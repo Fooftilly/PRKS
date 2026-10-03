@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { QueryObserver } from '@tanstack/vue-query'
+import { listPublishersInUse } from '../../api/publishers'
 import { createPrksQueryClient } from '../../query/client'
 import { prksQueryKeys } from '../../query/keys'
 import { browserPublishersIntents, type PublishersIntentOwner } from './intents'
@@ -99,6 +101,43 @@ describe('Publishers intents', () => {
     expect(outcome).toEqual({ status: 'error', message: 'Could not add publisher.' })
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(failure).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['a malformed reply', () => new Response(JSON.stringify({ id: 'R-1' }), { status: 200 })],
+    ['a server error', () => new Response(JSON.stringify(null), { status: 500 })],
+    [
+      'a lost reply',
+      () => {
+        throw new TypeError('Failed to fetch')
+      },
+    ],
+  ])('refetches the list after a write that may have committed but got %s', async (_label, reply) => {
+    const server = [{ id: 'R-0', name: 'Old', aliases: [], work_count: 0 }]
+    const requests: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init: RequestInit = {}) => {
+        const method = init.method ?? 'GET'
+        requests.push(`${method} ${url}`)
+        if (method === 'GET') return new Response(JSON.stringify(server), { status: 200 })
+        server.push({ id: 'R-1', name: 'OUP', aliases: [], work_count: 0 })
+        return reply()
+      }),
+    )
+    const client = createPrksQueryClient()
+    const observer = new QueryObserver(client, {
+      queryKey: prksQueryKeys.publishers.inUse(),
+      queryFn: ({ signal }) => listPublishersInUse(signal),
+      retry: false,
+    })
+    const unsubscribe = observer.subscribe(() => {})
+    await vi.waitFor(() => expect(observer.getCurrentResult().data).toHaveLength(1))
+    const outcome = await browserPublishersIntents(owner({ generation: 1 }), 1, client).create('OUP')
+    expect(outcome).toEqual({ status: 'error', message: 'Could not add publisher.' })
+    expect(requests).toEqual(['GET /api/publishers?used=1', 'POST /api/publishers', 'GET /api/publishers?used=1'])
+    expect(observer.getCurrentResult().data?.map((row) => row.id)).toEqual(['R-0', 'R-1'])
+    unsubscribe()
   })
 
   it('stays quiet and sends nothing when the offline guard refuses the write', async () => {

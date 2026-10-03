@@ -74,8 +74,9 @@ export function ownsPublishers(
  * Publisher writes go through the typed client. Publishers are online-only:
  * there is no durable publisher queue and nothing is retried. `generation` is
  * this owner's: a confirm that outlives the pane does not write, and a write
- * that finishes late reports nothing to a replaced owner. A write that landed
- * invalidates every Publishers read, whichever pane it came from.
+ * that finishes late reports nothing to a replaced owner. Every write that was
+ * sent, failed or not, invalidates every Publishers read, whichever pane it
+ * came from.
  */
 export function browserPublishersIntents(
   owner: PublishersIntentOwner | null,
@@ -87,18 +88,21 @@ export function browserPublishersIntents(
     // A mutation, not a bare call, so the client's mutation defaults (no
     // retry) and its transport-failure reporting apply.
     const mutation = new MutationObserver(queryClient, { mutationFn: run })
+    let outcome: PublishersActionOutcome
     try {
       await mutation.mutate()
+      outcome = success()
     } catch (err) {
-      if (!ownsPublishers(owner, generation)) return quiet()
-      return failure(actionMessage(err, fallback))
+      outcome = failure(actionMessage(err, fallback))
     } finally {
       mutation.reset()
     }
-    // A failed refetch keeps the list on screen and shows on the page. It is
-    // not a failed create, alias change, or delete.
+    // Once a write was sent, a failure cannot prove the server did not commit
+    // it (a malformed or lost reply looks the same), so every attempt marks
+    // Publishers stale. A failed refetch keeps the list on screen and shows on
+    // the page; it does not change this write's outcome.
     await queryClient.invalidateQueries({ queryKey: prksQueryKeys.publishers.all() })
-    return ownsPublishers(owner, generation) ? success() : quiet()
+    return ownsPublishers(owner, generation) ? outcome : quiet()
   }
 
   return {
