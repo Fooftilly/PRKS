@@ -2857,10 +2857,17 @@ function prksPrivateNotesTextForEntity(entityType, entityId, serverText) {
     return entry.draftText;
 }
 
+/**
+ * Private notes liveness: the owner generation and entity still match, and
+ * this exact editor is the installed `privateNotesEditor` slot. A
+ * same-generation replacement fails the identity check.
+ */
 function prksPrivateNotesOwnerCurrent(editor) {
     if (!editor || !editor.ctx || !editor.ctx.isCurrent(editor.generation)) return false;
     const live = editor.ctx.getEntity ? editor.ctx.getEntity(editor.entityType) : null;
-    return !!(live && String(live.id) === editor.entityId);
+    if (!live || String(live.id) !== editor.entityId) return false;
+    return typeof editor.ctx.getResource === 'function' &&
+        editor.ctx.getResource('privateNotesEditor') === editor;
 }
 
 function prksPrivateNotesSetStatus(editor, text) {
@@ -3187,14 +3194,24 @@ function prksPrivateNotesEditorKey(entityType, entityId, ctx) {
     return prksPrivateNoteKey(entityType, entityId);
 }
 
+/**
+ * Binds the Reminders field in the shared right panel as the owner's
+ * `privateNotesEditor` session. The session is non-suspendable: warm park
+ * disposes it (listeners, debounce, busy retry) and the focused-panel
+ * refresh binds a new one from the draft kept on the TabContext. The ticket
+ * is captured before the field is touched; a rejected registration binds
+ * nothing. The draft and durable save stay on the session and
+ * `prksEnqueuePrivateNotesSave`; flushing stays on the leave path.
+ */
 function prksBindPrivateNotesField(entityType, entityId, ownerCtx) {
     const idSuffix = `${entityType}-${entityId}`;
     const ctx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
     if (!ctx || !prksRightPanelOwnedBy(ctx)) return;
+    const ticket = typeof ctx.resourceTicket === 'function' ? ctx.resourceTicket() : null;
+    if (!ctx.resourceRegistry || !ctx.resourceRegistry.accepts(ticket)) return;
     const panel = document.getElementById('panel-content');
     const ta = panel && panel.querySelector(`#prks-private-notes-${idSuffix}`);
     if (!ta || ta.dataset.prksNotesBound === '1') return;
-    ta.dataset.prksNotesBound = '1';
     const statusEl = panel.querySelector(`#prks-private-notes-status-${idSuffix}`);
     const editorKey = prksPrivateNotesEditorKey(entityType, entityId, ctx);
     let session = null;
@@ -3254,18 +3271,25 @@ function prksBindPrivateNotesField(entityType, entityId, ownerCtx) {
         ctx.clearTimer(editor.timerKey);
         prksEnqueuePrivateNotesSave(editor);
     };
+    const attached = ctx.registerResource(ticket, {
+        kind: 'privateNotesEditor',
+        value: editor,
+        suspendable: false,
+        dispose: function () {
+            ctx.clearTimer(editor.timerKey);
+            ctx.clearTimer('privateNotesBusyRetry:' + editor.key);
+            if (editor._prksBusyRetryStop) {
+                try { editor._prksBusyRetryStop(); } catch (_e) { /* ignore */ }
+                editor._prksBusyRetryStop = null;
+            }
+            ta.removeEventListener('input', schedule);
+            ta.removeEventListener('blur', blur);
+        },
+    });
+    if (attached === 'rejected') return;
+    ta.dataset.prksNotesBound = '1';
     ta.addEventListener('input', schedule);
     ta.addEventListener('blur', blur);
-    ctx.setResource('privateNotesEditor', editor, function () {
-        ctx.clearTimer(editor.timerKey);
-        ctx.clearTimer('privateNotesBusyRetry:' + editor.key);
-        if (editor._prksBusyRetryStop) {
-            try { editor._prksBusyRetryStop(); } catch (_e) { /* ignore */ }
-            editor._prksBusyRetryStop = null;
-        }
-        ta.removeEventListener('input', schedule);
-        ta.removeEventListener('blur', blur);
-    });
     if (editor.entityType === 'work' && typeof prksRefreshPendingWorkNotes === 'function') {
         void prksRefreshPendingWorkNotes().then(function () {
             if (!ctx.isCurrent(editor.generation)) return;
