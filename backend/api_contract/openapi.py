@@ -27,6 +27,15 @@ from backend.api_contract.positions import (
     PositionSyncState,
     PositionUpdateRequest,
 )
+from backend.api_contract.processing_files import (
+    ProcessingFile,
+    ProcessingFileImported,
+    ProcessingFileRole,
+    ProcessingFileRoleInput,
+    ProcessingFileTag,
+    ProcessingFileTagInput,
+    ProcessingFileUpdateRequest,
+)
 from backend.api_contract.publishers import (
     PublisherAliasAdded,
     PublisherAliasRequest,
@@ -735,6 +744,172 @@ def saved_views_openapi_document() -> dict[str, Any]:
                 "Vertical-slice OpenAPI for the online-only Saved Views family "
                 "(#45 / #232). Schemas are generated from the same Pydantic "
                 "boundary as the rest of backend/api_contract."
+            ),
+        },
+        "paths": paths,
+        "components": {
+            "schemas": schemas,
+        },
+    }
+
+
+PROCESSING_FILES_CONTRACT_VERSION = "0.1.0"
+
+
+def processing_files_openapi_document() -> dict[str, Any]:
+    """OpenAPI 3.1 for the online-only Files for Processing family (#45 / #232).
+
+    Same Pydantic-generated contract style as Saved Views. The inbox has no
+    durable operation, revision, or sync state. The PDF preview route serves
+    bytes to an iframe and is not part of this JSON slice.
+    """
+    schemas: dict[str, Any] = {}
+    for model in (
+        ApiErrorEnvelope,
+        ProcessingFileRole,
+        ProcessingFileTag,
+        ProcessingFile,
+        ProcessingFileImported,
+        ProcessingFileRoleInput,
+        ProcessingFileTagInput,
+        ProcessingFileUpdateRequest,
+    ):
+        raw = _schema(model)
+        _merge_defs(schemas, raw)
+
+    schemas["ProcessingFileList"] = {
+        "type": "array",
+        "items": {"$ref": "#/components/schemas/ProcessingFile"},
+    }
+
+    error_ref = {"$ref": "#/components/schemas/ApiErrorEnvelope"}
+
+    def _json_content(schema_ref: dict[str, Any]) -> dict[str, Any]:
+        return {"application/json": {"schema": schema_ref}}
+
+    def _json_error(description: str) -> dict[str, Any]:
+        return {
+            "description": description,
+            "content": _json_content(error_ref),
+        }
+
+    # Shared body-read refusals from PRKSHandler._read_json_body (POST/PATCH).
+    mutation_body_read_errors = {
+        "413": _json_error(
+            "Request body larger than the JSON body limit (request_too_large)."
+        ),
+        "415": _json_error(
+            "Missing or unsupported Content-Type (unsupported_media_type)."
+        ),
+    }
+
+    file_id_parameter = {
+        "name": "processing_file_id",
+        "in": "path",
+        "required": True,
+        "schema": {"type": "string"},
+    }
+
+    paths: dict[str, Any] = {
+        "/api/processing-files": {
+            "get": {
+                "operationId": "listProcessingFiles",
+                "summary": "List inbox files that are not imported yet",
+                "tags": ["processing-files"],
+                "parameters": [
+                    {
+                        "name": "rescan",
+                        "in": "query",
+                        "required": False,
+                        "description": (
+                            "`1`, `true`, or `yes` (any case) reconciles the "
+                            "inbox folder on disk before listing."
+                        ),
+                        "schema": {"type": "string"},
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": (
+                            "Pending, missing, and failed files, in that "
+                            "order, then by path case-insensitively."
+                        ),
+                        "content": _json_content(
+                            {"$ref": "#/components/schemas/ProcessingFileList"}
+                        ),
+                    },
+                },
+            },
+        },
+        "/api/processing-files/{processing_file_id}": {
+            "parameters": [file_id_parameter],
+            "patch": {
+                "operationId": "updateProcessingFile",
+                "summary": "Save an inbox file's staged Work metadata",
+                "tags": ["processing-files"],
+                "requestBody": {
+                    "required": True,
+                    "content": _json_content(
+                        {"$ref": "#/components/schemas/ProcessingFileUpdateRequest"}
+                    ),
+                },
+                "responses": {
+                    "200": {
+                        "description": "The updated inbox file.",
+                        "content": _json_content(
+                            {"$ref": "#/components/schemas/ProcessingFile"}
+                        ),
+                    },
+                    "400": _json_error(
+                        "No such file, a body that is not an object, roles or "
+                        "tags that are not arrays, or a domain refusal of the "
+                        "draft status, folder, person, tag, or role type."
+                    ),
+                    **mutation_body_read_errors,
+                },
+            },
+        },
+        "/api/processing-files/{processing_file_id}/import": {
+            "parameters": [file_id_parameter],
+            "post": {
+                "operationId": "importProcessingFile",
+                "summary": "Import an inbox file as a new Work",
+                "description": (
+                    "Uses the staged metadata. Importing a file that is "
+                    "already imported returns its Work again."
+                ),
+                "tags": ["processing-files"],
+                "requestBody": {
+                    "required": False,
+                    "description": "Ignored.",
+                    "content": _json_content({"type": "object"}),
+                },
+                "responses": {
+                    "200": {
+                        "description": "Imported.",
+                        "content": _json_content(
+                            {"$ref": "#/components/schemas/ProcessingFileImported"}
+                        ),
+                    },
+                    "400": _json_error(
+                        "No such file, an unknown target folder, a file that is "
+                        "gone or not a PDF, or a failed import."
+                    ),
+                    **mutation_body_read_errors,
+                },
+            },
+        },
+    }
+
+    return {
+        "openapi": "3.1.0",
+        "info": {
+            "title": "PRKS API — Files for Processing slice",
+            "version": PROCESSING_FILES_CONTRACT_VERSION,
+            "description": (
+                "Vertical-slice OpenAPI for the online-only Files for Processing "
+                "family (#45 / #232). Schemas are generated from the same "
+                "Pydantic boundary as the rest of backend/api_contract."
             ),
         },
         "paths": paths,

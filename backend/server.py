@@ -59,6 +59,7 @@ from backend.api_contract.errors import research_error_envelope
 from backend.api_contract.openapi import (
     performance_diagnostics_openapi_document,
     positions_openapi_document,
+    processing_files_openapi_document,
     publishers_openapi_document,
     saved_views_openapi_document,
 )
@@ -75,6 +76,10 @@ from backend.api_contract.positions import (
     PositionSyncState,
     PositionUpdateRequest,
     parse_position_request,
+)
+from backend.api_contract.processing_files import (
+    ProcessingFile,
+    ProcessingFileImported,
 )
 from backend.api_contract.publishers import (
     PublisherAliasRequest,
@@ -1053,7 +1058,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 except ValueError as e:
                     self.send_json(400, {'error': str(e)})
                     return
-                self.send_json(200, row)
+                self.send_json(200, dump_response(ProcessingFile, row))
             elif path.startswith('/api/works/') and path.endswith('/roles'):
                 parts = path.split('/')
                 if len(parts) != 5 or parts[4] != 'roles':
@@ -2322,6 +2327,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(200, publishers_openapi_document())
             elif path == '/api/openapi/saved-views.json':
                 self.send_json(200, saved_views_openapi_document())
+            elif path == '/api/openapi/processing-files.json':
+                self.send_json(200, processing_files_openapi_document())
             elif path == '/api/positions':
                 rows = research_network.list_positions(db)
                 self.send_json(200, dump_response(PositionSummary, rows))
@@ -2597,7 +2604,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     data = db.scan_processing_files()
                 else:
                     data = db.get_processing_files(include_imported=False)
-                self.send_json(200, data)
+                self.send_json(200, dump_response(ProcessingFile, data))
             elif path.startswith('/api/processing-files/') and path.endswith('/pdf'):
                 parts = path.split('/')
                 if len(parts) == 5 and parts[4] == 'pdf':
@@ -2811,7 +2818,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                             safe_log_id(pf_id),
                             safe_error_type(e),
                         )
-                    self.send_json(200, out)
+                    self.send_json(200, dump_response(ProcessingFileImported, out))
                 else:
                     self.send_error(404, "API endpoint not found")
             elif path == '/api/works':

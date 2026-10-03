@@ -5058,6 +5058,210 @@ class TestServerAPI(unittest.TestCase):
                 )
             )
 
+    def _processing_call(self, method, path, payload=None, *, schema_valid=True):
+        """Send one Files for Processing request and check it against its OpenAPI slice.
+
+        ``schema_valid=False`` sends a body the schema refuses; only the
+        response is checked then.
+        """
+        from openapi_core import OpenAPI
+        from openapi_core.testing import MockRequest, MockResponse
+
+        from backend.api_contract.openapi import processing_files_openapi_document
+
+        data = None if payload is None else json.dumps(payload).encode()
+        req = urllib.request.Request(f"{self._base_url}{path}", data=data, method=method)
+        if payload is not None:
+            req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req) as res:
+                status, raw = res.status, res.read()
+        except urllib.error.HTTPError as exc:
+            status, raw = exc.code, exc.read()
+        api = OpenAPI.from_dict(processing_files_openapi_document())
+        split = urllib.parse.urlsplit(path)
+        request = MockRequest(
+            host_url="http://127.0.0.1",
+            method=method.lower(),
+            path=split.path,
+            args=dict(urllib.parse.parse_qsl(split.query)),
+            data=data,
+        )
+        if schema_valid:
+            api.validate_request(request)
+        api.validate_response(
+            request,
+            MockResponse(data=raw, status_code=status, content_type="application/json"),
+        )
+        return status, json.loads(raw.decode())
+
+    def _fresh_processing_inbox(self, *names):
+        """Empty the inbox folder, drop one PDF per name into it, and rescan."""
+        processing_root = server_module.processing_dir
+        for dirpath, _dirnames, filenames in os.walk(processing_root, topdown=False):
+            for name in filenames:
+                os.remove(os.path.join(dirpath, name))
+            if dirpath != processing_root:
+                try:
+                    os.rmdir(dirpath)
+                except OSError:
+                    pass
+
+        def _empty():
+            for name in names:
+                try:
+                    os.remove(os.path.join(processing_root, name))
+                except FileNotFoundError:
+                    pass
+            server_module.db.scan_processing_files()
+
+        self.addCleanup(_empty)
+        for name in names:
+            with open(os.path.join(processing_root, name), "wb") as handle:
+                handle.write(_pdf_with_text_bytes(f"contract {name}"))
+        status, rows = self._processing_call("GET", "/api/processing-files?rescan=1")
+        self.assertEqual(status, 200)
+        return {row["filename"]: row for row in rows}
+
+    def test_processing_files_contract_round_trip(self):
+        db = server_module.db
+        rows = self._fresh_processing_inbox("contract_a.pdf")
+        file_id = rows["contract_a.pdf"]["id"]
+        person_id = db.add_person("Contract", "Author")
+        tag_id = db.add_tag("processing-contract-tag")["id"]
+        folder_id = db.add_folder("Processing Contract Folder")
+        status, listed = self._processing_call("GET", "/api/processing-files")
+        self.assertEqual((status, [row["id"] for row in listed]), (200, [file_id]))
+        status, patched = self._processing_call(
+            "PATCH",
+            f"/api/processing-files/{file_id}",
+            {
+                "title": "Contract Title",
+                "status_draft": "Planned",
+                "published_date": "2026-10-03",
+                "thumb_page": "2",
+                "target_folder_id": folder_id,
+                "roles": [{"person_id": person_id, "role_type": "Editor"}],
+                "tags": [{"id": tag_id}],
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            (patched["title"], patched["status_draft"], patched["thumb_page"]),
+            ("Contract Title", "Planned", 2),
+        )
+        self.assertEqual(
+            patched["roles"],
+            [
+                {
+                    "person_id": person_id,
+                    "person_name": "Contract Author",
+                    "role_type": "Editor",
+                    "order_index": 0,
+                }
+            ],
+        )
+        self.assertEqual([tag["id"] for tag in patched["tags"]], [tag_id])
+        status, listed = self._processing_call("GET", "/api/processing-files")
+        self.assertEqual(listed, [patched])
+        status, imported = self._processing_call(
+            "POST", f"/api/processing-files/{file_id}/import", {}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(imported["processing_file_id"], file_id)
+        self.assertTrue(imported["work_id"])
+        # Importing again returns the same Work.
+        status, again = self._processing_call(
+            "POST", f"/api/processing-files/{file_id}/import", {}
+        )
+        self.assertEqual((status, again), (200, imported))
+        status, listed = self._processing_call("GET", "/api/processing-files?rescan=1")
+        self.assertEqual((status, listed), (200, []))
+
+    def test_processing_files_refusals_keep_domain_messages(self):
+        rows = self._fresh_processing_inbox("contract_refuse.pdf")
+        file_id = rows["contract_refuse.pdf"]["id"]
+        cases = (
+            ({"status_draft": "Done"}, "Invalid status_draft value."),
+            ({"target_folder_id": "F-missing"}, "Unknown folder."),
+            ({"roles": [{"person_id": "P-missing", "role_type": "Author"}]}, "Unknown person id: P-missing"),
+            ({"tags": [{"id": "T-missing"}]}, "Unknown tag id: T-missing"),
+        )
+        for payload, message in cases:
+            with self.subTest(message=message):
+                status, body = self._processing_call(
+                    "PATCH", f"/api/processing-files/{file_id}", payload
+                )
+                self.assertEqual((status, body), (400, {"error": message}))
+        status, body = self._processing_call(
+            "PATCH", "/api/processing-files/PF-missing", {"title": "x"}
+        )
+        self.assertEqual((status, body), (400, {"error": "Processing file not found."}))
+        status, body = self._processing_call(
+            "POST", "/api/processing-files/PF-missing/import", {}
+        )
+        self.assertEqual((status, body), (400, {"error": "Processing file not found."}))
+
+    def test_processing_files_request_schema_matches_the_live_endpoint(self):
+        """Inputs the schema accepts, the server accepts, and the reverse."""
+        from openapi_core import OpenAPI
+        from openapi_core.testing import MockRequest
+
+        from backend.api_contract.openapi import processing_files_openapi_document
+
+        db = server_module.db
+        rows = self._fresh_processing_inbox("contract_parity.pdf")
+        file_id = rows["contract_parity.pdf"]["id"]
+        path = f"/api/processing-files/{file_id}"
+        person_id = db.add_person("Parity", "Person")
+        # Extra keys, top-level and nested, are ignored by both; scalars are
+        # stringified and trimmed.
+        status, patched = self._processing_call(
+            "PATCH",
+            path,
+            {
+                "title": "  Parity  ",
+                "year": 1999,
+                "abs_path": "/elsewhere.pdf",
+                "roles": [{"person_id": person_id, "role_type": "Author", "extra": 1}],
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual((patched["title"], patched["year"]), ("Parity", "1999"))
+        self.assertEqual(patched["rel_path"], "contract_parity.pdf")
+        # null roles and tags leave them unchanged; a role without a person is skipped.
+        status, patched = self._processing_call("PATCH", path, {"roles": None, "tags": None})
+        self.assertEqual([role["person_id"] for role in patched["roles"]], [person_id])
+        status, patched = self._processing_call(
+            "PATCH", path, {"roles": [{"role_type": "Author"}]}
+        )
+        self.assertEqual((status, patched["roles"]), (200, []))
+        # `status` is the legacy spelling of `status_draft`.
+        status, patched = self._processing_call("PATCH", path, {"status": "Paused"})
+        self.assertEqual((status, patched["status_draft"]), (200, "Paused"))
+        # A page number below 1 clears the thumbnail page.
+        status, patched = self._processing_call("PATCH", path, {"thumb_page": 0})
+        self.assertEqual((status, patched["thumb_page"]), (200, None))
+        # Roles that are not an array, and a body that is not an object, are
+        # refused by both.
+        status, body = self._processing_call(
+            "PATCH", path, {"roles": "Author"}, schema_valid=False
+        )
+        self.assertEqual((status, body), (400, {"error": "roles must be an array."}))
+        status, body = self._processing_call("PATCH", path, ["title"], schema_valid=False)
+        self.assertEqual((status, body), (400, {"error": "JSON object body required"}))
+        api = OpenAPI.from_dict(processing_files_openapi_document())
+        for payload in ({"roles": "Author"}, ["title"]):
+            with self.subTest(payload=payload), self.assertRaises(Exception):
+                api.validate_request(
+                    MockRequest(
+                        host_url="http://127.0.0.1",
+                        method="patch",
+                        path=path,
+                        data=json.dumps(payload).encode(),
+                    )
+                )
+
     def test_saved_views_live_results_match_search(self):
         db = self.__class__.test_db
         a = db.add_work(title="Work A", author_text="Adorno")

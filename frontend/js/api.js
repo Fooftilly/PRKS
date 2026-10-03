@@ -25,7 +25,6 @@ const PRKS_API_ERROR_SOURCES = {
     'recently-added': 'recently-added.fetch',
     search: 'search.fetch',
     tags: 'tags.fetch',
-    'processing-files': 'processing-files.fetch',
     'works-bulk': 'works.bulk',
     concepts: 'concepts.fetch',
     positions: 'positions.fetch',
@@ -421,55 +420,15 @@ async function fetchTags(options = {}) {
     }
 }
 
-async function fetchProcessingFiles(options = {}) {
-    const errorOwner = prksApiErrorOwner(options);
-    const params = new URLSearchParams();
-    if (options && options.rescan) {
-        params.set('rescan', '1');
-    }
-    const q = params.toString() ? '?' + params.toString() : '';
-    const policy = options && options.rescan
-        ? { dedupe: false, retry: false, freshForMs: 0 }
-        : {};
-    try {
-        const res = await prksRequest('/api/processing-files' + q, { signal: prksApiSignal(options) }, policy);
-        const data = await prksParseJsonResponse(res, [], 'processing-files', errorOwner);
-        return Array.isArray(data) ? data : [];
-    } catch (_e) {
-        if (prksAbortFallback(_e)) return [];
-        prksSetApiError('processing-files', 'Could not load files for processing.', '', errorOwner);
-        prksReportApiClientError('processing-files');
-        return [];
-    }
-}
-
-async function patchProcessingFile(processingFileId, fields) {
-    const res = await prksRequest('/api/processing-files/' + encodeURIComponent(processingFileId), {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(fields || {}),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-        throw new Error(data.error || 'Could not update processing file metadata.');
-    }
-    return data;
-}
-
-async function importProcessingFile(processingFileId) {
-    const res = await prksRequest('/api/processing-files/' + encodeURIComponent(processingFileId) + '/import', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-        throw new Error(data.error || 'Could not import file.');
-    }
-    // Importing commits a brand-new canonical Work in one request: it is always
-    // filed into a folder (the requested one, else "Uncategorized") and can
-    // carry staged Author/Editor roles, so this boundary owes the same
-    // coherence the /api/works create path publishes.
+/**
+ * Coherence for a Files for Processing import, called by the Vue Processing
+ * records after every import that was sent. Importing commits a brand-new
+ * canonical Work in one request: it is always filed into a folder (the
+ * requested one, else "Uncategorized") and can carry staged Author/Editor
+ * roles, so this boundary owes the same coherence the /api/works create path
+ * publishes.
+ */
+function prksMarkProcessingImportChanged() {
     prksMarkFoldersDomainChanged();
     prksMarkPeopleDomainChanged();
     prksMarkPersonGroupsDomainChanged();
@@ -477,7 +436,6 @@ async function importProcessingFile(processingFileId) {
     // NOT Recent -- its last_opened_at is still NULL.
     prksMarkWorksBrowseChanged();
     prksMarkRecentlyAddedChanged();
-    return data;
 }
 
 /** Legacy device-only key; migrated once to server via prksLoadAppSettings. */
@@ -1685,6 +1643,7 @@ window.prksMarkResearchGraphCoreChanged = prksMarkResearchGraphCoreChanged;
 window.prksMarkResearchGraphPeopleChanged = prksMarkResearchGraphPeopleChanged;
 window.prksMarkConceptsDomainChanged = prksMarkConceptsDomainChanged;
 window.prksMarkWorkTitleChanged = prksMarkWorkTitleChanged;
+window.prksMarkProcessingImportChanged = prksMarkProcessingImportChanged;
 window.prksMarkPositionsDomainChanged = prksMarkPositionsDomainChanged;
 window.prksMarkArgumentsDomainChanged = prksMarkArgumentsDomainChanged;
 window.prksArgumentSaveMessage = prksArgumentSaveMessage;
