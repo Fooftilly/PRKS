@@ -125,6 +125,15 @@ class TestTabContextResourceAPI(unittest.TestCase):
             suspend.find("prksReleaseWorkThumbPreview"),
             suspend.find("moveRoot(ctx.root, host)"),
         )
+        self.assertLess(
+            suspend.find("if (!moveRoot(ctx.root, host)) return false;"),
+            suspend.find("resourceRegistry.warmSuspend()"),
+        )
+        resume = src.split("ctx.resume = function (host)", 1)[1].split("ctx.unmount = function", 1)[0]
+        self.assertLess(
+            resume.find("if (!moveRoot(ctx.root, host)) return false;"),
+            resume.find("resourceRegistry.resume()"),
+        )
 
     def test_warm_pdf_parking_host_exists(self):
         index_path = os.path.join(ROOT, "frontend", "index.html")
@@ -243,14 +252,17 @@ class TestScriptOrderAndRenderer(unittest.TestCase):
             html = fh.read()
         nav = html.find('src="/js/navigation.js"')
         ws = html.find('src="/js/workspace-tabs.js"')
+        resource = html.find('src="/js/owner-resource.js"')
         tc = html.find('src="/js/tab-context.js"')
         tiling = html.find('src="/js/workspace-tiling.js"')
         leave = html.find('src="/js/tab-leave.js"')
         pdf_rt = html.find('src="/js/pdf-work-runtime.js"')
         app = html.find('src="/js/app.js"')
         self.assertNotEqual(nav, -1)
+        self.assertNotEqual(resource, -1)
         self.assertLess(nav, ws)
-        self.assertLess(ws, tc)
+        self.assertLess(ws, resource)
+        self.assertLess(resource, tc)
         self.assertLess(tc, tiling)
         self.assertLess(tiling, leave)
         self.assertLess(leave, pdf_rt)

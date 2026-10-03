@@ -4,6 +4,7 @@
 const path = require('path');
 
 const rootDir = path.resolve(__dirname, '../..');
+globalThis.prksOwnerResource = require(path.join(rootDir, 'frontend/js/owner-resource.js'));
 const tc = require(path.join(rootDir, 'frontend/js/tab-context.js'));
 
 const {
@@ -371,6 +372,131 @@ c.setResource('ok', {}, function () {
 });
 c.destroy();
 assertEq('cleanup continues after throw', boom, 11);
+
+{
+    const main = prksEnsureTabContext('resource-main');
+    const side = prksEnsureTabContext('resource-side');
+    main.mount(makeHost());
+    side.mount(makeHost());
+    main.beginRoute({ name: 'research-graph', hash: '#/graph' });
+    side.beginRoute({ name: 'research-graph', hash: '#/graph' });
+    let mainDisposes = 0;
+    let sideDisposes = 0;
+    const mainGraph = { id: 'main' };
+    const sideGraph = { id: 'side' };
+    main.registerResource(main.resourceTicket(), {
+        kind: 'researchGraph',
+        value: mainGraph,
+        suspendable: false,
+        dispose: function () { mainDisposes += 1; },
+    });
+    side.registerResource(side.resourceTicket(), {
+        kind: 'researchGraph',
+        value: sideGraph,
+        suspendable: false,
+        dispose: function () { sideDisposes += 1; },
+    });
+    assert('role swap keeps main graph', main.readResource('researchGraph') === mainGraph && mainDisposes === 0);
+    assert('role swap keeps secondary graph', side.readResource('researchGraph') === sideGraph && sideDisposes === 0);
+    assert('role swap leaves both mounted', main.mounted && side.mounted);
+
+    const replaced = main.registerResource(main.resourceTicket(), {
+        kind: 'researchGraph',
+        value: { id: 'main-2' },
+        dispose: function () { mainDisposes += 1; },
+    });
+    assertEq('same owner replace result', replaced, 'replaced');
+    assertEq('same owner replace disposes once', mainDisposes, 1);
+    assert('secondary untouched by main replace', side.readResource('researchGraph') === sideGraph && sideDisposes === 0);
+
+    prksDestroyTabContext('resource-main');
+    prksDestroyTabContext('resource-main');
+    assertEq('destroying main disposes its graph once', mainDisposes, 2);
+    assertEq('destroying main leaves the secondary graph', sideDisposes, 0);
+    assert('secondary graph remains', side.readResource('researchGraph') === sideGraph);
+
+    const warm = prksEnsureTabContext('resource-warm');
+    warm.mount(makeHost());
+    warm.beginRoute({ name: 'work', hash: '#/works/warm' });
+    let warmGraphDisposes = 0;
+    let warmPdfDisposes = 0;
+    const pdf = { id: 'pdf' };
+    warm.registerResource(warm.resourceTicket(), {
+        kind: 'researchGraph',
+        value: { id: 'warm-graph' },
+        suspendable: false,
+        dispose: function () { warmGraphDisposes += 1; },
+    });
+    warm.setResource('pdf', pdf, function () { warmPdfDisposes += 1; });
+    assert('warm suspend parks the pdf owner', warm.suspend(makeHost()));
+    assertEq('warm suspend releases the graph once', warmGraphDisposes, 1);
+    assertEq('warm suspend keeps the pdf resource', warm.getResource('pdf'), pdf);
+    assertEq('warm suspend does not dispose pdf', warmPdfDisposes, 0);
+    assert('warm resume reuses the context', warm.resume(makeHost()));
+    assertEq('warm resume does not recreate the graph', warm.getResource('researchGraph'), undefined);
+    assertEq('warm resume still has not disposed pdf', warmPdfDisposes, 0);
+    warm.unmount('cold');
+    assertEq('cold unmount disposes pdf', warmPdfDisposes, 1);
+    assertEq('cold unmount does not dispose the graph again', warmGraphDisposes, 1);
+
+    const cold = prksEnsureTabContext('resource-cold');
+    cold.mount(makeHost());
+    cold.beginRoute({ name: 'research-graph', hash: '#/graph' });
+    let coldDisposes = 0;
+    cold.registerResource(cold.resourceTicket(), {
+        kind: 'researchGraph',
+        value: { id: 'cold' },
+        dispose: function () { coldDisposes += 1; },
+    });
+    cold.unmount('cold-park');
+    cold.unmount('cold-park');
+    assertEq('cold park disposes the graph once', coldDisposes, 1);
+
+    const routed = prksEnsureTabContext('resource-route');
+    routed.mount(makeHost());
+    const generationA = routed.beginRoute({ name: 'research-graph', hash: '#/graph' });
+    const ticketA = routed.resourceTicket(generationA);
+    let routeDisposes = 0;
+    routed.registerResource(ticketA, {
+        kind: 'researchGraph',
+        value: { id: 'A' },
+        dispose: function () { routeDisposes += 1; },
+    });
+    const generationB = routed.beginRoute({ name: 'research-graph', hash: '#/graph?focus=concept:C-1' });
+    assertEq('route replacement disposes the previous graph', routeDisposes, 1);
+    const staleAttach = routed.registerResource(ticketA, {
+        kind: 'researchGraph',
+        value: { id: 'stale' },
+        dispose: function () { routeDisposes += 1; },
+    });
+    routed.registerResource(routed.resourceTicket(generationB), {
+        kind: 'researchGraph',
+        value: { id: 'B' },
+        dispose: function () { routeDisposes += 1; },
+    });
+    assertEq('stale generation cannot attach', staleAttach, 'rejected');
+    assertEq('current route owns the replacement graph', routed.readResource('researchGraph').id, 'B');
+
+    prksDestroyTabContext('same-tab');
+    const previous = prksEnsureTabContext('same-tab');
+    previous.mount(makeHost());
+    previous.beginRoute({ name: 'research-graph', hash: '#/graph' });
+    const previousTicket = previous.resourceTicket();
+    prksDestroyTabContext('same-tab');
+    const replacement = prksEnsureTabContext('same-tab');
+    replacement.mount(makeHost());
+    replacement.beginRoute({ name: 'research-graph', hash: '#/graph' });
+    let foreignDisposes = 0;
+    const foreign = replacement.registerResource(previousTicket, {
+        kind: 'researchGraph',
+        value: { id: 'foreign' },
+        dispose: function () { foreignDisposes += 1; },
+    });
+    assertEq('replacement context rejects the old owner ticket', foreign, 'rejected');
+    assertEq('old ticket does not dispose a graph it never owned', foreignDisposes, 0);
+    assertEq('replacement context has no planted graph', replacement.getResource('researchGraph'), undefined);
+    prksDestroyAllTabContexts();
+}
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
 process.exit(failed ? 1 : 0);

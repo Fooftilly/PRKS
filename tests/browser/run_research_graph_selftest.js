@@ -5,6 +5,8 @@ const path = require('path');
 const fs = require('fs');
 const vm = require('vm');
 
+const ownerResource = require(path.join(__dirname, '..', '..', 'frontend', 'js', 'owner-resource.js'));
+
 function record(rows, name, ok, detail) {
     rows.push({ name: name, ok: !!ok, detail: detail || '' });
 }
@@ -143,33 +145,56 @@ function fakeCytoscape(opts) {
     return cy;
 }
 
-const _mockResources = new Map();
-const _mockCtx = {
+function attachRegistry(ctx) {
+    const token = {};
+    if (typeof ctx.generation !== 'number') ctx.generation = 1;
+    if (typeof ctx.destroyed !== 'boolean') ctx.destroyed = false;
+    const host = {
+        ownerId: String(ctx.tabId || ''),
+        ownerToken: token,
+        generation: function () { return ctx.generation; },
+        alive: function () { return !ctx.destroyed; },
+    };
+    ctx.ownerToken = token;
+    ctx.resourceRegistry = ownerResource.createOwnerResourceRegistry(host);
+    ctx.resourceTicket = function (generation) {
+        return ownerResource.resourceTicket(host, generation);
+    };
+    ctx.readResource = function (kind) {
+        return ctx.resourceRegistry.get(kind);
+    };
+    ctx.getResource = function (name) {
+        if (String(name) === 'researchGraph') return ctx.resourceRegistry.get('researchGraph');
+        return undefined;
+    };
+    ctx.clearResource = function (name) {
+        if (String(name) === 'researchGraph') ctx.resourceRegistry.dispose('researchGraph');
+    };
+    ctx.beginRoute = function () {
+        ctx.resourceRegistry.releaseAll();
+        ctx.generation += 1;
+        return ctx.generation;
+    };
+    ctx.warmSuspend = function () {
+        ctx.resourceRegistry.warmSuspend();
+    };
+    ctx.resumeOwner = function () {
+        ctx.resourceRegistry.resume();
+    };
+    ctx.releaseOwner = function () {
+        ctx.resourceRegistry.releaseAll();
+        ctx.destroyed = true;
+    };
+    return ctx;
+}
+
+const _mockCtx = attachRegistry({
     tabId: 'mock-tab',
     mounted: true,
     destroyed: false,
-    resources: _mockResources,
-    setResource: function (name, value, disposer) {
-        const key = String(name);
-        const prev = _mockResources.get(key);
-        if (prev && typeof prev.disposer === 'function') try { prev.disposer(); } catch (_e) {}
-        _mockResources.set(key, { value: value, disposer: disposer });
-        return value;
-    },
-    getResource: function (name) {
-        const rec = _mockResources.get(String(name));
-        return rec ? rec.value : undefined;
-    },
-    clearResource: function (name) {
-        const key = String(name);
-        const rec = _mockResources.get(key);
-        if (!rec) return;
-        _mockResources.delete(key);
-        if (typeof rec.disposer === 'function') try { rec.disposer(); } catch (_e) {}
-    },
     domId: function (local) { return 'prks-tab-mock-tab-' + local; },
     query: function () { return null; },
-};
+});
 
 const pendingFrames = new Map();
 const resizeObservers = [];
@@ -421,23 +446,29 @@ sandbox.destroyResearchGraph();
 assertEq(rows, 'destroy is idempotent', sandbox.__prksResearchGraphLiveCount || 0, 0);
 
 function makeGraphHost() {
-    function noop() {}
+    let bound = 0;
+    function track(el) {
+        el.addEventListener = function () { bound += 1; };
+        el.removeEventListener = function () { bound = Math.max(0, bound - 1); };
+    }
     const peopleBox = {
         checked: false,
         getAttribute: function (name) {
             return name === 'data-graph-filter' ? 'people' : null;
         },
-        addEventListener: noop,
     };
+    track(peopleBox);
     const inspector = { innerHTML: '' };
     const status = { textContent: '', hidden: true };
     const canvas = { id: 'prks-graph-canvas' };
     const graphRoot = {
-        addEventListener: noop,
-        removeEventListener: noop,
         querySelector: function (sel) {
             if (sel === '#prks-graph-find' || sel === '[data-prks-role="graph-find"]') {
-                return { value: '', addEventListener: noop };
+                if (!graphRoot._find) {
+                    graphRoot._find = { value: '' };
+                    track(graphRoot._find);
+                }
+                return graphRoot._find;
             }
             if (sel === '#prks-graph-find-results' || sel === '[data-prks-role="graph-find-results"]') {
                 return { innerHTML: '', hidden: true };
@@ -454,8 +485,15 @@ function makeGraphHost() {
         },
         parentNode: null,
     };
+    track(graphRoot);
     const host = {
         innerHTML: '',
+        hasAttribute: function (name) {
+            return name === 'data-prks-research-graph';
+        },
+        getAttribute: function (name) {
+            return name === 'data-prks-research-graph' ? '' : null;
+        },
         querySelector: function (sel) {
             if (sel === '.research-graph') return graphRoot;
             if (sel === '#prks-graph-canvas' || sel === '[data-prks-role="graph-canvas"]') return canvas;
@@ -467,45 +505,22 @@ function makeGraphHost() {
         _peopleBox: peopleBox,
         _inspector: inspector,
         _status: status,
+        _bound: function () { return bound; },
     };
     graphRoot.parentNode = host;
     return host;
 }
 
 function makeCtx(tabId) {
-    const resources = new Map();
-    return {
+    return attachRegistry({
         tabId: tabId,
-        resources: resources,
-        setResource: function (name, value, disposer) {
-            const key = String(name);
-            const prev = resources.get(key);
-            if (prev && typeof prev.disposer === 'function') {
-                try { prev.disposer(); } catch (_e) {}
-            }
-            resources.set(key, { value: value, disposer: disposer });
-            return value;
-        },
-        getResource: function (name) {
-            const rec = resources.get(String(name));
-            return rec ? rec.value : undefined;
-        },
-        clearResource: function (name) {
-            const key = String(name);
-            const rec = resources.get(key);
-            if (!rec) return;
-            resources.delete(key);
-            if (typeof rec.disposer === 'function') {
-                try { rec.disposer(); } catch (_e) {}
-            }
-        },
         domId: function (local) {
             return 'prks-tab-' + tabId + '-' + local;
         },
         query: function () {
             return null;
         },
-    };
+    });
 }
 
 (async function () {
@@ -803,6 +818,163 @@ function makeCtx(tabId) {
         if (savedDocument === undefined) delete sandbox.document;
         else sandbox.document = savedDocument;
     }
+
+    fetchImpl = async function () {
+        return fixture;
+    };
+    const lifeCtx = makeCtx('life');
+    const lifeHost = makeGraphHost();
+    const liveAtReplace = sandbox.__prksResearchGraphLiveCount || 0;
+    const cyAtReplace = fakeElements.length;
+    await g.renderResearchGraph(lifeHost, { ctx: lifeCtx });
+    const graphA = fakeElements[cyAtReplace];
+    const runtimeA = lifeCtx.getResource('researchGraph');
+    await g.renderResearchGraph(lifeHost, { ctx: lifeCtx });
+    const graphB = fakeElements[cyAtReplace + 1];
+    assertEq(rows, 'replacement disposes the previous cytoscape once', graphA.destroyed, true);
+    assertEq(rows, 'replacement keeps one live graph', sandbox.__prksResearchGraphLiveCount, liveAtReplace + 1);
+    assert(rows, 'replacement installs the new runtime', lifeCtx.getResource('researchGraph') !== runtimeA);
+    assertEq(rows, 'replacement cytoscape stays mounted', graphB.destroyed, false);
+
+    const destroyCtx = makeCtx('destroy-once');
+    const destroyHost = makeGraphHost();
+    const liveBeforeDestroy = sandbox.__prksResearchGraphLiveCount || 0;
+    await g.renderResearchGraph(destroyHost, { ctx: destroyCtx });
+    const destroyCy = fakeElements[fakeElements.length - 1];
+    destroyCtx.releaseOwner();
+    destroyCtx.releaseOwner();
+    assertEq(rows, 'owner release disposes the graph once', sandbox.__prksResearchGraphLiveCount, liveBeforeDestroy);
+    assertEq(rows, 'released cytoscape is destroyed', destroyCy.destroyed, true);
+    assertEq(rows, 'released owner has no graph', destroyCtx.getResource('researchGraph'), undefined);
+
+    const paneMain = makeCtx('pane-main');
+    const paneSide = makeCtx('pane-side');
+    const paneMainHost = makeGraphHost();
+    const paneSideHost = makeGraphHost();
+    await g.renderResearchGraph(paneMainHost, { ctx: paneMain });
+    await g.renderResearchGraph(paneSideHost, { ctx: paneSide });
+    const paneMainCy = fakeElements[fakeElements.length - 2];
+    const paneSideCy = fakeElements[fakeElements.length - 1];
+    paneMain.releaseOwner();
+    assertEq(rows, 'one pane release keeps the other cytoscape', paneSideCy.destroyed, false);
+    assertEq(rows, 'released pane cytoscape is gone', paneMainCy.destroyed, true);
+    assert(rows, 'other pane still owns its graph', paneSide.getResource('researchGraph') != null);
+    paneSide.releaseOwner();
+
+    const warmCtx = makeCtx('warm-graph');
+    const warmHost = makeGraphHost();
+    const cyBeforeWarm = fakeElements.length;
+    await g.renderResearchGraph(warmHost, { ctx: warmCtx });
+    const warmCy = fakeElements[cyBeforeWarm];
+    const warmLive = sandbox.__prksResearchGraphLiveCount || 0;
+    warmCtx.warmSuspend();
+    warmCtx.warmSuspend();
+    assertEq(rows, 'warm park releases the non-suspendable graph once', warmCy.destroyed, true);
+    assertEq(rows, 'warm park drops one live graph', sandbox.__prksResearchGraphLiveCount, warmLive - 1);
+    assertEq(rows, 'warm park clears the graph resource', warmCtx.getResource('researchGraph'), undefined);
+    warmCtx.resumeOwner();
+    assertEq(rows, 'warm resume does not create another cytoscape', fakeElements.length, cyBeforeWarm + 1);
+    assertEq(rows, 'warm resume leaves the graph unregistered', warmCtx.getResource('researchGraph'), undefined);
+
+    const coldCtx = makeCtx('cold-graph');
+    const coldHost = makeGraphHost();
+    await g.renderResearchGraph(coldHost, { ctx: coldCtx });
+    const coldCy = fakeElements[fakeElements.length - 1];
+    coldCtx.resourceRegistry.releaseAll();
+    coldCtx.resumeOwner();
+    assertEq(rows, 'cold park destroys the cytoscape', coldCy.destroyed, true);
+    assertEq(rows, 'cold park leaves no graph to resume', coldCtx.getResource('researchGraph'), undefined);
+
+    const routeCtx = makeCtx('route-swap');
+    const routeHostA = makeGraphHost();
+    let resolveRouteA;
+    fetchImpl = function () {
+        return new Promise(function (resolve) {
+            resolveRouteA = resolve;
+        });
+    };
+    const cyBeforeRoute = fakeElements.length;
+    const pendingRouteA = g.renderResearchGraph(routeHostA, { ctx: routeCtx, routeGen: routeCtx.generation });
+    routeCtx.beginRoute();
+    fetchImpl = async function () {
+        return fixture;
+    };
+    const routeHostB = makeGraphHost();
+    await g.renderResearchGraph(routeHostB, { ctx: routeCtx, routeGen: routeCtx.generation });
+    const routeCyB = fakeElements[fakeElements.length - 1];
+    resolveRouteA(fixture);
+    await pendingRouteA;
+    assertEq(rows, 'stale route completion does not mount a second cytoscape', fakeElements.length, cyBeforeRoute + 1);
+    assertEq(rows, 'replacement route keeps its cytoscape', routeCyB.destroyed, false);
+    assert(rows, 'stale completion does not own the replacement', routeCtx.getResource('researchGraph') !== undefined);
+    assertEq(rows, 'stale host was not rewritten', routeHostA.innerHTML, '');
+
+    const repeatCtx = makeCtx('repeat');
+    const repeatHost = makeGraphHost();
+    const framesAtRepeat = pendingFrames.size;
+    for (let pass = 0; pass < 3; pass++) {
+        await g.renderResearchGraph(repeatHost, { ctx: repeatCtx });
+        repeatCtx.getResource('researchGraph').selectNode('concept:C-1');
+        g.destroyResearchGraph(repeatHost);
+        assertEq(rows, 'pass ' + pass + ' releases listeners', repeatHost._bound(), 0);
+        assertEq(rows, 'pass ' + pass + ' releases the resize frame', pendingFrames.size, framesAtRepeat);
+    }
+    const repeatCanvas = repeatHost.querySelector('[data-prks-role="graph-canvas"]');
+    const repeatLiveObs = resizeObservers.filter(function (obs) {
+        return obs.target === repeatCanvas && !obs.disconnected;
+    });
+    assertEq(rows, 'repeated mount leaves no live observer', repeatLiveObs.length, 0);
+    assertEq(rows, 'repeated mount leaves no graph resource', repeatCtx.getResource('researchGraph'), undefined);
+
+    const roleMain = makeCtx('role-main');
+    const roleSide = makeCtx('role-side');
+    const roleMainHost = makeGraphHost();
+    const roleSideHost = makeGraphHost();
+    await g.renderResearchGraph(roleMainHost, { ctx: roleMain });
+    await g.renderResearchGraph(roleSideHost, { ctx: roleSide });
+    const roleMainRuntime = roleMain.getResource('researchGraph');
+    const roleSideRuntime = roleSide.getResource('researchGraph');
+    const roleMainCy = fakeElements[fakeElements.length - 2];
+    const promoted = roleSide;
+    const demoted = roleMain;
+    assert(rows, 'role swap keeps the promoted runtime', promoted.getResource('researchGraph') === roleSideRuntime);
+    assert(rows, 'role swap keeps the demoted runtime', demoted.getResource('researchGraph') === roleMainRuntime);
+    assertEq(rows, 'role swap does not destroy the demoted cytoscape', roleMainCy.destroyed, false);
+    roleMain.releaseOwner();
+    roleSide.releaseOwner();
+
+    const oldOwner = makeCtx('same-tab');
+    const oldHost = makeGraphHost();
+    let resolveOld;
+    fetchImpl = function () {
+        return new Promise(function (resolve) {
+            resolveOld = resolve;
+        });
+    };
+    const pendingOld = g.renderResearchGraph(oldHost, { ctx: oldOwner, routeGen: oldOwner.generation });
+    const oldTicket = oldOwner.resourceTicket(oldOwner.generation);
+    oldOwner.releaseOwner();
+    const newOwner = makeCtx('same-tab');
+    fetchImpl = async function () {
+        return fixture;
+    };
+    const newHost = makeGraphHost();
+    await g.renderResearchGraph(newHost, { ctx: newOwner, routeGen: newOwner.generation });
+    const newCy = fakeElements[fakeElements.length - 1];
+    const planted = { id: 'stale-plant' };
+    let plantedDisposes = 0;
+    const plantedResult = newOwner.resourceRegistry.register(oldTicket, {
+        kind: 'researchGraph',
+        value: planted,
+        dispose: function () { plantedDisposes += 1; },
+    });
+    resolveOld(fixture);
+    await pendingOld;
+    assertEq(rows, 'old owner ticket cannot register on the replacement', plantedResult, 'rejected');
+    assertEq(rows, 'rejected plant is not disposed', plantedDisposes, 0);
+    assertEq(rows, 'replacement cytoscape survives the old completion', newCy.destroyed, false);
+    assert(rows, 'replacement still owns its own graph', newOwner.getResource('researchGraph') !== planted);
+    newOwner.releaseOwner();
 
     const passed = rows.filter((r) => r.ok).length;
     const failed = rows.filter((r) => !r.ok).length;

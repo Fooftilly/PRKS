@@ -19,10 +19,11 @@
     // --repo fails if it drifts. Changing manifest bytes (vendor files, the
     // committed Vue bundle, frontend/js/workspace-model.js,
     // frontend/js/work-route-projection.js,
-    // frontend/js/search-query-codec.js, or
-    // frontend/js/tab-leave.js) retires old
+    // frontend/js/search-query-codec.js,
+    // frontend/js/tab-leave.js, or
+    // frontend/js/owner-resource.js) retires old
     // shell/static caches.
-    const DEPENDENCY_REVISION = '84482fc97409';
+    const DEPENDENCY_REVISION = 'd7bf5666a592';
     const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
     const PDF_CACHE = 'prks-pdf-v1';
@@ -102,6 +103,7 @@
         '/js/workspace-tree.js',
         '/js/workspace-persistence.js',
         '/js/workspace-tabs.js',
+        '/js/owner-resource.js',
         '/js/tab-context.js',
         '/js/workspace-tiling.js',
         '/js/workspace-split.js',

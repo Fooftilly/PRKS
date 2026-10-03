@@ -216,7 +216,8 @@ TabContext owns route runtime:
 - route DOM → `ctx.root`
 - page-local lookup → `ctx.query` / `data-prks-role` (`ctx.domId` only for ARIA)
 - async lifetime → `ctx.beginRoute()` / `ctx.isCurrent(generation)`
-- live resources → `ctx.resources` / `ctx.setTimer`
+- external browser resources → `ctx.resourceRegistry` (`frontend/js/owner-resource.js`, built from `frontend-app/src/lifecycle/owner-resource.ts`). Research Graph is the first kind and is not warm-suspendable. PDF stays on `ctx.setResource('pdf', …)` until the next B2 slice; a suspendable registration is the shape that runtime will use.
+- other named values → `ctx.resources` / `ctx.setTimer`
 - shell → main/focused context (`prksGetMainTabContext`, `prksGetFocusedTabContext`)
 
 People-library search runtime belongs to rendered `.prks-people-library` root
@@ -249,7 +250,7 @@ on the same owner are serialized. `prksRenderTabRoute` does not ask again after 
 approved preflight. Person, Work, and PDF probes stay with those features.
 
 Stacked mode: one mounted context. Tiled mode: Main + every visible Secondary leaf (up to the visible-pane cap), each with an independent TabContext. Do not store route-scoped state on `window`. The Research Graph
-is `ctx.getResource('researchGraph')`; no module-level singleton fallback.
+is that owner's `researchGraph` resource (`ctx.getResource('researchGraph')` reads the registry); no module-level singleton fallback.
 
 ### Workspace drag and drop
 
@@ -363,7 +364,7 @@ labels, page ranges, markup, and backlink snippets are private. Never log them.
 The Research Graph is a read-only derived projection. It is never canonical
 relationship storage and must never authorize a destructive mutation.
 
-`#/graph` chrome is painted by `frontend-app/src/features/research-graph/`. Vue does not fetch the projection and does not construct Cytoscape. The coordinator loads `prksOfflineResearchGraphFetch` and mounts the instance with `renderResearchGraph` into that shell. The instance is `ctx.setResource('researchGraph', runtime, destroy)` for that pane only. Destroy releases the Cytoscape instance, its listeners, the canvas `ResizeObserver`, and any pending resize frame. A second mount on the same owner replaces the previous instance. Main and Secondary each keep their own instance; destroying one does not drop the other. A stale completion after leave does not mount into the replacement route. Selection stays on that pane's runtime. Only the runtime whose context is `prksGetFocusedTabContext()` may write `#prks-graph-inspector` or refresh focused-panel visibility; focusing a pane repaints through `renderGraphInspector`. When `renderResearchGraph` is missing, the graph body shows `Graph UI unavailable.` and does not alert. The Vue route host participates in the pane flex chain, and `[data-prks-role="graph-body"]` passes that height to the stage. After Vue writes the chrome, `prksRefreshIcons` runs on the painted graph element so the header and legend placeholders become icons. `shellHtml` remains the non-Vue mount path used by the node selftest; #303 B2 retires that bridge.
+`#/graph` chrome is painted by `frontend-app/src/features/research-graph/`. Vue does not fetch the projection and does not construct Cytoscape. The coordinator loads `prksOfflineResearchGraphFetch` and mounts the instance with `renderResearchGraph` into that shell. The instance is the `researchGraph` registration on that pane's owner-resource registry. It is not warm-suspendable. Registering another instance for the same owner disposes the previous one once. Destroy releases the Cytoscape instance, its listeners, the canvas `ResizeObserver`, and any pending resize frame. Warm suspend releases it and resume does not create another. Cold park and owner destruction release it. A Main/Secondary role swap does not. Main and Secondary each keep their own instance; destroying one does not drop the other. A stale completion after the owner or its generation is replaced does not register or mount into the replacement. Selection stays on that pane's runtime. Only the runtime whose context is `prksGetFocusedTabContext()` may write `#prks-graph-inspector` or refresh focused-panel visibility; focusing a pane repaints through `renderGraphInspector`. When `renderResearchGraph` is missing, the graph body shows `Graph UI unavailable.` and does not alert. The Vue route host participates in the pane flex chain, and `[data-prks-role="graph-body"]` passes that height to the stage. After Vue writes the chrome, `prksRefreshIcons` runs on the painted graph element so the header and legend placeholders become icons. The non-Vue `shellHtml` mount path is removed. The Vue shell is the only chrome.
 
 Graph node IDs must be namespaced by entity type; raw PRKS IDs are not globally
 unique across record types.
