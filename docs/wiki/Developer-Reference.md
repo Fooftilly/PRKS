@@ -162,7 +162,7 @@ Rebuild vendored assets after changing a pin:
 (cd frontend-app && npm ci --ignore-scripts && npm run build)
 ```
 
-Each build refreshes `frontend/vendor/DEPENDENCY-MANIFEST.json` and `frontend/sw.js`'s `DEPENDENCY_REVISION` so service-worker static/shell caches retire when vendor bytes, the Vue bundle, `frontend/js/workspace-model.js`, `frontend/js/work-route-projection.js`, `frontend/js/search-query-codec.js`, `frontend/js/tab-leave.js`, or `frontend/js/owner-resource.js` change. Those classic scripts are built before that manifest is written. Inter is intentionally raw-managed (npm would alter the CSS/woff2 contract); update its `VERSION` + assets, then `python scripts/dependency_gate.py --write-manifest`.
+Each build refreshes `frontend/vendor/DEPENDENCY-MANIFEST.json` and `frontend/sw.js`'s `DEPENDENCY_REVISION` so service-worker static/shell caches retire when vendor bytes, the Vue bundle, `frontend/js/workspace-model.js`, `frontend/js/work-route-projection.js`, `frontend/js/search-query-codec.js`, `frontend/js/tab-leave.js`, `frontend/js/owner-resource.js`, or `frontend/js/route-model.js` change. Those classic scripts are built before that manifest is written. Inter is intentionally raw-managed (npm would alter the CSS/woff2 contract); update its `VERSION` + assets, then `python scripts/dependency_gate.py --write-manifest`.
 
 ## See also
 

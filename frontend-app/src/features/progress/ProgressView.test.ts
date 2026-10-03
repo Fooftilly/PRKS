@@ -1,7 +1,7 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { presentProgress, resetProgressSessionForTests } from './session'
-import { PROGRESS_STATUSES } from './status'
+import { WORK_STATUSES } from '../../domain/work-status'
 
 afterEach(() => {
   resetProgressSessionForTests()
@@ -59,7 +59,7 @@ describe('ProgressView', () => {
     expect(el.querySelector('[data-prks-role="work-browse-mode"]')).not.toBeNull()
     expect(el.querySelector('.work-browse-collection--cards')).not.toBeNull()
 
-    for (const status of PROGRESS_STATUSES) {
+    for (const status of WORK_STATUSES) {
       calls.length = 0
       presentProgress({
         owner: pane,
@@ -67,7 +67,7 @@ describe('ProgressView', () => {
         status,
         rows: [{ id: status, title: 'Only', status, abstract_excerpt: 'x' }],
         offlineCached: false,
-        generation: PROGRESS_STATUSES.indexOf(status) + 2,
+        generation: WORK_STATUSES.indexOf(status) + 2,
       })
       await nextTick()
       expect(el.querySelector('.prks-page-title')?.textContent).toBe(`Files · ${status}`)

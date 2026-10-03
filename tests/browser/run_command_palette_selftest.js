@@ -496,6 +496,7 @@ function runScript(rel) {
     vm.runInNewContext(code, sandbox, { filename: file });
 }
 
+runScript('frontend/js/route-model.js');
 runScript('frontend/js/navigation.js');
 runScript('frontend/js/search-query-codec.js');
 runScript('frontend/js/saved-views.js');

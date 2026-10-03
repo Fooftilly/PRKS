@@ -1353,6 +1353,22 @@ def build_dependency_manifest(repo_root: Path | None = None) -> dict[str, Any]:
             }
         )
 
+    route_model_path = root / "frontend" / "js" / "route-model.js"
+    if route_model_path.is_file():
+        entries.append(
+            {
+                "name": "prks-route-model",
+                "version": "1",
+                "source_category": "frontend-app:route-model",
+                "runtime_files": [
+                    {
+                        "path": "/js/route-model.js",
+                        "sha256": sha256_file(route_model_path),
+                    }
+                ],
+            }
+        )
+
     entries.sort(key=lambda e: e["name"])
     return {
         "schema_version": 1,

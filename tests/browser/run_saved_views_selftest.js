@@ -92,6 +92,7 @@ const sandbox = {
 sandbox.window = sandbox;
 sandbox.globalThis = sandbox;
 
+runScript('frontend/js/route-model.js', sandbox);
 runScript('frontend/js/navigation.js', sandbox);
 runScript('frontend/js/search-query-codec.js', sandbox);
 runScript('frontend/js/saved-views.js', sandbox);

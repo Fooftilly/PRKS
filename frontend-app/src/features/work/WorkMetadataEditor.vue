@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
+import { WORK_STATUSES } from '../../domain/work-status'
 import type { WorkMetaDraft, WorkMetaField } from './metadata-draft'
 import type { WorkMetadataChrome, WorkMetadataConflict, WorkMetadataGroupChrome } from './metadata-session'
 
@@ -17,7 +18,6 @@ const emit = defineEmits<{
 }>()
 
 const isVideo = props.sourceKind === 'video'
-const statuses = ['Not Started', 'Planned', 'In Progress', 'Completed', 'Paused']
 const docMenuReady = ref(false)
 
 function group(name: string): WorkMetadataGroupChrome | undefined {
@@ -225,7 +225,7 @@ watch(() => props.draft.doc_type, () => {
           <input id="meta-status" type="hidden" data-prks-work-field="status" :value="draft.status">
           <div class="prks-segmented prks-segmented--status prks-segmented--single-row" role="radiogroup" aria-label="Status">
             <button
-              v-for="label in statuses"
+              v-for="label in WORK_STATUSES"
               :key="label"
               type="button"
               class="prks-segmented__btn"

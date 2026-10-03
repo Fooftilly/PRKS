@@ -5,8 +5,8 @@
  * emits them as the classic script `frontend/js/search-query-codec.js`, whose
  * global `prksSearchQueryCodec` is the only legacy bridge.
  *
- * This module does not parse hashes. `prksParseRoute` in `frontend/js/navigation.js`
- * remains the only hash parser. A search definition is already-parsed route params.
+ * This module does not parse hashes. `parseRoute` in `routing/route-model.ts`
+ * is the only hash parser. A search definition is already-parsed route params.
  */
 
 export const SEARCH_UNSAVABLE_MESSAGE = 'This search combination cannot be saved as a view.'

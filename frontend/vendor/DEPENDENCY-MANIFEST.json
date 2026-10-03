@@ -124,11 +124,22 @@
       "version": "2.15.1"
     },
     {
+      "name": "prks-route-model",
+      "runtime_files": [
+        {
+          "path": "/js/route-model.js",
+          "sha256": "e30d91e66981b83df668e343da3582104923ee01250741f292e3e3dabb3147ad"
+        }
+      ],
+      "source_category": "frontend-app:route-model",
+      "version": "1"
+    },
+    {
       "name": "prks-search-query-codec",
       "runtime_files": [
         {
           "path": "/js/search-query-codec.js",
-          "sha256": "9be89de0e23be05b082e9192f47486eb67cffe1be1c204f4a9d868796ef4df1c"
+          "sha256": "bcc416c86b13e94f9e1affef46e6149dd90cca180390d045636ae9968f5d5001"
         }
       ],
       "source_category": "frontend-app:search-query-codec",
@@ -150,7 +161,7 @@
       "runtime_files": [
         {
           "path": "/vue/prks-vue.js",
-          "sha256": "aca76694445778bb9866d65a902f27a256de62eb9575e329417ddfa103a7cd8e"
+          "sha256": "dc5f9321fb82a9022af9299ef6724337317e65ee7eb299087800e2236996d6ac"
         }
       ],
       "source_category": "npm:frontend-app",
