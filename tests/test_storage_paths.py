@@ -20,9 +20,15 @@ def _env(*, testing=None, storage=None, processing=None, log_file=None):
         "PRKS_STORAGE",
         "PRKS_FOR_PROCESSING_DIR",
         "PRKS_LOG_FILE",
+        "PRKS_CONFIG_FILE",
     )
     old = {k: os.environ.get(k) for k in keys}
     try:
+        # Production-mode cases resolve through the bootstrap step; point it at
+        # a file that cannot exist so a developer's real config is never read.
+        os.environ["PRKS_CONFIG_FILE"] = os.path.join(
+            _PROJECT_DIR, "data_testing", ".no-such-dir", "config.json"
+        )
         if testing is None:
             os.environ.pop("PRKS_TESTING", None)
         else:
@@ -79,13 +85,18 @@ class TestStoragePaths(unittest.TestCase):
             )
             self.assertEqual(cfg.root, os.path.join(_PROJECT_DIR, "data_testing"))
 
-    def test_explicit_storage_keeps_configured_string(self):
+    def test_explicit_relative_storage_is_normalized_once(self):
+        # V1 (storage-architecture §7.2): a relative PRKS_STORAGE is made
+        # absolute once, at resolution, so it names the same tree the process
+        # started with regardless of later working-directory changes.
         configured = "data_testing"
+        expected = os.path.abspath(configured)
         with _env(testing="1", storage=configured):
             cfg = StorageConfig.from_env()
-            self.assertEqual(cfg.configured_root, configured)
-            self.assertEqual(cfg.pdfs_dir, os.path.join(configured, "pdfs"))
-            self.assertEqual(cfg.db_path, os.path.join(configured, "prks_data.db"))
+            self.assertEqual(cfg.configured_root, expected)
+            self.assertEqual(cfg.root_source, "env")
+            self.assertEqual(cfg.pdfs_dir, os.path.join(expected, "pdfs"))
+            self.assertEqual(cfg.db_path, os.path.join(expected, "prks_data.db"))
 
     def test_paths_has_no_env_wrappers(self):
         self.assertFalse(hasattr(paths, "resolve_storage_root"))
@@ -157,9 +168,10 @@ class TestStorageConfig(unittest.TestCase):
 
         with _env(testing="1", storage="data_testing"):
             cfg = StorageConfig.from_env()
-        self.assertEqual(cfg.configured_root, "data_testing")
-        self.assertEqual(cfg.root, "data_testing")
-        self.assertEqual(cfg.db_path, os.path.join("data_testing", "prks_data.db"))
+        expected = os.path.abspath("data_testing")
+        self.assertEqual(cfg.configured_root, expected)
+        self.assertEqual(cfg.root, expected)
+        self.assertEqual(cfg.db_path, os.path.join(expected, "prks_data.db"))
 
     def test_for_testing_is_explicit_root(self):
         from backend.storage.config import StorageConfig
@@ -258,6 +270,7 @@ class TestStorageConfig(unittest.TestCase):
 
         with _env(testing="1", storage="data_testing"):
             cfg = StorageConfig.from_env()
+        expected = os.path.abspath("data_testing")
         with _env(
             testing="",
             storage="/tmp/changed",
@@ -265,12 +278,12 @@ class TestStorageConfig(unittest.TestCase):
             log_file="/tmp/changed.log",
         ):
             self.assertEqual(cfg.mode, "testing")
-            self.assertEqual(cfg.configured_root, "data_testing")
-            self.assertEqual(cfg.db_path, os.path.join("data_testing", "prks_data.db"))
+            self.assertEqual(cfg.configured_root, expected)
+            self.assertEqual(cfg.db_path, os.path.join(expected, "prks_data.db"))
             self.assertEqual(
-                cfg.processing_dir, os.path.join("data_testing", "for_processing")
+                cfg.processing_dir, os.path.join(expected, "for_processing")
             )
-            self.assertEqual(cfg.log_file, os.path.join("data_testing", "prks-errors.log"))
+            self.assertEqual(cfg.log_file, os.path.join(expected, "prks-errors.log"))
 
     def test_testing_refuses_repo_data_root(self):
         repo_data = os.path.join(_PROJECT_DIR, "data")

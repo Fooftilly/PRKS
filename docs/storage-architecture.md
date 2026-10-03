@@ -1,10 +1,12 @@
 # Storage location and Asset storage backends: design (#311)
 
-**Status: proposed design. Not implemented.** This is the design gate for
-#311, under the #310 target architecture. It settles the storage-location and
-physical-object contract that #60's Asset work consumes. It adds no schema,
-migration, API, configuration behavior or UI. Once approved, the phases in
-[§13](#13-implementation-phases) become focused implementation issues.
+**Status: Phase A (contract and foundation) implemented; Phases B–F are
+proposed.** This is the design gate for #311, under the #310 target
+architecture. It settles the storage-location and physical-object contract
+that #60's Asset work consumes. The phases in
+[§13](#13-implementation-phases) become focused implementation issues. How
+Phase A maps onto the code, and the choices it made inside this design's
+latitude, are recorded in [§18](#18-phase-a-implementation-record).
 
 It follows the shape of [work-identity-model.md](work-identity-model.md): audit
 the code first, then decide. Every claim about current behavior was checked
@@ -43,6 +45,7 @@ Contents:
 15. [Rejected alternatives](#15-rejected-alternatives)
 16. [Open questions](#16-open-questions)
 17. [Conformance checks](#17-conformance-checks)
+18. [Phase A implementation record](#18-phase-a-implementation-record)
 
 ---
 
@@ -1625,3 +1628,100 @@ on, and PRKS says so explicitly instead of assuming (§7.4).
 
 **What this PR changes.** Documentation only. There is no runtime, schema,
 API, OpenAPI, frontend, Storybook or dependency change.
+
+---
+
+## 18. Phase A implementation record
+
+**Where it lives.** Phase A adapts the existing owners instead of adding a
+parallel configuration system:
+
+| Concern | Before Phase A | Phase A |
+| --- | --- | --- |
+| Root selection | `StorageConfig.from_env()` | still the one entry; it asks `storage/resolver.py` (§5.2, V1, §6) and records `root_source` |
+| Path derivation | `storage/paths.py` via `StorageConfig._from_parts` | unchanged |
+| CLI | `prks_app.py` | `--storage-root`; `open_storage()` runs before restore recovery and `bind_storage()` |
+| Bootstrap file | none | `storage/bootstrap_config.py` (reader, `BootstrapConfigStore` compare-and-set, `transaction()` for later multi-step writers) |
+| Marker, validation, lease | none | `storage/root_marker.py`, `storage/root_binding.py`, `storage/preflight.py`, `storage/file_lock.py` |
+| Bind | `server.bind_storage()` | unchanged, plus a guard refusing a root this process has not leased |
+| Backup inventory | `backup_storage_inventory()` | adds `operational_root_entries` (marker, `root.lock`) and `external_operational` (bootstrap file and its lock) |
+| Durability | `fs_durability` | adds `replace_file_atomically()` (sibling temporary, fsync, replace, directory sync) used by the marker and the bootstrap file |
+| Backend boundary | none | `storage/objects.py` with the shared contract suite `tests/storage_backend_contract.py`; **no production operation uses it yet** |
+
+**Choices made inside the design's latitude.**
+
+- **Adoption (§7.1, open question 5) needs proof by type and content.** An
+  unmarked root is adopted only when it holds the mode's database as a regular
+  file with a SQLite header, `pdfs/` as a plain directory, or recognized
+  restore state under `.prks-maintenance/` (`restore-journal.json`,
+  `rollback/`, `restore-staging/`, `backup/`). The last case lets a root
+  interrupted mid-restore, whose database and `pdfs/` may be moved away, still
+  reach `recover_incomplete_restore()`. A same-named entry of the wrong type, or
+  arbitrary maintenance content, is foreign. Open question 5 stays open.
+- **Only a first run creates a root.** An empty or absent root becomes a new
+  root for the CLI, `PRKS_STORAGE` and default sources, as V3 prescribes. A
+  root selected by the **bootstrap file** must already carry a marker or be
+  adoptable: absent or empty, it is far more likely an unmounted disk than a
+  wish for a new library, so it is refused (`root_missing`) without creating
+  anything. Choosing a genuinely new root is Phase D's command.
+- **V7 and V13 cover the whole root.** Under the lease, startup walks the
+  resolved root completely without following links (excluding the root path
+  itself and top-level OS metadata such as `lost+found`). Any link or Windows
+  reparse point is refused, and so is any entry -- directory or regular file,
+  so a file bind mount is caught -- on a device other than the root's. The one
+  relaxation is an overlayfs root, where unmodified files may report the lower
+  layer's device: there only directories are held to the device rule, with a
+  warning. A directory that cannot be read is refused, because the invariant
+  cannot be proven for it. Components an override places outside the root are
+  not part of the walk. Device numbers alone cannot see a bind mount from the
+  same filesystem, across which `rename()` still fails with `EXDEV`, so the
+  mount table is consulted too (`/proc/self/mountinfo` on Linux, `mount(8)`
+  on macOS; on Windows a folder mount is a reparse point): any mount point
+  strictly inside the root, directory or file, is refused. The root itself may
+  be a mount point.
+- **Root links are resolved once.** After the lease is taken, the process
+  entry re-anchors every root-relative `StorageConfig` path beneath the leased
+  `root_real` (`BoundRoot.anchor()`), so retargeting a root link afterwards
+  cannot move database, PDF or index I/O to a root whose marker and lease were
+  never checked. `configured_root` keeps the configured spelling.
+- **V11 install directory.** A packaged build refuses any root inside the
+  install directory. A source checkout refuses only the checkout itself or a
+  root containing it, so existing self-hosted roots inside a checkout keep
+  starting. The nested-marker scan is bounded to two levels and 2000 entries.
+- **V9** refuses a filesystem type known with certainty to be a network mount,
+  before anything is written: Linux types from `/proc/mounts` (`nfs`, `cifs`,
+  `smb3`, network FUSE such as `fuse.sshfs`, …), macOS types from `mount(8)`
+  (`smbfs`, `nfs`, `afpfs`, `webdav`), and on Windows a UNC path or a drive
+  reported as `DRIVE_REMOTE`. Other FUSE types are uncertain and a filesystem
+  the platform cannot classify is never assumed local; both are warned about.
+  **V10** warns. **V5, V6, V8** run once per device; the result is cached in
+  the marker's `filesystem_probe`, and a different `st_dev` re-probes.
+- **Diagnostics.** Each bind records `active_process` (PID, host, start time)
+  in the marker for the "already open" message. It is never read as authority.
+- **Inbox for new sources.** A `config_file` or `platform_default` root uses
+  `<root>/for_processing`. No existing deployment has those sources; the
+  development default keeps `/data/for_processing` exactly (§1.2).
+- **Relocation records.** A marker in `fenced`, `staging` or `retired` state,
+  or an `active` marker with a relocation role, is refused with the relocation
+  ID and peer. A bootstrap `relocation` record with a known phase is parsed and
+  never acted on; the marker check refuses whichever end is not bindable.
+- **`put_new` publication** is always one atomic no-overwrite step: `link`
+  (POSIX), `rename` (Windows), or, on a filesystem without hard links,
+  `renameat2(RENAME_NOREPLACE)` / `renamex_np(RENAME_EXCL)`. Where none exists
+  it fails closed; the key is never reserved with an empty file.
+- **Bootstrap file identity.** `BootstrapConfigStore` canonicalizes a
+  symlinked config path to its target, so every alias shares one lock and a
+  write replaces the target rather than the link.
+- **Windows.** The lease is `msvcrt.locking` (`LockFile` on one byte, per
+  handle). A marker replace that meets a sharing violation from a concurrent
+  diagnostic reader is retried briefly.
+
+**Deliberately not in Phase A.** Routing any managed-file operation through
+`StorageBackend`, key-scoped locks, and a derived `processing_files.abs_path`
+(Phase B); storage status, choose, open another library, hot rebind,
+`unbind_storage()`, the Settings writer and the typed API (Phase D); every
+relocation step, recovery, `storage relocate/finalize/abort/verify` and terminal
+teardown (Phase E). Probing earlier default locations (§5.2) has nothing to
+probe yet: a source checkout's only earlier default is its current one, and no
+packaged build has shipped.
+
