@@ -112,6 +112,38 @@ describe('owner resource lifetime', () => {
     expect(side.registry.get('researchGraph')).toBe('side-graph')
   })
 
+  it('warm park keeps a pdf that declares no suspend or resume hook', () => {
+    const { host, registry } = openHost('pdf-no-hook')
+    const ticket = resourceTicket(host)
+    const pdf = { viewer: 1 }
+    let disposed = 0
+    registry.register(ticket, {
+      kind: 'pdf',
+      value: pdf,
+      suspendable: true,
+      dispose: () => {
+        disposed += 1
+      },
+    })
+    registry.warmSuspend()
+    expect(registry.get('pdf')).toBe(pdf)
+    expect(disposed).toBe(0)
+    registry.resume()
+    expect(registry.get('pdf')).toBe(pdf)
+    expect(disposed).toBe(0)
+    const next = { viewer: 2 }
+    expect(registry.register(ticket, {
+      kind: 'pdf',
+      value: next,
+      suspendable: true,
+      dispose: () => {
+        disposed += 1
+      },
+    })).toBe('replaced')
+    expect(disposed).toBe(1)
+    expect(registry.get('pdf')).toBe(next)
+  })
+
   it('warm park keeps only a suspendable resource and does not recreate it', () => {
     const { host, registry } = openHost()
     const ticket = resourceTicket(host)

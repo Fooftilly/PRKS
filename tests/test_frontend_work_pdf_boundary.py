@@ -32,7 +32,11 @@ class WorkPdfBoundaryTests(unittest.TestCase):
         self.assertIn("pdfDeferredSetup", setup)
         self.assertIn("if (_pdfStale()) return;", setup)
         self.assertIn('ctx.query(\'[data-prks-role="pdf-viewer"]\')', setup)
-        self.assertIn("ctx.setResource('pdf', runtime, function () {", setup)
+        self.assertIn("ctx.resourceTicket(_pdfGen)", setup)
+        self.assertIn("ctx.registerResource(_pdfTicket", setup)
+        self.assertIn("kind: 'pdf'", setup)
+        self.assertIn("suspendable: true", setup)
+        self.assertNotIn("ctx.setResource('pdf'", setup)
         self.assertIn("runtime.destroy();", setup)
         self.assertIn("prksRequest(String(work.file_path)", setup)
         self.assertNotIn("savePdfAnnotation", _SURFACE + _VIEW)
@@ -81,7 +85,8 @@ class WorkPdfBoundaryTests(unittest.TestCase):
         self.assertIn("clearAllTimers();", teardown)
         setup = _between(_PDF, "export function initPdfViewerForWork", "function prksReconcilePdfMutationMode")
         self.assertLess(setup.index("const _pdfGen = ctx.generation;"), setup.index("setTimeout"))
-        self.assertLess(setup.index("if (_pdfStale()) return;"), setup.index("ctx.setResource('pdf'"))
+        self.assertLess(setup.index("ctx.resourceTicket(_pdfGen)"), setup.index("setTimeout"))
+        self.assertLess(setup.index("if (_pdfStale()) return;"), setup.index("ctx.registerResource(_pdfTicket"))
 
 
 if __name__ == "__main__":

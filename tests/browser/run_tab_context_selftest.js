@@ -454,16 +454,18 @@ assertEq('cleanup continues after throw', boom, 11);
         suspend: function () { latePdfSuspends += 1; },
         resume: function () { latePdfResumes += 1; },
     });
-    assertEq('parked owner attaches a later suspendable pdf', latePdfResult, 'attached');
-    assertEq('later pdf is readable while parked', warm.readResource('pdf'), latePdf);
+    assertEq('parked owner replaces the pdf slot with a later suspendable pdf', latePdfResult, 'replaced');
+    assertEq('later pdf is readable while parked', warm.getResource('pdf'), latePdf);
+    assertEq('later pdf is the same registry read', warm.readResource('pdf'), latePdf);
     assertEq('later pdf suspend hook ran once', latePdfSuspends, 1);
+    assertEq('replacing the parked pdf disposes the previous once', warmPdfDisposes, 1);
     assert('warm resume reuses the context', warm.resume(makeHost()));
     assertEq('resume runs the later pdf hook once', latePdfResumes, 1);
     assertEq('resume does not dispose the later pdf', latePdfDisposes, 0);
     assertEq('warm resume does not recreate the graph', warm.getResource('researchGraph'), undefined);
-    assertEq('warm resume still has not disposed pdf', warmPdfDisposes, 0);
+    assertEq('warm resume does not dispose the replaced pdf again', warmPdfDisposes, 1);
     warm.unmount('cold');
-    assertEq('cold unmount disposes pdf', warmPdfDisposes, 1);
+    assertEq('cold unmount does not dispose the replaced pdf again', warmPdfDisposes, 1);
     assertEq('cold unmount disposes the later pdf once', latePdfDisposes, 1);
     assertEq('cold unmount does not dispose the graph again', warmGraphDisposes, 1);
 
@@ -588,6 +590,93 @@ assertEq('cleanup continues after throw', boom, 11);
     assertEq('beginRoute rejects the previous ticket', staleRoute, 'rejected');
     assertEq('beginRoute keeps the new graph', parked.getResource('researchGraph').id, 'after-route');
     assertEq('rejected beginRoute registration keeps its disposer', routeDisposer, 0);
+
+    const pdfSlot = prksEnsureTabContext('resource-pdf-slot');
+    pdfSlot.mount(makeHost());
+    pdfSlot.beginRoute({ name: 'work', hash: '#/works/pdf-slot' });
+    let pdfSlotDisposes = 0;
+    const pdfSlotValue = { id: 'slot' };
+    const pdfSlotResult = pdfSlot.registerResource(pdfSlot.resourceTicket(), {
+        kind: 'pdf',
+        value: pdfSlotValue,
+        suspendable: true,
+        dispose: function () { pdfSlotDisposes += 1; },
+    });
+    assertEq('registerResource pdf attaches', pdfSlotResult, 'attached');
+    assert('getResource pdf reads the registry slot', pdfSlot.getResource('pdf') === pdfSlotValue);
+    assert('readResource pdf reads the same slot', pdfSlot.readResource('pdf') === pdfSlotValue);
+    assert('registered pdf skips the legacy map', !pdfSlot.resources.has('pdf'));
+    pdfSlot.clearResource('pdf');
+    assertEq('clearResource pdf disposes the registry slot once', pdfSlotDisposes, 1);
+    assertEq('clearResource pdf clears getResource', pdfSlot.getResource('pdf'), undefined);
+    assertEq('clearResource pdf clears the registry read', pdfSlot.readResource('pdf'), undefined);
+    assert('clearResource pdf leaves no legacy entry', !pdfSlot.resources.has('pdf'));
+
+    let plantedDisposes = 0;
+    pdfSlot.resources.set('pdf', {
+        value: { id: 'stranded' },
+        disposer: function () { plantedDisposes += 1; },
+    });
+    let setterDisposes = 0;
+    const setterValue = { id: 'via-set-pdf' };
+    pdfSlot.setResource('pdf', setterValue, function () { setterDisposes += 1; });
+    assertEq('setResource pdf disposes a stranded legacy entry', plantedDisposes, 1);
+    assert('setResource pdf is readable', pdfSlot.getResource('pdf') === setterValue);
+    assert('setResource pdf does not keep a legacy entry', !pdfSlot.resources.has('pdf'));
+    assert('setResource pdf matches registerResource', pdfSlot.readResource('pdf') === setterValue);
+    let setterNextDisposes = 0;
+    pdfSlot.registerResource(pdfSlot.resourceTicket(), {
+        kind: 'pdf',
+        value: { id: 'via-register' },
+        suspendable: true,
+        dispose: function () { setterNextDisposes += 1; },
+    });
+    assertEq('registerResource replaces the setResource pdf once', setterDisposes, 1);
+    assertEq('replacement disposer has not run', setterNextDisposes, 0);
+    assertEq('getResource follows the replacement', pdfSlot.getResource('pdf').id, 'via-register');
+    pdfSlot.unmount('park');
+    let rejectedPdfDisposes = 0;
+    pdfSlot.setResource('pdf', { id: 'after-park' }, function () { rejectedPdfDisposes += 1; });
+    assertEq('setResource pdf after cold park does not attach', pdfSlot.getResource('pdf'), undefined);
+    assert('setResource pdf after cold park leaves no legacy entry', !pdfSlot.resources.has('pdf'));
+    assertEq('rejected setResource pdf does not run the new disposer', rejectedPdfDisposes, 0);
+    assertEq('cold park disposes the setResource pdf once', setterNextDisposes, 1);
+
+    const warmPdf = prksEnsureTabContext('resource-pdf-warm-register');
+    warmPdf.mount(makeHost());
+    warmPdf.beginRoute({ name: 'work', hash: '#/works/warm-register' });
+    assert('empty pdf owner can warm-suspend', warmPdf.suspend(makeHost()));
+    let bareDisposes = 0;
+    const barePdf = { id: 'already-suspended' };
+    const bareResult = warmPdf.registerResource(warmPdf.resourceTicket(), {
+        kind: 'pdf',
+        value: barePdf,
+        suspendable: true,
+        dispose: function () { bareDisposes += 1; },
+    });
+    assertEq('warm-suspended pdf registration attaches', bareResult, 'attached');
+    assert('warm-suspended pdf is readable', warmPdf.getResource('pdf') === barePdf);
+    assertEq('warm-suspended pdf without a hook does not dispose', bareDisposes, 0);
+    const hookedOwner = prksEnsureTabContext('resource-pdf-warm-hook');
+    hookedOwner.mount(makeHost());
+    hookedOwner.beginRoute({ name: 'work', hash: '#/works/warm-hook' });
+    assert('hook owner warm-suspends', hookedOwner.suspend(makeHost()));
+    let hookedSuspends = 0;
+    let hookedResumes = 0;
+    const hookedPdf = { id: 'hooked' };
+    const hooked = hookedOwner.registerResource(hookedOwner.resourceTicket(), {
+        kind: 'pdf',
+        value: hookedPdf,
+        suspendable: true,
+        dispose: function () {},
+        suspend: function () { hookedSuspends += 1; },
+        resume: function () { hookedResumes += 1; },
+    });
+    assertEq('warm-suspended pdf with a hook attaches', hooked, 'attached');
+    assertEq('warm-suspended pdf invokes suspend once when a hook exists', hookedSuspends, 1);
+    assert('hooked pdf is readable while parked', hookedOwner.getResource('pdf') === hookedPdf);
+    assert('hooked owner resumes', hookedOwner.resume(makeHost()));
+    assertEq('resume invokes the pdf hook once', hookedResumes, 1);
 
     const stored = prksEnsureTabContext('resource-set');
     stored.mount(makeHost());

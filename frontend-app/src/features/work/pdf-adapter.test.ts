@@ -1,5 +1,6 @@
 import { nextTick } from 'vue'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import ownerResourceSource from '../../../../frontend/js/owner-resource.js?raw'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
 import runtimeSource from '../../../../frontend/js/pdf-work-runtime.js?raw'
 import {
@@ -78,6 +79,7 @@ type PdfWindow = Window & {
 const pdfWindow = window as unknown as PdfWindow
 
 beforeAll(() => {
+  pdfWindow.eval(ownerResourceSource)
   pdfWindow.eval(tabContextSource)
   pdfWindow.eval(runtimeSource)
 })

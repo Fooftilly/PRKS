@@ -2,7 +2,8 @@
  * Per-workspace-tab runtime. Cold-parked contexts are inert. Up to three PDF
  * contexts may instead be warm-suspended with their DOM/runtime preserved.
  * Owner-registry resources that are not suspendable are released on that warm
- * suspend. Warm park does not invalidate a resource ticket. Cold park does.
+ * suspend. The pdf kind is suspendable and stays readable. Warm park does not
+ * invalidate a resource ticket. Cold park does.
  * Role changes do not suspend, release, or replace them.
  */
 (function (root) {
@@ -332,18 +333,38 @@
             return ctx.entity.value;
         };
 
+        /**
+         * Registry kinds. pdf is warm-suspendable; researchGraph is not.
+         * setResource mints a fresh ticket and is the compatibility bridge for
+         * synchronous harness callers. Async PDF setup must capture its ticket
+         * before pdfDeferredSetup and call registerResource. Retire the pdf
+         * branch of this bridge when the remaining disposer-backed map entries
+         * leave ctx.setResource (privateNotesEditor, workRoleEditor,
+         * workTagEditor, workSourceEditor, folderTagEditor, workMetadataEditor,
+         * workNotes, workNotesSyncBound, workNotesSideRo), in that later #303
+         * B2 slice or in B5 if those callers are already gone.
+         */
+        const registrySuspendable = {
+            researchGraph: false,
+            pdf: true,
+        };
+
+        function isRegistryKind(key) {
+            return Object.prototype.hasOwnProperty.call(registrySuspendable, key);
+        }
+
         ctx.setResource = function (name, value, disposer) {
             if (!assertAlive()) return value;
             const key = String(name);
-            if (key === 'researchGraph' && ctx.resourceRegistry) {
+            if (isRegistryKind(key) && ctx.resourceRegistry) {
                 const orphan = ctx.resources.get(key);
                 ctx.resources.delete(key);
                 if (orphan) safeCall(orphan.disposer, key);
                 const ticket = typeof ctx.resourceTicket === 'function' ? ctx.resourceTicket() : null;
                 const result = ctx.resourceRegistry.register(ticket, {
-                    kind: 'researchGraph',
+                    kind: key,
                     value: value,
-                    suspendable: false,
+                    suspendable: registrySuspendable[key] === true,
                     dispose: function () { safeCall(disposer, key); },
                 });
                 if (result === 'rejected') return value;
@@ -356,8 +377,8 @@
 
         ctx.getResource = function (name) {
             const key = String(name);
-            if (key === 'researchGraph' && ctx.resourceRegistry) {
-                return ctx.resourceRegistry.get('researchGraph');
+            if (isRegistryKind(key) && ctx.resourceRegistry) {
+                return ctx.resourceRegistry.get(key);
             }
             const rec = ctx.resources.get(key);
             return rec ? rec.value : undefined;
@@ -365,8 +386,8 @@
 
         ctx.clearResource = function (name) {
             const key = String(name);
-            if (key === 'researchGraph' && ctx.resourceRegistry) {
-                ctx.resourceRegistry.dispose('researchGraph');
+            if (isRegistryKind(key) && ctx.resourceRegistry) {
+                ctx.resourceRegistry.dispose(key);
                 const orphan = ctx.resources.get(key);
                 ctx.resources.delete(key);
                 if (orphan) safeCall(orphan.disposer, key);

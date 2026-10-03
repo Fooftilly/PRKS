@@ -13,7 +13,9 @@
  * park. Cold release advances a resource epoch, so a ticket captured before
  * that release cannot attach again, including after the same owner remounts.
  * Route generation is not used for that. Research Graph is not suspendable.
- * The PDF runtime will be, in a later slice; this module does not register one.
+ * The PDF runtime is suspendable. Production registers it from
+ * initPdfViewerForWork with the ticket captured before deferred setup.
+ * This module does not construct that runtime.
  *
  * VueUse is not used here. Cytoscape, the PDF viewer, and other owned browser
  * resources outlive a component mount, and their dispose stays on this registry.

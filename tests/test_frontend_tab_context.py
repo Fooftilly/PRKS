@@ -240,7 +240,9 @@ class TestWorkPageLocalIdsGone(unittest.TestCase):
         with open(pdf_path, encoding="utf-8") as fh:
             src = fh.read()
         self.assertIn("export function initPdfViewerForWork(ctx, work)", src)
-        self.assertIn('ctx.setResource(\'pdf\'', src)
+        self.assertIn("ctx.registerResource(_pdfTicket", src)
+        self.assertIn("kind: 'pdf'", src)
+        self.assertNotIn("ctx.setResource('pdf'", src)
         self.assertIn("if (_pdfStale())", src)
         self.assertIn("viewer.destroy", src)
 
@@ -382,7 +384,9 @@ class TestPdfRuntimeShape(unittest.TestCase):
         with open(pdf_path, encoding="utf-8") as fh:
             src = fh.read()
         self.assertIn("createWorkPdfRuntime", src)
-        self.assertIn("ctx.setResource('pdf', runtime", src)
+        self.assertIn("ctx.registerResource(_pdfTicket", src)
+        self.assertIn("kind: 'pdf'", src)
+        self.assertNotIn("ctx.setResource('pdf'", src)
         self.assertIn("runtime.viewer = viewer", src)
         self.assertIn(
             "openPdfAnnotationEditorById(ctx, info.annotationId,",
