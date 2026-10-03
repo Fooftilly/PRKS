@@ -1049,6 +1049,120 @@ async function run() {
         });
     }
 
+    {
+        /* A parked id in a batch close can mount while the first prompt is open.
+         * Approving that prompt must not destroy it unless the new owner approved.
+         * Rejecting the new owner leaves the batch uncommitted. */
+        function batchView(h) {
+            const snap = h.ws.snapshot();
+            return JSON.stringify({
+                main: snap.mainTabId,
+                focus: snap.focusedTabId,
+                mode: snap.mode,
+                tree: snap.secondaryTree,
+                tabs: snap.tabs.map(function (tab) { return tab.id + ':' + tab.route; }),
+                url: h.hist.getHash(),
+                mounted: snap.tabs.filter(function (tab) { return h.isMounted(tab.id); }).map(function (tab) { return tab.id; }),
+            });
+        }
+
+        async function otherScene() {
+            const h = makeHarness({ hash: '#/works/WA' });
+            await h.ws.navigate('#/works/WM', { target: 'tile' });
+            const parked = await h.ws.openTab('#/works/WP', { activate: false });
+            const snap = h.ws.snapshot();
+            return {
+                h: h,
+                main: snap.mainTabId,
+                mounted: snap.secondaryTree.tabId,
+                parked: parked.id,
+                keep: snap.mainTabId,
+                start: function () { return h.ws.closeOtherTabs(snap.mainTabId); },
+            };
+        }
+
+        async function rightScene() {
+            const h = makeHarness({ hash: '#/works/WA' });
+            const anchor = await h.ws.openTab('#/works/WL', { activate: false });
+            await h.ws.navigate('#/works/WM', { target: 'tile' });
+            const parked = await h.ws.openTab('#/works/WP', { activate: false });
+            const snap = h.ws.snapshot();
+            return {
+                h: h,
+                main: snap.mainTabId,
+                mounted: snap.secondaryTree.tabId,
+                parked: parked.id,
+                keep: anchor.id,
+                start: function () { return h.ws.closeTabsToTheRight(anchor.id); },
+            };
+        }
+
+        async function raceBatch(name, scene, approveNew) {
+            const s = await scene();
+            const gates = Object.create(null);
+            const asked = [];
+            s.h.setCanLeaveFn(function (tabId) {
+                asked.push(tabId);
+                if (tabId === s.main) return true;
+                return new Promise(function (resolve) { gates[tabId] = resolve; });
+            });
+            let settled = false;
+            let threw = false;
+            const pending = Promise.resolve(s.start()).then(
+                function (value) {
+                    settled = true;
+                    return value;
+                },
+                function () {
+                    threw = true;
+                    settled = true;
+                    return false;
+                }
+            );
+            await Promise.resolve();
+            assert(name + ' waits on the mounted tab', typeof gates[s.mounted] === 'function');
+            assertEq(name + ' has not asked the parked tab', asked.indexOf(s.parked), -1);
+            const activated = await s.h.ws.activateTab(s.parked);
+            assert(name + ' activation mounted the parked tab', activated === true);
+            assert(name + ' parked tab is mounted', s.h.isMounted(s.parked));
+            assert(name + ' original tab still mounted', s.h.isMounted(s.mounted));
+            const afterActivate = batchView(s.h);
+            const destroyedAfterActivate = s.h.life.destroy.slice();
+            gates[s.mounted](true);
+            await Promise.resolve();
+            await Promise.resolve();
+            assert(name + ' close still waiting on the new owner', settled === false);
+            assert(name + ' preflights the newly mounted tab', typeof gates[s.parked] === 'function');
+            assertEq(name + ' approval does not destroy early', batchView(s.h), afterActivate);
+            assertEq(
+                name + ' approval destroys nobody yet',
+                s.h.life.destroy.join(','),
+                destroyedAfterActivate.join(',')
+            );
+            gates[s.parked](approveNew);
+            const result = await pending;
+            assert(name + ' does not throw', threw === false);
+            if (!approveNew) {
+                assertEq(name + ' rejection does not commit', result, false);
+                assertEq(name + ' rejection leaves the workspace', batchView(s.h), afterActivate);
+                assert(name + ' rejection keeps the new owner mounted', s.h.isMounted(s.parked));
+                assert(name + ' rejection keeps the original owner mounted', s.h.isMounted(s.mounted));
+                return;
+            }
+            assert(name + ' commits after the new owner approves', result === true);
+            const snap = s.h.ws.snapshot();
+            assert('kept tab remains', snap.tabs.some(function (tab) { return tab.id === s.keep; }));
+            assert('originally mounted tab is gone', snap.tabs.every(function (tab) { return tab.id !== s.mounted; }));
+            assert('newly mounted tab is gone', snap.tabs.every(function (tab) { return tab.id !== s.parked; }));
+            assert('newly mounted tab is not still mounted', !s.h.isMounted(s.parked));
+        }
+
+        await raceBatch('close other tabs', otherScene, false);
+        await raceBatch('close tabs to the right', rightScene, false);
+        await raceBatch('close other tabs approved', otherScene, true);
+        await raceBatch('close tabs to the right approved', rightScene, true);
+    }
+
     const unsup = makeHarness({ hash: '#/works/WA' });
     await unsup.ws.navigate('#/people/P1', { target: 'tile' });
     const unsupB = unsup.ws.snapshot().secondaryTree.tabId;

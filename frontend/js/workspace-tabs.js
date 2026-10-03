@@ -1646,11 +1646,13 @@
             }
             if (!unique.length) return Promise.resolve(true);
 
-            const entries = [];
-            for (let n = 0; n < unique.length; n++) {
-                if (contextMounted(unique[n])) entries.push({ tabId: unique[n], nextHash: keep.route });
-            }
-            return runLeaves(entries, 'close', function () {
+            /* Ids mounted when a prompt opens are the only ones that have approved.
+             * A parked id can mount while that prompt is open (browser Back on a
+             * warm-parked tab). Recheck before any destroy, and preflight the new
+             * mounted owners first. A rejection commits nothing. */
+            const preflighted = Object.create(null);
+
+            function commitBatch() {
                 if (!getTab(keepId)) return false;
                 const closingMain = unique.indexOf(state.mainTabId) >= 0;
                 const treeLeavesBefore = root.collectLeafTabIds(state.secondaryTree);
@@ -1705,7 +1707,36 @@
                 paintAndRestore(state.focusedTabId);
                 refreshFocusedPanel();
                 return true;
-            });
+            }
+
+            function mountedAwaitingLeave() {
+                const pending = [];
+                for (let i = 0; i < unique.length; i++) {
+                    const id = unique[i];
+                    if (preflighted[id] || !getTab(id) || !contextMounted(id)) continue;
+                    pending.push(id);
+                }
+                return pending;
+            }
+
+            function preflightThenClose() {
+                const anchor = getTab(keepId);
+                if (!anchor) return Promise.resolve(false);
+                const pending = mountedAwaitingLeave();
+                if (!pending.length) return Promise.resolve(commitBatch());
+                const entries = [];
+                for (let i = 0; i < pending.length; i++) {
+                    preflighted[pending[i]] = true;
+                    entries.push({ tabId: pending[i], nextHash: anchor.route });
+                }
+                return runLeaves(entries, 'close', function () {
+                    if (!getTab(keepId)) return false;
+                    if (mountedAwaitingLeave().length) return preflightThenClose();
+                    return commitBatch();
+                });
+            }
+
+            return preflightThenClose();
         }
 
         function closeOtherTabs(tabId) {
