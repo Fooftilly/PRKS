@@ -625,5 +625,35 @@ describe('work private notes owner lifetime', () => {
     expect(status.textContent).toBe('Replacement status')
     expect(ownerA.getResource('privateNotesEditor')).toBe(replacement)
   })
+
+  it('flushes a draft left dirty after the editor was parked away', async () => {
+    const { ownerA, notes, saves } = bound('saved')
+    let release: (result: { code: string }) => void = () => {}
+    panelWindow.prksSaveWorkNoteDurably = (entityId, kind, content) => {
+      saves.push({ entityId: String(entityId), kind: String(kind), content: String(content) })
+      if (saves.length > 1) return Promise.resolve({ code: 'saved' })
+      return new Promise((resolve) => { release = resolve })
+    }
+    notes.value = 'Busy while parking'
+    notes.dispatchEvent(new Event('input', { bubbles: true }))
+    panelWindow.prksFlushPendingPrivateNotes(ownerA)
+    await flushMicrotasks()
+    expect(ownerA.suspend(parking())).toBe(true)
+    expect(ownerA.getResource('privateNotesEditor')).toBeUndefined()
+    release({ code: 'scope_busy' })
+    await flushMicrotasks()
+    expect(ownerA.ui.workPrivateNoteSession?.dirty).toBe(true)
+    panelWindow.prksFlushPendingPrivateNotes(ownerA)
+    await flushMicrotasks()
+    expect(saves).toEqual([
+      { entityId: 'work-a', kind: 'work-private-note', content: 'Busy while parking' },
+      { entityId: 'work-a', kind: 'work-private-note', content: 'Busy while parking' },
+    ])
+    expect(ownerA.ui.workPrivateNoteSession?.dirty).toBe(false)
+    expect(ownerA.ui.workPrivateNoteSession?.state).toBe('committed')
+    panelWindow.prksFlushPendingPrivateNotes(ownerA)
+    await flushMicrotasks()
+    expect(saves).toHaveLength(2)
+  })
 })
 

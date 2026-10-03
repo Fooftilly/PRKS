@@ -3168,9 +3168,32 @@ function prksEnqueuePrivateNotesSave(editor) {
 function prksFlushPendingPrivateNotes(ctx) {
     if (!ctx || typeof ctx.getResource !== 'function') return;
     const editor = ctx.getResource('privateNotesEditor');
-    if (!editor || !editor.dirty) return;
-    ctx.clearTimer(editor.timerKey);
-    prksEnqueuePrivateNotesSave(editor);
+    if (editor) {
+        if (!editor.dirty) return;
+        ctx.clearTimer(editor.timerKey);
+        prksEnqueuePrivateNotesSave(editor);
+        return;
+    }
+    /* The Work draft outlives its editor: warm park and a focus switch
+     * dispose the editor, and a scope_busy settlement can leave the session
+     * dirty after that. Flush it from the session so closing or leaving
+     * this owner does not drop it. The save never paints: no editor is
+     * installed for it to own. */
+    const session = ctx.ui ? ctx.ui.workPrivateNoteSession : null;
+    const work = ctx.getEntity ? ctx.getEntity('work') : null;
+    if (!work || !session || !session.dirty || session.promise) return;
+    if (!prksWorkPrivateNoteSessionCurrent(session, ctx, work.id)) return;
+    const workId = String(work.id);
+    prksEnqueueWorkPrivateNoteSave({
+        key: prksPrivateNotesEditorKey('work', workId, ctx),
+        entityType: 'work',
+        entityId: workId,
+        ctx: ctx,
+        generation: ctx.generation,
+        textarea: null,
+        statusEl: null,
+        dirty: true,
+    });
 }
 
 /** Work and Folder private notes are durable SET_* paths. */
