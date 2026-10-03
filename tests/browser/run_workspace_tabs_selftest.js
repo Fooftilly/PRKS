@@ -2835,6 +2835,83 @@ async function run() {
         assert('approved navigation renders with leave already decided', !!(last && last.leaveApproved === true));
     }
 
+    {
+        /* Production has no second leave implementation. Without the injected
+         * seam, a missing or partial prksTabLeave rejects navigation, parking,
+         * and destruction. deps.canLeave remains the only test seam. */
+        const savedEngine = globalThis.prksTabLeave;
+        const savedGet = globalThis.prksGetTabContext;
+        const contexts = Object.create(null);
+        try {
+            globalThis.prksGetTabContext = function (tabId) {
+                if (!contexts[tabId]) {
+                    contexts[tabId] = {
+                        id: tabId,
+                        tabId: tabId,
+                        generation: 1,
+                        destroyed: false,
+                        mounted: false,
+                    };
+                }
+                return contexts[tabId];
+            };
+            const h = makeHarness({ hash: '#/folders', productionLeave: true });
+            const opened = await h.ws.navigate('#/works/W-ENGINE');
+            assert('complete leave engine still approves production navigation', opened !== false);
+            assertEq('complete leave engine applies the route', h.ws.snapshot().tabs[0].route, '#/works/W-ENGINE');
+            await h.ws.navigate('#/works/WB', { target: 'tile' });
+            const snapReady = h.ws.snapshot();
+            const mainId = snapReady.mainTabId;
+            const secondaryId = snapReady.secondaryTree && snapReady.secondaryTree.tabId;
+            assert('complete leave engine tiled a secondary', !!secondaryId);
+            const rendersBefore = h.renders.length;
+            const parkedBefore = h.life.park.length;
+            const destroyedBefore = h.life.destroy.length;
+
+            delete globalThis.prksTabLeave;
+            const missed = await h.ws.navigate('#/works/W-MISSING');
+            assertEq('missing leave engine rejects navigation', missed, false);
+            assertEq('missing leave engine keeps the route', h.ws.snapshot().tabs[0].route, '#/works/W-ENGINE');
+            assertEq('missing leave engine does not render', h.renders.length, rendersBefore);
+            const activated = await h.ws.openTab('#/works/W-ACT', { activate: true });
+            assertEq('missing leave engine rejects activated open', activated, false);
+            assertEq('missing leave engine does not park Main', h.life.park.length, parkedBefore);
+            assertEq('missing leave engine keeps Main', h.ws.snapshot().mainTabId, mainId);
+            const closed = await h.ws.closeTab(mainId);
+            assertEq('missing leave engine rejects Main close', closed, false);
+            assert('missing leave engine does not destroy Main', h.ws.snapshot().tabs.some(function (tab) {
+                return tab.id === mainId;
+            }));
+            assertEq('missing leave engine destroy count unchanged', h.life.destroy.length, destroyedBefore);
+            const hidden = await h.ws.setMode('stacked');
+            assertEq('missing leave engine rejects hide split', hidden, false);
+            assertEq('missing leave engine stays tiled', h.ws.snapshot().mode, 'tiled');
+            assert('missing leave engine keeps the secondary mounted', h.isMounted(secondaryId));
+
+            let engineCalled = false;
+            globalThis.prksTabLeave = {
+                run: function () {
+                    engineCalled = true;
+                    return Promise.resolve({ status: 'approved', value: true });
+                },
+            };
+            const partial = await h.ws.navigate('#/works/W-PARTIAL');
+            assertEq('partial leave engine rejects navigation', partial, false);
+            assert('partial leave engine is not asked to commit', engineCalled === false);
+            assertEq('partial leave engine keeps the route', h.ws.snapshot().tabs[0].route, '#/works/W-ENGINE');
+
+            delete globalThis.prksTabLeave;
+            const seam = makeHarness({ hash: '#/folders' });
+            const seamNav = await seam.ws.navigate('#/works/W-SEAM');
+            assert('injected canLeave still approves without the engine', seamNav !== false);
+            assertEq('injected canLeave applies the route', seam.ws.snapshot().tabs[0].route, '#/works/W-SEAM');
+        } finally {
+            globalThis.prksTabLeave = savedEngine;
+            if (savedGet) globalThis.prksGetTabContext = savedGet;
+            else delete globalThis.prksGetTabContext;
+        }
+    }
+
     console.log('\n' + passed + ' passed, ' + failed + ' failed');
     process.exit(failed ? 1 : 0);
 }

@@ -716,6 +716,19 @@
             return root.prksTabLeave || null;
         }
 
+        /* Production has one leave implementation. A missing or partial
+         * prksTabLeave must not approve navigation, parking, or destruction.
+         * deps.canLeave is the only substitute, and only tests inject it. */
+        function productionLeaveEngine() {
+            const engine = leaveEngine();
+            if (!engine) return null;
+            if (typeof engine.run !== 'function') return null;
+            if (typeof engine.runBatch !== 'function') return null;
+            if (typeof engine.assessOwner !== 'function') return null;
+            if (typeof engine.flushOwner !== 'function') return null;
+            return engine;
+        }
+
         function ownerSnapshot(tabId) {
             const tab = getTab(tabId);
             if (!tab) return null;
@@ -751,15 +764,11 @@
                     return false;
                 }
             }
-            const engine = leaveEngine();
-            if (
-                engine &&
-                typeof engine.assessOwner === 'function' &&
-                typeof root.prksGetTabContext === 'function'
-            ) {
+            const engine = productionLeaveEngine();
+            if (engine && typeof root.prksGetTabContext === 'function') {
                 return engine.assessOwner(root.prksGetTabContext(tabId), nextHash);
             }
-            return true;
+            return false;
         }
 
         function flushLeaveNotes(tabId) {
@@ -810,8 +819,9 @@
 
         /** One owner. The commit runs only after approval, while the owner lock is held. */
         function runLeave(tabId, nextHash, transition, commit) {
-            const engine = leaveEngine();
-            if (!engine || typeof engine.run !== 'function') {
+            const engine = productionLeaveEngine();
+            if (!engine) {
+                if (!injectedCanLeave) return Promise.resolve(false);
                 return Promise.resolve()
                     .then(function () {
                         return assessLeave(tabId, nextHash);
@@ -843,8 +853,9 @@
                 if (entries[i] && entries[i].tabId) live.push(entries[i]);
             }
             if (!live.length) return Promise.resolve(commit ? commit() : true);
-            const engine = leaveEngine();
-            if (!engine || typeof engine.runBatch !== 'function') {
+            const engine = productionLeaveEngine();
+            if (!engine) {
+                if (!injectedCanLeave) return Promise.resolve(false);
                 function step(i) {
                     if (i >= live.length) {
                         if (includeFlush) {
