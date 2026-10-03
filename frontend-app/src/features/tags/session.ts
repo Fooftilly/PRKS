@@ -3,6 +3,7 @@ import {
   dismissRouteSurface,
   presentRouteSurface,
   registerEarlyRoutePresenter,
+  registerRouteWindowBridge,
   resetRouteSurfaceForTests,
   type RouteSurfaceOwner,
 } from '../../route-surface/lifecycle'
@@ -130,7 +131,7 @@ export function resetTagsSessionForTests(): void {
 }
 
 export function registerTagsBridge(target: Window = window): void {
-  target.prksVuePresentTags = presentTags
+  registerRouteWindowBridge(target)
   target.prksVueDismissTags = dismissTags
   target.prksVueCloseTagsAliasModal = closeTagsAliasModals
   target.prksVueCloseTagsMergeModal = closeTagsMergeModals

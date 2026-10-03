@@ -14,8 +14,7 @@ afterEach(() => {
   resetPlaylistsSessionForTests()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
-  delete window.prksVuePresentPlaylistsIndex
-  delete window.prksVuePresentPlaylistDetail
+  delete window.prksVuePresentRoute
   delete window.prksVueDismissPlaylists
   delete window.prksOpenNewPlaylistModalFromPlaylistsPage
   delete window.updatePlaylist
@@ -822,8 +821,7 @@ describe('Playlists route surface', () => {
       shell: true,
     }
     registerPlaylistsBridge(window)
-    expect(window.prksVuePresentPlaylistsIndex).toBeTypeOf('function')
-    expect(window.prksVuePresentPlaylistDetail).toBeTypeOf('function')
+    expect(window.prksVuePresentRoute).toBeTypeOf('function')
     expect(el.textContent).toContain('Early')
     expect(decoy.textContent).not.toContain('Early')
   })

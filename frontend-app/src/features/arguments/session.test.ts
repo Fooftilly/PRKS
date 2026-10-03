@@ -14,8 +14,7 @@ afterEach(() => {
   resetArgumentsSessionForTests()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
-  delete window.prksVuePresentArgumentsIndex
-  delete window.prksVuePresentArgumentDetail
+  delete window.prksVuePresentRoute
   delete window.prksVueDismissArguments
   delete window.prksPageHeaderIconHtml
   delete window.prksIcon

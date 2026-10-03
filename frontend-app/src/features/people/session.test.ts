@@ -13,8 +13,7 @@ afterEach(() => {
   resetPeopleSessionForTests()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
-  delete window.prksVuePresentPeopleIndex
-  delete window.prksVuePresentPersonDetail
+  delete window.prksVuePresentRoute
   delete window.prksVueDismissPeople
   delete window.openModal
   delete window.prksNavigate

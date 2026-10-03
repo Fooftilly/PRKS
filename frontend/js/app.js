@@ -2834,6 +2834,21 @@ function prksRouteTitleFromHash(hash) {
 }
 
 /**
+ * Deliver a host-local route request to the one Vue dispatcher.
+ * The registered feature presenter writes that owner's PrksRouteInstance.
+ * An unregistered feature leaves the request on this pane's host.
+ */
+function prksDeliverVueRoute(host, request) {
+    if (
+        typeof window.prksVuePresentRoute === 'function' &&
+        window.prksVuePresentRoute(Object.assign({ host: host }, request)) === true
+    ) {
+        return;
+    }
+    host.__prksVueRouteRequest = request;
+}
+
+/**
  * Mount the Vue Progress surface in this pane.
  * `detail.rows` must already be the effective works-browse projection.
  */
@@ -2853,13 +2868,7 @@ function prksPresentVueProgress(ctx, contentDiv, detail) {
         // already happened for Main in prksRenderTabRoute.
         shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
     };
-    if (typeof window.prksVuePresentProgress === 'function') {
-        window.prksVuePresentProgress(Object.assign({ host: host }, request));
-        return;
-    }
-    // Early paints stash the request on this pane's host, not on window.
-    // The route-surface dispatcher paints that host for feature "progress".
-    host.__prksVueRouteRequest = request;
+    prksDeliverVueRoute(host, request);
 }
 
 /**
@@ -2879,11 +2888,7 @@ function prksPresentVueRecent(ctx, contentDiv, detail) {
         generation: detail.generation,
         shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
     };
-    if (typeof window.prksVuePresentRecent === 'function') {
-        window.prksVuePresentRecent(Object.assign({ host: host }, request));
-        return;
-    }
-    host.__prksVueRouteRequest = request;
+    prksDeliverVueRoute(host, request);
 }
 
 /**
@@ -2902,11 +2907,7 @@ function prksPresentVueTypesIndex(ctx, contentDiv, detail) {
         generation: detail.generation,
         shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
     };
-    if (typeof window.prksVuePresentTypesIndex === 'function') {
-        window.prksVuePresentTypesIndex(Object.assign({ host: host }, request));
-        return;
-    }
-    host.__prksVueRouteRequest = request;
+    prksDeliverVueRoute(host, request);
 }
 
 /**
@@ -2929,11 +2930,7 @@ function prksPresentVueTypeDetail(ctx, contentDiv, detail) {
         generation: detail.generation,
         shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
     };
-    if (typeof window.prksVuePresentTypeDetail === 'function') {
-        window.prksVuePresentTypeDetail(Object.assign({ host: host }, request));
-        return;
-    }
-    host.__prksVueRouteRequest = request;
+    prksDeliverVueRoute(host, request);
 }
 
 /**
@@ -2954,11 +2951,7 @@ function prksPresentVueTags(ctx, contentDiv, detail) {
         resume: detail.resume || null,
         shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
     };
-    if (typeof window.prksVuePresentTags === 'function') {
-        window.prksVuePresentTags(Object.assign({ host: host }, request));
-        return;
-    }
-    host.__prksVueRouteRequest = request;
+    prksDeliverVueRoute(host, request);
 }
 
 /**
@@ -3014,11 +3007,7 @@ function prksPresentVuePublishers(ctx, contentDiv, detail) {
         resume: detail.resume || null,
         shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
     };
-    if (typeof window.prksVuePresentPublishers === 'function') {
-        window.prksVuePresentPublishers(Object.assign({ host: host }, request));
-        return;
-    }
-    host.__prksVueRouteRequest = request;
+    prksDeliverVueRoute(host, request);
 }
 
 /**
@@ -3091,11 +3080,7 @@ function prksPresentVueResearchGraph(ctx, contentDiv, detail) {
         attach: detail.attach || null,
         shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
     };
-    if (typeof window.prksVuePresentResearchGraph === 'function') {
-        window.prksVuePresentResearchGraph(Object.assign({ host: host }, request));
-        return;
-    }
-    host.__prksVueRouteRequest = request;
+    prksDeliverVueRoute(host, request);
 }
 
 function prksPresentVueProcessing(ctx, contentDiv, detail) {
@@ -3119,11 +3104,7 @@ function prksPresentVueProcessing(ctx, contentDiv, detail) {
         resume: detail.resume || null,
         shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
     };
-    if (typeof window.prksVuePresentProcessing === 'function') {
-        window.prksVuePresentProcessing(Object.assign({ host: host }, request));
-        return;
-    }
-    host.__prksVueRouteRequest = request;
+    prksDeliverVueRoute(host, request);
 }
 
 /**
@@ -3235,11 +3216,7 @@ function prksPresentVueSearch(ctx, contentDiv, detail) {
         generation: detail.generation,
         shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
     };
-    if (typeof window.prksVuePresentSearch === 'function') {
-        window.prksVuePresentSearch(Object.assign({ host: host }, request));
-        return;
-    }
-    host.__prksVueRouteRequest = request;
+    prksDeliverVueRoute(host, request);
 }
 
 /**
@@ -3258,11 +3235,7 @@ function prksPresentVueSavedViewsIndex(ctx, contentDiv, detail) {
         generation: detail.generation,
         shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
     };
-    if (typeof window.prksVuePresentSavedViewsIndex === 'function') {
-        window.prksVuePresentSavedViewsIndex(Object.assign({ host: host }, request));
-        return;
-    }
-    host.__prksVueRouteRequest = request;
+    prksDeliverVueRoute(host, request);
 }
 
 /**
@@ -3285,11 +3258,7 @@ function prksPresentVueSavedViewDetail(ctx, contentDiv, detail) {
         generation: detail.generation,
         shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
     };
-    if (typeof window.prksVuePresentSavedViewDetail === 'function') {
-        window.prksVuePresentSavedViewDetail(Object.assign({ host: host }, request));
-        return;
-    }
-    host.__prksVueRouteRequest = request;
+    prksDeliverVueRoute(host, request);
 }
 
 /**
@@ -3319,11 +3288,7 @@ function prksPresentVueFolderDetail(ctx, contentDiv, detail) {
         generation: detail.generation,
         shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
     };
-    if (typeof window.prksVuePresentFolderDetail === 'function') {
-        window.prksVuePresentFolderDetail(Object.assign({ host: host }, request));
-        return;
-    }
-    host.__prksVueRouteRequest = request;
+    prksDeliverVueRoute(host, request);
 }
 
 /**
@@ -3357,11 +3322,7 @@ function prksPresentVueFolderLibrary(ctx, contentDiv, detail) {
         generation: detail.generation,
         shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
     };
-    if (typeof window.prksVuePresentFolderLibrary === 'function') {
-        window.prksVuePresentFolderLibrary(Object.assign({ host: host }, request));
-        return;
-    }
-    host.__prksVueRouteRequest = request;
+    prksDeliverVueRoute(host, request);
 }
 
 function prksPresentVueConcepts(ctx, contentDiv, detail) {
@@ -3386,15 +3347,7 @@ function prksPresentVueConcepts(ctx, contentDiv, detail) {
         generation: detail.generation,
         shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
     };
-    if (feature === 'concept-detail' && typeof window.prksVuePresentConceptDetail === 'function') {
-        window.prksVuePresentConceptDetail(Object.assign({ host: host }, request));
-        return;
-    }
-    if (feature === 'concepts' && typeof window.prksVuePresentConceptsIndex === 'function') {
-        window.prksVuePresentConceptsIndex(Object.assign({ host: host }, request));
-        return;
-    }
-    host.__prksVueRouteRequest = request;
+    prksDeliverVueRoute(host, request);
 }
 
 /**
@@ -3425,15 +3378,7 @@ function prksPresentVuePositions(ctx, contentDiv, detail) {
         generation: detail.generation,
         shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
     };
-    if (feature === 'position-detail' && typeof window.prksVuePresentPositionDetail === 'function') {
-        window.prksVuePresentPositionDetail(Object.assign({ host: host }, request));
-        return;
-    }
-    if (feature === 'positions' && typeof window.prksVuePresentPositionsIndex === 'function') {
-        window.prksVuePresentPositionsIndex(Object.assign({ host: host }, request));
-        return;
-    }
-    host.__prksVueRouteRequest = request;
+    prksDeliverVueRoute(host, request);
 }
 
 /**
@@ -3465,15 +3410,7 @@ function prksPresentVueArguments(ctx, contentDiv, detail) {
         generation: detail.generation,
         shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
     };
-    if (feature === 'argument-detail' && typeof window.prksVuePresentArgumentDetail === 'function') {
-        window.prksVuePresentArgumentDetail(Object.assign({ host: host }, request));
-        return;
-    }
-    if (feature === 'arguments' && typeof window.prksVuePresentArgumentsIndex === 'function') {
-        window.prksVuePresentArgumentsIndex(Object.assign({ host: host }, request));
-        return;
-    }
-    host.__prksVueRouteRequest = request;
+    prksDeliverVueRoute(host, request);
 }
 
 /**
@@ -3505,15 +3442,7 @@ function prksPresentVuePlaylists(ctx, contentDiv, detail) {
         generation: detail.generation,
         shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
     };
-    if (feature === 'playlist-detail' && typeof window.prksVuePresentPlaylistDetail === 'function') {
-        window.prksVuePresentPlaylistDetail(Object.assign({ host: host }, request));
-        return;
-    }
-    if (feature === 'playlists' && typeof window.prksVuePresentPlaylistsIndex === 'function') {
-        window.prksVuePresentPlaylistsIndex(Object.assign({ host: host }, request));
-        return;
-    }
-    host.__prksVueRouteRequest = request;
+    prksDeliverVueRoute(host, request);
 }
 
 /**
@@ -3548,15 +3477,7 @@ function prksPresentVuePeople(ctx, contentDiv, detail) {
         generation: detail.generation,
         shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
     };
-    if (feature === 'person' && typeof window.prksVuePresentPersonDetail === 'function') {
-        window.prksVuePresentPersonDetail(Object.assign({ host: host }, request));
-        return;
-    }
-    if (feature === 'people' && typeof window.prksVuePresentPeopleIndex === 'function') {
-        window.prksVuePresentPeopleIndex(Object.assign({ host: host }, request));
-        return;
-    }
-    host.__prksVueRouteRequest = request;
+    prksDeliverVueRoute(host, request);
 }
 
 /**
@@ -3588,15 +3509,7 @@ function prksPresentVuePersonGroups(ctx, contentDiv, detail) {
         generation: detail.generation,
         shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
     };
-    if (feature === 'person-group-detail' && typeof window.prksVuePresentPersonGroupDetail === 'function') {
-        window.prksVuePresentPersonGroupDetail(Object.assign({ host: host }, request));
-        return;
-    }
-    if (feature === 'person-groups' && typeof window.prksVuePresentPersonGroupsIndex === 'function') {
-        window.prksVuePresentPersonGroupsIndex(Object.assign({ host: host }, request));
-        return;
-    }
-    host.__prksVueRouteRequest = request;
+    prksDeliverVueRoute(host, request);
 }
 
 function prksRenderRouteLoading(contentDiv, hash) {

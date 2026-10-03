@@ -11,7 +11,7 @@ import {
 afterEach(() => {
   resetResearchGraphSessionForTests()
   document.body.innerHTML = ''
-  delete window.prksVuePresentResearchGraph
+  delete window.prksVuePresentRoute
   delete window.prksVueDismissResearchGraph
   delete window.renderResearchGraph
   delete window.prksReleaseResearchGraph
@@ -153,7 +153,7 @@ describe('Research Graph route bridge', () => {
       attach: {},
     }
     registerResearchGraphBridge(window)
-    expect(window.prksVuePresentResearchGraph).toBeTypeOf('function')
+    expect(window.prksVuePresentRoute).toBeTypeOf('function')
     expect((el as HTMLElement & { __prksVueRouteRequest?: unknown }).__prksVueRouteRequest).toBeUndefined()
     expect(el.querySelector('[data-prks-research-graph]')).not.toBeNull()
     expect(decoy.querySelector('[data-prks-research-graph]')).toBeNull()

@@ -7,7 +7,7 @@ afterEach(() => {
   resetSearchSessionForTests()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
-  delete window.prksVuePresentSearch
+  delete window.prksVuePresentRoute
   delete window.prksVueDismissSearch
   delete window.prksWorkCardHtml
   delete window.prksAbstractExcerpt
@@ -159,7 +159,7 @@ describe('Search route bridge', () => {
       generation: 1,
     }
     registerSearchBridge(window)
-    expect(window.prksVuePresentSearch).toBeTypeOf('function')
+    expect(window.prksVuePresentRoute).toBeTypeOf('function')
     expect(el.querySelector('[data-work-id="early"]')).not.toBeNull()
     expect(decoy.querySelector('[data-work-id="early"]')).toBeNull()
   })

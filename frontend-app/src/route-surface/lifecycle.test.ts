@@ -4,10 +4,12 @@ import {
   VUE_ROUTE_HOST_ATTR,
   VUE_ROUTE_PENDING_KEY,
   dismissRouteSurface,
+  presentRegisteredRoute,
   presentRouteSurface,
   publishEarlyRouteRequests,
   readRouteSurface,
   registerEarlyRoutePresenter,
+  registerRouteWindowBridge,
   resetRouteSurfaceForTests,
   routeSurfaceGenerationCurrent,
   type RouteSurfaceOwner,
@@ -16,6 +18,7 @@ import {
 afterEach(() => {
   resetRouteSurfaceForTests()
   document.body.innerHTML = ''
+  delete window.prksVuePresentRoute
 })
 
 interface CleanupOwner extends RouteSurfaceOwner {
@@ -292,6 +295,45 @@ describe('route surface lifecycle', () => {
     expect(hostB.querySelector(`[data-probe="${second}"]`)).not.toBeNull()
     expect(hostA.querySelector(`[data-probe="${first}"]`)).not.toBeNull()
     expect(hostA.querySelector(`[data-probe="${second}"]`)).toBeNull()
+  })
+
+  it('delivers a mounted request through the one window dispatcher', () => {
+    const owner = cleanupOwner()
+    const el = host()
+    registerRouteWindowBridge(window)
+    expect(presentRegisteredRoute({ feature: 'probe', owner, host: el, label: 'probe', generation: 4 })).toBe(
+      false,
+    )
+    expect(readRouteSurface(owner)).toBeNull()
+    claimProbe('probe')
+    expect(
+      window.prksVuePresentRoute?.({
+        feature: 'probe',
+        owner,
+        host: el,
+        label: 'probe',
+        generation: 4,
+        ownsMainShell: true,
+      }),
+    ).toBe(true)
+    expect(readRouteSurface(owner)).toMatchObject({
+      name: 'recent',
+      canonicalHash: '#/probe',
+      ownsMainShell: true,
+      generation: 4,
+      mounted: true,
+    })
+    const other = host()
+    expect(
+      window.prksVuePresentRoute?.({
+        feature: 'other',
+        owner: cleanupOwner(),
+        host: other,
+        label: 'other',
+        generation: 1,
+      }),
+    ).toBe(false)
+    expect(other.querySelector('[data-probe]')).toBeNull()
   })
 
   it('paints the storage host when the payload names another host', () => {

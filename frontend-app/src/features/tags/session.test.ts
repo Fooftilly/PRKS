@@ -13,7 +13,7 @@ afterEach(() => {
   resetTagsSessionForTests()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
-  delete window.prksVuePresentTags
+  delete window.prksVuePresentRoute
   delete window.prksVueDismissTags
   delete window.prksVueCloseTagsAliasModal
   delete window.prksVueCloseTagsMergeModal
@@ -155,7 +155,7 @@ describe('Tags route bridge', () => {
       shell: true,
     }
     registerTagsBridge(window)
-    expect(window.prksVuePresentTags).toBeTypeOf('function')
+    expect(window.prksVuePresentRoute).toBeTypeOf('function')
     expect(window.prksVueDismissTags).toBeTypeOf('function')
     expect((el as HTMLElement & { __prksVueRouteRequest?: unknown }).__prksVueRouteRequest).toBeUndefined()
     expect(el.querySelector('[data-tag-alias-edit="t1"]')).not.toBeNull()
@@ -168,14 +168,16 @@ describe('Tags route bridge', () => {
     const secondary = owner()
     const mainHost = host()
     const secondaryHost = host()
-    window.prksVuePresentTags?.({
+    window.prksVuePresentRoute?.({
+      feature: 'tags',
       owner: main,
       host: mainHost,
       tags: [ALPHA],
       generation: 2,
       shell: true,
     })
-    window.prksVuePresentTags?.({
+    window.prksVuePresentRoute?.({
+      feature: 'tags',
       owner: secondary,
       host: secondaryHost,
       tags: [BETA],

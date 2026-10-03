@@ -16,8 +16,7 @@ afterEach(() => {
   resetSavedViewsSessionForTests()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
-  delete window.prksVuePresentSavedViewsIndex
-  delete window.prksVuePresentSavedViewDetail
+  delete window.prksVuePresentRoute
   delete window.prksVueDismissSavedViews
   delete window.prksSearchSummaryText
   delete window.prksDeleteSavedViewFromIndex
@@ -439,7 +438,7 @@ describe('Saved Views index route bridge', () => {
       generation: 1,
     }
     registerSavedViewsBridge(window)
-    expect(window.prksVuePresentSavedViewsIndex).toBeTypeOf('function')
+    expect(window.prksVuePresentRoute).toBeTypeOf('function')
     expect(el.querySelector('.saved-views-page__summary')?.textContent).toBe('tag:T')
   })
 })
@@ -584,7 +583,7 @@ describe('Saved View detail route bridge', () => {
       generation: 1,
     }
     registerSavedViewsBridge(window)
-    expect(window.prksVuePresentSavedViewDetail).toBeTypeOf('function')
+    expect(window.prksVuePresentRoute).toBeTypeOf('function')
     expect(el.querySelector('[data-work-id="early"]')).not.toBeNull()
   })
 })

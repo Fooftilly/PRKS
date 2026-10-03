@@ -1,110 +1,13 @@
 /// <reference types="vite/client" />
 
-interface ProgressPresentRequest {
-  owner: object
-  host: HTMLElement
-  status: string | null | undefined
-  rows: unknown
-  offlineCached?: boolean
-  generation?: number
-  shell?: boolean
-}
-
-interface RecentPresentRequest {
-  owner: object
-  host: HTMLElement
-  rows: unknown
-  offlineCached?: boolean
-  generation?: number
-  shell?: boolean
-}
-
-interface TypesIndexPresentRequest {
-  owner: object
-  host: HTMLElement
-  rows: unknown
-  generation?: number
-  shell?: boolean
-}
-
-interface TypeDetailPresentRequest {
-  owner: object
-  host: HTMLElement
-  docType?: string
-  label?: string
-  canonicalHash?: string
-  rows: unknown
-  offlineCached?: boolean
-  generation?: number
-  shell?: boolean
-}
-
-interface TagsPresentRequest {
-  owner: object
-  host: HTMLElement
-  tags: unknown
-  generation?: number
-  shell?: boolean
-  resume?: {
-    aliasTagId?: string | null
-    mergeSourceId?: string | null
-    mergeTargetId?: string | null
-  } | null
-}
-
 interface TagsMutationOutcome {
   ok?: boolean
   reason?: string
 }
 
-interface PublishersPresentRequest {
-  owner: object
-  host: HTMLElement
-  publishers: unknown
-  generation?: number
-  shell?: boolean
-  resume?: { aliasPublisherId?: string | null } | null
-}
-
 interface PublishersMutationOutcome {
   ok?: boolean
   reason?: string
-}
-
-interface ResearchGraphPresentRequest {
-  owner: object
-  host: HTMLElement
-  generation?: number
-  shell?: boolean
-  focus?: string
-  includePeople?: boolean
-  chrome?: {
-    findId?: string
-    resultsId?: string
-    filtersPanelId?: string
-    legendPanelId?: string
-  }
-  attach?: {
-    focus?: string
-    signal?: AbortSignal
-    routeGen?: number
-    stale?: () => boolean
-    loadSnapshot?: (people: boolean, signal?: AbortSignal) => Promise<unknown>
-    onSnapshot?: (result: unknown) => void
-  } | null
-}
-
-interface ProcessingPresentRequest {
-  owner: object
-  host: HTMLElement
-  files: unknown
-  people: unknown
-  folders: unknown
-  roleTypes: unknown
-  domPrefix: string
-  generation?: number
-  shell?: boolean
-  resume?: { visibleCount?: number | null } | null
 }
 
 /** Painted inbox people. The coordinator stores the person rows; quick-create appends `{ id, name }`. */
@@ -144,163 +47,6 @@ interface ProcessingPreviewTarget {
   filename?: string
   relPath?: string
   canPreview?: boolean
-}
-
-interface SearchPresentRequest {
-  owner: object
-  host: HTMLElement
-  request: unknown
-  canonicalHash?: string
-  rows: unknown
-  generation?: number
-  shell?: boolean
-}
-
-interface SavedViewsIndexPresentRequest {
-  owner: object
-  host: HTMLElement
-  views?: unknown
-  generation?: number
-  shell?: boolean
-}
-
-interface SavedViewDetailPresentRequest {
-  owner: object
-  host: HTMLElement
-  availability?: 'ready' | 'not-found'
-  view?: unknown
-  viewId?: string
-  searchHash?: string
-  rows?: unknown
-  generation?: number
-  shell?: boolean
-}
-
-interface FolderDetailPresentRequest {
-  owner: object
-  host: HTMLElement
-  availability?: 'ready' | 'unavailable' | 'not-found'
-  folder?: unknown
-  folderId?: string
-  offlineCached?: boolean
-  preserveWorkspace?: boolean
-  generation?: number
-  shell?: boolean
-}
-
-interface ConceptsIndexPresentRequest {
-  owner: object
-  host: HTMLElement
-  availability?: 'ready' | 'unavailable'
-  items?: unknown
-  generation?: number
-  shell?: boolean
-}
-
-interface ConceptDetailPresentRequest {
-  owner: object
-  host: HTMLElement
-  availability?: 'ready' | 'unavailable' | 'not-found'
-  concept?: unknown
-  conceptId?: string
-  generation?: number
-  shell?: boolean
-}
-
-interface PositionsIndexPresentRequest {
-  owner: object
-  host: HTMLElement
-  availability?: 'ready' | 'unavailable'
-  items?: unknown
-  generation?: number
-  shell?: boolean
-}
-
-interface ArgumentsIndexPresentRequest {
-  owner: object
-  host: HTMLElement
-  availability?: 'ready' | 'unavailable'
-  kind?: string
-  items?: unknown
-  generation?: number
-  shell?: boolean
-}
-
-interface ArgumentDetailPresentRequest {
-  owner: object
-  host: HTMLElement
-  availability?: 'ready' | 'unavailable' | 'not-found'
-  argument?: unknown
-  argumentId?: string
-  generation?: number
-  shell?: boolean
-}
-
-interface PlaylistsIndexPresentRequest {
-  owner: object
-  host: HTMLElement
-  availability?: 'ready' | 'unavailable'
-  items?: unknown
-  generation?: number
-  shell?: boolean
-}
-
-interface PeopleIndexPresentRequest {
-  owner: object
-  host: HTMLElement
-  availability?: 'ready' | 'unavailable' | 'unknown-role'
-  items?: unknown
-  roleFilter?: string
-  unknownRole?: boolean
-  generation?: number
-  shell?: boolean
-}
-
-interface PersonDetailPresentRequest {
-  owner: object
-  host: HTMLElement
-  availability?: 'ready' | 'unavailable' | 'not-found'
-  person?: unknown
-  personId?: string
-  editing?: boolean
-  editorActive?: boolean
-  worksEditing?: boolean
-  offlineCached?: boolean
-  generation?: number
-  shell?: boolean
-}
-
-interface PlaylistDetailPresentRequest {
-  owner: object
-  host: HTMLElement
-  availability?: 'ready' | 'unavailable' | 'not-found'
-  playlist?: unknown
-  playlistId?: string
-  editing?: boolean
-  renaming?: unknown
-  generation?: number
-  shell?: boolean
-}
-
-interface PositionDetailPresentRequest {
-  owner: object
-  host: HTMLElement
-  availability?: 'ready' | 'unavailable' | 'not-found'
-  position?: unknown
-  positionId?: string
-  generation?: number
-  shell?: boolean
-}
-
-interface FolderLibraryPresentRequest {
-  owner: object
-  host: HTMLElement
-  contentRoot?: HTMLElement | null
-  availability?: 'ready' | 'unavailable'
-  folders?: unknown
-  offlineCached?: boolean
-  generation?: number
-  shell?: boolean
 }
 
 interface PrksPromptTextOptions {
@@ -393,14 +139,10 @@ interface Window {
     work: { id?: unknown },
     initialText: string,
   ) => boolean
-  prksVuePresentProgress?: (input: ProgressPresentRequest) => void
+  prksVuePresentRoute?: (request: unknown) => boolean
   prksVueDismissProgress?: (owner: object) => void
-  prksVuePresentRecent?: (input: RecentPresentRequest) => void
   prksVueDismissRecent?: (owner: object) => void
-  prksVuePresentTypesIndex?: (input: TypesIndexPresentRequest) => void
-  prksVuePresentTypeDetail?: (input: TypeDetailPresentRequest) => void
   prksVueDismissTypes?: (owner: object) => void
-  prksVuePresentTags?: (input: TagsPresentRequest) => void
   prksVueDismissTags?: (owner: object) => void
   prksVueCloseTagsAliasModal?: (modal?: Element | null) => void
   prksVueCloseTagsMergeModal?: (modal?: Element | null) => void
@@ -420,7 +162,6 @@ interface Window {
   prksTagsMerge?: (sourceId: string, targetId: string) => Promise<TagsMutationOutcome>
   fetchTags?: (options?: { used?: boolean; signal?: AbortSignal }) => Promise<unknown>
   prksTagVocabularyMessage?: (error: unknown, action: string) => string
-  prksVuePresentPublishers?: (input: PublishersPresentRequest) => void
   prksVueDismissPublishers?: (owner: object) => void
   prksVueClosePublishersAliasModal?: () => void
   prksVueReportPublishersRefreshFailure?: (owner: object, message: string) => void
@@ -433,7 +174,6 @@ interface Window {
   prksPublishersAddAlias?: (publisherId: string, alias: string) => Promise<PublishersMutationOutcome>
   prksPublishersRemoveAlias?: (publisherId: string, alias: string) => Promise<PublishersMutationOutcome>
   prksPublishersDelete?: (publisherId: string) => Promise<PublishersMutationOutcome>
-  prksVuePresentResearchGraph?: (input: ResearchGraphPresentRequest) => void
   prksVueDismissResearchGraph?: (owner: object) => void
   renderResearchGraph?: (
     container: HTMLElement,
@@ -450,7 +190,6 @@ interface Window {
   ) => Promise<unknown>
   prksReleaseResearchGraph?: (owner: object) => void
   __prksProcessingPeople?: ProcessingPeopleCatalogueEntry[]
-  prksVuePresentProcessing?: (input: ProcessingPresentRequest) => void
   prksVueDismissProcessing?: (owner: object) => void
   prksReloadProcessingFiles?: (
     owner: object,
@@ -509,10 +248,7 @@ interface Window {
   ) => boolean
   prksTagPlusIconHtml?: () => string
   fetchPublishersInUse?: (options?: { signal?: AbortSignal; errorOwner?: object }) => Promise<unknown>
-  prksVuePresentSearch?: (input: SearchPresentRequest) => void
   prksVueDismissSearch?: (owner: object) => void
-  prksVuePresentSavedViewsIndex?: (input: SavedViewsIndexPresentRequest) => void
-  prksVuePresentSavedViewDetail?: (input: SavedViewDetailPresentRequest) => void
   prksVueDismissSavedViews?: (owner: object) => void
   prksSearchHashFromDefinition?: (definition: Record<string, string>) => string
   prksOpenSavedViewModalFromCurrentSearch?: (hash?: string) => void
@@ -531,7 +267,6 @@ interface Window {
   fetchSavedView?: (id: string) => Promise<{ id?: string; name?: string; search?: { mode: string; q: string; tag: string; author: string; publisher: string } } | null>
   prksOpenCommandPalette?: () => void
   prksScopeLineHtml?: (options: { total?: number; label?: string }) => string
-  prksVuePresentFolderDetail?: (input: FolderDetailPresentRequest) => void
   prksVueDismissFolderDetail?: (owner: object) => void
   prksEffectiveFolderDetailWorks?: (folder: unknown) => unknown[]
   prksFolderDetailSummaryHtml?: (folder: unknown) => string
@@ -546,41 +281,11 @@ interface Window {
   prksMountFolderHierarchyNav?: (ctx: unknown, folder: unknown, container: ParentNode | null) => void
   prksDeleteFolderFromDetail?: (folderId: string, still?: () => boolean) => Promise<void>
   prksOpenNewFolderFromDetail?: (folder: Record<string, unknown>) => void
-  prksVuePresentConceptsIndex?: (input: ConceptsIndexPresentRequest) => void
-  prksVuePresentConceptDetail?: (input: ConceptDetailPresentRequest) => void
   prksVueDismissConcepts?: (owner: object) => void
-  prksVuePresentPositionsIndex?: (input: PositionsIndexPresentRequest) => void
-  prksVuePresentPositionDetail?: (input: PositionDetailPresentRequest) => void
   prksVueDismissPositions?: (owner: object) => void
-  prksVuePresentArgumentsIndex?: (input: ArgumentsIndexPresentRequest) => void
-  prksVuePresentArgumentDetail?: (input: ArgumentDetailPresentRequest) => void
   prksVueDismissArguments?: (owner: object) => void
-  prksVuePresentPlaylistsIndex?: (input: PlaylistsIndexPresentRequest) => void
-  prksVuePresentPlaylistDetail?: (input: PlaylistDetailPresentRequest) => void
   prksVueDismissPlaylists?: (owner: object) => void
-  prksVuePresentPeopleIndex?: (input: PeopleIndexPresentRequest) => void
-  prksVuePresentPersonDetail?: (input: PersonDetailPresentRequest) => void
   prksVueDismissPeople?: (owner: object) => void
-  prksVuePresentPersonGroupsIndex?: (input: {
-    owner: object
-    host: HTMLElement
-    availability?: string
-    items?: unknown
-    generation?: number
-    shell?: boolean
-  }) => void
-  prksVuePresentPersonGroupDetail?: (input: {
-    owner: object
-    host: HTMLElement
-    availability?: string
-    group?: unknown
-    groupId?: string
-    editing?: boolean
-    membersEditing?: boolean
-    editorActive?: boolean
-    generation?: number
-    shell?: boolean
-  }) => void
   prksVueDismissPersonGroups?: (owner: object) => void
   prksOpenNewGroupModalFromGroupsPage?: (owner?: object) => void
   prksTakePersonGroupCreateNavigation?: () => { mode?: string; tabId?: string }
@@ -666,7 +371,6 @@ interface Window {
   prksTogglePersonWorksEdit?: (ctx?: unknown) => void
   prksRemoveWorkRoleLink?: (button: HTMLButtonElement) => Promise<void>
   prksPersonViewInGraph?: () => void
-  prksVuePresentFolderLibrary?: (input: FolderLibraryPresentRequest) => void
   prksVueDismissFolderLibrary?: (owner: object) => void
   prksFolderLibraryTreeInnerHtml?: (
     list: unknown,

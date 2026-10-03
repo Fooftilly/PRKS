@@ -6227,9 +6227,12 @@ class WorkspaceTilingTests(_BrowserE2E):
         main_id = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
         page.evaluate(
             """() => {
-                window.__prksOriginalPresentConceptDetail = window.prksVuePresentConceptDetail;
-                window.prksVuePresentConceptDetail = function () {
-                    throw new Error('forced secondary render failure');
+                window.__prksOriginalPresentRoute = window.prksVuePresentRoute;
+                window.prksVuePresentRoute = function (request) {
+                    if (request && request.feature === 'concept-detail') {
+                        throw new Error('forced secondary render failure');
+                    }
+                    return window.__prksOriginalPresentRoute(request);
                 };
             }"""
         )
@@ -6249,7 +6252,7 @@ class WorkspaceTilingTests(_BrowserE2E):
             secondary_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
             page.evaluate(
                 """(id) => {
-                    window.prksVuePresentConceptDetail = window.__prksOriginalPresentConceptDetail;
+                    window.prksVuePresentRoute = window.__prksOriginalPresentRoute;
                     window.prksGetTabContext(id).query('#prks-route-retry').click();
                 }""",
                 arg=secondary_id,
@@ -6269,8 +6272,8 @@ class WorkspaceTilingTests(_BrowserE2E):
         finally:
             page.evaluate(
                 """() => {
-                    if (window.__prksOriginalPresentConceptDetail) {
-                        window.prksVuePresentConceptDetail = window.__prksOriginalPresentConceptDetail;
+                    if (window.__prksOriginalPresentRoute) {
+                        window.prksVuePresentRoute = window.__prksOriginalPresentRoute;
                     }
                 }"""
             )

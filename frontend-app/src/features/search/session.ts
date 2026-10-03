@@ -3,6 +3,7 @@ import {
   dismissRouteSurface,
   presentRouteSurface,
   registerEarlyRoutePresenter,
+  registerRouteWindowBridge,
   resetRouteSurfaceForTests,
   type RouteSurfaceOwner,
 } from '../../route-surface/lifecycle'
@@ -72,7 +73,7 @@ export function resetSearchSessionForTests(): void {
 }
 
 export function registerSearchBridge(target: Window = window): void {
-  target.prksVuePresentSearch = presentSearch
+  registerRouteWindowBridge(target)
   target.prksVueDismissSearch = dismissSearch
   registerEarlyRoutePresenter(
     SEARCH_FEATURE,

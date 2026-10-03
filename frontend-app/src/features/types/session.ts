@@ -3,6 +3,7 @@ import {
   dismissRouteSurface,
   presentRouteSurface,
   registerEarlyRoutePresenter,
+  registerRouteWindowBridge,
   resetRouteSurfaceForTests,
   type RouteSurfaceOwner,
 } from '../../route-surface/lifecycle'
@@ -126,8 +127,7 @@ export function resetTypesSessionForTests(): void {
 }
 
 export function registerTypesBridge(target: Window = window): void {
-  target.prksVuePresentTypesIndex = presentTypesIndex
-  target.prksVuePresentTypeDetail = presentTypeDetail
+  registerRouteWindowBridge(target)
   target.prksVueDismissTypes = dismissTypes
   registerEarlyRoutePresenter(
     TYPES_FEATURE,

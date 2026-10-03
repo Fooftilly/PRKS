@@ -12,7 +12,7 @@ afterEach(() => {
   resetProcessingSessionForTests()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
-  delete window.prksVuePresentProcessing
+  delete window.prksVuePresentRoute
   delete window.prksVueDismissProcessing
   delete window.prksProcessingAttachResources
   delete window.prksProcessingReleaseResources
@@ -426,7 +426,7 @@ describe('Processing Files route bridge', () => {
 
   it('registers the early presenter', () => {
     registerProcessingBridge(window)
-    expect(typeof window.prksVuePresentProcessing).toBe('function')
+    expect(typeof window.prksVuePresentRoute).toBe('function')
     expect(typeof window.prksVueDismissProcessing).toBe('function')
   })
 })

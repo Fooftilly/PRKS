@@ -3,6 +3,7 @@ import {
   dismissRouteSurface,
   presentRouteSurface,
   registerEarlyRoutePresenter,
+  registerRouteWindowBridge,
   resetRouteSurfaceForTests,
   type RouteSurfaceOwner,
 } from '../../route-surface/lifecycle'
@@ -94,7 +95,7 @@ export function resetProcessingSessionForTests(): void {
 }
 
 export function registerProcessingBridge(target: Window = window): void {
-  target.prksVuePresentProcessing = presentProcessing
+  registerRouteWindowBridge(target)
   target.prksVueDismissProcessing = dismissProcessing
   registerEarlyRoutePresenter(
     PROCESSING_FEATURE,

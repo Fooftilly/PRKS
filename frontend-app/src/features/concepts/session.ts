@@ -3,6 +3,7 @@ import {
   dismissRouteSurface,
   presentRouteSurface,
   registerEarlyRoutePresenter,
+  registerRouteWindowBridge,
   resetRouteSurfaceForTests,
   type RouteSurfaceOwner,
 } from '../../route-surface/lifecycle'
@@ -175,8 +176,7 @@ function isConceptDetailEarlyRequest(
 }
 
 export function registerConceptsBridge(target: Window = window): void {
-  target.prksVuePresentConceptsIndex = presentConceptsIndex
-  target.prksVuePresentConceptDetail = presentConceptDetail
+  registerRouteWindowBridge(target)
   target.prksVueDismissConcepts = dismissConcepts
   registerEarlyRoutePresenter(
     CONCEPTS_FEATURE,
