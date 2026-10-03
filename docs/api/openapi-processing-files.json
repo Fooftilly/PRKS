@@ -1089,7 +1089,30 @@
             "anyOf": [
               {
                 "items": {
-                  "$ref": "#/components/schemas/ProcessingFileRoleInput"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ProcessingFileRoleInput"
+                    },
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "items": {},
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "type": "array"
               },
@@ -1098,13 +1121,37 @@
               }
             ],
             "default": null,
+            "description": "Entries that are not objects are skipped.",
             "title": "Roles"
           },
           "tags": {
             "anyOf": [
               {
                 "items": {
-                  "$ref": "#/components/schemas/ProcessingFileTagInput"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ProcessingFileTagInput"
+                    },
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "items": {},
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "type": "array"
               },
@@ -1113,6 +1160,7 @@
               }
             ],
             "default": null,
+            "description": "Entries that are not objects are skipped.",
             "title": "Tags"
           }
         },

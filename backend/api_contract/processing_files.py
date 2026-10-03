@@ -15,7 +15,7 @@ ignored, JSON ``null`` for ``roles`` or ``tags`` leaves them unchanged, and
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -24,6 +24,9 @@ ProcessingDraftStatus = Literal["Planned", "In Progress", "Completed", "Paused",
 
 # The domain stringifies and trims every draft scalar it keeps.
 DraftScalar = str | int | float | bool | None
+
+# A role or tag entry that is not an object is skipped by the domain.
+SkippedEntry = str | int | float | bool | None | list[Any]
 
 
 class ProcessingFileRole(BaseModel):
@@ -171,5 +174,11 @@ class ProcessingFileUpdateRequest(BaseModel):
         default=None,
         description="An existing folder id, or empty to clear (domain-checked).",
     )
-    roles: list[ProcessingFileRoleInput] | None = None
-    tags: list[ProcessingFileTagInput] | None = None
+    roles: list[ProcessingFileRoleInput | SkippedEntry] | None = Field(
+        default=None,
+        description="Entries that are not objects are skipped.",
+    )
+    tags: list[ProcessingFileTagInput | SkippedEntry] | None = Field(
+        default=None,
+        description="Entries that are not objects are skipped.",
+    )

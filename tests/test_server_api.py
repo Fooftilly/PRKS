@@ -5236,6 +5236,18 @@ class TestServerAPI(unittest.TestCase):
             "PATCH", path, {"roles": [{"role_type": "Author"}]}
         )
         self.assertEqual((status, patched["roles"]), (200, []))
+        # Entries that are not objects are skipped by both.
+        status, patched = self._processing_call(
+            "PATCH",
+            path,
+            {
+                "roles": [None, "Author", [1], {"person_id": person_id, "role_type": "Author"}],
+                "tags": [None, 7],
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual([role["person_id"] for role in patched["roles"]], [person_id])
+        self.assertEqual(patched["tags"], [])
         # `status` is the legacy spelling of `status_draft`.
         status, patched = self._processing_call("PATCH", path, {"status": "Paused"})
         self.assertEqual((status, patched["status_draft"]), (200, "Paused"))
