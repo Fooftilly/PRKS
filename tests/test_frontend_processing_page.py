@@ -68,6 +68,15 @@ class FrontendProcessingPageTests(unittest.TestCase):
         card = _read(os.path.join(_VUE, "ProcessingFileCard.vue"))
         self.assertIn("data-prks-processing-status-host", card)
 
+    def test_route_unmount_releases_preview_resources(self):
+        """Shared route dismiss unmounts the tree; the component releases the preview."""
+        page = _read(os.path.join(_VUE, "ProcessingFilesRoute.vue"))
+        unmount = page.split("onBeforeUnmount(() => {", 1)[1].split("})", 1)[0]
+        self.assertIn("props.intents.releaseResources()", unmount)
+        intents = _read(os.path.join(_VUE, "intents.ts"))
+        release = intents.split("releaseResources() {", 1)[1].split("},", 1)[0]
+        self.assertIn("window.prksProcessingReleaseResources?.(owner)", release)
+
     def test_processing_vue_maps_to_the_processing_files_e2e(self):
         policy = _read(os.path.join(_PROJECT_DIR, "tests", "e2e", "policy.py"))
         rule = policy[policy.index('"name": "processing-vue"'):policy.index('"name": "concepts-vue"')]

@@ -1,6 +1,6 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { dismissRouteSurface, readRouteSurface } from '../../route-surface/lifecycle'
+import { readRouteSurface } from '../../route-surface/lifecycle'
 import {
   presentProcessing,
   registerProcessingBridge,
@@ -100,7 +100,7 @@ describe('Processing Files route bridge', () => {
     expect(readRouteSurface(secondary)?.canonicalHash).toBe('#/processing-files')
   })
 
-  it('rejects an older generation and releases the preview with the owner', async () => {
+  it('rejects an older generation and releases the preview when the shared dismiss unmounts the owner', async () => {
     const release = vi.fn()
     window.prksProcessingReleaseResources = release
     window.prksProcessingAttachResources = vi.fn()
@@ -128,7 +128,9 @@ describe('Processing Files route bridge', () => {
     })
     await nextTick()
     expect(pane.querySelector('[data-processing-id="pdf-1"]')).not.toBeNull()
-    dismissRouteSurface(current)
+    registerProcessingBridge(window)
+    window.prksVueDismissRoute?.(current)
+    expect(release).toHaveBeenCalledTimes(1)
     expect(release).toHaveBeenCalledWith(current)
     expect(pane.querySelector('[data-prks-processing-page]')).toBeNull()
   })
