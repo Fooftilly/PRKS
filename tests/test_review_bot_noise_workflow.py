@@ -308,20 +308,30 @@ class NoiseRuleTableTests(unittest.TestCase):
 
 
 class WorkflowSecurityTests(unittest.TestCase):
-    def test_no_content_deletion_or_unminimize_path(self) -> None:
+    def test_no_content_deletion_path(self) -> None:
         self.assertNotRegex(_TEXT, r"delete[A-Z]")
         for forbidden in (
             "DELETE",
             "deletePullRequestReview",
             "deleteIssueComment",
             "deletePullRequestReviewComment",
-            "unminimizeComment",
             "--method",
             "-X ",
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, _TEXT)
         self.assertEqual(_TEXT.count("classifier: OFF_TOPIC"), 1)
+
+    def test_unminimize_is_limited_to_edited_comments(self) -> None:
+        # One mutation definition, used only by the comment job's edited path.
+        self.assertEqual(_TEXT.count("unminimizeComment("), 1)
+        self.assertNotIn("UNMINIMIZE_MUTATION", _job_section(_TEXT, "minimize-noisy-review"))
+        comment_script = _job_run_script(_TEXT, "minimize-noise-comment")
+        self.assertEqual(comment_script.count('query="${UNMINIMIZE_MUTATION}"'), 1)
+        self.assertIn('if [[ "${rule}" == "none" && "${action}" != "edited" ]]; then', comment_script)
+        self.assertIn('"${reason}" != "off-topic"', comment_script)
+        self.assertIn("issue_comment:\n    types: [created, edited]\n", _TEXT)
+        self.assertIn("pull_request_review_comment:\n    types: [created, edited]\n", _TEXT)
 
     def test_names_describe_minimization(self) -> None:
         self.assertIn("name: Minimize noisy review bot comments\n", _TEXT)
@@ -367,39 +377,60 @@ class WorkflowSecurityTests(unittest.TestCase):
 
 
 _STUB_GH = r"""#!/usr/bin/env bash
+# Stand-in for gh: logs every call, serves the live subject for REST reads,
+# and keeps the node's Minimizable state in a JSON file for GraphQL calls.
 set -euo pipefail
-printf '%s\n' "$*" >> "${STUB_LOG}"
+jq -nc '$ARGS.positional' --args -- "$@" >> "${STUB_LOG}"
 if [[ "${1:-}" != "api" ]]; then exit 64; fi
 for arg in "$@"; do
   case "${arg}" in
-    DELETE|*delete*|*unminimize*) echo "forbidden call" >&2; exit 65 ;;
+    DELETE|*delete*) echo "forbidden call" >&2; exit 65 ;;
   esac
 done
 if [[ "${2:-}" != "graphql" ]]; then
-  cat "${STUB_REVIEW_JSON}"
+  [[ "${*: -1}" == "${STUB_EXPECT_PATH}" ]] || { echo "wrong path ${*: -1}" >&2; exit 68; }
+  cat "${STUB_SUBJECT_JSON}"
   exit 0
 fi
 query=""
 subject=""
+jq_filter=""
+previous=""
 for arg in "$@"; do
+  [[ "${previous}" == "--jq" ]] && jq_filter="${arg}"
   case "${arg}" in
     query=*) query="${arg#query=}" ;;
     subjectId=*) subject="${arg#subjectId=}" ;;
   esac
+  previous="${arg}"
 done
 [[ "${subject}" == "${STUB_EXPECT_SUBJECT}" ]] || { echo "wrong subject" >&2; exit 66; }
+if [[ "${query}" == *unminimizeComment* ]]; then
+  if [[ "${STUB_MUTATION}" == "error" ]]; then echo "mutation failed" >&2; exit 1; fi
+  if [[ "${STUB_MUTATION}" == "ok" ]]; then
+    echo '{"isMinimized":false,"minimizedReason":null}' > "${STUB_STATE}"
+  fi
+  echo '{}'
+  exit 0
+fi
 if [[ "${query}" == *minimizeComment* ]]; then
   [[ "${query}" == *"classifier: OFF_TOPIC"* ]] || exit 67
   if [[ "${STUB_MUTATION}" == "error" ]]; then echo "mutation failed" >&2; exit 1; fi
   if [[ "${STUB_MUTATION}" == "error-after-concurrent-minimize" ]]; then
-    echo true > "${STUB_STATE}"; echo "already minimized" >&2; exit 1
+    echo '{"isMinimized":true,"minimizedReason":"off-topic"}' > "${STUB_STATE}"
+    echo "already minimized" >&2; exit 1
   fi
-  if [[ "${STUB_MUTATION}" == "ok" ]]; then echo true > "${STUB_STATE}"; fi
-  echo '{"data":{"minimizeComment":{"minimizedComment":{"isMinimized":true}}}}'
+  if [[ "${STUB_MUTATION}" == "ok" ]]; then
+    echo '{"isMinimized":true,"minimizedReason":"off-topic"}' > "${STUB_STATE}"
+  fi
+  echo '{}'
   exit 0
 fi
-cat "${STUB_STATE}"
+jq -c '{data: {node: .}}' "${STUB_STATE}" | jq -r "${jq_filter}"
 """
+
+_VISIBLE = {"isMinimized": False, "minimizedReason": None}
+_OFF_TOPIC = {"isMinimized": True, "minimizedReason": "off-topic"}
 
 
 class MinimizeScriptTests(unittest.TestCase):
@@ -419,41 +450,67 @@ class MinimizeScriptTests(unittest.TestCase):
     def tearDown(self) -> None:
         self._tmp.cleanup()
 
-    def _run(self, job: str, *, subject: dict, state: str, mutation: str = "ok", title: str = "") -> tuple[int, list[str], str]:
+    def _run(
+        self,
+        job: str,
+        *,
+        subject: dict,
+        state: dict | None,
+        mutation: str = "ok",
+        title: str = "",
+        action: str = "created",
+        event_name: str = "issue_comment",
+        event_subject: dict | None = None,
+    ) -> tuple[int, list[list[str]], dict | None]:
         log = self.tmp / "gh.log"
         log.write_text("", encoding="utf-8")
-        state_file = self.tmp / "state"
-        state_file.write_text(state + "\n", encoding="utf-8")
+        state_file = self.tmp / "state.json"
+        state_file.write_text(json.dumps(state), encoding="utf-8")
         event = self.tmp / "event.json"
-        event.write_text(json.dumps({"comment": subject}), encoding="utf-8")
-        review = self.tmp / "review.json"
-        review.write_text(json.dumps(subject), encoding="utf-8")
+        event.write_text(json.dumps({"action": action, "comment": event_subject or subject}), encoding="utf-8")
+        live = self.tmp / "subject.json"
+        live.write_text(json.dumps(subject), encoding="utf-8")
         script = self.tmp / "step.sh"
         script.write_text(_job_run_script(_TEXT, job), encoding="utf-8")
+        if job == "minimize-noisy-review":
+            match = re.fullmatch(r"review-([0-9]+)-pr-([0-9]+)", title)
+            expect_path = f"repos/Fooftilly/PRKS/pulls/{match.group(2)}/reviews/{match.group(1)}" if match else ""
+        else:
+            kind = "issues" if event_name == "issue_comment" else "pulls"
+            expect_path = f"repos/Fooftilly/PRKS/{kind}/comments/{(event_subject or subject).get('id')}"
         env = {
             "PATH": self.path,
             "HOME": str(self.tmp),
             "GH_TOKEN": "stub",
             "GITHUB_EVENT_PATH": str(event),
+            "GITHUB_EVENT_NAME": event_name if job == "minimize-noise-comment" else "workflow_run",
+            "GITHUB_REPOSITORY": "Fooftilly/PRKS",
             "REPOSITORY": "Fooftilly/PRKS",
             "SIGNAL_TITLE": title,
             "NOISE_CLASSIFIER_JQ": _CLASSIFIER,
             "MINIMIZED_STATE_QUERY": _env_block(_TEXT, "MINIMIZED_STATE_QUERY"),
             "MINIMIZE_OFF_TOPIC_MUTATION": _env_block(_TEXT, "MINIMIZE_OFF_TOPIC_MUTATION"),
+            "UNMINIMIZE_MUTATION": _env_block(_TEXT, "UNMINIMIZE_MUTATION"),
             "STUB_LOG": str(log),
             "STUB_STATE": str(state_file),
             "STUB_MUTATION": mutation,
-            "STUB_REVIEW_JSON": str(review),
+            "STUB_SUBJECT_JSON": str(live),
+            "STUB_EXPECT_PATH": expect_path,
             "STUB_EXPECT_SUBJECT": str(subject.get("node_id", "")),
         }
         assert _BASH
         result = subprocess.run([_BASH, str(script)], env=env, capture_output=True, text=True)
-        calls = [line for line in log.read_text(encoding="utf-8").splitlines() if line]
-        return result.returncode, calls, state_file.read_text(encoding="utf-8").strip()
+        calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line]
+        return result.returncode, calls, json.loads(state_file.read_text(encoding="utf-8"))
 
     @staticmethod
-    def _mutations(calls: list[str]) -> int:
-        return sum("minimizeComment" in call for call in calls)
+    def _mutations(calls: list[list[str]], name: str = "minimizeComment") -> int:
+        pattern = re.compile(rf"\b{name}\(")
+        return sum(any(pattern.search(arg) for arg in call) for call in calls)
+
+    @staticmethod
+    def _graphql(calls: list[list[str]]) -> int:
+        return sum(call[:2] == ["api", "graphql"] for call in calls)
 
     def _comment(self, body: str = CODEX_QUOTA, login: str = _CODEX) -> dict:
         return {"user": {"login": login}, "body": body, "node_id": "IC_kwDOabc123", "id": 5966421774}
@@ -462,26 +519,31 @@ class MinimizeScriptTests(unittest.TestCase):
         return {"user": {"login": login}, "body": body, "node_id": "PRR_kwDOxyz789", "id": 5399399625}
 
     def test_new_match_is_minimized_and_verified(self) -> None:
-        for job, subject, title in (
-            ("minimize-noise-comment", self._comment(), ""),
-            ("minimize-noisy-review", self._review(), "review-5399399625-pr-362"),
+        for job, subject, title, event_name in (
+            ("minimize-noise-comment", self._comment(), "", "issue_comment"),
+            ("minimize-noise-comment", {**self._comment(), "node_id": "PRRC_kwDOabc1"}, "", "pull_request_review_comment"),
+            ("minimize-noisy-review", self._review(), "review-5399399625-pr-362", ""),
         ):
-            with self.subTest(job=job):
-                code, calls, state = self._run(job, subject=subject, state="false", title=title)
+            with self.subTest(job=job, event=event_name):
+                code, calls, state = self._run(
+                    job, subject=subject, state=_VISIBLE, title=title, event_name=event_name or "issue_comment"
+                )
                 self.assertEqual(code, 0)
                 self.assertEqual(self._mutations(calls), 1)
-                self.assertEqual(state, "true")
+                self.assertEqual(self._mutations(calls, "unminimizeComment"), 0)
+                self.assertEqual(state, _OFF_TOPIC)
 
     def test_already_minimized_or_duplicate_event_succeeds_without_mutation(self) -> None:
-        for job, subject, title in (
-            ("minimize-noise-comment", self._comment(), ""),
-            ("minimize-noisy-review", self._review(GREPTILE_TRIAL_ENDED, _GREPTILE), "review-5394711990-pr-349"),
+        for job, subject, title, action in (
+            ("minimize-noise-comment", self._comment(), "", "created"),
+            ("minimize-noise-comment", self._comment(), "", "edited"),
+            ("minimize-noisy-review", self._review(GREPTILE_TRIAL_ENDED, _GREPTILE), "review-5394711990-pr-349", "created"),
         ):
-            with self.subTest(job=job):
-                code, calls, state = self._run(job, subject=subject, state="true", title=title)
+            with self.subTest(job=job, action=action):
+                code, calls, state = self._run(job, subject=subject, state=_OFF_TOPIC, title=title, action=action)
                 self.assertEqual(code, 0)
-                self.assertEqual(self._mutations(calls), 0)
-                self.assertEqual(state, "true")
+                self.assertEqual(self._graphql(calls), 1)
+                self.assertEqual(state, _OFF_TOPIC)
 
     def test_mutation_error_after_concurrent_minimize_succeeds(self) -> None:
         # A duplicate run minimized the node between the read and the mutation;
@@ -489,12 +551,12 @@ class MinimizeScriptTests(unittest.TestCase):
         code, calls, state = self._run(
             "minimize-noise-comment",
             subject=self._comment(),
-            state="false",
+            state=_VISIBLE,
             mutation="error-after-concurrent-minimize",
         )
         self.assertEqual(code, 0)
         self.assertEqual(self._mutations(calls), 1)
-        self.assertEqual(state, "true")
+        self.assertEqual(state, _OFF_TOPIC)
 
     def test_failed_minimization_fails_visibly(self) -> None:
         for mutation in ("error", "noop"):
@@ -503,42 +565,139 @@ class MinimizeScriptTests(unittest.TestCase):
                 ("minimize-noisy-review", self._review(), "review-5399399625-pr-362"),
             ):
                 with self.subTest(job=job, mutation=mutation):
-                    code, calls, state = self._run(job, subject=subject, state="false", mutation=mutation, title=title)
+                    code, calls, state = self._run(job, subject=subject, state=_VISIBLE, mutation=mutation, title=title)
                     self.assertNotEqual(code, 0)
-                    self.assertEqual(state, "false")
+                    self.assertEqual(state, _VISIBLE)
 
     def test_missing_or_unminimizable_node_fails(self) -> None:
-        code, calls, _ = self._run("minimize-noise-comment", subject=self._comment(), state="null")
-        self.assertNotEqual(code, 0)
-        self.assertEqual(self._mutations(calls), 0)
+        for action in ("created", "edited"):
+            with self.subTest(action=action):
+                code, calls, _ = self._run(
+                    "minimize-noise-comment", subject=self._comment(), state=None, action=action
+                )
+                self.assertNotEqual(code, 0)
+                self.assertEqual(self._graphql(calls), 1)
 
-    def test_unmatched_content_makes_no_minimize_call(self) -> None:
-        code, calls, _ = self._run(
+    def test_unmatched_new_content_makes_no_graphql_call(self) -> None:
+        code, calls, state = self._run(
             "minimize-noise-comment",
             subject=self._comment(CODERABBIT_WALKTHROUGH, _CODERABBIT),
-            state="false",
+            state=_OFF_TOPIC,
         )
-        self.assertEqual((code, calls), (0, []))
+        # A created comment is never unminimized, even if already minimized.
+        self.assertEqual((code, self._graphql(calls), state), (0, 0, _OFF_TOPIC))
         code, calls, _ = self._run(
             "minimize-noisy-review",
             subject=self._review(SOURCERY_FINDINGS),
-            state="false",
+            state=_VISIBLE,
             title="review-1-pr-2",
         )
-        self.assertEqual(code, 0)
-        self.assertEqual(self._mutations(calls), 0)
-        self.assertFalse(any("graphql" in call for call in calls))
+        self.assertEqual((code, self._graphql(calls)), (0, 0))
 
-    def test_invalid_node_ids_are_rejected_before_any_graphql(self) -> None:
-        for job, subject, title in (
-            ("minimize-noise-comment", {**self._comment(), "node_id": "PRR_kwDOxyz789"}, ""),
-            ("minimize-noise-comment", {**self._comment(), "node_id": "IC_x; rm -rf /"}, ""),
-            ("minimize-noisy-review", {**self._review(), "node_id": "IC_kwDOabc123"}, "review-1-pr-2"),
+    def test_noisy_comment_edited_into_review_is_restored(self) -> None:
+        # The <10 stars banner was minimized; CodeRabbit then edits the same
+        # comment into a walkthrough (or the banner plus review output).
+        for body in (CODERABBIT_WALKTHROUGH, CODERABBIT_BANNER_WITH_REVIEW):
+            with self.subTest(body=body[:60]):
+                code, calls, state = self._run(
+                    "minimize-noise-comment",
+                    subject=self._comment(body, _CODERABBIT),
+                    state=_OFF_TOPIC,
+                    action="edited",
+                )
+                self.assertEqual(code, 0)
+                self.assertEqual(self._mutations(calls, "unminimizeComment"), 1)
+                self.assertEqual(self._mutations(calls), 0)
+                self.assertEqual(state, _VISIBLE)
+
+    def test_edit_uses_live_body_not_stale_event_payload(self) -> None:
+        # A queued edited event still carries the banner, but the live comment
+        # is already the walkthrough: the live body decides.
+        code, calls, state = self._run(
+            "minimize-noise-comment",
+            subject=self._comment(CODERABBIT_WALKTHROUGH, _CODERABBIT),
+            event_subject=self._comment(CODERABBIT_NO_AUTO_REVIEW, _CODERABBIT),
+            state=_OFF_TOPIC,
+            action="edited",
+        )
+        self.assertEqual((code, state), (0, _VISIBLE))
+        # And the reverse: stale review payload, live banner gets minimized.
+        code, calls, state = self._run(
+            "minimize-noise-comment",
+            subject=self._comment(CODERABBIT_NO_AUTO_REVIEW, _CODERABBIT),
+            event_subject=self._comment(CODERABBIT_WALKTHROUGH, _CODERABBIT),
+            state=_VISIBLE,
+            action="edited",
+        )
+        self.assertEqual((code, state), (0, _OFF_TOPIC))
+
+    def test_edit_that_stays_noise_keeps_or_applies_minimization(self) -> None:
+        running = CODERABBIT_NO_AUTO_REVIEW.replace("- [ ] 🔍 Trigger review", "- 🔄 Running review...")
+        for state_before in (_OFF_TOPIC, _VISIBLE):
+            with self.subTest(state=state_before):
+                code, calls, state = self._run(
+                    "minimize-noise-comment",
+                    subject=self._comment(running, _CODERABBIT),
+                    state=state_before,
+                    action="edited",
+                )
+                self.assertEqual((code, state), (0, _OFF_TOPIC))
+                self.assertEqual(self._mutations(calls, "unminimizeComment"), 0)
+
+    def test_edit_never_restores_other_minimization_reasons_or_visible_comments(self) -> None:
+        for state_before in (
+            {"isMinimized": True, "minimizedReason": "spam"},
+            {"isMinimized": True, "minimizedReason": "outdated"},
+            {"isMinimized": True, "minimizedReason": "resolved"},
+            _VISIBLE,
         ):
-            with self.subTest(job=job, node_id=subject["node_id"]):
-                code, calls, _ = self._run(job, subject=subject, state="false", title=title)
+            with self.subTest(state=state_before):
+                code, calls, state = self._run(
+                    "minimize-noise-comment",
+                    subject=self._comment(CODERABBIT_WALKTHROUGH, _CODERABBIT),
+                    state=state_before,
+                    action="edited",
+                )
+                self.assertEqual((code, state), (0, state_before))
+                self.assertEqual(self._graphql(calls), 1)
+
+    def test_failed_restore_fails_visibly(self) -> None:
+        for mutation in ("error", "noop"):
+            with self.subTest(mutation=mutation):
+                code, _, state = self._run(
+                    "minimize-noise-comment",
+                    subject=self._comment(CODERABBIT_WALKTHROUGH, _CODERABBIT),
+                    state=_OFF_TOPIC,
+                    mutation=mutation,
+                    action="edited",
+                )
                 self.assertNotEqual(code, 0)
-                self.assertFalse(any("graphql" in call for call in calls))
+                self.assertEqual(state, _OFF_TOPIC)
+
+    def test_live_author_must_match_event(self) -> None:
+        code, calls, state = self._run(
+            "minimize-noise-comment",
+            subject=self._comment(CODEX_QUOTA, "Fooftilly"),
+            event_subject=self._comment(CODEX_QUOTA, _CODEX),
+            state=_OFF_TOPIC,
+            action="edited",
+        )
+        self.assertNotEqual(code, 0)
+        self.assertEqual((self._graphql(calls), state), (0, _OFF_TOPIC))
+
+    def test_invalid_event_or_node_ids_are_rejected_before_any_graphql(self) -> None:
+        cases = (
+            ("minimize-noise-comment", {**self._comment(), "node_id": "PRR_kwDOxyz789"}, "", "created"),
+            ("minimize-noise-comment", {**self._comment(), "node_id": "IC_x; rm -rf /"}, "", "created"),
+            ("minimize-noise-comment", self._comment(), "", "deleted"),
+            ("minimize-noise-comment", {**self._comment(), "id": "1; id"}, "", "created"),
+            ("minimize-noisy-review", {**self._review(), "node_id": "IC_kwDOabc123"}, "review-1-pr-2", "created"),
+        )
+        for job, subject, title, action in cases:
+            with self.subTest(job=job, node_id=subject["node_id"], action=action, id=subject["id"]):
+                code, calls, _ = self._run(job, subject=subject, state=_VISIBLE, title=title, action=action)
+                self.assertNotEqual(code, 0)
+                self.assertEqual(self._graphql(calls), 0)
 
     def test_signal_title_must_be_strictly_numeric(self) -> None:
         for title in (
@@ -553,7 +712,7 @@ class MinimizeScriptTests(unittest.TestCase):
         ):
             with self.subTest(title=title):
                 code, calls, _ = self._run(
-                    "minimize-noisy-review", subject=self._review(), state="false", title=title
+                    "minimize-noisy-review", subject=self._review(), state=_VISIBLE, title=title
                 )
                 self.assertNotEqual(code, 0)
                 self.assertEqual(calls, [])

@@ -4,12 +4,15 @@ name: Minimize noisy review bot comments
 # review-bot noise stays in GitHub history but is minimized as OFF_TOPIC.
 # Nothing is ever deleted: this workflow has no content-deletion API path, and
 # a failed minimization fails the job instead of falling back to anything else.
+# Bots edit comments in place, so an edited bot comment is reclassified from
+# its live body: noise is (re)minimized, and an OFF_TOPIC-minimized comment
+# whose live body is no longer noise is unminimized again.
 
 on:
   issue_comment:
-    types: [created]
+    types: [created, edited]
   pull_request_review_comment:
-    types: [created]
+    types: [created, edited]
   workflow_run:
     workflows: ["Review event signal"]
     types: [completed]
@@ -122,6 +125,7 @@ env:
       node(id: $subjectId) {
         ... on Minimizable {
           isMinimized
+          minimizedReason
         }
       }
     }
@@ -135,13 +139,24 @@ env:
       }
     }
 
+  # Used only by the edited-comment path, and only to undo an OFF_TOPIC
+  # minimization of a bot comment whose live body no longer matches a rule.
+  UNMINIMIZE_MUTATION: |
+    mutation($subjectId: ID!) {
+      unminimizeComment(input: {subjectId: $subjectId}) {
+        unminimizedComment {
+          isMinimized
+        }
+      }
+    }
+
 jobs:
   minimize-noise-comment:
     name: Minimize noisy bot comment
     # Comment events run in the base repository context. Only comments by the
     # known review bots on pull requests start this job; the classifier then
-    # decides. The comment body is read from the event payload by jq as data
-    # and never reaches a shell command or a ${{ }} expression in run:.
+    # decides. Comment bodies are read by jq as data and never reach a shell
+    # command or a ${{ }} expression in run:.
     if: >-
       (
         github.event_name == 'pull_request_review_comment' ||
@@ -153,56 +168,105 @@ jobs:
       )
 
     permissions:
-      issues: write # minimizeComment on a PR conversation (issue) comment
-      pull-requests: write # minimizeComment on an inline review comment
+      issues: write # read and (un)minimize a PR conversation (issue) comment
+      pull-requests: write # read and (un)minimize an inline review comment
 
     runs-on: ubuntu-24.04
     timeout-minutes: 2
 
     steps:
-      - name: Minimize matched bot-noise comment
+      - name: Reconcile bot comment visibility
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
-          rule="$(jq -c '.comment' "${GITHUB_EVENT_PATH}" | jq -r "${NOISE_CLASSIFIER_JQ}")"
-          if [[ "${rule}" == "none" ]]; then
-            echo "No high-confidence noise rule matched; leaving the comment visible."
-            exit 0
+          action="$(jq -r '.action // empty' "${GITHUB_EVENT_PATH}")"
+          comment_id="$(jq -r '.comment.id // empty' "${GITHUB_EVENT_PATH}")"
+          event_login="$(jq -r '.comment.user.login // empty' "${GITHUB_EVENT_PATH}")"
+          if [[ ! "${action}" =~ ^(created|edited)$ || ! "${comment_id}" =~ ^[0-9]+$ ]]; then
+            echo "::error::Unexpected comment event" >&2
+            exit 1
           fi
+          case "${GITHUB_EVENT_NAME}" in
+            issue_comment) kind="issues" ;;
+            pull_request_review_comment) kind="pulls" ;;
+            *) echo "::error::Unexpected event" >&2; exit 1 ;;
+          esac
+
+          # Classify the live comment, not the event payload: bots edit in
+          # place, and an older queued event must not act on a stale body.
+          comment_json="$(mktemp)"
+          trap 'rm -f "${comment_json}"' EXIT
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            "repos/${GITHUB_REPOSITORY}/${kind}/comments/${comment_id}" \
+            > "${comment_json}"
+
+          if [[ "$(jq -r '.user.login // empty' "${comment_json}")" != "${event_login}" ]]; then
+            echo "::error::Live comment author does not match the event" >&2
+            exit 1
+          fi
+
+          rule="$(jq -r "${NOISE_CLASSIFIER_JQ}" "${comment_json}")"
           if [[ ! "${rule}" =~ ^[a-z0-9-]+$ ]]; then
             echo "::error::Unexpected classifier output" >&2
             exit 1
           fi
+          if [[ "${rule}" == "none" && "${action}" != "edited" ]]; then
+            echo "No high-confidence noise rule matched; leaving the comment visible."
+            exit 0
+          fi
 
-          # The event's own GraphQL node ID: IC_ for PR conversation comments,
-          # PRRC_ for inline review comments.
-          subject_id="$(jq -r '.comment.node_id // empty' "${GITHUB_EVENT_PATH}")"
+          # GraphQL node ID: IC_ for PR conversation comments, PRRC_ for
+          # inline review comments.
+          subject_id="$(jq -r '.node_id // empty' "${comment_json}")"
           if [[ ! "${subject_id}" =~ ^(IC|PRRC)_[A-Za-z0-9_-]+$ ]]; then
             echo "::error::Missing or invalid comment node ID" >&2
             exit 1
           fi
 
+          # Prints "<isMinimized> <minimizedReason>", e.g. "true off-topic".
           minimized_state() {
             gh api graphql \
               -f query="${MINIMIZED_STATE_QUERY}" \
               -f subjectId="${subject_id}" \
-              --jq '.data.node.isMinimized'
+              --jq '.data.node | "\(.isMinimized) \(.minimizedReason // "" | ascii_downcase | gsub("_"; "-"))"'
           }
 
-          before="$(minimized_state)"
-          case "${before}" in
-            true)
-              echo "Rule ${rule}: ${subject_id} is already minimized."
+          read -r minimized reason <<< "$(minimized_state)"
+          if [[ ! "${minimized}" =~ ^(true|false)$ ]]; then
+            echo "::error::${subject_id} is missing or not minimizable" >&2
+            exit 1
+          fi
+
+          if [[ "${rule}" == "none" ]]; then
+            # An edited bot comment that is no longer noise: restore it only
+            # when it is minimized as off-topic (the classifier this workflow
+            # uses). Other minimization reasons are someone else's decision.
+            if [[ "${minimized}" != "true" || "${reason}" != "off-topic" ]]; then
+              echo "No high-confidence noise rule matched; leaving the comment as it is."
               exit 0
-              ;;
-            false) ;;
-            *)
-              echo "::error::${subject_id} is missing or not minimizable" >&2
+            fi
+            if ! gh api graphql \
+              -f query="${UNMINIMIZE_MUTATION}" \
+              -f subjectId="${subject_id}" > /dev/null
+            then
+              echo "::warning::unminimizeComment returned an error; re-checking state"
+            fi
+            read -r minimized reason <<< "$(minimized_state)"
+            if [[ "${minimized}" != "false" ]]; then
+              echo "::error::Failed to restore visibility of ${subject_id}" >&2
               exit 1
-              ;;
-          esac
+            fi
+            echo "Edited comment ${subject_id} is no longer noise; restored its visibility."
+            exit 0
+          fi
+
+          if [[ "${minimized}" == "true" ]]; then
+            echo "Rule ${rule}: ${subject_id} is already minimized."
+            exit 0
+          fi
 
           if ! gh api graphql \
             -f query="${MINIMIZE_OFF_TOPIC_MUTATION}" \
@@ -212,8 +276,8 @@ jobs:
             echo "::warning::minimizeComment returned an error; re-checking state"
           fi
 
-          after="$(minimized_state)"
-          if [[ "${after}" != "true" ]]; then
+          read -r minimized reason <<< "$(minimized_state)"
+          if [[ "${minimized}" != "true" ]]; then
             echo "::error::Rule ${rule}: failed to minimize ${subject_id}" >&2
             exit 1
           fi
