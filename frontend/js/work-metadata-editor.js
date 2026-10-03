@@ -395,6 +395,14 @@
         if (input && document.activeElement !== input) input.value = ack.value;
     }
 
+    /** Entity-only field acknowledgement for a parked owner. No observed base, no paint. */
+    function applyWorkMetadataEntityAck(ctx, ack) {
+        if (!ctx || !ack || !ack.field) return;
+        const work = ctx.getEntity('work');
+        if (!work || work.id !== ack.work_id) return;
+        ctx.setEntity('work', Object.assign({}, work, { [ack.field]: ack.value }));
+    }
+
     async function prepare(ctx, state) {
         const readVersion = state.readVersion = (state.readVersion || 0) + 1;
         try {
@@ -441,6 +449,9 @@
                 })
                 : 'rejected';
             if (attached === 'rejected') return;
+            if (typeof root.prksBindOwnerWorkAcknowledgement === 'function') {
+                root.prksBindOwnerWorkAcknowledgement(ctx);
+            }
             stops.sync = root.prksSync.subscribe(event => {
                 if (event.acknowledged && event.operation === 'SET_WORK_METADATA_FIELD') {
                     acceptAck(ctx, next, root.prksEffectiveMetadataAck(event.acknowledged, event.op));
@@ -581,12 +592,15 @@
                     value: result.current_value, server_revision: result.current_revision,
                     changed: false, code: 'ACKNOWLEDGED' };
                 if (!await root.prksOfflineReconcileWorkField(ack)) throw new Error();
-                if (still() && live(ctx, state)) acceptAck(ctx, state, ack);
+                if (!still() || !live(ctx, state)) return;
+                acceptAck(ctx, state, ack);
             } else if (!apply) {
+                if (!still() || !live(ctx, state)) return;
                 root.prksOfflineMarkEntityChanged('work', state.workId);
                 root.prksOfflineMarkEntityChanged('work-metadata-state', state.workId);
-                if (still() && live(ctx, state)) state.observed = null;
+                state.observed = null;
             }
+            if (!still() || !live(ctx, state)) return;
             await root.prksSync.store.resolveConflict(op.op_id, apply);
             root.prksSync.changed();
             if (!still()) return;
@@ -616,4 +630,5 @@
 
     root.prksMountWorkMetadataEditor = mount;
     root.prksSaveWorkMetadataFields = save;
+    root.prksApplyWorkMetadataEntityAck = applyWorkMetadataEntityAck;
 })(typeof window === 'undefined' ? globalThis : window);

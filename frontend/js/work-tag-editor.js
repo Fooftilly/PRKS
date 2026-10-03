@@ -89,8 +89,10 @@
                                 present: result.current_state, server_revision: result.current_revision,
                                 tag: op.local_context.tag };
                             if (!await root.prksOfflineReconcileWorkTag(ack)) throw new Error();
+                            if (!live(ctx, state)) return;
                             acceptAck(ctx, state, ack);
                         } else if (!apply) {
+                            if (!live(ctx, state)) return;
                             // Explicitly discard the intent and stale relationship.
                             // Catalog/lifecycle conflicts do not fabricate a target.
                             const work = ctx.getEntity('work');
@@ -99,9 +101,14 @@
                             ctx.setEntity('work', { ...work, tags: work.tags.filter(t => t.id !== op.payload.tag_id) });
                             state.options = null;
                         }
+                        if (!live(ctx, state)) return;
                         await root.prksSync.store.resolveConflict(op.op_id, apply);
+                        if (!live(ctx, state)) return;
                         state.error = null; root.prksSync.changed();
-                    } catch (_) { state.error = 'Could not save the resolution locally. Please retry.'; }
+                    } catch (_) {
+                        if (!live(ctx, state)) return;
+                        state.error = 'Could not save the resolution locally. Please retry.';
+                    }
                     await paint(ctx, state);
                 };
                 item.appendChild(button);
@@ -130,6 +137,15 @@
             if (ack.present) state.options.assigned.push({ tag_id: ack.tag_id, relation_revision: ack.server_revision });
             else if (ack.server_revision) state.options.known_absent[ack.tag_id] = ack.server_revision;
         }
+    }
+    /** Entity-only tag acknowledgement for a parked owner. No options, no paint. */
+    function applyWorkTagEntityAck(ctx, ack) {
+        if (!ctx || !ack) return;
+        const work = ctx.getEntity('work');
+        if (!work || work.id !== ack.work_id || !Array.isArray(work.tags)) return;
+        const tags = work.tags.filter(t => t.id !== ack.tag_id);
+        if (ack.present) tags.push(ack.tag);
+        ctx.setEntity('work', { ...work, tags });
     }
     async function prepare(ctx, state) {
         const readVersion = state.readVersion = (state.readVersion || 0) + 1;
@@ -229,6 +245,9 @@
                 })
                 : 'rejected';
             if (attached === 'rejected') return;
+            if (typeof root.prksBindOwnerWorkAcknowledgement === 'function') {
+                root.prksBindOwnerWorkAcknowledgement(ctx);
+            }
             stops.sync = root.prksSync.subscribe(event => {
                 /* Only THIS family's acknowledgements. The durable queue is
                  * shared, and another family's ACK carries no tag_id -- feeding
@@ -296,4 +315,5 @@
     }
     root.prksMountWorkTags = mount;
     root.prksWorkTagEdit = edit;
+    root.prksApplyWorkTagEntityAck = applyWorkTagEntityAck;
 })(typeof window === 'undefined' ? globalThis : window);

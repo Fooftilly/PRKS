@@ -25,6 +25,7 @@ installMiniDocument([
     '</div>',
     '<div id="main-host"></div>',
     '<div id="side-host"></div>',
+    '<div id="page-content"></div>',
     '<div id="prks-tab-warm-parking"></div>',
     '</div>',
 ].join(''));
@@ -35,6 +36,8 @@ let unsubscribeCount = 0;
 let doubleUnsub = 0;
 const roleWrites = [];
 const tagWrites = [];
+let resolveConflictCalls = 0;
+let processListenerMark = [];
 
 function track(fn) {
     subscribeCount += 1;
@@ -60,6 +63,9 @@ global.prksSync = {
         },
         coalesceWorkTag: async function () {
             tagWrites.push(Array.prototype.slice.call(arguments));
+        },
+        resolveConflict: async function () {
+            resolveConflictCalls += 1;
         },
     },
 };
@@ -227,11 +233,407 @@ function mountSlice(text, start, end) {
     return text.slice(at, stop === -1 ? undefined : stop);
 }
 
+function findButton(label) {
+    const buttons = panel().querySelectorAll('button');
+    for (let i = 0; i < buttons.length; i += 1) {
+        if (buttons[i].textContent === label) return buttons[i];
+    }
+    return null;
+}
+
+function emitLive(event) {
+    listeners.forEach(function (rec) {
+        if (rec.dead || processListenerMark.indexOf(rec) !== -1) return;
+        rec.fn(event);
+    });
+}
+
+async function replaceDuringTagReconcile() {
+    prksDestroyAllTabContexts();
+    hosts();
+    resolveConflictCalls = 0;
+    const workId = 'work-tag-c';
+    const ctx = mountTab('tag-conflict');
+    showWork(ctx, workId);
+    ctx.setEntity('work', Object.assign(workRecord(workId), { tags: [] }));
+    own(ctx);
+    const op = {
+        op_id: 'op-tag-1',
+        entity_type: 'work',
+        entity_id: workId,
+        operation: 'ADD_WORK_TAG',
+        status: 'conflict',
+        payload: { tag_id: 't1' },
+        local_context: { tag: { id: 't1', name: 'Server Tag' } },
+        server_result: { code: 'REVISION_CONFLICT', current_state: true, current_revision: 4 },
+    };
+    const previousList = prksSync.store.listOperations;
+    prksSync.store.listOperations = async function () { return [op]; };
+    let releaseGate = null;
+    let reconcileStarted = 0;
+    const gate = new Promise(function (resolve) { releaseGate = resolve; });
+    const previousReconcile = global.prksOfflineReconcileWorkTag;
+    global.prksOfflineReconcileWorkTag = async function () {
+        reconcileStarted += 1;
+        await gate;
+        return true;
+    };
+    try {
+        prksMountWorkTags(ctx, workId);
+        await flush();
+        const state = ctx.getResource('workTagEditor');
+        state.error = 'kept';
+        state.options = { sentinel: 'old' };
+        const button = findButton('Use server state');
+        assert('work tag conflict exposes Use server state', !!button);
+        if (!button) return;
+        const pending = button.onclick();
+        await Promise.resolve();
+        const fresh = {
+            workId: workId,
+            generation: ctx.generation,
+            options: { sentinel: 'fresh' },
+            error: 'kept',
+            operations: [],
+        };
+        const replaced = ctx.registerResource(ctx.resourceTicket(), {
+            kind: 'workTagEditor',
+            value: fresh,
+            suspendable: false,
+            dispose: function () {},
+        });
+        assertEq('work tag replacement during reconciliation reports replaced', replaced, 'replaced');
+        releaseGate(true);
+        await pending;
+        await flush();
+        assertEq('work tag reconciliation started', reconcileStarted, 1);
+        assertEq('replaced work tag session does not resolve the conflict', resolveConflictCalls, 0);
+        assertEq('replaced work tag session does not clear the old error', state.error, 'kept');
+        assertEq('replaced work tag session does not clear the old options', state.options.sentinel, 'old');
+        assertEq('replaced work tag session leaves the fresh options', fresh.options.sentinel, 'fresh');
+        assertEq('replaced work tag session leaves the fresh error', fresh.error, 'kept');
+        assertEq('replaced work tag session does not patch tags', ctx.getEntity('work').tags.length, 0);
+    } finally {
+        prksSync.store.listOperations = previousList;
+        global.prksOfflineReconcileWorkTag = previousReconcile;
+        prksDestroyTabContext('tag-conflict');
+    }
+}
+
+async function warmParkDuringFolderReconcile() {
+    prksDestroyAllTabContexts();
+    hosts();
+    resolveConflictCalls = 0;
+    const folderId = 'folder-c';
+    const ctx = mountTab('folder-conflict');
+    ctx.setEntity('folder', { id: folderId, tags: [] });
+    own(ctx);
+    const pdf = { id: 'folder-pdf', resize: function () {} };
+    ctx.registerResource(ctx.resourceTicket(), {
+        kind: 'pdf', value: pdf, suspendable: true, dispose: function () {},
+    });
+    const op = {
+        op_id: 'op-folder-1',
+        entity_type: 'folder',
+        entity_id: folderId,
+        operation: 'ADD_FOLDER_TAG',
+        status: 'conflict',
+        payload: { tag_id: 't9' },
+        local_context: { tag: { id: 't9', name: 'Server Folder Tag' } },
+        server_result: { code: 'REVISION_CONFLICT', current_state: true, current_revision: 4 },
+    };
+    const previousList = prksSync.store.listOperations;
+    prksSync.store.listOperations = async function () { return [op]; };
+    let releaseGate = null;
+    let reconcileStarted = 0;
+    const gate = new Promise(function (resolve) { releaseGate = resolve; });
+    const previousReconcile = global.prksOfflineReconcileFolderTag;
+    global.prksOfflineReconcileFolderTag = async function () {
+        reconcileStarted += 1;
+        await gate;
+        return true;
+    };
+    try {
+        prksMountFolderTags(ctx, folderId);
+        await flush();
+        const state = ctx.getResource('folderTagEditor');
+        state.error = 'kept';
+        state.options = { sentinel: 'old' };
+        const button = findButton('Use server state');
+        assert('folder tag conflict exposes Use server state', !!button);
+        if (!button) return;
+        const pending = button.onclick();
+        await Promise.resolve();
+        assert('folder conflict warm park disposes the editor', prksWarmParkTabContext(ctx.tabId) === true);
+        assertEq('folder tag session is absent while parked', ctx.getResource('folderTagEditor'), undefined);
+        const resumed = prksResumeWarmTabContext(ctx.tabId, document.getElementById('main-host'));
+        assert('folder conflict resume returns the same owner', resumed === ctx);
+        const fresh = {
+            folderId: folderId,
+            generation: ctx.generation,
+            options: { sentinel: 'fresh' },
+            error: 'kept',
+            operations: [],
+        };
+        const attached = ctx.registerResource(ctx.resourceTicket(), {
+            kind: 'folderTagEditor',
+            value: fresh,
+            suspendable: false,
+            dispose: function () {},
+        });
+        assertEq('resumed folder owner accepts the new tag session', attached, 'attached');
+        releaseGate(true);
+        await pending;
+        await flush();
+        assertEq('folder tag reconciliation started', reconcileStarted, 1);
+        assertEq('parked folder tag session does not resolve the conflict', resolveConflictCalls, 0);
+        assertEq('parked folder tag session does not clear the old error', state.error, 'kept');
+        assertEq('parked folder tag session does not clear the old options', state.options.sentinel, 'old');
+        assertEq('parked folder tag session leaves the fresh options', fresh.options.sentinel, 'fresh');
+        assertEq('parked folder tag session leaves the fresh error', fresh.error, 'kept');
+        assertEq('parked folder tag session does not patch tags', ctx.getEntity('folder').tags.length, 0);
+    } finally {
+        prksSync.store.listOperations = previousList;
+        global.prksOfflineReconcileFolderTag = previousReconcile;
+        prksDestroyTabContext('folder-conflict');
+    }
+}
+
+function armMetadataSession(ctx, workId) {
+    showWork(ctx, workId);
+    ctx.ui.workDetailsMode = 'metadata';
+    ctx.ui.workMetaEditSession = 4;
+    ctx.ui.workMetaDraftWorkId = workId;
+    ctx.ui.workMetaDraft = { title: 'Local Title' };
+    ctx.setEntity('work', Object.assign(workRecord(workId), { title: 'Local Title' }));
+    own(ctx);
+}
+
+function metadataConflictOp(workId, opId) {
+    return {
+        op_id: opId,
+        entity_type: 'work',
+        entity_id: workId,
+        operation: 'SET_WORK_METADATA_FIELD',
+        status: 'conflict',
+        payload: { field: 'title', value: 'Local Title' },
+        server_result: { current_value: 'Server Title', current_revision: 4 },
+    };
+}
+
+async function metadataResolveDuringGate(tabId, workId, opId, during) {
+    prksDestroyAllTabContexts();
+    hosts();
+    resolveConflictCalls = 0;
+    const ctx = mountTab(tabId);
+    armMetadataSession(ctx, workId);
+    let releaseGate = null;
+    let reconcileStarted = 0;
+    const gate = new Promise(function (resolve) { releaseGate = resolve; });
+    const previousReconcile = global.prksOfflineReconcileWorkField;
+    global.prksOfflineReconcileWorkField = async function () {
+        reconcileStarted += 1;
+        await gate;
+        return true;
+    };
+    try {
+        prksMountWorkMetadataEditor(ctx, workId);
+        await flush();
+        const state = ctx.getResource('workMetadataEditor');
+        state.operations = [metadataConflictOp(workId, opId)];
+        state.observed = { fields: { title: { revision: 1, value: 'Local Title' } } };
+        state.error = 'kept';
+        state.readVersion = 2;
+        const pending = prksResolveWorkMetadataFieldConflict(opId, false, 'bib');
+        await Promise.resolve();
+        await during(ctx, state);
+        releaseGate(true);
+        await pending;
+        await flush();
+        assertEq(tabId + ' reconciliation started', reconcileStarted, 1);
+        assertEq(tabId + ' does not resolve the conflict', resolveConflictCalls, 0);
+        const current = ctx.getResource('workMetadataEditor');
+        if (current && current !== state) {
+            assertEq(tabId + ' leaves the fresh observed title', current.observed.fields.title.value, 'Fresh');
+            assertEq(tabId + ' leaves the fresh error', current.error, 'kept');
+        }
+        assertEq(tabId + ' does not change the old read', state.readVersion, 2);
+        assertEq(tabId + ' does not change the old error', state.error, 'kept');
+        assertEq(tabId + ' does not change the old observed title', state.observed.fields.title.value, 'Local Title');
+        assertEq(tabId + ' does not patch the work title', ctx.getEntity('work').title, 'Local Title');
+    } finally {
+        global.prksOfflineReconcileWorkField = previousReconcile;
+        prksDestroyTabContext(tabId);
+    }
+}
+
+async function warmAcknowledgementSurvivesActivation() {
+    const previousSnapshot = global.prksWorkspaceSnapshot;
+    const previousHtml = global.buildWorkLinkedPersonsHtml;
+    const previousPublish = global.prksPublishWorkPanelRead;
+    const previousList = prksSync.store.listOperations;
+    if (typeof createPrksWorkspaceTabs !== 'function') {
+        require(path.join(rootDir, 'frontend/js/workspace-tree.js'));
+        require(path.join(rootDir, 'frontend/js/workspace-tabs.js'));
+    }
+    require(path.join(rootDir, 'frontend/js/work-role-state.js'));
+    global.buildWorkLinkedPersonsHtml = function (work) {
+        rolePaints += 1;
+        const roles = (work && work.roles) || [];
+        return roles.map(function (role) {
+            return '<span class="credit">' + (role && role.credit_name || '') + '</span>';
+        }).join('');
+    };
+    global.prksPublishWorkPanelRead = function (_ctx, work) {
+        const panelNode = document.getElementById('panel-content');
+        const host = panelNode && panelNode.querySelector('.work-linked-persons-by-role');
+        if (!host) return;
+        const effective = typeof prksEffectiveWorkDetailRoles === 'function'
+            ? prksEffectiveWorkDetailRoles(work) : work;
+        const roles = (effective && effective.roles) || [];
+        host.innerHTML = roles.map(function (role) {
+            return '<span class="credit">' + (role && role.credit_name || '') + '</span>';
+        }).join('');
+    };
+    const pendingOp = {
+        op_id: 'op-role-park',
+        entity_type: 'work',
+        entity_id: 'WA',
+        operation: 'ADD_WORK_PERSON_ROLE',
+        status: 'pending',
+        payload: { person_id: 'p1', role_type: 'Author', credit_name: 'Pending Ada' },
+        local_context: { person: { id: 'p1', first_name: 'Ada', last_name: 'Lovelace' } },
+    };
+    let roleOps = [pendingOp];
+    prksSync.store.listOperations = async function () { return roleOps.slice(); };
+    let hash = '#/works/WA';
+    let href = 'http://127.0.0.1/#/works/WA';
+    let historyState = null;
+    const hist = {
+        getHash: function () { return hash; },
+        getHref: function () { return href; },
+        getState: function () { return historyState; },
+        pushState: function (next, url) {
+            historyState = next;
+            href = String(url);
+            const at = href.indexOf('#');
+            if (at >= 0) hash = href.slice(at);
+        },
+        replaceState: function (next, url) {
+            historyState = next;
+            href = String(url);
+            const at = href.indexOf('#');
+            if (at >= 0) hash = href.slice(at);
+        },
+    };
+    let renders = 0;
+    const ws = createPrksWorkspaceTabs({
+        parseRoute: function (raw) {
+            const value = raw || '#/folders';
+            const work = /^#\/works\/([^/?#]+)/.exec(value);
+            if (work) {
+                return {
+                    canonicalHash: '#/works/' + work[1],
+                    hash: value,
+                    name: 'work',
+                    params: { workId: work[1] },
+                };
+            }
+            return { canonicalHash: value, hash: value, name: 'folders', params: {} };
+        },
+        routeLoadingTitle: function () { return 'Loading'; },
+        routeTabIcon: function () { return 'file-text'; },
+        homeHash: '#/folders',
+        historyAdapter: hist,
+        supportsTile: function () { return false; },
+        canLeave: function () { return true; },
+        loadSnapshot: function () { return null; },
+        renderRoute: function () { renders += 1; },
+        refreshFocusedPanel: function () { prksRefreshFocusedRightPanel(); },
+        publishMainShell: function () {},
+        announce: function () {},
+        onChange: function () {},
+    });
+    try {
+        prksDestroyAllTabContexts();
+        hosts();
+        pdfInits = 0;
+        ws.bootstrap('#/works/WA');
+        global.prksWorkspaceSnapshot = function () { return ws.snapshot(); };
+        const snap = ws.snapshot();
+        const tabA = snap.mainTabId;
+        const ctx = prksGetTabContext(tabA);
+        showWork(ctx, 'WA');
+        ctx.setEntity('work', Object.assign(workRecord('WA'), { roles: [] }));
+        const pdf = { id: 'pdf-wa', resized: 0, resize: function () { pdf.resized += 1; } };
+        ctx.registerResource(ctx.resourceTicket(), {
+            kind: 'pdf', value: pdf, suspendable: true, dispose: function () {},
+        });
+        prksRefreshFocusedRightPanel();
+        await flush();
+        const hostBefore = panel().querySelector('.work-linked-persons-by-role');
+        assert('setup refresh paints the pending credit', !!hostBefore && hostBefore.innerHTML.indexOf('Pending Ada') !== -1);
+        assert('setup refresh mounts the role editor', !!ctx.getResource('workRoleEditor'));
+        const opened = await ws.openTab('#/works/WB', { activate: false });
+        await ws.activateTab(opened.id);
+        await flush();
+        assert('activation warm-parks the PDF work', ctx.suspended === true && ctx.getResource('pdf') === pdf);
+        assertEq('warm park drops the role editor', ctx.getResource('workRoleEditor'), undefined);
+        assert('parked panel still shows the pending credit',
+            hostBefore.innerHTML.indexOf('Pending Ada') !== -1 && hostBefore.innerHTML.indexOf('Server Ada') === -1);
+        roleOps = [];
+        emitLive({
+            operation: 'ADD_WORK_PERSON_ROLE',
+            acknowledged: {
+                work_id: 'WA',
+                person_id: 'p1',
+                role_type: 'Author',
+                present: true,
+                credit_name: 'Server Ada',
+                first_name: 'Ada',
+                last_name: 'Lovelace',
+                server_revision: 3,
+            },
+        });
+        const parkedRoles = ctx.getEntity('work').roles;
+        assertEq('parked acknowledgement patches the work credit',
+            parkedRoles && parkedRoles[0] && parkedRoles[0].credit_name, 'Server Ada');
+        assert('parked acknowledgement does not refresh the panel',
+            hostBefore.innerHTML.indexOf('Pending Ada') !== -1);
+        const rendersBeforeResume = renders;
+        await ws.activateTab(tabA);
+        await flush();
+        const hostAfter = panel().querySelector('.work-linked-persons-by-role');
+        const afterHtml = hostAfter ? hostAfter.innerHTML : '';
+        const effective = prksEffectiveWorkDetailRoles(ctx.getEntity('work'));
+        const effectiveCredit = effective && effective.roles && effective.roles[0]
+            ? effective.roles[0].credit_name : '';
+        assertEq('resumed entity keeps the acknowledged credit',
+            ctx.getEntity('work').roles[0].credit_name, 'Server Ada');
+        assert('resumed panel shows the acknowledged credit', afterHtml.indexOf('Server Ada') !== -1);
+        assert('resumed panel drops the pending credit', afterHtml.indexOf('Pending Ada') === -1);
+        assertEq('resumed panel has no pending role overlay', effectiveCredit, 'Server Ada');
+        assertEq('warm resume keeps the PDF object', ctx.getResource('pdf'), pdf);
+        assertEq('warm resume does not init a PDF viewer', pdfInits, 0);
+        assertEq('workspace activation does not route-render the resumed work', renders, rendersBeforeResume);
+    } finally {
+        global.prksWorkspaceSnapshot = previousSnapshot;
+        global.buildWorkLinkedPersonsHtml = previousHtml;
+        global.prksPublishWorkPanelRead = previousPublish;
+        prksSync.store.listOperations = previousList;
+        if (typeof prksRefreshPendingWorkRoles === 'function') {
+            roleOps = [];
+            await prksRefreshPendingWorkRoles();
+        }
+        prksDestroyAllTabContexts();
+    }
+}
+
 async function main() {
-    const processListeners = listeners.slice();
+    processListenerMark = listeners.slice();
     function editorLive() {
         return listeners.filter(function (rec) {
-            return !rec.dead && processListeners.indexOf(rec) === -1;
+            return !rec.dead && processListenerMark.indexOf(rec) === -1;
         }).length;
     }
     const unhandled = [];
@@ -284,6 +686,31 @@ async function main() {
     ['prksMountWorkMetadataEditor', 'prksMountWorkSourceEditor', 'prksMountWorkRoleEditor', 'initWorkTagCombobox'].forEach(function (name) {
         assert('focused work panel reconstructs via ' + name, panelUpdate.indexOf(name) !== -1);
     });
+    const tagResolve = mountSlice(source('frontend/js/work-tag-editor.js'),
+        'await root.prksOfflineReconcileWorkTag', 'await paint(ctx, state)');
+    assert('work tag rechecks identity after reconciliation',
+        tagResolve.indexOf('if (!live(ctx, state)) return;') !== -1 &&
+        tagResolve.indexOf('if (!live(ctx, state)) return;') < tagResolve.indexOf('store.resolveConflict'));
+    const folderResolve = mountSlice(source('frontend/js/folder-tag-editor.js'),
+        'await root.prksOfflineReconcileFolderTag', 'await paint(ctx, state)');
+    assert('folder tag rechecks identity after reconciliation',
+        folderResolve.indexOf('if (!live(ctx, state)) return;') !== -1 &&
+        folderResolve.indexOf('if (!live(ctx, state)) return;') < folderResolve.indexOf('store.resolveConflict'));
+    const metaResolve = mountSlice(source('frontend/js/work-metadata-editor.js'),
+        'async function actionResolve', 'root.prksResolveWorkMetadataFieldConflict');
+    assert('metadata rechecks the edit session before resolveConflict',
+        metaResolve.indexOf('if (!still() || !live(ctx, state)) return;') !== -1 &&
+        metaResolve.indexOf('if (!still() || !live(ctx, state)) return;') < metaResolve.indexOf('store.resolveConflict'));
+    assert('metadata still() return stays after the sync change',
+        metaResolve.indexOf('prksSync.changed()') < metaResolve.indexOf('if (!still()) return;'));
+    const sourceResolve = mountSlice(source('frontend/js/work-source-editor.js'),
+        'async function resolveSource', 'function writeInput');
+    const sourceResolveAt = sourceResolve.indexOf('store.resolveConflict');
+    const sourceBeforeResolve = sourceResolve.slice(0, sourceResolve.lastIndexOf('\n', sourceResolveAt));
+    assert('work source does not await reconciliation before resolveConflict',
+        sourceBeforeResolve.indexOf('await ') === -1);
+    assert('work role has no conflict resolver',
+        source('frontend/js/work-role-editor.js').indexOf('resolveConflict') === -1);
 
     prksDestroyAllTabContexts();
     hosts();
@@ -378,9 +805,14 @@ async function main() {
         dispose: function () { secondDisposed += 1; },
     });
     assertEq('same-generation replacement reports replaced', replaced, 'replaced');
-    assertEq('same-generation replacement disposes the previous session once', unsubscribeCount - unsubBeforeReplace, firstListeners.length);
-    assert('same-generation replacement unsubscribes every previous listener',
-        firstListeners.every(function (rec) { return rec.dead; }));
+    assertEq('role mount keeps the owner acknowledgement beside the session', firstListeners.length, 3);
+    const replacedListeners = firstListeners.slice(0, -1);
+    assertEq('same-generation replacement disposes the previous session once',
+        unsubscribeCount - unsubBeforeReplace, replacedListeners.length);
+    assert('same-generation replacement unsubscribes every previous editor listener',
+        replacedListeners.every(function (rec) { return rec.dead; }));
+    assert('same-generation replacement keeps the owner acknowledgement',
+        !firstListeners[firstListeners.length - 1].dead);
     assertEq('same-generation replacement installs only the new state', replaceCtx.getResource('workRoleEditor'), second);
     panel().innerHTML = 'BEFORE';
     releaseRead();
@@ -498,7 +930,7 @@ async function main() {
     own(warm);
     await flush();
     const editorSubs = subscribeCount - parkedSubs;
-    assertEq('warm owner subscribed the five editor sessions', editorSubs, 8);
+    assertEq('warm owner subscribed the five editor sessions and the owner acknowledgement', editorSubs, 9);
     const unsubAtPark = unsubscribeCount;
     assert('warm park keeps the PDF and releases editors', prksWarmParkTabContext('warm') === true);
     EDITOR_KINDS.forEach(function (kind) {
@@ -506,8 +938,9 @@ async function main() {
     });
     assertEq('warm park keeps the PDF object', warm.getResource('pdf'), pdf);
     assertEq('warm park does not dispose the PDF', pdfDisposed, 0);
-    assertEq('warm park unsubscribes editor listeners once', unsubscribeCount - unsubAtPark, editorSubs);
-    assertEq('warm park leaves no live editor subscription', editorLive(), 0);
+    assertEq('warm park unsubscribes editor listeners and keeps the owner acknowledgement',
+        unsubscribeCount - unsubAtPark, editorSubs - 1);
+    assertEq('warm park keeps the owner acknowledgement subscription', editorLive(), 1);
     const rejectedSubs = subscribeCount;
     prksMountWorkRoleEditor(warm, 'work-warm');
     prksMountWorkTags(warm, 'work-warm');
@@ -571,6 +1004,30 @@ async function main() {
     await prksWorkTagEdit(durable, 'tag-1', true);
     assertEq('current tag session still reaches coalesceWorkTag', tagWrites.length, 1);
     prksDestroyTabContext('durable');
+
+    await replaceDuringTagReconcile();
+    await warmParkDuringFolderReconcile();
+    await metadataResolveDuringGate('meta-replace', 'work-meta-replace', 'op-meta-replace', async function (ctx, state) {
+        const fresh = {
+            workId: state.workId,
+            generation: ctx.generation,
+            operations: [],
+            observed: { fields: { title: { revision: 9, value: 'Fresh' } } },
+            error: 'kept',
+        };
+        const replaced = ctx.registerResource(ctx.resourceTicket(), {
+            kind: 'workMetadataEditor',
+            value: fresh,
+            suspendable: false,
+            dispose: function () {},
+        });
+        assertEq('metadata replacement during reconciliation reports replaced', replaced, 'replaced');
+        assertEq('metadata replacement installs the fresh observed title', fresh.observed.fields.title.value, 'Fresh');
+    });
+    await metadataResolveDuringGate('meta-fence', 'work-meta-fence', 'op-meta-fence', async function (ctx) {
+        ctx.ui.workMetaEditSession += 1;
+    });
+    await warmAcknowledgementSurvivesActivation();
 
     prksDestroyAllTabContexts();
     hosts();

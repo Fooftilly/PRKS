@@ -74,8 +74,10 @@
                                 present: result.current_state, server_revision: result.current_revision,
                                 tag: op.local_context.tag };
                             if (!await root.prksOfflineReconcileFolderTag(ack)) throw new Error();
+                            if (!live(ctx, state)) return;
                             acceptAck(ctx, state, ack);
                         } else if (!apply) {
+                            if (!live(ctx, state)) return;
                             // Explicitly discard the intent and stale relationship.
                             // Catalog/lifecycle conflicts do not fabricate a target.
                             const work = ctx.getEntity('folder');
@@ -84,9 +86,14 @@
                             ctx.setEntity('folder', { ...work, tags: work.tags.filter(t => t.id !== op.payload.tag_id) });
                             state.options = null;
                         }
+                        if (!live(ctx, state)) return;
                         await root.prksSync.store.resolveConflict(op.op_id, apply);
+                        if (!live(ctx, state)) return;
                         state.error = null; root.prksSync.changed();
-                    } catch (_) { state.error = 'Could not save the resolution locally. Please retry.'; }
+                    } catch (_) {
+                        if (!live(ctx, state)) return;
+                        state.error = 'Could not save the resolution locally. Please retry.';
+                    }
                     await paint(ctx, state);
                 };
                 item.appendChild(button);

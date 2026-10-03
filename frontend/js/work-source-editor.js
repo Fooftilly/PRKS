@@ -249,6 +249,14 @@
         writeInput(ctx, state, ack.source_url);
     }
 
+    /** Entity-only source acknowledgement for a parked owner. No observed base, no paint. */
+    function applyWorkSourceEntityAck(ctx, ack) {
+        if (!ctx || !ack || typeof root.prksAcknowledgedWorkSource !== 'function') return;
+        const work = ctx.getEntity('work');
+        if (!work || work.id !== ack.work_id) return;
+        ctx.setEntity('work', Object.assign({}, work, root.prksAcknowledgedWorkSource(ack)));
+    }
+
     function sourceStateShape(workId) {
         return value => !!value && typeof value === 'object' && value.work_id === workId &&
             Number.isSafeInteger(value.revision) && value.revision >= 0;
@@ -352,6 +360,9 @@
                 })
                 : 'rejected';
             if (attached === 'rejected') return;
+            if (typeof root.prksBindOwnerWorkAcknowledgement === 'function') {
+                root.prksBindOwnerWorkAcknowledgement(ctx);
+            }
             stops.sync = root.prksSync.subscribe(event => {
                 if (event && event.operation && event.operation !== 'SET_WORK_SOURCE') return;
                 if (event && event.acknowledged) acceptAck(ctx, next, event.acknowledged);
@@ -481,4 +492,5 @@
     };
     root.prksMountWorkSourceEditor = mount;
     root.prksSaveWorkSource = save;
+    root.prksApplyWorkSourceEntityAck = applyWorkSourceEntityAck;
 })(typeof window === 'undefined' ? globalThis : window);

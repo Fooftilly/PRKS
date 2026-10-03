@@ -165,6 +165,66 @@
 
     function safePaint(ctx, state) { return paint(ctx, state).catch(() => {}); }
 
+    /**
+     * Warm park drops the non-suspendable editor sessions, and with them the
+     * listeners that copy an acknowledgement onto this tab's Work. The pending
+     * overlay then retires while the entity stays stale, and resume rebuilds
+     * the editor from that stale Work.
+     *
+     * This subscription is owner-scoped: registerCleanup survives warm suspend
+     * and dies with the tab. While an editor session is mounted it owns both
+     * the observed base and the entity, so this path only patches the entity
+     * when that session is absent. It does not paint and it is not a registry
+     * slot.
+     */
+    function applyParkedWorkAcknowledgement(ctx, event) {
+        if (!ctx || ctx.destroyed || (!ctx.mounted && !ctx.suspended)) return;
+        if (!event || !event.acknowledged || !event.operation) return;
+        const ack = event.acknowledged;
+        const op = event.operation;
+        if ((root.PRKS_WORK_ROLE_OPERATION_TYPES || []).indexOf(op) !== -1) {
+            if (ctx.getResource('workRoleEditor')) return;
+            const work = ctx.getEntity('work');
+            if (!work || work.id !== ack.work_id || typeof root.prksPatchWorkDetailRoles !== 'function') return;
+            const patched = root.prksPatchWorkDetailRoles(work, ack);
+            if (patched) ctx.setEntity('work', patched);
+            return;
+        }
+        if (op === 'ADD_WORK_TAG' || op === 'REMOVE_WORK_TAG') {
+            if (ctx.getResource('workTagEditor')) return;
+            if (typeof root.prksApplyWorkTagEntityAck === 'function') root.prksApplyWorkTagEntityAck(ctx, ack);
+            return;
+        }
+        if (op === 'SET_WORK_SOURCE') {
+            if (ctx.getResource('workSourceEditor')) return;
+            if (typeof root.prksApplyWorkSourceEntityAck === 'function') root.prksApplyWorkSourceEntityAck(ctx, ack);
+            return;
+        }
+        if (op === 'SET_WORK_METADATA_FIELD') {
+            if (ctx.getResource('workMetadataEditor')) return;
+            const effective = typeof root.prksEffectiveMetadataAck === 'function'
+                ? root.prksEffectiveMetadataAck(ack, event.op)
+                : ack;
+            if (typeof root.prksApplyWorkMetadataEntityAck === 'function') {
+                root.prksApplyWorkMetadataEntityAck(ctx, effective);
+            }
+        }
+    }
+
+    function bindOwnerWorkAcknowledgement(ctx) {
+        if (!ctx || ctx.destroyed || ctx.__prksWorkEntityAck) return;
+        if (typeof ctx.registerCleanup !== 'function') return;
+        if (!root.prksSync || typeof root.prksSync.subscribe !== 'function') return;
+        const stop = root.prksSync.subscribe(function (event) {
+            applyParkedWorkAcknowledgement(ctx, event);
+        });
+        ctx.__prksWorkEntityAck = true;
+        ctx.registerCleanup(function () {
+            ctx.__prksWorkEntityAck = false;
+            if (typeof stop === 'function') stop();
+        });
+    }
+
     function mount(ctx, workId, options) {
         if (!ctx || !root.prksSync) return;
         let state = ctx.getResource('workRoleEditor');
@@ -203,6 +263,7 @@
                 }
                 void safePaint(ctx, next);
             });
+            bindOwnerWorkAcknowledgement(ctx);
             next.preparing = readBase(ctx, next).then(() => safePaint(ctx, next));
             return;
         }
@@ -290,4 +351,5 @@
 
     root.prksMountWorkRoleEditor = mount;
     root.prksSaveWorkPersonRoleDurably = save;
+    root.prksBindOwnerWorkAcknowledgement = bindOwnerWorkAcknowledgement;
 })(typeof window === 'undefined' ? globalThis : window);
