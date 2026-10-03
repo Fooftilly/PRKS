@@ -1,5 +1,6 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { processingFileRow } from '../../api/processing-files.fixtures'
 import { readRouteSurface } from '../../route-surface/lifecycle'
 import {
   presentProcessing,
@@ -20,8 +21,7 @@ afterEach(() => {
   delete window.prksProcessingQuickCreatePerson
   delete window.prksProcessingQuickCreateFolder
   delete window.prksProcessingCreateTag
-  delete window.prksProcessingSave
-  delete window.prksProcessingImport
+  delete window.prksProcessingRecords
   delete window.prksAlertMessage
   delete window.__prksProcessingPeople
 })
@@ -266,8 +266,12 @@ describe('Processing Files route bridge', () => {
   })
 
   it('clears import busy and shows the reload error beside the import action', async () => {
-    window.prksProcessingSave = async () => ({})
-    window.prksProcessingImport = async () => ({})
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit = {}) =>
+      init.method === 'POST'
+        ? new Response(JSON.stringify({ processing_file_id: 'pdf-1', work_id: 'W-1' }), { status: 200 })
+        : new Response(JSON.stringify(processingFileRow({ id: 'pdf-1' })), { status: 200 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
     window.prksReloadProcessingFiles = async () => {
       throw new Error('Could not refresh files for processing.')
     }
@@ -292,6 +296,41 @@ describe('Processing Files route bridge', () => {
     )
     const after = [...el.querySelectorAll('button')].find((node) => node.textContent?.includes('Import to library'))
     expect(after?.getAttribute('aria-busy')).toBeNull()
+    expect(fetchMock.mock.calls.map((call) => `${call[1]?.method} ${call[0]}`)).toEqual([
+      'PATCH /api/processing-files/pdf-1',
+      'POST /api/processing-files/pdf-1/import',
+    ])
+  })
+
+  it('keeps a save refusal on the card and does not import', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: 'Unknown folder.' }), { status: 400 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const reload = vi.fn(async () => true)
+    window.prksReloadProcessingFiles = reload
+    const el = host()
+    presentProcessing({
+      owner: owner(2),
+      host: el,
+      files: [file],
+      people: [],
+      folders: [],
+      roleTypes: ['Author'],
+      domPrefix: 'prks-pf-main',
+      generation: 2,
+    })
+    await nextTick()
+    const button = [...el.querySelectorAll('button')].find((node) => node.textContent?.includes('Import to library'))
+    button?.click()
+    await flush()
+    expect(el.querySelector('.prks-processing-card__message')?.textContent).toContain('Unknown folder.')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(reload).not.toHaveBeenCalled()
+  })
+
+  it('publishes the Processing records service on the bridge', () => {
+    registerProcessingBridge(window)
+    expect(typeof window.prksProcessingRecords?.inbox).toBe('function')
+    expect(typeof window.prksProcessingRecords?.importFile).toBe('function')
   })
 
   it('holds Creating… on the folder button, ignores a second click, then restores and shows the local error', async () => {

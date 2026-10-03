@@ -126,16 +126,9 @@
         return /^\/api\/pdfs\/[^/]+$/.test(path);
     }
 
-    function isProcessingFilesRescan(pathname, searchParams) {
-        return pathname === '/api/processing-files' && searchParams && searchParams.get('rescan') === '1';
-    }
-
     function classifyRequest(method, parsed) {
         const pathname = parsed.pathname;
         if (isPersonProfileImagePath(pathname) || isWorkThumbnailPath(pathname)) return 'mutation';
-        if ((method === 'GET' || method === 'HEAD') && isProcessingFilesRescan(pathname, parsed.searchParams)) {
-            return 'mutation';
-        }
         if (method === 'GET' || method === 'HEAD') return 'read';
         if (method === 'POST' || method === 'PATCH' || method === 'PUT' || method === 'DELETE') return 'mutation';
         return 'mutation';

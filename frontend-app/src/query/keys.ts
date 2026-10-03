@@ -18,6 +18,11 @@ export const prksQueryKeys = {
     all: () => ['performance-diagnostics'] as const,
     snapshot: () => ['performance-diagnostics', 'snapshot'] as const,
   },
+  processingFiles: {
+    all: () => ['processing-files'] as const,
+    /** `rescan` reconciles the inbox folder first, so it never joins a stored read. */
+    inbox: (read: 'rescan' | 'stored') => ['processing-files', 'inbox', read] as const,
+  },
   publishers: {
     all: () => ['publishers'] as const,
     inUse: () => ['publishers', 'in-use'] as const,

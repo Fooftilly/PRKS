@@ -25,12 +25,15 @@ class FrontendProcessingPageTests(unittest.TestCase):
         self.assertNotIn("prksRenderProcessingFilesPageWithFetch", body)
         self.assertNotIn("renderProcessingFilesPage", body)
         self.assertIn("async function prksLoadProcessingInbox(", app)
-        self.assertIn("Object.assign({ rescan: true }", app)
-        self.assertIn("fetchProcessingFiles(fileRequest)", app)
+        load = app.split("async function prksLoadProcessingInbox(", 1)[1].split(
+            "window.prksReloadProcessingFiles", 1
+        )[0]
+        self.assertIn("window.prksProcessingRecords", load)
+        self.assertIn("records.inbox({ rescan: true, signal: signal || undefined })", load)
         self.assertIn("async function prksReloadProcessingFiles(", app)
         self.assertIn("window.prksVueDismissRoute(ctx)", app)
 
-    def test_legacy_module_owns_preview_lifetime_and_upload_import(self):
+    def test_legacy_module_owns_preview_lifetime_and_catalog_helpers(self):
         src = _read(_PROCESSING)
         self.assertIn("window.PRKS_PEOPLE_ROLES", src)
         self.assertNotRegex(
@@ -45,10 +48,15 @@ class FrontendProcessingPageTests(unittest.TestCase):
         self.assertIn("function prksProcessingReleaseResources(", src)
         self.assertIn("removeEventListener('resize', rec.onResize)", src)
         self.assertIn("rec.frame.removeAttribute('src')", src)
-        self.assertIn("function prksProcessingSave(", src)
-        self.assertIn("patchProcessingFile(", src)
-        self.assertIn("function prksProcessingImport(", src)
-        self.assertIn("importProcessingFile(", src)
+        # Save and import belong to the Processing records service.
+        for retired in (
+            "prksProcessingSave",
+            "prksProcessingImport",
+            "prksProcessingNormalizeDraft",
+            "patchProcessingFile",
+            "importProcessingFile",
+        ):
+            self.assertNotIn(retired, src)
         self.assertIn("prksCreateTagDurably(", src)
         self.assertIn("createFolder(", src)
         self.assertIn("prksQuickCreatePersonForSearchField(", src)
@@ -105,11 +113,9 @@ class FrontendProcessingPageTests(unittest.TestCase):
         self.assertIn("errorOwner", load)
         self.assertIn("prksConsumeApiError", load)
         self.assertIn("filesError", load)
-        api = _read(os.path.join(_PROJECT_DIR, "frontend", "js", "api.js"))
-        fetch = api.split("async function fetchProcessingFiles(", 1)[1].split(
-            "async function patchProcessingFile(", 1
-        )[0]
-        self.assertIn("return [];", fetch)
+        # A failed or aborted inbox read paints no rows; only a failure has a message.
+        self.assertIn("if (!prksAbortFallback(err)) filesError = records.actionMessage(err, filesFallback);", load)
+        self.assertIn("return [];", load)
         quick = _read(_PROCESSING).split("async function prksProcessingQuickCreatePerson(", 1)[1].split(
             "window.prksProcessingRoleTypes", 1
         )[0]
@@ -159,6 +165,39 @@ class FrontendProcessingPageTests(unittest.TestCase):
         self.assertIn(':disabled="creatingFolder"', card)
         self.assertIn('busy-label="Creating…"', card)
         self.assertIn("if (creatingFolder.value) return", card)
+
+
+    def test_processing_records_own_inbox_reads_and_file_writes(self):
+        api = _read(os.path.join(_PROJECT_DIR, "frontend", "js", "api.js"))
+        for retired in ("fetchProcessingFiles", "patchProcessingFile", "importProcessingFile", "'processing-files':"):
+            self.assertNotIn(retired, api)
+        marks = api.split("function prksMarkProcessingImportChanged(", 1)[1].split("\n}\n", 1)[0]
+        for mark in (
+            "prksMarkFoldersDomainChanged()",
+            "prksMarkPeopleDomainChanged()",
+            "prksMarkPersonGroupsDomainChanged()",
+            "prksMarkWorksBrowseChanged()",
+            "prksMarkRecentlyAddedChanged()",
+        ):
+            self.assertIn(mark, marks)
+        self.assertNotIn("prksMarkRecentChanged()", marks)
+        app = _read(_APP)
+        badge = app.split("async function prksRefreshProcessingNavBadge(", 1)[1].split(
+            "async function prksRefreshSyncQueueCue(", 1
+        )[0]
+        self.assertIn("window.prksProcessingRecords", badge)
+        self.assertNotIn("fetchProcessingFiles", app)
+        intents = _read(os.path.join(_VUE, "intents.ts"))
+        self.assertIn("records.save(fileId, draft)", intents)
+        self.assertIn("records.importFile(fileId)", intents)
+        self.assertNotIn("window.prksProcessingSave", intents)
+        self.assertNotIn("window.prksProcessingImport", intents)
+        records = _read(os.path.join(_VUE, "records.ts"))
+        self.assertIn("clientErrorSource: 'processing-files.fetch'", records)
+        self.assertIn("prksQueryKeys.processingFiles.all()", records)
+        self.assertIn("window.prksMarkProcessingImportChanged?.()", records)
+        session = _read(os.path.join(_VUE, "session.ts"))
+        self.assertIn("target.prksProcessingRecords = processingRecords()", session)
 
 
 if __name__ == "__main__":
