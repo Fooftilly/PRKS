@@ -228,4 +228,155 @@ describe('owner resource lifetime', () => {
     })).toBe('attached')
     expect(next.registry.get('researchGraph')).toBe('fresh')
   })
+
+  it('rejects a non-suspendable registration while warm-parked without staling the ticket', () => {
+    const parked = openHost('parked-graph')
+    const ticket = resourceTicket(parked.host)
+    parked.registry.warmSuspend()
+    let disposed = 0
+    expect(parked.registry.register(ticket, {
+      kind: 'researchGraph',
+      value: 'late-graph',
+      suspendable: false,
+      dispose: () => {
+        disposed += 1
+      },
+    })).toBe('rejected')
+    expect(disposed).toBe(0)
+    expect(parked.registry.get('researchGraph')).toBeUndefined()
+    expect(parked.registry.accepts(ticket)).toBe(true)
+
+    parked.registry.resume()
+    expect(parked.registry.register(ticket, {
+      kind: 'researchGraph',
+      value: 'after-resume',
+      dispose: () => {
+        disposed += 1
+      },
+    })).toBe('attached')
+    expect(parked.registry.get('researchGraph')).toBe('after-resume')
+    expect(disposed).toBe(0)
+    parked.registry.releaseAll()
+    expect(disposed).toBe(1)
+    expect(parked.registry.get('researchGraph')).toBeUndefined()
+
+    const cold = openHost('cold-graph')
+    const coldTicket = resourceTicket(cold.host)
+    cold.registry.warmSuspend()
+    let coldDisposed = 0
+    expect(cold.registry.register(coldTicket, {
+      kind: 'researchGraph',
+      value: 'during-park',
+      dispose: () => {
+        coldDisposed += 1
+      },
+    })).toBe('rejected')
+    expect(coldDisposed).toBe(0)
+    cold.registry.releaseAll()
+    expect(cold.registry.accepts(coldTicket)).toBe(true)
+    expect(cold.registry.register(coldTicket, {
+      kind: 'researchGraph',
+      value: 'after-cold',
+      dispose: () => {},
+    })).toBe('attached')
+    expect(cold.registry.get('researchGraph')).toBe('after-cold')
+  })
+
+  it('attaches a suspendable registration during warm park and resumes or cold-releases it', () => {
+    const parked = openHost('parked-pdf')
+    const ticket = resourceTicket(parked.host)
+    parked.registry.warmSuspend()
+    const pdf = { viewer: 1 }
+    let disposed = 0
+    let suspended = 0
+    let resumed = 0
+    expect(parked.registry.register(ticket, {
+      kind: 'pdf',
+      value: pdf,
+      suspendable: true,
+      dispose: () => {
+        disposed += 1
+      },
+      suspend: () => {
+        suspended += 1
+      },
+      resume: () => {
+        resumed += 1
+      },
+    })).toBe('attached')
+    expect(parked.registry.get('pdf')).toBe(pdf)
+    expect(suspended).toBe(1)
+    expect(disposed).toBe(0)
+    expect(parked.registry.accepts(ticket)).toBe(true)
+    parked.registry.warmSuspend()
+    expect(suspended).toBe(1)
+    parked.registry.resume()
+    parked.registry.resume()
+    expect(resumed).toBe(1)
+    expect(disposed).toBe(0)
+    expect(parked.registry.get('pdf')).toBe(pdf)
+
+    const cold = openHost('cold-pdf')
+    const coldTicket = resourceTicket(cold.host)
+    cold.registry.warmSuspend()
+    let coldDisposed = 0
+    let coldResumed = 0
+    expect(cold.registry.register(coldTicket, {
+      kind: 'pdf',
+      value: { viewer: 2 },
+      suspendable: true,
+      dispose: () => {
+        coldDisposed += 1
+      },
+      suspend: () => {},
+      resume: () => {
+        coldResumed += 1
+      },
+    })).toBe('attached')
+    cold.registry.releaseAll()
+    cold.registry.resume()
+    expect(coldDisposed).toBe(1)
+    expect(coldResumed).toBe(0)
+    expect(cold.registry.get('pdf')).toBeUndefined()
+    expect(cold.registry.accepts(coldTicket)).toBe(true)
+    expect(cold.registry.register(coldTicket, {
+      kind: 'researchGraph',
+      value: 'after-cold',
+      dispose: () => {},
+    })).toBe('attached')
+  })
+
+  it('disposes a slot installed by a reentrant register and keeps the outer value', () => {
+    const { host, registry } = openHost()
+    const ticket = resourceTicket(host)
+    let previousDisposed = 0
+    let loserDisposed = 0
+    let winnerDisposed = 0
+    registry.register(ticket, {
+      kind: 'researchGraph',
+      value: 'previous',
+      dispose: () => {
+        previousDisposed += 1
+        registry.register(ticket, {
+          kind: 'researchGraph',
+          value: 'loser',
+          dispose: () => {
+            loserDisposed += 1
+          },
+        })
+      },
+    })
+    const result = registry.register(ticket, {
+      kind: 'researchGraph',
+      value: 'winner',
+      dispose: () => {
+        winnerDisposed += 1
+      },
+    })
+    expect(result).toBe('replaced')
+    expect(previousDisposed).toBe(1)
+    expect(loserDisposed).toBe(1)
+    expect(winnerDisposed).toBe(0)
+    expect(registry.get('researchGraph')).toBe('winner')
+  })
 })

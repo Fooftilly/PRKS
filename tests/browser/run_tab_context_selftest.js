@@ -432,11 +432,38 @@ assertEq('cleanup continues after throw', boom, 11);
     assertEq('warm suspend releases the graph once', warmGraphDisposes, 1);
     assertEq('warm suspend keeps the pdf resource', warm.getResource('pdf'), pdf);
     assertEq('warm suspend does not dispose pdf', warmPdfDisposes, 0);
+    const lateGraph = warm.registerResource(warm.resourceTicket(), {
+        kind: 'researchGraph',
+        value: { id: 'late-graph' },
+        suspendable: false,
+        dispose: function () { warmGraphDisposes += 1; },
+    });
+    assertEq('parked owner rejects a later graph', lateGraph, 'rejected');
+    assertEq('parked owner does not attach the later graph', warm.getResource('researchGraph'), undefined);
+    assert('warm park leaves the ticket current', warm.resourceRegistry.accepts(warm.resourceTicket()));
+    let latePdfSuspends = 0;
+    let latePdfResumes = 0;
+    let latePdfDisposes = 0;
+    const latePdf = { id: 'late-pdf' };
+    const latePdfResult = warm.registerResource(warm.resourceTicket(), {
+        kind: 'pdf',
+        value: latePdf,
+        suspendable: true,
+        dispose: function () { latePdfDisposes += 1; },
+        suspend: function () { latePdfSuspends += 1; },
+        resume: function () { latePdfResumes += 1; },
+    });
+    assertEq('parked owner attaches a later suspendable pdf', latePdfResult, 'attached');
+    assertEq('later pdf is readable while parked', warm.readResource('pdf'), latePdf);
+    assertEq('later pdf suspend hook ran once', latePdfSuspends, 1);
     assert('warm resume reuses the context', warm.resume(makeHost()));
+    assertEq('resume runs the later pdf hook once', latePdfResumes, 1);
+    assertEq('resume does not dispose the later pdf', latePdfDisposes, 0);
     assertEq('warm resume does not recreate the graph', warm.getResource('researchGraph'), undefined);
     assertEq('warm resume still has not disposed pdf', warmPdfDisposes, 0);
     warm.unmount('cold');
     assertEq('cold unmount disposes pdf', warmPdfDisposes, 1);
+    assertEq('cold unmount disposes the later pdf once', latePdfDisposes, 1);
     assertEq('cold unmount does not dispose the graph again', warmGraphDisposes, 1);
 
     const cold = prksEnsureTabContext('resource-cold');

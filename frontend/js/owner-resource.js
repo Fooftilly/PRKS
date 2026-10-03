@@ -1,6 +1,6 @@
 var prksOwnerResource = (function(exports) {
 	Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
-	//#region frontend-app/src/lifecycle/owner-resource.ts
+	//#region src/lifecycle/owner-resource.ts
 	function call(fn, value) {
 		if (typeof fn !== "function") return;
 		try {
@@ -9,6 +9,8 @@ var prksOwnerResource = (function(exports) {
 	}
 	function createOwnerResourceRegistry(host) {
 		const slots = /* @__PURE__ */ new Map();
+		let ownerPhase = "live";
+		let releasing = 0;
 		function ticketCurrent(ticket) {
 			if (!ticket || typeof ticket !== "object") return false;
 			if (!host.alive()) return false;
@@ -23,27 +25,44 @@ var prksOwnerResource = (function(exports) {
 			slots.delete(slot.kind);
 			call(slot.dispose, slot.value);
 		}
-		function register(ticket, registration) {
-			if (!ticketCurrent(ticket) || !registration) return "rejected";
-			if (registration.kind !== "researchGraph" && registration.kind !== "pdf") return "rejected";
-			const previous = slots.get(registration.kind);
-			let result = "attached";
-			if (previous) {
-				drop(previous);
-				if (!ticketCurrent(ticket)) return "rejected";
-				result = "replaced";
+		function dropInstalled(kind) {
+			const seen = /* @__PURE__ */ new Set();
+			for (;;) {
+				const slot = slots.get(kind);
+				if (!slot || seen.has(slot)) return;
+				seen.add(slot);
+				drop(slot);
 			}
-			slots.set(registration.kind, {
+		}
+		function install(registration, result) {
+			const phase = ownerPhase === "suspended" ? "suspended" : "live";
+			const slot = {
 				kind: registration.kind,
 				value: registration.value,
 				suspendable: registration.suspendable === true,
-				phase: "live",
+				phase,
 				dispose: registration.dispose,
 				suspend: registration.suspend,
 				resume: registration.resume,
 				disposing: false
-			});
+			};
+			slots.set(registration.kind, slot);
+			if (phase === "suspended") call(slot.suspend, slot.value);
 			return result;
+		}
+		function register(ticket, registration) {
+			if (releasing > 0) return "rejected";
+			if (!ticketCurrent(ticket) || !registration) return "rejected";
+			if (registration.kind !== "researchGraph" && registration.kind !== "pdf") return "rejected";
+			if (ownerPhase === "suspended" && registration.suspendable !== true) return "rejected";
+			const previous = slots.get(registration.kind);
+			let result = "attached";
+			if (previous) {
+				dropInstalled(registration.kind);
+				if (!ticketCurrent(ticket)) return "rejected";
+				result = "replaced";
+			}
+			return install(registration, result);
 		}
 		function get(kind) {
 			const slot = slots.get(kind);
@@ -54,6 +73,7 @@ var prksOwnerResource = (function(exports) {
 			if (slot) drop(slot);
 		}
 		function warmSuspend() {
+			ownerPhase = "suspended";
 			for (const slot of Array.from(slots.values())) {
 				if (!slot.suspendable) {
 					drop(slot);
@@ -65,6 +85,7 @@ var prksOwnerResource = (function(exports) {
 			}
 		}
 		function resume() {
+			ownerPhase = "live";
 			for (const slot of slots.values()) {
 				if (slot.phase !== "suspended") continue;
 				slot.phase = "live";
@@ -72,7 +93,13 @@ var prksOwnerResource = (function(exports) {
 			}
 		}
 		function releaseAll() {
-			for (const slot of Array.from(slots.values())) drop(slot);
+			releasing += 1;
+			try {
+				for (const slot of Array.from(slots.values())) drop(slot);
+			} finally {
+				releasing -= 1;
+				ownerPhase = "live";
+			}
 		}
 		function kinds() {
 			return Array.from(slots.keys()).sort();

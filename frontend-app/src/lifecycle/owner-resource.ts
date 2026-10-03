@@ -4,10 +4,14 @@
  * TabContext hosts one registry per owner. A later Vue-native owner can host
  * the same registry. This is not a second TabContext and not a leave decision.
  *
- * A slot is absent, live, or warm-suspended. Cold park and owner destruction
- * dispose every slot. Warm park keeps only a registration that declares
- * `suspendable`. Research Graph does not. The PDF runtime will, in a later
- * slice; this module does not register one.
+ * A slot is absent, live, or warm-suspended. The owner itself is live or
+ * warm-suspended. Cold park and owner destruction dispose every slot and
+ * clear that owner state. Warm park keeps only a registration that declares
+ * `suspendable`. While the owner is suspended, a non-suspendable registration
+ * is rejected and not attached; a suspendable registration attaches already
+ * suspended and its suspend hook runs. The ticket stays current across warm
+ * park. Research Graph is not suspendable. The PDF runtime will be, in a
+ * later slice; this module does not register one.
  *
  * VueUse is not used here. Cytoscape, the PDF viewer, and other owned browser
  * resources outlive a component mount, and their dispose stays on this registry.
@@ -80,6 +84,8 @@ function call(fn: ((value: unknown) => void) | undefined, value: unknown): void 
 
 export function createOwnerResourceRegistry(host: OwnerResourceHost): OwnerResourceRegistry {
   const slots = new Map<OwnerResourceKind, Slot>()
+  let ownerPhase: 'live' | 'suspended' = 'live'
+  let releasing = 0
 
   function ticketCurrent(ticket: ResourceTicket | null | undefined): ticket is ResourceTicket {
     if (!ticket || typeof ticket !== 'object') return false
@@ -97,27 +103,46 @@ export function createOwnerResourceRegistry(host: OwnerResourceHost): OwnerResou
     call(slot.dispose, slot.value)
   }
 
-  function register<T>(ticket: ResourceTicket, registration: ResourceRegistration<T>): RegisterResult {
-    if (!ticketCurrent(ticket) || !registration) return 'rejected'
-    if (registration.kind !== 'researchGraph' && registration.kind !== 'pdf') return 'rejected'
-    const previous = slots.get(registration.kind)
-    let result: RegisterResult = 'attached'
-    if (previous) {
-      drop(previous)
-      if (!ticketCurrent(ticket)) return 'rejected'
-      result = 'replaced'
+  function dropInstalled(kind: OwnerResourceKind): void {
+    const seen = new Set<Slot>()
+    for (;;) {
+      const slot = slots.get(kind)
+      if (!slot || seen.has(slot)) return
+      seen.add(slot)
+      drop(slot)
     }
-    slots.set(registration.kind, {
+  }
+
+  function install<T>(registration: ResourceRegistration<T>, result: RegisterResult): RegisterResult {
+    const phase = ownerPhase === 'suspended' ? 'suspended' : 'live'
+    const slot: Slot = {
       kind: registration.kind,
       value: registration.value,
       suspendable: registration.suspendable === true,
-      phase: 'live',
+      phase,
       dispose: registration.dispose as (value: unknown) => void,
       suspend: registration.suspend as ((value: unknown) => void) | undefined,
       resume: registration.resume as ((value: unknown) => void) | undefined,
       disposing: false,
-    })
+    }
+    slots.set(registration.kind, slot)
+    if (phase === 'suspended') call(slot.suspend, slot.value)
     return result
+  }
+
+  function register<T>(ticket: ResourceTicket, registration: ResourceRegistration<T>): RegisterResult {
+    if (releasing > 0) return 'rejected'
+    if (!ticketCurrent(ticket) || !registration) return 'rejected'
+    if (registration.kind !== 'researchGraph' && registration.kind !== 'pdf') return 'rejected'
+    if (ownerPhase === 'suspended' && registration.suspendable !== true) return 'rejected'
+    const previous = slots.get(registration.kind)
+    let result: RegisterResult = 'attached'
+    if (previous) {
+      dropInstalled(registration.kind)
+      if (!ticketCurrent(ticket)) return 'rejected'
+      result = 'replaced'
+    }
+    return install(registration, result)
   }
 
   function get<T>(kind: OwnerResourceKind): T | undefined {
@@ -131,6 +156,7 @@ export function createOwnerResourceRegistry(host: OwnerResourceHost): OwnerResou
   }
 
   function warmSuspend(): void {
+    ownerPhase = 'suspended'
     for (const slot of Array.from(slots.values())) {
       if (!slot.suspendable) {
         drop(slot)
@@ -143,6 +169,7 @@ export function createOwnerResourceRegistry(host: OwnerResourceHost): OwnerResou
   }
 
   function resume(): void {
+    ownerPhase = 'live'
     for (const slot of slots.values()) {
       if (slot.phase !== 'suspended') continue
       slot.phase = 'live'
@@ -151,7 +178,13 @@ export function createOwnerResourceRegistry(host: OwnerResourceHost): OwnerResou
   }
 
   function releaseAll(): void {
-    for (const slot of Array.from(slots.values())) drop(slot)
+    releasing += 1
+    try {
+      for (const slot of Array.from(slots.values())) drop(slot)
+    } finally {
+      releasing -= 1
+      ownerPhase = 'live'
+    }
   }
 
   function kinds(): OwnerResourceKind[] {

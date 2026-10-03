@@ -876,6 +876,19 @@ function makeCtx(tabId) {
     assertEq(rows, 'warm resume does not create another cytoscape', fakeElements.length, cyBeforeWarm + 1);
     assertEq(rows, 'warm resume leaves the graph unregistered', warmCtx.getResource('researchGraph'), undefined);
 
+    const parkedCtx = makeCtx('parked-register');
+    parkedCtx.warmSuspend();
+    const cyBeforeParkedRegister = fakeElements.length;
+    const parkedHost = makeGraphHost();
+    await g.renderResearchGraph(parkedHost, { ctx: parkedCtx, routeGen: parkedCtx.generation });
+    assertEq(rows, 'parked owner rejects a graph completion', parkedCtx.getResource('researchGraph'), undefined);
+    assertEq(rows, 'parked graph completion does not mount cytoscape', fakeElements.length, cyBeforeParkedRegister);
+    assert(rows, 'warm park does not stale the graph ticket', parkedCtx.resourceRegistry.accepts(parkedCtx.resourceTicket()));
+    parkedCtx.resumeOwner();
+    await g.renderResearchGraph(parkedHost, { ctx: parkedCtx, routeGen: parkedCtx.generation });
+    assertEq(rows, 'resume then mount creates one cytoscape', fakeElements.length, cyBeforeParkedRegister + 1);
+    parkedCtx.releaseOwner();
+
     const coldCtx = makeCtx('cold-graph');
     const coldHost = makeGraphHost();
     await g.renderResearchGraph(coldHost, { ctx: coldCtx });
