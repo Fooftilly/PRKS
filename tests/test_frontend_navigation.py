@@ -11,6 +11,9 @@ _NAV = os.path.join(_FRONTEND, "js", "navigation.js")
 _APP = os.path.join(_FRONTEND, "js", "app.js")
 _SELFTEST = os.path.join(_PROJECT_DIR, "tests", "browser", "navigation_selftest.js")
 _RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_navigation_selftest.js")
+_MISSING_LEAVE_RUNNER = os.path.join(
+    _PROJECT_DIR, "tests", "browser", "run_missing_tab_leave_selftest.js"
+)
 _FIXTURE = os.path.join(_PROJECT_DIR, "tests", "browser", "navigation.html")
 _PEOPLE = os.path.join(_FRONTEND, "js", "components", "people.js")
 _FOLDERS = os.path.join(_FRONTEND, "js", "components", "folders.js")
@@ -40,7 +43,8 @@ class FrontendNavigationTests(unittest.TestCase):
         app = _read(_APP)
         self.assertIn("prksParseRoute(", app)
         self.assertIn("switch (route.name)", app)
-        self.assertIn("prksTabLeave.run", app)
+        self.assertIn("function prksReadTabLeave()", app)
+        self.assertIn("leaveApi.run", app)
         self.assertNotIn("prksHasPendingWorkAnnotationSync", app)
         self.assertIn("prksMaybeFlushPdfLastPageOnRouteChange", app)
         self.assertIn("prksCaptureCurrentRouteState", app)
@@ -54,7 +58,7 @@ class FrontendNavigationTests(unittest.TestCase):
         self.assertIn("Back to ", nav)
         self.assertNotIn("history.back()", nav)
         app = _read(_APP)
-        run_at = app.find("prksTabLeave.run")
+        run_at = app.find("leaveApi.run")
         commit_at = app.find("async function prksCommitTabRouteRender")
         finish_at = app.find("prksFinishRouteRender")
         self.assertNotEqual(run_at, -1)
@@ -114,6 +118,21 @@ class FrontendNavigationTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stdout + "\n" + proc.stderr)
         self.assertIn("passed", proc.stdout)
+        self.assertIn(", 0 failed", proc.stdout)
+        self.assertNotIn("FAIL  ", proc.stdout)
+
+    def test_missing_tab_leave_script_cancels_direct_route(self):
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "node is required for the missing leave-script test")
+        proc = subprocess.run(
+            [node, _MISSING_LEAVE_RUNNER],
+            cwd=_PROJECT_DIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + "\n" + proc.stderr)
         self.assertIn(", 0 failed", proc.stdout)
         self.assertNotIn("FAIL  ", proc.stdout)
 

@@ -3598,24 +3598,32 @@ function prksTabLeaveStill(ctx, snap) {
     );
 }
 
+/* `typeof` is required. A missing /js/tab-leave.js leaves this identifier
+ * undeclared, and a bare read throws before the caller can cancel. */
+function prksReadTabLeave() {
+    if (typeof prksTabLeave === 'undefined' || !prksTabLeave) return null;
+    return prksTabLeave;
+}
+
 /**
  * Compatibility boolean for callers that only need approved/not.
  * The decision owner is prksTabLeave. Workspace operations do not call this;
  * they assess registered probes inside prksTabLeave.run so the lock is not nested.
  */
 function prksCanLeaveTabContext(ctx, nextHash) {
-    if (!ctx || !prksTabLeave || typeof prksTabLeave.run !== 'function') {
+    const leaveApi = prksReadTabLeave();
+    if (!ctx || !leaveApi || typeof leaveApi.run !== 'function') {
         return Promise.resolve(!ctx);
     }
     const destination = nextHash || '#/folders';
-    return prksTabLeave.run({
+    return leaveApi.run({
         ownerId: String(ctx.tabId || 'detached'),
         destination: destination,
         transition: 'route-replace',
         capture: function () { return prksTabLeaveSnapshot(ctx); },
         still: function (snap) { return prksTabLeaveStill(ctx, snap); },
-        assess: function () { return prksTabLeave.assessOwner(ctx, destination); },
-        flushNotes: function () { prksTabLeave.flushOwner(ctx); },
+        assess: function () { return leaveApi.assessOwner(ctx, destination); },
+        flushNotes: function () { leaveApi.flushOwner(ctx); },
         commit: function () { return true; },
     }).then(function (decision) {
         return !!(decision && decision.status === 'approved');
@@ -3660,25 +3668,26 @@ async function prksRenderTabRoute(ctx, hash, options) {
     const suppliedHash = hash == null ? '#/folders' : String(hash);
     const route = typeof prksParseRoute === 'function' ? prksParseRoute(suppliedHash) : null;
     if (!route) return;
-    if (opts.internalRefresh && prksTabLeave && typeof prksTabLeave.flushOwner === 'function') {
-        prksTabLeave.flushOwner(ctx);
+    const leaveApi = prksReadTabLeave();
+    if (opts.internalRefresh && leaveApi && typeof leaveApi.flushOwner === 'function') {
+        leaveApi.flushOwner(ctx);
     }
     if (opts.leaveApproved || opts.internalRefresh) {
         return prksCommitTabRouteRender(ctx, hash, options);
     }
-    if (!prksTabLeave || typeof prksTabLeave.run !== 'function') {
+    if (!leaveApi || typeof leaveApi.run !== 'function') {
         return { cancelled: true, reason: 'cancelled' };
     }
     const destination = route.canonicalHash || suppliedHash;
     let renderTask = null;
-    const decision = await prksTabLeave.run({
+    const decision = await leaveApi.run({
         ownerId: String(ctx.tabId || 'detached'),
         destination: destination,
         transition: 'route-replace',
         capture: function () { return prksTabLeaveSnapshot(ctx); },
         still: function (snap) { return prksTabLeaveStill(ctx, snap); },
-        assess: function () { return prksTabLeave.assessOwner(ctx, destination); },
-        flushNotes: function () { prksTabLeave.flushOwner(ctx); },
+        assess: function () { return leaveApi.assessOwner(ctx, destination); },
+        flushNotes: function () { leaveApi.flushOwner(ctx); },
         /* Claim the route inside the lock, then let the render's network wait
          * run without it. A later navigation on this owner must be able to
          * start while an earlier detail GET is still in flight. */

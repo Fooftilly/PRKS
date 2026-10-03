@@ -401,7 +401,8 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
     def test_low_level_hash_writes_remain_narrow(self):
         app = _read(_APP)
         self.assertIn("prksCanLeaveCurrentRoute", app)
-        self.assertIn("prksTabLeave.run", app)
+        self.assertIn("function prksReadTabLeave()", app)
+        self.assertIn("leaveApi.run", app)
         self.assertNotIn("prksHasPendingWorkAnnotationSync", app)
         self.assertIn("workspaceSwitch", app)
         ws = _read(_WS)
@@ -418,16 +419,19 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         guard = app.split("function prksCanLeaveTabContext(ctx, nextHash)", 1)[1].split(
             "function prksCanLeaveCurrentRoute", 1
         )[0]
-        self.assertIn("prksTabLeave.run", guard)
-        self.assertIn("prksTabLeave.flushOwner", guard)
-        self.assertIn("prksTabLeave.assessOwner", guard)
+        self.assertIn("prksReadTabLeave()", guard)
+        self.assertIn("leaveApi.run", guard)
+        self.assertIn("leaveApi.flushOwner", guard)
+        self.assertIn("leaveApi.assessOwner", guard)
         self.assertNotIn("window.confirm(", guard)
         self.assertNotIn("prksFlushPendingWorkResearchNotes(ctx)", guard)
         render = app.split("async function prksRenderTabRoute", 1)[1].split(
             "async function prksCommitTabRouteRender", 1
         )[0]
         self.assertIn("opts.leaveApproved", render)
-        self.assertIn("prksTabLeave.run", render)
+        self.assertIn("prksReadTabLeave()", render)
+        self.assertIn("leaveApi.run", render)
+        self.assertIn("{ cancelled: true, reason: 'cancelled' }", render)
         commit = app.split("async function prksCommitTabRouteRender", 1)[1].split(
             "const contentDiv = ctx.root;", 1
         )[0]
