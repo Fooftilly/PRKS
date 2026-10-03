@@ -4049,10 +4049,8 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     };
                     break;
                 }
-                const views = typeof fetchSavedViews === 'function' ? await fetchSavedViews({ signal: routeSignal }) : [];
-                if (stale()) return;
+                // Vue reads and writes Saved Views through its records service.
                 prksPresentVueRoute(ctx, contentDiv, 'saved-views', {
-                    views: views,
                     generation: generation,
                 });
                 break;
@@ -4070,9 +4068,27 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     break;
                 }
                 const viewId = route.params.viewId;
-                const view = typeof fetchSavedView === 'function' ? await fetchSavedView(viewId, { signal: routeSignal }) : null;
+                // The record comes from the frontend-app Saved View records
+                // service (typed client + shared query cache). Search rows stay
+                // this coordinator's prksEffectiveSearchResults read.
+                let view = null;
+                let viewReadFailed = false;
+                try {
+                    view = await window.prksSavedViewRecords.get(viewId);
+                } catch (_err) {
+                    viewReadFailed = true;
+                }
                 if (stale()) return;
                 ctx.setEntity('savedView', view || null);
+                if (viewReadFailed) {
+                    prksPresentVueRoute(ctx, contentDiv, 'saved-view-detail', {
+                        availability: 'error',
+                        viewId: viewId,
+                        generation: generation,
+                    });
+                    titleOpts = { notFound: true, notFoundTitle: 'Could not load Saved View' };
+                    break;
+                }
                 if (!view) {
                     prksPresentVueRoute(ctx, contentDiv, 'saved-view-detail', {
                         availability: 'not-found',

@@ -481,8 +481,10 @@ const sandbox = {
     fetchPlaylists: function () {
         return Promise.resolve([]);
     },
-    fetchSavedViews: function () {
-        return Promise.resolve([]);
+    prksSavedViewRecords: {
+        list: function () {
+            return Promise.resolve([]);
+        },
     },
 };
 
@@ -791,7 +793,7 @@ Promise.resolve()
         root.fetchPlaylists = function () {
             return Promise.resolve([{ id: 'PL-1', title: 'Lectures' }]);
         };
-        root.fetchSavedViews = function () {
+        root.prksSavedViewRecords.list = function () {
             return Promise.resolve([
                 {
                     id: 'SV-1',
@@ -1182,7 +1184,7 @@ Promise.resolve()
                 root.fetchPersons = function () { return Promise.resolve([]); };
                 root.fetchPersonGroups = function () { return Promise.resolve([]); };
                 root.fetchPlaylists = function () { return Promise.resolve([]); };
-                root.fetchSavedViews = function () { return Promise.resolve([]); };
+                root.prksSavedViewRecords.list = function () { return Promise.resolve([]); };
                 root.fetchConcepts = function () { return Promise.resolve([]); };
                 root.fetchPositions = function () { return Promise.resolve([]); };
                 root.fetchArguments = function () { return Promise.resolve([]); };

@@ -114,11 +114,37 @@ class SearchSavedViewsRouteSurfaceTests(unittest.TestCase):
         )
         self.assertEqual(page.locator(".prks-tile--secondary .saved-view-detail").count(), 0)
 
+        view_hash = page.evaluate("() => location.hash")
+
+        # The index reads the list itself; Edit opens the shared modal from a
+        # fresh record read, and the save refreshes the list.
+        page.evaluate("() => prksNavigate('#/views')")
+        row = page.locator(".prks-tile--main .saved-views-page__list-item", has_text="E2E Saved Search")
+        row.wait_for(timeout=15000)
+        row.locator("[data-sv-index-edit]").click()
+        page.wait_for_selector("#saved-view-modal:not(.hidden)", timeout=15000)
+        self.assertEqual(page.locator("#saved-view-name").input_value(), "E2E Saved Search")
+        page.locator("#saved-view-name").fill("E2E Renamed Search")
+        page.locator("#save-saved-view-btn").click()
+        page.wait_for_selector("#saved-view-modal", state="hidden", timeout=15000)
+        page.locator(
+            ".prks-tile--main .saved-views-page__list-item", has_text="E2E Renamed Search"
+        ).wait_for(timeout=15000)
+        self.assertEqual(
+            page.locator(".prks-tile--main .saved-views-page__list-item").count(), 1
+        )
+
+        page.evaluate("(hash) => prksNavigate(hash)", view_hash)
+        page.wait_for_selector(".prks-tile--main .saved-view-detail .prks-page-title", timeout=15000)
+        self.assertEqual(
+            page.locator(".prks-tile--main .saved-view-detail .prks-page-title").inner_text(),
+            "E2E Renamed Search",
+        )
         page.locator(".prks-tile--main #prks-saved-view-delete").click()
         page.wait_for_selector("#prks-modal-confirm-ok", state="visible", timeout=15000)
         page.locator("#prks-modal-confirm-ok").click()
         page.wait_for_function("() => location.hash === '#/views'")
-        page.wait_for_selector(".prks-tile--main .saved-views-page", timeout=15000)
+        page.wait_for_selector(".prks-tile--main .saved-views-page__empty", timeout=15000)
         self.assertEqual(
             page.locator(".prks-tile--main .saved-views-page__list-item").count(), 0
         )

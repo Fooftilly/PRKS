@@ -1,9 +1,10 @@
-import { flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { SavedView } from '../../api/saved-views'
+import { resetPrksQueryClientForTests } from '../../query/client'
 import { dismissRouteSurface, readRouteSurface } from '../../route-surface/lifecycle'
 import { presentSearch } from '../search/session'
-import { buildSavedViewDetailProjection, buildSavedViewIndexProjection } from './projection'
+import { buildSavedViewDetailProjection, savedViewIndexRows } from './projection'
 import {
   presentSavedViewDetail,
   presentSavedViewsIndex,
@@ -13,12 +14,12 @@ import {
 
 afterEach(() => {
   resetSavedViewsSessionForTests()
+  resetPrksQueryClientForTests()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
   delete window.prksVuePresentRoute
   delete window.prksVueDismissRoute
-  delete window.prksDeleteSavedViewFromIndex
-  delete window.fetchSavedView
+  delete window.prksSavedViewRecords
   delete window.prksOpenCommandPalette
   delete window.prksPageHeaderIconHtml
   delete window.prksIcon
@@ -27,10 +28,26 @@ afterEach(() => {
   delete window.prksAbstractExcerpt
   delete window.prksReleaseLazyWorkThumbs
   delete window.prksOpenSavedViewModal
-  delete window.prksDeleteSavedViewFromDetail
+  delete window.prksConfirmDestructive
+  delete window.prksNavigate
 })
 
-const VIEW = { id: 'SV 1', name: 'Critical theory', search: { mode: 'all', q: 'x', tag: '', author: '', publisher: '' } }
+async function flush(): Promise<void> {
+  for (let i = 0; i < 4; i += 1) {
+    await nextTick()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+  await nextTick()
+}
+
+const VIEW: SavedView = {
+  id: 'SV 1',
+  name: 'Critical theory',
+  search: { mode: 'all', q: 'x', tag: '', author: '', publisher: '' },
+  created_at: '2026-10-03 10:00:00',
+  updated_at: '2026-10-03 10:00:00',
+}
+const LATER: SavedView = { ...VIEW, id: 'SV 2', name: 'Later' }
 
 function host(): HTMLElement {
   const el = document.createElement('div')
@@ -51,30 +68,106 @@ function owner(tabId: string) {
   }
 }
 
+function indexOwner(tabId: string, generation: number) {
+  const pane = owner(tabId)
+  pane.state.generation = generation
+  pane.state.routeName = 'saved-views'
+  return pane
+}
+
 function cards(): void {
   window.prksWorkCardHtml = (work, options) =>
     `<div class="work-card" data-work-id="${String(work.id)}" data-sub="${options.subtitle || ''}"></div>`
 }
 
-describe('saved views index projection', () => {
-  it('keeps named views, skips blank ids, and summarizes with the canonical codec', () => {
-    const projection = buildSavedViewIndexProjection({
-      views: [VIEW, { id: '  ', name: 'blank' }, null, { name: 'missing id' }],
-      generation: 4,
-    })
-    expect(projection.generation).toBe(4)
-    expect(projection.rows).toEqual([
+function chrome(): void {
+  window.prksPageHeaderIconHtml = () => ''
+  window.prksIcon = () => ''
+}
+
+type Reply = { status: number; body: unknown }
+
+/**
+ * An in-memory Saved Views server behind `fetch`. `refuse` answers the next
+ * matching request with an error; `hold` keeps it pending until released.
+ */
+function fakeServer(initial: SavedView[]) {
+  const views = initial.map((view) => ({ ...view, search: { ...view.search } }))
+  const requests: string[] = []
+  const refusals = new Map<string, Reply>()
+  const holds = new Map<string, Promise<void>>()
+
+  function handle(method: string, path: string): Reply {
+    if (method === 'GET' && path === '/api/saved-views') return { status: 200, body: views }
+    const match = /^\/api\/saved-views\/([^/]+)$/.exec(path)
+    const id = match ? decodeURIComponent(match[1]) : ''
+    const index = views.findIndex((view) => view.id === id)
+    if (!match || index < 0) return { status: 404, body: { error: 'Saved View not found.' } }
+    if (method === 'GET') return { status: 200, body: views[index] }
+    if (method === 'DELETE') {
+      views.splice(index, 1)
+      return { status: 200, body: { status: 'deleted' } }
+    }
+    return { status: 405, body: { error: 'Method not allowed' } }
+  }
+
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init: RequestInit = {}) => {
+      const method = init.method ?? 'GET'
+      const key = `${method} ${new URL(url, location.origin).pathname}`
+      requests.push(key)
+      const held = holds.get(key)
+      if (held) {
+        holds.delete(key)
+        await held
+      }
+      const refused = refusals.get(key)
+      if (refused) refusals.delete(key)
+      const reply = refused ?? handle(method, new URL(url, location.origin).pathname)
+      return new Response(JSON.stringify(reply.body), { status: reply.status })
+    }),
+  )
+
+  return {
+    requests,
+    refuse(key: string, reply: Reply) {
+      refusals.set(key, reply)
+    },
+    hold(key: string): () => void {
+      let release: () => void = () => {}
+      holds.set(
+        key,
+        new Promise<void>((resolve) => {
+          release = resolve
+        }),
+      )
+      return () => release()
+    },
+    count: (key: string) => requests.filter((request) => request === key).length,
+  }
+}
+
+function rowIds(el: HTMLElement): (string | null)[] {
+  return [...el.querySelectorAll('[data-sv-index-edit]')].map((node) => node.getAttribute('data-sv-index-edit'))
+}
+
+describe('saved views projections', () => {
+  it('builds index rows in server order and summarizes with the canonical codec', () => {
+    expect(savedViewIndexRows([VIEW, { ...LATER, name: '' }])).toEqual([
       { id: 'SV 1', name: 'Critical theory', summary: 'All: x', href: '#/views/SV%201' },
+      { id: 'SV 2', name: 'Saved View', summary: 'All: x', href: '#/views/SV%202' },
     ])
   })
-})
 
-describe('saved view detail projection', () => {
-  it('is not-found without a record and never carries rows then', () => {
+  it('is not-found without a record, keeps a read failure apart, and never carries rows then', () => {
     const missing = buildSavedViewDetailProjection({ availability: 'ready', view: null, viewId: 'SV-9', rows: [{ id: 'w' }], generation: 1 })
     expect(missing.availability).toBe('not-found')
     expect(missing.viewId).toBe('SV-9')
     expect(missing.results.rows).toEqual([])
+    const failed = buildSavedViewDetailProjection({ availability: 'error', viewId: 'SV-9', rows: [{ id: 'w' }], generation: 1 })
+    expect(failed.availability).toBe('error')
+    expect(failed.results.rows).toEqual([])
     const ready = buildSavedViewDetailProjection({
       availability: 'ready',
       view: VIEW,
@@ -87,349 +180,246 @@ describe('saved view detail projection', () => {
   })
 })
 
-describe('Saved Views index route bridge', () => {
-  it('paints rows, routes Edit and Delete through index intents, and ignores a stale owner', async () => {
-    window.prksPageHeaderIconHtml = () => ''
-    window.prksIcon = () => ''
+describe('Saved Views index route', () => {
+  it('shares one list read between panes and paints rows after loading', async () => {
+    chrome()
+    const server = fakeServer([VIEW, LATER])
+    const release = server.hold('GET /api/saved-views')
+    const main = host()
+    const other = host()
+    presentSavedViewsIndex({ owner: indexOwner('main', 3), host: main, generation: 3 })
+    presentSavedViewsIndex({ owner: indexOwner('other', 1), host: other, generation: 1 })
+    await nextTick()
+    expect(main.querySelector('[data-saved-views-loading]')).not.toBeNull()
+    expect(main.querySelector('.saved-views-page__empty')).toBeNull()
+    release()
+    await flush()
+    expect(server.count('GET /api/saved-views')).toBe(1)
+    expect(main.querySelector('[data-saved-views-loading]')).toBeNull()
+    expect(main.querySelector('.prks-page-title')?.textContent?.replace(/\s+/g, ' ').trim()).toBe('Saved Views')
+    expect(main.querySelector('.saved-views-page__summary')?.textContent).toBe('All: x')
+    expect(main.querySelector('a.saved-views-page__list-main')?.getAttribute('href')).toBe('#/views/SV%201')
+    expect(main.querySelector('a.prks-btn')?.textContent).toBe('Open')
+    expect(rowIds(other)).toEqual(['SV 1', 'SV 2'])
+  })
+
+  it('opens Edit from a fresh record read and refreshes every pane after Delete', async () => {
+    chrome()
+    const server = fakeServer([VIEW, LATER])
     const open = vi.fn()
-    const del = vi.fn(async () => {})
-    window.fetchSavedView = async () => VIEW
+    const confirm = vi.fn(async () => true)
     window.prksOpenSavedViewModal = open
-    window.prksDeleteSavedViewFromIndex = del
-    const pane = owner('main')
-    pane.state.generation = 3
-    pane.state.routeName = 'saved-views'
-    const el = host()
-    presentSavedViewsIndex({ owner: pane, host: el, views: [VIEW], generation: 3 })
-    expect(el.querySelector('.prks-page-title')?.textContent?.replace(/\s+/g, ' ').trim()).toBe('Saved Views')
-    expect(el.querySelector('.saved-views-page__summary')?.textContent).toBe('All: x')
-    expect(el.querySelector('a.saved-views-page__list-main')?.getAttribute('href')).toBe('#/views/SV%201')
-    expect(el.querySelector('a.prks-btn')?.textContent).toBe('Open')
-    const actions = el.querySelectorAll('.saved-views-page__row-actions button')
-    ;(actions[0] as HTMLButtonElement).click()
-    await flushPromises()
+    window.prksConfirmDestructive = confirm
+    window.prksNavigate = vi.fn()
+    const pane = indexOwner('main', 3)
+    const main = host()
+    const other = host()
+    presentSavedViewsIndex({ owner: pane, host: main, generation: 3 })
+    presentSavedViewsIndex({ owner: indexOwner('other', 1), host: other, generation: 1 })
+    await flush()
+
+    main.querySelector<HTMLButtonElement>('[data-sv-index-edit="SV 1"]')?.click()
+    await flush()
+    expect(server.requests).toContain('GET /api/saved-views/SV%201')
     expect(open).toHaveBeenCalledWith({ viewId: 'SV 1', name: 'Critical theory', definition: VIEW.search })
-    ;(actions[1] as HTMLButtonElement).click()
-    await flushPromises()
-    expect(del).toHaveBeenCalledWith('SV 1', expect.any(Function), 'main')
-    pane.state.generation = 4
-    ;(actions[0] as HTMLButtonElement).click()
-    await flushPromises()
-    ;(actions[1] as HTMLButtonElement).click()
-    await flushPromises()
-    expect(open).toHaveBeenCalledTimes(1)
-    expect(del).toHaveBeenCalledTimes(1)
+
+    main.querySelector<HTMLButtonElement>('[data-sv-index-delete="SV 1"]')?.click()
+    await flush()
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(server.requests).toContain('DELETE /api/saved-views/SV%201')
+    expect(rowIds(main)).toEqual(['SV 2'])
+    expect(rowIds(other)).toEqual(['SV 2'])
+    expect(window.prksNavigate).not.toHaveBeenCalled()
     expect(readRouteSurface(pane)).toMatchObject({ name: 'saved-views', canonicalHash: '#/views' })
-  })
 
-  it('keeps an index delete busy until resolve, reject, or cancel, and ignores a second click', async () => {
-    window.prksPageHeaderIconHtml = () => ''
-    window.prksIcon = () => ''
-    let release: (value?: void) => void = () => {}
-    let rejectDelete: (error: Error) => void = () => {}
-    const del = vi.fn(
-      () =>
-        new Promise<void>((resolve, reject) => {
-          release = resolve
-          rejectDelete = reject
-        }),
-    )
-    window.prksDeleteSavedViewFromIndex = del
-    const main = owner('main')
-    const other = owner('other')
-    main.state.generation = 3
-    other.state.generation = 1
-    main.state.routeName = 'saved-views'
-    other.state.routeName = 'saved-views'
-    const mainHost = host()
-    const otherHost = host()
-    const views = [VIEW, { ...VIEW, id: 'SV 2', name: 'Later' }]
-    presentSavedViewsIndex({ owner: main, host: mainHost, views, generation: 3 })
-    presentSavedViewsIndex({ owner: other, host: otherHost, views, generation: 1 })
-    const button = (root: HTMLElement, id: string) =>
-      root.querySelector(`[data-sv-index-delete="${id}"]`) as HTMLButtonElement
-    const clicked = () => button(mainHost, 'SV 1')
-    const sibling = () => button(mainHost, 'SV 2')
-    const otherButton = () => button(otherHost, 'SV 1')
-
-    expect(clicked().classList.contains('prks-btn--danger')).toBe(true)
-    expect(clicked().classList.contains('prks-btn--sm')).toBe(true)
-    expect(clicked().textContent?.trim()).toBe('Delete')
-    expect(mainHost.innerHTML).not.toContain('style="display: contents"')
-    expect(mainHost.querySelectorAll('.work-html-slot').length).toBeGreaterThan(0)
-
-    clicked().click()
-    await nextTick()
-    expect(clicked().disabled).toBe(true)
-    expect(clicked().getAttribute('aria-busy')).toBe('true')
-    expect(clicked().textContent).toBe('Deleting…')
-    clicked().click()
-    sibling().click()
-    expect(del).toHaveBeenCalledTimes(1)
-    expect(del).toHaveBeenCalledWith('SV 1', expect.any(Function), 'main')
-    expect(sibling().disabled).toBe(true)
-    expect(sibling().getAttribute('aria-busy')).toBeNull()
-    expect(sibling().textContent?.trim()).toBe('Delete')
-    expect(otherButton().disabled).toBe(false)
-    expect(otherButton().getAttribute('aria-busy')).toBeNull()
-    expect(otherButton().textContent?.trim()).toBe('Delete')
-
-    release()
-    await flushPromises()
-    expect(clicked().disabled).toBe(false)
-    expect(clicked().getAttribute('aria-busy')).toBeNull()
-    expect(clicked().textContent?.trim()).toBe('Delete')
-    expect(sibling().disabled).toBe(false)
-
-    clicked().click()
-    await nextTick()
-    expect(del).toHaveBeenCalledTimes(2)
-    expect(clicked().getAttribute('aria-busy')).toBe('true')
-    rejectDelete(new Error('delete failed'))
-    await flushPromises()
-    expect(clicked().disabled).toBe(false)
-    expect(clicked().getAttribute('aria-busy')).toBeNull()
-    expect(clicked().textContent?.trim()).toBe('Delete')
-
-    clicked().click()
-    await nextTick()
-    expect(del).toHaveBeenCalledTimes(3)
-    expect(clicked().textContent).toBe('Deleting…')
-    release()
-    await flushPromises()
-    expect(clicked().disabled).toBe(false)
-    expect(clicked().getAttribute('aria-busy')).toBeNull()
-    expect(clicked().textContent?.trim()).toBe('Delete')
-    expect(otherButton().disabled).toBe(false)
-  })
-
-  it('starts one fetch for two delayed Edit clicks, and Edit and Delete cannot overlap', async () => {
-    window.prksPageHeaderIconHtml = () => ''
-    window.prksIcon = () => ''
-    let releaseFetch: (value: typeof VIEW) => void = () => {}
-    const fetchView = vi.fn(
-      () =>
-        new Promise<typeof VIEW>((resolve) => {
-          releaseFetch = resolve
-        }),
-    )
-    const open = vi.fn()
-    window.fetchSavedView = fetchView
-    window.prksOpenSavedViewModal = open
-    let releaseDelete: (value?: void) => void = () => {}
-    const del = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          releaseDelete = resolve
-        }),
-    )
-    window.prksDeleteSavedViewFromIndex = del
-    const main = owner('main')
-    const other = owner('other')
-    main.state.generation = 3
-    other.state.generation = 1
-    main.state.routeName = 'saved-views'
-    other.state.routeName = 'saved-views'
-    const mainHost = host()
-    const otherHost = host()
-    presentSavedViewsIndex({ owner: main, host: mainHost, views: [VIEW], generation: 3 })
-    presentSavedViewsIndex({ owner: other, host: otherHost, views: [VIEW], generation: 1 })
-    const editButton = (root: HTMLElement) =>
-      root.querySelector('[data-sv-index-edit="SV 1"]') as HTMLButtonElement
-    const deleteButton = (root: HTMLElement) =>
-      root.querySelector('[data-sv-index-delete="SV 1"]') as HTMLButtonElement
-
-    editButton(mainHost).click()
-    await nextTick()
-    expect(editButton(mainHost).disabled).toBe(true)
-    expect(editButton(mainHost).getAttribute('aria-busy')).toBe('true')
-    expect(editButton(mainHost).textContent).toBe('Opening…')
-    editButton(mainHost).click()
-    expect(fetchView).toHaveBeenCalledTimes(1)
-    expect(deleteButton(mainHost).disabled).toBe(true)
-    deleteButton(mainHost).click()
-    expect(del).not.toHaveBeenCalled()
-    expect(editButton(otherHost).disabled).toBe(false)
-    expect(deleteButton(otherHost).disabled).toBe(false)
-
-    releaseFetch(VIEW)
-    await flushPromises()
+    pane.state.generation = 4
+    main.querySelector<HTMLButtonElement>('[data-sv-index-edit="SV 2"]')?.click()
+    main.querySelector<HTMLButtonElement>('[data-sv-index-delete="SV 2"]')?.click()
+    await flush()
     expect(open).toHaveBeenCalledTimes(1)
-    expect(editButton(mainHost).disabled).toBe(false)
-    expect(editButton(mainHost).textContent?.trim()).toBe('Edit')
-    expect(deleteButton(mainHost).disabled).toBe(false)
-
-    deleteButton(mainHost).click()
-    await nextTick()
-    expect(deleteButton(mainHost).disabled).toBe(true)
-    expect(deleteButton(mainHost).textContent).toBe('Deleting…')
-    expect(editButton(mainHost).disabled).toBe(true)
-    editButton(mainHost).click()
-    expect(fetchView).toHaveBeenCalledTimes(1)
-    expect(editButton(otherHost).disabled).toBe(false)
-    releaseDelete()
-    await flushPromises()
-    expect(editButton(mainHost).disabled).toBe(false)
-    expect(deleteButton(mainHost).disabled).toBe(false)
-    expect(del).toHaveBeenCalledTimes(1)
+    expect(confirm).toHaveBeenCalledTimes(1)
   })
 
-  it('shows a failed Edit or Delete on the owning row and stays quiet for cancel or stale', async () => {
-    window.prksPageHeaderIconHtml = () => ''
-    window.prksIcon = () => ''
-    const open = vi.fn()
-    window.prksOpenSavedViewModal = open
-    let rejectFetch: (err: Error) => void = () => {}
-    window.fetchSavedView = vi.fn(
-      () =>
-        new Promise<typeof VIEW>((_resolve, reject) => {
-          rejectFetch = reject
-        }),
-    )
-    let deleteResult: { ok: boolean; reason: string; message?: string } = {
-      ok: false,
-      reason: 'cancelled',
-    }
-    const del = vi.fn(async () => deleteResult)
-    window.prksDeleteSavedViewFromIndex = del
-    const main = owner('main')
-    const other = owner('other')
-    main.state.generation = 3
-    other.state.generation = 1
-    main.state.routeName = 'saved-views'
-    other.state.routeName = 'saved-views'
-    const mainHost = host()
-    const otherHost = host()
-    const views = [VIEW, { ...VIEW, id: 'SV 2', name: 'Later' }]
-    presentSavedViewsIndex({ owner: main, host: mainHost, views, generation: 3 })
-    presentSavedViewsIndex({ owner: other, host: otherHost, views: [VIEW], generation: 1 })
-    const editButton = (root: HTMLElement, id: string) =>
-      root.querySelector(`[data-sv-index-edit="${id}"]`) as HTMLButtonElement
-    const deleteButton = (root: HTMLElement, id: string) =>
-      root.querySelector(`[data-sv-index-delete="${id}"]`) as HTMLButtonElement
-    const rowError = (root: HTMLElement, id: string) => root.querySelector(`[data-sv-index-error="${id}"]`)
+  it('keeps an index delete busy until the server answers, and Edit and Delete cannot overlap', async () => {
+    chrome()
+    const server = fakeServer([VIEW, LATER])
+    window.prksConfirmDestructive = async () => true
+    window.prksOpenSavedViewModal = vi.fn()
+    const main = host()
+    const other = host()
+    presentSavedViewsIndex({ owner: indexOwner('main', 3), host: main, generation: 3 })
+    presentSavedViewsIndex({ owner: indexOwner('other', 1), host: other, generation: 1 })
+    await flush()
+    const button = (root: HTMLElement, kind: 'edit' | 'delete', id: string) =>
+      root.querySelector(`[data-sv-index-${kind}="${id}"]`) as HTMLButtonElement
 
-    editButton(mainHost, 'SV 1').click()
-    await nextTick()
-    expect(editButton(mainHost, 'SV 1').textContent).toBe('Opening…')
-    rejectFetch(new Error('Could not open Saved View.'))
-    await flushPromises()
-    expect(open).not.toHaveBeenCalled()
-    expect(editButton(mainHost, 'SV 1').disabled).toBe(false)
-    expect(editButton(mainHost, 'SV 1').getAttribute('aria-busy')).toBeNull()
-    expect(editButton(mainHost, 'SV 1').textContent?.trim()).toBe('Edit')
-    expect(rowError(mainHost, 'SV 1')?.textContent?.trim()).toBe('Could not open Saved View.')
-    expect(rowError(mainHost, 'SV 2')).toBeNull()
-    expect(otherHost.querySelector('[data-sv-index-error]')).toBeNull()
+    expect(button(main, 'delete', 'SV 1').classList.contains('prks-btn--danger')).toBe(true)
+    expect(button(main, 'delete', 'SV 1').classList.contains('prks-btn--sm')).toBe(true)
+    expect(main.innerHTML).not.toContain('style="display: contents"')
 
-    editButton(mainHost, 'SV 2').click()
-    await nextTick()
-    main.state.generation = 4
-    rejectFetch(new Error('late failure'))
-    await flushPromises()
-    expect(mainHost.textContent).not.toContain('late failure')
-    expect(rowError(mainHost, 'SV 2')).toBeNull()
-    expect(rowError(mainHost, 'SV 1')?.textContent?.trim()).toBe('Could not open Saved View.')
-    expect(editButton(mainHost, 'SV 2').disabled).toBe(false)
-    expect(editButton(otherHost, 'SV 1').disabled).toBe(false)
+    const releaseDelete = server.hold('DELETE /api/saved-views/SV%201')
+    button(main, 'delete', 'SV 1').click()
+    await flush()
+    expect(button(main, 'delete', 'SV 1').disabled).toBe(true)
+    expect(button(main, 'delete', 'SV 1').getAttribute('aria-busy')).toBe('true')
+    expect(button(main, 'delete', 'SV 1').textContent).toBe('Deleting…')
+    button(main, 'delete', 'SV 1').click()
+    button(main, 'delete', 'SV 2').click()
+    button(main, 'edit', 'SV 2').click()
+    expect(button(main, 'delete', 'SV 2').disabled).toBe(true)
+    expect(button(main, 'delete', 'SV 2').getAttribute('aria-busy')).toBeNull()
+    expect(button(other, 'delete', 'SV 1').disabled).toBe(false)
+    releaseDelete()
+    await flush()
+    expect(server.count('DELETE /api/saved-views/SV%201')).toBe(1)
+    expect(server.count('DELETE /api/saved-views/SV%202')).toBe(0)
+    expect(server.count('GET /api/saved-views/SV%202')).toBe(0)
+    expect(rowIds(main)).toEqual(['SV 2'])
+    expect(button(main, 'delete', 'SV 2').disabled).toBe(false)
 
-    main.state.generation = 3
-    deleteButton(mainHost, 'SV 1').click()
-    await flushPromises()
-    expect(del).toHaveBeenCalledTimes(1)
-    expect(rowError(mainHost, 'SV 1')?.textContent?.trim()).toBe('Could not open Saved View.')
-    expect(deleteButton(mainHost, 'SV 1').disabled).toBe(false)
-    expect(deleteButton(mainHost, 'SV 1').textContent?.trim()).toBe('Delete')
+    const releaseRead = server.hold('GET /api/saved-views/SV%202')
+    button(main, 'edit', 'SV 2').click()
+    await flush()
+    expect(button(main, 'edit', 'SV 2').textContent).toBe('Opening…')
+    expect(button(main, 'delete', 'SV 2').disabled).toBe(true)
+    button(main, 'edit', 'SV 2').click()
+    releaseRead()
+    await flush()
+    expect(server.count('GET /api/saved-views/SV%202')).toBe(1)
+    expect(window.prksOpenSavedViewModal).toHaveBeenCalledTimes(1)
+    expect(button(main, 'edit', 'SV 2').textContent?.trim()).toBe('Edit')
+  })
 
-    deleteResult = { ok: false, reason: 'failed', message: 'Could not delete Saved View.' }
-    deleteButton(mainHost, 'SV 2').click()
-    await flushPromises()
-    expect(rowError(mainHost, 'SV 2')?.textContent?.trim()).toBe('Could not delete Saved View.')
-    expect(rowError(mainHost, 'SV 1')?.textContent?.trim()).toBe('Could not open Saved View.')
-    expect(deleteButton(mainHost, 'SV 2').disabled).toBe(false)
-    expect(deleteButton(mainHost, 'SV 2').classList.contains('prks-btn--danger')).toBe(true)
-    expect(otherHost.querySelector('[data-sv-index-error]')).toBeNull()
+  it('shows a failed Edit or Delete on its row, stays quiet for cancel, and refreshes after a failed delete', async () => {
+    chrome()
+    const server = fakeServer([VIEW, LATER])
+    let answer = false
+    window.prksConfirmDestructive = async () => answer
+    window.prksOpenSavedViewModal = vi.fn()
+    const main = host()
+    const other = host()
+    presentSavedViewsIndex({ owner: indexOwner('main', 3), host: main, generation: 3 })
+    presentSavedViewsIndex({ owner: indexOwner('other', 1), host: other, generation: 1 })
+    await flush()
+    const rowError = (id: string) => main.querySelector(`[data-sv-index-error="${id}"]`)
+
+    server.refuse('GET /api/saved-views/SV%201', { status: 500, body: null })
+    main.querySelector<HTMLButtonElement>('[data-sv-index-edit="SV 1"]')?.click()
+    await flush()
+    expect(rowError('SV 1')?.textContent?.trim()).toBe('Could not open Saved View.')
+    expect(window.prksOpenSavedViewModal).not.toHaveBeenCalled()
+
+    main.querySelector<HTMLButtonElement>('[data-sv-index-delete="SV 2"]')?.click()
+    await flush()
+    expect(server.count('DELETE /api/saved-views/SV%202')).toBe(0)
+    expect(rowError('SV 2')).toBeNull()
+
+    answer = true
+    const lists = server.count('GET /api/saved-views')
+    server.refuse('DELETE /api/saved-views/SV%202', { status: 404, body: { error: 'Saved View not found.' } })
+    main.querySelector<HTMLButtonElement>('[data-sv-index-delete="SV 2"]')?.click()
+    await flush()
+    expect(rowError('SV 2')?.textContent?.trim()).toBe('Saved View not found.')
+    expect(rowError('SV 1')?.textContent?.trim()).toBe('Could not open Saved View.')
+    expect(server.count('GET /api/saved-views')).toBe(lists + 1)
+    expect(other.querySelector('[data-sv-index-error]')).toBeNull()
   })
 
   it('stays quiet when a delete fails after the owning index goes stale', async () => {
-    window.prksPageHeaderIconHtml = () => ''
-    window.prksIcon = () => ''
-    let releaseDelete: (value: { ok: boolean; reason: string; message: string }) => void = () => {}
-    window.prksDeleteSavedViewFromIndex = () =>
-      new Promise((resolve) => {
-        releaseDelete = resolve
-      })
-    const main = owner('main')
-    const other = owner('other')
-    main.state.generation = 3
-    other.state.generation = 1
-    main.state.routeName = 'saved-views'
-    other.state.routeName = 'saved-views'
-    const mainHost = host()
-    const otherHost = host()
-    presentSavedViewsIndex({ owner: main, host: mainHost, views: [VIEW], generation: 3 })
-    presentSavedViewsIndex({ owner: other, host: otherHost, views: [VIEW], generation: 1 })
-    const deleteButton = (root: HTMLElement) =>
-      root.querySelector('[data-sv-index-delete="SV 1"]') as HTMLButtonElement
-
-    deleteButton(mainHost).click()
-    await nextTick()
-    expect(deleteButton(mainHost).textContent).toBe('Deleting…')
-    expect(deleteButton(mainHost).classList.contains('prks-btn--danger')).toBe(true)
-    main.state.generation = 4
-    releaseDelete({ ok: false, reason: 'failed', message: 'late failure' })
-    await flushPromises()
-    expect(mainHost.textContent).not.toContain('late failure')
-    expect(mainHost.querySelector('[data-sv-index-error]')).toBeNull()
-    expect(deleteButton(mainHost).disabled).toBe(false)
-    expect(deleteButton(mainHost).textContent?.trim()).toBe('Delete')
-    expect(deleteButton(otherHost).disabled).toBe(false)
-    expect(otherHost.querySelector('[data-sv-index-error]')).toBeNull()
+    chrome()
+    const server = fakeServer([VIEW])
+    window.prksConfirmDestructive = async () => true
+    const pane = indexOwner('main', 3)
+    const main = host()
+    presentSavedViewsIndex({ owner: pane, host: main, generation: 3 })
+    await flush()
+    server.refuse('DELETE /api/saved-views/SV%201', { status: 500, body: { error: 'late failure' } })
+    const release = server.hold('DELETE /api/saved-views/SV%201')
+    main.querySelector<HTMLButtonElement>('[data-sv-index-delete="SV 1"]')?.click()
+    await flush()
+    pane.state.generation = 4
+    release()
+    await flush()
+    expect(main.textContent).not.toContain('late failure')
+    expect(main.querySelector('[data-sv-index-error]')).toBeNull()
   })
 
-  it('paints the empty index, keeps owners apart, and drops a stale generation', async () => {
+  it('paints the empty index, a first-load error with retry, and keeps rows when a refetch fails', async () => {
+    chrome()
     const palette = vi.fn()
     window.prksOpenCommandPalette = palette
-    const main = owner('main')
-    const other = owner('other')
-    main.state.generation = 2
-    other.state.generation = 1
-    main.state.routeName = 'saved-views'
-    other.state.routeName = 'saved-views'
-    const mainHost = host()
-    const otherHost = host()
-    presentSavedViewsIndex({ owner: main, host: mainHost, views: [], generation: 2 })
-    presentSavedViewsIndex({ owner: other, host: otherHost, views: [VIEW], generation: 1 })
-    expect(mainHost.querySelector('.saved-views-page__empty')?.textContent).toBe('No Saved Views yet.')
-    expect(mainHost.textContent).toContain('Run a search and choose “Save View” to keep it here.')
-    expect(mainHost.querySelector('.saved-views-page__list-item')).toBeNull()
-    ;(mainHost.querySelector('#prks-saved-views-empty-search') as HTMLButtonElement).click()
+    const server = fakeServer([])
+    server.refuse('GET /api/saved-views', { status: 500, body: null })
+    const main = host()
+    presentSavedViewsIndex({ owner: indexOwner('main', 2), host: main, generation: 2 })
+    await flush()
+    expect(main.querySelector('[data-saved-views-load-error]')?.textContent).toContain('Could not load Saved Views.')
+    expect(main.querySelector('.saved-views-page__empty')).toBeNull()
+    main.querySelector<HTMLButtonElement>('[data-saved-views-load-error] button')?.click()
+    await flush()
+    expect(main.querySelector('[data-saved-views-load-error]')).toBeNull()
+    expect(main.querySelector('.saved-views-page__empty')?.textContent).toBe('No Saved Views yet.')
+    expect(main.textContent).toContain('Run a search and choose “Save View” to keep it here.')
+    ;(main.querySelector('#prks-saved-views-empty-search') as HTMLButtonElement).click()
     expect(palette).toHaveBeenCalledTimes(1)
-    expect(otherHost.querySelector('.saved-views-page__list-item')).not.toBeNull()
-    presentSavedViewsIndex({ owner: main, host: mainHost, views: [VIEW], generation: 1 })
-    await nextTick()
-    expect(mainHost.querySelector('.saved-views-page__list-item')).toBeNull()
-    dismissRouteSurface(main)
-    expect(mainHost.innerHTML).toBe('')
-    expect(otherHost.querySelector('.saved-views-page__list-item')).not.toBeNull()
+
+    resetSavedViewsSessionForTests()
+    document.body.innerHTML = ''
+    const full = fakeServer([VIEW])
+    const first = host()
+    const firstOwner = indexOwner('main', 1)
+    presentSavedViewsIndex({ owner: firstOwner, host: first, generation: 1 })
+    await flush()
+    dismissRouteSurface(firstOwner)
+    full.refuse('GET /api/saved-views', { status: 500, body: null })
+    const second = host()
+    presentSavedViewsIndex({ owner: indexOwner('main', 2), host: second, generation: 2 })
+    await flush()
+    expect(full.count('GET /api/saved-views')).toBe(2)
+    expect(rowIds(second)).toEqual(['SV 1'])
+    expect(second.querySelector('[data-saved-views-refresh-error]')?.textContent?.trim()).toBe(
+      'Could not refresh Saved Views.',
+    )
   })
 
-  it('registers the index bridge and paints an early host', () => {
+  it('drops a stale generation and keeps owners apart', async () => {
+    chrome()
+    fakeServer([VIEW])
+    const main = owner('main')
+    main.state.generation = 2
+    main.state.routeName = 'saved-views'
+    const mainHost = host()
+    const otherHost = host()
+    presentSavedViewsIndex({ owner: main, host: mainHost, generation: 2 })
+    presentSavedViewsIndex({ owner: indexOwner('other', 1), host: otherHost, generation: 1 })
+    await flush()
+    presentSavedViewsIndex({ owner: main, host: mainHost, generation: 1 })
+    await flush()
+    expect(rowIds(mainHost)).toEqual(['SV 1'])
+    dismissRouteSurface(main)
+    expect(mainHost.innerHTML).toBe('')
+    expect(rowIds(otherHost)).toEqual(['SV 1'])
+  })
+
+  it('registers the records bridge and paints an early host', async () => {
+    chrome()
+    fakeServer([VIEW])
     const el = host()
     el.setAttribute('data-prks-vue-route-host', 'true')
     ;(el as HTMLElement & { __prksVueRouteRequest?: object }).__prksVueRouteRequest = {
       feature: 'saved-views',
-      owner: owner('main'),
-      views: [VIEW],
+      owner: indexOwner('main', 1),
       generation: 1,
     }
     registerSavedViewsBridge(window)
     expect(window.prksVuePresentRoute).toBeTypeOf('function')
+    expect(window.prksSavedViewRecords?.get).toBeTypeOf('function')
+    await flush()
     expect(el.querySelector('.saved-views-page__summary')?.textContent).toBe('All: x')
   })
 })
 
-describe('Saved View detail route bridge', () => {
+describe('Saved View detail route', () => {
   it('paints the view and the same result cards Search paints for the same rows', () => {
     cards()
     window.prksAbstractExcerpt = (value) => String(value).slice(0, 2)
@@ -460,41 +450,39 @@ describe('Saved View detail route bridge', () => {
     expect(readRouteSurface(viewOwner)).toMatchObject({ name: 'saved-view-detail', canonicalHash: '#/views/SV%201' })
   })
 
-  it('routes Edit and Delete through owner-checked intents', async () => {
+  it('edits through the shared modal and deletes, then sends only this owner back to the index', async () => {
     cards()
+    const server = fakeServer([VIEW])
     const open = vi.fn()
-    const del = vi.fn(async () => {})
+    const navigate = vi.fn()
     window.prksOpenSavedViewModal = open
-    window.prksDeleteSavedViewFromDetail = del
+    window.prksConfirmDestructive = async () => true
+    window.prksNavigate = navigate
     const pane = owner('main')
     pane.state.generation = 4
     pane.state.entityId = 'SV 1'
     const el = host()
     presentSavedViewDetail({ owner: pane, host: el, availability: 'ready', view: VIEW, rows: [], generation: 4 })
     ;(el.querySelector('#prks-saved-view-edit') as HTMLButtonElement).click()
-    ;(el.querySelector('#prks-saved-view-delete') as HTMLButtonElement).click()
-    await nextTick()
     expect(open).toHaveBeenCalledWith({ viewId: 'SV 1', name: 'Critical theory', definition: VIEW.search })
-    expect(del).toHaveBeenCalledWith('SV 1', expect.any(Function), 'main')
+    ;(el.querySelector('#prks-saved-view-delete') as HTMLButtonElement).click()
+    await flush()
+    expect(server.count('DELETE /api/saved-views/SV%201')).toBe(1)
+    expect(navigate).toHaveBeenCalledWith('#/views', { replace: true, tabId: 'main' })
     pane.state.generation = 5
     ;(el.querySelector('#prks-saved-view-edit') as HTMLButtonElement).click()
     ;(el.querySelector('#prks-saved-view-delete') as HTMLButtonElement).click()
+    await flush()
     expect(open).toHaveBeenCalledTimes(1)
-    expect(del).toHaveBeenCalledTimes(1)
+    expect(server.count('DELETE /api/saved-views/SV%201')).toBe(1)
   })
 
-  it('keeps detail delete busy until confirm, cancel, or failure, and ignores a second click', async () => {
+  it('keeps detail delete busy until the server answers and shows a failure inline', async () => {
     cards()
-    let release: (value?: void) => void = () => {}
-    let rejectDelete: (error: Error) => void = () => {}
-    const del = vi.fn(
-      () =>
-        new Promise<void>((resolve, reject) => {
-          release = resolve
-          rejectDelete = reject
-        }),
-    )
-    window.prksDeleteSavedViewFromDetail = del
+    const server = fakeServer([VIEW])
+    window.prksConfirmDestructive = async () => true
+    const navigate = vi.fn()
+    window.prksNavigate = navigate
     const main = owner('main')
     const other = owner('other')
     main.state.generation = 2
@@ -506,47 +494,44 @@ describe('Saved View detail route bridge', () => {
     presentSavedViewDetail({ owner: main, host: mainHost, availability: 'ready', view: VIEW, rows: [], generation: 2 })
     presentSavedViewDetail({ owner: other, host: otherHost, availability: 'ready', view: VIEW, rows: [], generation: 1 })
     const button = () => mainHost.querySelector('#prks-saved-view-delete') as HTMLButtonElement
-    const otherButton = () => otherHost.querySelector('#prks-saved-view-delete') as HTMLButtonElement
     expect(button().classList.contains('prks-btn--danger')).toBe(true)
     expect(button().textContent?.trim()).toBe('Delete Saved View')
 
+    server.refuse('DELETE /api/saved-views/SV%201', { status: 500, body: null })
+    const release = server.hold('DELETE /api/saved-views/SV%201')
     button().click()
-    await nextTick()
+    await flush()
     expect(button().disabled).toBe(true)
     expect(button().getAttribute('aria-busy')).toBe('true')
     expect(button().textContent).toBe('Deleting…')
     button().click()
-    expect(del).toHaveBeenCalledTimes(1)
-    expect(otherButton().disabled).toBe(false)
-    expect(otherButton().getAttribute('aria-busy')).toBeNull()
-
+    expect((otherHost.querySelector('#prks-saved-view-delete') as HTMLButtonElement).disabled).toBe(false)
     release()
-    await flushPromises()
+    await flush()
+    expect(server.count('DELETE /api/saved-views/SV%201')).toBe(1)
     expect(button().disabled).toBe(false)
     expect(button().getAttribute('aria-busy')).toBeNull()
-    expect(button().textContent?.trim()).toBe('Delete Saved View')
-
-    button().click()
-    await nextTick()
-    expect(del).toHaveBeenCalledTimes(2)
-    expect(button().getAttribute('aria-busy')).toBe('true')
-    rejectDelete(new Error('delete failed'))
-    await flushPromises()
-    expect(button().disabled).toBe(false)
-    expect(button().getAttribute('aria-busy')).toBeNull()
-    expect(button().textContent?.trim()).toBe('Delete Saved View')
+    expect(mainHost.querySelector('[data-sv-delete-error]')?.textContent?.trim()).toBe('Could not delete Saved View.')
+    expect(otherHost.querySelector('[data-sv-delete-error]')).toBeNull()
+    expect(navigate).not.toHaveBeenCalled()
   })
 
-  it('paints not-found, ignores a stale generation, and keeps owners apart', async () => {
+  it('paints not-found and a read failure, ignores a stale generation, and keeps owners apart', async () => {
     cards()
     const main = owner('main')
     const other = owner('other')
     const mainHost = host()
     const otherHost = host()
+    const failedHost = host()
     presentSavedViewDetail({ owner: main, host: mainHost, availability: 'not-found', viewId: 'gone', generation: 3 })
     presentSavedViewDetail({ owner: other, host: otherHost, availability: 'ready', view: VIEW, rows: [{ id: 'w2' }], generation: 1 })
+    presentSavedViewDetail({ owner: owner('third'), host: failedHost, availability: 'error', viewId: 'SV 1', generation: 1 })
     expect(mainHost.querySelector('.prks-page-title')?.textContent).toBe('Saved View not found.')
     expect(mainHost.querySelector('a[href="#/views"]')).not.toBeNull()
+    expect(failedHost.querySelector('[data-prks-saved-view-load-error] .prks-page-title')?.textContent).toBe(
+      'Could not load Saved View.',
+    )
+    expect(failedHost.querySelector('[data-prks-saved-view-not-found]')).toBeNull()
     expect(mainHost.querySelector('[data-work-id="w2"]')).toBeNull()
     presentSavedViewDetail({ owner: main, host: mainHost, availability: 'ready', view: VIEW, rows: [{ id: 'late' }], generation: 2 })
     await nextTick()

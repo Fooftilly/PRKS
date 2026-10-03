@@ -1,5 +1,6 @@
 """Structural + Node regressions for Saved Views."""
 import os
+import re
 import shutil
 import subprocess
 import unittest
@@ -55,9 +56,9 @@ class FrontendSavedViewsTests(unittest.TestCase):
         self.assertIn("prks-save-view-btn", search)
         self.assertIn("Save View", search)
         api = _read(_API)
-        self.assertIn("function fetchSavedViews", api)
-        self.assertIn("function createSavedView", api)
-        self.assertIn("saved-views.fetch", api)
+        for name in ("fetchSavedViews", "fetchSavedView", "createSavedView", "updateSavedView",
+                     "deleteSavedView", "prksGuardSavedViewMutation", "saved-views.fetch", "/api/saved-views"):
+            self.assertNotIn(name, api)
         src = _read(_SV)
         self.assertIn("prksSearchQueryCodec", src)
         self.assertNotIn("function prksSearchDefinitionFromRoute", src)
@@ -87,12 +88,13 @@ class FrontendSavedViewsTests(unittest.TestCase):
         for name in ("function renderSavedViewDetail", "function renderSavedViewNotFound",
                      "prksSearchResultCardsHtml", "__prksCurrentSavedView"):
             self.assertNotIn(name, src)
-        self.assertIn("function prksDeleteSavedViewFromDetail", src)
+        self.assertNotIn("prksDeleteSavedViewFromDetail", src)
         detail = _read(_SV_DETAIL)
         search = _read(_SEARCH)
         for vue in (detail, search):
             self.assertIn("SearchResultsCollection", vue)
-        self.assertIn("prksDeleteSavedViewFromDetail", _read(_SV_INTENTS))
+        self.assertNotIn("prksDeleteSavedViewFromDetail", _read(_SV_INTENTS))
+        self.assertIn("records.remove(viewId)", _read(_SV_INTENTS))
         intents = _read(_SEARCH_INTENTS)
         self.assertIn("hashFromDefinition", intents)
         self.assertNotIn("window.prksSearchHashFromDefinition", intents)
@@ -104,19 +106,28 @@ class FrontendSavedViewsTests(unittest.TestCase):
         self.assertNotIn('style="display: contents"', detail)
         self.assertNotIn('style="display: contents"', search)
         self.assertIn("work-html-slot", search)
-        self.assertIn("confirmLabel: 'Delete Saved View'", src)
+        self.assertIn("confirmLabel: 'Delete Saved View'", _read(_SV_INTENTS))
+        self.assertIn("data-sv-delete-error", detail)
+        self.assertIn("data-prks-saved-view-load-error", detail)
         policy = _read(os.path.join(_PROJECT_DIR, "tests", "e2e", "policy.py"))
         self.assertNotIn("frontend/js/components/search.js", policy)
 
     def test_saved_views_index_is_a_vue_surface(self):
-        """The index is the Vue list. The replaced painter and its edit/delete
-        helpers are gone. Delete refreshes in place."""
+        """The index is the Vue list and reads its own records. The replaced
+        painter and its edit/delete helpers are gone. Delete refreshes through
+        the shared list query."""
         app = _read(_APP)
         self.assertNotIn("function prksPresentVueSavedViewsIndex(", app)
         case_at = app.index("case 'saved-views': {")
-        case_body = app[case_at: case_at + 1200]
-        self.assertIn("fetchSavedViews(", case_body)
+        case_body = app[case_at: app.index("case 'saved-view-detail': {")]
+        self.assertIn("prksOfflineRenderUnavailable(", case_body)
         self.assertIn("prksPresentVueRoute(ctx, contentDiv, 'saved-views'", case_body)
+        self.assertNotIn("await ", case_body)
+        self.assertNotIn("views:", case_body)
+        detail_at = app.index("case 'saved-view-detail': {")
+        detail_body = app[detail_at: detail_at + 2400]
+        self.assertIn("window.prksSavedViewRecords.get(viewId)", detail_body)
+        self.assertIn("availability: 'error'", detail_body)
         self.assertNotIn("renderSavedViewsIndex", app)
         src = _read(_SV)
         for name in (
@@ -127,12 +138,22 @@ class FrontendSavedViewsTests(unittest.TestCase):
             "prksOpenSavedViewIndexEdit",
         ):
             self.assertNotIn(name, src)
-        self.assertIn("function prksDeleteSavedViewFromIndex", src)
+        self.assertNotIn("prksDeleteSavedViewFromIndex", src)
         self.assertNotIn("prksCurrentCanonicalHash", src)
-        self.assertIn("prksNavigate('#/views'", src)
+        self.assertIn("root.prksSavedViewRecords", src)
+        self.assertIn("records.create(", src)
+        self.assertIn("records.update(", src)
+        for name in ("root.createSavedView", "root.updateSavedView", "root.deleteSavedView"):
+            self.assertNotIn(name, src)
+        palette = _read(_PALETTE)
+        self.assertIn("root.prksSavedViewRecords", palette)
+        self.assertNotIn("fetchSavedViews", palette)
         index = _read(_SV_INDEX)
         self.assertIn("saved-views-page", index)
         self.assertIn("SAVED_VIEWS_EMPTY", index)
+        self.assertIn("useSavedViewsList", index)
+        self.assertIn("data-saved-views-load-error", index)
+        self.assertIn("data-saved-views-refresh-error", index)
         self.assertIn("work-html-slot", index)
         self.assertNotIn('style="display: contents"', index)
         self.assertIn("prks-inline-message--error", index)
@@ -145,8 +166,19 @@ class FrontendSavedViewsTests(unittest.TestCase):
         self.assertIn("removeFromIndex", _read(_SV_INTENTS))
         self.assertIn("summaryText", projection)
         self.assertNotIn("window.prksSearchSummaryText", projection)
+        sv_dir = os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "saved-views")
+        for name in os.listdir(sv_dir):
+            if name.endswith(".test.ts"):
+                continue
+            text = _read(os.path.join(sv_dir, name))
+            self.assertIsNone(re.search(r"(?<![A-Za-z])fetch\(", text), name)
+            self.assertNotIn("'/api/", text, name)
+            self.assertNotIn("['saved-views'", text, name)
+        records = _read(os.path.join(sv_dir, "records.ts"))
+        self.assertIn("prksQueryKeys.savedViews.all()", records)
+        self.assertIn("new MutationObserver(", records)
         agents = _read(_AGENTS)
-        self.assertIn("prksDeleteSavedViewFromIndex", agents)
+        self.assertIn("window.prksSavedViewRecords", agents)
         self.assertIn(
             "`renderSavedViewsIndex`, `bindIndexActions`, `openEditById`, and `confirmDelete` are removed.",
             agents,

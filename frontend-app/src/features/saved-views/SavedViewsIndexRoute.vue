@@ -1,21 +1,22 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import { usePendingAction } from '../../route-surface/pending-action'
 import type { SavedViewIntents } from './intents'
-import { SAVED_VIEWS_EMPTY, SAVED_VIEWS_EMPTY_HINT, type SavedViewIndexProjection } from './projection'
+import { SAVED_VIEWS_EMPTY, SAVED_VIEWS_EMPTY_HINT } from './projection'
+import { useSavedViewsList } from './useSavedViewsList'
 
 const props = defineProps<{
-  projection: SavedViewIndexProjection
   intents: SavedViewIntents
 }>()
+
+const { rows, loaded, loading, loadError, refreshError, retry } = useSavedViewsList()
 
 const { actionBusy, actionBlocked, withBusy } = usePendingAction()
 const rootEl = ref<HTMLElement | null>(null)
 const rowErrors = ref<Record<string, string>>({})
 const headerIcon = computed(() => window.prksPageHeaderIconHtml?.('bookmark') ?? '')
 const bookmarkIcon = computed(() => window.prksIcon?.('bookmark', { size: 'sm' }) ?? '')
-const rows = computed(() => props.projection.rows)
 
 function deleteKey(viewId: string): string {
   return `delete:${viewId}`
@@ -60,9 +61,14 @@ function remove(viewId: string): void {
   })
 }
 
-onMounted(() => {
-  window.prksRefreshIcons?.(rootEl.value)
-})
+// Rows arrive after mount and change after each write; icons follow them.
+watch(
+  rows,
+  () => {
+    window.prksRefreshIcons?.(rootEl.value)
+  },
+  { flush: 'post', immediate: true },
+)
 </script>
 
 <template>
@@ -73,7 +79,22 @@ onMounted(() => {
         Saved Views
       </h2>
     </div>
-    <div class="list-view saved-views-page__list">
+    <p
+      v-if="refreshError"
+      class="prks-inline-message prks-inline-message--error"
+      role="status"
+      data-saved-views-refresh-error
+    >
+      {{ refreshError }}
+    </p>
+    <div v-if="loading" class="prks-state prks-state--loading" role="status" data-saved-views-loading>
+      <p class="prks-state__body">Loading Saved Views…</p>
+    </div>
+    <div v-else-if="loadError" class="prks-state prks-state--error" role="status" data-saved-views-load-error>
+      <p class="prks-state__body">{{ loadError }}</p>
+      <PrksButton variant="secondary" size="sm" @click="retry">Try again</PrksButton>
+    </div>
+    <div v-if="loaded" class="list-view saved-views-page__list">
       <template v-if="rows.length">
         <div v-for="row in rows" :key="row.id" class="project-card saved-views-page__list-item">
           <a class="saved-views-page__list-main" :href="row.href">

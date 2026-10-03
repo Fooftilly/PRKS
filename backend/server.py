@@ -60,6 +60,7 @@ from backend.api_contract.openapi import (
     performance_diagnostics_openapi_document,
     positions_openapi_document,
     publishers_openapi_document,
+    saved_views_openapi_document,
 )
 from backend.api_contract.performance import (
     PerformanceDiagnosticsReset,
@@ -2319,6 +2320,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(200, performance_diagnostics_openapi_document())
             elif path == '/api/openapi/publishers.json':
                 self.send_json(200, publishers_openapi_document())
+            elif path == '/api/openapi/saved-views.json':
+                self.send_json(200, saved_views_openapi_document())
             elif path == '/api/positions':
                 rows = research_network.list_positions(db)
                 self.send_json(200, dump_response(PositionSummary, rows))

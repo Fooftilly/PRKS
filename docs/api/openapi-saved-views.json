@@ -1,0 +1,420 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "PRKS API \u2014 Saved Views slice",
+    "version": "0.1.0",
+    "description": "Vertical-slice OpenAPI for the online-only Saved Views family (#45 / #232). Schemas are generated from the same Pydantic boundary as the rest of backend/api_contract."
+  },
+  "paths": {
+    "/api/saved-views": {
+      "get": {
+        "operationId": "listSavedViews",
+        "summary": "List Saved Views",
+        "tags": [
+          "saved-views"
+        ],
+        "responses": {
+          "200": {
+            "description": "Saved Views ordered by name, case-insensitively.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedViewList"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createSavedView",
+        "summary": "Save a named search definition",
+        "tags": [
+          "saved-views"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedViewCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Domain refusal: wrong type, empty or too long name, or an incomplete or invalid search definition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Name already used, or the library has the maximum number of Saved Views.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body larger than the JSON body limit (request_too_large).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Missing or unsupported Content-Type (unsupported_media_type).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/saved-views/{view_id}": {
+      "parameters": [
+        {
+          "name": "view_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getSavedView",
+        "summary": "Read one Saved View",
+        "tags": [
+          "saved-views"
+        ],
+        "responses": {
+          "200": {
+            "description": "The Saved View.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Saved View.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateSavedView",
+        "summary": "Rename a Saved View or change its search",
+        "tags": [
+          "saved-views"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedViewUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Nothing to update, or a domain refusal of the name or search definition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Saved View.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Name already used by another Saved View.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body larger than the JSON body limit (request_too_large).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Missing or unsupported Content-Type (unsupported_media_type).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteSavedView",
+        "summary": "Delete a Saved View",
+        "description": "Deleting a view never deletes Works or files.",
+        "tags": [
+          "saved-views"
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedViewDeleted"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Saved View.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ApiErrorEnvelope": {
+        "additionalProperties": false,
+        "description": "Standard JSON error body at the HTTP adapter boundary.",
+        "properties": {
+          "error": {
+            "description": "Human-readable error message.",
+            "minLength": 1,
+            "title": "Error",
+            "type": "string"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Stable machine-readable code when the domain provides one.",
+            "title": "Code"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "SavedViewSearch": {
+        "additionalProperties": false,
+        "description": "A saved search definition. All five keys are always present.",
+        "properties": {
+          "mode": {
+            "enum": [
+              "all",
+              "advanced",
+              "tag"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "q": {
+            "title": "Q",
+            "type": "string"
+          },
+          "tag": {
+            "title": "Tag",
+            "type": "string"
+          },
+          "author": {
+            "title": "Author",
+            "type": "string"
+          },
+          "publisher": {
+            "title": "Publisher",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "q",
+          "tag",
+          "author",
+          "publisher"
+        ],
+        "type": "object"
+      },
+      "SavedView": {
+        "additionalProperties": false,
+        "description": "One Saved View: GET list rows, GET by id, POST and PATCH bodies.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "search": {
+            "$ref": "#/components/schemas/SavedViewSearch"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "search",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "SavedViewCreateRequest": {
+        "description": "POST /api/saved-views.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "search": {
+            "$ref": "#/components/schemas/SavedViewSearch"
+          }
+        },
+        "required": [
+          "name",
+          "search"
+        ],
+        "type": "object"
+      },
+      "SavedViewUpdateRequest": {
+        "description": "PATCH /api/saved-views/{id}. Omit a field to leave it unchanged.\n\nSending neither field is a domain refusal (``Nothing to update.``). The\npublished contract refuses JSON null; the controller still treats a null\nfield as omitted, as it did before this contract existed.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "search": {
+            "$ref": "#/components/schemas/SavedViewSearch"
+          }
+        },
+        "type": "object"
+      },
+      "SavedViewDeleted": {
+        "additionalProperties": false,
+        "description": "DELETE /api/saved-views/{id} body.",
+        "properties": {
+          "status": {
+            "pattern": "^deleted$",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "SavedViewList": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/SavedView"
+        }
+      }
+    }
+  }
+}

@@ -249,13 +249,8 @@ interface Window {
     name?: string
     definition?: { mode: string; q: string; tag: string; author: string; publisher: string }
   }) => void
-  prksDeleteSavedViewFromDetail?: (viewId: string, still?: () => boolean, tabId?: string) => Promise<void>
-  prksDeleteSavedViewFromIndex?: (
-    viewId: string,
-    still?: () => boolean,
-    tabId?: string,
-  ) => Promise<{ ok?: boolean; reason?: string; message?: string } | void>
-  fetchSavedView?: (id: string) => Promise<{ id?: string; name?: string; search?: { mode: string; q: string; tag: string; author: string; publisher: string } } | null>
+  /** Saved View records for classic callers (coordinator, modal, palette). Owned by frontend-app. */
+  prksSavedViewRecords?: import('./src/features/saved-views/records').SavedViewRecords
   prksOpenCommandPalette?: () => void
   prksScopeLineHtml?: (options: { total?: number; label?: string }) => string
   prksEffectiveFolderDetailWorks?: (folder: unknown) => unknown[]

@@ -24,6 +24,17 @@ const inputs = {
     publisher: { value: '' },
 };
 
+const modalError = {
+    textContent: '',
+    classList: { add: function () {}, remove: function () {} },
+};
+const saveButton = {
+    disabled: false,
+    textContent: '',
+    listeners: {},
+    addEventListener: function (type, fn) { this.listeners[type] = fn; },
+};
+
 const radios = [
     { value: 'all', checked: false, addEventListener: function () {} },
     { value: 'advanced', checked: true, addEventListener: function () {} },
@@ -39,8 +50,8 @@ const document = {
         if (id === 'saved-view-publisher') return inputs.publisher;
         if (id === 'saved-view-modal-title') return { textContent: '' };
         if (id === 'saved-view-modal-helper') return { textContent: '' };
-        if (id === 'saved-view-modal-error') return { textContent: '', classList: { add: function () {}, remove: function () {} } };
-        if (id === 'save-saved-view-btn') return { disabled: false, textContent: '', addEventListener: function () {} };
+        if (id === 'saved-view-modal-error') return modalError;
+        if (id === 'save-saved-view-btn') return saveButton;
         if (id === 'saved-view-modal') return { id: 'saved-view-modal' };
         if (id === 'saved-view-field-q-wrap') return { hidden: false };
         if (id === 'saved-view-q-label') return { textContent: '' };
@@ -61,6 +72,23 @@ const document = {
     },
 };
 
+const records = {
+    fail: null,
+    create: function (payload) {
+        posts.push(payload);
+        if (records.fail) return Promise.reject(records.fail);
+        return Promise.resolve({ id: 'SV-NEW', name: payload.name, search: payload.search });
+    },
+    update: function (id, payload) {
+        patches.push({ id: id, payload: payload });
+        if (records.fail) return Promise.reject(records.fail);
+        return Promise.resolve({ id: id, name: payload.name, search: payload.search });
+    },
+    actionMessage: function (err, fallback) {
+        return err && err.serverText ? err.serverText : fallback;
+    },
+};
+
 const sandbox = {
     console: console,
     window: null,
@@ -71,22 +99,12 @@ const sandbox = {
     module: { exports: {} },
     exports: {},
     prksParseRoute: null,
-    prksNavigate: function (hash, opts) {
-        navCalls.push({ hash: hash, replace: !!(opts && opts.replace), tabId: opts && opts.tabId });
-        sandbox.location.hash = hash;
-    },
     openModal: function (id) {
         modalCalls.push(id);
     },
-    requestModalClose: function () {},
-    createSavedView: function (payload) {
-        posts.push(payload);
-        return Promise.resolve({ id: 'SV-NEW', name: payload.name, search: payload.search });
-    },
-    updateSavedView: function (id, payload) {
-        patches.push({ id: id, payload: payload });
-        return Promise.resolve({ id: id, name: payload.name, search: payload.search });
-    },
+    closes: 0,
+    requestModalClose: function () { sandbox.closes += 1; },
+    prksSavedViewRecords: records,
 };
 
 sandbox.window = sandbox;
@@ -98,6 +116,10 @@ runScript('frontend/js/search-query-codec.js', sandbox);
 runScript('frontend/js/saved-views.js', sandbox);
 
 const root = sandbox;
+// navigation.js installs the real prksNavigate; record calls instead.
+root.prksNavigate = function (hash, opts) {
+    navCalls.push({ hash: hash, replace: !!(opts && opts.replace), tabId: opts && opts.tabId });
+};
 let passed = 0;
 let failed = 0;
 function assert(name, ok) {
@@ -115,10 +137,21 @@ function assertEq(name, a, b) {
     assert(name, ok);
 }
 
+function settle() {
+    return new Promise(function (resolve) { setTimeout(resolve, 0); });
+}
+
+function save() {
+    saveButton.listeners.click();
+    return settle();
+}
+
 assert(
     'codec bridge is loaded',
     root.prksSearchQueryCodec && typeof root.prksSearchQueryCodec.definitionFromRoute === 'function'
 );
+root.prksInitSavedViews();
+assert('save button is bound', typeof saveButton.listeners.click === 'function');
 
 root.prksOpenSavedViewModalFromCurrentSearch();
 assertEq('modal opened', modalCalls[0], 'saved-view-modal');
@@ -126,31 +159,44 @@ assertEq('name focused', inputs.name.focused, true);
 assertEq('prefill q', inputs.q.value, 'critical theory');
 
 inputs.name.value = 'Adorno — Culture Industry';
-Promise.resolve(root.createSavedView({
-    name: inputs.name.value,
-    search: { mode: 'all', q: 'critical theory', tag: '', author: '', publisher: '' },
-}))
+radios.forEach(function (r) { r.checked = r.value === 'all'; });
+save()
     .then(function () {
-        assert('posted create', posts.length === 1);
+        assertEq('create goes through the records service', posts.length, 1);
         assertEq('posted name', posts[0].name, 'Adorno — Culture Industry');
         assertEq('posted mode', posts[0].search.mode, 'all');
         assertEq('posted q', posts[0].search.q, 'critical theory');
+        assertEq('create closes the modal', root.closes, 1);
+        assertEq('create opens the new view', navCalls[navCalls.length - 1].hash, '#/views/SV-NEW');
 
-        return root.updateSavedView('SV-1', {
-            name: 'Critical Theory',
-            search: {
-                mode: 'advanced',
-                q: 'culture industry',
-                tag: '',
-                author: 'Adorno',
-                publisher: '',
-            },
-        });
+        records.fail = { serverText: 'A Saved View with that name already exists.' };
+        root.prksOpenSavedViewModal({ name: 'Taken', definition: { mode: 'all', q: 'x', tag: '', author: '', publisher: '' } });
+        return save();
     })
     .then(function () {
-        assertEq('patch same id', patches[0].id, 'SV-1');
-        assertEq('patch name', patches[0].payload.name, 'Critical Theory');
-        assertEq('patch mode', patches[0].payload.search.mode, 'advanced');
+        assertEq('refused create keeps the modal open', root.closes, 1);
+        assertEq('refused create shows the server text', modalError.textContent, 'A Saved View with that name already exists.');
+        assertEq('save button is enabled again', saveButton.disabled, false);
+
+        records.fail = {};
+        root.prksOpenSavedViewModal({
+            viewId: 'SV-1',
+            name: 'Critical Theory',
+            definition: { mode: 'advanced', q: 'culture industry', tag: '', author: 'Adorno', publisher: '' },
+        });
+        return save();
+    })
+    .then(function () {
+        assertEq('failed update names the edit', modalError.textContent, 'Could not update Saved View.');
+        records.fail = null;
+        return save();
+    })
+    .then(function () {
+        assertEq('patch same id', patches[patches.length - 1].id, 'SV-1');
+        assertEq('patch name', patches[patches.length - 1].payload.name, 'Critical Theory');
+        assertEq('patch mode', patches[patches.length - 1].payload.search.mode, 'advanced');
+        assertEq('patch author', patches[patches.length - 1].payload.search.author, 'Adorno');
+        assertEq('update closes the modal', root.closes, 2);
 
         const src = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'js', 'saved-views.js'), 'utf8');
         assert('no results table', src.indexOf('saved_view_works') < 0);
@@ -163,146 +209,51 @@ Promise.resolve(root.createSavedView({
             src.indexOf('function openEditById') < 0 &&
             src.indexOf('function confirmDelete') < 0 &&
             src.indexOf('prksOpenSavedViewIndexEdit') < 0);
-        assert('index delete stays in saved-views.js', src.indexOf('function prksDeleteSavedViewFromIndex') >= 0);
+        assert('delete wrappers left saved-views.js',
+            typeof root.prksDeleteSavedViewFromIndex === 'undefined' &&
+            typeof root.prksDeleteSavedViewFromDetail === 'undefined' &&
+            src.indexOf('deleteSavedView') < 0);
+        assert('no raw Saved View HTTP', src.indexOf('/api/saved-views') < 0);
 
-        return Promise.resolve().then(function () {
-            /* Save View from the Search surface uses that owner's hash, not the URL. */
-            root.location.hash = '#/folders';
-            root.prksOpenSavedViewModalFromCurrentSearch('#/search?q=owned&author=Benjamin');
-            assertEq('save view uses owner hash q', inputs.q.value, 'owned');
-            assertEq('save view uses owner hash author', inputs.author.value, 'Benjamin');
+        /* Save View from the Search surface uses that owner's hash, not the URL. */
+        root.location.hash = '#/folders';
+        root.prksOpenSavedViewModalFromCurrentSearch('#/search?q=owned&author=Benjamin');
+        assertEq('save view uses owner hash q', inputs.q.value, 'owned');
+        assertEq('save view uses owner hash author', inputs.author.value, 'Benjamin');
 
-            /* Edit this Saved View reads the Main TabContext entity. */
-            const beforeEdit = modalCalls.length;
-            root.prksGetMainTabContext = function () { return { getEntity: function () { return null; } }; };
-            root.prksOpenSavedViewModalForCurrentView();
-            assertEq('edit current view without entity is a no-op', modalCalls.length, beforeEdit);
-            root.prksGetMainTabContext = function () {
-                return {
-                    getEntity: function (type) {
-                        return type === 'savedView'
-                            ? { id: 'SV-MAIN', name: 'Main View', search: { mode: 'tag', q: '', tag: 'T', author: '', publisher: '' } }
-                            : null;
-                    },
-                };
+        /* Edit this Saved View reads the Main TabContext entity. */
+        const beforeEdit = modalCalls.length;
+        root.prksGetMainTabContext = function () { return { getEntity: function () { return null; } }; };
+        root.prksOpenSavedViewModalForCurrentView();
+        assertEq('edit current view without entity is a no-op', modalCalls.length, beforeEdit);
+        root.prksGetMainTabContext = function () {
+            return {
+                getEntity: function (type) {
+                    return type === 'savedView'
+                        ? { id: 'SV-MAIN', name: 'Main View', search: { mode: 'tag', q: '', tag: 'T', author: '', publisher: '' } }
+                        : null;
+                },
             };
-            root.prksOpenSavedViewModalForCurrentView();
-            assertEq('edit current view opens modal', modalCalls.length, beforeEdit + 1);
-            assertEq('edit current view fills name', inputs.name.value, 'Main View');
-            assertEq('edit current view fills tag', inputs.tag.value, 'T');
+        };
+        root.prksOpenSavedViewModalForCurrentView();
+        assertEq('edit current view opens modal', modalCalls.length, beforeEdit + 1);
+        assertEq('edit current view fills name', inputs.name.value, 'Main View');
+        assertEq('edit current view fills tag', inputs.tag.value, 'T');
+        assert('detail painters removed', typeof root.renderSavedViewDetail === 'undefined' &&
+            typeof root.renderSavedViewNotFound === 'undefined' &&
+            typeof root.prksSearchResultCardsHtml === 'undefined');
+        assert('index edit export removed', typeof root.prksOpenSavedViewIndexEdit === 'undefined');
+        assert('index painter export removed', typeof root.renderSavedViewsIndex === 'undefined');
 
-            /* Detail delete: confirm, still fence, delete, still fence, navigate owner. */
-            const deletes = [];
-            let confirmOpts = null;
-            root.prksConfirmDestructive = function (opts) {
-                confirmOpts = opts;
-                return Promise.resolve(true);
-            };
-            root.deleteSavedView = function (id) { deletes.push(id); return Promise.resolve(); };
-            navCalls.length = 0;
-            root.prksNavigate = function (hash, opts) {
-                navCalls.push({ hash: hash, replace: !!(opts && opts.replace), tabId: opts && opts.tabId });
-            };
-            return root.prksDeleteSavedViewFromDetail('SV-A', function () { return false; }, 'tab-1')
-                .then(function () {
-                    assertEq('stale owner after confirm does not delete', deletes.length, 0);
-                    assertEq('stale owner after confirm does not navigate', navCalls.length, 0);
-                    let calls = 0;
-                    return root.prksDeleteSavedViewFromDetail('SV-B', function () {
-                        calls += 1;
-                        return calls === 1;
-                    }, 'tab-1');
-                })
-                .then(function () {
-                    assertEq('delete started before stale still deletes', deletes.join(','), 'SV-B');
-                    assertEq('owner gone after delete does not navigate', navCalls.length, 0);
-                    return root.prksDeleteSavedViewFromDetail('SV-C', function () { return true; }, 'tab-1');
-                })
-                .then(function () {
-                    assertEq('current owner delete', deletes.join(','), 'SV-B,SV-C');
-                    assertEq('current owner navigates to index', navCalls[0] && navCalls[0].hash, '#/views');
-                    assertEq('current owner navigate replaces', navCalls[0] && navCalls[0].replace, true);
-                    assertEq('current owner navigate targets tab', navCalls[0] && navCalls[0].tabId, 'tab-1');
-                    assertEq('confirm names Delete Saved View', confirmOpts && confirmOpts.confirmLabel, 'Delete Saved View');
-                    root.prksConfirmDestructive = function () { return Promise.resolve(false); };
-                    return root.prksDeleteSavedViewFromDetail('SV-D', function () { return true; }, 'tab-1');
-                })
-                .then(function () {
-                    assertEq('cancel does not delete', deletes.join(','), 'SV-B,SV-C');
-                    assert('detail painters removed', typeof root.renderSavedViewDetail === 'undefined' &&
-                        typeof root.renderSavedViewNotFound === 'undefined' &&
-                        typeof root.prksSearchResultCardsHtml === 'undefined');
-                    assert('index edit export removed', typeof root.prksOpenSavedViewIndexEdit === 'undefined');
-                    assert('index painter export removed', typeof root.renderSavedViewsIndex === 'undefined');
-
-                    /* Index delete refreshes the owning tab to #/views. A focused URL elsewhere stays there. */
-                    root.prksConfirmDestructive = function () { return Promise.resolve(true); };
-                    assert('index refresh does not read the focused hash', src.indexOf('prksCurrentCanonicalHash') < 0);
-                    navCalls.length = 0;
-                    return root.prksDeleteSavedViewFromIndex('SV-I1', function () { return false; }, 'tab-index');
-                })
-                .then(function () {
-                    assertEq('stale index after confirm does not delete', deletes.join(','), 'SV-B,SV-C');
-                    assertEq('stale index after confirm does not refresh', navCalls.length, 0);
-                    let calls = 0;
-                    return root.prksDeleteSavedViewFromIndex('SV-I2', function () {
-                        calls += 1;
-                        return calls === 1;
-                    }, 'tab-index');
-                })
-                .then(function () {
-                    assertEq('index delete started before stale still deletes', deletes.join(','), 'SV-B,SV-C,SV-I2');
-                    assertEq('index owner gone after delete does not refresh', navCalls.length, 0);
-                    root.location.hash = '#/folders';
-                    return root.prksDeleteSavedViewFromIndex('SV-I3', function () { return true; }, 'tab-index');
-                })
-                .then(function () {
-                    assertEq('current index delete', deletes[deletes.length - 1], 'SV-I3');
-                    assertEq('focused folders URL still refreshes the owner to the index', navCalls[0] && navCalls[0].hash, '#/views');
-                    assertEq('index refresh replaces', navCalls[0] && navCalls[0].replace, true);
-                    assertEq('index refresh targets the owner tab', navCalls[0] && navCalls[0].tabId, 'tab-index');
-                    assertEq('index refresh is one navigation', navCalls.length, 1);
-                    assertEq('focused hash stays on folders', root.location.hash, '#/folders');
-                    root.prksConfirmDestructive = function () { return Promise.resolve(false); };
-                    navCalls.length = 0;
-                    const before = deletes.length;
-                    return root.prksDeleteSavedViewFromIndex('SV-I5', function () { return true; }, 'tab-index')
-                        .then(function (outcome) {
-                            assertEq('cancelled index delete does not delete', deletes.length, before);
-                            assertEq('cancelled index delete does not refresh', navCalls.length, 0);
-                            assertEq('cancelled index delete stays quiet', outcome && outcome.reason, 'cancelled');
-                            root.prksConfirmDestructive = function () { return Promise.resolve(true); };
-                            root.deleteSavedView = function () {
-                                return Promise.reject(new Error('Could not delete Saved View.'));
-                            };
-                            return root.prksDeleteSavedViewFromIndex('SV-I6', function () { return true; }, 'tab-index');
-                        })
-                        .then(function (outcome) {
-                            assertEq('failed index delete does not refresh', navCalls.length, 0);
-                            assertEq('failed index delete names the failure', outcome && outcome.reason, 'failed');
-                            assertEq('failed index delete keeps the message', outcome && outcome.message, 'Could not delete Saved View.');
-                            return root.prksDeleteSavedViewFromIndex('SV-I7', function () { return false; }, 'tab-index');
-                        })
-                        .then(function (outcome) {
-                            assertEq('stale index delete stays quiet', outcome && outcome.reason, 'stale');
-                            assertEq('stale index delete does not refresh', navCalls.length, 0);
-                            let owns = true;
-                            root.deleteSavedView = function () {
-                                owns = false;
-                                return Promise.reject(new Error('late failure'));
-                            };
-                            return root.prksDeleteSavedViewFromIndex('SV-I8', function () { return owns; }, 'tab-index');
-                        })
-                        .then(function (outcome) {
-                            assertEq('late failed index delete after the owner leaves stays stale', outcome && outcome.reason, 'stale');
-                            assertEq('late failed index delete after the owner leaves does not refresh', navCalls.length, 0);
-                            assert('late failed index delete after the owner leaves drops the message', !(outcome && outcome.message));
-                        });
-                });
-        }).then(function () {
-            console.log(passed + ' passed, ' + failed + ' failed');
-            if (failed) process.exit(1);
-        });
+        /* The offline guard refuses to open the modal. */
+        const beforeOffline = modalCalls.length;
+        root.prksOfflineGuardMutation = function () { return true; };
+        root.prksOpenSavedViewModal({ name: 'Offline' });
+        assertEq('offline guard keeps the modal closed', modalCalls.length, beforeOffline);
+    })
+    .then(function () {
+        console.log(passed + ' passed, ' + failed + ' failed');
+        if (failed) process.exit(1);
     })
     .catch(function (err) {
         console.error(err);

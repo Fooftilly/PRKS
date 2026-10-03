@@ -3,6 +3,10 @@
  * Results are never stored. Opening a view re-runs fetchSearch() through the
  * coordinator's prksEffectiveSearchResults, the same read Search uses.
  *
+ * Saved View records belong to frontend-app (typed client, shared query
+ * cache, write invalidation). This modal saves through that one owner,
+ * window.prksSavedViewRecords. Index and detail deletes are Vue intents.
+ *
  * The search query codec lives in frontend-app/src/features/search/codec.ts.
  * This file does not own it. The shared Saved View modal reads a parsed route
  * through the one classic bridge, prksSearchQueryCodec, and stays here until
@@ -125,14 +129,15 @@
         modalState.saving = true;
         if (els.save) els.save.disabled = true;
         setModalError('');
+        const records = root.prksSavedViewRecords;
         try {
             if (modalState.mode === 'edit') {
-                await root.updateSavedView(modalState.viewId, { name: name, search: search });
+                await records.update(modalState.viewId, { name: name, search: search });
                 if (typeof root.requestModalClose === 'function') root.requestModalClose('save');
                 else if (typeof root.closeModal === 'function') root.closeModal();
                 navigateRefresh();
             } else {
-                const created = await root.createSavedView({ name: name, search: search });
+                const created = await records.create({ name: name, search: search });
                 if (typeof root.requestModalClose === 'function') root.requestModalClose('save');
                 else if (typeof root.closeModal === 'function') root.closeModal();
                 if (created && created.id && typeof root.prksNavigate === 'function') {
@@ -142,7 +147,10 @@
                 }
             }
         } catch (err) {
-            setModalError((err && err.message) || 'Could not save view.');
+            const fallback = modalState.mode === 'edit' ? 'Could not update Saved View.' : 'Could not save view.';
+            setModalError(records && typeof records.actionMessage === 'function'
+                ? records.actionMessage(err, fallback)
+                : fallback);
         } finally {
             modalState.saving = false;
             if (els.save) els.save.disabled = false;
@@ -243,68 +251,6 @@
         }
     }
 
-    function savedViewActionMessage(err, fallback) {
-        const message = err && err.message != null ? String(err.message).trim() : '';
-        return message || fallback;
-    }
-
-    /**
-     * Confirm, recheck `still`, then delete. Success, cancel, a stale owner,
-     * and a failed delete stay distinct so the index can show only the failure.
-     */
-    async function confirmAndDelete(id, still) {
-        const ok =
-            typeof root.prksConfirmDestructive === 'function'
-                ? await root.prksConfirmDestructive({
-                      title: 'Delete Saved View?',
-                      message: 'Deleting this Saved View will not delete any files.',
-                      confirmLabel: 'Delete Saved View',
-                  })
-                : true;
-        if (!ok) return { ok: false, reason: 'cancelled' };
-        if (typeof still === 'function' && !still()) return { ok: false, reason: 'stale' };
-        try {
-            await root.deleteSavedView(id);
-        } catch (err) {
-            if (typeof still === 'function' && !still()) return { ok: false, reason: 'stale' };
-            return {
-                ok: false,
-                reason: 'failed',
-                message: savedViewActionMessage(err, 'Could not delete Saved View.'),
-            };
-        }
-        return { ok: true, reason: 'success' };
-    }
-
-    /**
-     * Index delete. Confirms, rechecks `still`, deletes, rechecks `still`,
-     * then navigates this tab to `#/views` so the index refetches. The
-     * refresh is the index hash on `tabId`. The focused location stays put.
-     * Cancel and a stale owner stay quiet. A failed delete returns its message.
-     */
-    async function prksDeleteSavedViewFromIndex(id, still, tabId) {
-        const outcome = await confirmAndDelete(id, still);
-        if (typeof still === 'function' && !still()) return { ok: false, reason: 'stale' };
-        if (!outcome.ok) return outcome;
-        if (typeof root.prksNavigate !== 'function') return { ok: false, reason: 'stale' };
-        root.prksNavigate('#/views', tabId ? { replace: true, tabId: tabId } : { replace: true });
-        return outcome;
-    }
-
-    /**
-     * Saved View detail delete. `still` is the owning surface's fence: a
-     * replaced owner does not delete after confirm, and a delete that already
-     * started does not navigate a pane that moved on.
-     */
-    async function prksDeleteSavedViewFromDetail(id, still, tabId) {
-        const outcome = await confirmAndDelete(id, still);
-        if (!outcome.ok) return;
-        if (typeof still === 'function' && !still()) return;
-        if (typeof root.prksNavigate === 'function') {
-            root.prksNavigate('#/views', tabId ? { replace: true, tabId: tabId } : { replace: true });
-        }
-    }
-
     function init() {
         bindModal();
     }
@@ -313,8 +259,6 @@
         prksOpenSavedViewModalFromCurrentSearch: prksOpenSavedViewModalFromCurrentSearch,
         prksOpenSavedViewModalForCurrentView: prksOpenSavedViewModalForCurrentView,
         prksOpenSavedViewModal: openModalWith,
-        prksDeleteSavedViewFromDetail: prksDeleteSavedViewFromDetail,
-        prksDeleteSavedViewFromIndex: prksDeleteSavedViewFromIndex,
         prksInitSavedViews: init,
     };
     Object.keys(api).forEach(function (k) {
