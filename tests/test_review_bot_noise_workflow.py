@@ -140,6 +140,27 @@ CODERABBIT_WALKTHROUGH = (
     "Your trial includes unlimited reviews.\n"
     "<!-- walkthrough_end -->"
 )
+CODERABBIT_REVIEW_LIMIT = (
+    "<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n"
+    "<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n\n"
+    "> [!WARNING]\n> ## Review limit reached\n> \n"
+    "> You've used all free OSS reviews for now. Wait for the free limit to reset to keep "
+    "reviewing this public repository.\n> \n> **Next included review available in 41 minutes.**\n"
+    "> \n> [Check out review usage here](https://app.coderabbit.ai/dashboard/review-capacity).\n"
+    "> \n> <details>\n> <summary>View limit details</summary>\n> \n"
+    "> **Limit details:** You’ve used the included review currently available.\n> \n"
+    "> **Review configuration:**\n> \n> <details>\n> <summary>⚙️ Run configuration</summary>\n"
+    "> \n> - **Review profile**: ASSERTIVE\n> </details>\n> \n> <details>\n"
+    "> <summary>📥 Commits</summary>\n> \n> Reviewing files that changed from the base of the PR "
+    "and between 1e94d7f and fe61bbf.\n> </details>\n> \n> <details>\n"
+    "> <summary>📒 Files selected for processing (3)</summary>\n> \n"
+    "> * `.github/workflows/review-event-signal.yml`\n> </details>\n> </details>\n\n"
+    "<!-- end of auto-generated comment: rate limited by coderabbit.ai -->\n\n"
+    "<!-- autopilot:start -->\n- [ ] <strong title=\"Keep fixing CodeRabbit findings and "
+    "required CI, and resolving merge conflicts\">Autopilot</strong>\n<!-- autopilot:end -->\n"
+    "Thanks for using [CodeRabbit](https://coderabbit.ai)! It's free for OSS."
+)
+
 # The <10-stars banner and substantive review output in one comment, as
 # CodeRabbit can produce when it edits its summary comment in place.
 CODERABBIT_BANNER_WITH_REVIEW = (
@@ -183,6 +204,7 @@ POSITIVE_CASES = {
     "sourcery-review-budget": (_SOURCERY, SOURCERY_BUDGET),
     "qodo-trial-expiring": (_QODO, QODO_TRIAL_EXPIRING),
     "coderabbit-auto-review-unavailable": (_CODERABBIT, CODERABBIT_NO_AUTO_REVIEW),
+    "coderabbit-review-limit": (_CODERABBIT, CODERABBIT_REVIEW_LIMIT),
 }
 
 
@@ -235,6 +257,14 @@ class NoiseClassifierTests(unittest.TestCase):
             "sourcery diff only": (_SOURCERY, "This PR has 900 diff characters."),
             "coderabbit auto only": (_CODERABBIT, "This repository does not receive automatic reviews."),
             "coderabbit stars only": (_CODERABBIT, "Repositories with fewer than 10 stars."),
+            "coderabbit rate-limit marker only": (
+                _CODERABBIT,
+                "<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->",
+            ),
+            "coderabbit limit heading only": (
+                _CODERABBIT,
+                "## Review limit reached\nYou've used all free OSS reviews for now.",
+            ),
             "qodo marker text without marker": (_QODO, "qodo:trial-expiring Your Qodo trial ends soon."),
         }
         for name, (login, body) in cases.items():
@@ -245,6 +275,15 @@ class NoiseClassifierTests(unittest.TestCase):
         cases = {
             "coderabbit walkthrough": (_CODERABBIT, CODERABBIT_WALKTHROUGH),
             "coderabbit banner with walkthrough": (_CODERABBIT, CODERABBIT_BANNER_WITH_REVIEW),
+            "coderabbit rate-limit notice with walkthrough": (
+                _CODERABBIT,
+                CODERABBIT_REVIEW_LIMIT + CODERABBIT_BANNER_WITH_REVIEW[CODERABBIT_BANNER_WITH_REVIEW.index("<!-- walkthrough_start"):],
+            ),
+            "coderabbit review that mentions limits": (
+                _CODERABBIT,
+                CODERABBIT_WALKTHROUGH + "\n\nReview limit reached for nitpicks; rate limit and "
+                "review limits apply to free reviews.",
+            ),
             "greptile summary": (_GREPTILE, GREPTILE_SUMMARY),
             "greptile finding": (_GREPTILE, GREPTILE_FINDING),
             "sourcery findings": (_SOURCERY, SOURCERY_FINDINGS),
@@ -290,16 +329,22 @@ class NoiseRuleTableTests(unittest.TestCase):
                 marker_only = len(fragments) == 1 and re.fullmatch(r"<!-- [a-z]+:[a-z-]+ -->", fragments[0])
                 self.assertTrue(len(fragments) >= 2 or marker_only)
 
-    def test_coderabbit_banner_with_any_review_marker_stays_visible(self) -> None:
-        (rule,) = [r for r in self._rules() if r["rule"] == "coderabbit-auto-review-unavailable"]
-        self.assertTrue(rule["excluded"])
-        for marker in rule["excluded"]:
-            self.assertEqual(marker, marker.lower())
-            self.assertNotIn(marker, CODERABBIT_NO_AUTO_REVIEW.lower())
-            for variant in (marker, marker.upper(), marker.title()):
-                with self.subTest(marker=variant):
-                    body = f"{CODERABBIT_NO_AUTO_REVIEW}\n\n{variant}: details follow."
-                    self.assertEqual(_classify(_subject(_CODERABBIT, body)), "none")
+    def test_coderabbit_notice_with_any_review_marker_stays_visible(self) -> None:
+        coderabbit = [r for r in self._rules() if r["login"] == _CODERABBIT]
+        self.assertEqual(
+            {r["rule"] for r in coderabbit},
+            {"coderabbit-auto-review-unavailable", "coderabbit-review-limit"},
+        )
+        for rule in coderabbit:
+            self.assertTrue(rule["excluded"])
+            _, notice = POSITIVE_CASES[rule["rule"]]
+            for marker in rule["excluded"]:
+                self.assertEqual(marker, marker.lower())
+                self.assertNotIn(marker, notice.lower())
+                for variant in (marker, marker.upper(), marker.title()):
+                    with self.subTest(rule=rule["rule"], marker=variant):
+                        body = f"{notice}\n\n{variant}: details follow."
+                        self.assertEqual(_classify(_subject(_CODERABBIT, body)), "none")
 
     def test_comment_job_prefilter_lists_exactly_the_rule_bots(self) -> None:
         section = _job_section(_TEXT, "minimize-noise-comment")
