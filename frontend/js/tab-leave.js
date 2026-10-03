@@ -152,6 +152,7 @@ var prksTabLeave = (function(exports) {
 						snapshot: row.snapshot
 					});
 				}
+				for (const row of approved) if (!row.attempt.still(row.snapshot)) return decisionFor(label, "stale-owner");
 				for (const row of approved) if (row.attempt.flushNotes) row.attempt.flushNotes(row.snapshot);
 				for (const row of approved) if (!row.attempt.still(row.snapshot)) return decisionFor(label, "stale-owner");
 				const value = await batch.commit();

@@ -216,6 +216,7 @@ function makeHarness(opts) {
         },
         renderRoute: function (options) {
             renders.push(options || {});
+            if (typeof opts.onRender === 'function') return opts.onRender(options);
         },
         announce: function (title, kind) {
             announcements.push({ title: title == null ? '' : String(title), kind: kind || '' });
@@ -2554,6 +2555,133 @@ async function run() {
         const secondResult = await second;
         assertEq('rejected waiter result', secondResult, false);
         assertEq('rejected waiter leaves the accepted route', h.ws.snapshot().tabs[0].route, '#/works/W1');
+    }
+
+    {
+        /* Popstate claims the history route inside the leave commit and waits
+         * for the detail render only after that lock is released. A later
+         * navigation on the same owner can start while the request is open. */
+        async function tickUntil(pred) {
+            for (let i = 0; i < 30; i++) {
+                if (pred()) return true;
+                await Promise.resolve();
+            }
+            return false;
+        }
+
+        const releases = [];
+        let holdRender = false;
+        const h = makeHarness({
+            hash: '#/folders',
+            onRender: function () {
+                if (!holdRender) return undefined;
+                return new Promise(function (resolve) {
+                    releases.push(resolve);
+                });
+            },
+        });
+        await h.ws.navigate('#/works/W1');
+        await h.ws.navigate('#/works/W2');
+        const rendersBefore = h.renders.length;
+        const leavesBefore = h.canLeaveCalls();
+        holdRender = true;
+        assert('popstate history back', h.hist.back() === true);
+        let popSettled = false;
+        const popPromise = Promise.resolve(h.ws.handlePopState(h.hist.getState())).then(function (value) {
+            popSettled = true;
+            return value;
+        });
+        assert(
+            'popstate render started while its request is open',
+            await tickUntil(function () {
+                return h.renders.length === rendersBefore + 1 && h.canLeaveCalls() === leavesBefore + 1;
+            })
+        );
+        const claimed = h.ws.snapshot().tabs.find(function (tab) {
+            return tab.id === h.ws.snapshot().mainTabId;
+        });
+        assertEq('popstate claimed the history route before the request finished', claimed.route, '#/works/W1');
+        await Promise.resolve();
+        assert('popstate render is still pending', popSettled === false);
+        const second = h.ws.navigate('#/people/P9');
+        assert(
+            'second navigation begins while the popstate request is pending',
+            await tickUntil(function () {
+                return h.canLeaveCalls() === leavesBefore + 2;
+            })
+        );
+        assert('popstate request still pending after the second navigation starts', popSettled === false);
+        releases.forEach(function (release) {
+            release();
+        });
+        assert('popstate finishes after its request', (await popPromise) === true);
+        assert('second navigation is not rejected while the popstate request was open', (await second) !== false);
+        assertEq(
+            'second navigation replaced the route',
+            h.ws.snapshot().tabs.find(function (tab) {
+                return tab.id === h.ws.snapshot().mainTabId;
+            }).route,
+            '#/people/P9'
+        );
+
+        const secReleases = [];
+        let holdSec = false;
+        const sec = makeHarness({
+            hash: '#/works/WA',
+            onRender: function () {
+                if (!holdSec) return undefined;
+                return new Promise(function (resolve) {
+                    secReleases.push(resolve);
+                });
+            },
+        });
+        await sec.ws.navigate('#/works/WB', { target: 'tile' });
+        const secondaryId = sec.ws.snapshot().secondaryTree.tabId;
+        await sec.ws.navigate('#/works/WB2', { tabId: secondaryId });
+        const secRendersBefore = sec.renders.length;
+        const secLeavesBefore = sec.canLeaveCalls();
+        holdSec = true;
+        let secPopSettled = false;
+        const secPop = Promise.resolve(
+            sec.ws.handlePopState({
+                prksWorkspace: { v: 1, tabId: secondaryId, route: '#/works/WB', historyIndex: 0 },
+            })
+        ).then(function (value) {
+            secPopSettled = true;
+            return value;
+        });
+        assert(
+            'secondary popstate render started while its request is open',
+            await tickUntil(function () {
+                return sec.renders.length === secRendersBefore + 1 && sec.canLeaveCalls() === secLeavesBefore + 1;
+            })
+        );
+        const secTab = sec.ws.snapshot().tabs.find(function (tab) {
+            return tab.id === secondaryId;
+        });
+        assertEq('secondary popstate claimed the history route', secTab.route, '#/works/WB');
+        await Promise.resolve();
+        assert('secondary popstate render is still pending', secPopSettled === false);
+        const secNext = sec.ws.navigate('#/works/WB3', { tabId: secondaryId });
+        assert(
+            'second secondary navigation begins while the popstate request is pending',
+            await tickUntil(function () {
+                return sec.canLeaveCalls() === secLeavesBefore + 2;
+            })
+        );
+        assert('secondary popstate request still pending after the next navigation starts', secPopSettled === false);
+        secReleases.forEach(function (release) {
+            release();
+        });
+        assert('secondary popstate finishes after its request', (await secPop) === true);
+        assert('second secondary navigation is not rejected', (await secNext) !== false);
+        assertEq(
+            'second secondary navigation replaced the route',
+            sec.ws.snapshot().tabs.find(function (tab) {
+                return tab.id === secondaryId;
+            }).route,
+            '#/works/WB3'
+        );
     }
 
     {

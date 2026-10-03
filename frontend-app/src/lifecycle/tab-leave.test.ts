@@ -338,6 +338,44 @@ describe('tab leave preflight', () => {
     expect(b.notes).toBe(1)
   })
 
+  it('does not flush a batch when an earlier owner goes stale during a later assessment', async () => {
+    const leave = createTabLeave()
+    const a: Owner = { id: 'a', generation: 1, destroyed: false, notes: 0, route: '#/works/a' }
+    const b: Owner = { id: 'b', generation: 1, destroyed: false, notes: 0, route: '#/works/b' }
+    let releaseB: (value: null) => void = () => {}
+    let commits = 0
+    const pending = leave.runBatch({
+      transition: 'close',
+      attempts: [
+        attempt(a, '#/folders', () => null, () => undefined, 'close'),
+        attempt(
+          b,
+          '#/folders',
+          () =>
+            new Promise<null>((resolve) => {
+              releaseB = resolve
+            }),
+          () => undefined,
+          'close',
+        ),
+      ],
+      commit: () => {
+        commits += 1
+      },
+    })
+    await Promise.resolve()
+    expect(a.notes).toBe(0)
+    a.generation += 1
+    releaseB(null)
+    const decision = await pending
+    expect(decision.status).toBe('stale-owner')
+    expect(commits).toBe(0)
+    expect(a.notes).toBe(0)
+    expect(b.notes).toBe(0)
+    expect(a.route).toBe('#/works/a')
+    expect(b.route).toBe('#/works/b')
+  })
+
   it('runs registered probes in order and flushes through one hook', async () => {
     const leave = createTabLeave()
     const seen: string[] = []

@@ -276,6 +276,11 @@ export function createTabLeave(): TabLeaveApi {
         if (blocker) return decisionFor<T>(label, blocker.status, { feature: blocker.feature })
         approved.push({ attempt: row.attempt, snapshot: row.snapshot })
       }
+      /* An earlier owner can go stale while a later assessment is still
+       * pending. Flush only after every approved owner is still current. */
+      for (const row of approved) {
+        if (!row.attempt.still(row.snapshot)) return decisionFor<T>(label, 'stale-owner')
+      }
       for (const row of approved) {
         if (row.attempt.flushNotes) row.attempt.flushNotes(row.snapshot)
       }

@@ -1981,6 +1981,9 @@
                 if (routeChanging) entries.push({ tabId: target.id, nextHash: want.route });
                 const promo = mainPromotionLeaveEntry(target.id);
                 if (promo) entries.push(promo);
+                /* Claim the history route inside the commit and return before the
+                 * detail render. The owner lock must not cover that request. */
+                let pendingHistoryRender = null;
                 const commitHistory = function () {
                     if (!getTab(target.id) || !root.containsTab(state.secondaryTree, target.id)) {
                         restoreMainUrl();
@@ -1994,16 +1997,15 @@
                     markHandled();
                     paint();
                     if (routeChanging) {
-                        return Promise.resolve(
+                        pendingHistoryRender = Promise.resolve(
                             invokeRender({
                                 workspaceSwitch: false,
                                 fromPopstate: true,
                                 tabId: target.id,
                                 hash: target.route,
                             })
-                        ).then(function () {
-                            return true;
-                        });
+                        );
+                        return true;
                     }
                     publishShell(target.id);
                     refreshFocusedPanel();
@@ -2014,7 +2016,10 @@
                         restoreMainUrl();
                         return false;
                     }
-                    return ok;
+                    if (!pendingHistoryRender) return true;
+                    return pendingHistoryRender.then(function () {
+                        return true;
+                    });
                 };
                 if (!entries.length) return Promise.resolve(commitHistory()).then(after);
                 return runLeaves(entries, 'history', commitHistory).then(after);
@@ -2024,6 +2029,7 @@
                 const tab = main;
                 const want = target ? historyWant(tab, raw, locHash) : historyWant(tab, null, locHash);
                 const routeChanging = tab.route !== want.route;
+                let pendingHistoryRender = null;
                 const commitHistory = function () {
                     if (target) applyWantToTab(tab, want);
                     else {
@@ -2033,16 +2039,15 @@
                     markHandled();
                     paint();
                     if (routeChanging) {
-                        return Promise.resolve(
+                        pendingHistoryRender = Promise.resolve(
                             invokeRender({
                                 workspaceSwitch: false,
                                 fromPopstate: true,
                                 tabId: tab.id,
                                 hash: tab.route,
                             })
-                        ).then(function () {
-                            return true;
-                        });
+                        );
+                        return true;
                     }
                     return true;
                 };
@@ -2051,7 +2056,10 @@
                         restoreMainUrl();
                         return false;
                     }
-                    return ok;
+                    if (!pendingHistoryRender) return true;
+                    return pendingHistoryRender.then(function () {
+                        return true;
+                    });
                 };
                 if (!routeChanging) return Promise.resolve(commitHistory()).then(after);
                 return runLeave(tab.id, want.route, 'history', commitHistory).then(after);
@@ -2059,6 +2067,7 @@
 
             const parkedWant = historyWant(target, raw, locHash);
             const leavingMainId = state.mainTabId;
+            let pendingHistoryRender = null;
             return runLeave(leavingMainId, parkedWant.route, 'history', function () {
                 if (!getTab(target.id)) {
                     restoreMainUrl();
@@ -2087,22 +2096,24 @@
                     refreshFocusedPanel();
                     return true;
                 }
-                return Promise.resolve(
+                pendingHistoryRender = Promise.resolve(
                     invokeRender({
                         workspaceSwitch: false,
                         fromPopstate: true,
                         tabId: target.id,
                         hash: target.route,
                     })
-                ).then(function () {
-                    return true;
-                });
+                );
+                return true;
             }).then(function (ok) {
                 if (!ok) {
                     restoreMainUrl();
                     return false;
                 }
-                return ok;
+                if (!pendingHistoryRender) return true;
+                return pendingHistoryRender.then(function () {
+                    return true;
+                });
             });
         }
 
