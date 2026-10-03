@@ -10,7 +10,6 @@ import uuid
 
 from backend import pdf_annotation_sync, pdf_materialization
 from backend.db_manager import PRKSDatabase
-from backend.db_migrations import LATEST_SCHEMA_VERSION
 from backend.storage.config import StorageConfig
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -42,7 +41,6 @@ class PdfMaterializationTests(unittest.TestCase):
         self.work_id = self.db.add_work(title="Mat Work")
 
     def test_schema_has_materialization_columns(self) -> None:
-        self.assertEqual(LATEST_SCHEMA_VERSION, 17)
         row = self.db.execute_query(
             """
             SELECT canonical_annotation_set_revision, materialized_pdf_annotation_revision

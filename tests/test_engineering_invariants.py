@@ -4317,5 +4317,96 @@ class HttpAdapterBoundaryTests(unittest.TestCase):
             self.assertEqual(codes, ["INV-ADAPTER-001", "INV-ADAPTER-002"])
 
 
+def _schema_codes(source: str, relpath: str = "tests/test_new_feature.py") -> list[str]:
+    return [f.code for f in checker.check_test_schema_snapshots(source, relpath)]
+
+
+# Fixture sources that contain a schema-version *assignment* are concatenated
+# from two literals so this module does not itself trip INV-TESTS-001.
+_SOURCE_TEXT_SNAPSHOT = (
+    'self.assertIn("LATEST_SCHEMA_VERSION = ' + '17", _read(_SCHEMA))\n'
+)
+
+
+class SchemaVersionSnapshotTests(unittest.TestCase):
+    """INV-TESTS-001 (#103): unrelated tests must not pin the current schema."""
+
+    def test_blocks_assert_equal_pins(self):
+        for source in (
+            "self.assertEqual(PRKS_SCHEMA_VERSION, 17)\n",
+            "self.assertEqual(LATEST_SCHEMA_VERSION, 17)\n",
+            "self.assertEqual(17, LATEST_SCHEMA_VERSION)\n",
+            "self.assertEquals(PRKS_SCHEMA_VERSION, 3)\n",
+            "self.assertEqual(db_migrations.LATEST_SCHEMA_VERSION, 17)\n",
+            "assertEqual(PRKS_SCHEMA_VERSION, 17, 'msg')\n",
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(_schema_codes(source), ["INV-TESTS-001"])
+
+    def test_blocks_bare_assert_pins(self):
+        for source in (
+            "assert PRKS_SCHEMA_VERSION == 17\n",
+            "assert 17 == LATEST_SCHEMA_VERSION\n",
+            "assert x == db_manager.PRKS_SCHEMA_VERSION == 17\n",
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(_schema_codes(source), ["INV-TESTS-001"])
+
+    def test_blocks_source_text_snapshot(self):
+        self.assertEqual(_schema_codes(_SOURCE_TEXT_SNAPSHOT), ["INV-TESTS-001"])
+        annotated = 'pattern = "LATEST_SCHEMA_VERSION: int = ' + '17"\n'
+        self.assertEqual(_schema_codes(annotated), ["INV-TESTS-001"])
+
+    def test_allows_consistency_and_relative_uses(self):
+        for source in (
+            "self.assertEqual(PRKS_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)\n",
+            "self.assertEqual(_version(path), LATEST_SCHEMA_VERSION)\n",
+            "ahead = PRKS_SCHEMA_VERSION + 1\n",
+            "self.assertEqual(TEXT_INDEX_SCHEMA_VERSION, 2)\n",
+            "self.assertGreaterEqual(LATEST_SCHEMA_VERSION, 17)\n",
+            "conn.execute('UPDATE schema_version SET version = 12')\n",
+            "assert PRKS_SCHEMA_VERSION != 0\n",
+            "f'LATEST_SCHEMA_VERSION = {version}\\n'\n",
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(_schema_codes(source), [])
+
+    def test_migration_focused_allowlist_is_narrow(self):
+        self.assertEqual(
+            checker.SCHEMA_VERSION_SNAPSHOT_ALLOWLIST,
+            {"tests/test_db_migrations.py", "tests/test_schema_change_gate.py"},
+        )
+        source = "self.assertEqual(LATEST_SCHEMA_VERSION, 17)\n"
+        for relpath in checker.SCHEMA_VERSION_SNAPSHOT_ALLOWLIST:
+            with self.subTest(relpath=relpath):
+                self.assertEqual(_schema_codes(source, relpath), [])
+
+    def test_repo_scan_reports_new_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "tests" / "e2e").mkdir(parents=True)
+            (root / "tests" / "test_feature.py").write_text(
+                "self.assertEqual(PRKS_SCHEMA_VERSION, 17)\n", encoding="utf-8"
+            )
+            (root / "tests" / "e2e" / "test_ui.py").write_text(
+                _SOURCE_TEXT_SNAPSHOT, encoding="utf-8"
+            )
+            (root / "tests" / "test_db_migrations.py").write_text(
+                "self.assertEqual(LATEST_SCHEMA_VERSION, 17)\n", encoding="utf-8"
+            )
+            findings = checker.check_test_schema_snapshots_repo(root)
+        self.assertEqual(
+            sorted((f.code, f.path) for f in findings),
+            [
+                ("INV-TESTS-001", "tests/e2e/test_ui.py"),
+                ("INV-TESTS-001", "tests/test_feature.py"),
+            ],
+        )
+
+    def test_current_repo_tests_pass(self):
+        findings = checker.check_test_schema_snapshots_repo(_ROOT)
+        self.assertEqual(findings, [], "\n".join(f.render() for f in findings))
+
+
 if __name__ == "__main__":
     unittest.main()
