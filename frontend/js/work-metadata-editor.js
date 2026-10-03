@@ -18,7 +18,8 @@
 
     function live(ctx, state) {
         return ctx && !ctx.destroyed && ctx.generation === state.generation &&
-            ctx.getEntity('work') && ctx.getEntity('work').id === state.workId;
+            ctx.getEntity('work') && ctx.getEntity('work').id === state.workId &&
+            ctx.getResource('workMetadataEditor') === state;
     }
     function owns(ctx, state) {
         return live(ctx, state) && root.prksRightPanelOwnedBy(ctx) && root.prksOwnerTabIsFocused(ctx);
@@ -143,6 +144,7 @@
     }
 
     async function paint(ctx, state) {
+        if (!live(ctx, state)) return;
         const paintVersion = state.paintVersion = (state.paintVersion || 0) + 1;
         // One read serves both this editor and the synchronous overlay other
         // surfaces consult (the leave guard, the form's initial values, the
@@ -421,17 +423,34 @@
         if (!ctx || !root.prksSync) return;
         let state = ctx.getResource('workMetadataEditor');
         if (!state || state.workId !== workId || state.generation !== ctx.generation) {
-            state = { workId, generation: ctx.generation, operations: [], observed: null, error: null };
-            const stopSync = root.prksSync.subscribe(event => {
+            /* Capture the ticket before subscriptions or async prepare.
+             * setResource would mint a later ticket. A rejected registration
+             * does not subscribe, paint, prepare, or mutate this owner. */
+            const ticket = typeof ctx.resourceTicket === 'function' ? ctx.resourceTicket() : null;
+            const next = { workId, generation: ctx.generation, operations: [], observed: null, error: null };
+            const stops = { sync: null, connectivity: null };
+            const attached = typeof ctx.registerResource === 'function'
+                ? ctx.registerResource(ticket, {
+                    kind: 'workMetadataEditor',
+                    value: next,
+                    suspendable: false,
+                    dispose: function () {
+                        if (stops.sync) stops.sync();
+                        if (stops.connectivity) stops.connectivity();
+                    },
+                })
+                : 'rejected';
+            if (attached === 'rejected') return;
+            stops.sync = root.prksSync.subscribe(event => {
                 if (event.acknowledged && event.operation === 'SET_WORK_METADATA_FIELD') {
-                    acceptAck(ctx, state, root.prksEffectiveMetadataAck(event.acknowledged, event.op));
+                    acceptAck(ctx, next, root.prksEffectiveMetadataAck(event.acknowledged, event.op));
                 }
-                void safePaint(ctx, state);
+                void safePaint(ctx, next);
             });
-            const stopConnectivity = root.prksOfflineRuntimeSubscribe(() => {
-                void safePaint(ctx, state);
+            stops.connectivity = root.prksOfflineRuntimeSubscribe(() => {
+                void safePaint(ctx, next);
             });
-            ctx.setResource('workMetadataEditor', state, () => { stopSync(); stopConnectivity(); });
+            state = next;
         }
         void safePaint(ctx, state);
         if (options && options.editing) state.preparing = prepare(ctx, state);
@@ -521,9 +540,11 @@
                 }
             }
             if (!sessionOwned()) return;
+            if (!live(ctx, state)) return;
             await root.prksSync.store.saveWorkMetadataFields(workId, changes, observed.fields);
             root.prksSync.changed();
             if (!sessionOwned()) return;
+            if (!live(ctx, state)) return;
             if (typeof root.prksCommitWorkMetaBaseline === 'function') {
                 root.prksCommitWorkMetaBaseline(ctx, workId, session, snapshot, Object.keys(changes));
             }
@@ -531,6 +552,7 @@
             await safePaint(ctx, state);
         } catch (error) {
             if (!sessionOwned()) return;
+            if (!live(ctx, state)) return;
             setError(state, group, error && error.prksLocalStoreCode === 'scope_busy'
                 ? 'One of these fields is still syncing or needs a decision below.'
                 : group.failure);
@@ -545,6 +567,7 @@
     }
 
     async function actionResolve(ctx, state, op, apply, group) {
+        if (!live(ctx, state)) return;
         const session = ctx.ui && typeof ctx.ui.workMetaEditSession === 'number' ? ctx.ui.workMetaEditSession : 0;
         const still = () => sessionStill(ctx, state.workId, session);
         try {
@@ -558,21 +581,24 @@
                     value: result.current_value, server_revision: result.current_revision,
                     changed: false, code: 'ACKNOWLEDGED' };
                 if (!await root.prksOfflineReconcileWorkField(ack)) throw new Error();
-                if (still()) acceptAck(ctx, state, ack);
+                if (still() && live(ctx, state)) acceptAck(ctx, state, ack);
             } else if (!apply) {
                 root.prksOfflineMarkEntityChanged('work', state.workId);
                 root.prksOfflineMarkEntityChanged('work-metadata-state', state.workId);
-                if (still()) state.observed = null;
+                if (still() && live(ctx, state)) state.observed = null;
             }
             await root.prksSync.store.resolveConflict(op.op_id, apply);
             root.prksSync.changed();
             if (!still()) return;
+            if (!live(ctx, state)) return;
             setError(state, group, null);
         } catch (_) {
             if (!still()) return;
+            if (!live(ctx, state)) return;
             setError(state, group, 'Could not save that resolution locally. Please retry.');
         }
         if (!still()) return;
+        if (!live(ctx, state)) return;
         await safePaint(ctx, state);
     }
 

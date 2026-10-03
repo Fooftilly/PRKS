@@ -1,5 +1,6 @@
 import { nextTick } from 'vue'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import ownerResourceSource from '../../../../frontend/js/owner-resource.js?raw'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
 import uiSource from '../../../../frontend/js/ui.js?raw'
 import metadataEditorSource from '../../../../frontend/js/work-metadata-editor.js?raw'
@@ -142,6 +143,7 @@ function editorState(ctx: WorkCtx, name: string): EditorState {
 }
 
 beforeAll(() => {
+  panelWindow.eval(ownerResourceSource)
   panelWindow.eval(tabContextSource)
   panelWindow.eval(uiSource)
   panelWindow.eval(metadataEditorSource)

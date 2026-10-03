@@ -553,4 +553,75 @@ describe('owner resource lifetime', () => {
     expect(winnerDisposed).toBe(0)
     expect(registry.get('researchGraph')).toBe('winner')
   })
+
+  it('keeps the five editor sessions non-suspendable and beside the PDF runtime', () => {
+    const editorKinds = [
+      'workRoleEditor',
+      'workTagEditor',
+      'workSourceEditor',
+      'workMetadataEditor',
+      'folderTagEditor',
+    ] as const
+    const { host, registry } = openHost('editors')
+    const ticket = resourceTicket(host)
+    const pdf = { id: 'pdf' }
+    let pdfDisposed = 0
+    expect(registry.register(ticket, {
+      kind: 'pdf',
+      value: pdf,
+      suspendable: true,
+      dispose: () => { pdfDisposed += 1 },
+    })).toBe('attached')
+    const disposed: Record<string, number> = {}
+    for (const kind of editorKinds) {
+      disposed[kind] = 0
+      const session = { id: kind }
+      expect(registry.register(ticket, {
+        kind,
+        value: session,
+        suspendable: false,
+        dispose: () => { disposed[kind] += 1 },
+      })).toBe('attached')
+      expect(registry.get(kind)).toBe(session)
+      const forced = { id: kind + '-forced' }
+      expect(registry.register(ticket, {
+        kind,
+        value: forced,
+        suspendable: true,
+        dispose: () => { disposed[kind] += 1 },
+      })).toBe('rejected')
+      expect(registry.get(kind)).toBe(session)
+    }
+    expect(registry.register(ticket, {
+      kind: 'notAKind' as 'pdf',
+      value: 'nope',
+      dispose: () => {},
+    })).toBe('rejected')
+    registry.warmSuspend()
+    for (const kind of editorKinds) {
+      expect(registry.get(kind)).toBeUndefined()
+      expect(disposed[kind]).toBe(1)
+    }
+    expect(registry.get('pdf')).toBe(pdf)
+    expect(pdfDisposed).toBe(0)
+    registry.resume()
+    expect(registry.get('pdf')).toBe(pdf)
+    for (const kind of editorKinds) expect(registry.get(kind)).toBeUndefined()
+    const replaced = { id: 'workRoleEditor-2' }
+    let secondDisposed = 0
+    expect(registry.register(resourceTicket(host), {
+      kind: 'workRoleEditor',
+      value: replaced,
+      suspendable: false,
+      dispose: () => { secondDisposed += 1 },
+    })).toBe('attached')
+    expect(registry.register(resourceTicket(host), {
+      kind: 'workRoleEditor',
+      value: { id: 'workRoleEditor-3' },
+      suspendable: false,
+      dispose: () => {},
+    })).toBe('replaced')
+    expect(secondDisposed).toBe(1)
+    expect(pdfDisposed).toBe(0)
+  })
 })

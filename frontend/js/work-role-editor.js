@@ -22,7 +22,8 @@
 
     function live(ctx, state) {
         return ctx && !ctx.destroyed && ctx.generation === state.generation &&
-            ctx.getEntity('work') && ctx.getEntity('work').id === state.workId;
+            ctx.getEntity('work') && ctx.getEntity('work').id === state.workId &&
+            ctx.getResource('workRoleEditor') === state;
     }
     function owns(ctx, state) {
         return live(ctx, state) && root.prksRightPanelOwnedBy(ctx) &&
@@ -89,7 +90,10 @@
              * decision it never saw, so the control stays disabled instead. */
             state.observed = result && result.source !== 'unavailable' && result.value
                 ? result.value : null;
-        } catch (_) { state.observed = null; }
+        } catch (_) {
+            if (!live(ctx, state)) return;
+            state.observed = null;
+        }
     }
 
     /**
@@ -125,6 +129,7 @@
     }
 
     async function paint(ctx, state) {
+        if (!live(ctx, state)) return;
         const paintVersion = state.paintVersion = (state.paintVersion || 0) + 1;
         const rows = await root.prksRefreshPendingWorkRoles();
         if (!live(ctx, state) || paintVersion !== state.paintVersion) return;
@@ -164,29 +169,45 @@
         if (!ctx || !root.prksSync) return;
         let state = ctx.getResource('workRoleEditor');
         if (!state || state.workId !== workId || state.generation !== ctx.generation) {
-            state = { workId, generation: ctx.generation, operations: [], observed: null,
+            /* Capture the ticket before subscriptions or async prepare.
+             * setResource would mint a later ticket. A rejected registration
+             * does not subscribe, paint, prepare, or mutate this owner. */
+            const ticket = typeof ctx.resourceTicket === 'function' ? ctx.resourceTicket() : null;
+            const next = { workId, generation: ctx.generation, operations: [], observed: null,
                 error: null, editable: !!(options && options.editable) };
-            const stopSync = root.prksSync.subscribe(event => {
+            const stops = { sync: null, connectivity: null };
+            const attached = typeof ctx.registerResource === 'function'
+                ? ctx.registerResource(ticket, {
+                    kind: 'workRoleEditor',
+                    value: next,
+                    suspendable: false,
+                    dispose: function () {
+                        if (stops.sync) stops.sync();
+                        if (stops.connectivity) stops.connectivity();
+                    },
+                })
+                : 'rejected';
+            if (attached === 'rejected') return;
+            stops.sync = root.prksSync.subscribe(event => {
                 if (event && event.operation &&
                     (root.PRKS_WORK_ROLE_OPERATION_TYPES || []).indexOf(event.operation) === -1) {
                     return;
                 }
-                if (event && event.acknowledged) acceptAck(ctx, state, event.acknowledged);
-                void safePaint(ctx, state);
+                if (event && event.acknowledged) acceptAck(ctx, next, event.acknowledged);
+                void safePaint(ctx, next);
             });
-            const stopConnectivity = root.prksOfflineRuntimeSubscribe(() => {
-                if (!state.observed && root.prksOfflineRuntimeState() === 'online') {
-                    void readBase(ctx, state).then(() => safePaint(ctx, state));
+            stops.connectivity = root.prksOfflineRuntimeSubscribe(() => {
+                if (!next.observed && root.prksOfflineRuntimeState() === 'online') {
+                    void readBase(ctx, next).then(() => safePaint(ctx, next));
                     return;
                 }
-                void safePaint(ctx, state);
+                void safePaint(ctx, next);
             });
-            ctx.setResource('workRoleEditor', state, () => { stopSync(); stopConnectivity(); });
-            state.preparing = readBase(ctx, state).then(() => safePaint(ctx, state));
-        } else {
-            state.editable = !!(options && options.editable);
-            void safePaint(ctx, state);
+            next.preparing = readBase(ctx, next).then(() => safePaint(ctx, next));
+            return;
         }
+        state.editable = !!(options && options.editable);
+        void safePaint(ctx, state);
     }
 
     /**
@@ -259,7 +280,7 @@
             if (code === 'dependency_failed') return { code: 'dependency-failed' };
             return { code: 'failed' };
         }
-        if (mounted) {
+        if (mounted && live(ctx, state)) {
             state.error = null;
             await safePaint(ctx, state);
         }
