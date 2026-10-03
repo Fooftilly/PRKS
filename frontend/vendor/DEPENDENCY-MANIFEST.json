@@ -124,6 +124,17 @@
       "version": "1"
     },
     {
+      "name": "prks-tab-leave",
+      "runtime_files": [
+        {
+          "path": "/js/tab-leave.js",
+          "sha256": "5d0ca336c3daa69fb4dfb5ba9d6e460a932c038687dec9f6421e4456867bb62a"
+        }
+      ],
+      "source_category": "frontend-app:tab-leave",
+      "version": "1"
+    },
+    {
       "name": "prks-vue",
       "runtime_files": [
         {

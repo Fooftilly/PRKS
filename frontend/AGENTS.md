@@ -241,9 +241,12 @@ Person profile and Work metadata drafts are TabContext-owned runtime state. Neve
 persist them through workspace persistence. Merely focusing another mounted pane is
 non-destructive and must not prompt. Any operation that will replace a route, unmount,
 park, or destroy a context with a dirty editable draft must preflight through
-`prksCanLeaveTabContext`; rejection is an atomic no-op that preserves route, tab order,
-tree topology, focus, draft, and editor DOM. Batch operations preflight all affected
-mounted contexts before mutating any of them.
+`prksTabLeave` (`frontend/js/tab-leave.js`, built from `frontend-app/src/lifecycle/tab-leave.ts`).
+`prksCanLeaveTabContext` is only the boolean adapter. Rejection is an atomic no-op that
+preserves route, tab order, tree topology, focus, draft, and editor DOM. Batch operations
+preflight every affected mounted context before mutating any of them. Concurrent attempts
+on the same owner are serialized. `prksRenderTabRoute` does not ask again after an
+approved preflight. Person, Work, and PDF probes stay with those features.
 
 Stacked mode: one mounted context. Tiled mode: Main + every visible Secondary leaf (up to the visible-pane cap), each with an independent TabContext. Do not store route-scoped state on `window`. The Research Graph
 is `ctx.getResource('researchGraph')`; no module-level singleton fallback.
@@ -452,11 +455,12 @@ load-bearing constraints are maintained in the bounded leaf files routed by
 ## Interaction feedback
 
 Do not replace the synchronous pending-annotation-sync navigation guard
-(`prksCanLeaveTabContext` and the mirrored check inside `prksRenderTabRoute`,
-both in `frontend/js/app.js`) with `prksConfirmDialog`/`prksConfirmDestructive`
+(the `pdf-sync` probe in `frontend/js/pdf-work-runtime.js`, registered on
+`prksTabLeave`) with `prksConfirmDialog`/`prksConfirmDestructive`
 without redesigning the navigation contract. It must stay a native
 `window.confirm`; this synchronous PDF safety decision must complete before any
-async editable-draft confirmation begins. This is the sole native-confirm exception.
+async editable-draft confirmation begins. `prksRenderTabRoute` does not repeat it.
+This is the sole native-confirm exception.
 Person profile and Work metadata dirty-draft leave guards use the styled async
 confirmation and are awaited by workspace `awaitLeave()` before mutation.
 

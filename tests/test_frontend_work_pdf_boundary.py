@@ -39,16 +39,23 @@ class WorkPdfBoundaryTests(unittest.TestCase):
         self.assertNotIn("works-pdf.js", _SURFACE + _VIEW)
 
     def test_route_change_flushes_last_page_before_the_next_paint(self):
-        route = _between(_APP, "async function prksRenderTabRoute", "const contentDiv = ctx.root;")
+        route = _between(_APP, "async function prksCommitTabRouteRender", "const contentDiv = ctx.root;")
         self.assertIn("ctx.getResource('pdf')", route)
         self.assertIn("prevPdf.flushLastPage()", route)
-        self.assertIn("prksHasPendingWorkAnnotationSync(ctx)", route)
+        self.assertIn("const prevRoute = ctx.lastResolvedRoute || null", route)
+        self.assertLess(route.find("const prevRoute"), route.find("prevHash = prevRoute"))
+        self.assertNotIn("prksHasPendingWorkAnnotationSync", route)
+        wrapper = _between(_APP, "async function prksRenderTabRoute", "async function prksCommitTabRouteRender")
+        self.assertIn("prksReadTabLeave()", wrapper)
+        self.assertIn("leaveApi.run", wrapper)
+        self.assertIn("{ cancelled: true, reason: 'cancelled' }", wrapper)
+        self.assertIn("leaveApproved", wrapper)
         self.assertIn("function prksHasPendingWorkAnnotationSync(ctx)", _RUNTIME)
         self.assertIn("function savePdfAnnotation(workId, desired, observed)", _STORE)
 
     def test_tab_close_disposes_the_pdf_resource(self):
         close = _between(_WORKSPACE, "function closeTab(tabId)", "function closeTabIds")
-        self.assertIn("destroyContext(closing.id)", close)
+        self.assertIn("destroyContext(tabId)", close)
         destroy = _between(_WORKSPACE, "function destroyContext(tabId)", "function resetAllContexts")
         self.assertIn("prksDestroyTabContext(tabId)", destroy)
         teardown = _between(_TABS, "function teardownRuntime()", "ctx.beginRoute = function")

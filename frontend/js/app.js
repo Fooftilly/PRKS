@@ -3571,88 +3571,63 @@ function prksEnsureMountedTabContext(tabId) {
     return prksMountTabContext(tabId, host);
 }
 
-function prksCanLeaveTabContext(ctx, nextHash) {
-    if (typeof prksFlushPendingWorkResearchNotes === 'function') {
-        prksFlushPendingWorkResearchNotes(ctx);
-    }
-    if (typeof prksFlushPendingPrivateNotes === 'function') {
-        prksFlushPendingPrivateNotes(ctx);
-    }
-    const prevRoute = ctx && ctx.lastResolvedRoute;
-    const route =
-        typeof prksParseRoute === 'function'
-            ? prksParseRoute(nextHash || '#/folders')
-            : null;
-    const leavingWorkPage = !!(
-        prevRoute &&
-        prevRoute.name === 'work' &&
-        route &&
-        route.canonicalHash !== prevRoute.canonicalHash
-    );
-    if (
-        leavingWorkPage &&
-        typeof window.prksHasPendingWorkAnnotationSync === 'function' &&
-        window.prksHasPendingWorkAnnotationSync(ctx)
-    ) {
-        const annotationLeaveApproved = window.confirm(
-            'PDF annotation sync still running. Leave page before all changes save to server?'
-        );
-        if (!annotationLeaveApproved) return false;
-    }
-    return prksCanLeaveTabContextOwnedDraft(ctx);
+function prksLeaveDecisionReason(decision) {
+    const status = decision && decision.status;
+    if (status === 'rejected-pending-pdf-sync') return 'pending-sync';
+    if (status === 'stale-owner') return 'stale-owner';
+    if (status === 'cancelled') return 'cancelled';
+    return 'unsaved-edit';
 }
 
-function prksCanLeaveTabContextOwnedDraft(ctx) {
-    const prevRoute = ctx && ctx.lastResolvedRoute;
-    if (!ctx || !ctx.ui || !prevRoute) return true;
+function prksTabLeaveSnapshot(ctx) {
+    if (!ctx || ctx.destroyed) return null;
+    return {
+        ownerId: String(ctx.tabId || ''),
+        generation: typeof ctx.generation === 'number' ? ctx.generation : null,
+        token: ctx,
+    };
+}
 
-    if (prevRoute.name === 'person' && ctx.ui.personDetailEditing) {
-        const person = ctx.getEntity ? ctx.getEntity('person') : null;
-        const draft = ctx.ui.personProfileDraft;
-        if (person && draft && String(draft.personId) === String(person.id)) {
-            if (
-                typeof prksRightPanelOwnedBy === 'function' &&
-                prksRightPanelOwnedBy(ctx) &&
-                typeof prksSyncPersonProfileDraftFromEditor === 'function'
-            ) {
-                const panel = document.getElementById('panel-content');
-                const editor = panel && panel.querySelector('.person-panel-edit');
-                if (editor) {
-                    prksSyncPersonProfileDraftFromEditor(ctx, editor, person.id, ctx.generation);
-                }
-            }
-            if (
-                typeof prksPersonProfileDraftIsDirty === 'function' &&
-                prksPersonProfileDraftIsDirty(ctx, person)
-            ) {
-                if (typeof prksConfirmUnsavedRouteLeave !== 'function') return Promise.resolve(false);
-                return prksConfirmUnsavedRouteLeave({
-                    title: 'Discard profile changes?',
-                    message: 'Your unsaved Person profile changes will be discarded.',
-                });
-            }
-        }
-    }
+function prksTabLeaveStill(ctx, snap) {
+    return !!(
+        snap &&
+        ctx &&
+        snap.token === ctx &&
+        !ctx.destroyed &&
+        ctx.generation === snap.generation
+    );
+}
 
-    if (prevRoute.name === 'work' && ctx.ui.workDetailsMode === 'metadata') {
-        const work = ctx.getEntity ? ctx.getEntity('work') : null;
-        if (work) {
-            if (typeof prksCaptureWorkMetaDraft === 'function') {
-                prksCaptureWorkMetaDraft(ctx);
-            }
-            if (
-                typeof prksWorkMetaDraftIsDirty === 'function' &&
-                prksWorkMetaDraftIsDirty(ctx, work)
-            ) {
-                if (typeof prksConfirmUnsavedRouteLeave !== 'function') return Promise.resolve(false);
-                return prksConfirmUnsavedRouteLeave({
-                    title: 'Discard metadata changes?',
-                    message: 'Your unsaved Work metadata changes will be discarded.',
-                });
-            }
-        }
+/* `typeof` is required. A missing /js/tab-leave.js leaves this identifier
+ * undeclared, and a bare read throws before the caller can cancel. */
+function prksReadTabLeave() {
+    if (typeof prksTabLeave === 'undefined' || !prksTabLeave) return null;
+    return prksTabLeave;
+}
+
+/**
+ * Compatibility boolean for callers that only need approved/not.
+ * The decision owner is prksTabLeave. Workspace operations do not call this;
+ * they assess registered probes inside prksTabLeave.run so the lock is not nested.
+ */
+function prksCanLeaveTabContext(ctx, nextHash) {
+    const leaveApi = prksReadTabLeave();
+    if (!ctx || !leaveApi || typeof leaveApi.run !== 'function') {
+        return Promise.resolve(!ctx);
     }
-    return true;
+    const destination = nextHash || '#/folders';
+    return leaveApi.run({
+        ownerId: String(ctx.tabId || 'detached'),
+        destination: destination,
+        transition: 'route-replace',
+        capture: function () { return prksTabLeaveSnapshot(ctx); },
+        still: function (snap) { return prksTabLeaveStill(ctx, snap); },
+        assess: function () { return leaveApi.assessOwner(ctx, destination); },
+        flushNotes: function () { leaveApi.flushOwner(ctx); },
+        commit: function () { return true; },
+    }).then(function (decision) {
+        return !!(decision && decision.status === 'approved');
+    });
 }
 
 function prksCanLeaveCurrentRoute(nextHash) {
@@ -3681,12 +3656,57 @@ async function handleRoute(options) {
     return prksRenderTabRoute(ctx, hash, opts);
 }
 
+/**
+ * Direct route replacement. Workspace operations pass leaveApproved after
+ * prksTabLeave already decided, so this does not assess or flush again.
+ * An internal refresh is not a leave: it flushes pending notes once, then
+ * commits, because the editor may be torn down.
+ */
 async function prksRenderTabRoute(ctx, hash, options) {
+    if (!ctx || ctx.destroyed) return;
+    const opts = options || {};
+    const suppliedHash = hash == null ? '#/folders' : String(hash);
+    const route = typeof prksParseRoute === 'function' ? prksParseRoute(suppliedHash) : null;
+    if (!route) return;
+    const leaveApi = prksReadTabLeave();
+    if (opts.internalRefresh && leaveApi && typeof leaveApi.flushOwner === 'function') {
+        leaveApi.flushOwner(ctx);
+    }
+    if (opts.leaveApproved || opts.internalRefresh) {
+        return prksCommitTabRouteRender(ctx, hash, options);
+    }
+    if (!leaveApi || typeof leaveApi.run !== 'function') {
+        return { cancelled: true, reason: 'cancelled' };
+    }
+    const destination = route.canonicalHash || suppliedHash;
+    let renderTask = null;
+    const decision = await leaveApi.run({
+        ownerId: String(ctx.tabId || 'detached'),
+        destination: destination,
+        transition: 'route-replace',
+        capture: function () { return prksTabLeaveSnapshot(ctx); },
+        still: function (snap) { return prksTabLeaveStill(ctx, snap); },
+        assess: function () { return leaveApi.assessOwner(ctx, destination); },
+        flushNotes: function () { leaveApi.flushOwner(ctx); },
+        /* Claim the route inside the lock, then let the render's network wait
+         * run without it. A later navigation on this owner must be able to
+         * start while an earlier detail GET is still in flight. */
+        commit: function () {
+            renderTask = prksCommitTabRouteRender(ctx, hash, options);
+            return true;
+        },
+    });
+    if (!decision || decision.status !== 'approved') {
+        return { cancelled: true, reason: prksLeaveDecisionReason(decision) };
+    }
+    return renderTask;
+}
+
+async function prksCommitTabRouteRender(ctx, hash, options) {
     if (!ctx || ctx.destroyed) return;
     const opts = options || {};
     const workspaceSwitch = !!opts.workspaceSwitch;
     const fromPopstate = !!opts.fromPopstate;
-    const leaveApproved = !!opts.leaveApproved;
     const routeStateCaptured = !!opts.routeStateCaptured;
     // A re-render PRKS decided to do -- reconnecting, say -- is not the user
     // opening anything. Recording an open here would mean that regaining
@@ -3698,29 +3718,6 @@ async function prksRenderTabRoute(ctx, hash, options) {
     if (!route) return;
 
     const prevRoute = ctx.lastResolvedRoute || null;
-    const leavingWorkPage = !!(
-        prevRoute &&
-        prevRoute.name === 'work' &&
-        route.canonicalHash !== prevRoute.canonicalHash
-    );
-    if (!leaveApproved) {
-        if (
-            leavingWorkPage &&
-            typeof window.prksHasPendingWorkAnnotationSync === 'function' &&
-            window.prksHasPendingWorkAnnotationSync(ctx)
-        ) {
-            const ok = window.confirm(
-                'PDF annotation sync still running. Leave page before all changes save to server?'
-            );
-            if (!ok) {
-                return { cancelled: true, reason: 'pending-sync' };
-            }
-        }
-        const draftLeaveApproved = await Promise.resolve(prksCanLeaveTabContextOwnedDraft(ctx));
-        if (!draftLeaveApproved) {
-            return { cancelled: true, reason: 'unsaved-edit' };
-        }
-    }
 
     if (route.canonicalize && route.canonicalHash && route.canonicalHash !== suppliedHash) {
         const isMain = typeof prksIsMainTabContext === 'function' ? prksIsMainTabContext(ctx) : true;
@@ -3746,13 +3743,6 @@ async function prksRenderTabRoute(ctx, hash, options) {
         if (!workspaceSwitch && !fromPopstate && route.detail && typeof prksRememberOrigin === 'function') {
             prksRememberOrigin(route, prevRoute, ctx);
         }
-    }
-
-    if (typeof prksFlushPendingWorkResearchNotes === 'function') {
-        prksFlushPendingWorkResearchNotes(ctx);
-    }
-    if (typeof prksFlushPendingPrivateNotes === 'function') {
-        prksFlushPendingPrivateNotes(ctx);
     }
 
     const contentDiv = ctx.root;

@@ -549,6 +549,8 @@ AFFECTED_RULES = (
             "frontend/js/workspace-tabs.js",
             "frontend/js/workspace-persistence.js",
             "frontend/js/workspace-tab-menu.js",
+            "frontend/js/tab-leave.js",
+            "frontend-app/src/lifecycle/**",
         ),
         "features": ("tabs", "workspace-persistence"),
     },

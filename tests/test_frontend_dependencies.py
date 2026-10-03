@@ -129,6 +129,7 @@ class FrontendDependencyTests(unittest.TestCase):
             "prks-workspace-model",
             "prks-work-route-projection",
             "prks-search-query-codec",
+            "prks-tab-leave",
         ):
             self.assertIn(name, names)
 

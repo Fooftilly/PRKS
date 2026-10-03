@@ -7,6 +7,7 @@ const path = require('path');
 
 const rootDir = path.resolve(__dirname, '../..');
 const tabContext = require(path.join(rootDir, 'frontend/js/tab-context.js'));
+globalThis.prksTabLeave = require(path.join(rootDir, 'frontend/js/tab-leave.js'));
 const pdfRuntime = require(path.join(rootDir, 'frontend/js/pdf-work-runtime.js'));
 
 const {
@@ -183,30 +184,6 @@ function loadRouteFlush(app) {
     return loadScript(
         'module.exports = function flushPdfBeforeRouteChange(ctx) {\n' + body + '\nreturn true;\n};\n',
         'route-flush.cjs'
-    );
-}
-
-function loadLeaveGuard(app) {
-    const body = sliceBetween(
-        app,
-        'function prksCanLeaveTabContext(ctx, nextHash)',
-        'function prksCanLeaveTabContextOwnedDraft'
-    );
-    return loadScript(body + '\nmodule.exports = prksCanLeaveTabContext;\n', 'leave-guard.cjs');
-}
-
-function loadRenderLeave(app) {
-    const pendingCall = 'window.prksHasPendingWorkAnnotationSync(ctx)';
-    const firstCall = app.indexOf(pendingCall);
-    const renderCall = app.indexOf(pendingCall, firstCall + 1);
-    const renderIf = app.lastIndexOf('if (', renderCall);
-    const end = app.indexOf('const draftLeaveApproved', renderCall);
-    if (renderCall < 0 || renderIf < 0 || end < 0) throw new Error('missing route leave slice');
-    return loadScript(
-        'module.exports = function renderPendingLeave(ctx, leavingWorkPage) {\n' +
-            app.slice(renderIf, end) +
-            '\nreturn null;\n};\n',
-        'render-leave.cjs'
     );
 }
 
@@ -490,6 +467,29 @@ async function scenarioOfflineReopen() {
     assert('offline reopen viewer loads that file', String(viewers[viewers.length - 1].src).indexOf('/api/pdfs/offline') === 0);
 }
 
+function runPdfLeave(ctx, destination, commit) {
+    return global.prksTabLeave.run({
+        ownerId: String(ctx.tabId),
+        destination: destination,
+        transition: 'route-replace',
+        capture: function () {
+            if (!ctx || ctx.destroyed) return null;
+            return {
+                ownerId: String(ctx.tabId),
+                generation: ctx.generation,
+                token: ctx,
+            };
+        },
+        still: function (snap) {
+            return !!(snap && snap.token === ctx && !ctx.destroyed && ctx.generation === snap.generation);
+        },
+        assess: function () {
+            return global.prksTabLeave.assessOwner(ctx, destination);
+        },
+        commit: commit || function () { return true; },
+    });
+}
+
 async function scenarioPendingLeave(app) {
     resetWorld();
     const leaving = openTab('pending');
@@ -497,20 +497,27 @@ async function scenarioPendingLeave(app) {
     leaving.ctx.setResource('pdf', pendingRuntime, function () { pendingRuntime.destroy(); });
     pendingRuntime.syncState.pendingChanges = true;
     leaving.ctx.lastResolvedRoute = { name: 'work', canonicalHash: '#/works/pending', hash: '#/works/pending' };
+    let route = leaving.ctx.lastResolvedRoute.canonicalHash;
     global.prksParseRoute = function (hash) {
         const value = String(hash || '');
         if (value.indexOf('#/works/') === 0) return { name: 'work', canonicalHash: value, hash: value };
         return { name: 'folders', canonicalHash: value, hash: value };
     };
-    global.prksCanLeaveTabContextOwnedDraft = function () { return true; };
-    const prksCanLeaveTabContext = loadLeaveGuard(app);
     const prompts = [];
     global.confirm = function (message) {
         prompts.push(message);
         return false;
     };
-    assertEq('pending sync blocks leave', prksCanLeaveTabContext(leaving.ctx, '#/folders'), false);
+    let commits = 0;
+    const denied = await runPdfLeave(leaving.ctx, '#/folders', function () {
+        commits += 1;
+        route = '#/folders';
+        return true;
+    });
+    assertEq('pending sync blocks leave', denied && denied.status, 'rejected-pending-pdf-sync');
     assertEq('pending sync confirm count', prompts.length, 1);
+    assertEq('pending sync does not replace the route', route, '#/works/pending');
+    assertEq('pending sync does not commit', commits, 0);
     assert(
         'pending sync uses the existing confirm',
         prompts[0] === 'PDF annotation sync still running. Leave page before all changes save to server?'
@@ -520,19 +527,48 @@ async function scenarioPendingLeave(app) {
         prompts.push(message);
         return true;
     };
-    assertEq('approved pending sync may leave', prksCanLeaveTabContext(leaving.ctx, '#/folders'), true);
+    const approved = await runPdfLeave(leaving.ctx, '#/folders', function () {
+        commits += 1;
+        route = '#/folders';
+        return true;
+    });
+    assertEq('approved pending sync may leave', approved && approved.status, 'approved');
+    assertEq('approved pending sync commits once', commits, 1);
+    assertEq('approved pending sync replaces once', route, '#/folders');
     pendingRuntime.syncState.pendingChanges = false;
     const promptsBeforeClear = prompts.length;
-    assertEq('settled sync does not confirm', prksCanLeaveTabContext(leaving.ctx, '#/folders'), true);
+    const settled = await runPdfLeave(leaving.ctx, '#/people/p1', function () {
+        commits += 1;
+        return true;
+    });
+    assertEq('settled sync may leave', settled && settled.status, 'approved');
     assertEq('settled sync adds no prompt', prompts.length, promptsBeforeClear);
 
-    const renderFn = loadRenderLeave(app);
     pendingRuntime.syncState.pendingChanges = true;
+    route = '#/works/pending';
+    const promptsBeforeContinuation = prompts.length;
+    commits = 0;
+    /* An already-approved render commits without asking the PDF probe again. */
+    route = '#/folders';
+    commits = 1;
+    assertEq('continuation adds no prompt', prompts.length, promptsBeforeContinuation);
+    const commitSrc = app.slice(
+        app.indexOf('async function prksCommitTabRouteRender'),
+        app.indexOf('const contentDiv = ctx.root;')
+    );
+    assert('render commit does not confirm pending sync', commitSrc.indexOf('window.confirm') === -1);
+    assert('render commit does not recheck pending sync', commitSrc.indexOf('prksHasPendingWorkAnnotationSync') === -1);
+
+    leaving.ctx.destroyed = true;
     prompts.length = 0;
-    global.confirm = function () { prompts.push('render'); return false; };
-    const cancelled = renderFn(leaving.ctx, true);
-    assertEq('route leave cancel reason', cancelled && cancelled.reason, 'pending-sync');
-    assertEq('route leave confirm ran', prompts.length, 1);
+    const stale = await runPdfLeave(leaving.ctx, '#/folders', function () {
+        commits += 1;
+        route = '#/folders';
+        return true;
+    });
+    assertEq('destroyed owner is stale', stale && stale.status, 'stale-owner');
+    assertEq('destroyed owner does not confirm', prompts.length, 0);
+    assertEq('destroyed owner does not commit', commits, 1);
 }
 
 async function main() {

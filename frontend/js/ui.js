@@ -4208,6 +4208,39 @@ function prksCaptureWorkMetaDraft(ownerCtx) {
     ownerCtx.ui.workMetaDraft = draft;
 }
 
+/**
+ * Work metadata leave answer. Captures the open form and asks
+ * prksWorkMetaDraftIsDirty. The styled confirm stays Keep editing /
+ * Discard changes. Retires when the Vue metadata editor registers this probe.
+ */
+function prksAssessWorkMetadataLeave(ctx) {
+    const prevRoute = ctx && ctx.lastResolvedRoute;
+    if (!ctx || !ctx.ui || !prevRoute || prevRoute.name !== 'work' || ctx.ui.workDetailsMode !== 'metadata') {
+        return null;
+    }
+    const work = ctx.getEntity ? ctx.getEntity('work') : null;
+    if (!work) return null;
+    if (typeof prksCaptureWorkMetaDraft === 'function') prksCaptureWorkMetaDraft(ctx);
+    if (typeof prksWorkMetaDraftIsDirty !== 'function' || !prksWorkMetaDraftIsDirty(ctx, work)) return null;
+    if (typeof prksConfirmUnsavedRouteLeave !== 'function') {
+        return { status: 'rejected-unsaved-edit', feature: 'work-metadata' };
+    }
+    return prksConfirmUnsavedRouteLeave({
+        title: 'Discard metadata changes?',
+        message: 'Your unsaved Work metadata changes will be discarded.',
+    }).then(function (ok) {
+        return ok ? null : { status: 'rejected-unsaved-edit', feature: 'work-metadata' };
+    });
+}
+window.prksAssessWorkMetadataLeave = prksAssessWorkMetadataLeave;
+if (typeof prksTabLeave !== 'undefined' && prksTabLeave && typeof prksTabLeave.registerProbe === 'function') {
+    prksTabLeave.registerProbe({
+        id: 'work-metadata',
+        order: 30,
+        assess: prksAssessWorkMetadataLeave,
+    });
+}
+
 function prksBindWorkMetaDraftEditor(ownerCtx, work) {
     if (!ownerCtx || !ownerCtx.ui || ownerCtx.ui.workDetailsMode !== 'metadata') return;
     const panel = document.getElementById('panel-content');
