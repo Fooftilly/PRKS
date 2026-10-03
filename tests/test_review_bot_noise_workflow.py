@@ -200,7 +200,7 @@ class NoiseClassifierTests(unittest.TestCase):
     def test_same_body_from_wrong_account_stays_visible(self) -> None:
         impostors = ("Fooftilly", "github-actions[bot]", "coderabbitai", "sourcery-ai", "")
         for rule, (login, body) in POSITIVE_CASES.items():
-            for other in (*impostors, *(l for l, _ in POSITIVE_CASES.values() if l != login)):
+            for other in (*impostors, *(bot for bot, _ in POSITIVE_CASES.values() if bot != login)):
                 with self.subTest(rule=rule, login=other):
                     self.assertEqual(_classify(_subject(other, body)), "none")
 
