@@ -48,7 +48,7 @@ function isSavedViewsIndexEarlyRequest(
 
 /**
  * Paint one owner's Saved Views index. The coordinator has already loaded the
- * list. Vue does not fetch it. Summaries come from `prksSearchSummaryText`.
+ * list. Vue does not fetch it. Summaries come from the search query codec.
  */
 export function presentSavedViewsIndex(input: SavedViewsIndexPresentInput): void {
   if (!input || !input.owner || typeof input.owner !== 'object') return

@@ -473,56 +473,41 @@
     }
 
     function searchHash(kind, q) {
-        if (typeof root.prksSearchHashFromDefinition === 'function') {
-            if (kind === 'all') {
-                return root.prksSearchHashFromDefinition({
-                    mode: 'all',
-                    q: q,
-                    tag: '',
-                    author: '',
-                    publisher: '',
-                });
-            }
-            if (kind === 'keywords') {
-                return root.prksSearchHashFromDefinition({
-                    mode: 'advanced',
-                    q: q,
-                    tag: '',
-                    author: '',
-                    publisher: '',
-                });
-            }
-            if (kind === 'people') {
-                return root.prksSearchHashFromDefinition({
-                    mode: 'advanced',
-                    q: '',
-                    tag: '',
-                    author: q,
-                    publisher: '',
-                });
-            }
-            if (kind === 'publisher') {
-                return root.prksSearchHashFromDefinition({
-                    mode: 'advanced',
-                    q: '',
-                    tag: '',
-                    author: '',
-                    publisher: q,
-                });
-            }
-        }
-        const p = new URLSearchParams();
+        const hashFromDefinition = root.prksSearchQueryCodec.hashFromDefinition;
         if (kind === 'all') {
-            p.set('any', '1');
-            p.set('q', q);
-        } else if (kind === 'keywords') {
-            p.set('q', q);
-        } else if (kind === 'people') {
-            p.set('author', q);
-        } else if (kind === 'publisher') {
-            p.set('publisher', q);
+            return hashFromDefinition({
+                mode: 'all',
+                q: q,
+                tag: '',
+                author: '',
+                publisher: '',
+            });
         }
-        return '#/search?' + p.toString();
+        if (kind === 'keywords') {
+            return hashFromDefinition({
+                mode: 'advanced',
+                q: q,
+                tag: '',
+                author: '',
+                publisher: '',
+            });
+        }
+        if (kind === 'people') {
+            return hashFromDefinition({
+                mode: 'advanced',
+                q: '',
+                tag: '',
+                author: q,
+                publisher: '',
+            });
+        }
+        return hashFromDefinition({
+            mode: 'advanced',
+            q: '',
+            tag: '',
+            author: '',
+            publisher: kind === 'publisher' ? q : '',
+        });
     }
 
     function searchCommands(rawQuery) {
@@ -727,8 +712,13 @@
                 section: 'actions',
             });
         }
-        if (route && route.name === 'search' && typeof root.prksSearchDefinitionFromRoute === 'function') {
-            const parsed = root.prksSearchDefinitionFromRoute(route);
+        if (
+            route &&
+            route.name === 'search' &&
+            root.prksSearchQueryCodec &&
+            typeof root.prksSearchQueryCodec.definitionFromRoute === 'function'
+        ) {
+            const parsed = root.prksSearchQueryCodec.definitionFromRoute(route);
             if (parsed && parsed.ok) {
                 out.push({
                     id: 'save-search-view',

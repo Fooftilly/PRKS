@@ -89,6 +89,14 @@ if (workRouteBuild.status !== 0) {
   process.exit(workRouteBuild.status || 1);
 }
 
+const searchCodecBuild = spawnSync(process.execPath, [join(appRoot, "scripts/build-search-codec.mjs")], {
+  cwd: appRoot,
+  stdio: "inherit",
+});
+if (searchCodecBuild.status !== 0) {
+  process.exit(searchCodecBuild.status || 1);
+}
+
 const py = resolvePython();
 const gate = spawnSync(
   py.executable,

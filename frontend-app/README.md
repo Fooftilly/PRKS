@@ -11,7 +11,7 @@ Legacy UI remains `frontend/js/` and `frontend/index.html`. The shell loads the 
 
 The legacy PRKS router stays canonical. `src/route-surface/` is the owner-scoped bridge from a TabContext route instance into a Vue view. Route-local runtime cannot live on `window`. Generations are never compared across TabContexts. Global shell and navigation state belongs to the shell/router. Generic browser lifecycle and this PRKS route-instance lifecycle are different concerns. Early presentation is feature-scoped: each feature registers its own presenter, and a pending request paints only on the host that stored it.
 
-`src/workspace/` is the typed canonical workspace model and its pure transforms. `npm run build` emits it as the classic script `frontend/js/workspace-model.js`, loaded before `workspace-tree.js`. It is not part of `frontend/vue/prks-vue.js`, and `src/main.ts` must not import it. `workspace-tabs.js` owns the one live state object, the effect coordinator, and `prksWorkspaceSubscribe`. `src/workspace-shell/` renders that read-only projection (tab strip, Main frame, recursive Secondary tree) and dispatches intents. It does not import `src/workspace/`. Content hosts stay in `frontend/js/workspace-hosts.js`. Do not add Pinia or a second snapshot.
+`src/workspace/` is the typed canonical workspace model and its pure transforms. `npm run build` emits it as the classic script `frontend/js/workspace-model.js`, loaded before `workspace-tree.js`. It is not part of `frontend/vue/prks-vue.js`, and `src/main.ts` must not import it. `src/features/search/codec.ts` is the Search / Saved View query codec. The same build emits `frontend/js/search-query-codec.js` (`prksSearchQueryCodec`) for classic callers, loaded before `saved-views.js`. Vue imports `codec.ts` and does not import `codec-browser-entry.ts`. `workspace-tabs.js` owns the one live state object, the effect coordinator, and `prksWorkspaceSubscribe`. `src/workspace-shell/` renders that read-only projection (tab strip, Main frame, recursive Secondary tree) and dispatches intents. It does not import `src/workspace/`. Content hosts stay in `frontend/js/workspace-hosts.js`. Do not add Pinia or a second snapshot.
 
 ## Toolchain
 
@@ -35,6 +35,7 @@ npm run build-storybook   # catalog only; gitignored storybook-static/
 | Path | Role |
 | --- | --- |
 | `src/workspace/` | Canonical typed workspace state and pure transforms. Built to `frontend/js/workspace-model.js`. Not a Vue renderer and not a second state owner |
+| `src/features/search/codec.ts` | Canonical Search / Saved View query codec. Built to `frontend/js/search-query-codec.js` for legacy callers. Vue imports the module |
 | `src/workspace-shell/` | Vue presentation for the tab strip, pane frames, and recursive Secondary tree. Renders a detached projection and sends coordinator intents. Not a state owner |
 | `src/workspace-dnd/` | #256 production Pragmatic DnD adapter + pure `WorkspaceDropIntent` resolver. Wired by `WorkspaceShell` (shell-commit reconcile). Classic `frontend/js/workspace-drag.js` is a geometry/API shim only |
 | `src/route-surface/` | Typed Vue route-instance lifecycle. Owner-scoped mount, generation, cleanup, and feature-scoped host-local early presentation. Not a router |

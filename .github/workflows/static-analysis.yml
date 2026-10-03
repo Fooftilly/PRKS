@@ -190,10 +190,10 @@ jobs:
         run: |
           set -euo pipefail
           npm run build --prefix frontend-app
-          git diff --exit-code -- frontend/vue frontend/js/workspace-model.js frontend/vendor/DEPENDENCY-MANIFEST.json frontend/sw.js
-          if [[ -n "$(git status --porcelain -- frontend/vue frontend/js/workspace-model.js frontend/vendor/DEPENDENCY-MANIFEST.json frontend/sw.js)" ]]; then
+          git diff --exit-code -- frontend/vue frontend/js/workspace-model.js frontend/js/work-route-projection.js frontend/js/search-query-codec.js frontend/vendor/DEPENDENCY-MANIFEST.json frontend/sw.js
+          if [[ -n "$(git status --porcelain -- frontend/vue frontend/js/workspace-model.js frontend/js/work-route-projection.js frontend/js/search-query-codec.js frontend/vendor/DEPENDENCY-MANIFEST.json frontend/sw.js)" ]]; then
             echo "Vue production build changed committed assets" >&2
-            git status --porcelain -- frontend/vue frontend/js/workspace-model.js frontend/vendor/DEPENDENCY-MANIFEST.json frontend/sw.js >&2
+            git status --porcelain -- frontend/vue frontend/js/workspace-model.js frontend/js/work-route-projection.js frontend/js/search-query-codec.js frontend/vendor/DEPENDENCY-MANIFEST.json frontend/sw.js >&2
             exit 1
           fi
 

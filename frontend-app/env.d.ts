@@ -250,7 +250,23 @@ interface Window {
   fetchPublishersInUse?: (options?: { signal?: AbortSignal; errorOwner?: object }) => Promise<unknown>
   prksVueDismissSearch?: (owner: object) => void
   prksVueDismissSavedViews?: (owner: object) => void
-  prksSearchHashFromDefinition?: (definition: Record<string, string>) => string
+  /** Classic-script bridge for `frontend-app/src/features/search/codec.ts`. Vue imports that module. */
+  prksSearchQueryCodec?: {
+    definitionFromRoute: (route: unknown) => {
+      ok: boolean
+      empty?: boolean
+      unsavable?: boolean
+      message?: string
+      definition?: { mode: string; q: string; tag: string; author: string; publisher: string }
+    }
+    hashFromDefinition: (definition: unknown) => string
+    optionsFromDefinition: (definition: unknown) => {
+      q: string
+      tag: string | null
+      options: { any?: string; author?: string; publisher?: string }
+    }
+    summaryText: (definition: unknown) => string
+  }
   prksOpenSavedViewModalFromCurrentSearch?: (hash?: string) => void
   prksOpenSavedViewModal?: (options: {
     viewId?: string
@@ -263,7 +279,6 @@ interface Window {
     still?: () => boolean,
     tabId?: string,
   ) => Promise<{ ok?: boolean; reason?: string; message?: string } | void>
-  prksSearchSummaryText?: (definition: unknown) => string
   fetchSavedView?: (id: string) => Promise<{ id?: string; name?: string; search?: { mode: string; q: string; tag: string; author: string; publisher: string } } | null>
   prksOpenCommandPalette?: () => void
   prksScopeLineHtml?: (options: { total?: number; label?: string }) => string

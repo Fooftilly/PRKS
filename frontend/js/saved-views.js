@@ -3,133 +3,16 @@
  * Results are never stored. Opening a view re-runs fetchSearch() through the
  * coordinator's prksEffectiveSearchResults, the same read Search uses.
  *
- * This file owns the canonical search query codec (definition <-> route
- * params <-> hash <-> fetchSearch options) until the coordinator/global-window
- * remainder of #303 B1, and the shared Saved View modal until #303 B4. The
- * typed route identity already lives in frontend-app `PrksRouteInstance`.
- * Search, Saved View detail, and the Saved Views index are painted by frontend-app.
+ * The search query codec lives in frontend-app/src/features/search/codec.ts.
+ * This file does not own it. The shared Saved View modal reads a parsed route
+ * through the one classic bridge, prksSearchQueryCodec, and stays here until
+ * #303 B4. Search, Saved View detail, and the Saved Views index are painted
+ * by frontend-app.
  */
 (function (root) {
     'use strict';
 
     const UNSAVABLE_MSG = 'This search combination cannot be saved as a view.';
-
-    function truthyAny(raw) {
-        const anyRaw = raw == null ? '' : raw;
-        return (
-            anyRaw === '1' ||
-            String(anyRaw).trim().toLowerCase() === 'true' ||
-            String(anyRaw).trim().toLowerCase() === 'yes'
-        );
-    }
-
-    function paramsFromRoute(route) {
-        if (route && route.params) return route.params;
-        return route || {};
-    }
-
-    function prksSearchDefinitionFromRoute(route) {
-        const params = paramsFromRoute(route);
-        const q = String(params.q || '').trim();
-        const tag = String(params.tag || '').trim();
-        const author = String(params.author || '').trim();
-        const publisher = String(params.publisher || '').trim();
-        const any = truthyAny(params.any);
-        if (!q && !tag && !author && !publisher) {
-            return { ok: false, empty: true, unsavable: true, message: UNSAVABLE_MSG };
-        }
-        if (any && (tag || author || publisher)) {
-            return { ok: false, unsavable: true, message: UNSAVABLE_MSG };
-        }
-        if (tag && q) {
-            return { ok: false, unsavable: true, message: UNSAVABLE_MSG };
-        }
-        if (any) {
-            if (!q) return { ok: false, unsavable: true, message: UNSAVABLE_MSG };
-            return {
-                ok: true,
-                definition: { mode: 'all', q: q, tag: '', author: '', publisher: '' },
-            };
-        }
-        if (tag) {
-            return {
-                ok: true,
-                definition: {
-                    mode: 'tag',
-                    q: '',
-                    tag: tag,
-                    author: author,
-                    publisher: publisher,
-                },
-            };
-        }
-        return {
-            ok: true,
-            definition: {
-                mode: 'advanced',
-                q: q,
-                tag: '',
-                author: author,
-                publisher: publisher,
-            },
-        };
-    }
-
-    function prksSearchHashFromDefinition(definition) {
-        const d = definition || {};
-        const p = new URLSearchParams();
-        const mode = String(d.mode || '');
-        const q = String(d.q || '').trim();
-        const tag = String(d.tag || '').trim();
-        const author = String(d.author || '').trim();
-        const publisher = String(d.publisher || '').trim();
-        if (mode === 'all') {
-            p.set('any', '1');
-            if (q) p.set('q', q);
-        } else if (mode === 'tag') {
-            if (tag) p.set('tag', tag);
-            if (author) p.set('author', author);
-            if (publisher) p.set('publisher', publisher);
-        } else {
-            if (q) p.set('q', q);
-            if (author) p.set('author', author);
-            if (publisher) p.set('publisher', publisher);
-        }
-        return '#/search?' + p.toString();
-    }
-
-    function prksSearchOptionsFromDefinition(definition) {
-        const d = definition || {};
-        const q = String(d.q || '').trim();
-        const tag = String(d.tag || '').trim();
-        const author = String(d.author || '').trim();
-        const publisher = String(d.publisher || '').trim();
-        if (d.mode === 'all') {
-            return { q: q, tag: null, options: { any: '1' } };
-        }
-        if (d.mode === 'tag') {
-            return { q: '', tag: tag, options: { author: author, publisher: publisher } };
-        }
-        return { q: q, tag: null, options: { author: author, publisher: publisher } };
-    }
-
-    function prksSearchSummaryText(definition) {
-        const d = definition || {};
-        const parts = [];
-        if (d.mode === 'all') {
-            return 'All: ' + String(d.q || '');
-        }
-        if (d.mode === 'tag') {
-            parts.push('Tag: ' + String(d.tag || ''));
-            if (d.author) parts.push('Author: ' + d.author);
-            if (d.publisher) parts.push('Publisher: ' + d.publisher);
-            return parts.join(' · ');
-        }
-        if (d.q) parts.push('Keywords: ' + d.q);
-        if (d.author) parts.push('Author: ' + d.author);
-        if (d.publisher) parts.push('Publisher: ' + d.publisher);
-        return parts.join(' · ');
-    }
 
     const modalState = {
         mode: 'create',
@@ -306,7 +189,11 @@
             ? searchHash
             : (root.location ? root.location.hash : '');
         const route = typeof root.prksParseRoute === 'function' ? root.prksParseRoute(hash) : null;
-        const parsed = prksSearchDefinitionFromRoute(route);
+        const codec = root.prksSearchQueryCodec;
+        const parsed =
+            codec && typeof codec.definitionFromRoute === 'function'
+                ? codec.definitionFromRoute(route)
+                : { ok: false, unsavable: true, message: UNSAVABLE_MSG };
         if (!parsed || !parsed.ok) {
             const msg = (parsed && parsed.message) || UNSAVABLE_MSG;
             if (typeof root.prksAlertDialog === 'function') {
@@ -423,10 +310,6 @@
     }
 
     const api = {
-        prksSearchDefinitionFromRoute: prksSearchDefinitionFromRoute,
-        prksSearchHashFromDefinition: prksSearchHashFromDefinition,
-        prksSearchOptionsFromDefinition: prksSearchOptionsFromDefinition,
-        prksSearchSummaryText: prksSearchSummaryText,
         prksOpenSavedViewModalFromCurrentSearch: prksOpenSavedViewModalFromCurrentSearch,
         prksOpenSavedViewModalForCurrentView: prksOpenSavedViewModalForCurrentView,
         prksOpenSavedViewModal: openModalWith,

@@ -1,3 +1,4 @@
+import { summaryText } from '../search/codec'
 import { buildSearchResultsProjection, SEARCH_NO_RESULTS } from '../search/projection'
 import type { SearchResultsProjection } from '../search/types'
 import type { SavedViewDefinition, SavedViewDetailAvailability, SavedViewRecord } from './types'
@@ -33,7 +34,7 @@ export interface SavedViewDetailProjection {
   readonly availability: SavedViewDetailAvailability
   readonly view: SavedViewRecord | null
   readonly viewId: string
-  /** `prksSearchHashFromDefinition(view.search)`, computed by the coordinator. */
+  /** `hashFromDefinition(view.search)`, computed by the coordinator. */
   readonly searchHash: string
   readonly results: SearchResultsProjection
   readonly generation: number
@@ -54,11 +55,9 @@ export interface SavedViewIndexProjection {
   readonly generation: number
 }
 
-/** Summary text stays the codec in `saved-views.js`. This does not restate it. */
+/** Summary text is `summaryText` from the search query codec. This does not restate it. */
 export function savedViewSummary(search: unknown): string {
-  const summarize = window.prksSearchSummaryText
-  if (typeof summarize !== 'function') return ''
-  return summarize(search)
+  return summaryText(search)
 }
 
 export function buildSavedViewIndexProjection(input: {

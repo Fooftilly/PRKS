@@ -16,7 +16,6 @@ afterEach(() => {
   delete window.prksInitLazyWorkThumbs
   delete window.prksScopeLineHtml
   delete window.prksNavigate
-  delete window.prksSearchHashFromDefinition
   delete window.prksOpenSavedViewModalFromCurrentSearch
 })
 
@@ -92,7 +91,6 @@ describe('Search route bridge', () => {
     cards()
     const navigate = vi.fn()
     window.prksNavigate = navigate
-    window.prksSearchHashFromDefinition = (d) => `#/search?any=1&q=${d.q}`
     const pane = owner('main')
     pane.state.generation = 2
     const el = host()
@@ -111,7 +109,6 @@ describe('Search route bridge', () => {
     cards()
     const navigate = vi.fn()
     window.prksNavigate = navigate
-    window.prksSearchHashFromDefinition = () => '#/search?q=late'
     const pane = owner('main')
     pane.state.generation = 3
     const el = host()

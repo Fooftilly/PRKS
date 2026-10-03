@@ -16,6 +16,11 @@ _SV_DETAIL = os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "save
 _SV_INDEX = os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "saved-views", "SavedViewsIndexRoute.vue")
 _SV_INTENTS = os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "saved-views", "intents.ts")
 _SV_PROJECTION = os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "saved-views", "projection.ts")
+_CODEC = os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "search", "codec.ts")
+_CODEC_JS = os.path.join(_FRONTEND, "js", "search-query-codec.js")
+_PALETTE = os.path.join(_FRONTEND, "js", "command-palette.js")
+_SW = os.path.join(_FRONTEND, "sw.js")
+_MAIN = os.path.join(_PROJECT_DIR, "frontend-app", "src", "main.ts")
 _TAB_CONTEXT = os.path.join(_FRONTEND, "js", "tab-context.js")
 _API = os.path.join(_FRONTEND, "js", "api.js")
 _WIKI_USER = os.path.join(_PROJECT_DIR, "docs", "wiki", "User-Guide.md")
@@ -54,8 +59,9 @@ class FrontendSavedViewsTests(unittest.TestCase):
         self.assertIn("function createSavedView", api)
         self.assertIn("saved-views.fetch", api)
         src = _read(_SV)
-        self.assertIn("prksSearchDefinitionFromRoute", src)
-        self.assertIn("prksSearchHashFromDefinition", src)
+        self.assertIn("prksSearchQueryCodec", src)
+        self.assertNotIn("function prksSearchDefinitionFromRoute", src)
+        self.assertNotIn("function prksSearchHashFromDefinition", src)
         self.assertNotIn("saved_view_works", src)
         self.assertNotIn(":id/results", src)
 
@@ -87,7 +93,9 @@ class FrontendSavedViewsTests(unittest.TestCase):
         for vue in (detail, search):
             self.assertIn("SearchResultsCollection", vue)
         self.assertIn("prksDeleteSavedViewFromDetail", _read(_SV_INTENTS))
-        self.assertIn("prksSearchHashFromDefinition", _read(_SEARCH_INTENTS))
+        intents = _read(_SEARCH_INTENTS)
+        self.assertIn("hashFromDefinition", intents)
+        self.assertNotIn("window.prksSearchHashFromDefinition", intents)
         detail = _read(_SV_DETAIL)
         self.assertIn("Delete Saved View", detail)
         self.assertIn('variant="danger"', detail)
@@ -135,13 +143,77 @@ class FrontendSavedViewsTests(unittest.TestCase):
         projection = _read(_SV_PROJECTION)
         self.assertIn("No Saved Views yet.", projection)
         self.assertIn("removeFromIndex", _read(_SV_INTENTS))
-        self.assertIn("prksSearchSummaryText", projection)
+        self.assertIn("summaryText", projection)
+        self.assertNotIn("window.prksSearchSummaryText", projection)
         agents = _read(_AGENTS)
         self.assertIn("prksDeleteSavedViewFromIndex", agents)
         self.assertIn(
             "`renderSavedViewsIndex`, `bindIndexActions`, `openEditById`, and `confirmDelete` are removed.",
             agents,
         )
+
+    def test_search_query_codec_has_one_owner(self):
+        """The query codec is the typed module. Legacy JS keeps one bridge."""
+        html = _read(_INDEX)
+        codec_at = html.find('src="/js/search-query-codec.js"')
+        sv_at = html.find('src="/js/saved-views.js"')
+        pal_at = html.find('src="/js/command-palette.js"')
+        app_at = html.find('src="/js/app.js"')
+        vue_at = html.find('src="/vue/prks-vue.js"')
+        self.assertGreater(codec_at, 0)
+        self.assertLess(codec_at, sv_at)
+        self.assertLess(sv_at, pal_at)
+        self.assertLess(pal_at, app_at)
+        self.assertLess(app_at, vue_at)
+        sw = _read(_SW)
+        self.assertLess(sw.find("'/js/search-query-codec.js'"), sw.find("'/js/saved-views.js'"))
+        codec = _read(_CODEC)
+        self.assertIn("This search combination cannot be saved as a view.", codec)
+        self.assertIn("function definitionFromRoute", codec)
+        self.assertIn("function hashFromDefinition", codec)
+        self.assertIn("function optionsFromDefinition", codec)
+        self.assertIn("function summaryText", codec)
+        self.assertNotIn("prksParseRoute(", codec)
+        saved = _read(_SV)
+        app = _read(_APP)
+        palette = _read(_PALETTE)
+        intents = _read(_SEARCH_INTENTS)
+        projection = _read(_SV_PROJECTION)
+        main = _read(_MAIN)
+        for name in (
+            "function prksSearchDefinitionFromRoute",
+            "function prksSearchHashFromDefinition",
+            "function prksSearchOptionsFromDefinition",
+            "function prksSearchSummaryText",
+            "window.prksSearchDefinitionFromRoute",
+            "window.prksSearchHashFromDefinition",
+            "window.prksSearchOptionsFromDefinition",
+            "window.prksSearchSummaryText",
+        ):
+            for label, text in (
+                ("saved-views.js", saved),
+                ("app.js", app),
+                ("command-palette.js", palette),
+                ("intents.ts", intents),
+                ("projection.ts", projection),
+                ("main.ts", main),
+            ):
+                self.assertNotIn(name, text, label)
+        self.assertIn("root.prksSearchQueryCodec", saved)
+        self.assertIn("codec.definitionFromRoute", saved)
+        self.assertNotIn("prksSearchDefinitionFromRoute:", saved)
+        self.assertIn("prksSearchQueryCodec.optionsFromDefinition", app)
+        self.assertIn("prksSearchQueryCodec.hashFromDefinition", app)
+        self.assertNotIn("new URLSearchParams", palette)
+        self.assertIn("prksSearchQueryCodec.hashFromDefinition", palette)
+        self.assertIn("prksSearchQueryCodec.definitionFromRoute", palette)
+        self.assertIn("from './codec'", intents)
+        self.assertIn("from '../search/codec'", projection)
+        self.assertNotIn("codec-browser-entry", main)
+        self.assertTrue(os.path.isfile(_CODEC_JS))
+        built = _read(_CODEC_JS)
+        self.assertIn("var prksSearchQueryCodec", built)
+        self.assertNotIn("function prksSearchHashFromDefinition", built)
 
     def test_docs(self):
         wiki = _read(_WIKI_USER)

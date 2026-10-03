@@ -4586,7 +4586,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     titleOpts = { notFound: true, notFoundTitle: 'Saved View not found' };
                     break;
                 }
-                const mapped = prksSearchOptionsFromDefinition(view.search || {});
+                const mapped = prksSearchQueryCodec.optionsFromDefinition(view.search || {});
                 const rows = await prksEffectiveSearchResults(
                     mapped.q, mapped.tag, mapped.options, routeSignal, stale);
                 if (stale()) return;
@@ -4594,7 +4594,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     availability: 'ready',
                     view: view,
                     viewId: view.id,
-                    searchHash: prksSearchHashFromDefinition(view.search || {}),
+                    searchHash: prksSearchQueryCodec.hashFromDefinition(view.search || {}),
                     rows: rows,
                     generation: generation,
                 });
