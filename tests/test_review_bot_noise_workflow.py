@@ -118,7 +118,12 @@ CODERABBIT_NO_AUTO_REVIEW = (
     "<!-- This is an auto-generated comment: skip review by coderabbit.ai -->\n\n"
     "> [!IMPORTANT]\n> - [ ] 🔍 Trigger review\n> \n"
     "> This repository does not receive automatic reviews because it has fewer than 10 stars.\n"
-    "<!-- end of auto-generated comment: skip review by coderabbit.ai -->\n"
+    "> <details>\n> <summary>⚙️ Run configuration</summary>\n> \n"
+    "> - **Configuration used**: Repository: Fooftilly/PRKS/.coderabbit.yaml\n"
+    "> - **Review profile**: ASSERTIVE\n> - **Plan**: Advanced\n> \n> </details>\n\n"
+    "<!-- end of auto-generated comment: skip review by coderabbit.ai -->\n\n"
+    "<!-- autopilot:start -->\n- [ ] <strong title=\"Keep fixing CodeRabbit findings and "
+    "required CI, and resolving merge conflicts\">Autopilot</strong>\n<!-- autopilot:end -->\n"
     "Thanks for using [CodeRabbit](https://coderabbit.ai)! It's free for OSS.\n"
     "<sub>Comment `@coderabbitai help` to get the list of available commands.</sub>"
 )
@@ -133,6 +138,15 @@ CODERABBIT_WALKTHROUGH = (
     "No actionable comments were generated in the recent review. 🎉\n\n"
     "Thanks for using [CodeRabbit](https://coderabbit.ai)! Upgrade to Pro for more. "
     "Your trial includes unlimited reviews.\n"
+    "<!-- walkthrough_end -->"
+)
+# The <10-stars banner and substantive review output in one comment, as
+# CodeRabbit can produce when it edits its summary comment in place.
+CODERABBIT_BANNER_WITH_REVIEW = (
+    CODERABBIT_NO_AUTO_REVIEW.replace("<!-- tips_start -->", "")
+    + "\n<!-- walkthrough_start -->\n\n## Walkthrough\n\nRoutes mounted views through one "
+    "dispatcher.\n\n## Changes\n\n| File | Summary |\n|---|---|\n| `app.js` | Adds a helper. |\n\n"
+    "## Pre-merge checks\n\n✅ Passed checks (3 passed)\n\n**Merge risk:** low.\n"
     "<!-- walkthrough_end -->"
 )
 GREPTILE_SUMMARY = (
@@ -230,6 +244,7 @@ class NoiseClassifierTests(unittest.TestCase):
     def test_substantive_reviews_stay_visible(self) -> None:
         cases = {
             "coderabbit walkthrough": (_CODERABBIT, CODERABBIT_WALKTHROUGH),
+            "coderabbit banner with walkthrough": (_CODERABBIT, CODERABBIT_BANNER_WITH_REVIEW),
             "greptile summary": (_GREPTILE, GREPTILE_SUMMARY),
             "greptile finding": (_GREPTILE, GREPTILE_FINDING),
             "sourcery findings": (_SOURCERY, SOURCERY_FINDINGS),
@@ -274,6 +289,17 @@ class NoiseRuleTableTests(unittest.TestCase):
                 self.assertTrue(any(len(f) >= 20 for f in fragments))
                 marker_only = len(fragments) == 1 and re.fullmatch(r"<!-- [a-z]+:[a-z-]+ -->", fragments[0])
                 self.assertTrue(len(fragments) >= 2 or marker_only)
+
+    def test_coderabbit_banner_with_any_review_marker_stays_visible(self) -> None:
+        (rule,) = [r for r in self._rules() if r["rule"] == "coderabbit-auto-review-unavailable"]
+        self.assertTrue(rule["excluded"])
+        for marker in rule["excluded"]:
+            self.assertEqual(marker, marker.lower())
+            self.assertNotIn(marker, CODERABBIT_NO_AUTO_REVIEW.lower())
+            for variant in (marker, marker.upper(), marker.title()):
+                with self.subTest(marker=variant):
+                    body = f"{CODERABBIT_NO_AUTO_REVIEW}\n\n{variant}: details follow."
+                    self.assertEqual(_classify(_subject(_CODERABBIT, body)), "none")
 
     def test_comment_job_prefilter_lists_exactly_the_rule_bots(self) -> None:
         section = _job_section(_TEXT, "minimize-noise-comment")

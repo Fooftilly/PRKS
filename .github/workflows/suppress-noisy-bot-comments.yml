@@ -28,7 +28,10 @@ env:
   # object ({user: {login}, body}). Output: the matched rule name, or "none".
   #
   # Every rule requires the exact bot login AND every listed distinctive
-  # fragment (or an explicit bot marker). Never add a rule that matches only
+  # fragment (or an explicit bot marker). A rule's optional "excluded" list
+  # names substantive-review markers (matched case-insensitively) that veto
+  # the match, for bots that can put a status banner and real review content
+  # in the same comment. Never add a rule that matches only
   # generic words such as "trial", "upgrade", "budget", "quota" or
   # "no issues": review findings, summaries and walkthroughs must stay visible.
   NOISE_CLASSIFIER_JQ: |
@@ -67,7 +70,25 @@ env:
       {
         rule: "coderabbit-auto-review-unavailable",
         login: "coderabbitai[bot]",
-        fragments: ["does not receive automatic reviews", "fewer than 10 stars"]
+        fragments: ["does not receive automatic reviews", "fewer than 10 stars"],
+        # CodeRabbit edits one summary comment in place; if the banner ever
+        # shares it with review output, the comment must stay visible.
+        excluded: [
+          "walkthrough",
+          "summary by coderabbit",
+          "pre-merge check",
+          "actionable comments posted",
+          "estimated code review effort",
+          "review details",
+          "sequence diagram",
+          "## changes",
+          "merge risk",
+          "architecture",
+          "auto-generated comment: review",
+          "potential issue",
+          "refactor suggestion",
+          "nitpick"
+        ]
       },
       # Benign no-findings messages explicitly selected as noise
       {
@@ -85,6 +106,12 @@ env:
         $rules[]
         | select(.login == $login)
         | select(all(.fragments[]; . as $fragment | $body | contains($fragment)))
+        | select(
+            all(
+              (.excluded // [])[];
+              ascii_downcase as $marker | $body | ascii_downcase | contains($marker) | not
+            )
+          )
         | .rule
       ) // "none"
 
