@@ -139,7 +139,7 @@ watch(rows, refreshIcons, { flush: 'post' })
           </p>
         </div>
       </template>
-      <template v-else>
+      <template v-else-if="!refreshError">
         <p class="meta-row saved-views-page__empty">{{ SAVED_VIEWS_EMPTY }}</p>
         <p class="meta-row">{{ SAVED_VIEWS_EMPTY_HINT }}</p>
         <p>

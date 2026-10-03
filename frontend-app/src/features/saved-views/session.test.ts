@@ -382,6 +382,24 @@ describe('Saved Views index route', () => {
     )
   })
 
+  it('does not claim an empty index when refreshing an empty list fails', async () => {
+    chrome()
+    const server = fakeServer([])
+    const first = host()
+    const firstOwner = indexOwner('main', 1)
+    presentSavedViewsIndex({ owner: firstOwner, host: first, generation: 1 })
+    await flush()
+    expect(first.querySelector('.saved-views-page__empty')).not.toBeNull()
+    dismissRouteSurface(firstOwner)
+    server.refuse('GET /api/saved-views', { status: 500, body: null })
+    const second = host()
+    presentSavedViewsIndex({ owner: indexOwner('main', 2), host: second, generation: 2 })
+    await flush()
+    expect(second.querySelector('[data-saved-views-refresh-error]')).not.toBeNull()
+    expect(second.querySelector('.saved-views-page__empty')).toBeNull()
+    expect(second.querySelector('#prks-saved-views-empty-search')).toBeNull()
+  })
+
   it('refreshes icons on mount even when the first read fails, and again when rows arrive', async () => {
     chrome()
     const refresh = vi.fn()
