@@ -272,7 +272,7 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
                       app.index('function prksPresentVueProgress')]
         self.assertIn('host.__prksVueRouteRequest = request', deliver)
         self.assertNotIn('prksSyncSidebarActive', present)
-        self.assertIn('prksVueDismissProgress(ctx)', app)
+        self.assertIn('window.prksVueDismissRoute(ctx)', app)
         self.assertNotIn('window.__prksProgressPresentRequest', app)
         self.assertNotIn('window.__prksVueRouteRequest', app)
         self.assertNotIn('renderProgressByStatus', body)

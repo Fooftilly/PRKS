@@ -1,6 +1,5 @@
 import { createVNode } from 'vue'
 import {
-  dismissRouteSurface,
   presentRouteSurface,
   registerEarlyRoutePresenter,
   registerRouteWindowBridge,
@@ -100,17 +99,12 @@ export function presentResearchGraph(input: ResearchGraphPresentInput): void {
   attachGraph(input)
 }
 
-export function dismissResearchGraph(owner: object | null | undefined): void {
-  dismissRouteSurface(owner)
-}
-
 export function resetResearchGraphSessionForTests(): void {
   resetRouteSurfaceForTests()
 }
 
 export function registerResearchGraphBridge(target: Window = window): void {
   registerRouteWindowBridge(target)
-  target.prksVueDismissResearchGraph = dismissResearchGraph
   registerEarlyRoutePresenter(
     GRAPH_FEATURE,
     (request, host) => {

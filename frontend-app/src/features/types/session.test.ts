@@ -1,8 +1,7 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readRouteSurface } from '../../route-surface/lifecycle'
+import { dismissRouteSurface, readRouteSurface } from '../../route-surface/lifecycle'
 import {
-  dismissTypes,
   presentTypeDetail,
   presentTypesIndex,
   registerTypesBridge,
@@ -14,7 +13,7 @@ afterEach(() => {
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
   delete window.prksVuePresentRoute
-  delete window.prksVueDismissTypes
+  delete window.prksVueDismissRoute
   delete window.prksWorkCardHtml
   delete window.prksDocTypeBadgeHtml
   delete window.prksIcon
@@ -96,7 +95,7 @@ describe('File types route bridge', () => {
     const el = host()
     presentTypesIndex({ owner: pane, host: el, rows: [], generation: 2 })
     expect(el.querySelector('.types-page__empty')?.textContent).toContain('No files in library yet')
-    dismissTypes(pane)
+    dismissRouteSurface(pane)
     presentTypesIndex({
       owner: pane,
       host: el,
@@ -132,7 +131,7 @@ describe('File types route bridge', () => {
     }
     registerTypesBridge(window)
     expect(window.prksVuePresentRoute).toBeTypeOf('function')
-    expect(window.prksVueDismissTypes).toBeTypeOf('function')
+    expect(window.prksVueDismissRoute).toBeTypeOf('function')
     expect((el as HTMLElement & { __prksVueRouteRequest?: unknown }).__prksVueRouteRequest).toBeUndefined()
     expect(el.querySelector('[data-prks-route="#/types/online"]')).not.toBeNull()
     expect(decoy.querySelector('[data-prks-types-index]')).toBeNull()
@@ -168,7 +167,7 @@ describe('File types route bridge', () => {
       generation: 1,
       shell: false,
     })
-    window.prksVueDismissTypes?.(main)
+    window.prksVueDismissRoute?.(main)
     expect(mainHost.querySelector('[data-prks-types-index]')).toBeNull()
     expect(secondaryHost.querySelector('[data-work-id="side"]')).not.toBeNull()
     expect(readRouteSurface(secondary)).toMatchObject({
@@ -269,7 +268,7 @@ describe('File types route bridge', () => {
     expect(el.querySelector('[data-work-id="a"]')).toBeNull()
     const live = el.querySelector('img[data-prks-thumb-lazy]')
     preview.__prksWorkThumbPreviewSource = live
-    dismissTypes(pane)
+    dismissRouteSurface(pane)
     expect(releaseLog).toContainEqual({ id: 'b', connected: true, underDetail: true })
     expect(preview.__prksWorkThumbPreviewSource).toBeNull()
     presentTypeDetail({

@@ -1,8 +1,7 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readRouteSurface } from '../../route-surface/lifecycle'
+import { dismissRouteSurface, readRouteSurface } from '../../route-surface/lifecycle'
 import {
-  dismissPeople,
   PEOPLE_RETAIN_SURFACE_KEY,
   presentPeopleIndex,
   presentPersonDetail,
@@ -14,7 +13,7 @@ afterEach(() => {
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
   delete window.prksVuePresentRoute
-  delete window.prksVueDismissPeople
+  delete window.prksVueDismissRoute
   delete window.openModal
   delete window.prksNavigate
   delete window.openPersonProfileEdit
@@ -505,7 +504,7 @@ describe('People route surface', () => {
     cleanups.clear()
     failed.forEach((fn) => fn())
     pane[PEOPLE_RETAIN_SURFACE_KEY] = false
-    dismissPeople(pane)
+    dismissRouteSurface(pane)
     expect(routeHost.querySelector('[data-prks-people-index-view]')).toBeNull()
     expect(readRouteSurface(pane)?.mounted).toBe(false)
     contentDiv.innerHTML = '<p><button type="button" id="prks-route-retry">Retry</button></p>'
@@ -520,7 +519,7 @@ describe('People route surface', () => {
     const bHost = host()
     presentPeopleIndex({ owner: a, host: aHost, items: [ada], generation: 1 })
     presentPersonDetail({ owner: b, host: bHost, person: grace, personId: 'P2', generation: 1 })
-    dismissPeople(a)
+    dismissRouteSurface(a)
     expect(aHost.querySelector('[data-prks-people-index-view]')).toBeNull()
     expect(bHost.textContent).toContain('Grace Hopper')
   })

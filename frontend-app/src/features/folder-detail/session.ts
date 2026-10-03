@@ -41,7 +41,7 @@ function armFolderDetailOwnerCleanup(owner: FolderDetailOwner): void {
       armFolderDetailOwnerCleanup(owner)
       return
     }
-    dismissFolderDetail(owner)
+    dismissRouteSurface(owner)
   })
 }
 
@@ -103,10 +103,6 @@ export function presentFolderDetail(input: FolderDetailPresentInput): void {
   armFolderDetailOwnerCleanup(input.owner)
 }
 
-export function dismissFolderDetail(owner: object | null | undefined): void {
-  dismissRouteSurface(owner)
-}
-
 export function resetFolderDetailSessionForTests(): void {
   resetRouteSurfaceForTests()
 }
@@ -121,7 +117,6 @@ function isFolderDetailEarlyRequest(
 
 export function registerFolderDetailBridge(target: Window = window): void {
   registerRouteWindowBridge(target)
-  target.prksVueDismissFolderDetail = dismissFolderDetail
   registerEarlyRoutePresenter(
     FOLDER_DETAIL_FEATURE,
     (request, host) => {

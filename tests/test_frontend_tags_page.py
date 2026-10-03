@@ -25,7 +25,7 @@ class FrontendTagsPageTests(unittest.TestCase):
         self.assertIn("prksPresentVueTags", tags_body)
         self.assertNotIn("renderTagsPage", tags_body)
         self.assertIn("async function prksReloadTagsVocabulary(", app)
-        self.assertIn("prksVueDismissTags", app)
+        self.assertIn("window.prksVueDismissRoute(ctx)", app)
         publishers = app[publishers_at:types_at]
         self.assertIn("fetchPublishersInUse({ signal: routeSignal })", publishers)
         self.assertIn("prksPresentVuePublishers", publishers)

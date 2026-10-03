@@ -1,6 +1,5 @@
 import { createVNode } from 'vue'
 import {
-  dismissRouteSurface,
   presentRouteSurface,
   registerEarlyRoutePresenter,
   registerRouteWindowBridge,
@@ -83,20 +82,12 @@ export function presentProcessing(input: ProcessingPresentInput): void {
   })
 }
 
-export function dismissProcessing(owner: object | null | undefined): void {
-  if (owner && typeof window.prksProcessingReleaseResources === 'function') {
-    window.prksProcessingReleaseResources(owner)
-  }
-  dismissRouteSurface(owner)
-}
-
 export function resetProcessingSessionForTests(): void {
   resetRouteSurfaceForTests()
 }
 
 export function registerProcessingBridge(target: Window = window): void {
   registerRouteWindowBridge(target)
-  target.prksVueDismissProcessing = dismissProcessing
   registerEarlyRoutePresenter(
     PROCESSING_FEATURE,
     (request, host) => {

@@ -1,6 +1,5 @@
 import { createVNode } from 'vue'
 import {
-  dismissRouteSurface,
   presentRouteSurface,
   registerEarlyRoutePresenter,
   registerRouteWindowBridge,
@@ -122,17 +121,12 @@ export function presentTags(input: TagsPresentInput): void {
   })
 }
 
-export function dismissTags(owner: object | null | undefined): void {
-  dismissRouteSurface(owner)
-}
-
 export function resetTagsSessionForTests(): void {
   resetRouteSurfaceForTests()
 }
 
 export function registerTagsBridge(target: Window = window): void {
   registerRouteWindowBridge(target)
-  target.prksVueDismissTags = dismissTags
   target.prksVueCloseTagsAliasModal = closeTagsAliasModals
   target.prksVueCloseTagsMergeModal = closeTagsMergeModals
   target.prksVueReportTagsRefreshFailure = reportTagsRefreshFailure

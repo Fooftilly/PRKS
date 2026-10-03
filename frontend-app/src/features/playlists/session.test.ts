@@ -1,8 +1,7 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readRouteSurface } from '../../route-surface/lifecycle'
+import { dismissRouteSurface, readRouteSurface } from '../../route-surface/lifecycle'
 import {
-  dismissPlaylists,
   PLAYLISTS_RETAIN_SURFACE_KEY,
   presentPlaylistDetail,
   presentPlaylistsIndex,
@@ -15,7 +14,7 @@ afterEach(() => {
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
   delete window.prksVuePresentRoute
-  delete window.prksVueDismissPlaylists
+  delete window.prksVueDismissRoute
   delete window.prksOpenNewPlaylistModalFromPlaylistsPage
   delete window.updatePlaylist
   delete window.prksReloadPlaylistDetail
@@ -775,7 +774,7 @@ describe('Playlists route surface', () => {
     cleanups.clear()
     failed.forEach((fn) => fn())
     pane[PLAYLISTS_RETAIN_SURFACE_KEY] = false
-    dismissPlaylists(pane)
+    dismissRouteSurface(pane)
     expect(routeHost.querySelector('[data-prks-playlists-index-view]')).toBeNull()
     expect(readRouteSurface(pane)?.mounted).toBe(false)
     contentDiv.innerHTML = '<p><button type="button" id="prks-route-retry">Retry</button></p>'
@@ -801,7 +800,7 @@ describe('Playlists route surface', () => {
       playlist: { ...playlist, id: 'PL-2', title: 'Beta' },
       generation: 1,
     })
-    dismissPlaylists(a)
+    dismissRouteSurface(a)
     expect(aHost.querySelector('[data-prks-playlists-index-view]')).toBeNull()
     expect(bHost.textContent).toContain('Beta')
   })

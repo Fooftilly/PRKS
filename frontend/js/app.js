@@ -3948,47 +3948,10 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
         window.prksReleaseWorkThumbPreview(contentDiv);
     }
     if (!sameFolderWorkspace && !sameConceptsWorkspace && !sameFolderLibraryWorkspace && !samePositionsWorkspace && !sameArgumentsWorkspace && !samePlaylistsWorkspace && !samePeopleWorkspace && !samePersonGroupsWorkspace) {
-        if (typeof window.prksVueDismissProgress === 'function') {
-            window.prksVueDismissProgress(ctx);
-        }
-        if (typeof window.prksVueDismissConcepts === 'function') {
-            window.prksVueDismissConcepts(ctx);
-        }
-        if (typeof window.prksVueDismissFolderLibrary === 'function') {
-            window.prksVueDismissFolderLibrary(ctx);
-        }
-        if (typeof window.prksVueDismissPositions === 'function') {
-            window.prksVueDismissPositions(ctx);
-        }
-        if (typeof window.prksVueDismissArguments === 'function') {
-            window.prksVueDismissArguments(ctx);
-        }
-        if (typeof window.prksVueDismissPlaylists === 'function') {
-            window.prksVueDismissPlaylists(ctx);
-        }
-        if (typeof window.prksVueDismissPeople === 'function') {
-            window.prksVueDismissPeople(ctx);
-        }
-        if (typeof window.prksVueDismissPersonGroups === 'function') {
-            window.prksVueDismissPersonGroups(ctx);
-        }
-        if (typeof window.prksVueDismissFolderDetail === 'function') {
-            window.prksVueDismissFolderDetail(ctx);
-        }
-        if (typeof window.prksVueDismissRecent === 'function') {
-            window.prksVueDismissRecent(ctx);
-        }
-        if (typeof window.prksVueDismissTypes === 'function') {
-            window.prksVueDismissTypes(ctx);
-        }
-        if (typeof window.prksVueDismissTags === 'function') {
-            window.prksVueDismissTags(ctx);
-        }
-        if (typeof window.prksVueDismissPublishers === 'function') {
-            window.prksVueDismissPublishers(ctx);
-        }
-        if (typeof window.prksVueDismissProcessing === 'function') {
-            window.prksVueDismissProcessing(ctx);
+        // One route-surface session per owner, so one dismiss covers every
+        // route feature this context painted.
+        if (typeof window.prksVueDismissRoute === 'function') {
+            window.prksVueDismissRoute(ctx);
         }
         prksRenderRouteLoading(contentDiv, route.hash);
     } else if (sameFolderWorkspace) {
@@ -5762,29 +5725,17 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
         if (typeof prksIsAbortError === 'function' && prksIsAbortError(_e)) return;
         /* Retained Vue surfaces skip beginRoute dismiss. An error path that
          * replaces contentDiv must still tear them down so unmount/cleanup run. */
-        if (sameFolderLibraryWorkspace && typeof window.prksVueDismissFolderLibrary === 'function') {
-            window.prksVueDismissFolderLibrary(ctx);
-        }
-        if (sameConceptsWorkspace && typeof window.prksVueDismissConcepts === 'function') {
-            window.prksVueDismissConcepts(ctx);
-        }
-        if (samePositionsWorkspace && typeof window.prksVueDismissPositions === 'function') {
-            window.prksVueDismissPositions(ctx);
-        }
-        if (sameArgumentsWorkspace && typeof window.prksVueDismissArguments === 'function') {
-            window.prksVueDismissArguments(ctx);
-        }
-        if (samePlaylistsWorkspace && typeof window.prksVueDismissPlaylists === 'function') {
-            window.prksVueDismissPlaylists(ctx);
-        }
-        if (samePeopleWorkspace && typeof window.prksVueDismissPeople === 'function') {
-            window.prksVueDismissPeople(ctx);
-        }
-        if (samePersonGroupsWorkspace && typeof window.prksVueDismissPersonGroups === 'function') {
-            window.prksVueDismissPersonGroups(ctx);
-        }
-        if (sameFolderWorkspace && typeof window.prksVueDismissFolderDetail === 'function') {
-            window.prksVueDismissFolderDetail(ctx);
+        const retainedRouteSurface =
+            sameFolderLibraryWorkspace ||
+            sameConceptsWorkspace ||
+            samePositionsWorkspace ||
+            sameArgumentsWorkspace ||
+            samePlaylistsWorkspace ||
+            samePeopleWorkspace ||
+            samePersonGroupsWorkspace ||
+            sameFolderWorkspace;
+        if (retainedRouteSurface && typeof window.prksVueDismissRoute === 'function') {
+            window.prksVueDismissRoute(ctx);
         }
         if (typeof prksRenderRouteError === 'function') {
             prksRenderRouteError(contentDiv, ctx, route.canonicalHash || route.hash, generation);

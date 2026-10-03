@@ -45,7 +45,8 @@ class PeopleVueContracts(unittest.TestCase):
         self.assertIn(":scope > [data-prks-vue-route-host]", present)
         self.assertIn("contentDiv.innerHTML = '';", present)
         self.assertLess(present.index("querySelector"), present.index("contentDiv.innerHTML = '';"))
-        self.assertIn("samePeopleWorkspace && typeof window.prksVueDismissPeople", app)
+        self.assertIn("samePeopleWorkspace ||", app)
+        self.assertIn("retainedRouteSurface && typeof window.prksVueDismissRoute", app)
         refresh = app[
             app.index("function prksOfflineMaybeRefreshFocusedRoute") : app.index(
                 "function prksRenderConnectivityIndicator"

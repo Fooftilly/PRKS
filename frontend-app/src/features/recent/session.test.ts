@@ -1,14 +1,14 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readRouteSurface } from '../../route-surface/lifecycle'
-import { dismissRecent, presentRecent, registerRecentBridge, resetRecentSessionForTests } from './session'
+import { dismissRouteSurface, readRouteSurface } from '../../route-surface/lifecycle'
+import { presentRecent, registerRecentBridge, resetRecentSessionForTests } from './session'
 
 afterEach(() => {
   resetRecentSessionForTests()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
   delete window.prksVuePresentRoute
-  delete window.prksVueDismissRecent
+  delete window.prksVueDismissRoute
   delete window.prksWorkCardHtml
   delete window.prksWorkBrowseModeToggleHtml
   delete window.prksPageHeaderIconHtml
@@ -81,7 +81,7 @@ describe('Recent route bridge', () => {
     presentRecent({ owner: pane, host: el, rows: [], generation: 2 })
     expect(el.querySelector('.prks-inline-message')?.textContent).toBe('No recently opened documents found.')
     expect(fetchMock).not.toHaveBeenCalled()
-    dismissRecent(pane)
+    dismissRouteSurface(pane)
     presentRecent({
       owner: pane,
       host: el,
@@ -118,7 +118,7 @@ describe('Recent route bridge', () => {
     window.prksWorkCardHtml = (work) => `<div data-work-id="${String(work.id)}"></div>`
     registerRecentBridge(window)
     expect(window.prksVuePresentRoute).toBeTypeOf('function')
-    expect(window.prksVueDismissRecent).toBeTypeOf('function')
+    expect(window.prksVueDismissRoute).toBeTypeOf('function')
     expect((el as HTMLElement & { __prksVueRouteRequest?: unknown }).__prksVueRouteRequest).toBeUndefined()
     expect(el.querySelector('[data-work-id="early"]')).not.toBeNull()
     expect(decoy.querySelector('[data-prks-recent-view]')).toBeNull()
@@ -148,7 +148,7 @@ describe('Recent route bridge', () => {
       generation: 1,
       shell: false,
     })
-    window.prksVueDismissRecent?.(main)
+    window.prksVueDismissRoute?.(main)
     expect(mainHost.querySelector('[data-prks-recent-view]')).toBeNull()
     expect(secondaryHost.querySelector('[data-work-id="side"]')).not.toBeNull()
   })
@@ -208,7 +208,7 @@ describe('Recent route bridge', () => {
     expect(inits).toEqual(['a', 'b'])
     const live = el.querySelector('img[data-prks-thumb-lazy]')
     preview.__prksWorkThumbPreviewSource = live
-    dismissRecent(pane)
+    dismissRouteSurface(pane)
     expect(releaseLog).toContainEqual({ id: 'b', connected: true, underRecent: true })
     expect(preview.__prksWorkThumbPreviewSource).toBeNull()
     expect(el.querySelector('[data-prks-recent-view]')).toBeNull()

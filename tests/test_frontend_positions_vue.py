@@ -38,9 +38,9 @@ class PositionsVueContracts(unittest.TestCase):
         self.assertIn(":scope > [data-prks-vue-route-host]", present)
         self.assertIn("contentDiv.innerHTML = '';", present)
         self.assertLess(present.index("querySelector"), present.index("contentDiv.innerHTML = '';"))
-        self.assertIn("prksVueDismissPositions", app)
+        self.assertIn("samePositionsWorkspace ||", app)
         self.assertIn(
-            "samePositionsWorkspace && typeof window.prksVueDismissPositions",
+            "retainedRouteSurface && typeof window.prksVueDismissRoute",
             app,
         )
 

@@ -140,10 +140,7 @@ interface Window {
     initialText: string,
   ) => boolean
   prksVuePresentRoute?: (request: unknown) => boolean
-  prksVueDismissProgress?: (owner: object) => void
-  prksVueDismissRecent?: (owner: object) => void
-  prksVueDismissTypes?: (owner: object) => void
-  prksVueDismissTags?: (owner: object) => void
+  prksVueDismissRoute?: (owner: object) => void
   prksVueCloseTagsAliasModal?: (modal?: Element | null) => void
   prksVueCloseTagsMergeModal?: (modal?: Element | null) => void
   prksVueReportTagsRefreshFailure?: (owner: object, message: string) => void
@@ -162,7 +159,6 @@ interface Window {
   prksTagsMerge?: (sourceId: string, targetId: string) => Promise<TagsMutationOutcome>
   fetchTags?: (options?: { used?: boolean; signal?: AbortSignal }) => Promise<unknown>
   prksTagVocabularyMessage?: (error: unknown, action: string) => string
-  prksVueDismissPublishers?: (owner: object) => void
   prksVueClosePublishersAliasModal?: () => void
   prksVueReportPublishersRefreshFailure?: (owner: object, message: string) => void
   prksReloadPublishersPage?: (
@@ -174,7 +170,6 @@ interface Window {
   prksPublishersAddAlias?: (publisherId: string, alias: string) => Promise<PublishersMutationOutcome>
   prksPublishersRemoveAlias?: (publisherId: string, alias: string) => Promise<PublishersMutationOutcome>
   prksPublishersDelete?: (publisherId: string) => Promise<PublishersMutationOutcome>
-  prksVueDismissResearchGraph?: (owner: object) => void
   renderResearchGraph?: (
     container: HTMLElement,
     options?: {
@@ -190,7 +185,6 @@ interface Window {
   ) => Promise<unknown>
   prksReleaseResearchGraph?: (owner: object) => void
   __prksProcessingPeople?: ProcessingPeopleCatalogueEntry[]
-  prksVueDismissProcessing?: (owner: object) => void
   prksReloadProcessingFiles?: (
     owner: object,
     generation: number,
@@ -248,8 +242,6 @@ interface Window {
   ) => boolean
   prksTagPlusIconHtml?: () => string
   fetchPublishersInUse?: (options?: { signal?: AbortSignal; errorOwner?: object }) => Promise<unknown>
-  prksVueDismissSearch?: (owner: object) => void
-  prksVueDismissSavedViews?: (owner: object) => void
   /** Classic-script bridge for `frontend-app/src/features/search/codec.ts`. Vue imports that module. */
   prksSearchQueryCodec?: {
     definitionFromRoute: (route: unknown) => {
@@ -282,7 +274,6 @@ interface Window {
   fetchSavedView?: (id: string) => Promise<{ id?: string; name?: string; search?: { mode: string; q: string; tag: string; author: string; publisher: string } } | null>
   prksOpenCommandPalette?: () => void
   prksScopeLineHtml?: (options: { total?: number; label?: string }) => string
-  prksVueDismissFolderDetail?: (owner: object) => void
   prksEffectiveFolderDetailWorks?: (folder: unknown) => unknown[]
   prksFolderDetailSummaryHtml?: (folder: unknown) => string
   prksFolderDetailNavHtml?: (ctx: unknown, folder: unknown) => string
@@ -296,12 +287,6 @@ interface Window {
   prksMountFolderHierarchyNav?: (ctx: unknown, folder: unknown, container: ParentNode | null) => void
   prksDeleteFolderFromDetail?: (folderId: string, still?: () => boolean) => Promise<void>
   prksOpenNewFolderFromDetail?: (folder: Record<string, unknown>) => void
-  prksVueDismissConcepts?: (owner: object) => void
-  prksVueDismissPositions?: (owner: object) => void
-  prksVueDismissArguments?: (owner: object) => void
-  prksVueDismissPlaylists?: (owner: object) => void
-  prksVueDismissPeople?: (owner: object) => void
-  prksVueDismissPersonGroups?: (owner: object) => void
   prksOpenNewGroupModalFromGroupsPage?: (owner?: object) => void
   prksTakePersonGroupCreateNavigation?: () => { mode?: string; tabId?: string }
   prksClearPersonGroupIndexCreateOrigin?: () => void
@@ -386,7 +371,6 @@ interface Window {
   prksTogglePersonWorksEdit?: (ctx?: unknown) => void
   prksRemoveWorkRoleLink?: (button: HTMLButtonElement) => Promise<void>
   prksPersonViewInGraph?: () => void
-  prksVueDismissFolderLibrary?: (owner: object) => void
   prksFolderLibraryTreeInnerHtml?: (
     list: unknown,
     filterQuery?: string,

@@ -1,8 +1,7 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readRouteSurface, type RouteSurfaceOwner } from '../../route-surface/lifecycle'
+import { dismissRouteSurface, readRouteSurface, type RouteSurfaceOwner } from '../../route-surface/lifecycle'
 import {
-  dismissResearchGraph,
   presentResearchGraph,
   registerResearchGraphBridge,
   resetResearchGraphSessionForTests,
@@ -12,7 +11,7 @@ afterEach(() => {
   resetResearchGraphSessionForTests()
   document.body.innerHTML = ''
   delete window.prksVuePresentRoute
-  delete window.prksVueDismissResearchGraph
+  delete window.prksVueDismissRoute
   delete window.renderResearchGraph
   delete window.prksReleaseResearchGraph
   delete window.prksIcon
@@ -128,7 +127,7 @@ describe('Research Graph route bridge', () => {
     const secondaryHost = host()
     presentResearchGraph({ owner: main, host: mainHost, generation: 1, attach: {} })
     presentResearchGraph({ owner: secondary, host: secondaryHost, generation: 1, shell: false, attach: {} })
-    dismissResearchGraph(main)
+    dismissRouteSurface(main)
     await nextTick()
     expect(released).toEqual([main])
     expect(mainHost.querySelector('[data-prks-research-graph]')).toBeNull()

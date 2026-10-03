@@ -1,9 +1,8 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readRouteSurface } from '../../route-surface/lifecycle'
+import { dismissRouteSurface, readRouteSurface } from '../../route-surface/lifecycle'
 import {
   ARGUMENTS_RETAIN_SURFACE_KEY,
-  dismissArguments,
   presentArgumentDetail,
   presentArgumentsIndex,
   registerArgumentsBridge,
@@ -15,7 +14,7 @@ afterEach(() => {
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
   delete window.prksVuePresentRoute
-  delete window.prksVueDismissArguments
+  delete window.prksVueDismissRoute
   delete window.prksPageHeaderIconHtml
   delete window.prksIcon
   delete window.prksPaintScopeHost
@@ -364,7 +363,7 @@ describe('Arguments route bridge', () => {
     pane[ARGUMENTS_RETAIN_SURFACE_KEY] = false
     expect(cleanups.size).toBe(1)
 
-    dismissArguments(pane)
+    dismissRouteSurface(pane)
     expect(routeHost.querySelector('[data-prks-arguments-index-view]')).toBeNull()
     contentDiv.innerHTML = '<p><button type="button" id="prks-route-retry">Retry</button></p>'
     expect(contentDiv.querySelector('[data-prks-arguments-index-view]')).toBeNull()
@@ -678,7 +677,7 @@ describe('Arguments route bridge', () => {
     const other = owner('other')
     const otherHost = host()
     presentArgumentsIndex({ owner: other, host: otherHost, items: [rows[1]], generation: 1 })
-    dismissArguments(pane)
+    dismissRouteSurface(pane)
     expect(el.querySelector('[data-prks-arguments-index-view]')).toBeNull()
     expect(otherHost.textContent).toContain('Unrelated Argument')
   })

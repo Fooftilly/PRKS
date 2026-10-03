@@ -42,7 +42,11 @@ class ArgumentsVueContracts(unittest.TestCase):
         self.assertIn("contentDiv.innerHTML = '';", present)
         self.assertLess(present.index("querySelector"), present.index("contentDiv.innerHTML = '';"))
         self.assertIn(
-            "sameArgumentsWorkspace && typeof window.prksVueDismissArguments",
+            "retainedRouteSurface && typeof window.prksVueDismissRoute",
+            app,
+        )
+        self.assertIn(
+            "sameArgumentsWorkspace ||",
             app,
         )
         people = (FRONTEND / "components" / "people.js").read_text()

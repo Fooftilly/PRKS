@@ -48,7 +48,7 @@ function armPositionsOwnerCleanup(owner: PositionsOwner): void {
       armPositionsOwnerCleanup(owner)
       return
     }
-    dismissPositions(owner)
+    dismissRouteSurface(owner)
   })
 }
 
@@ -150,11 +150,6 @@ export function presentPositionDetail(input: PositionDetailPresentInput): void {
   armPositionsOwnerCleanup(input.owner)
 }
 
-/** Drop the Vue Positions tree owned by this pane. Other owners stay mounted. */
-export function dismissPositions(owner: object | null | undefined): void {
-  dismissRouteSurface(owner)
-}
-
 export function resetPositionsSessionForTests(): void {
   resetRouteSurfaceForTests()
 }
@@ -177,7 +172,6 @@ function isPositionDetailEarlyRequest(
 
 export function registerPositionsBridge(target: Window = window): void {
   registerRouteWindowBridge(target)
-  target.prksVueDismissPositions = dismissPositions
   registerEarlyRoutePresenter(
     POSITIONS_FEATURE,
     (request, host) => {

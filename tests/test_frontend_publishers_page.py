@@ -25,7 +25,7 @@ class FrontendPublishersPageTests(unittest.TestCase):
         self.assertIn("prksPresentVuePublishers", body)
         self.assertNotIn("renderPublishersPage", body)
         self.assertIn("async function prksReloadPublishersPage(", app)
-        self.assertIn("prksVueDismissPublishers", app)
+        self.assertIn("window.prksVueDismissRoute(ctx)", app)
         processing = app[processing_at:search_at]
         self.assertIn("prksLoadProcessingInbox(routeSignal)", processing)
         self.assertIn("prksPresentVueProcessing", processing)
