@@ -10,7 +10,8 @@ Positions is the first HTTP family with Pydantic request/response models at the
 adapter boundary only. See [docs/api-contract-boundary.md](https://github.com/Fooftilly/PRKS/blob/master/docs/api-contract-boundary.md)
 for the migration pattern, error envelope, and openapi-core / Schemathesis notes.
 Live fragment: `GET /api/openapi.json`. Checked-in artifact:
-`docs/api/openapi-positions.json`.
+`docs/api/openapi-positions.json`. Publishers follow the same pattern
+(`GET /api/openapi/publishers.json`, `docs/api/openapi-publishers.json`).
 
 ## UI design
 

@@ -24,7 +24,6 @@ const PRKS_API_ERROR_SOURCES = {
     recent: 'recent.fetch',
     'recently-added': 'recently-added.fetch',
     search: 'search.fetch',
-    publishers: 'publishers.fetch',
     tags: 'tags.fetch',
     'processing-files': 'processing-files.fetch',
     'saved-views': 'saved-views.fetch',
@@ -400,20 +399,6 @@ async function fetchSearch(query, tagName, options = {}) {
         return [];
     }
 }
-async function fetchPublishersInUse(options = {}) {
-    const errorOwner = prksApiErrorOwner(options);
-    try {
-        const res = await prksRequest('/api/publishers?used=1', { signal: prksApiSignal(options) });
-        const data = await prksParseJsonResponse(res, [], 'publishers', errorOwner);
-        return Array.isArray(data) ? data : [];
-    } catch (e) {
-        if (prksAbortFallback(e)) return [];
-        prksSetApiError('publishers', 'Could not load publishers.', '', errorOwner);
-        prksReportApiClientError('publishers');
-        return [];
-    }
-}
-
 async function fetchTags(options = {}) {
     if (!options.used && typeof prksReadTagsIndex === 'function') {
         try { const result = await prksReadTagsIndex(options); return result.value || []; }

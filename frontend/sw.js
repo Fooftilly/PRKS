@@ -24,7 +24,7 @@
     // frontend/js/owner-resource.js, or
     // frontend/js/route-model.js) retires old
     // shell/static caches.
-    const DEPENDENCY_REVISION = 'b21ba9cc4873';
+    const DEPENDENCY_REVISION = 'fea806244230';
     const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
     const PDF_CACHE = 'prks-pdf-v1';
@@ -168,7 +168,6 @@
         '/js/components/playlists.js',
         '/js/components/people.js',
         '/js/components/people-groups.js',
-        '/js/components/publishers.js',
         '/js/components/tags.js',
         '/js/components/types.js',
         '/js/components/processing-files.js',

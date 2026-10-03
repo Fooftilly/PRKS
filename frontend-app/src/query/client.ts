@@ -43,3 +43,20 @@ export function createPrksQueryClient(): QueryClient {
     },
   })
 }
+
+let shared: QueryClient | null = null
+
+/**
+ * The page's one QueryClient. The Settings app and every route surface use it,
+ * so a write in one pane invalidates the same read in another pane.
+ * Route surfaces render without an app, so they pass it to `useQuery` directly.
+ */
+export function prksQueryClient(): QueryClient {
+  if (!shared) shared = createPrksQueryClient()
+  return shared
+}
+
+export function resetPrksQueryClientForTests(): void {
+  shared?.clear()
+  shared = null
+}

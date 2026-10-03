@@ -4,37 +4,30 @@ import PrksButton from '../../components/PrksButton.vue'
 import { usePendingAction } from '../../route-surface/pending-action'
 import { registerPublishersAliasCloser } from './closers'
 import type { PublishersIntents } from './intents'
-import type { PublisherRow, PublishersProjection } from './projection'
-import type { PublishersDialogState, PublishersRefreshSink } from './session'
+import type { PublisherRow } from './projection'
+import { usePublishersCatalog } from './usePublishersCatalog'
 
 const props = defineProps<{
-  projection: PublishersProjection
   intents: PublishersIntents
-  dialogState?: PublishersDialogState
-  refreshSink?: PublishersRefreshSink
 }>()
+
+const { rows, loaded, loading, loadError, refreshError, retry } = usePublishersCatalog()
 
 const { actionBusy, actionBlocked, withBusy } = usePendingAction()
 const rootEl = ref<HTMLElement | null>(null)
 const draftName = ref('')
-const aliasPublisherId = ref<string | null>(props.projection.openAliasPublisherId)
+const aliasPublisherId = ref<string | null>(null)
 const aliasDraft = ref('')
 const aliasTrigger = ref<HTMLElement | null>(null)
 const createError = ref('')
 const aliasAddError = ref('')
 const aliasRemoveError = ref('')
 const aliasDeleteError = ref('')
-const refreshError = ref('')
-const rows = computed(() => props.projection.rows)
 const aliasPublisher = computed(() => rows.value.find((row) => row.id === aliasPublisherId.value) ?? null)
 const plusIcon = computed(() => window.prksTagPlusIconHtml?.() ?? '')
 const buildingIcon = computed(() => window.prksIcon?.('building-2', { size: 'sm' }) ?? '')
 
 let unregisterAlias: (() => void) | null = null
-
-function showRefreshFailure(message: string): void {
-  refreshError.value = message
-}
 
 function aliasEditButton(publisherId: string): HTMLElement | null {
   const root = rootEl.value
@@ -53,12 +46,6 @@ function restoreFocus(trigger: HTMLElement | null, fallback: HTMLElement | null)
   } catch {
     /* The control may already be gone. */
   }
-}
-
-function publishDialog(): void {
-  const state = props.dialogState
-  if (!state) return
-  state.aliasPublisherId = aliasPublisherId.value
 }
 
 function closeAlias(): void {
@@ -145,20 +132,26 @@ function removePublisher(): void {
 }
 
 watch(aliasPublisherId, (id) => {
-  publishDialog()
   clearAliasActionErrors()
   if (!id) return
   void nextTick(() => focusAliasInput())
-}, { immediate: true })
+})
+
+// Rows arrive after mount; their row icons are placeholders until refreshed.
+watch(rows, () => window.prksRefreshIcons?.(rootEl.value), { flush: 'post' })
+
+// A publisher deleted here or in another pane closes its alias dialog.
+watch(rows, (next) => {
+  const id = aliasPublisherId.value
+  if (id && !next.some((row) => row.id === id)) closeAlias()
+})
 
 onMounted(() => {
   window.prksRefreshIcons?.(rootEl.value)
-  if (props.refreshSink) props.refreshSink.set = showRefreshFailure
   unregisterAlias = registerPublishersAliasCloser(closeAlias)
 })
 
 onUnmounted(() => {
-  if (props.refreshSink?.set === showRefreshFailure) props.refreshSink.set = null
   unregisterAlias?.()
   unregisterAlias = null
 })
@@ -228,7 +221,14 @@ onUnmounted(() => {
     >
       {{ refreshError }}
     </p>
-    <div id="publishers-page-cloud" class="list-view publishers-page__list">
+    <div v-if="loading" class="prks-state prks-state--loading" role="status" data-publishers-loading>
+      <p class="prks-state__body">Loading publishers…</p>
+    </div>
+    <div v-else-if="loadError" class="prks-state prks-state--error" role="status" data-publishers-load-error>
+      <p class="prks-state__body">{{ loadError }}</p>
+      <PrksButton variant="secondary" size="sm" @click="retry">Try again</PrksButton>
+    </div>
+    <div v-if="loaded" id="publishers-page-cloud" class="list-view publishers-page__list">
       <p v-if="!rows.length" class="tags-page__empty publishers-page__empty">
         No publisher groups yet. Add a canonical name below, then add alternate spellings that appear on your files (⋯).
       </p>

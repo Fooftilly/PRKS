@@ -1,22 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import {
-  acceptPublisherRows,
-  buildPublishersProjection,
-  publisherSearchHash,
-  publisherStatsLabel,
-} from './projection'
+import { publisherRows, publisherSearchHash, publisherStatsLabel } from './projection'
 
 describe('Publishers projection', () => {
-  it('keeps coordinator order and drops rows without an id', () => {
-    const rows = acceptPublisherRows([
+  it('keeps server order and derives the row labels', () => {
+    const rows = publisherRows([
       { id: 'b', name: 'Beta', work_count: 2, aliases: ['B'] },
-      null,
-      { name: 'Missing' },
-      { id: '', name: 'Blank' },
-      { id: 'a', name: 'Ada', work_count: 1, aliases: ['A', 4, 'Ada Press'] },
+      { id: 'a', name: 'Ada & Co', work_count: 1, aliases: [] },
     ])
     expect(rows.map((row) => row.id)).toEqual(['b', 'a'])
-    expect(rows[1]?.aliases).toEqual(['A', 'Ada Press'])
+    expect(rows[0]).toMatchObject({ workCount: 2, aliases: ['B'], stats: '2 files · 1 alias' })
+    expect(rows[1]).toMatchObject({
+      stats: '1 file',
+      searchHash: '#/search?publisher=Ada%20%26%20Co',
+      encodedName: 'Ada%20%26%20Co',
+    })
   })
 
   it('formats the legacy file and alias line', () => {
@@ -27,20 +24,5 @@ describe('Publishers projection', () => {
     expect(publisherSearchHash('Oxford University Press')).toBe(
       '#/search?publisher=Oxford%20University%20Press',
     )
-  })
-
-  it('reopens the alias dialog only for a publisher that is still in the list', () => {
-    const open = buildPublishersProjection({
-      publishers: [{ id: 'p1', name: 'OUP', work_count: 1, aliases: [] }],
-      generation: 2,
-      resume: { aliasPublisherId: 'p1' },
-    })
-    expect(open.openAliasPublisherId).toBe('p1')
-    const closed = buildPublishersProjection({
-      publishers: [{ id: 'p1', name: 'OUP', work_count: 1, aliases: [] }],
-      generation: 2,
-      resume: { aliasPublisherId: 'missing' },
-    })
-    expect(closed.openAliasPublisherId).toBeNull()
   })
 })

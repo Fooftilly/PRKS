@@ -27,6 +27,14 @@ from backend.api_contract.positions import (
     PositionSyncState,
     PositionUpdateRequest,
 )
+from backend.api_contract.publishers import (
+    PublisherAliasAdded,
+    PublisherAliasRequest,
+    PublisherCreated,
+    PublisherCreateRequest,
+    PublisherDeleted,
+    PublisherInUse,
+)
 
 
 def _schema(model) -> dict[str, Any]:
@@ -359,6 +367,194 @@ def performance_diagnostics_openapi_document() -> dict[str, Any]:
                 "(#45 / #232). Schemas are generated from the same Pydantic "
                 "boundary as the rest of backend/api_contract. The snapshot "
                 "is disposable process metadata, not canonical library data."
+            ),
+        },
+        "paths": paths,
+        "components": {
+            "schemas": schemas,
+        },
+    }
+
+
+PUBLISHERS_CONTRACT_VERSION = "0.1.0"
+
+
+def publishers_openapi_document() -> dict[str, Any]:
+    """OpenAPI 3.1 for the online-only Publishers HTTP family (#45 / #232).
+
+    Same Pydantic-generated contract style as the Positions slice. Publishers
+    have no durable operation, revision, or sync state.
+    """
+    schemas: dict[str, Any] = {}
+    for model in (
+        ApiErrorEnvelope,
+        PublisherInUse,
+        PublisherCreateRequest,
+        PublisherCreated,
+        PublisherAliasRequest,
+        PublisherAliasAdded,
+        PublisherDeleted,
+    ):
+        raw = _schema(model)
+        _merge_defs(schemas, raw)
+
+    schemas["PublisherInUseList"] = {
+        "type": "array",
+        "items": {"$ref": "#/components/schemas/PublisherInUse"},
+    }
+
+    error_ref = {"$ref": "#/components/schemas/ApiErrorEnvelope"}
+    deleted_ref = {"$ref": "#/components/schemas/PublisherDeleted"}
+
+    def _json_content(schema_ref: dict[str, Any]) -> dict[str, Any]:
+        return {"application/json": {"schema": schema_ref}}
+
+    def _json_error(description: str) -> dict[str, Any]:
+        return {
+            "description": description,
+            "content": _json_content(error_ref),
+        }
+
+    # Shared body-read refusals from PRKSHandler._read_json_body (POST).
+    mutation_body_read_errors = {
+        "413": _json_error(
+            "Request body larger than the JSON body limit (request_too_large)."
+        ),
+        "415": _json_error(
+            "Missing or unsupported Content-Type (unsupported_media_type)."
+        ),
+    }
+
+    publisher_id_parameter = {
+        "name": "publisher_id",
+        "in": "path",
+        "required": True,
+        "schema": {"type": "string"},
+    }
+
+    paths: dict[str, Any] = {
+        "/api/publishers": {
+            "get": {
+                "operationId": "listPublishersInUse",
+                "summary": "List canonical Publishers with aliases and Work counts",
+                "tags": ["publishers"],
+                "parameters": [
+                    {
+                        "name": "used",
+                        "in": "query",
+                        "required": False,
+                        "description": (
+                            "`1`, `true`, or `yes` returns the catalog. Any "
+                            "other value returns an empty list."
+                        ),
+                        "schema": {"type": "string"},
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Publishers ordered by name, case-insensitively.",
+                        "content": _json_content(
+                            {"$ref": "#/components/schemas/PublisherInUseList"}
+                        ),
+                    },
+                },
+            },
+            "post": {
+                "operationId": "createPublisher",
+                "summary": "Create a canonical Publisher, or return the existing one",
+                "tags": ["publishers"],
+                "requestBody": {
+                    "required": True,
+                    "content": _json_content(
+                        {"$ref": "#/components/schemas/PublisherCreateRequest"}
+                    ),
+                },
+                "responses": {
+                    "200": {
+                        "description": "Created or existing Publisher.",
+                        "content": _json_content(
+                            {"$ref": "#/components/schemas/PublisherCreated"}
+                        ),
+                    },
+                    "400": _json_error("Schema or domain refusal (empty name)."),
+                    **mutation_body_read_errors,
+                },
+            },
+        },
+        "/api/publishers/{publisher_id}": {
+            "parameters": [publisher_id_parameter],
+            "delete": {
+                "operationId": "deletePublisher",
+                "summary": "Delete a Publisher group and its aliases",
+                "description": "Works keep their publisher text. Deleting a missing id is not an error.",
+                "tags": ["publishers"],
+                "responses": {
+                    "200": {
+                        "description": "Deleted.",
+                        "content": _json_content(deleted_ref),
+                    },
+                },
+            },
+        },
+        "/api/publishers/{publisher_id}/aliases": {
+            "parameters": [publisher_id_parameter],
+            "post": {
+                "operationId": "addPublisherAlias",
+                "summary": "Add an alternate spelling to a Publisher",
+                "tags": ["publishers"],
+                "requestBody": {
+                    "required": True,
+                    "content": _json_content(
+                        {"$ref": "#/components/schemas/PublisherAliasRequest"}
+                    ),
+                },
+                "responses": {
+                    "200": {
+                        "description": "Added, or already an alias of this Publisher.",
+                        "content": _json_content(
+                            {"$ref": "#/components/schemas/PublisherAliasAdded"}
+                        ),
+                    },
+                    "400": _json_error(
+                        "Schema or domain refusal (empty, unknown Publisher, "
+                        "canonical name, or used elsewhere)."
+                    ),
+                    **mutation_body_read_errors,
+                },
+            },
+            "delete": {
+                "operationId": "removePublisherAlias",
+                "summary": "Remove an alternate spelling from a Publisher",
+                "tags": ["publishers"],
+                "parameters": [
+                    {
+                        "name": "alias",
+                        "in": "query",
+                        "required": True,
+                        "schema": {"type": "string"},
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Removed.",
+                        "content": _json_content(deleted_ref),
+                    },
+                    "400": _json_error("Missing alias."),
+                    "404": _json_error("This Publisher has no such alias."),
+                },
+            },
+        },
+    }
+
+    return {
+        "openapi": "3.1.0",
+        "info": {
+            "title": "PRKS API — Publishers slice",
+            "version": PUBLISHERS_CONTRACT_VERSION,
+            "description": (
+                "Vertical-slice OpenAPI for the online-only Publishers family "
+                "(#45 / #232). Schemas are generated from the same Pydantic "
+                "boundary as the rest of backend/api_contract."
             ),
         },
         "paths": paths,

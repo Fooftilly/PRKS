@@ -1,14 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createPrksQueryClient } from '../../query/client'
+import { prksQueryKeys } from '../../query/keys'
 import { browserPublishersIntents, type PublishersIntentOwner } from './intents'
 
 afterEach(() => {
+  vi.unstubAllGlobals()
   delete window.prksNavigate
-  delete window.prksPublishersCreate
-  delete window.prksPublishersAddAlias
-  delete window.prksPublishersRemoveAlias
-  delete window.prksPublishersDelete
-  delete window.prksReloadPublishersPage
   delete window.prksConfirmDestructive
+  delete window.prksOfflineGuardMutation
 })
 
 function owner(state: { generation: number }): PublishersIntentOwner {
@@ -19,127 +18,143 @@ function owner(state: { generation: number }): PublishersIntentOwner {
   }
 }
 
+type Reply = { status?: number; body: unknown }
+
+/** Answer each request in order and record what was sent. */
+function stubFetch(...replies: Reply[]) {
+  const calls: { url: string; method: string; body: unknown }[] = []
+  const fetchMock = vi.fn(async (url: string, init: RequestInit = {}) => {
+    calls.push({
+      url,
+      method: init.method ?? 'GET',
+      body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined,
+    })
+    const reply = replies.shift()
+    if (!reply) throw new Error(`unexpected request ${url}`)
+    return new Response(JSON.stringify(reply.body), { status: reply.status ?? 200 })
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return calls
+}
+
+/** A query client whose Publishers read was already painted. */
+function primedClient() {
+  const client = createPrksQueryClient()
+  client.setQueryData(prksQueryKeys.publishers.inUse(), [])
+  return client
+}
+
 describe('Publishers intents', () => {
   it('opens search on the owning tab only while that page is current', () => {
     const navigate = vi.fn()
     window.prksNavigate = navigate
     const state = { generation: 2 }
-    browserPublishersIntents(owner(state), 2).openPublisher('Oxford University Press')
+    browserPublishersIntents(owner(state), 2, primedClient()).openPublisher('Oxford University Press')
     expect(navigate).toHaveBeenCalledWith('#/search?publisher=Oxford%20University%20Press', {
       tabId: 'tab-publishers',
     })
     state.generation = 3
-    browserPublishersIntents(owner(state), 2).openPublisher('Oxford University Press')
+    browserPublishersIntents(owner(state), 2, primedClient()).openPublisher('Oxford University Press')
     expect(navigate).toHaveBeenCalledTimes(1)
   })
 
-  it('reloads the list after a current create and does not fetch from Vue', async () => {
-    const create = vi.fn(async () => ({ ok: true }))
-    const reload = vi.fn(async () => true)
-    window.prksPublishersCreate = create
-    window.prksReloadPublishersPage = reload
-    const fetchMock = vi.fn()
+  it('creates through the typed client and invalidates the Publishers read', async () => {
+    const calls = stubFetch({ body: { id: 'R-1', name: 'OUP', existed: false } })
+    const client = primedClient()
+    const outcome = await browserPublishersIntents(owner({ generation: 2 }), 2, client).create('  OUP ')
+    expect(outcome.status).toBe('success')
+    expect(calls).toEqual([{ url: '/api/publishers', method: 'POST', body: { name: 'OUP' } }])
+    expect(client.getQueryState(prksQueryKeys.publishers.inUse())?.isInvalidated).toBe(true)
+  })
+
+  it('adds and removes aliases on the encoded publisher path', async () => {
+    const calls = stubFetch({ body: { status: 'added' } }, { body: { status: 'deleted' } })
+    const intents = browserPublishersIntents(owner({ generation: 1 }), 1, primedClient())
+    expect((await intents.addAlias('R/1', ' Oxford UP ')).status).toBe('success')
+    expect((await intents.removeAlias('R/1', 'A & B')).status).toBe('success')
+    expect(calls).toEqual([
+      { url: '/api/publishers/R%2F1/aliases', method: 'POST', body: { alias: 'Oxford UP' } },
+      { url: '/api/publishers/R%2F1/aliases?alias=A+%26+B', method: 'DELETE', body: undefined },
+    ])
+  })
+
+  it('shows the server refusal, or the action fallback when there is none', async () => {
+    stubFetch(
+      { status: 400, body: { error: 'alias already used' } },
+      { status: 500, body: null },
+    )
+    const intents = browserPublishersIntents(owner({ generation: 1 }), 1, primedClient())
+    expect(await intents.addAlias('R-1', 'OUP')).toEqual({ status: 'error', message: 'alias already used' })
+    expect(await intents.create('OUP')).toEqual({ status: 'error', message: 'Could not add publisher.' })
+  })
+
+  it('does not retry a write and reports a transport failure as the action failure', async () => {
+    const failure = vi.fn()
+    vi.stubGlobal('prksOfflineNoteRequestFailure', failure)
+    const fetchMock = vi.fn(async () => {
+      throw new TypeError('Failed to fetch')
+    })
     vi.stubGlobal('fetch', fetchMock)
-    const outcome = await browserPublishersIntents(owner({ generation: 2 }), 2).create('  OUP  ')
-    expect(outcome.status).toBe('success')
-    expect(create).toHaveBeenCalledWith('OUP')
-    expect(reload).toHaveBeenCalledWith(expect.anything(), 2, null)
-    expect(fetchMock).not.toHaveBeenCalled()
-    await browserPublishersIntents(owner({ generation: 2 }), 2).create('   ')
-    expect(create).toHaveBeenCalledTimes(1)
-    vi.unstubAllGlobals()
+    const outcome = await browserPublishersIntents(owner({ generation: 1 }), 1, primedClient()).create('OUP')
+    expect(outcome).toEqual({ status: 'error', message: 'Could not add publisher.' })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(failure).toHaveBeenCalledTimes(1)
   })
 
-  it('does not reload a publisher onto an owner that left during the create', async () => {
+  it('stays quiet and sends nothing when the offline guard refuses the write', async () => {
+    const calls = stubFetch()
+    const guard = vi.fn(() => true)
+    window.prksOfflineGuardMutation = guard
+    const outcome = await browserPublishersIntents(owner({ generation: 1 }), 1, primedClient()).create('OUP')
+    expect(outcome.status).toBe('quiet')
+    expect(guard).toHaveBeenCalledWith('Publishers require a connection to PRKS.')
+    expect(calls).toEqual([])
+  })
+
+  it('reports nothing to an owner that left during the write, but still invalidates', async () => {
     const state = { generation: 2 }
-    window.prksPublishersCreate = async () => {
-      state.generation = 3
-      return { ok: true }
-    }
-    const reload = vi.fn(async () => true)
-    window.prksReloadPublishersPage = reload
-    const outcome = await browserPublishersIntents(owner(state), 2).create('OUP')
-    expect(outcome.status).toBe('quiet')
-    expect(reload).not.toHaveBeenCalled()
-  })
-
-  it('reloads the alias dialog only after a current alias add', async () => {
-    const add = vi.fn(async () => ({ ok: true }))
-    const reload = vi.fn(async () => true)
-    window.prksPublishersAddAlias = add
-    window.prksReloadPublishersPage = reload
-    const outcome = await browserPublishersIntents(owner({ generation: 4 }), 4).addAlias('p1', ' Oxford ')
-    expect(outcome.status).toBe('success')
-    expect(add).toHaveBeenCalledWith('p1', 'Oxford')
-    expect(reload).toHaveBeenCalledWith(expect.anything(), 4, { aliasPublisherId: 'p1' })
-  })
-
-  it('does not resume an alias dialog the user already closed', async () => {
-    const reload = vi.fn(async () => true)
-    window.prksPublishersAddAlias = async () => ({ ok: true })
-    window.prksReloadPublishersPage = reload
-    const outcome = await browserPublishersIntents(owner({ generation: 4 }), 4, {
-      currentDialog: () => null,
-    }).addAlias('p1', 'Oxford')
-    expect(outcome.status).toBe('success')
-    expect(reload).toHaveBeenCalledWith(expect.anything(), 4, null)
-  })
-
-  it('resumes the publisher the user switched to, not the write that was in flight', async () => {
-    const reload = vi.fn(async () => true)
-    window.prksPublishersRemoveAlias = async () => ({ ok: true })
-    window.prksReloadPublishersPage = reload
-    const outcome = await browserPublishersIntents(owner({ generation: 4 }), 4, {
-      currentDialog: () => ({ aliasPublisherId: 'p2' }),
-    }).removeAlias('p1', 'OUP')
-    expect(outcome.status).toBe('success')
-    expect(reload).toHaveBeenCalledWith(expect.anything(), 4, { aliasPublisherId: 'p2' })
-  })
-
-  it('keeps a successful write when the refresh does not repaint', async () => {
-    const reload = vi.fn(async () => false)
-    window.prksPublishersCreate = async () => ({ ok: true })
-    window.prksReloadPublishersPage = reload
-    const outcome = await browserPublishersIntents(owner({ generation: 2 }), 2).create('OUP')
-    expect(outcome.status).toBe('success')
-    expect(reload).toHaveBeenCalledWith(expect.anything(), 2, null)
-  })
-
-  it('stays quiet when the offline guard refuses the write', async () => {
-    const reload = vi.fn()
-    window.prksReloadPublishersPage = reload
-    window.prksPublishersCreate = async () => ({ ok: false, reason: 'offline' })
-    const outcome = await browserPublishersIntents(owner({ generation: 1 }), 1).create('OUP')
-    expect(outcome.status).toBe('quiet')
-    expect(reload).not.toHaveBeenCalled()
+    let release: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        await gate
+        return new Response(JSON.stringify({ status: 'added' }), { status: 200 })
+      }),
+    )
+    const client = primedClient()
+    const pending = browserPublishersIntents(owner(state), 2, client).addAlias('R-1', 'OUP')
+    state.generation = 3
+    release?.()
+    expect((await pending).status).toBe('quiet')
+    expect(client.getQueryState(prksQueryKeys.publishers.inUse())?.isInvalidated).toBe(true)
   })
 
   it('does not delete after confirm once the owner has left', async () => {
+    const calls = stubFetch()
     const state = { generation: 4 }
-    const remove = vi.fn(async () => ({ ok: true }))
-    window.prksPublishersDelete = remove
     window.prksConfirmDestructive = async () => {
       state.generation = 5
       return true
     }
-    const outcome = await browserPublishersIntents(owner(state), 4).remove('p1', 'OUP')
+    const outcome = await browserPublishersIntents(owner(state), 4, primedClient()).remove('p1', 'OUP')
     expect(outcome.status).toBe('quiet')
-    expect(remove).not.toHaveBeenCalled()
+    expect(calls).toEqual([])
   })
 
-  it('deletes through the online wrapper and reloads without reopening the dialog', async () => {
-    const remove = vi.fn(async () => ({ ok: true }))
-    const reload = vi.fn(async () => true)
-    window.prksPublishersDelete = remove
-    window.prksReloadPublishersPage = reload
+  it('confirms, deletes, and invalidates', async () => {
+    const calls = stubFetch({ body: { status: 'deleted' } })
     window.prksConfirmDestructive = async (opts) => {
       expect(opts.title).toBe('Delete publisher “OUP”?')
       expect(opts.confirmLabel).toBe('Delete publisher')
       return true
     }
-    const outcome = await browserPublishersIntents(owner({ generation: 4 }), 4).remove('p1', 'OUP')
+    const client = primedClient()
+    const outcome = await browserPublishersIntents(owner({ generation: 4 }), 4, client).remove('p1', 'OUP')
     expect(outcome.status).toBe('success')
-    expect(remove).toHaveBeenCalledWith('p1')
-    expect(reload).toHaveBeenCalledWith(expect.anything(), 4, null)
+    expect(calls).toEqual([{ url: '/api/publishers/p1', method: 'DELETE', body: undefined }])
+    expect(client.getQueryState(prksQueryKeys.publishers.inUse())?.isInvalidated).toBe(true)
   })
 })
