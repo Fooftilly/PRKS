@@ -6,9 +6,9 @@
  * `frontend/js/navigation.js` remains the only hash parser. Work/PDF and
  * unrecognized hashes stay on that router and are not members here.
  *
- * The coordinator/global-window collapse (app.js dispatch and `window.*`
- * presenters) and the search codec in `saved-views.js` are the remainder of
- * #303 B1. They are not this type.
+ * `app.js` route dispatch is still coordinator-owned. The search query codec
+ * is `features/search/codec.ts`, not this type. Per-feature dismiss globals
+ * stay with their features.
  */
 import type { ArgumentDetailRouteInstance, ArgumentsIndexRouteInstance } from '../features/arguments/route'
 import type { ConceptDetailRouteInstance, ConceptsIndexRouteInstance } from '../features/concepts/route'

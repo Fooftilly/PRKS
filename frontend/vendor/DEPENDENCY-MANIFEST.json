@@ -113,11 +113,22 @@
       "version": "2.15.1"
     },
     {
+      "name": "prks-search-query-codec",
+      "runtime_files": [
+        {
+          "path": "/js/search-query-codec.js",
+          "sha256": "9be89de0e23be05b082e9192f47486eb67cffe1be1c204f4a9d868796ef4df1c"
+        }
+      ],
+      "source_category": "frontend-app:search-query-codec",
+      "version": "1"
+    },
+    {
       "name": "prks-vue",
       "runtime_files": [
         {
           "path": "/vue/prks-vue.js",
-          "sha256": "de41b55380d0212a3a4f8f6563cd331c5a4843e2e519c521f99e09c5cbca9fef"
+          "sha256": "49dbaa21f2fec1c7c39a6e4815e1aef68ca65ac161bdb6e9fbbfa2120c0ebf8d"
         }
       ],
       "source_category": "npm:frontend-app",

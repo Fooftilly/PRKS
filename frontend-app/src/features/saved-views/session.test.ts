@@ -18,7 +18,6 @@ afterEach(() => {
   vi.unstubAllGlobals()
   delete window.prksVuePresentRoute
   delete window.prksVueDismissSavedViews
-  delete window.prksSearchSummaryText
   delete window.prksDeleteSavedViewFromIndex
   delete window.fetchSavedView
   delete window.prksOpenCommandPalette
@@ -59,21 +58,15 @@ function cards(): void {
 }
 
 describe('saved views index projection', () => {
-  it('keeps named views, skips blank ids, and asks the codec for the summary', () => {
-    window.prksSearchSummaryText = (definition) => {
-      const search = definition as { q?: string }
-      return search.q ? `q:${search.q}` : 'Any file'
-    }
+  it('keeps named views, skips blank ids, and summarizes with the canonical codec', () => {
     const projection = buildSavedViewIndexProjection({
       views: [VIEW, { id: '  ', name: 'blank' }, null, { name: 'missing id' }],
       generation: 4,
     })
     expect(projection.generation).toBe(4)
     expect(projection.rows).toEqual([
-      { id: 'SV 1', name: 'Critical theory', summary: 'q:x', href: '#/views/SV%201' },
+      { id: 'SV 1', name: 'Critical theory', summary: 'All: x', href: '#/views/SV%201' },
     ])
-    delete window.prksSearchSummaryText
-    expect(buildSavedViewIndexProjection({ views: [VIEW], generation: 1 }).rows[0]?.summary).toBe('')
   })
 })
 
@@ -97,7 +90,6 @@ describe('saved view detail projection', () => {
 
 describe('Saved Views index route bridge', () => {
   it('paints rows, routes Edit and Delete through index intents, and ignores a stale owner', async () => {
-    window.prksSearchSummaryText = () => 'Any file'
     window.prksPageHeaderIconHtml = () => ''
     window.prksIcon = () => ''
     const open = vi.fn()
@@ -111,7 +103,7 @@ describe('Saved Views index route bridge', () => {
     const el = host()
     presentSavedViewsIndex({ owner: pane, host: el, views: [VIEW], generation: 3 })
     expect(el.querySelector('.prks-page-title')?.textContent?.replace(/\s+/g, ' ').trim()).toBe('Saved Views')
-    expect(el.querySelector('.saved-views-page__summary')?.textContent).toBe('Any file')
+    expect(el.querySelector('.saved-views-page__summary')?.textContent).toBe('All: x')
     expect(el.querySelector('a.saved-views-page__list-main')?.getAttribute('href')).toBe('#/views/SV%201')
     expect(el.querySelector('a.prks-btn')?.textContent).toBe('Open')
     const actions = el.querySelectorAll('.saved-views-page__row-actions button')
@@ -132,7 +124,6 @@ describe('Saved Views index route bridge', () => {
   })
 
   it('keeps an index delete busy until resolve, reject, or cancel, and ignores a second click', async () => {
-    window.prksSearchSummaryText = () => 'Any file'
     window.prksPageHeaderIconHtml = () => ''
     window.prksIcon = () => ''
     let release: (value?: void) => void = () => {}
@@ -214,7 +205,6 @@ describe('Saved Views index route bridge', () => {
   })
 
   it('starts one fetch for two delayed Edit clicks, and Edit and Delete cannot overlap', async () => {
-    window.prksSearchSummaryText = () => 'Any file'
     window.prksPageHeaderIconHtml = () => ''
     window.prksIcon = () => ''
     let releaseFetch: (value: typeof VIEW) => void = () => {}
@@ -286,7 +276,6 @@ describe('Saved Views index route bridge', () => {
   })
 
   it('shows a failed Edit or Delete on the owning row and stays quiet for cancel or stale', async () => {
-    window.prksSearchSummaryText = () => 'Any file'
     window.prksPageHeaderIconHtml = () => ''
     window.prksIcon = () => ''
     const open = vi.fn()
@@ -364,7 +353,6 @@ describe('Saved Views index route bridge', () => {
   })
 
   it('stays quiet when a delete fails after the owning index goes stale', async () => {
-    window.prksSearchSummaryText = () => 'Any file'
     window.prksPageHeaderIconHtml = () => ''
     window.prksIcon = () => ''
     let releaseDelete: (value: { ok: boolean; reason: string; message: string }) => void = () => {}
@@ -428,7 +416,6 @@ describe('Saved Views index route bridge', () => {
   })
 
   it('registers the index bridge and paints an early host', () => {
-    window.prksSearchSummaryText = () => 'tag:T'
     const el = host()
     el.setAttribute('data-prks-vue-route-host', 'true')
     ;(el as HTMLElement & { __prksVueRouteRequest?: object }).__prksVueRouteRequest = {
@@ -439,7 +426,7 @@ describe('Saved Views index route bridge', () => {
     }
     registerSavedViewsBridge(window)
     expect(window.prksVuePresentRoute).toBeTypeOf('function')
-    expect(el.querySelector('.saved-views-page__summary')?.textContent).toBe('tag:T')
+    expect(el.querySelector('.saved-views-page__summary')?.textContent).toBe('All: x')
   })
 })
 

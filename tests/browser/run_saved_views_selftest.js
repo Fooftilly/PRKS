@@ -93,6 +93,7 @@ sandbox.window = sandbox;
 sandbox.globalThis = sandbox;
 
 runScript('frontend/js/navigation.js', sandbox);
+runScript('frontend/js/search-query-codec.js', sandbox);
 runScript('frontend/js/saved-views.js', sandbox);
 
 const root = sandbox;
@@ -113,61 +114,10 @@ function assertEq(name, a, b) {
     assert(name, ok);
 }
 
-const parse = root.prksParseRoute;
-
-const allRoute = parse('#/search?any=1&q=critical%20theory');
-const allDef = root.prksSearchDefinitionFromRoute(allRoute);
-assert('all savable', allDef.ok === true);
-assertEq('all mode', allDef.definition.mode, 'all');
-assertEq('all q', allDef.definition.q, 'critical theory');
-
-const adv = root.prksSearchDefinitionFromRoute(parse('#/search?q=culture%20industry&author=Adorno'));
-assert('advanced savable', adv.ok === true);
-assertEq('advanced mode', adv.definition.mode, 'advanced');
-assertEq('advanced author', adv.definition.author, 'Adorno');
-
-const tag = root.prksSearchDefinitionFromRoute(parse('#/search?tag=Frankfurt%20School&publisher=Verso'));
-assert('tag savable', tag.ok === true);
-assertEq('tag mode', tag.definition.mode, 'tag');
-assertEq('tag name', tag.definition.tag, 'Frankfurt School');
-assertEq('tag q empty', tag.definition.q, '');
-
-const mixed = root.prksSearchDefinitionFromRoute(parse('#/search?any=1&author=Adorno'));
-assert('mixed unsavable', mixed.ok === false && mixed.unsavable === true);
-assertEq('mixed message', mixed.message, 'This search combination cannot be saved as a view.');
-
-const allHash = root.prksSearchHashFromDefinition(allDef.definition);
-assertEq('open as search all', allHash, '#/search?' + new URLSearchParams({ any: '1', q: 'critical theory' }).toString());
-const advHash = root.prksSearchHashFromDefinition(adv.definition);
-const advParams = new URLSearchParams(advHash.slice('#/search?'.length));
-assertEq('open as search adv q', advParams.get('q'), 'culture industry');
-assertEq('open as search adv author', advParams.get('author'), 'Adorno');
-assert('open as search adv no tag', advParams.get('tag') == null);
-const tagHash = root.prksSearchHashFromDefinition(tag.definition);
-const tagParams = new URLSearchParams(tagHash.slice('#/search?'.length));
-assertEq('open as search tag', tagParams.get('tag'), 'Frankfurt School');
-assertEq('open as search tag pub', tagParams.get('publisher'), 'Verso');
-assert('open as search tag no q', tagParams.get('q') == null);
-
-assertEq(
-    'summary all',
-    root.prksSearchSummaryText(allDef.definition),
-    'All: critical theory'
+assert(
+    'codec bridge is loaded',
+    root.prksSearchQueryCodec && typeof root.prksSearchQueryCodec.definitionFromRoute === 'function'
 );
-assertEq(
-    'summary advanced',
-    root.prksSearchSummaryText(adv.definition),
-    'Keywords: culture industry · Author: Adorno'
-);
-assertEq(
-    'summary tag',
-    root.prksSearchSummaryText(tag.definition),
-    'Tag: Frankfurt School · Publisher: Verso'
-);
-
-const mapped = root.prksSearchOptionsFromDefinition(allDef.definition);
-assertEq('options all any', mapped.options.any, '1');
-assertEq('options all q', mapped.q, 'critical theory');
 
 root.prksOpenSavedViewModalFromCurrentSearch();
 assertEq('modal opened', modalCalls[0], 'saved-view-modal');
@@ -177,7 +127,7 @@ assertEq('prefill q', inputs.q.value, 'critical theory');
 inputs.name.value = 'Adorno — Culture Industry';
 Promise.resolve(root.createSavedView({
     name: inputs.name.value,
-    search: allDef.definition,
+    search: { mode: 'all', q: 'critical theory', tag: '', author: '', publisher: '' },
 }))
     .then(function () {
         assert('posted create', posts.length === 1);
@@ -187,7 +137,13 @@ Promise.resolve(root.createSavedView({
 
         return root.updateSavedView('SV-1', {
             name: 'Critical Theory',
-            search: adv.definition,
+            search: {
+                mode: 'advanced',
+                q: 'culture industry',
+                tag: '',
+                author: 'Adorno',
+                publisher: '',
+            },
         });
     })
     .then(function () {
@@ -197,7 +153,8 @@ Promise.resolve(root.createSavedView({
 
         const src = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'js', 'saved-views.js'), 'utf8');
         assert('no results table', src.indexOf('saved_view_works') < 0);
-        assert('uses fetchSearch mapping', src.indexOf('prksSearchOptionsFromDefinition') >= 0);
+        assert('codec left saved-views.js', src.indexOf('function prksSearchDefinitionFromRoute') < 0);
+        assert('modal uses the codec bridge', src.indexOf('prksSearchQueryCodec') >= 0);
         assert('no eval', src.indexOf('eval(') < 0);
         assert('index painters removed',
             src.indexOf('function renderSavedViewsIndex') < 0 &&

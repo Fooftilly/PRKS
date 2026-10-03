@@ -17,10 +17,11 @@
     // DEPENDENCY_REVISION is derived from frontend/vendor/DEPENDENCY-MANIFEST.json
     // (sha256 prefix). scripts/dependency_gate.py --write-manifest keeps it in sync;
     // --repo fails if it drifts. Changing manifest bytes (vendor files, the
-    // committed Vue bundle, frontend/js/workspace-model.js, or
-    // frontend/js/work-route-projection.js) retires old
+    // committed Vue bundle, frontend/js/workspace-model.js,
+    // frontend/js/work-route-projection.js, or
+    // frontend/js/search-query-codec.js) retires old
     // shell/static caches.
-    const DEPENDENCY_REVISION = '7c0ccd25b226';
+    const DEPENDENCY_REVISION = '2fa7fabc21c7';
     const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
     const PDF_CACHE = 'prks-pdf-v1';
@@ -166,6 +167,7 @@
         '/js/components/types.js',
         '/js/components/processing-files.js',
         '/js/work-selection.js',
+        '/js/search-query-codec.js',
         '/js/saved-views.js',
         '/js/command-palette.js',
         '/js/work-route-projection.js',
