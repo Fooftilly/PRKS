@@ -3184,7 +3184,7 @@ function prksFlushPendingPrivateNotes(ctx) {
     if (!work || !session || !session.dirty || session.promise) return;
     if (!prksWorkPrivateNoteSessionCurrent(session, ctx, work.id)) return;
     const workId = String(work.id);
-    prksEnqueueWorkPrivateNoteSave({
+    void prksEnqueueWorkPrivateNoteSave({
         key: prksPrivateNotesEditorKey('work', workId, ctx),
         entityType: 'work',
         entityId: workId,
