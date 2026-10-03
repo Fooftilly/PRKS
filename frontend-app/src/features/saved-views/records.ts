@@ -83,9 +83,56 @@ function abortError(): DOMException {
 /** Page-wide: writes from any records instance reach every subscriber. */
 const writeListeners = new Set<() => void>()
 
-/** Page-wide count of writes sent, and how many are still unanswered. */
+/** Page-wide count of writes sent, settled, and still unanswered. */
 let writesSent = 0
+let writesSettled = 0
 let writesPending = 0
+
+/**
+ * Writes settled when the latest request for each Saved Views key began, per
+ * QueryClient, since each client holds its own requests.
+ */
+const requestStartedAfter = new WeakMap<QueryClient, Map<string, number>>()
+
+function requestStarts(queryClient: QueryClient): Map<string, number> {
+  let starts = requestStartedAfter.get(queryClient)
+  if (!starts) {
+    starts = new Map()
+    requestStartedAfter.set(queryClient, starts)
+  }
+  return starts
+}
+
+function slotOf(queryKey: readonly unknown[]): string {
+  return JSON.stringify(queryKey)
+}
+
+/**
+ * The list request, noting which writes had settled when it began. The index
+ * query uses it too, so an imperative reader can tell whether a request it
+ * joined could predate a write.
+ */
+export function fetchSavedViewList(queryClient: QueryClient, signal?: AbortSignal): Promise<SavedView[]> {
+  requestStarts(queryClient).set(slotOf(prksQueryKeys.savedViews.list()), writesSettled)
+  return listSavedViews(signal)
+}
+
+/**
+ * Resolve a read that reflects every write settled before it was asked for.
+ * `fetchQuery` joins a request already in flight; when that request began
+ * before such a write, read once more.
+ */
+async function readAfterSettledWrites<T>(
+  queryClient: QueryClient,
+  slot: string,
+  read: () => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  const settled = writesSettled
+  let value = await read()
+  if ((requestStarts(queryClient).get(slot) ?? -1) < settled && !signal?.aborted) value = await read()
+  return value
+}
 
 /**
  * When the request behind each record began: the writes sent by then, and
@@ -136,6 +183,7 @@ export function savedViewRecords(queryClient?: QueryClient): SavedViewRecords {
       return await mutation.mutate()
     } finally {
       writesPending -= 1
+      writesSettled += 1
       mutation.reset()
       await shared.invalidateQueries({ queryKey: prksQueryKeys.savedViews.all() })
       notifyWrite()
@@ -144,18 +192,22 @@ export function savedViewRecords(queryClient?: QueryClient): SavedViewRecords {
 
   const records: SavedViewRecords = {
     list() {
-      return client().fetchQuery({
-        queryKey: prksQueryKeys.savedViews.list(),
-        queryFn: ({ signal }) => listSavedViews(signal),
-        staleTime: 0,
-        meta: SAVED_VIEWS_READ_META,
-      })
+      const shared = client()
+      const queryKey = prksQueryKeys.savedViews.list()
+      return readAfterSettledWrites(shared, slotOf(queryKey), () =>
+        shared.fetchQuery({
+          queryKey,
+          queryFn: ({ signal }) => fetchSavedViewList(shared, signal),
+          staleTime: 0,
+          meta: SAVED_VIEWS_READ_META,
+        }),
+      )
     },
     get(viewId, signal) {
       if (signal?.aborted) return Promise.reject(abortError())
       const shared = client()
       const queryKey = prksQueryKeys.savedViews.detail(viewId)
-      const slot = JSON.stringify(queryKey)
+      const slot = slotOf(queryKey)
       pendingReads.set(slot, (pendingReads.get(slot) ?? 0) + 1)
       let held = true
       const release = (): boolean => {
@@ -166,17 +218,24 @@ export function savedViewRecords(queryClient?: QueryClient): SavedViewRecords {
         else pendingReads.delete(slot)
         return left <= 0
       }
-      const read = shared.fetchQuery({
-        queryKey,
-        queryFn: async ({ signal: requestSignal }) => {
-          const epoch = { sent: writesSent, pending: writesPending > 0 }
-          const found = await getSavedView(viewId, requestSignal)
-          if (found) readEpochs.set(found, epoch)
-          return found
-        },
-        staleTime: 0,
-        meta: SAVED_VIEWS_READ_META,
-      })
+      const read = readAfterSettledWrites(
+        shared,
+        slot,
+        () =>
+          shared.fetchQuery({
+            queryKey,
+            queryFn: async ({ signal: requestSignal }) => {
+              requestStarts(shared).set(slot, writesSettled)
+              const epoch = { sent: writesSent, pending: writesPending > 0 }
+              const found = await getSavedView(viewId, requestSignal)
+              if (found) readEpochs.set(found, epoch)
+              return found
+            },
+            staleTime: 0,
+            meta: SAVED_VIEWS_READ_META,
+          }),
+        signal,
+      )
       if (!signal) return read.finally(release)
       return new Promise<SavedView | null>((resolve, reject) => {
         const onAbort = () => {

@@ -1,11 +1,10 @@
 import { computed } from 'vue'
 import { useQuery, type QueryClient } from '@tanstack/vue-query'
 import { isAbortError } from '../../api/http'
-import { listSavedViews } from '../../api/saved-views'
 import { prksQueryClient } from '../../query/client'
 import { prksQueryKeys } from '../../query/keys'
 import { savedViewIndexRows } from './projection'
-import { SAVED_VIEWS_READ_META } from './records'
+import { fetchSavedViewList, SAVED_VIEWS_READ_META } from './records'
 
 const LOAD_ERROR = 'Could not load Saved Views.'
 const REFRESH_ERROR = 'Could not refresh Saved Views.'
@@ -20,7 +19,7 @@ export function useSavedViewsList(queryClient: QueryClient = prksQueryClient()) 
   const query = useQuery(
     {
       queryKey: prksQueryKeys.savedViews.list(),
-      queryFn: ({ signal }) => listSavedViews(signal),
+      queryFn: ({ signal }) => fetchSavedViewList(queryClient, signal),
       refetchOnMount: 'always',
       meta: SAVED_VIEWS_READ_META,
     },

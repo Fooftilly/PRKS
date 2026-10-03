@@ -357,4 +357,44 @@ describe('Saved View records', () => {
     expect(server.reads()).toBe(reads)
     expect(changed).not.toHaveBeenCalled()
   })
+
+  it('reads again when a read joins a request that began before a write settled', async () => {
+    let names = ['First']
+    let gate: Promise<void> | null = null
+    let listGets = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init: RequestInit = {}) => {
+        const method = init.method ?? 'GET'
+        if (method === 'GET') {
+          const seen = names
+          if (url === '/api/saved-views') listGets += 1
+          if (gate) await gate
+          if (url === '/api/saved-views') return new Response(JSON.stringify(seen.map((n) => view('SV-1', n))), { status: 200 })
+          return new Response(JSON.stringify(view('SV-1', seen[0])), { status: 200 })
+        }
+        names = ['Renamed']
+        return new Response(JSON.stringify(view('SV-1', 'Renamed')), { status: 200 })
+      }),
+    )
+    const records = savedViewRecords(createPrksQueryClient())
+    let release: () => void = () => {}
+    gate = new Promise((resolve) => {
+      release = resolve
+    })
+    // A list request and a record request start before the write.
+    const earlyList = records.list()
+    const earlyRecord = records.get('SV-1')
+    await vi.waitFor(() => expect(listGets).toBe(1))
+    gate = null
+    await records.update('SV-1', { name: 'Renamed', search: { ...SEARCH } })
+    // Reads asked for after the write join those requests, then read again.
+    const lateList = records.list()
+    const lateRecord = records.get('SV-1')
+    release()
+    expect((await earlyList)[0].name).toBe('First')
+    expect((await earlyRecord)?.name).toBe('First')
+    expect((await lateList)[0].name).toBe('Renamed')
+    expect((await lateRecord)?.name).toBe('Renamed')
+  })
 })
