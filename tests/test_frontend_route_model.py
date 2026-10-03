@@ -1,5 +1,7 @@
 """The typed route model owns the hash parser; navigation.js and app.js consume it."""
 import re
+import shutil
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -10,6 +12,8 @@ NAVIGATION = ROOT / "frontend" / "js" / "navigation.js"
 APP = ROOT / "frontend" / "js" / "app.js"
 INDEX = ROOT / "frontend" / "index.html"
 SW = ROOT / "frontend" / "sw.js"
+DIFFERENTIAL = ROOT / "tests" / "browser" / "run_route_model_differential_selftest.js"
+ORACLE = ROOT / "tests" / "browser" / "fixtures" / "route-parser-legacy-oracle.js"
 
 
 def _route_names() -> list[str]:
@@ -91,6 +95,27 @@ class RouteModelContracts(unittest.TestCase):
         self.assertLess(model_at, html.index('src="/js/navigation.js"'))
         sw = SW.read_text(encoding="utf-8")
         self.assertLess(sw.index("'/js/route-model.js'"), sw.index("'/js/navigation.js'"))
+
+    def test_port_matches_the_frozen_legacy_parser(self):
+        """The typed parser is deep-equal to the pre-port JS parser over the harvested corpus."""
+        oracle = ORACLE.read_text(encoding="utf-8")
+        self.assertIn("function prksParseRoute(", oracle)
+        self.assertIn("The application does not load this file.", oracle)
+        self.assertNotIn("route-parser-legacy-oracle", INDEX.read_text(encoding="utf-8"))
+        self.assertNotIn("route-parser-legacy-oracle", SW.read_text(encoding="utf-8"))
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "node is required for the route-model differential selftest")
+        proc = subprocess.run(
+            [node, str(DIFFERENTIAL)],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + "\n" + proc.stderr)
+        self.assertIn("parseRoute diffs 0", proc.stdout)
+        self.assertIn(", 0 failed", proc.stdout)
 
 
 if __name__ == "__main__":
