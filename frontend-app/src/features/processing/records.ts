@@ -34,8 +34,8 @@ export interface ProcessingRecords {
    * folder first. `signal` is the reader's lifetime (a route's abort signal):
    * when it aborts, this call rejects with an AbortError, and the request is
    * cancelled only if no other reader of that key is still waiting on it.
-   * A read asked for after a write settled never answers with a request that
-   * began before that write settled.
+   * A read asked for after a write was sent waits for that write to settle
+   * and never answers with a request that began before it settled.
    */
   inbox(options?: { rescan?: boolean; signal?: AbortSignal }): Promise<ProcessingFile[]>
   /** Save the card's draft as the file's staged Work metadata. */
@@ -53,8 +53,28 @@ export interface ProcessingRecords {
 /** Readers still waiting on each inbox key, page-wide. */
 const pendingReads = new Map<string, number>()
 
-/** Page-wide count of writes settled. */
+/** Page-wide count of writes sent and settled. */
+let writesSent = 0
 let writesSettled = 0
+
+/** Reads waiting for the writes sent before them to settle. */
+const settleWaiters = new Set<{ count: number; resolve: () => void }>()
+
+function untilSettled(count: number): Promise<void> {
+  if (writesSettled >= count) return Promise.resolve()
+  return new Promise((resolve) => {
+    settleWaiters.add({ count, resolve })
+  })
+}
+
+function noteWriteSettled(): void {
+  writesSettled += 1
+  for (const waiter of [...settleWaiters]) {
+    if (writesSettled < waiter.count) continue
+    settleWaiters.delete(waiter)
+    waiter.resolve()
+  }
+}
 
 /**
  * Writes settled when the latest request for each inbox key began, per
@@ -126,10 +146,11 @@ export function processingRecords(queryClient?: QueryClient): ProcessingRecords 
     // A mutation, not a bare call, so the client's mutation defaults (no
     // retry) and its transport-failure reporting apply.
     const mutation = new MutationObserver(shared, { mutationFn: run })
+    writesSent += 1
     try {
       return await mutation.mutate()
     } finally {
-      writesSettled += 1
+      noteWriteSettled()
       mutation.reset()
       settled?.()
       await shared.invalidateQueries({ queryKey: prksQueryKeys.processingFiles.all() })
@@ -165,14 +186,21 @@ export function processingRecords(queryClient?: QueryClient): ProcessingRecords 
           meta: PROCESSING_FILES_READ_META,
           ...(rescan ? { retry: false } : {}),
         })
-      // `fetchQuery` joins a request already in flight. When that request
-      // began before a write that settled before this read was asked for
-      // (an import, say), read once more so the imported file is gone.
-      const settledBefore = writesSettled
-      const read = fetchInbox().then((rows) => {
-        if ((requestStarts(shared).get(slot) ?? -1) >= settledBefore || signal?.aborted) return rows
-        return fetchInbox()
-      })
+      // A read answers only from a request that began after every write
+      // sent before it was asked for had settled (an import, say), as the
+      // classic coordinator queued a rescan behind writes. It waits for
+      // writes still in flight, and `fetchQuery` may join a request that
+      // began earlier, so it reads again until that holds.
+      const sentBefore = writesSent
+      const read = (async () => {
+        await untilSettled(sentBefore)
+        if (signal?.aborted) throw abortError()
+        let rows = await fetchInbox()
+        while ((requestStarts(shared).get(slot) ?? -1) < sentBefore && !signal?.aborted) {
+          rows = await fetchInbox()
+        }
+        return rows
+      })()
       if (!signal) return read.finally(release)
       return new Promise<ProcessingFile[]>((resolve, reject) => {
         const onAbort = () => {

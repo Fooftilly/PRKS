@@ -130,6 +130,22 @@ describe('Processing records', () => {
     await expect(after).resolves.toEqual([])
   })
 
+  it('holds a read asked for while an import is in flight until the import settles', async () => {
+    const calls = heldFetch()
+    const records = processingRecords(createPrksQueryClient())
+    const imported = records.importFile('PF-1')
+    await vi.waitFor(() => expect(calls).toHaveLength(1))
+    const during = records.inbox({ rescan: true })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(calls).toHaveLength(1)
+    calls[0].release(json(IMPORTED))
+    await expect(imported).resolves.toEqual(IMPORTED)
+    await vi.waitFor(() => expect(calls).toHaveLength(2))
+    expect(calls[1].url).toBe('/api/processing-files?rescan=1')
+    calls[1].release(json([]))
+    await expect(during).resolves.toEqual([])
+  })
+
   it('saves the normalized draft and invalidates the domain, without retrying a write', async () => {
     window.prksParsePublishedDateInput = (raw: string) => (raw === '03.10.2026' ? '2026-10-03' : '')
     const fetchMock = vi.fn(async () => json({ ...ROW, title: 'Notes' }))

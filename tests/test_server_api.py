@@ -5228,6 +5228,9 @@ class TestServerAPI(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual((patched["title"], patched["year"]), ("Parity", "1999"))
+        # Arrays and objects in draft fields are stringified too.
+        status, patched = self._processing_call("PATCH", path, {"publisher": ["x"]})
+        self.assertEqual((status, patched["publisher"]), (200, "['x']"))
         self.assertEqual(patched["rel_path"], "contract_parity.pdf")
         # null roles and tags leave them unchanged; a role without a person is skipped.
         status, patched = self._processing_call("PATCH", path, {"roles": None, "tags": None})

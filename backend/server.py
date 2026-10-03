@@ -77,10 +77,7 @@ from backend.api_contract.positions import (
     PositionUpdateRequest,
     parse_position_request,
 )
-from backend.api_contract.processing_files import (
-    ProcessingFile,
-    ProcessingFileImported,
-)
+from backend.api_contract.processing_files import ProcessingFile
 from backend.api_contract.publishers import (
     PublisherAliasRequest,
     PublisherCreateRequest,
@@ -1058,7 +1055,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 except ValueError as e:
                     self.send_json(400, {'error': str(e)})
                     return
-                self.send_json(200, dump_response(ProcessingFile, row))
+                # Domain already committed; do not dump_response here (see
+                # docs/api-contract-boundary.md).
+                self.send_json(200, row)
             elif path.startswith('/api/works/') and path.endswith('/roles'):
                 parts = path.split('/')
                 if len(parts) != 5 or parts[4] != 'roles':
@@ -2818,7 +2817,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                             safe_log_id(pf_id),
                             safe_error_type(e),
                         )
-                    self.send_json(200, dump_response(ProcessingFileImported, out))
+                    # Domain already committed; do not dump_response here (see
+                    # docs/api-contract-boundary.md).
+                    self.send_json(200, out)
                 else:
                     self.send_error(404, "API endpoint not found")
             elif path == '/api/works':

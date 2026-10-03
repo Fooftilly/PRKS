@@ -558,6 +558,14 @@
                 "type": "boolean"
               },
               {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
                 "type": "null"
               }
             ],
@@ -577,6 +585,14 @@
               },
               {
                 "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
               },
               {
                 "type": "null"
@@ -607,6 +623,14 @@
                 "type": "boolean"
               },
               {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
                 "type": "null"
               }
             ],
@@ -628,6 +652,14 @@
                 "type": "boolean"
               },
               {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
                 "type": "null"
               }
             ],
@@ -638,7 +670,7 @@
         "type": "object"
       },
       "ProcessingFileUpdateRequest": {
-        "description": "PATCH /api/processing-files/{id}. Omit a field to leave it unchanged.\n\nScalar fields are stringified and trimmed. ``thumb_page`` keeps a whole\npage number of at least 1 and clears anything else. An empty\n``target_folder_id`` clears it. ``roles`` and ``tags`` replace the staged\nlist; ``null`` leaves it unchanged.",
+        "description": "PATCH /api/processing-files/{id}. Omit a field to leave it unchanged.\n\nDraft values are stringified and trimmed (arrays and objects too; send\nstrings). ``thumb_page`` keeps a whole\npage number of at least 1 and clears anything else. An empty\n``target_folder_id`` clears it. ``roles`` and ``tags`` replace the staged\nlist; ``null`` leaves it unchanged.",
         "properties": {
           "title": {
             "anyOf": [
@@ -653,6 +685,14 @@
               },
               {
                 "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
               },
               {
                 "type": "null"
@@ -674,6 +714,14 @@
               },
               {
                 "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
               },
               {
                 "type": "null"
@@ -698,6 +746,14 @@
                 "type": "boolean"
               },
               {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
                 "type": "null"
               }
             ],
@@ -718,6 +774,14 @@
               },
               {
                 "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
               },
               {
                 "type": "null"
@@ -741,6 +805,14 @@
                 "type": "boolean"
               },
               {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
                 "type": "null"
               }
             ],
@@ -760,6 +832,14 @@
               },
               {
                 "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
               },
               {
                 "type": "null"
@@ -783,6 +863,14 @@
                 "type": "boolean"
               },
               {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
                 "type": "null"
               }
             ],
@@ -802,6 +890,14 @@
               },
               {
                 "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
               },
               {
                 "type": "null"
@@ -825,6 +921,14 @@
                 "type": "boolean"
               },
               {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
                 "type": "null"
               }
             ],
@@ -844,6 +948,14 @@
               },
               {
                 "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
               },
               {
                 "type": "null"
@@ -867,6 +979,14 @@
                 "type": "boolean"
               },
               {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
                 "type": "null"
               }
             ],
@@ -886,6 +1006,14 @@
               },
               {
                 "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
               },
               {
                 "type": "null"
@@ -909,6 +1037,14 @@
                 "type": "boolean"
               },
               {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
                 "type": "null"
               }
             ],
@@ -928,6 +1064,14 @@
               },
               {
                 "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
               },
               {
                 "type": "null"
@@ -951,6 +1095,14 @@
                 "type": "boolean"
               },
               {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
                 "type": "null"
               }
             ],
@@ -970,6 +1122,14 @@
               },
               {
                 "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
               },
               {
                 "type": "null"
@@ -993,6 +1153,14 @@
                 "type": "boolean"
               },
               {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
                 "type": "null"
               }
             ],
@@ -1012,6 +1180,14 @@
               },
               {
                 "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
               },
               {
                 "type": "null"
@@ -1036,6 +1212,14 @@
                 "type": "boolean"
               },
               {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
                 "type": "null"
               }
             ],
@@ -1057,6 +1241,14 @@
                 "type": "boolean"
               },
               {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
                 "type": "null"
               }
             ],
@@ -1076,6 +1268,14 @@
               },
               {
                 "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
               },
               {
                 "type": "null"
