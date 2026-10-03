@@ -17,7 +17,6 @@ class FrontendTagsPageTests(unittest.TestCase):
         app = _read(_APP)
         tags_at = app.index("case 'tags':")
         publishers_at = app.index("case 'publishers':")
-        types_at = app.index("case 'types':")
         processing_at = app.index("case 'processing-files':")
         search_at = app.index("case 'search':")
         tags_body = app[tags_at:publishers_at]
@@ -26,10 +25,6 @@ class FrontendTagsPageTests(unittest.TestCase):
         self.assertNotIn("renderTagsPage", tags_body)
         self.assertIn("async function prksReloadTagsVocabulary(", app)
         self.assertIn("window.prksVueDismissRoute(ctx)", app)
-        publishers = app[publishers_at:types_at]
-        self.assertIn("fetchPublishersInUse({ signal: routeSignal })", publishers)
-        self.assertIn("prksPresentVueRoute(ctx, contentDiv, 'publishers'", publishers)
-        self.assertNotIn("renderPublishersPage", publishers)
         processing = app[processing_at:search_at]
         self.assertIn("prksLoadProcessingInbox(routeSignal)", processing)
         self.assertIn("prksPresentVueProcessing", processing)

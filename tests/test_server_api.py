@@ -3688,52 +3688,105 @@ class TestServerAPI(unittest.TestCase):
             data = json.loads(sr.read().decode())
         self.assertTrue(any(x.get("id") == w_id for x in data))
 
+    def _publishers_call(self, method, path, payload=None, *, schema_valid=True):
+        """Send one Publishers request and check it against the OpenAPI slice.
+
+        ``schema_valid=False`` sends a body the schema refuses; only the
+        response is checked then.
+        """
+        from openapi_core import OpenAPI
+        from openapi_core.testing import MockRequest, MockResponse
+
+        from backend.api_contract.openapi import publishers_openapi_document
+
+        data = json.dumps(payload).encode() if payload is not None else None
+        req = urllib.request.Request(f"{self._base_url}{path}", data=data, method=method)
+        if data is not None:
+            req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req) as res:
+                status, raw = res.status, res.read()
+        except urllib.error.HTTPError as err:
+            status, raw = err.code, err.read()
+        parsed = urllib.parse.urlsplit(path)
+        api = OpenAPI.from_dict(publishers_openapi_document())
+        request = MockRequest(
+            host_url="http://127.0.0.1",
+            method=method.lower(),
+            path=parsed.path,
+            args=dict(urllib.parse.parse_qsl(parsed.query)),
+            data=data,
+        )
+        if schema_valid:
+            api.validate_request(request)
+        api.validate_response(
+            request,
+            MockResponse(data=raw, status_code=status, content_type="application/json"),
+        )
+        return status, json.loads(raw.decode())
+
     def test_publishers_api_list_create_alias_delete(self):
-        req_list = urllib.request.Request(f"{self._base_url}/api/publishers?used=1")
-        with urllib.request.urlopen(req_list) as rl:
-            before = json.loads(rl.read().decode())
+        status, before = self._publishers_call("GET", "/api/publishers?used=1")
+        self.assertEqual(status, 200)
         self.assertIsInstance(before, list)
 
-        req_p = urllib.request.Request(
-            f"{self._base_url}/api/publishers",
-            data=json.dumps({"name": "ApiCanonPublisher"}).encode(),
-            method="POST",
+        status, body = self._publishers_call(
+            "POST", "/api/publishers", {"name": "ApiCanonPublisher"}
         )
-        req_p.add_header("Content-Type", "application/json")
-        with urllib.request.urlopen(req_p) as rp:
-            body = json.loads(rp.read().decode())
-        self.assertIn("id", body)
+        self.assertEqual(status, 200)
+        self.assertEqual(body["name"], "ApiCanonPublisher")
+        self.assertIs(body["existed"], False)
         pid = body["id"]
-
-        req_a = urllib.request.Request(
-            f"{self._base_url}/api/publishers/{urllib.parse.quote(pid)}/aliases",
-            data=json.dumps({"alias": "ACP Alias"}).encode(),
-            method="POST",
+        status, again = self._publishers_call(
+            "POST", "/api/publishers", {"name": "apicanonpublisher"}
         )
-        req_a.add_header("Content-Type", "application/json")
-        with urllib.request.urlopen(req_a) as ra:
-            self.assertEqual(ra.status, 200)
+        self.assertEqual((status, again["id"], again["existed"]), (200, pid, True))
 
-        req_list2 = urllib.request.Request(f"{self._base_url}/api/publishers?used=1")
-        with urllib.request.urlopen(req_list2) as rl2:
-            after = json.loads(rl2.read().decode())
+        quoted = urllib.parse.quote(pid)
+        status, added = self._publishers_call(
+            "POST", f"/api/publishers/{quoted}/aliases", {"alias": "ACP Alias"}
+        )
+        self.assertEqual((status, added), (200, {"status": "added"}))
+
+        status, after = self._publishers_call("GET", "/api/publishers?used=1")
         row = next(x for x in after if x.get("id") == pid)
-        self.assertIn("ACP Alias", row.get("aliases", []))
+        self.assertEqual(row, {"id": pid, "name": "ApiCanonPublisher", "aliases": ["ACP Alias"], "work_count": 0})
 
         alias_enc = urllib.parse.quote("ACP Alias")
-        req_da = urllib.request.Request(
-            f"{self._base_url}/api/publishers/{urllib.parse.quote(pid)}/aliases?alias={alias_enc}",
-            method="DELETE",
+        status, removed = self._publishers_call(
+            "DELETE", f"/api/publishers/{quoted}/aliases?alias={alias_enc}"
         )
-        with urllib.request.urlopen(req_da) as rda:
-            self.assertEqual(rda.status, 200)
+        self.assertEqual((status, removed), (200, {"status": "deleted"}))
+        status, missing = self._publishers_call(
+            "DELETE", f"/api/publishers/{quoted}/aliases?alias={alias_enc}"
+        )
+        self.assertEqual((status, missing["error"]), (404, "alias not found"))
 
-        req_dp = urllib.request.Request(
-            f"{self._base_url}/api/publishers/{urllib.parse.quote(pid)}",
-            method="DELETE",
+        status, deleted = self._publishers_call("DELETE", f"/api/publishers/{quoted}")
+        self.assertEqual((status, deleted), (200, {"status": "deleted"}))
+
+    def test_publishers_api_refuses_wrong_types_and_keeps_domain_messages(self):
+        status, body = self._publishers_call("POST", "/api/publishers", {"name": 7}, schema_valid=False)
+        self.assertEqual((status, body["code"]), (400, "invalid_request"))
+        status, body = self._publishers_call("POST", "/api/publishers", {}, schema_valid=False)
+        self.assertEqual((status, body["code"]), (400, "invalid_request"))
+        status, body = self._publishers_call("POST", "/api/publishers", {"name": "   "})
+        self.assertEqual((status, body), (400, {"error": "publisher name is empty"}))
+
+        _status, created = self._publishers_call(
+            "POST", "/api/publishers", {"name": "TypedAliasPublisher"}
         )
-        with urllib.request.urlopen(req_dp) as rdp:
-            self.assertEqual(rdp.status, 200)
+        quoted = urllib.parse.quote(created["id"])
+        status, body = self._publishers_call(
+            "POST", f"/api/publishers/{quoted}/aliases", {"alias": ["x"]}, schema_valid=False
+        )
+        self.assertEqual((status, body["code"]), (400, "invalid_request"))
+        status, body = self._publishers_call(
+            "POST", f"/api/publishers/{quoted}/aliases", {"alias": "typedaliaspublisher"}
+        )
+        self.assertEqual(
+            (status, body), (400, {"error": "alias matches canonical publisher name"})
+        )
 
     def test_processing_files_api_scan_patch_and_import(self):
         processing_root = server_module.processing_dir

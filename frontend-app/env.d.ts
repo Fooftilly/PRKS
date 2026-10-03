@@ -5,11 +5,6 @@ interface TagsMutationOutcome {
   reason?: string
 }
 
-interface PublishersMutationOutcome {
-  ok?: boolean
-  reason?: string
-}
-
 /** Painted inbox people. The coordinator stores the person rows; quick-create appends `{ id, name }`. */
 interface ProcessingPeopleCatalogueEntry {
   id?: string
@@ -160,16 +155,6 @@ interface Window {
   fetchTags?: (options?: { used?: boolean; signal?: AbortSignal }) => Promise<unknown>
   prksTagVocabularyMessage?: (error: unknown, action: string) => string
   prksVueClosePublishersAliasModal?: () => void
-  prksVueReportPublishersRefreshFailure?: (owner: object, message: string) => void
-  prksReloadPublishersPage?: (
-    owner: object,
-    generation: number,
-    resume?: { aliasPublisherId?: string | null } | null,
-  ) => Promise<boolean>
-  prksPublishersCreate?: (name: string) => Promise<PublishersMutationOutcome>
-  prksPublishersAddAlias?: (publisherId: string, alias: string) => Promise<PublishersMutationOutcome>
-  prksPublishersRemoveAlias?: (publisherId: string, alias: string) => Promise<PublishersMutationOutcome>
-  prksPublishersDelete?: (publisherId: string) => Promise<PublishersMutationOutcome>
   renderResearchGraph?: (
     container: HTMLElement,
     options?: {
@@ -241,7 +226,6 @@ interface Window {
     roleType: string,
   ) => boolean
   prksTagPlusIconHtml?: () => string
-  fetchPublishersInUse?: (options?: { signal?: AbortSignal; errorOwner?: object }) => Promise<unknown>
   /** Classic-script bridge for `frontend-app/src/features/search/codec.ts`. Vue imports that module. */
   prksSearchQueryCodec?: {
     definitionFromRoute: (route: unknown) => {
@@ -540,6 +524,8 @@ interface Window {
   prksConsumeApiError?: (owner: object) => { message?: string } | null
   prksInferWorkSourceKind?: (work: unknown) => string
   prksOfflineRuntimeState?: () => string
+  /** True when the offline runtime refused an online-only write and showed `message`. */
+  prksOfflineGuardMutation?: (message: string) => boolean
   prksOfflineRuntimeSubscribe?: (listener: (state: string) => void) => () => void
   prksAlertMessage?: (message: string, title?: string) => Promise<void> | void
   prksApplyPlaylistOfflineState?: (container: ParentNode | null) => void
