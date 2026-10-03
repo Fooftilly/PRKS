@@ -260,16 +260,16 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         self.assertIn('prksRefreshPendingWorkMetadata', body)
         # The overlaid rows, not the acknowledged snapshot, are what Vue renders.
         self.assertIn('rows: works', body)
-        self.assertIn('prksPresentVueProgress(ctx, contentDiv', body)
-        present = app[app.index('function prksPresentVueProgress'):
-                      app.index('function prksPresentVueRecent')]
+        self.assertIn("prksPresentVueRoute(ctx, contentDiv, 'progress'", body)
+        present = app[app.index('function prksPresentVueRoute('):
+                      app.index('async function prksReloadTagsVocabulary')]
         self.assertIn('owner: ctx', present)
-        self.assertIn("feature: 'progress'", present)
+        self.assertIn('feature: feature', present)
         # The host slot lives in the shared dispatcher. Progress must use it
         # so an early paint stays on this pane instead of a window global.
         self.assertIn('prksDeliverVueRoute(host, request)', present)
         deliver = app[app.index('function prksDeliverVueRoute'):
-                      app.index('function prksPresentVueProgress')]
+                      app.index('const PRKS_RETAINED_VUE_ROUTE_FEATURES')]
         self.assertIn('host.__prksVueRouteRequest = request', deliver)
         self.assertNotIn('prksSyncSidebarActive', present)
         self.assertIn('window.prksVueDismissRoute(ctx)', app)

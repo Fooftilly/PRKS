@@ -112,11 +112,11 @@ class FrontendSavedViewsTests(unittest.TestCase):
         """The index is the Vue list. The replaced painter and its edit/delete
         helpers are gone. Delete refreshes in place."""
         app = _read(_APP)
-        self.assertIn("function prksPresentVueSavedViewsIndex(", app)
+        self.assertNotIn("function prksPresentVueSavedViewsIndex(", app)
         case_at = app.index("case 'saved-views': {")
         case_body = app[case_at: case_at + 1200]
         self.assertIn("fetchSavedViews(", case_body)
-        self.assertIn("prksPresentVueSavedViewsIndex(", case_body)
+        self.assertIn("prksPresentVueRoute(ctx, contentDiv, 'saved-views'", case_body)
         self.assertNotIn("renderSavedViewsIndex", app)
         src = _read(_SV)
         for name in (

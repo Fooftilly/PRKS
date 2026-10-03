@@ -16,7 +16,7 @@ class PlaylistsVueContracts(unittest.TestCase):
         index = app[app.index("case 'playlists': {") : app.index("case 'playlist-detail': {")]
         detail = app[app.index("case 'playlist-detail': {") : app.index("case 'folder-detail': {")]
         self.assertIn("prksEffectivePlaylistRows(", index)
-        self.assertIn("prksPresentVuePlaylists(", index)
+        self.assertIn("prksPresentVueRoute(ctx, contentDiv, 'playlists'", index)
         self.assertIn("availability: 'unavailable'", index)
         self.assertIn("prksOfflinePrependBanner(contentDiv, null)", index)
         self.assertIn("notFoundTitle: 'Playlists not available offline'", index)
@@ -38,8 +38,11 @@ class PlaylistsVueContracts(unittest.TestCase):
         app = (FRONTEND / "app.js").read_text()
         self.assertIn("samePlaylistsWorkspace", app)
         self.assertIn("__prksRetainPlaylistsSurface", app)
+        retained = app[app.index("const PRKS_RETAINED_VUE_ROUTE_FEATURES") : app.index("function prksPresentVueRoute(")]
+        self.assertIn("'playlists',", retained)
+        self.assertIn("'playlist-detail',", retained)
         present = app[
-            app.index("function prksPresentVuePlaylists") : app.index("function prksRenderRouteLoading")
+            app.index("function prksPresentVueRoute(") : app.index("async function prksReloadTagsVocabulary")
         ]
         self.assertIn(":scope > [data-prks-vue-route-host]", present)
         self.assertIn("contentDiv.innerHTML = '';", present)

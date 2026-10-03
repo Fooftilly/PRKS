@@ -277,9 +277,8 @@ function prksBindPersonOfflineState(ctx, container) {
 function renderPeopleListUnavailable(container, ctx) {
     if (!container) return;
     const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
-    if (owner && typeof prksPresentVuePeople === 'function') {
-        prksPresentVuePeople(owner, container, {
-            feature: 'people',
+    if (owner && typeof prksPresentVueRoute === 'function') {
+        prksPresentVueRoute(owner, container, 'people', {
             availability: 'unavailable',
             items: [],
             generation: owner.generation,
@@ -842,9 +841,8 @@ function prksBindPeopleLibrarySearch(root) {
 function renderPeopleList(ctx, persons, container, options = {}) {
     if (!container) return;
     const roleFilter = options.roleFilter || '';
-    if (typeof prksPresentVuePeople === 'function') {
-        prksPresentVuePeople(ctx, container, {
-            feature: 'people',
+    if (typeof prksPresentVueRoute === 'function') {
+        prksPresentVueRoute(ctx, container, 'people', {
             availability: 'ready',
             items: Array.isArray(persons) ? persons : [],
             roleFilter: roleFilter,
@@ -1950,9 +1948,8 @@ function renderPersonDetails(ctx, person, container) {
     const route = ctx && (ctx.lastResolvedRoute || ctx.route);
     const personId = (person && person.id) || (route && route.params && route.params.personId) || '';
     const view = person ? prksPersonViewRecord(ctx, person) : null;
-    if (typeof prksPresentVuePeople === 'function') {
-        prksPresentVuePeople(ctx, container, {
-            feature: 'person',
+    if (typeof prksPresentVueRoute === 'function') {
+        prksPresentVueRoute(ctx, container, 'person', {
             availability: person ? 'ready' : 'not-found',
             person: view,
             personId: personId ? String(personId) : '',

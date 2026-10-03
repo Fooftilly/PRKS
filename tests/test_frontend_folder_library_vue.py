@@ -12,13 +12,13 @@ FRONTEND_APP = ROOT / "frontend-app" / "src" / "features" / "folder-library"
 class FolderLibraryVueContracts(unittest.TestCase):
     def test_coordinator_presents_vue_folder_library(self):
         app = (FRONTEND / "app.js").read_text()
-        self.assertIn("function prksPresentVueFolderLibrary", app)
+        self.assertNotIn("function prksPresentVueFolderLibrary", app)
         self.assertIn("prksDeliverVueRoute", app)
         self.assertNotIn("prksVuePresentFolderLibrary", app)
         self.assertIn("sameFolderLibraryWorkspace", app)
         self.assertIn("__prksRetainFolderLibrarySurface", app)
         folders_case = app[app.index("case 'folders': {"): app.index("case 'playlists': {")]
-        self.assertIn("prksPresentVueFolderLibrary", folders_case)
+        self.assertIn("prksPresentVueRoute(ctx, contentDiv, 'folder-library'", folders_case)
         self.assertNotIn("renderDashboard(", folders_case)
         self.assertIn("skipPageEnter: sameFolderLibraryWorkspace", folders_case)
         # Retained surfaces must still dismiss on same-route error after retain.
@@ -33,10 +33,10 @@ class FolderLibraryVueContracts(unittest.TestCase):
 
     def test_folder_library_route_reuses_host_on_in_place_refresh(self):
         app = (FRONTEND / "app.js").read_text()
+        retained = app[app.index("const PRKS_RETAINED_VUE_ROUTE_FEATURES") : app.index("function prksPresentVueRoute(")]
+        self.assertIn("'folder-library',", retained)
         present = app[
-            app.index("function prksPresentVueFolderLibrary") : app.index(
-                "function prksPresentVueConcepts"
-            )
+            app.index("function prksPresentVueRoute(") : app.index("async function prksReloadTagsVocabulary")
         ]
         self.assertIn(":scope > [data-prks-vue-route-host]", present)
         self.assertIn("contentDiv.innerHTML = '';", present)

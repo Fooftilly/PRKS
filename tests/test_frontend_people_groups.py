@@ -272,8 +272,8 @@ class FrontendPeopleGroupsTests(unittest.TestCase):
             r"""
 const painted = [];
 function prksGetFocusedTabContext() { return other; }
-function prksPresentVuePersonGroups(ctx, _root, payload) {
-  painted.push({ tabId: ctx.tabId, editing: payload.editing });
+function prksPresentVueRoute(ctx, _root, feature, payload) {
+  painted.push({ tabId: ctx.tabId, feature: feature, editing: payload.editing });
 }
 function prksRerenderPersonGroupDetail() { return new Promise(() => {}); }
 const origin = {
@@ -293,7 +293,7 @@ const other = {
 closePersonGroupEdit(origin);
 if (origin.ui.personGroupEditing) throw new Error('origin editor stayed open');
 if (!other.ui.personGroupEditing) throw new Error('focused pane editor was closed');
-if (painted.length !== 1 || painted[0].tabId !== 'origin' || painted[0].editing) {
+if (painted.length !== 1 || painted[0].tabId !== 'origin' || painted[0].feature !== 'person-group-detail' || painted[0].editing) {
   throw new Error('cancel painted the wrong pane: ' + JSON.stringify(painted));
 }
 process.stdout.write('ok');
