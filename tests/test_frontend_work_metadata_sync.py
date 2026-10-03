@@ -262,10 +262,15 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         self.assertIn('rows: works', body)
         self.assertIn('prksPresentVueProgress(ctx, contentDiv', body)
         present = app[app.index('function prksPresentVueProgress'):
-                      app.index('function prksRenderRouteLoading')]
+                      app.index('function prksPresentVueRecent')]
         self.assertIn('owner: ctx', present)
         self.assertIn("feature: 'progress'", present)
-        self.assertIn('host.__prksVueRouteRequest = request', present)
+        # The host slot lives in the shared dispatcher. Progress must use it
+        # so an early paint stays on this pane instead of a window global.
+        self.assertIn('prksDeliverVueRoute(host, request)', present)
+        deliver = app[app.index('function prksDeliverVueRoute'):
+                      app.index('function prksPresentVueProgress')]
+        self.assertIn('host.__prksVueRouteRequest = request', deliver)
         self.assertNotIn('prksSyncSidebarActive', present)
         self.assertIn('prksVueDismissProgress(ctx)', app)
         self.assertNotIn('window.__prksProgressPresentRequest', app)
