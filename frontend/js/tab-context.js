@@ -1,6 +1,9 @@
 /**
  * Per-workspace-tab runtime. Cold-parked contexts are inert. Up to three PDF
  * contexts may instead be warm-suspended with their DOM/runtime preserved.
+ * Owner-registry resources that are not suspendable are released on that warm
+ * suspend. Warm park does not invalidate a resource ticket. Cold park does.
+ * Role changes do not suspend, release, or replace them.
  */
 (function (root) {
     'use strict';
@@ -205,6 +208,38 @@
             return !ctx.destroyed;
         }
 
+        const ownerToken = {};
+        ctx.ownerToken = ownerToken;
+        const resourceApi = root.prksOwnerResource;
+        if (resourceApi && typeof resourceApi.createOwnerResourceRegistry === 'function') {
+            let resourceEpoch = 0;
+            const resourceHost = {
+                ownerId: id,
+                ownerToken: ownerToken,
+                generation: function () { return ctx.generation; },
+                alive: function () {
+                    return !ctx.destroyed && (ctx.mounted || ctx.suspended);
+                },
+                epoch: function () { return resourceEpoch; },
+                advanceEpoch: function () { resourceEpoch += 1; },
+            };
+            ctx.resourceRegistry = resourceApi.createOwnerResourceRegistry(resourceHost);
+            ctx.resourceTicket = function (generation) {
+                return resourceApi.resourceTicket(resourceHost, generation);
+            };
+        } else {
+            ctx.resourceRegistry = null;
+            ctx.resourceTicket = function () { return null; };
+        }
+        ctx.registerResource = function (ticket, registration) {
+            if (!ctx.resourceRegistry) return 'rejected';
+            return ctx.resourceRegistry.register(ticket, registration);
+        };
+        ctx.readResource = function (kind) {
+            if (!ctx.resourceRegistry) return undefined;
+            return ctx.resourceRegistry.get(kind);
+        };
+
         ctx.domId = function (localName) {
             const local = String(localName == null ? '' : localName).replace(/[^a-zA-Z0-9_-]/g, '-');
             return 'prks-tab-' + sanitizeTabId(id) + '-' + (local || 'id');
@@ -300,18 +335,43 @@
         ctx.setResource = function (name, value, disposer) {
             if (!assertAlive()) return value;
             const key = String(name);
+            if (key === 'researchGraph' && ctx.resourceRegistry) {
+                const orphan = ctx.resources.get(key);
+                ctx.resources.delete(key);
+                if (orphan) safeCall(orphan.disposer, key);
+                const ticket = typeof ctx.resourceTicket === 'function' ? ctx.resourceTicket() : null;
+                const result = ctx.resourceRegistry.register(ticket, {
+                    kind: 'researchGraph',
+                    value: value,
+                    suspendable: false,
+                    dispose: function () { safeCall(disposer, key); },
+                });
+                if (result === 'rejected') return value;
+                return value;
+            }
             ctx.clearResource(key);
             ctx.resources.set(key, { value: value, disposer: disposer });
             return value;
         };
 
         ctx.getResource = function (name) {
-            const rec = ctx.resources.get(String(name));
+            const key = String(name);
+            if (key === 'researchGraph' && ctx.resourceRegistry) {
+                return ctx.resourceRegistry.get('researchGraph');
+            }
+            const rec = ctx.resources.get(key);
             return rec ? rec.value : undefined;
         };
 
         ctx.clearResource = function (name) {
             const key = String(name);
+            if (key === 'researchGraph' && ctx.resourceRegistry) {
+                ctx.resourceRegistry.dispose('researchGraph');
+                const orphan = ctx.resources.get(key);
+                ctx.resources.delete(key);
+                if (orphan) safeCall(orphan.disposer, key);
+                return;
+            }
             const rec = ctx.resources.get(key);
             if (!rec) return;
             ctx.resources.delete(key);
@@ -375,6 +435,7 @@
         function teardownRuntime() {
             abortRoute();
             clearAllTimers();
+            if (ctx.resourceRegistry) ctx.resourceRegistry.releaseAll();
             clearAllResources();
             runCleanups();
             ctx.entity = null;
@@ -425,6 +486,7 @@
                 safeCall(() => root.prksReleaseWorkThumbPreview(ctx.root), 'thumbPreview');
             }
             if (!moveRoot(ctx.root, host)) return false;
+            if (ctx.resourceRegistry) ctx.resourceRegistry.warmSuspend();
             ctx.host = host;
             ctx.mounted = false;
             ctx.suspended = true;
@@ -434,6 +496,7 @@
         ctx.resume = function (host) {
             if (ctx.destroyed || !ctx.suspended || !ctx.root) return false;
             if (!moveRoot(ctx.root, host)) return false;
+            if (ctx.resourceRegistry) ctx.resourceRegistry.resume();
             removeWarmLru(id);
             ctx.host = host;
             ctx.suspended = false;
@@ -502,7 +565,10 @@
                 suspended: !!ctx.suspended,
                 generation: ctx.generation,
                 hasAbortController: !!ctx.abortController,
-                resourceNames: Array.from(ctx.resources.keys()).sort(),
+                resourceNames: Array.from(new Set([].concat(
+                    Array.from(ctx.resources.keys()),
+                    ctx.resourceRegistry ? ctx.resourceRegistry.kinds() : []
+                ))).sort(),
                 timerCount: ctx.timers.size,
                 cleanupCount: ctx.cleanupCallbacks.size,
             };

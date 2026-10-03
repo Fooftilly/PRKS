@@ -105,6 +105,14 @@ if (tabLeaveBuild.status !== 0) {
   process.exit(tabLeaveBuild.status || 1);
 }
 
+const ownerResourceBuild = spawnSync(process.execPath, [join(appRoot, "scripts/build-owner-resource.mjs")], {
+  cwd: appRoot,
+  stdio: "inherit",
+});
+if (ownerResourceBuild.status !== 0) {
+  process.exit(ownerResourceBuild.status || 1);
+}
+
 const py = resolvePython();
 const gate = spawnSync(
   py.executable,

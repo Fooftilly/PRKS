@@ -94,6 +94,17 @@
       "version": "1.47.0"
     },
     {
+      "name": "prks-owner-resource",
+      "runtime_files": [
+        {
+          "path": "/js/owner-resource.js",
+          "sha256": "19d06a0b25b35e709b45c3294c7e9c8061a2674e38587f184bba4b4242c54c8b"
+        }
+      ],
+      "source_category": "frontend-app:owner-resource",
+      "version": "1"
+    },
+    {
       "name": "prks-pdf-viewer",
       "runtime_files": [
         {

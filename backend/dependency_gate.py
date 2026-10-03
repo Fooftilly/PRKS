@@ -1337,6 +1337,22 @@ def build_dependency_manifest(repo_root: Path | None = None) -> dict[str, Any]:
             }
         )
 
+    owner_resource_path = root / "frontend" / "js" / "owner-resource.js"
+    if owner_resource_path.is_file():
+        entries.append(
+            {
+                "name": "prks-owner-resource",
+                "version": "1",
+                "source_category": "frontend-app:owner-resource",
+                "runtime_files": [
+                    {
+                        "path": "/js/owner-resource.js",
+                        "sha256": sha256_file(owner_resource_path),
+                    }
+                ],
+            }
+        )
+
     entries.sort(key=lambda e: e["name"])
     return {
         "schema_version": 1,

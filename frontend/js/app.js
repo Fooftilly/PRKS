@@ -3059,7 +3059,9 @@ window.prksReloadPublishersPage = prksReloadPublishersPage;
  * mounts the new instance into that shell. Vue does not fetch the projection.
  */
 function prksPresentVueResearchGraph(ctx, contentDiv, detail) {
-    if (ctx && typeof ctx.clearResource === 'function') ctx.clearResource('researchGraph');
+    if (ctx && ctx.resourceRegistry && typeof ctx.resourceRegistry.dispose === 'function') {
+        ctx.resourceRegistry.dispose('researchGraph');
+    }
     contentDiv.innerHTML = '';
     const host = document.createElement('div');
     host.setAttribute('data-prks-vue-route-host', 'true');
