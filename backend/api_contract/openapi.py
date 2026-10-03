@@ -35,6 +35,14 @@ from backend.api_contract.publishers import (
     PublisherDeleted,
     PublisherInUse,
 )
+from backend.api_contract.saved_views import (
+    SavedView,
+    SavedViewCreateRequest,
+    SavedViewDeleted,
+    SavedViewSearch,
+    SavedViewSearchInput,
+    SavedViewUpdateRequest,
+)
 
 
 def _schema(model) -> dict[str, Any]:
@@ -553,6 +561,178 @@ def publishers_openapi_document() -> dict[str, Any]:
             "version": PUBLISHERS_CONTRACT_VERSION,
             "description": (
                 "Vertical-slice OpenAPI for the online-only Publishers family "
+                "(#45 / #232). Schemas are generated from the same Pydantic "
+                "boundary as the rest of backend/api_contract."
+            ),
+        },
+        "paths": paths,
+        "components": {
+            "schemas": schemas,
+        },
+    }
+
+
+SAVED_VIEWS_CONTRACT_VERSION = "0.1.0"
+
+
+def saved_views_openapi_document() -> dict[str, Any]:
+    """OpenAPI 3.1 for the online-only Saved Views HTTP family (#45 / #232).
+
+    Same Pydantic-generated contract style as Publishers. Saved Views have no
+    durable operation, revision, or sync state. Results are never stored.
+    """
+    schemas: dict[str, Any] = {}
+    for model in (
+        ApiErrorEnvelope,
+        SavedViewSearch,
+        SavedViewSearchInput,
+        SavedView,
+        SavedViewCreateRequest,
+        SavedViewUpdateRequest,
+        SavedViewDeleted,
+    ):
+        raw = _schema(model)
+        _merge_defs(schemas, raw)
+
+    schemas["SavedViewList"] = {
+        "type": "array",
+        "items": {"$ref": "#/components/schemas/SavedView"},
+    }
+
+    error_ref = {"$ref": "#/components/schemas/ApiErrorEnvelope"}
+    view_ref = {"$ref": "#/components/schemas/SavedView"}
+
+    def _json_content(schema_ref: dict[str, Any]) -> dict[str, Any]:
+        return {"application/json": {"schema": schema_ref}}
+
+    def _json_error(description: str) -> dict[str, Any]:
+        return {
+            "description": description,
+            "content": _json_content(error_ref),
+        }
+
+    # Shared body-read refusals from PRKSHandler._read_json_body (POST/PATCH).
+    mutation_body_read_errors = {
+        "413": _json_error(
+            "Request body larger than the JSON body limit (request_too_large)."
+        ),
+        "415": _json_error(
+            "Missing or unsupported Content-Type (unsupported_media_type)."
+        ),
+    }
+
+    view_id_parameter = {
+        "name": "view_id",
+        "in": "path",
+        "required": True,
+        "schema": {"type": "string"},
+    }
+
+    paths: dict[str, Any] = {
+        "/api/saved-views": {
+            "get": {
+                "operationId": "listSavedViews",
+                "summary": "List Saved Views",
+                "tags": ["saved-views"],
+                "responses": {
+                    "200": {
+                        "description": "Saved Views ordered by name, case-insensitively.",
+                        "content": _json_content(
+                            {"$ref": "#/components/schemas/SavedViewList"}
+                        ),
+                    },
+                },
+            },
+            "post": {
+                "operationId": "createSavedView",
+                "summary": "Save a named search definition",
+                "tags": ["saved-views"],
+                "requestBody": {
+                    "required": True,
+                    "content": _json_content(
+                        {"$ref": "#/components/schemas/SavedViewCreateRequest"}
+                    ),
+                },
+                "responses": {
+                    "201": {
+                        "description": "Created.",
+                        "content": _json_content(view_ref),
+                    },
+                    "400": _json_error(
+                        "Domain refusal: wrong type, empty or too long name, "
+                        "or an incomplete or invalid search definition."
+                    ),
+                    "409": _json_error(
+                        "Name already used, or the library has the maximum "
+                        "number of Saved Views."
+                    ),
+                    **mutation_body_read_errors,
+                },
+            },
+        },
+        "/api/saved-views/{view_id}": {
+            "parameters": [view_id_parameter],
+            "get": {
+                "operationId": "getSavedView",
+                "summary": "Read one Saved View",
+                "tags": ["saved-views"],
+                "responses": {
+                    "200": {
+                        "description": "The Saved View.",
+                        "content": _json_content(view_ref),
+                    },
+                    "404": _json_error("No such Saved View."),
+                },
+            },
+            "patch": {
+                "operationId": "updateSavedView",
+                "summary": "Rename a Saved View or change its search",
+                "tags": ["saved-views"],
+                "requestBody": {
+                    "required": True,
+                    "content": _json_content(
+                        {"$ref": "#/components/schemas/SavedViewUpdateRequest"}
+                    ),
+                },
+                "responses": {
+                    "200": {
+                        "description": "Updated.",
+                        "content": _json_content(view_ref),
+                    },
+                    "400": _json_error(
+                        "Nothing to update, or a domain refusal of the name "
+                        "or search definition."
+                    ),
+                    "404": _json_error("No such Saved View."),
+                    "409": _json_error("Name already used by another Saved View."),
+                    **mutation_body_read_errors,
+                },
+            },
+            "delete": {
+                "operationId": "deleteSavedView",
+                "summary": "Delete a Saved View",
+                "description": "Deleting a view never deletes Works or files.",
+                "tags": ["saved-views"],
+                "responses": {
+                    "200": {
+                        "description": "Deleted.",
+                        "content": _json_content(
+                            {"$ref": "#/components/schemas/SavedViewDeleted"}
+                        ),
+                    },
+                    "404": _json_error("No such Saved View."),
+                },
+            },
+        },
+    }
+
+    return {
+        "openapi": "3.1.0",
+        "info": {
+            "title": "PRKS API — Saved Views slice",
+            "version": SAVED_VIEWS_CONTRACT_VERSION,
+            "description": (
+                "Vertical-slice OpenAPI for the online-only Saved Views family "
                 "(#45 / #232). Schemas are generated from the same Pydantic "
                 "boundary as the rest of backend/api_contract."
             ),

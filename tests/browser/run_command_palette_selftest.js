@@ -481,8 +481,19 @@ const sandbox = {
     fetchPlaylists: function () {
         return Promise.resolve([]);
     },
-    fetchSavedViews: function () {
-        return Promise.resolve([]);
+    prksSavedViewRecords: {
+        listeners: new Set(),
+        list: function () {
+            return Promise.resolve([]);
+        },
+        onWrite: function (listener) {
+            const set = this.listeners;
+            set.add(listener);
+            return function () { set.delete(listener); };
+        },
+        wrote: function () {
+            this.listeners.forEach(function (listener) { listener(); });
+        },
     },
 };
 
@@ -791,7 +802,7 @@ Promise.resolve()
         root.fetchPlaylists = function () {
             return Promise.resolve([{ id: 'PL-1', title: 'Lectures' }]);
         };
-        root.fetchSavedViews = function () {
+        root.prksSavedViewRecords.list = function () {
             return Promise.resolve([
                 {
                     id: 'SV-1',
@@ -1062,7 +1073,84 @@ Promise.resolve()
                     return r.entity === 'saved-view';
                 });
                 assert('saved view by name', svRows.some(function (r) { return r.entityId === 'SV-1'; }));
-                root.prksCloseCommandPalette();
+                // A Saved View write elsewhere re-reads the open palette's list.
+                const records = root.prksSavedViewRecords;
+                assertEq('open palette watches Saved View writes', records.listeners.size, 1);
+                const previousList = records.list;
+                records.list = function () { return Promise.resolve([]); };
+                records.wrote();
+                return new Promise(function (r) { setTimeout(r, 0); }).then(function () {
+                    const after = root.prksCommandPaletteGetResults().filter(function (r) {
+                        return r.entity === 'saved-view';
+                    });
+                    assertEq('deleted saved view leaves the open palette', after.length, 0);
+                    records.list = previousList;
+                    root.prksCloseCommandPalette();
+                    assertEq('closed palette stops watching Saved View writes', records.listeners.size, 0);
+                });
+            })
+            .then(function () {
+                // Writes during a held palette read queue one read after it
+                // settles, so the old answer is replaced without reopening.
+                const records = root.prksSavedViewRecords;
+                const previousList = records.list;
+                const row = function (name) {
+                    return { id: 'SV-1', name: name, search: { mode: 'all', q: '', tag: '', author: '', publisher: '' } };
+                };
+                let calls = 0;
+                let releaseHeld = function () {};
+                records.list = function () {
+                    calls += 1;
+                    if (calls === 1) {
+                        return new Promise(function (resolve) {
+                            releaseHeld = function () { resolve([row('Culture Old')]); };
+                        });
+                    }
+                    return Promise.resolve([row('Culture Renamed')]);
+                };
+                root.prksOpenCommandPalette();
+                root.prksCommandPaletteSetQuery('culture');
+                return new Promise(function (r) { setTimeout(r, 0); })
+                    .then(function () {
+                        assertEq('palette started one Saved Views read', calls, 1);
+                        records.wrote();
+                        records.wrote();
+                        assertEq('writes during a read wait for it', calls, 1);
+                        releaseHeld();
+                        return new Promise(function (r) { setTimeout(r, 0); });
+                    })
+                    .then(function () {
+                        assertEq('one queued read after the held read', calls, 2);
+                        const names = root.prksCommandPaletteGetResults()
+                            .filter(function (r) { return r.entity === 'saved-view'; })
+                            .map(function (r) { return r.label || r.title || r.name; });
+                        assert('open palette shows the post-write row', names.join('|').indexOf('Culture Renamed') !== -1);
+                        assert('open palette drops the pre-write row', names.join('|').indexOf('Culture Old') === -1);
+                        // A queued read never outlives its palette session.
+                        calls = 0;
+                        records.list = function () {
+                            calls += 1;
+                            return new Promise(function (resolve) {
+                                releaseHeld = function () { resolve([row('Culture Old')]); };
+                            });
+                        };
+                        root.prksCloseCommandPalette();
+                        root.prksOpenCommandPalette();
+                        root.prksCommandPaletteSetQuery('culture');
+                        return new Promise(function (r) { setTimeout(r, 0); });
+                    })
+                    .then(function () {
+                        records.wrote();
+                        root.prksCloseCommandPalette();
+                        releaseHeld();
+                        return new Promise(function (r) { setTimeout(r, 0); });
+                    })
+                    .then(function () {
+                        assertEq('closing drops the queued read', calls, 1);
+                        records.list = previousList;
+                    });
+            })
+            .then(function () {
                 root.prksOpenCommandPalette();
                 root.prksCommandPaletteSetQuery('PRIVATE_SAVED_QUERY_X9Q7');
                 return new Promise(function (r) { setTimeout(r, 0); });
@@ -1182,7 +1270,7 @@ Promise.resolve()
                 root.fetchPersons = function () { return Promise.resolve([]); };
                 root.fetchPersonGroups = function () { return Promise.resolve([]); };
                 root.fetchPlaylists = function () { return Promise.resolve([]); };
-                root.fetchSavedViews = function () { return Promise.resolve([]); };
+                root.prksSavedViewRecords.list = function () { return Promise.resolve([]); };
                 root.fetchConcepts = function () { return Promise.resolve([]); };
                 root.fetchPositions = function () { return Promise.resolve([]); };
                 root.fetchArguments = function () { return Promise.resolve([]); };

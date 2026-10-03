@@ -26,7 +26,6 @@ const PRKS_API_ERROR_SOURCES = {
     search: 'search.fetch',
     tags: 'tags.fetch',
     'processing-files': 'processing-files.fetch',
-    'saved-views': 'saved-views.fetch',
     'works-bulk': 'works.bulk',
     concepts: 'concepts.fetch',
     positions: 'positions.fetch',
@@ -923,83 +922,6 @@ async function bulkUpdateWorks(payload) {
     return data;
 }
 
-async function fetchSavedViews(options = {}) {
-    const errorOwner = prksApiErrorOwner(options);
-    try {
-        const res = await prksRequest('/api/saved-views', { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
-        const data = await prksParseJsonResponse(res, [], 'saved-views', errorOwner);
-        return Array.isArray(data) ? data : [];
-    } catch (e) {
-        if (prksAbortFallback(e)) return [];
-        prksSetApiError('saved-views', 'Could not load Saved Views.', '', errorOwner);
-        prksReportApiClientError('saved-views');
-        return [];
-    }
-}
-
-async function fetchSavedView(id, options = {}) {
-    const errorOwner = prksApiErrorOwner(options);
-    try {
-        const res = await prksRequest('/api/saved-views/' + encodeURIComponent(id), { signal: prksApiSignal(options) });
-        if (res.status === 404) return null;
-        const data = await prksParseJsonResponse(res, null, 'saved-views', errorOwner);
-        return data && data.id ? data : null;
-    } catch (e) {
-        if (prksAbortFallback(e)) return null;
-        prksSetApiError('saved-views', 'Could not load Saved View.', '', errorOwner);
-        prksReportApiClientError('saved-views');
-        return null;
-    }
-}
-
-function prksGuardSavedViewMutation(message) {
-    if (typeof prksOfflineGuardMutation !== 'function') return;
-    if (!prksOfflineGuardMutation(
-        message || 'Saved Views require a connection to PRKS.')) return;
-    const err = new Error('Requires a connection to PRKS.');
-    err.prksOfflineRefused = true;
-    throw err;
-}
-
-async function createSavedView(payload) {
-    prksGuardSavedViewMutation('Saving a view requires a connection to PRKS.');
-    const res = await prksRequest('/api/saved-views', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload || {}),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-        throw new Error((data && data.error) || 'Could not save view.');
-    }
-    return data;
-}
-
-async function updateSavedView(id, payload) {
-    prksGuardSavedViewMutation('Editing a Saved View requires a connection to PRKS.');
-    const res = await prksRequest('/api/saved-views/' + encodeURIComponent(id), {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload || {}),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-        throw new Error((data && data.error) || 'Could not update Saved View.');
-    }
-    return data;
-}
-
-async function deleteSavedView(id) {
-    prksGuardSavedViewMutation('Deleting a Saved View requires a connection to PRKS.');
-    const res = await prksRequest('/api/saved-views/' + encodeURIComponent(id), {
-        method: 'DELETE',
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-        throw new Error((data && data.error) || 'Could not delete Saved View.');
-    }
-}
-
 async function prksResearchJson(res, fallbackMessage, source) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -1759,11 +1681,6 @@ async function fetchResearchGraph(opts) {
 
 window.fetchFolders = fetchFolders;
 window.fetchTags = fetchTags;
-window.fetchSavedViews = fetchSavedViews;
-window.fetchSavedView = fetchSavedView;
-window.createSavedView = createSavedView;
-window.updateSavedView = updateSavedView;
-window.deleteSavedView = deleteSavedView;
 window.prksMarkResearchGraphCoreChanged = prksMarkResearchGraphCoreChanged;
 window.prksMarkResearchGraphPeopleChanged = prksMarkResearchGraphPeopleChanged;
 window.prksMarkConceptsDomainChanged = prksMarkConceptsDomainChanged;

@@ -4855,8 +4855,43 @@ class TestServerAPI(unittest.TestCase):
                 parsed = {"raw": raw}
             return exc.code, parsed
 
+    def _saved_views_call(self, method, path, payload=None, *, schema_valid=True):
+        """Send one Saved Views request and check it against the OpenAPI slice.
+
+        ``schema_valid=False`` sends a body the schema refuses; only the
+        response is checked then.
+        """
+        from openapi_core import OpenAPI
+        from openapi_core.testing import MockRequest, MockResponse
+
+        from backend.api_contract.openapi import saved_views_openapi_document
+
+        data = None if payload is None else json.dumps(payload).encode()
+        req = urllib.request.Request(f"{self._base_url}{path}", data=data, method=method)
+        if payload is not None:
+            req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req) as res:
+                status, raw = res.status, res.read()
+        except urllib.error.HTTPError as exc:
+            status, raw = exc.code, exc.read()
+        api = OpenAPI.from_dict(saved_views_openapi_document())
+        request = MockRequest(
+            host_url="http://127.0.0.1",
+            method=method.lower(),
+            path=urllib.parse.urlsplit(path).path,
+            data=data,
+        )
+        if schema_valid:
+            api.validate_request(request)
+        api.validate_response(
+            request,
+            MockResponse(data=raw, status_code=status, content_type="application/json"),
+        )
+        return status, json.loads(raw.decode())
+
     def test_saved_views_crud_and_duplicate_name(self):
-        status, created = self._sv_json(
+        status, created = self._saved_views_call(
             "POST",
             "/api/saved-views",
             {
@@ -4875,13 +4910,13 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(created["search"]["author"], "Adorno")
         self.assertNotIn("search_q", created)
         vid = created["id"]
-        status, listed = self._sv_json("GET", "/api/saved-views")
+        status, listed = self._saved_views_call("GET", "/api/saved-views")
         self.assertEqual(status, 200)
         self.assertTrue(any(v["id"] == vid for v in listed))
-        status, one = self._sv_json("GET", f"/api/saved-views/{vid}")
+        status, one = self._saved_views_call("GET", f"/api/saved-views/{vid}")
         self.assertEqual(status, 200)
         self.assertEqual(one["name"], "Adorno — culture industry")
-        status, dup = self._sv_json(
+        status, dup = self._saved_views_call(
             "POST",
             "/api/saved-views",
             {
@@ -4891,7 +4926,7 @@ class TestServerAPI(unittest.TestCase):
         )
         self.assertEqual(status, 409)
         self.assertEqual(dup["error"], "A Saved View with that name already exists.")
-        status, patched = self._sv_json(
+        status, patched = self._saved_views_call(
             "PATCH",
             f"/api/saved-views/{vid}",
             {"name": "Critical Theory"},
@@ -4899,21 +4934,22 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(patched["id"], vid)
         self.assertEqual(patched["name"], "Critical Theory")
-        status, missing = self._sv_json("GET", "/api/saved-views/SV-missing")
+        status, missing = self._saved_views_call("GET", "/api/saved-views/SV-missing")
         self.assertEqual(status, 404)
-        status, deleted = self._sv_json("DELETE", f"/api/saved-views/{vid}")
+        status, deleted = self._saved_views_call("DELETE", f"/api/saved-views/{vid}")
         self.assertEqual(status, 200)
-        status, gone = self._sv_json("GET", f"/api/saved-views/{vid}")
+        status, gone = self._saved_views_call("GET", f"/api/saved-views/{vid}")
         self.assertEqual(status, 404)
 
     def test_saved_views_reject_invalid_and_partial_search(self):
-        status, body = self._sv_json(
+        status, body = self._saved_views_call(
             "POST",
             "/api/saved-views",
             {"name": "Bad", "search": {"mode": "advanced", "author": "Adorno"}},
+            schema_valid=False,
         )
-        self.assertEqual(status, 400)
-        created = self._sv_json(
+        self.assertEqual((status, body), (400, {"error": "Search definition is incomplete."}))
+        created = self._saved_views_call(
             "POST",
             "/api/saved-views",
             {
@@ -4927,16 +4963,100 @@ class TestServerAPI(unittest.TestCase):
                 },
             },
         )[1]
-        status, partial = self._sv_json(
+        status, partial = self._saved_views_call(
             "PATCH",
             f"/api/saved-views/{created['id']}",
             {"search": {"author": "Adorno"}},
+            schema_valid=False,
         )
-        self.assertEqual(status, 400)
+        self.assertEqual((status, partial), (400, {"error": "Search definition is incomplete."}))
         self.assertEqual(
-            self._sv_json("GET", f"/api/saved-views/{created['id']}")[1]["search"]["q"],
+            self._saved_views_call("GET", f"/api/saved-views/{created['id']}")[1]["search"]["q"],
             "critical theory",
         )
+
+    def test_saved_views_wrong_types_keep_domain_messages(self):
+        search = {"mode": "all", "q": "typed", "tag": "", "author": "", "publisher": ""}
+        cases = (
+            ({"name": 7, "search": search}, "Name must be a string."),
+            ({"name": "Typed", "search": "all"}, "Search definition is required."),
+            ({"name": "Typed", "search": {**search, "q": 1}}, "Search fields must be strings."),
+            ({"name": "Typed", "search": {**search, "mode": "regex"}}, "Invalid search mode."),
+        )
+        for payload, message in cases:
+            with self.subTest(message=message):
+                status, body = self._saved_views_call(
+                    "POST", "/api/saved-views", payload, schema_valid=False
+                )
+                self.assertEqual((status, body), (400, {"error": message}))
+        _status, created = self._saved_views_call(
+            "POST", "/api/saved-views", {"name": "Typed", "search": search}
+        )
+        status, body = self._saved_views_call(
+            "PATCH", f"/api/saved-views/{created['id']}", {"name": 7}, schema_valid=False
+        )
+        self.assertEqual((status, body), (400, {"error": "Name must be a string."}))
+        status, body = self._saved_views_call(
+            "PATCH", f"/api/saved-views/{created['id']}", {}
+        )
+        self.assertEqual((status, body), (400, {"error": "Nothing to update."}))
+        status, body = self._saved_views_call("DELETE", "/api/saved-views/SV-missing")
+        self.assertEqual((status, body), (404, {"error": "Saved View not found."}))
+
+    def test_saved_views_request_schema_matches_the_live_endpoint(self):
+        """Inputs the schema accepts, the server accepts, and the reverse."""
+        search = {"mode": "all", "q": "parity", "tag": "", "author": "", "publisher": ""}
+        # Extra keys, top-level and nested, are ignored by both.
+        status, created = self._saved_views_call(
+            "POST",
+            "/api/saved-views",
+            {"name": "Parity", "search": {**search, "extra": 1}, "unused": True},
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(created["search"], search)
+        # The domain trims the mode; the schema types it as a string.
+        status, trimmed = self._saved_views_call(
+            "POST", "/api/saved-views", {"name": "Trimmed", "search": {**search, "mode": " all "}}
+        )
+        self.assertEqual((status, trimmed["search"]["mode"]), (201, "all"))
+        # A mode outside the three is a domain refusal of a schema-valid body.
+        status, body = self._saved_views_call(
+            "POST", "/api/saved-views", {"name": "Regex", "search": {**search, "mode": "regex"}}
+        )
+        self.assertEqual((status, body), (400, {"error": "Invalid search mode."}))
+        # PATCH null means "leave unchanged" in both.
+        vid = created["id"]
+        status, body = self._saved_views_call(
+            "PATCH", f"/api/saved-views/{vid}", {"name": None, "search": None}
+        )
+        self.assertEqual((status, body), (400, {"error": "Nothing to update."}))
+        status, renamed = self._saved_views_call(
+            "PATCH", f"/api/saved-views/{vid}", {"name": "Parity 2", "search": None}
+        )
+        self.assertEqual((status, renamed["name"], renamed["search"]), (200, "Parity 2", search))
+        # A missing search key is refused by both.
+        status, body = self._saved_views_call(
+            "POST",
+            "/api/saved-views",
+            {"name": "Short", "search": {"mode": "all", "q": "x"}},
+            schema_valid=False,
+        )
+        self.assertEqual((status, body), (400, {"error": "Search definition is incomplete."}))
+        from openapi_core import OpenAPI
+        from openapi_core.testing import MockRequest
+
+        from backend.api_contract.openapi import saved_views_openapi_document
+
+        api = OpenAPI.from_dict(saved_views_openapi_document())
+        with self.assertRaises(Exception):
+            api.validate_request(
+                MockRequest(
+                    host_url="http://127.0.0.1",
+                    method="post",
+                    path="/api/saved-views",
+                    data=json.dumps({"name": "Short", "search": {"mode": "all", "q": "x"}}).encode(),
+                )
+            )
 
     def test_saved_views_live_results_match_search(self):
         db = self.__class__.test_db

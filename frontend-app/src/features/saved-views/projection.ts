@@ -1,3 +1,4 @@
+import type { SavedView } from '../../api/saved-views'
 import { summaryText } from '../search/codec'
 import { buildSearchResultsProjection, SEARCH_NO_RESULTS } from '../search/projection'
 import type { SearchResultsProjection } from '../search/types'
@@ -50,34 +51,19 @@ export interface SavedViewIndexRow {
   readonly href: string
 }
 
-export interface SavedViewIndexProjection {
-  readonly rows: readonly SavedViewIndexRow[]
-  readonly generation: number
-}
-
 /** Summary text is `summaryText` from the search query codec. This does not restate it. */
 export function savedViewSummary(search: unknown): string {
   return summaryText(search)
 }
 
-export function buildSavedViewIndexProjection(input: {
-  views?: unknown
-  generation: number
-}): SavedViewIndexProjection {
-  const rows: SavedViewIndexRow[] = []
-  if (Array.isArray(input.views)) {
-    for (const item of input.views) {
-      const view = acceptSavedViewRecord(item)
-      if (!view) continue
-      rows.push({
-        id: view.id,
-        name: view.name,
-        summary: savedViewSummary(view.search),
-        href: `#/views/${encodeURIComponent(view.id)}`,
-      })
-    }
-  }
-  return { rows, generation: input.generation }
+/** Index rows from the typed list, in the server's order. */
+export function savedViewIndexRows(views: readonly SavedView[]): SavedViewIndexRow[] {
+  return views.map((view) => ({
+    id: view.id,
+    name: view.name || 'Saved View',
+    summary: savedViewSummary(view.search),
+    href: `#/views/${encodeURIComponent(view.id)}`,
+  }))
 }
 
 export function buildSavedViewDetailProjection(input: {
@@ -90,7 +76,7 @@ export function buildSavedViewDetailProjection(input: {
 }): SavedViewDetailProjection {
   const view = acceptSavedViewRecord(input.view)
   const availability: SavedViewDetailAvailability =
-    input.availability === 'ready' && view ? 'ready' : 'not-found'
+    input.availability === 'ready' && view ? 'ready' : input.availability === 'error' ? 'error' : 'not-found'
   const hash = text(input.searchHash)
   return {
     availability,

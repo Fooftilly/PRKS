@@ -3253,6 +3253,19 @@ async function prksRenderTabRoute(ctx, hash, options) {
     return renderTask;
 }
 
+/**
+ * A painted Saved View detail follows its record from before its search read:
+ * a write from any surface that changes or deletes the record re-resolves this
+ * owner through prksRenderTabRoute (so prksTabLeave), which also aborts that
+ * read. The follow ends with the route's signal.
+ */
+function prksFollowSavedViewDetail(ctx, route, view, routeSignal, stale) {
+    if (!routeSignal) return;
+    window.prksSavedViewRecords.follow(view, routeSignal, function () {
+        if (!stale()) void prksRenderTabRoute(ctx, route.canonicalHash);
+    });
+}
+
 async function prksCommitTabRouteRender(ctx, hash, options) {
     if (!ctx || ctx.destroyed) return;
     const opts = options || {};
@@ -4049,10 +4062,8 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     };
                     break;
                 }
-                const views = typeof fetchSavedViews === 'function' ? await fetchSavedViews({ signal: routeSignal }) : [];
-                if (stale()) return;
+                // Vue reads and writes Saved Views through its records service.
                 prksPresentVueRoute(ctx, contentDiv, 'saved-views', {
-                    views: views,
                     generation: generation,
                 });
                 break;
@@ -4070,9 +4081,27 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     break;
                 }
                 const viewId = route.params.viewId;
-                const view = typeof fetchSavedView === 'function' ? await fetchSavedView(viewId, { signal: routeSignal }) : null;
+                // Record: frontend-app records service, cancelled with this
+                // route. Rows: this coordinator's search read below.
+                let view = null;
+                let viewReadFailed = false;
+                try {
+                    view = await window.prksSavedViewRecords.get(viewId, routeSignal);
+                } catch (err) {
+                    if (stale() || (typeof prksIsAbortError === 'function' && prksIsAbortError(err))) return;
+                    viewReadFailed = true;
+                }
                 if (stale()) return;
                 ctx.setEntity('savedView', view || null);
+                if (viewReadFailed) {
+                    prksPresentVueRoute(ctx, contentDiv, 'saved-view-detail', {
+                        availability: 'error',
+                        viewId: viewId,
+                        generation: generation,
+                    });
+                    titleOpts = { notFound: true, notFoundTitle: 'Could not load Saved View' };
+                    break;
+                }
                 if (!view) {
                     prksPresentVueRoute(ctx, contentDiv, 'saved-view-detail', {
                         availability: 'not-found',
@@ -4082,6 +4111,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     titleOpts = { notFound: true, notFoundTitle: 'Saved View not found' };
                     break;
                 }
+                prksFollowSavedViewDetail(ctx, route, view, routeSignal, stale);
                 const mapped = prksSearchQueryCodec.optionsFromDefinition(view.search || {});
                 const rows = await prksEffectiveSearchResults(
                     mapped.q, mapped.tag, mapped.options, routeSignal, stale);

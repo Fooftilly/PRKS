@@ -409,6 +409,9 @@
         groupPromise: null,
         playlistPromise: null,
         savedViewPromise: null,
+        savedViewUnwatch: null,
+        savedViewLoading: false,
+        savedViewReloadDue: false,
         conceptPromise: null,
         positionPromise: null,
         argumentPromise: null,
@@ -1363,6 +1366,8 @@
         state.groupPromise = null;
         state.playlistPromise = null;
         state.savedViewPromise = null;
+        state.savedViewLoading = false;
+        state.savedViewReloadDue = false;
         state.conceptPromise = null;
         state.positionPromise = null;
         state.argumentPromise = null;
@@ -1400,6 +1405,51 @@
             });
     }
 
+    /**
+     * Saved Views come from the frontend-app records service, so the palette
+     * shares the index's query cache. The list it holds is replaced when a
+     * read finishes, never cleared first.
+     */
+    function loadSavedViews() {
+        const records = root.prksSavedViewRecords;
+        const listSaved = records && typeof records.list === 'function'
+            ? function () { return records.list(); }
+            : null;
+        const session = state.sessionGen;
+        state.savedViewLoading = true;
+        state.savedViewReloadDue = false;
+        state.savedViewPromise = wrapCatalog(listSaved, function (v) { state.savedViewCache = v; })
+            .then(function (list) {
+                if (session !== state.sessionGen) return list;
+                state.savedViewLoading = false;
+                if (state.savedViewReloadDue && state.open) loadSavedViews();
+                return list;
+            });
+    }
+
+    /**
+     * A Saved View write anywhere on the page re-reads the open palette's
+     * list, so a renamed or deleted view does not linger until it reopens.
+     * A write during a read queues one more read after it settles; several
+     * such writes still queue one.
+     */
+    function watchSavedViewWrites() {
+        unwatchSavedViewWrites();
+        const records = root.prksSavedViewRecords;
+        if (!records || typeof records.onWrite !== 'function') return;
+        state.savedViewUnwatch = records.onWrite(function () {
+            if (!state.open || !state.savedViewPromise) return;
+            if (state.savedViewLoading) state.savedViewReloadDue = true;
+            else loadSavedViews();
+        });
+    }
+
+    function unwatchSavedViewWrites() {
+        const stop = state.savedViewUnwatch;
+        state.savedViewUnwatch = null;
+        if (typeof stop === 'function') stop();
+    }
+
     function ensureCatalogs() {
         if (state.scope === 'create') return;
         if (normalizeQuery(state.query).length < MIN_DYNAMIC_LEN) return;
@@ -1416,9 +1466,7 @@
             const fetchPl = root.fetchPlaylists;
             state.playlistPromise = wrapCatalog(fetchPl, function (v) { state.playlistCache = v; });
         }
-        if (!state.savedViewPromise) {
-            state.savedViewPromise = wrapCatalog(root.fetchSavedViews, function (v) { state.savedViewCache = v; });
-        }
+        if (!state.savedViewPromise) loadSavedViews();
         if (!state.conceptPromise) {
             state.conceptPromise = wrapCatalog(root.fetchConcepts, function (v) { state.conceptCache = v; });
         }
@@ -1745,6 +1793,7 @@
         state.queryGen += 1;
         clearDebounce();
         clearCaches();
+        watchSavedViewWrites();
         parts.input.value = '';
         if (parts.title) {
             if (state.scope === 'create') parts.title.textContent = 'Create…';
@@ -1788,6 +1837,7 @@
         state.emptyCreate = false;
         clearDebounce();
         clearCaches();
+        unwatchSavedViewWrites();
         const parts = paletteEls();
         if (parts.input) {
             parts.input.value = '';

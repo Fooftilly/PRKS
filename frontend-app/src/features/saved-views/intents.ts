@@ -1,3 +1,9 @@
+import {
+  savedViewActionMessage as actionMessage,
+  savedViewRecords,
+  SavedViewOfflineRefusal,
+  type SavedViewRecords,
+} from './records'
 import type { SavedViewRecord } from './types'
 
 /** Owning TabContext fields Saved View intents need. Not a second route model. */
@@ -9,43 +15,37 @@ export interface SavedViewIntentOwner {
   route?: { name?: string } | null
 }
 
-/** Index Edit/Delete. Cancel, a stale owner, and a no-op stay quiet. */
-export type SavedViewIndexActionOutcome =
+/** Edit/Delete outcome. Cancel, a stale owner, and an offline refusal stay quiet. */
+export type SavedViewActionOutcome =
   | { status: 'success' }
   | { status: 'quiet' }
   | { status: 'error'; message: string }
 
 export interface SavedViewIntents {
+  /** Detail. Opens the shared modal with this owner's record. */
   edit(view: SavedViewRecord): void
-  remove(viewId: string): Promise<void>
-  /** Index row. Fetches that view, then opens the shared modal. */
-  editById(viewId: string): Promise<SavedViewIndexActionOutcome>
-  /**
-   * Index row. Confirms and deletes through `prksDeleteSavedViewFromIndex`.
-   * That wrapper refreshes this index in place. It does not navigate away.
-   */
-  removeFromIndex(viewId: string): Promise<SavedViewIndexActionOutcome>
+  /** Detail. Confirms, deletes, then sends this owner back to `#/views`. */
+  remove(viewId: string): Promise<SavedViewActionOutcome>
+  /** Index row. Reads that view, then opens the shared modal. */
+  editById(viewId: string): Promise<SavedViewActionOutcome>
+  /** Index row. Confirms and deletes. The shared list query refreshes the index. */
+  removeFromIndex(viewId: string): Promise<SavedViewActionOutcome>
   openSearch(): void
 }
 
 const EDIT_FAILURE = 'Could not open Saved View.'
 const DELETE_FAILURE = 'Could not delete Saved View.'
 
-function quiet(): SavedViewIndexActionOutcome {
+function quiet(): SavedViewActionOutcome {
   return { status: 'quiet' }
 }
 
-function success(): SavedViewIndexActionOutcome {
+function success(): SavedViewActionOutcome {
   return { status: 'success' }
 }
 
-function failure(message: string): SavedViewIndexActionOutcome {
+function failure(message: string): SavedViewActionOutcome {
   return { status: 'error', message }
-}
-
-function actionMessage(err: unknown, fallback: string): string {
-  if (err instanceof Error && err.message.trim()) return err.message.trim()
-  return fallback
 }
 
 export const SAVED_VIEW_ENTITY = 'savedView'
@@ -67,60 +67,71 @@ function ownsView(owner: SavedViewIntentOwner | null | undefined, generation: nu
   return !!live && String(live.id) === String(viewId)
 }
 
+function confirmDelete(): Promise<boolean> {
+  const confirm = window.prksConfirmDestructive
+  if (typeof confirm !== 'function') return Promise.resolve(false)
+  return confirm({
+    title: 'Delete Saved View?',
+    message: 'Deleting this Saved View will not delete any files.',
+    confirmLabel: 'Delete Saved View',
+  })
+}
+
 /**
- * Saved View writes stay on the canonical wrappers. Edit opens the shared
- * `#saved-view-modal` (`prksOpenSavedViewModal`), which calls
- * `updateSavedView`. Delete is `prksDeleteSavedViewFromDetail`: confirm,
- * `deleteSavedView`, then navigate this owner back to `#/views`. The `still`
- * fence is rechecked after confirm and before navigate. A stale owner does
- * not open the modal or delete.
+ * Saved View intents for one owner and generation. Reads and writes go
+ * through the Saved View records service (typed client + shared QueryClient).
+ * Edit still opens the shared classic `#saved-view-modal` until #303 B4.
+ * `still` is this owner: a confirm that outlives the pane does not delete,
+ * and a write that finishes late reports nothing to a replaced owner.
  */
 export function browserSavedViewIntents(
   owner: SavedViewIntentOwner | null,
   generation: number,
+  records: SavedViewRecords = savedViewRecords(),
 ): SavedViewIntents {
+  async function removeView(viewId: string, still: () => boolean): Promise<SavedViewActionOutcome> {
+    if (!(await confirmDelete()) || !still()) return quiet()
+    try {
+      await records.remove(viewId)
+    } catch (err) {
+      if (err instanceof SavedViewOfflineRefusal || !still()) return quiet()
+      return failure(actionMessage(err, DELETE_FAILURE))
+    }
+    return still() ? success() : quiet()
+  }
+
   return {
     edit(view) {
       if (!ownsView(owner, generation, view.id)) return
       window.prksOpenSavedViewModal?.({ viewId: view.id, name: view.name, definition: view.search })
     },
     async remove(viewId) {
-      if (!ownsView(owner, generation, viewId)) return
-      const fn = window.prksDeleteSavedViewFromDetail
-      if (typeof fn !== 'function') return
-      await fn(viewId, () => ownsView(owner, generation, viewId), owner?.tabId)
+      const still = () => ownsView(owner, generation, viewId)
+      if (!still()) return quiet()
+      const outcome = await removeView(viewId, still)
+      if (outcome.status === 'success') {
+        window.prksNavigate?.('#/views', owner?.tabId ? { replace: true, tabId: owner.tabId } : { replace: true })
+      }
+      return outcome
     },
     async editById(viewId) {
-      if (!ownsIndex(owner, generation) || !viewId) return quiet()
-      const fetchView = window.fetchSavedView
-      if (typeof fetchView !== 'function') return quiet()
-      let view: { id?: unknown; name?: unknown; search?: SavedViewRecord['search'] } | null
+      const still = () => ownsIndex(owner, generation)
+      if (!still() || !viewId) return quiet()
+      let view: SavedViewRecord | null
       try {
-        view = await fetchView(viewId)
+        view = await records.get(viewId)
       } catch (err) {
-        if (!ownsIndex(owner, generation)) return quiet()
-        return failure(actionMessage(err, EDIT_FAILURE))
+        return still() ? failure(actionMessage(err, EDIT_FAILURE)) : quiet()
       }
-      if (!ownsIndex(owner, generation)) return quiet()
-      if (!view || view.id == null || !String(view.id)) return failure(EDIT_FAILURE)
-      window.prksOpenSavedViewModal?.({
-        viewId: String(view.id),
-        name: String(view.name || ''),
-        definition: view.search || { mode: '', q: '', tag: '', author: '', publisher: '' },
-      })
+      if (!still()) return quiet()
+      if (!view) return failure(EDIT_FAILURE)
+      window.prksOpenSavedViewModal?.({ viewId: view.id, name: view.name, definition: view.search })
       return success()
     },
     async removeFromIndex(viewId) {
-      if (!ownsIndex(owner, generation) || !viewId) return quiet()
-      const fn = window.prksDeleteSavedViewFromIndex
-      if (typeof fn !== 'function') return quiet()
-      const outcome = await fn(viewId, () => ownsIndex(owner, generation), owner?.tabId)
-      if (outcome && outcome.ok) return success()
-      if (outcome && outcome.reason === 'failed') {
-        if (!ownsIndex(owner, generation)) return quiet()
-        return failure(String(outcome.message || '').trim() || DELETE_FAILURE)
-      }
-      return quiet()
+      const still = () => ownsIndex(owner, generation)
+      if (!still() || !viewId) return quiet()
+      return removeView(viewId, still)
     },
     openSearch() {
       if (!ownsIndex(owner, generation)) return
