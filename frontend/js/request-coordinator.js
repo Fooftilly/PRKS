@@ -251,7 +251,6 @@
             retries: 0,
             dedupeJoins: 0,
             burstCacheHits: 0,
-            coalescedMutations: 0,
         };
     }
 
@@ -660,19 +659,6 @@
         }
 
         function enqueueMutation(job) {
-            if (job.coalesceKey) {
-                for (let i = 0; i < mutationQueue.length; i++) {
-                    const queued = mutationQueue[i];
-                    if (queued.coalesceKey === job.coalesceKey) {
-                        queued.href = job.href;
-                        queued.fetchOptions = job.fetchOptions;
-                        queued.waiters.push.apply(queued.waiters, job.waiters);
-                        counts.coalescedMutations += 1;
-                        touchPeaks();
-                        return;
-                    }
-                }
-            }
             job.enqueuedAt = now();
             mutationQueue.push(job);
             touchPeaks();
@@ -690,9 +676,6 @@
             const priority = pol.priority === 'background' ? 'background' : 'foreground';
             const freshForMs = Number(pol.freshForMs);
             const ttl = Number.isFinite(freshForMs) && freshForMs > 0 ? freshForMs : 0;
-            const coalesceKey = mode === 'mutation' && typeof pol.coalesceKey === 'string' && pol.coalesceKey
-                ? pol.coalesceKey
-                : '';
 
             counts.started += 1;
 
@@ -706,7 +689,6 @@
                     enqueueMutation({
                         href: href,
                         fetchOptions: opts,
-                        coalesceKey: coalesceKey,
                         waiters: [{ resolve: resolve, reject: reject }],
                     });
                 });
@@ -773,7 +755,6 @@
                     retries: counts.retries,
                     dedupeJoins: counts.dedupeJoins,
                     burstCacheHits: counts.burstCacheHits,
-                    coalescedMutations: counts.coalescedMutations,
                 },
                 current: {
                     activeReads: activeFgReads + activeBgReads,
@@ -845,7 +826,6 @@
         prksIsAbortError: prksIsAbortError,
         createPrksRequestCoordinator: createPrksRequestCoordinator,
         PRKS_REQUEST_MAX_READS: PRKS_REQUEST_MAX_READS,
-        PRKS_REQUEST_MAX_BACKGROUND_READS: PRKS_REQUEST_MAX_BACKGROUND_READS,
         PRKS_REQUEST_BURST_FRESH_MS: PRKS_REQUEST_BURST_FRESH_MS,
     };
 

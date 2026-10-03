@@ -753,17 +753,17 @@ async function testCacheAndEpoch() {
     await Promise.all([d1, d2]);
 }
 
-async function testCoalesce() {
+async function testMutationsAreNeverMerged() {
     const box = makeDeferredFetch();
     const coord = makeCoordinator({ fetchBundle: box });
     const a = coord.prksRequest(
         '/api/works/W1',
-        { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text_content: 'A' }) },
-        { coalesceKey: 'work-research-notes:W1' }
+        { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text_content: 'A' }) }
     );
     await waitUntil(function () {
         return box.calls.length === 1;
     });
+    // A retired coalescing policy key is ignored: every queued write is sent.
     const b = coord.prksRequest(
         '/api/works/W1',
         { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text_content: 'B' }) },
@@ -774,45 +774,26 @@ async function testCoalesce() {
         { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text_content: 'C' }) },
         { coalesceKey: 'work-research-notes:W1' }
     );
-    const d = coord.prksRequest(
-        '/api/works/W2',
-        { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text_content: 'D' }) },
-        { coalesceKey: 'work-research-notes:W2' }
-    );
     await flush();
-    record('coalesce keeps A active and independent D queued', box.calls.length === 1 && coord.snapshot().current.queuedMutations === 2, 'queued=' + coord.snapshot().current.queuedMutations);
+    record('same-target mutations queue behind the active one', box.calls.length === 1 && coord.snapshot().current.queuedMutations === 2, 'queued=' + coord.snapshot().current.queuedMutations);
     box.calls[0].resolve(jsonResponse({ saved: 'A' }));
-    const aBody = await (await a).json();
     await waitUntil(function () {
         return box.calls.length === 2;
     });
-    record('network sees C not B after A', box.calls[1].init.body === JSON.stringify({ text_content: 'C' }), String(box.calls[1].init.body));
-    box.calls[1].resolve(jsonResponse({ saved: 'C' }));
-    const [bRes, cRes] = await Promise.all([b, c]);
-    const bBody = await bRes.json();
-    const cBody = await cRes.json();
-    record('B and C waiters resolve from C', aBody.saved === 'A' && bBody.saved === 'C' && cBody.saved === 'C', JSON.stringify({ a: aBody, b: bBody, c: cBody }));
+    record('B is sent after A, not replaced', box.calls[1].init.body === JSON.stringify({ text_content: 'B' }), String(box.calls[1].init.body));
+    box.calls[1].resolve(jsonResponse({ saved: 'B' }));
     await waitUntil(function () {
         return box.calls.length === 3;
     });
-    record('different coalesce key remains independent', box.calls[2].init.body === JSON.stringify({ text_content: 'D' }), String(box.calls[2].init.body));
-    box.calls[2].resolve(jsonResponse({ saved: 'D' }));
-    await d;
-
-    const box2 = makeDeferredFetch();
-    const coord2 = makeCoordinator({ fetchBundle: box2 });
-    const x = coord2.prksRequest('/api/works/1', { method: 'DELETE' });
-    const y = coord2.prksRequest('/api/works/1', { method: 'DELETE' });
-    await waitUntil(function () {
-        return box2.calls.length === 1;
-    });
-    box2.calls[0].resolve(jsonResponse({ ok: true }));
-    await waitUntil(function () {
-        return box2.calls.length === 2;
-    });
-    box2.calls[1].resolve(jsonResponse({ ok: true }));
-    await Promise.all([x, y]);
-    record('ordinary mutations do not coalesce without coalesceKey', box2.calls.length === 2 && coord2.snapshot().counts.coalescedMutations === 0, 'calls=' + box2.calls.length);
+    record('C is sent after B', box.calls[2].init.body === JSON.stringify({ text_content: 'C' }), String(box.calls[2].init.body));
+    box.calls[2].resolve(jsonResponse({ saved: 'C' }));
+    const bodies = await Promise.all([a, b, c].map(function (p) {
+        return p.then(function (res) {
+            return res.json();
+        });
+    }));
+    record('each waiter gets its own response', bodies.map(function (x) { return x.saved; }).join('') === 'ABC', JSON.stringify(bodies));
+    record('snapshot has no coalescing counter', !('coalescedMutations' in coord.snapshot().counts), JSON.stringify(coord.snapshot().counts));
 }
 
 async function testDiagnosticsPrivacyAndReset() {
@@ -821,7 +802,6 @@ async function testDiagnosticsPrivacyAndReset() {
     const secretId = 'W-SECRET-WORK-ID-9f3c';
     const secretQ = 'secretSearchTermXYZ';
     const secretBody = 'SECRET_BODY_PAYLOAD_q=leak';
-    const secretKey = 'work-research-notes:' + secretId;
     const holdMut = coord.prksRequest('/api/hold-mut', { method: 'POST', body: '{}' });
     await waitUntil(function () {
         return box.calls.length === 1 && coord.snapshot().current.activeMutation === 1;
@@ -834,8 +814,7 @@ async function testDiagnosticsPrivacyAndReset() {
     const queued = coord.prksRequest('/api/search?q=' + encodeURIComponent(secretQ) + '&work=' + secretId);
     const mut = coord.prksRequest(
         '/api/works/' + secretId,
-        { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text_content: secretBody }) },
-        { coalesceKey: secretKey }
+        { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text_content: secretBody }) }
     );
     await waitUntil(function () {
         return coord.snapshot().current.queuedForegroundReads === 1 && coord.snapshot().current.queuedMutations === 1;
@@ -847,9 +826,8 @@ async function testDiagnosticsPrivacyAndReset() {
         serialized.indexOf(secretId) !== -1 ||
         serialized.indexOf(secretQ) !== -1 ||
         serialized.indexOf(secretBody) !== -1 ||
-        serialized.indexOf(secretKey) !== -1 ||
         serialized.indexOf('text_content') !== -1;
-    record('snapshot contains no private URL/query/body/id/coalesceKey', !leaked, leaked ? serialized : '');
+    record('snapshot contains no private URL/query/body/id', !leaked, leaked ? serialized : '');
 
     coord.resetDiagnostics();
     const after = coord.snapshot();
@@ -1207,7 +1185,7 @@ async function main() {
     await testSubscriberAbort();
     await testRetry();
     await testCacheAndEpoch();
-    await testCoalesce();
+    await testMutationsAreNeverMerged();
     await testDiagnosticsPrivacyAndReset();
     await testWorkHintStalePublication();
     await testReachabilitySignalling();
