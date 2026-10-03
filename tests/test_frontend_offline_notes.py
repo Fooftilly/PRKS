@@ -63,7 +63,7 @@ class FrontendOfflineNotesGuardTests(unittest.TestCase):
 
     def test_no_offline_beforechange_barrier(self):
         src = _read(_WORKS)
-        init_start = src.index("function initEasyMDE(ctx, work)")
+        init_start = src.index("function initEasyMDE(ctx, work, ticket)")
         init_end = src.index("function prksWorkNotesMarkEdit")
         init_body = src[init_start:init_end]
         self.assertNotIn("notesBeforeChangeHandler", init_body)
