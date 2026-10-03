@@ -1,8 +1,7 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readRouteSurface } from '../../route-surface/lifecycle'
+import { dismissRouteSurface, readRouteSurface } from '../../route-surface/lifecycle'
 import {
-  dismissProcessing,
   presentProcessing,
   registerProcessingBridge,
   resetProcessingSessionForTests,
@@ -13,7 +12,7 @@ afterEach(() => {
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
   delete window.prksVuePresentRoute
-  delete window.prksVueDismissProcessing
+  delete window.prksVueDismissRoute
   delete window.prksProcessingAttachResources
   delete window.prksProcessingReleaseResources
   delete window.prksProcessingSetPreview
@@ -129,7 +128,7 @@ describe('Processing Files route bridge', () => {
     })
     await nextTick()
     expect(pane.querySelector('[data-processing-id="pdf-1"]')).not.toBeNull()
-    dismissProcessing(current)
+    dismissRouteSurface(current)
     expect(release).toHaveBeenCalledWith(current)
     expect(pane.querySelector('[data-prks-processing-page]')).toBeNull()
   })
@@ -427,6 +426,6 @@ describe('Processing Files route bridge', () => {
   it('registers the early presenter', () => {
     registerProcessingBridge(window)
     expect(typeof window.prksVuePresentRoute).toBe('function')
-    expect(typeof window.prksVueDismissProcessing).toBe('function')
+    expect(typeof window.prksVueDismissRoute).toBe('function')
   })
 })

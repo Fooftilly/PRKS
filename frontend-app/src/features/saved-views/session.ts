@@ -1,6 +1,5 @@
 import { createVNode } from 'vue'
 import {
-  dismissRouteSurface,
   presentRouteSurface,
   registerEarlyRoutePresenter,
   registerRouteWindowBridge,
@@ -110,17 +109,12 @@ export function presentSavedViewDetail(input: SavedViewDetailPresentInput): void
   })
 }
 
-export function dismissSavedViews(owner: object | null | undefined): void {
-  dismissRouteSurface(owner)
-}
-
 export function resetSavedViewsSessionForTests(): void {
   resetRouteSurfaceForTests()
 }
 
 export function registerSavedViewsBridge(target: Window = window): void {
   registerRouteWindowBridge(target)
-  target.prksVueDismissSavedViews = dismissSavedViews
   registerEarlyRoutePresenter(
     SAVED_VIEWS_INDEX_FEATURE,
     (request, host) => {

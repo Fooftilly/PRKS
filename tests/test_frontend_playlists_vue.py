@@ -45,7 +45,11 @@ class PlaylistsVueContracts(unittest.TestCase):
         self.assertIn("contentDiv.innerHTML = '';", present)
         self.assertLess(present.index("querySelector"), present.index("contentDiv.innerHTML = '';"))
         self.assertIn(
-            "samePlaylistsWorkspace && typeof window.prksVueDismissPlaylists",
+            "retainedRouteSurface && typeof window.prksVueDismissRoute",
+            app,
+        )
+        self.assertIn(
+            "samePlaylistsWorkspace ||",
             app,
         )
         refresh = app[

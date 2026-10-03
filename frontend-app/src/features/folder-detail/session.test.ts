@@ -1,8 +1,7 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readRouteSurface } from '../../route-surface/lifecycle'
+import { dismissRouteSurface, readRouteSurface } from '../../route-surface/lifecycle'
 import {
-  dismissFolderDetail,
   presentFolderDetail,
   registerFolderDetailBridge,
   resetFolderDetailSessionForTests,
@@ -13,7 +12,7 @@ afterEach(() => {
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
   delete window.prksVuePresentRoute
-  delete window.prksVueDismissFolderDetail
+  delete window.prksVueDismissRoute
   delete window.prksWorkCardHtml
   delete window.prksEffectiveFolderDetailWorks
   delete window.prksCommitFolderDetailSurface
@@ -323,7 +322,7 @@ describe('Folder detail route bridge', () => {
       generation: 1,
       shell: false,
     })
-    dismissFolderDetail(main)
+    dismissRouteSurface(main)
     expect(mainHost.querySelector('[data-prks-folder-detail-view]')).toBeNull()
     expect(secondaryHost.querySelector('.prks-page-title')?.textContent).toContain('Side')
   })

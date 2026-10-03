@@ -199,7 +199,7 @@ class FrontendPeopleGroupsTests(unittest.TestCase):
             ready,
         )
         self.assertIn("!samePersonGroupsWorkspace", app)
-        self.assertIn("prksVueDismissPersonGroups", app)
+        self.assertIn("window.prksVueDismissRoute(ctx)", app)
 
     def test_member_picker_async_mount_checks_original_owner_state(self):
         src = _read(_GROUPS)

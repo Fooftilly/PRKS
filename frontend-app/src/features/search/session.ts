@@ -1,6 +1,5 @@
 import { createVNode } from 'vue'
 import {
-  dismissRouteSurface,
   presentRouteSurface,
   registerEarlyRoutePresenter,
   registerRouteWindowBridge,
@@ -64,17 +63,12 @@ export function presentSearch(input: SearchPresentInput): void {
   })
 }
 
-export function dismissSearch(owner: object | null | undefined): void {
-  dismissRouteSurface(owner)
-}
-
 export function resetSearchSessionForTests(): void {
   resetRouteSurfaceForTests()
 }
 
 export function registerSearchBridge(target: Window = window): void {
   registerRouteWindowBridge(target)
-  target.prksVueDismissSearch = dismissSearch
   registerEarlyRoutePresenter(
     SEARCH_FEATURE,
     (request, host) => {

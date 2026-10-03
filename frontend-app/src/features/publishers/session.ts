@@ -1,6 +1,5 @@
 import { createVNode } from 'vue'
 import {
-  dismissRouteSurface,
   presentRouteSurface,
   registerEarlyRoutePresenter,
   registerRouteWindowBridge,
@@ -110,17 +109,12 @@ export function presentPublishers(input: PublishersPresentInput): void {
   })
 }
 
-export function dismissPublishers(owner: object | null | undefined): void {
-  dismissRouteSurface(owner)
-}
-
 export function resetPublishersSessionForTests(): void {
   resetRouteSurfaceForTests()
 }
 
 export function registerPublishersBridge(target: Window = window): void {
   registerRouteWindowBridge(target)
-  target.prksVueDismissPublishers = dismissPublishers
   target.prksVueClosePublishersAliasModal = closePublishersAliasModals
   target.prksVueReportPublishersRefreshFailure = reportPublishersRefreshFailure
   registerEarlyRoutePresenter(

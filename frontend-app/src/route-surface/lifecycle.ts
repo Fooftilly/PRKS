@@ -213,6 +213,7 @@ export function registerEarlyRoutePresenter(
 
 export interface RouteDispatchTarget {
   prksVuePresentRoute?: (request: unknown) => boolean
+  prksVueDismissRoute?: (owner: object) => void
 }
 
 /**
@@ -230,9 +231,14 @@ export function presentRegisteredRoute(request: unknown): boolean {
   return present(request, host as HTMLElement) === true
 }
 
-/** The only window entry for route presentation. Feature presenters stay off `window`. */
+/**
+ * The only window entries for route presentation and dismissal. Feature
+ * presenters stay off `window`. Each owner holds one route-surface session, so
+ * one dismiss drops whichever route feature that owner painted.
+ */
 export function registerRouteWindowBridge(target: RouteDispatchTarget = window): void {
   target.prksVuePresentRoute = presentRegisteredRoute
+  target.prksVueDismissRoute = dismissRouteSurface
 }
 
 /**

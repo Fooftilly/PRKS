@@ -1,14 +1,14 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readRouteSurface } from '../../route-surface/lifecycle'
-import { dismissSearch, presentSearch, registerSearchBridge, resetSearchSessionForTests } from './session'
+import { dismissRouteSurface, readRouteSurface } from '../../route-surface/lifecycle'
+import { presentSearch, registerSearchBridge, resetSearchSessionForTests } from './session'
 
 afterEach(() => {
   resetSearchSessionForTests()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
   delete window.prksVuePresentRoute
-  delete window.prksVueDismissSearch
+  delete window.prksVueDismissRoute
   delete window.prksWorkCardHtml
   delete window.prksAbstractExcerpt
   delete window.prksReleaseWorkThumbPreview
@@ -135,7 +135,7 @@ describe('Search route bridge', () => {
     presentSearch({ owner: pane, host: el, request: { q: 'a' }, rows: [{ id: 'b' }], generation: 2 })
     await nextTick()
     expect(released).toEqual(['empty', 'a'])
-    dismissSearch(pane)
+    dismissRouteSurface(pane)
     expect(released).toEqual(['empty', 'a', 'b'])
     expect(el.querySelector('[data-prks-search-view]')).toBeNull()
   })

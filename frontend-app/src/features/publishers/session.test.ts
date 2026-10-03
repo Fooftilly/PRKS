@@ -1,8 +1,7 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readRouteSurface } from '../../route-surface/lifecycle'
+import { dismissRouteSurface, readRouteSurface } from '../../route-surface/lifecycle'
 import {
-  dismissPublishers,
   presentPublishers,
   registerPublishersBridge,
   reportPublishersRefreshFailure,
@@ -14,7 +13,7 @@ afterEach(() => {
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
   delete window.prksVuePresentRoute
-  delete window.prksVueDismissPublishers
+  delete window.prksVueDismissRoute
   delete window.prksVueClosePublishersAliasModal
   delete window.prksVueReportPublishersRefreshFailure
   delete window.prksIcon
@@ -120,7 +119,7 @@ describe('Publishers route bridge', () => {
     const el = host()
     presentPublishers({ owner: pane, host: el, publishers: [], generation: 2 })
     expect(el.querySelector('.publishers-page__empty')?.textContent).toContain('No publisher groups yet')
-    dismissPublishers(pane)
+    dismissRouteSurface(pane)
     presentPublishers({
       owner: pane,
       host: el,
@@ -161,7 +160,7 @@ describe('Publishers route bridge', () => {
     }
     registerPublishersBridge(window)
     expect(window.prksVuePresentRoute).toBeTypeOf('function')
-    expect(window.prksVueDismissPublishers).toBeTypeOf('function')
+    expect(window.prksVueDismissRoute).toBeTypeOf('function')
     expect((el as HTMLElement & { __prksVueRouteRequest?: unknown }).__prksVueRouteRequest).toBeUndefined()
     expect(el.querySelector('[data-publisher-alias-edit="p1"]')).not.toBeNull()
     expect(decoy.querySelector('[data-prks-publishers-page]')).toBeNull()
@@ -191,7 +190,7 @@ describe('Publishers route bridge', () => {
       resume: { aliasPublisherId: 'p2' },
     })
     expect(secondaryHost.querySelector('#publishers-page-alias-canonical')?.textContent).toBe('Cambridge')
-    window.prksVueDismissPublishers?.(main)
+    window.prksVueDismissRoute?.(main)
     expect(mainHost.querySelector('[data-prks-publishers-page]')).toBeNull()
     expect(secondaryHost.querySelector('[data-publisher-alias-edit="p2"]')).not.toBeNull()
     expect(secondaryHost.querySelector('#publishers-page-alias-canonical')?.textContent).toBe('Cambridge')

@@ -1,14 +1,14 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readRouteSurface } from '../../route-surface/lifecycle'
-import { dismissProgress, presentProgress, registerProgressBridge, resetProgressSessionForTests } from './session'
+import { dismissRouteSurface, readRouteSurface } from '../../route-surface/lifecycle'
+import { presentProgress, registerProgressBridge, resetProgressSessionForTests } from './session'
 
 afterEach(() => {
   resetProgressSessionForTests()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
   delete window.prksVuePresentRoute
-  delete window.prksVueDismissProgress
+  delete window.prksVueDismissRoute
   delete window.prksWorkCardHtml
   delete (window as Window & { prksSyncSidebarActive?: unknown }).prksSyncSidebarActive
 })
@@ -78,7 +78,7 @@ describe('Progress route bridge', () => {
       generation: 2,
     })
     expect(fetchMock).not.toHaveBeenCalled()
-    dismissProgress(pane)
+    dismissRouteSurface(pane)
     expect(el.querySelector('[data-prks-progress-view]')).toBeNull()
     presentProgress({
       owner: pane,
@@ -119,7 +119,7 @@ describe('Progress route bridge', () => {
     window.prksWorkCardHtml = (work) => `<div data-work-id="${String(work.id)}"></div>`
     registerProgressBridge(window)
     expect(window.prksVuePresentRoute).toBeTypeOf('function')
-    expect(window.prksVueDismissProgress).toBeTypeOf('function')
+    expect(window.prksVueDismissRoute).toBeTypeOf('function')
     expect((el as HTMLElement & { __prksVueRouteRequest?: unknown }).__prksVueRouteRequest).toBeUndefined()
     expect(el.querySelector('.prks-page-title')?.textContent).toBe('Files · In Progress')
     expect(el.querySelector('[data-work-id="early"]')).not.toBeNull()
@@ -152,7 +152,7 @@ describe('Progress route bridge', () => {
       generation: 1,
       shell: false,
     })
-    window.prksVueDismissProgress?.(secondary)
+    window.prksVueDismissRoute?.(secondary)
     expect(secondaryHost.querySelector('[data-work-id="side"]')).toBeNull()
     expect(mainHost.querySelector('[data-work-id="main"]')).not.toBeNull()
     expect(mainHost.querySelector('.prks-page-title')?.textContent).toBe('Files · Paused')

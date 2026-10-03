@@ -28,7 +28,7 @@ class FrontendProcessingPageTests(unittest.TestCase):
         self.assertIn("Object.assign({ rescan: true }", app)
         self.assertIn("fetchProcessingFiles(fileRequest)", app)
         self.assertIn("async function prksReloadProcessingFiles(", app)
-        self.assertIn("prksVueDismissProcessing", app)
+        self.assertIn("window.prksVueDismissRoute(ctx)", app)
 
     def test_legacy_module_owns_preview_lifetime_and_upload_import(self):
         src = _read(_PROCESSING)

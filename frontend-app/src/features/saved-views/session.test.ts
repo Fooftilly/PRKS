@@ -1,11 +1,10 @@
 import { flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readRouteSurface } from '../../route-surface/lifecycle'
+import { dismissRouteSurface, readRouteSurface } from '../../route-surface/lifecycle'
 import { presentSearch } from '../search/session'
 import { buildSavedViewDetailProjection, buildSavedViewIndexProjection } from './projection'
 import {
-  dismissSavedViews,
   presentSavedViewDetail,
   presentSavedViewsIndex,
   registerSavedViewsBridge,
@@ -17,7 +16,7 @@ afterEach(() => {
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
   delete window.prksVuePresentRoute
-  delete window.prksVueDismissSavedViews
+  delete window.prksVueDismissRoute
   delete window.prksDeleteSavedViewFromIndex
   delete window.fetchSavedView
   delete window.prksOpenCommandPalette
@@ -410,7 +409,7 @@ describe('Saved Views index route bridge', () => {
     presentSavedViewsIndex({ owner: main, host: mainHost, views: [VIEW], generation: 1 })
     await nextTick()
     expect(mainHost.querySelector('.saved-views-page__list-item')).toBeNull()
-    dismissSavedViews(main)
+    dismissRouteSurface(main)
     expect(mainHost.innerHTML).toBe('')
     expect(otherHost.querySelector('.saved-views-page__list-item')).not.toBeNull()
   })
@@ -552,7 +551,7 @@ describe('Saved View detail route bridge', () => {
     presentSavedViewDetail({ owner: main, host: mainHost, availability: 'ready', view: VIEW, rows: [{ id: 'late' }], generation: 2 })
     await nextTick()
     expect(mainHost.querySelector('[data-work-id="late"]')).toBeNull()
-    dismissSavedViews(main)
+    dismissRouteSurface(main)
     expect(mainHost.innerHTML).toBe('')
     expect(otherHost.querySelector('[data-work-id="w2"]')).not.toBeNull()
   })

@@ -23,7 +23,11 @@ class FolderLibraryVueContracts(unittest.TestCase):
         self.assertIn("skipPageEnter: sameFolderLibraryWorkspace", folders_case)
         # Retained surfaces must still dismiss on same-route error after retain.
         self.assertIn(
-            "sameFolderLibraryWorkspace && typeof window.prksVueDismissFolderLibrary",
+            "retainedRouteSurface && typeof window.prksVueDismissRoute",
+            app,
+        )
+        self.assertIn(
+            "sameFolderLibraryWorkspace ||",
             app,
         )
 

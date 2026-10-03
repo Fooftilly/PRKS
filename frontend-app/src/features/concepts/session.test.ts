@@ -1,9 +1,8 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readRouteSurface } from '../../route-surface/lifecycle'
+import { dismissRouteSurface, readRouteSurface } from '../../route-surface/lifecycle'
 import {
   CONCEPTS_RETAIN_SURFACE_KEY,
-  dismissConcepts,
   presentConceptDetail,
   presentConceptsIndex,
   registerConceptsBridge,
@@ -15,7 +14,7 @@ afterEach(() => {
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
   delete window.prksVuePresentRoute
-  delete window.prksVueDismissConcepts
+  delete window.prksVueDismissRoute
   delete window.prksCreateConceptFlow
   delete window.prksResearchMarkdownHtml
   delete window.prksPageHeaderIconHtml
@@ -89,7 +88,7 @@ describe('Concepts route bridge', () => {
       generation: 2,
     })
     expect(fetchMock).not.toHaveBeenCalled()
-    dismissConcepts(pane)
+    dismissRouteSurface(pane)
     expect(el.querySelector('[data-prks-concepts-index-view]')).toBeNull()
     presentConceptsIndex({
       owner: pane,
@@ -154,7 +153,7 @@ describe('Concepts route bridge', () => {
     expect(el.querySelector('#prks-concept-view-graph')).not.toBeNull()
     expect(el.querySelector('#prks-concept-delete')?.className).toContain('prks-btn--quiet-danger')
     expect(el.querySelector('.research-entity__section-head')).not.toBeNull()
-    dismissConcepts(pane)
+    dismissRouteSurface(pane)
     presentConceptDetail({
       owner: pane,
       host: el,
@@ -418,7 +417,7 @@ describe('Concepts route bridge', () => {
       items: [{ id: '2', name: 'Beta' }],
       generation: 1,
     })
-    dismissConcepts(a)
+    dismissRouteSurface(a)
     expect(aHost.querySelector('[data-prks-concepts-index-view]')).toBeNull()
     expect(bHost.textContent).toContain('Beta')
   })
