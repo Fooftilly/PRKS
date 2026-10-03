@@ -655,5 +655,32 @@ describe('work private notes owner lifetime', () => {
     await flushMicrotasks()
     expect(saves).toHaveLength(2)
   })
+
+  it('retries a scope_busy Reminders save while the owner is warm-parked', async () => {
+    vi.useFakeTimers()
+    const { ownerA, notes, saves } = bound('saved')
+    let release: (result: { code: string }) => void = () => {}
+    panelWindow.prksSaveWorkNoteDurably = (entityId, kind, content) => {
+      saves.push({ entityId: String(entityId), kind: String(kind), content: String(content) })
+      if (saves.length > 1) return Promise.resolve({ code: 'saved' })
+      return new Promise((resolve) => { release = resolve })
+    }
+    notes.value = 'Retry while parked'
+    notes.dispatchEvent(new Event('input', { bubbles: true }))
+    panelWindow.prksFlushPendingPrivateNotes(ownerA)
+    await flushMicrotasks()
+    expect(ownerA.suspend(parking())).toBe(true)
+    release({ code: 'scope_busy' })
+    await flushMicrotasks()
+    expect(ownerA.ui.workPrivateNoteSession?.dirty).toBe(true)
+    await vi.advanceTimersByTimeAsync(400)
+    await flushMicrotasks()
+    expect(saves).toEqual([
+      { entityId: 'work-a', kind: 'work-private-note', content: 'Retry while parked' },
+      { entityId: 'work-a', kind: 'work-private-note', content: 'Retry while parked' },
+    ])
+    expect(ownerA.ui.workPrivateNoteSession?.dirty).toBe(false)
+    expect(ownerA.getResource('privateNotesEditor')).toBeUndefined()
+  })
 })
 

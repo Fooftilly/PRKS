@@ -2914,12 +2914,44 @@ function prksPrivateNotesStatusForResult(code) {
 function prksPrivateNotesRetryTarget(editor) {
     if (!editor || !editor.ctx || typeof editor.ctx.getResource !== 'function') return null;
     const live = editor.ctx.getResource('privateNotesEditor');
-    if (!live || live.ctx !== editor.ctx) return null;
+    if (!live) {
+        /* Warm park disposed the editor; the Work draft is still on the
+         * session and is retried from there while this generation holds. */
+        if (String(editor.entityType) !== 'work') return null;
+        if (String(editor.generation) !== String(editor.ctx.generation)) return null;
+        return prksWorkPrivateNoteSessionSaver(editor.ctx, editor.entityId);
+    }
+    if (live.ctx !== editor.ctx) return null;
     if (String(live.entityType) !== String(editor.entityType)) return null;
     if (String(live.entityId) !== String(editor.entityId)) return null;
     if (String(live.generation) !== String(editor.generation)) return null;
     if (!prksPrivateNotesOwnerCurrent(live)) return null;
     return live;
+}
+
+/**
+ * A paint-less save target for the owner's current Work Reminders session
+ * when no editor is installed (warm park or a focus switch disposed it).
+ * It never matches the installed slot, so its saves do not paint.
+ */
+function prksWorkPrivateNoteSessionSaver(ctx, workId) {
+    if (!ctx || ctx.destroyed || !ctx.ui || typeof ctx.isCurrent !== 'function') return null;
+    if (!ctx.isCurrent(ctx.generation)) return null;
+    const work = ctx.getEntity ? ctx.getEntity('work') : null;
+    if (!work || String(work.id) !== String(workId)) return null;
+    const session = ctx.ui.workPrivateNoteSession;
+    if (!prksWorkPrivateNoteSessionCurrent(session, ctx, work.id)) return null;
+    const id = String(work.id);
+    return {
+        key: prksPrivateNotesEditorKey('work', id, ctx),
+        entityType: 'work',
+        entityId: id,
+        ctx: ctx,
+        generation: ctx.generation,
+        textarea: null,
+        statusEl: null,
+        dirty: !!session.dirty,
+    };
 }
 
 function prksPrivateNotesRetryStillDirty(live) {
@@ -3182,18 +3214,8 @@ function prksFlushPendingPrivateNotes(ctx) {
     const session = ctx.ui ? ctx.ui.workPrivateNoteSession : null;
     const work = ctx.getEntity ? ctx.getEntity('work') : null;
     if (!work || !session || !session.dirty || session.promise) return;
-    if (!prksWorkPrivateNoteSessionCurrent(session, ctx, work.id)) return;
-    const workId = String(work.id);
-    void prksEnqueueWorkPrivateNoteSave({
-        key: prksPrivateNotesEditorKey('work', workId, ctx),
-        entityType: 'work',
-        entityId: workId,
-        ctx: ctx,
-        generation: ctx.generation,
-        textarea: null,
-        statusEl: null,
-        dirty: true,
-    });
+    const saver = prksWorkPrivateNoteSessionSaver(ctx, work.id);
+    if (saver) void prksEnqueueWorkPrivateNoteSave(saver);
 }
 
 /** Work and Folder private notes are durable SET_* paths. */
