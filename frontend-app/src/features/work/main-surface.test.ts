@@ -25,7 +25,11 @@ type WorkCtx = {
   getEntity: (type: string) => { id: string } | null
   isCurrent: (generation: number) => boolean
   getResource: (name: string) => unknown
-  setResource: (name: string, value: unknown, disposer?: () => void) => unknown
+  resourceTicket: () => unknown
+  registerResource: (
+    ticket: unknown,
+    registration: { kind: string; value: unknown; suspendable: boolean; dispose: () => void },
+  ) => string
   beginRoute: (route: { name: string; params: { workId: string } }) => number
 }
 
@@ -261,19 +265,24 @@ describe('work main surface', () => {
           log.push(host.isConnected ? 'pdf-connected' : 'pdf-detached')
         },
       }
-      ctx.setResource('pdf', runtime, () => runtime.destroy())
+      ctx.registerResource(ctx.resourceTicket(), { kind: 'pdf', value: runtime, suspendable: true, dispose: () => runtime.destroy() })
       const notes = {
         destroy() {
           log.push('easymde')
         },
       }
-      ctx.setResource('workNotes', notes, () => {
-        log.push(anchor.isConnected ? 'notes-connected' : 'notes-detached')
-        notes.destroy()
-        dismissWorkResearchNotes(ctx)
-        log.push(anchor.querySelector('.work-notes-pane') ? 'notes-vue-mounted' : 'notes-vue-unmounted')
-        log.push(ctx.root.querySelector('.work-workspace') ? 'shell-present' : 'shell-gone')
-        log.push(host.isConnected ? 'pdf-host-connected' : 'pdf-host-detached')
+      ctx.registerResource(ctx.resourceTicket(), {
+        kind: 'workNotes',
+        value: notes,
+        suspendable: true,
+        dispose: () => {
+          log.push(anchor.isConnected ? 'notes-connected' : 'notes-detached')
+          notes.destroy()
+          dismissWorkResearchNotes(ctx)
+          log.push(anchor.querySelector('.work-notes-pane') ? 'notes-vue-mounted' : 'notes-vue-unmounted')
+          log.push(ctx.root.querySelector('.work-workspace') ? 'shell-present' : 'shell-gone')
+          log.push(host.isConnected ? 'pdf-host-connected' : 'pdf-host-detached')
+        },
       })
       return { host }
     }

@@ -338,14 +338,13 @@
         };
 
         /**
-         * Registry kinds. pdf and workNotes are warm-suspendable. researchGraph
-         * and the six editor sessions are not. setResource mints a fresh
-         * ticket at write time. It is a compatibility bridge for synchronous
-         * harness callers of these named kinds, so a legacy-map entry cannot
-         * sit beside the registry slot. Production async and session setup
-         * must capture ctx.resourceTicket() and call registerResource; this
-         * setter is not that path. No production ctx.resources entry has a
-         * disposer: the map holds ordinary TabContext values.
+         * Registry kinds and their warm-park policy. pdf and workNotes are
+         * warm-suspendable; researchGraph and the editor sessions are not.
+         * A registry kind is owned only through
+         * registerResource(ticket, ...) with a ticket captured when its async
+         * work began, so setResource refuses these names. ctx.resources is a
+         * plain map of ordinary TabContext values (hint lists, title maps,
+         * route projections), with no teardown callbacks, cleared on unmount and destroy.
          */
         const registrySuspendable = {
             researchGraph: false,
@@ -363,50 +362,31 @@
             return Object.prototype.hasOwnProperty.call(registrySuspendable, key);
         }
 
-        ctx.setResource = function (name, value, disposer) {
-            if (!assertAlive()) return value;
+        ctx.setResource = function (name, value) {
             const key = String(name);
-            if (isRegistryKind(key) && ctx.resourceRegistry) {
-                const orphan = ctx.resources.get(key);
-                ctx.resources.delete(key);
-                if (orphan) safeCall(orphan.disposer, key);
-                const ticket = typeof ctx.resourceTicket === 'function' ? ctx.resourceTicket() : null;
-                const result = ctx.resourceRegistry.register(ticket, {
-                    kind: key,
-                    value: value,
-                    suspendable: registrySuspendable[key] === true,
-                    dispose: function () { safeCall(disposer, key); },
-                });
-                if (result === 'rejected') return value;
-                return value;
+            if (isRegistryKind(key)) {
+                throw new TypeError('setResource cannot own registry kind ' + key + '; use registerResource');
             }
-            ctx.clearResource(key);
-            ctx.resources.set(key, { value: value, disposer: disposer });
+            if (!assertAlive()) return value;
+            ctx.resources.set(key, value);
             return value;
         };
 
         ctx.getResource = function (name) {
             const key = String(name);
-            if (isRegistryKind(key) && ctx.resourceRegistry) {
-                return ctx.resourceRegistry.get(key);
+            if (isRegistryKind(key)) {
+                return ctx.resourceRegistry ? ctx.resourceRegistry.get(key) : undefined;
             }
-            const rec = ctx.resources.get(key);
-            return rec ? rec.value : undefined;
+            return ctx.resources.get(key);
         };
 
         ctx.clearResource = function (name) {
             const key = String(name);
-            if (isRegistryKind(key) && ctx.resourceRegistry) {
-                ctx.resourceRegistry.dispose(key);
-                const orphan = ctx.resources.get(key);
-                ctx.resources.delete(key);
-                if (orphan) safeCall(orphan.disposer, key);
+            if (isRegistryKind(key)) {
+                if (ctx.resourceRegistry) ctx.resourceRegistry.dispose(key);
                 return;
             }
-            const rec = ctx.resources.get(key);
-            if (!rec) return;
             ctx.resources.delete(key);
-            safeCall(rec.disposer, key);
         };
 
         ctx.registerCleanup = function (fn) {
@@ -444,8 +424,7 @@
         }
 
         function clearAllResources() {
-            const names = Array.from(ctx.resources.keys());
-            for (let i = 0; i < names.length; i++) ctx.clearResource(names[i]);
+            ctx.resources.clear();
         }
 
         function runCleanups() {
@@ -831,22 +810,6 @@
         return !!(route && names.indexOf(route.name) >= 0);
     }
 
-    function prksFocusedResource(name) {
-        const ctx = prksGetFocusedTabContext();
-        return ctx ? ctx.getResource(String(name)) : undefined;
-    }
-
-    function prksSetFocusedResource(name, value, disposer) {
-        const ctx = prksGetFocusedTabContext();
-        if (ctx) return ctx.setResource(String(name), value, disposer);
-        return value;
-    }
-
-    function prksClearFocusedResource(name) {
-        const ctx = prksGetFocusedTabContext();
-        if (ctx) ctx.clearResource(String(name));
-    }
-
     function prksFocusedTimer(name, timerId) {
         const ctx = prksGetFocusedTabContext();
         if (ctx) return ctx.setTimer(String(name), timerId);
@@ -920,9 +883,6 @@
         prksTabContextOwnsEntityRoute: prksTabContextOwnsEntityRoute,
         prksFocusedRouteGeneration: prksFocusedRouteGeneration,
         prksFocusedRouteIsCurrent: prksFocusedRouteIsCurrent,
-        prksFocusedResource: prksFocusedResource,
-        prksSetFocusedResource: prksSetFocusedResource,
-        prksClearFocusedResource: prksClearFocusedResource,
         prksFocusedTimer: prksFocusedTimer,
         prksClearFocusedTimer: prksClearFocusedTimer,
         prksFocusedRouteSidebar: prksFocusedRouteSidebar,

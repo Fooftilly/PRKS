@@ -84,7 +84,7 @@ for (let i = 0; i < 4; i++) {
     const runtime = {
         resize: function () { warmResizeCounts[i] += 1; },
     };
-    ctx.setResource('pdf', runtime, function () { warmDisposeCounts[i] += 1; });
+    ctx.registerResource(ctx.resourceTicket(), { kind: 'pdf', value: runtime, suspendable: true, dispose: function () { warmDisposeCounts[i] += 1; } });
     warmContexts.push(ctx);
     warmRoots.push(ctx.root);
     warmRuntimes.push(runtime);
@@ -117,7 +117,7 @@ const iteratorC = prksEnsureTabContext('iterator-c');
 const iteratorD = prksEnsureTabContext('iterator-d');
 iteratorA.mount(makeHost());
 iteratorB.mount(makeHost());
-iteratorB.setResource('pdf', {}, function () {});
+iteratorB.registerResource(iteratorB.resourceTicket(), { kind: 'pdf', value: {}, suspendable: true, dispose: function () {} });
 assert('iterator B warm-suspends', prksWarmParkTabContext(iteratorB.tabId, iteratorParking));
 iteratorC.mount(makeHost());
 iteratorC.unmount('cold-park');
@@ -202,20 +202,22 @@ assert('B abort isolated', !sigB.aborted);
 
 let disposedA = 0;
 let disposedB = 0;
-a.setResource(
-    'pdf',
-    { id: 'pdf-a' },
-    function () {
-        disposedA += 1;
-    }
-);
-b.setResource(
-    'pdf',
-    { id: 'pdf-b' },
-    function () {
-        disposedB += 1;
-    }
-);
+a.registerResource(a.resourceTicket(), {
+    kind: 'pdf',
+    value: { id: 'pdf-a' },
+    suspendable: true,
+    dispose: function () {
+            disposedA += 1;
+        },
+});
+b.registerResource(b.resourceTicket(), {
+    kind: 'pdf',
+    value: { id: 'pdf-b' },
+    suspendable: true,
+    dispose: function () {
+            disposedB += 1;
+        },
+});
 assertEq('get A pdf', a.getResource('pdf').id, 'pdf-a');
 assertEq('get B pdf', b.getResource('pdf').id, 'pdf-b');
 a.clearResource('pdf');
@@ -242,17 +244,20 @@ assert('A not mounted', a.mounted === false);
 assert('A entity cleared', a.entity === null);
 
 let disposedGraph = 0;
-b.setResource(
-    'graph',
-    { id: 'g' },
-    function () {
+b.registerResource(b.resourceTicket(), {
+    kind: 'researchGraph',
+    value: { id: 'g' },
+    suspendable: false,
+    dispose: function () {
         disposedGraph += 1;
-    }
-);
+    },
+});
+b.setResource('wikiTitleMap', { alpha: 'a' });
 b.destroy();
 b.destroy();
 assertEq('destroy B pdf disposer once', disposedB, 1);
 assertEq('destroy B graph disposer once', disposedGraph, 1);
+assertEq('destroy B clears ordinary values', b.resources.size, 0);
 assert('B destroyed flag', b.destroyed);
 
 const reg = prksEnsureTabContext('tab-reg');
@@ -331,7 +336,7 @@ prksDestroyAllTabContexts();
 
     const warmCtx = prksEnsureTabContext('preview-warm');
     warmCtx.mount(visible);
-    warmCtx.setResource('pdf', {}, function () {});
+    warmCtx.registerResource(warmCtx.resourceTicket(), { kind: 'pdf', value: {}, suspendable: true, dispose: function () {} });
     const thumb = { parentNode: null, isConnected: true };
     warmCtx.root.appendChild(thumb);
     globalThis.__prksWorkThumbPreviewSource = thumb;
@@ -352,7 +357,7 @@ prksDestroyAllTabContexts();
     /* Warm-parking the already-suspended context is a no-op; park a fresh PDF instead. */
     const warm2 = prksEnsureTabContext('preview-warm-2');
     warm2.mount(makeHost());
-    warm2.setResource('pdf', {}, function () {});
+    warm2.registerResource(warm2.resourceTicket(), { kind: 'pdf', value: {}, suspendable: true, dispose: function () {} });
     assert('warm park second PDF', prksWarmParkTabContext(warm2.tabId, parkHost));
     assert('second park release did not clear other tile source', globalThis.__prksWorkThumbPreviewSource === otherThumb);
 
@@ -363,11 +368,11 @@ prksDestroyAllTabContexts();
 
 let boom = 0;
 const c = createPrksTabContext('tab-boom');
-c.setResource('bad', {}, function () {
+c.registerCleanup(function () {
     boom += 1;
     throw new Error('cleanup boom');
 });
-c.setResource('ok', {}, function () {
+c.registerCleanup(function () {
     boom += 10;
 });
 c.destroy();
@@ -428,7 +433,7 @@ assertEq('cleanup continues after throw', boom, 11);
         suspendable: false,
         dispose: function () { warmGraphDisposes += 1; },
     });
-    warm.setResource('pdf', pdf, function () { warmPdfDisposes += 1; });
+    warm.registerResource(warm.resourceTicket(), { kind: 'pdf', value: pdf, suspendable: true, dispose: function () { warmPdfDisposes += 1; } });
     assert('warm suspend parks the pdf owner', warm.suspend(makeHost()));
     assertEq('warm suspend releases the graph once', warmGraphDisposes, 1);
     assertEq('warm suspend keeps the pdf resource', warm.getResource('pdf'), pdf);
@@ -612,35 +617,45 @@ assertEq('cleanup continues after throw', boom, 11);
     assertEq('clearResource pdf clears the registry read', pdfSlot.readResource('pdf'), undefined);
     assert('clearResource pdf leaves no legacy entry', !pdfSlot.resources.has('pdf'));
 
-    let plantedDisposes = 0;
-    pdfSlot.resources.set('pdf', {
-        value: { id: 'stranded' },
-        disposer: function () { plantedDisposes += 1; },
+    let refusedPdf = null;
+    try {
+        pdfSlot.setResource('pdf', { id: 'via-set-pdf' });
+    } catch (err) {
+        refusedPdf = err;
+    }
+    assert('setResource refuses the pdf registry kind', refusedPdf instanceof TypeError);
+    assertEq('refused setResource pdf installs nothing', pdfSlot.getResource('pdf'), undefined);
+    assert('refused setResource pdf leaves no map entry', !pdfSlot.resources.has('pdf'));
+    let replacedDisposes = 0;
+    pdfSlot.registerResource(pdfSlot.resourceTicket(), {
+        kind: 'pdf',
+        value: { id: 'first' },
+        suspendable: true,
+        dispose: function () { replacedDisposes += 1; },
     });
-    let setterDisposes = 0;
-    const setterValue = { id: 'via-set-pdf' };
-    pdfSlot.setResource('pdf', setterValue, function () { setterDisposes += 1; });
-    assertEq('setResource pdf disposes a stranded legacy entry', plantedDisposes, 1);
-    assert('setResource pdf is readable', pdfSlot.getResource('pdf') === setterValue);
-    assert('setResource pdf does not keep a legacy entry', !pdfSlot.resources.has('pdf'));
-    assert('setResource pdf matches registerResource', pdfSlot.readResource('pdf') === setterValue);
-    let setterNextDisposes = 0;
+    let nextDisposes = 0;
     pdfSlot.registerResource(pdfSlot.resourceTicket(), {
         kind: 'pdf',
         value: { id: 'via-register' },
         suspendable: true,
-        dispose: function () { setterNextDisposes += 1; },
+        dispose: function () { nextDisposes += 1; },
     });
-    assertEq('registerResource replaces the setResource pdf once', setterDisposes, 1);
-    assertEq('replacement disposer has not run', setterNextDisposes, 0);
+    assertEq('registerResource replaces the pdf once', replacedDisposes, 1);
+    assertEq('replacement disposer has not run', nextDisposes, 0);
     assertEq('getResource follows the replacement', pdfSlot.getResource('pdf').id, 'via-register');
+    const staleTicket = pdfSlot.resourceTicket();
     pdfSlot.unmount('park');
     let rejectedPdfDisposes = 0;
-    pdfSlot.setResource('pdf', { id: 'after-park' }, function () { rejectedPdfDisposes += 1; });
-    assertEq('setResource pdf after cold park does not attach', pdfSlot.getResource('pdf'), undefined);
-    assert('setResource pdf after cold park leaves no legacy entry', !pdfSlot.resources.has('pdf'));
-    assertEq('rejected setResource pdf does not run the new disposer', rejectedPdfDisposes, 0);
-    assertEq('cold park disposes the setResource pdf once', setterNextDisposes, 1);
+    const rejected = pdfSlot.registerResource(staleTicket, {
+        kind: 'pdf',
+        value: { id: 'after-park' },
+        suspendable: true,
+        dispose: function () { rejectedPdfDisposes += 1; },
+    });
+    assertEq('a pre-park ticket is rejected after cold park', rejected, 'rejected');
+    assertEq('rejected pdf does not attach', pdfSlot.getResource('pdf'), undefined);
+    assertEq('rejected pdf does not run its disposer', rejectedPdfDisposes, 0);
+    assertEq('cold park disposes the registered pdf once', nextDisposes, 1);
 
     const warmPdf = prksEnsureTabContext('resource-pdf-warm-register');
     warmPdf.mount(makeHost());
@@ -681,24 +696,22 @@ assertEq('cleanup continues after throw', boom, 11);
     const stored = prksEnsureTabContext('resource-set');
     stored.mount(makeHost());
     stored.beginRoute({ name: 'research-graph', hash: '#/graph' });
-    let firstDispose = 0;
-    const graphValue = { id: 'via-set' };
-    stored.setResource('researchGraph', graphValue, function () { firstDispose += 1; });
-    assert('setResource researchGraph is readable', stored.getResource('researchGraph') === graphValue);
-    assert('setResource researchGraph skips the legacy map', !stored.resources.has('researchGraph'));
-    let secondDispose = 0;
-    stored.setResource('researchGraph', { id: 'via-set-2' }, function () { secondDispose += 1; });
-    assertEq('setResource replace disposes the first graph once', firstDispose, 1);
-    assertEq('setResource replace keeps the new disposer', secondDispose, 0);
-    assert('replaced setResource value is readable', stored.getResource('researchGraph').id === 'via-set-2');
-    assert('replaced setResource still skips the legacy map', !stored.resources.has('researchGraph'));
+    let refusedGraph = null;
+    try {
+        stored.setResource('researchGraph', { id: 'via-set' });
+    } catch (err) {
+        refusedGraph = err;
+    }
+    assert('setResource refuses the researchGraph registry kind', refusedGraph instanceof TypeError);
+    assertEq('refused setResource researchGraph installs nothing', stored.getResource('researchGraph'), undefined);
+    const hints = [{ id: 'c1' }];
+    assert('setResource returns an ordinary value', stored.setResource('conceptHintList', hints) === hints);
+    assert('ordinary values are stored as plain values', stored.resources.get('conceptHintList') === hints);
+    stored.clearResource('conceptHintList');
+    assert('clearResource drops an ordinary value', !stored.resources.has('conceptHintList'));
+    stored.setResource('wikiWorkList', []);
     stored.unmount('park');
-    let rejectedDispose = 0;
-    stored.setResource('researchGraph', { id: 'after-park' }, function () { rejectedDispose += 1; });
-    assertEq('setResource after cold park does not attach', stored.getResource('researchGraph'), undefined);
-    assert('setResource after cold park leaves no legacy entry', !stored.resources.has('researchGraph'));
-    assertEq('rejected setResource does not run the new disposer', rejectedDispose, 0);
-    assertEq('cold park disposes the setResource graph once', secondDispose, 1);
+    assertEq('cold park clears ordinary values', stored.resources.size, 0);
 
     prksDestroyAllTabContexts();
 }

@@ -752,25 +752,16 @@ async function main() {
     assertEq('clearResource drops the slot', typed.getResource('workRoleEditor'), undefined);
     assertEq('clearResource drops the registry read', typed.readResource('workRoleEditor'), undefined);
 
-    let stranded = 0;
-    let bridge = 0;
-    typed.resources.set('workSourceEditor', {
-        value: { stranded: true },
-        disposer: function () { stranded += 1; },
-    });
-    typed.setResource('workSourceEditor', { id: 'bridge' }, function () { bridge += 1; });
-    assertEq('compatibility setResource disposes a stranded legacy entry', stranded, 1);
-    assert('compatibility setResource leaves no legacy copy', !typed.resources.has('workSourceEditor'));
-    assertEq('compatibility setResource installs the registry value', typed.getResource('workSourceEditor').id, 'bridge');
-    assertEq('compatibility value is the registry slot', typed.getResource('workSourceEditor'), typed.readResource('workSourceEditor'));
-    typed.registerResource(typed.resourceTicket(), {
-        kind: 'workSourceEditor',
-        value: { id: 'next' },
-        suspendable: false,
-        dispose: function () {},
-    });
-    assertEq('replacement disposes the compatibility session once', bridge, 1);
-    assertEq('replacement installs only the new state', typed.getResource('workSourceEditor').id, 'next');
+    const sourceBefore = typed.getResource('workSourceEditor');
+    let refusedEditor = null;
+    try {
+        typed.setResource('workSourceEditor', { id: 'bridge' });
+    } catch (err) {
+        refusedEditor = err;
+    }
+    assert('setResource refuses an editor-session kind', refusedEditor instanceof TypeError);
+    assert('refused setResource leaves the registered session', typed.getResource('workSourceEditor') === sourceBefore);
+    assert('refused setResource leaves no map entry', !typed.resources.has('workSourceEditor'));
     prksDestroyTabContext('typed');
 
     prksDestroyAllTabContexts();

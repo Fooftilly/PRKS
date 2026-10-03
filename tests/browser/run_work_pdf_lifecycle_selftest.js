@@ -530,7 +530,7 @@ async function scenarioPendingLeave(app) {
     resetWorld();
     const leaving = openTab('pending');
     const pendingRuntime = createWorkPdfRuntime({ workId: 'work-pending' });
-    leaving.ctx.setResource('pdf', pendingRuntime, function () { pendingRuntime.destroy(); });
+    leaving.ctx.registerResource(leaving.ctx.resourceTicket(), { kind: 'pdf', value: pendingRuntime, suspendable: true, dispose: function () { pendingRuntime.destroy(); } });
     pendingRuntime.syncState.pendingChanges = true;
     leaving.ctx.lastResolvedRoute = { name: 'work', canonicalHash: '#/works/pending', hash: '#/works/pending' };
     let route = leaving.ctx.lastResolvedRoute.canonicalHash;
@@ -844,7 +844,7 @@ async function scenarioWarmPendingLeave() {
     resetWorld();
     const leaving = openTab('warm-pending');
     const pendingRuntime = createWorkPdfRuntime({ workId: 'work-warm-pending' });
-    leaving.ctx.setResource('pdf', pendingRuntime, function () { pendingRuntime.destroy(); });
+    leaving.ctx.registerResource(leaving.ctx.resourceTicket(), { kind: 'pdf', value: pendingRuntime, suspendable: true, dispose: function () { pendingRuntime.destroy(); } });
     pendingRuntime.syncState.pendingChanges = true;
     leaving.ctx.lastResolvedRoute = { name: 'work', canonicalHash: '#/works/warm-pending', hash: '#/works/warm-pending' };
     global.prksParseRoute = function (hash) {

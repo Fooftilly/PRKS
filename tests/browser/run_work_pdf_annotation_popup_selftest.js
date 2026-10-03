@@ -132,8 +132,8 @@ function testMainAndSecondarySessionsStayApart() {
     sidePdf.viewer = viewerStub('side');
     mainPdf.viewerSetupToken = 1;
     sidePdf.viewerSetupToken = 1;
-    main.setResource('pdf', mainPdf, function () { mainPdf.destroy(); });
-    side.setResource('pdf', sidePdf, function () { sidePdf.destroy(); });
+    main.registerResource(main.resourceTicket(), { kind: 'pdf', value: mainPdf, suspendable: true, dispose: function () { mainPdf.destroy(); } });
+    side.registerResource(side.resourceTicket(), { kind: 'pdf', value: sidePdf, suspendable: true, dispose: function () { sidePdf.destroy(); } });
     mainPdf.openAnnotationPopup({ annId: 'A', comment: 'main', generation: main.generation });
     sidePdf.openAnnotationPopup({ annId: 'B', comment: 'side', generation: side.generation });
     const sideEpoch = sidePdf.readAnnotationPopup().epoch;

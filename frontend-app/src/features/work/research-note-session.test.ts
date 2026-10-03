@@ -28,6 +28,10 @@ type WorkCtx = {
   query: (selector: string) => Element | null
   beginRoute: (route: { name: string; params: { workId: string } }) => number
   resourceTicket: (generation?: number) => unknown
+  registerResource: (
+    ticket: unknown,
+    registration: { kind: string; value: unknown; suspendable: boolean; dispose: () => void },
+  ) => string
   suspend: (host: HTMLElement) => boolean
   resume: (host: HTMLElement) => boolean
   unmount: (reason?: string) => void
@@ -118,7 +122,7 @@ function installRefreshedNotes(held: ReturnType<typeof holdResearchNotesSave>) {
     latestSaveEditGeneration: 0,
     settledSaveToken: 0,
   }
-  held.ctx.setResource('workNotes', notes)
+  held.ctx.registerResource(held.ctx.resourceTicket(), { kind: 'workNotes', value: notes, suspendable: true, dispose: function () {} })
   held.status.innerText = 'Saving...'
   return { started, notes }
 }
@@ -184,7 +188,7 @@ describe('work research notes session', () => {
     main.setEntity('work', { id: 'work-a' })
     side.setEntity('work', { id: 'work-a' })
     const notes = { workId: 'work-a', editGeneration: 0, drafting: false }
-    main.setResource('workNotes', notes)
+    main.registerResource(main.resourceTicket(), { kind: 'workNotes', value: notes, suspendable: true, dispose: function () {} })
     notesWindow.prksWorkNotesMarkEdit(notes, 'work-a', 'Unscoped edit')
     expect(main.ui.workResearchNoteSession?.text).toBe('Unscoped edit')
     expect(main.ui.workResearchNoteSession?.ownerTabId).toBe(main.tabId)
@@ -292,7 +296,7 @@ describe('work research notes session', () => {
       latestSaveEditGeneration: 0,
       settledSaveToken: 0,
     }
-    held.ctx.setResource('workNotes', notes)
+    held.ctx.registerResource(held.ctx.resourceTicket(), { kind: 'workNotes', value: notes, suspendable: true, dispose: function () {} })
     notesWindow.prksWorkNotesMarkEdit(notes, 'work-a', 'second draft', held.ctx)
     const second = notesWindow.prksEnqueueWorkResearchNotesSave(held.ctx, 'work-a')
     expect(held.releases).toHaveLength(2)
@@ -428,7 +432,7 @@ describe('work research notes session', () => {
 
   it('drops hint resources when the editor is destroyed', () => {
     const ctx = mount('main')
-    ctx.setResource('workNotes', { editor: {} })
+    ctx.registerResource(ctx.resourceTicket(), { kind: 'workNotes', value: { editor: {} }, suspendable: true, dispose: function () {} })
     ctx.setResource('wikiTitleMap', { alpha: 'work-a' })
     ctx.setResource('wikiWorkList', [{ id: 'work-a' }])
     ctx.setResource('conceptHintList', [{ id: 'c1' }])
