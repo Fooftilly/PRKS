@@ -53,7 +53,7 @@ class WorkPdfBoundaryTests(unittest.TestCase):
 
     def test_tab_close_disposes_the_pdf_resource(self):
         close = _between(_WORKSPACE, "function closeTab(tabId)", "function closeTabIds")
-        self.assertIn("destroyContext(closing.id)", close)
+        self.assertIn("destroyContext(tabId)", close)
         destroy = _between(_WORKSPACE, "function destroyContext(tabId)", "function resetAllContexts")
         self.assertIn("prksDestroyTabContext(tabId)", destroy)
         teardown = _between(_TABS, "function teardownRuntime()", "ctx.beginRoute = function")

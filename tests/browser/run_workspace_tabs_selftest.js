@@ -41,6 +41,49 @@ function assertPersistable(name, snap) {
     assert(name, !!valid);
 }
 
+function labeledId(id, labels) {
+    const keys = Object.keys(labels);
+    for (let i = 0; i < keys.length; i++) {
+        if (labels[keys[i]] === id) return keys[i];
+    }
+    return id == null ? null : String(id);
+}
+
+function labeledTree(node, labels) {
+    if (!node) return null;
+    if (node.type === 'split') {
+        return {
+            type: 'split',
+            first: labeledTree(node.first, labels),
+            second: labeledTree(node.second, labels),
+        };
+    }
+    return { tabId: labeledId(node.tabId, labels) };
+}
+
+function closeOutcome(h, labels) {
+    const snap = h.ws.snapshot();
+    const mounted = {};
+    const keys = Object.keys(labels);
+    for (let i = 0; i < keys.length; i++) mounted[keys[i]] = h.isMounted(labels[keys[i]]);
+    return JSON.stringify({
+        main: labeledId(snap.mainTabId, labels),
+        focus: labeledId(snap.focusedTabId, labels),
+        mode: snap.mode,
+        tree: labeledTree(snap.secondaryTree, labels),
+        url: h.hist.getHash(),
+        tabs: snap.tabs.map(function (tab) { return labeledId(tab.id, labels); }),
+        mounted: mounted,
+        destroyed: h.life.destroy.map(function (id) { return labeledId(id, labels); }),
+    });
+}
+
+function closeShellSlice(h, labels, from) {
+    return JSON.stringify(h.published.slice(from).map(function (entry) {
+        return { tabId: labeledId(entry.tabId, labels), title: entry.title || '' };
+    }));
+}
+
 function assertSecondaryLeavesTileable(name, snap) {
     const ids = tree.collectLeafTabIds(snap.secondaryTree);
     let ok = true;
@@ -822,6 +865,110 @@ async function run() {
     assertEq('close main focused B', snapCloseMain.focusedTabId, promoteB);
     assertPersistable('close main persistable', snapCloseMain);
     assertSecondaryLeavesTileable('close main leaves tileable', snapCloseMain);
+
+    {
+        /* Tile-capable Make Main is not a leave and does not change generation, so it
+         * can swap roles while a close confirmation is open. Approval must replan. */
+        async function tilePair() {
+            const h = makeHarness({ hash: '#/works/WA' });
+            await h.ws.navigate('#/works/WB', { target: 'tile' });
+            return {
+                h: h,
+                A: h.ws.snapshot().mainTabId,
+                B: h.ws.snapshot().secondaryTree.tabId,
+            };
+        }
+
+        const promotedControl = await tilePair();
+        const promotedLabels = { A: promotedControl.A, B: promotedControl.B };
+        await promotedControl.h.ws.makeMain(promotedControl.B);
+        const promotedShellAt = promotedControl.h.published.length;
+        const promotedClosed = await promotedControl.h.ws.closeTab(promotedControl.B);
+        assert('control close of promoted main', promotedClosed === true);
+        const promotedExpect = closeOutcome(promotedControl.h, promotedLabels);
+        const promotedShell = closeShellSlice(promotedControl.h, promotedLabels, promotedShellAt);
+
+        const promoted = await tilePair();
+        const promotedRaceLabels = { A: promoted.A, B: promoted.B };
+        let releasePromoted = null;
+        promoted.h.setCanLeaveFn(function () {
+            return new Promise(function (resolve) { releasePromoted = resolve; });
+        });
+        let promotedThrew = false;
+        const pendingPromoted = promoted.h.ws.closeTab(promoted.B).then(
+            function (value) { return value; },
+            function () {
+                promotedThrew = true;
+                return false;
+            }
+        );
+        await Promise.resolve();
+        assert('secondary close waits on discard', typeof releasePromoted === 'function');
+        const promotedMade = await promoted.h.ws.makeMain(promoted.B);
+        assert('make main during secondary close', promotedMade === true);
+        assertEq('closed secondary is now main', promoted.h.ws.snapshot().mainTabId, promoted.B);
+        assertEq('former main is now secondary', promoted.h.ws.snapshot().secondaryTree.tabId, promoted.A);
+        const promotedShellBefore = promoted.h.published.length;
+        releasePromoted(true);
+        const promotedApproved = await pendingPromoted;
+        assert('promoted secondary close does not throw', promotedThrew === false);
+        assert('promoted secondary close commits', promotedApproved === true);
+        assertEq(
+            'promoted secondary close matches final close',
+            closeOutcome(promoted.h, promotedRaceLabels),
+            promotedExpect
+        );
+        assertEq(
+            'promoted secondary close shell matches',
+            closeShellSlice(promoted.h, promotedRaceLabels, promotedShellBefore),
+            promotedShell
+        );
+
+        const demotedControl = await tilePair();
+        const demotedLabels = { A: demotedControl.A, B: demotedControl.B };
+        await demotedControl.h.ws.makeMain(demotedControl.B);
+        const demotedShellAt = demotedControl.h.published.length;
+        const demotedClosed = await demotedControl.h.ws.closeTab(demotedControl.A);
+        assert('control close of demoted main', demotedClosed === true);
+        const demotedExpect = closeOutcome(demotedControl.h, demotedLabels);
+        const demotedShell = closeShellSlice(demotedControl.h, demotedLabels, demotedShellAt);
+
+        const demoted = await tilePair();
+        const demotedRaceLabels = { A: demoted.A, B: demoted.B };
+        let releaseDemoted = null;
+        demoted.h.setCanLeaveFn(function () {
+            return new Promise(function (resolve) { releaseDemoted = resolve; });
+        });
+        let demotedThrew = false;
+        const pendingDemoted = demoted.h.ws.closeTab(demoted.A).then(
+            function (value) { return value; },
+            function () {
+                demotedThrew = true;
+                return false;
+            }
+        );
+        await Promise.resolve();
+        assert('main close waits on discard', typeof releaseDemoted === 'function');
+        const demotedMade = await demoted.h.ws.makeMain(demoted.B);
+        assert('make main during main close', demotedMade === true);
+        assertEq('closed main is now secondary', demoted.h.ws.snapshot().secondaryTree.tabId, demoted.A);
+        assertEq('former secondary is now main', demoted.h.ws.snapshot().mainTabId, demoted.B);
+        const demotedShellBefore = demoted.h.published.length;
+        releaseDemoted(true);
+        const demotedApproved = await pendingDemoted;
+        assert('demoted main close does not throw', demotedThrew === false);
+        assert('demoted main close commits', demotedApproved === true);
+        assertEq(
+            'demoted main close matches final close',
+            closeOutcome(demoted.h, demotedRaceLabels),
+            demotedExpect
+        );
+        assertEq(
+            'demoted main close shell matches',
+            closeShellSlice(demoted.h, demotedRaceLabels, demotedShellBefore),
+            demotedShell
+        );
+    }
 
     const unsup = makeHarness({ hash: '#/works/WA' });
     await unsup.ws.navigate('#/people/P1', { target: 'tile' });

@@ -1514,24 +1514,11 @@
             const closing = state.tabs[idx];
             const closingMain = closing.id === state.mainTabId;
             const closingLeaf = root.containsTab(state.secondaryTree, closing.id);
-            if (!closingMain) {
-                const commitClose = function () {
-                    if (!getTab(tabId)) return false;
-                    const plan = workspaceModelApi.planCloseTab(state, tabId, null);
-                    if (!plan.ok || plan.needsHomeTab) return false;
-                    destroyContext(closing.id);
-                    commitCanonical(plan.state);
-                    paintAndRestore(state.focusedTabId);
-                    return true;
-                };
-                const needLeave = closingLeaf && visualTiled();
-                if (!needLeave) return Promise.resolve(commitClose());
-                return runLeave(closing.id, homeHash, 'close', commitClose);
-            }
-            const previewForLeave = workspaceModelApi.planCloseTab(state, tabId, null);
-            const successorForLeave = previewForLeave.successorId ? getTab(previewForLeave.successorId) : null;
-            const nextHash = successorForLeave ? successorForLeave.route : homeHash;
-            return runLeave(closing.id, nextHash, 'close', function () {
+            /* The role before the dialog only chooses whether to leave and which
+             * destination the confirmation is about. Tile-capable Make Main is not
+             * a leave and does not change generation, so it can swap Main while
+             * this close is waiting. Effects come from a fresh plan at approval. */
+            const commitClose = function () {
                 if (tabIndex(tabId) < 0) return false;
                 const preview = workspaceModelApi.planCloseTab(state, tabId, null);
                 if (preview.needsHomeTab) {
@@ -1551,8 +1538,15 @@
                     });
                 }
                 if (!preview.ok) return false;
-                const successor = preview.successorId ? getTab(preview.successorId) : null;
-                const wasMountedSuccessor = !!(successor && contextMounted(successor.id));
+                if (!preview.successorId) {
+                    destroyContext(tabId);
+                    commitCanonical(preview.state);
+                    paintAndRestore(state.focusedTabId);
+                    return true;
+                }
+                const successor = getTab(preview.successorId);
+                if (!successor) return false;
+                const wasMountedSuccessor = contextMounted(successor.id);
                 destroyContext(tabId);
                 commitCanonical(preview.state);
                 const resumedSuccessor = !wasMountedSuccessor && mountContext(preview.successorId);
@@ -1568,7 +1562,16 @@
                 ).then(function () {
                     return true;
                 });
-            });
+            };
+            if (!closingMain) {
+                const needLeave = closingLeaf && visualTiled();
+                if (!needLeave) return Promise.resolve(commitClose());
+                return runLeave(closing.id, homeHash, 'close', commitClose);
+            }
+            const previewForLeave = workspaceModelApi.planCloseTab(state, tabId, null);
+            const successorForLeave = previewForLeave.successorId ? getTab(previewForLeave.successorId) : null;
+            const nextHash = successorForLeave ? successorForLeave.route : homeHash;
+            return runLeave(closing.id, nextHash, 'close', commitClose);
         }
 
         function paintAndRestore(tabId) {
