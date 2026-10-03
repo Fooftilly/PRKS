@@ -3,6 +3,7 @@ import {
   dismissRouteSurface,
   presentRouteSurface,
   registerEarlyRoutePresenter,
+  registerRouteWindowBridge,
   resetRouteSurfaceForTests,
   type RouteSurfaceOwner,
 } from '../../route-surface/lifecycle'
@@ -108,7 +109,7 @@ export function resetResearchGraphSessionForTests(): void {
 }
 
 export function registerResearchGraphBridge(target: Window = window): void {
-  target.prksVuePresentResearchGraph = presentResearchGraph
+  registerRouteWindowBridge(target)
   target.prksVueDismissResearchGraph = dismissResearchGraph
   registerEarlyRoutePresenter(
     GRAPH_FEATURE,

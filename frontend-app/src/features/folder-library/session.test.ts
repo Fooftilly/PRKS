@@ -13,7 +13,7 @@ afterEach(() => {
   resetFolderLibrarySessionForTests()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
-  delete window.prksVuePresentFolderLibrary
+  delete window.prksVuePresentRoute
   delete window.prksVueDismissFolderLibrary
   delete window.prksFolderLibraryTreeInnerHtml
   delete window.prksFolderLibraryCatalogGlanceParts
@@ -97,7 +97,7 @@ describe('Folder Library route bridge', () => {
       shell: true,
     }
     registerFolderLibraryBridge(window)
-    expect(window.prksVuePresentFolderLibrary).toBeTypeOf('function')
+    expect(window.prksVuePresentRoute).toBeTypeOf('function')
     expect(el.textContent).toContain('Folder Library')
   })
 

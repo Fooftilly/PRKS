@@ -14,8 +14,7 @@ afterEach(() => {
   resetConceptsSessionForTests()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
-  delete window.prksVuePresentConceptsIndex
-  delete window.prksVuePresentConceptDetail
+  delete window.prksVuePresentRoute
   delete window.prksVueDismissConcepts
   delete window.prksCreateConceptFlow
   delete window.prksResearchMarkdownHtml
@@ -192,8 +191,7 @@ describe('Concepts route bridge', () => {
       shell: true,
     }
     registerConceptsBridge(window)
-    expect(window.prksVuePresentConceptsIndex).toBeTypeOf('function')
-    expect(window.prksVuePresentConceptDetail).toBeTypeOf('function')
+    expect(window.prksVuePresentRoute).toBeTypeOf('function')
     expect(el.textContent).toContain('Early')
     expect(decoy.textContent).not.toContain('Early')
   })

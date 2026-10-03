@@ -7,7 +7,7 @@ afterEach(() => {
   resetRecentSessionForTests()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
-  delete window.prksVuePresentRecent
+  delete window.prksVuePresentRoute
   delete window.prksVueDismissRecent
   delete window.prksWorkCardHtml
   delete window.prksWorkBrowseModeToggleHtml
@@ -117,7 +117,7 @@ describe('Recent route bridge', () => {
     }
     window.prksWorkCardHtml = (work) => `<div data-work-id="${String(work.id)}"></div>`
     registerRecentBridge(window)
-    expect(window.prksVuePresentRecent).toBeTypeOf('function')
+    expect(window.prksVuePresentRoute).toBeTypeOf('function')
     expect(window.prksVueDismissRecent).toBeTypeOf('function')
     expect((el as HTMLElement & { __prksVueRouteRequest?: unknown }).__prksVueRouteRequest).toBeUndefined()
     expect(el.querySelector('[data-work-id="early"]')).not.toBeNull()
@@ -132,14 +132,16 @@ describe('Recent route bridge', () => {
     const secondary = owner()
     const mainHost = host()
     const secondaryHost = host()
-    window.prksVuePresentRecent?.({
+    window.prksVuePresentRoute?.({
+      feature: 'recent',
       owner: main,
       host: mainHost,
       rows: [{ id: 'main' }],
       generation: 2,
       shell: true,
     })
-    window.prksVuePresentRecent?.({
+    window.prksVuePresentRoute?.({
+      feature: 'recent',
       owner: secondary,
       host: secondaryHost,
       rows: [{ id: 'side' }],

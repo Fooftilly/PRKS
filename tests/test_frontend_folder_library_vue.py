@@ -13,7 +13,8 @@ class FolderLibraryVueContracts(unittest.TestCase):
     def test_coordinator_presents_vue_folder_library(self):
         app = (FRONTEND / "app.js").read_text()
         self.assertIn("function prksPresentVueFolderLibrary", app)
-        self.assertIn("prksVuePresentFolderLibrary", app)
+        self.assertIn("prksDeliverVueRoute", app)
+        self.assertNotIn("prksVuePresentFolderLibrary", app)
         self.assertIn("sameFolderLibraryWorkspace", app)
         self.assertIn("__prksRetainFolderLibrarySurface", app)
         folders_case = app[app.index("case 'folders': {"): app.index("case 'playlists': {")]

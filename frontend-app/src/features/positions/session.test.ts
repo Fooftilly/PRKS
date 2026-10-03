@@ -14,8 +14,7 @@ afterEach(() => {
   resetPositionsSessionForTests()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
-  delete window.prksVuePresentPositionsIndex
-  delete window.prksVuePresentPositionDetail
+  delete window.prksVuePresentRoute
   delete window.prksVueDismissPositions
   delete window.prksPageHeaderIconHtml
   delete window.prksIcon
@@ -382,8 +381,7 @@ describe('Positions route bridge', () => {
       shell: true,
     }
     registerPositionsBridge(window)
-    expect(window.prksVuePresentPositionsIndex).toBeTypeOf('function')
-    expect(window.prksVuePresentPositionDetail).toBeTypeOf('function')
+    expect(window.prksVuePresentRoute).toBeTypeOf('function')
     expect(el.textContent).toContain('Early')
     expect(decoy.textContent).not.toContain('Early')
     expect(readRouteSurface(pane)?.canonicalHash).toBe('#/positions')

@@ -3,6 +3,7 @@ import {
   dismissRouteSurface,
   presentRouteSurface,
   registerEarlyRoutePresenter,
+  registerRouteWindowBridge,
   resetRouteSurfaceForTests,
   type RouteSurfaceOwner,
 } from '../../route-surface/lifecycle'
@@ -118,8 +119,7 @@ export function resetSavedViewsSessionForTests(): void {
 }
 
 export function registerSavedViewsBridge(target: Window = window): void {
-  target.prksVuePresentSavedViewsIndex = presentSavedViewsIndex
-  target.prksVuePresentSavedViewDetail = presentSavedViewDetail
+  registerRouteWindowBridge(target)
   target.prksVueDismissSavedViews = dismissSavedViews
   registerEarlyRoutePresenter(
     SAVED_VIEWS_INDEX_FEATURE,

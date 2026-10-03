@@ -3,6 +3,7 @@ import {
   dismissRouteSurface,
   presentRouteSurface,
   registerEarlyRoutePresenter,
+  registerRouteWindowBridge,
   resetRouteSurfaceForTests,
   type RouteSurfaceOwner,
 } from '../../route-surface/lifecycle'
@@ -118,7 +119,7 @@ export function resetPublishersSessionForTests(): void {
 }
 
 export function registerPublishersBridge(target: Window = window): void {
-  target.prksVuePresentPublishers = presentPublishers
+  registerRouteWindowBridge(target)
   target.prksVueDismissPublishers = dismissPublishers
   target.prksVueClosePublishersAliasModal = closePublishersAliasModals
   target.prksVueReportPublishersRefreshFailure = reportPublishersRefreshFailure

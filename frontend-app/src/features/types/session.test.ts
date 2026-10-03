@@ -13,8 +13,7 @@ afterEach(() => {
   resetTypesSessionForTests()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
-  delete window.prksVuePresentTypesIndex
-  delete window.prksVuePresentTypeDetail
+  delete window.prksVuePresentRoute
   delete window.prksVueDismissTypes
   delete window.prksWorkCardHtml
   delete window.prksDocTypeBadgeHtml
@@ -132,8 +131,7 @@ describe('File types route bridge', () => {
       shell: true,
     }
     registerTypesBridge(window)
-    expect(window.prksVuePresentTypesIndex).toBeTypeOf('function')
-    expect(window.prksVuePresentTypeDetail).toBeTypeOf('function')
+    expect(window.prksVuePresentRoute).toBeTypeOf('function')
     expect(window.prksVueDismissTypes).toBeTypeOf('function')
     expect((el as HTMLElement & { __prksVueRouteRequest?: unknown }).__prksVueRouteRequest).toBeUndefined()
     expect(el.querySelector('[data-prks-route="#/types/online"]')).not.toBeNull()
@@ -150,14 +148,16 @@ describe('File types route bridge', () => {
     const secondary = owner()
     const mainHost = host()
     const secondaryHost = host()
-    window.prksVuePresentTypesIndex?.({
+    window.prksVuePresentRoute?.({
+      feature: 'types',
       owner: main,
       host: mainHost,
       rows: [{ value: 'book', label: 'Book', count: 1 }],
       generation: 2,
       shell: true,
     })
-    window.prksVuePresentTypeDetail?.({
+    window.prksVuePresentRoute?.({
+      feature: 'type-detail',
       owner: secondary,
       host: secondaryHost,
       docType: 'article',

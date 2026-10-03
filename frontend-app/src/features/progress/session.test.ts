@@ -7,7 +7,7 @@ afterEach(() => {
   resetProgressSessionForTests()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
-  delete window.prksVuePresentProgress
+  delete window.prksVuePresentRoute
   delete window.prksVueDismissProgress
   delete window.prksWorkCardHtml
   delete (window as Window & { prksSyncSidebarActive?: unknown }).prksSyncSidebarActive
@@ -118,7 +118,7 @@ describe('Progress route bridge', () => {
     }
     window.prksWorkCardHtml = (work) => `<div data-work-id="${String(work.id)}"></div>`
     registerProgressBridge(window)
-    expect(window.prksVuePresentProgress).toBeTypeOf('function')
+    expect(window.prksVuePresentRoute).toBeTypeOf('function')
     expect(window.prksVueDismissProgress).toBeTypeOf('function')
     expect((el as HTMLElement & { __prksVueRouteRequest?: unknown }).__prksVueRouteRequest).toBeUndefined()
     expect(el.querySelector('.prks-page-title')?.textContent).toBe('Files · In Progress')
@@ -134,7 +134,8 @@ describe('Progress route bridge', () => {
     const secondary = owner()
     const mainHost = host()
     const secondaryHost = host()
-    window.prksVuePresentProgress?.({
+    window.prksVuePresentRoute?.({
+      feature: 'progress',
       owner: main,
       host: mainHost,
       status: 'Paused',
@@ -142,7 +143,8 @@ describe('Progress route bridge', () => {
       generation: 2,
       shell: true,
     })
-    window.prksVuePresentProgress?.({
+    window.prksVuePresentRoute?.({
+      feature: 'progress',
       owner: secondary,
       host: secondaryHost,
       status: 'Completed',

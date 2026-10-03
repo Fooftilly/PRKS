@@ -12,7 +12,7 @@ afterEach(() => {
   resetFolderDetailSessionForTests()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
-  delete window.prksVuePresentFolderDetail
+  delete window.prksVuePresentRoute
   delete window.prksVueDismissFolderDetail
   delete window.prksWorkCardHtml
   delete window.prksEffectiveFolderDetailWorks
@@ -294,7 +294,7 @@ describe('Folder detail route bridge', () => {
     }
     window.prksWorkCardHtml = () => ''
     registerFolderDetailBridge(window)
-    expect(window.prksVuePresentFolderDetail).toBeTypeOf('function')
+    expect(window.prksVuePresentRoute).toBeTypeOf('function')
     expect((el as HTMLElement & { __prksVueRouteRequest?: unknown }).__prksVueRouteRequest).toBeUndefined()
     expect(el.querySelector('.prks-page-title')?.textContent).toContain('Early')
     expect(decoy.querySelector('[data-prks-folder-detail-view]')).toBeNull()
@@ -307,14 +307,16 @@ describe('Folder detail route bridge', () => {
     const secondary = owner()
     const mainHost = host()
     const secondaryHost = host()
-    window.prksVuePresentFolderDetail?.({
+    window.prksVuePresentRoute?.({
+      feature: 'folder-detail',
       owner: main,
       host: mainHost,
       folder: { id: 'main', title: 'Main', works: [], children: [] },
       generation: 2,
       shell: true,
     })
-    window.prksVuePresentFolderDetail?.({
+    window.prksVuePresentRoute?.({
+      feature: 'folder-detail',
       owner: secondary,
       host: secondaryHost,
       folder: { id: 'side', title: 'Side', works: [], children: [] },

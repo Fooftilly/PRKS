@@ -211,6 +211,30 @@ export function registerEarlyRoutePresenter(
   publishEarlyRouteRequests(target)
 }
 
+export interface RouteDispatchTarget {
+  prksVuePresentRoute?: (request: unknown) => boolean
+}
+
+/**
+ * Deliver one host-local request to the presenter registered for its feature.
+ * That presenter records the owner's `PrksRouteInstance`. A request for an
+ * unregistered feature is not claimed, so the coordinator can leave it on the host.
+ */
+export function presentRegisteredRoute(request: unknown): boolean {
+  if (!request || typeof request !== 'object') return false
+  const host = (request as { host?: unknown }).host
+  if (!host || typeof (host as HTMLElement).setAttribute !== 'function') return false
+  const feature = earlyFeatureName(request)
+  const present = feature ? earlyPresenters.get(feature) : undefined
+  if (!feature || !present) return false
+  return present(request, host as HTMLElement) === true
+}
+
+/** The only window entry for route presentation. Feature presenters stay off `window`. */
+export function registerRouteWindowBridge(target: RouteDispatchTarget = window): void {
+  target.prksVuePresentRoute = presentRegisteredRoute
+}
+
 /**
  * Deliver host-local early requests to the presenter registered for each
  * request's feature. The host that stored the request is the host that paints.

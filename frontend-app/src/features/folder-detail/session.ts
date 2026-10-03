@@ -3,6 +3,7 @@ import {
   dismissRouteSurface,
   presentRouteSurface,
   registerEarlyRoutePresenter,
+  registerRouteWindowBridge,
   resetRouteSurfaceForTests,
   type RouteSurfaceOwner,
 } from '../../route-surface/lifecycle'
@@ -119,7 +120,7 @@ function isFolderDetailEarlyRequest(
 }
 
 export function registerFolderDetailBridge(target: Window = window): void {
-  target.prksVuePresentFolderDetail = presentFolderDetail
+  registerRouteWindowBridge(target)
   target.prksVueDismissFolderDetail = dismissFolderDetail
   registerEarlyRoutePresenter(
     FOLDER_DETAIL_FEATURE,

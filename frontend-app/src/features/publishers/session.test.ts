@@ -13,7 +13,7 @@ afterEach(() => {
   resetPublishersSessionForTests()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
-  delete window.prksVuePresentPublishers
+  delete window.prksVuePresentRoute
   delete window.prksVueDismissPublishers
   delete window.prksVueClosePublishersAliasModal
   delete window.prksVueReportPublishersRefreshFailure
@@ -160,7 +160,7 @@ describe('Publishers route bridge', () => {
       shell: true,
     }
     registerPublishersBridge(window)
-    expect(window.prksVuePresentPublishers).toBeTypeOf('function')
+    expect(window.prksVuePresentRoute).toBeTypeOf('function')
     expect(window.prksVueDismissPublishers).toBeTypeOf('function')
     expect((el as HTMLElement & { __prksVueRouteRequest?: unknown }).__prksVueRouteRequest).toBeUndefined()
     expect(el.querySelector('[data-publisher-alias-edit="p1"]')).not.toBeNull()
@@ -173,14 +173,16 @@ describe('Publishers route bridge', () => {
     const secondary = owner()
     const mainHost = host()
     const secondaryHost = host()
-    window.prksVuePresentPublishers?.({
+    window.prksVuePresentRoute?.({
+      feature: 'publishers',
       owner: main,
       host: mainHost,
       publishers: [OUP],
       generation: 2,
       shell: true,
     })
-    window.prksVuePresentPublishers?.({
+    window.prksVuePresentRoute?.({
+      feature: 'publishers',
       owner: secondary,
       host: secondaryHost,
       publishers: [CUP],
