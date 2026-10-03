@@ -200,14 +200,16 @@ function makeHarness(opts) {
         homeHash: '#/folders',
         historyAdapter: hist,
         supportsTile: nav.prksRouteSupportsTile,
-        canLeave: function (tabId, nextHash) {
-            canLeaveCalls += 1;
-            lastLeaveTabId = tabId || null;
-            lastLeaveHash = nextHash || null;
-            leaveCallLog.push({ tabId: lastLeaveTabId, hash: lastLeaveHash });
-            if (canLeaveFn) return canLeaveFn(tabId, nextHash);
-            return canLeave;
-        },
+        canLeave: opts.productionLeave
+            ? undefined
+            : function (tabId, nextHash) {
+                  canLeaveCalls += 1;
+                  lastLeaveTabId = tabId || null;
+                  lastLeaveHash = nextHash || null;
+                  leaveCallLog.push({ tabId: lastLeaveTabId, hash: lastLeaveHash });
+                  if (canLeaveFn) return canLeaveFn(tabId, nextHash);
+                  return canLeave;
+              },
         isRouteGenCurrent: function (g) {
             if (titleGenOk == null) return true;
             return g === titleGenOk;
@@ -1161,6 +1163,182 @@ async function run() {
         await raceBatch('close tabs to the right', rightScene, false);
         await raceBatch('close other tabs approved', otherScene, true);
         await raceBatch('close tabs to the right approved', rightScene, true);
+    }
+
+    {
+        /* Production leave (no injected canLeave) so note flush actually runs.
+         * Wave 1 must not flush before the mounted set is stable. A wave 2
+         * reject flushes nothing and destroys nothing. A wave 2 approval
+         * flushes each still-mounted close id once, including edits made
+         * while wave 2 was open, and only then destroys. */
+        const prevGetTabContext = globalThis.prksGetTabContext;
+        const contexts = Object.create(null);
+        try {
+            globalThis.prksGetTabContext = function (tabId) {
+                if (!contexts[tabId]) {
+                    contexts[tabId] = {
+                        id: tabId,
+                        tabId: tabId,
+                        generation: 1,
+                        destroyed: false,
+                        mounted: false,
+                        notes: 1,
+                    };
+                }
+                return contexts[tabId];
+            };
+
+            function flushView(h) {
+                const snap = h.ws.snapshot();
+                return JSON.stringify({
+                    main: snap.mainTabId,
+                    tabs: snap.tabs.map(function (tab) { return tab.id; }),
+                    mounted: snap.tabs.filter(function (tab) { return h.isMounted(tab.id); }).map(function (tab) { return tab.id; }),
+                    url: h.hist.getHash(),
+                });
+            }
+
+            async function productionScene(kind) {
+                const h = makeHarness({ hash: '#/works/WA', productionLeave: true });
+                if (kind === 'right') {
+                    const anchor = await h.ws.openTab('#/works/WL', { activate: false });
+                    await h.ws.navigate('#/works/WM', { target: 'tile' });
+                    const parked = await h.ws.openTab('#/works/WP', { activate: false });
+                    const snap = h.ws.snapshot();
+                    return {
+                        h: h,
+                        main: snap.mainTabId,
+                        mounted: snap.secondaryTree.tabId,
+                        parked: parked.id,
+                        keep: anchor.id,
+                        start: function () { return h.ws.closeTabsToTheRight(anchor.id); },
+                    };
+                }
+                await h.ws.navigate('#/works/WM', { target: 'tile' });
+                const parked = await h.ws.openTab('#/works/WP', { activate: false });
+                const snap = h.ws.snapshot();
+                return {
+                    h: h,
+                    main: snap.mainTabId,
+                    mounted: snap.secondaryTree.tabId,
+                    parked: parked.id,
+                    keep: snap.mainTabId,
+                    start: function () { return h.ws.closeOtherTabs(snap.mainTabId); },
+                };
+            }
+
+            async function untilGate(gates, tabId) {
+                for (let i = 0; i < 40; i++) {
+                    if (typeof gates[tabId] === 'function') return true;
+                    await Promise.resolve();
+                }
+                return false;
+            }
+
+            async function raceFlush(name, kind, approveNew) {
+                globalThis.prksTabLeave.registerProbe({
+                    id: 'selftest-close-flush',
+                    order: 1,
+                    assess: function () {
+                        return null;
+                    },
+                });
+                globalThis.prksTabLeave.registerFlush(function () {});
+                const s = await productionScene(kind);
+                if (contexts[s.mounted]) contexts[s.mounted].notes = 1;
+                if (contexts[s.parked]) contexts[s.parked].notes = 1;
+                const gates = Object.create(null);
+                const closeFlushes = [];
+                const destroyLenAtFlush = [];
+                globalThis.prksTabLeave.registerProbe({
+                    id: 'selftest-close-flush',
+                    order: 1,
+                    assess: function (ctx) {
+                        const tabId = ctx && (ctx.tabId || ctx.id);
+                        if (tabId === s.main) return true;
+                        return new Promise(function (resolve) {
+                            gates[tabId] = resolve;
+                        });
+                    },
+                });
+                globalThis.prksTabLeave.registerFlush(function (ctx) {
+                    if (!ctx || (ctx.tabId !== s.mounted && ctx.tabId !== s.parked)) return;
+                    closeFlushes.push({ id: ctx.tabId, notes: ctx.notes });
+                    destroyLenAtFlush.push(s.h.life.destroy.length);
+                });
+                let settled = false;
+                let threw = false;
+                const pending = Promise.resolve(s.start()).then(
+                    function (value) {
+                        settled = true;
+                        return value;
+                    },
+                    function () {
+                        threw = true;
+                        settled = true;
+                        return false;
+                    }
+                );
+                assert(name + ' waits on the mounted tab', await untilGate(gates, s.mounted));
+                const activated = await s.h.ws.activateTab(s.parked);
+                assert(name + ' activation mounted the parked tab', activated === true);
+                assert(name + ' parked tab is mounted', s.h.isMounted(s.parked));
+                const held = flushView(s.h);
+                const destroyBefore = s.h.life.destroy.length;
+                gates[s.mounted](true);
+                assert(name + ' preflights the newly mounted tab', await untilGate(gates, s.parked));
+                assert(name + ' close still waiting on the new owner', settled === false);
+                assertEq(name + ' wave 1 did not flush', closeFlushes.length, 0);
+                contexts[s.mounted].notes = 4;
+                assertEq(name + ' open wave 2 still has not flushed', closeFlushes.length, 0);
+                assertEq(name + ' workspace held while wave 2 is open', flushView(s.h), held);
+                gates[s.parked](approveNew);
+                const result = await pending;
+                assert(name + ' does not throw', threw === false);
+                if (!approveNew) {
+                    assertEq(name + ' rejection does not commit', result, false);
+                    assertEq(name + ' rejection flushed nothing', closeFlushes.length, 0);
+                    assertEq(name + ' rejection destroyed nothing', s.h.life.destroy.length, destroyBefore);
+                    assertEq(name + ' rejection leaves the workspace', flushView(s.h), held);
+                    assert(name + ' rejection keeps the new owner mounted', s.h.isMounted(s.parked));
+                    assert(name + ' rejection keeps the original owner mounted', s.h.isMounted(s.mounted));
+                    return;
+                }
+                assert(name + ' commits after the new owner approves', result === true);
+                assertEq(name + ' flushes the close set once', closeFlushes.length, 2);
+                const mountedFlush = closeFlushes.filter(function (row) { return row.id === s.mounted; });
+                const parkedFlush = closeFlushes.filter(function (row) { return row.id === s.parked; });
+                assertEq(name + ' flushes the original owner once', mountedFlush.length, 1);
+                assertEq(name + ' flushes the later edit', mountedFlush[0] && mountedFlush[0].notes, 4);
+                assertEq(name + ' flushes the new owner once', parkedFlush.length, 1);
+                assert(
+                    name + ' flushes before any destroy',
+                    destroyLenAtFlush.length === 2 &&
+                        destroyLenAtFlush.every(function (len) { return len === destroyBefore; })
+                );
+                const snap = s.h.ws.snapshot();
+                assert('kept tab remains', snap.tabs.some(function (tab) { return tab.id === s.keep; }));
+                assert('originally mounted tab is gone', snap.tabs.every(function (tab) { return tab.id !== s.mounted; }));
+                assert('newly mounted tab is gone', snap.tabs.every(function (tab) { return tab.id !== s.parked; }));
+                assertEq(name + ' destroys both close ids', s.h.life.destroy.length, destroyBefore + 2);
+            }
+
+            await raceFlush('flush close other tabs', 'other', false);
+            await raceFlush('flush close tabs to the right', 'right', false);
+            await raceFlush('flush close other tabs approved', 'other', true);
+            await raceFlush('flush close tabs to the right approved', 'right', true);
+        } finally {
+            if (prevGetTabContext) globalThis.prksGetTabContext = prevGetTabContext;
+            else delete globalThis.prksGetTabContext;
+            globalThis.prksTabLeave.registerProbe({
+                id: 'selftest-close-flush',
+                order: 1,
+                assess: function () {
+                    return null;
+                },
+            });
+            globalThis.prksTabLeave.registerFlush(function () {});
+        }
     }
 
     const unsup = makeHarness({ hash: '#/works/WA' });

@@ -777,8 +777,8 @@
             return decision.value;
         }
 
-        function leaveAttempt(tabId, nextHash, transition) {
-            return {
+        function leaveAttempt(tabId, nextHash, transition, includeFlush) {
+            const attempt = {
                 ownerId: String(tabId || ''),
                 destination: nextHash == null ? null : nextHash,
                 transition: transition,
@@ -791,10 +791,16 @@
                 assess: function () {
                     return assessLeave(tabId, nextHash);
                 },
-                flushNotes: function () {
-                    flushLeaveNotes(tabId);
-                },
             };
+            /* Omit flush when this approval can still abort or open another
+             * wave. runBatch flushes before commit, so a nested reject would
+             * otherwise keep the earlier wave's notes. */
+            if (includeFlush !== false) {
+                attempt.flushNotes = function () {
+                    flushLeaveNotes(tabId);
+                };
+            }
+            return attempt;
         }
 
         function leaveRejected(result) {
@@ -827,8 +833,11 @@
         /**
          * Every entry is assessed, in order, before `commit`. A rejection commits nothing.
          * Callers that must ignore unmounted tabs filter before calling.
+         * `options.flush === false` assesses only. The caller flushes later, and only
+         * on a path that can no longer abort.
          */
-        function runLeaves(entries, transition, commit) {
+        function runLeaves(entries, transition, commit, options) {
+            const includeFlush = !options || options.flush !== false;
             const live = [];
             for (let i = 0; i < entries.length; i++) {
                 if (entries[i] && entries[i].tabId) live.push(entries[i]);
@@ -838,7 +847,9 @@
             if (!engine || typeof engine.runBatch !== 'function') {
                 function step(i) {
                     if (i >= live.length) {
-                        for (let n = 0; n < live.length; n++) flushLeaveNotes(live[n].tabId);
+                        if (includeFlush) {
+                            for (let n = 0; n < live.length; n++) flushLeaveNotes(live[n].tabId);
+                        }
                         return Promise.resolve(commit ? commit() : true);
                     }
                     return Promise.resolve(assessLeave(live[i].tabId, live[i].nextHash)).then(function (result) {
@@ -854,7 +865,7 @@
                 .runBatch({
                     transition: transition,
                     attempts: live.map(function (entry) {
-                        return leaveAttempt(entry.tabId, entry.nextHash, transition);
+                        return leaveAttempt(entry.tabId, entry.nextHash, transition, includeFlush);
                     }),
                     commit: commit || function () {
                         return true;
@@ -1661,7 +1672,10 @@
             /* Ids mounted when a prompt opens are the only ones that have approved.
              * A parked id can mount while that prompt is open (browser Back on a
              * warm-parked tab). Recheck before any destroy, and preflight the new
-             * mounted owners first. A rejection commits nothing. */
+             * mounted owners first. A rejection commits nothing.
+             * Those assessment waves do not flush. runBatch flushes before commit,
+             * and the commit may open another wave or abort. Flush once, only when
+             * the mounted close set is stable, immediately before destroy. */
             const preflighted = Object.create(null);
 
             function commitBatch() {
@@ -1731,21 +1745,35 @@
                 return pending;
             }
 
+            function flushMountedThenDestroy() {
+                if (!getTab(keepId)) return false;
+                if (mountedAwaitingLeave().length) return preflightThenClose();
+                for (let i = 0; i < unique.length; i++) {
+                    const id = unique[i];
+                    if (!getTab(id) || !contextMounted(id)) continue;
+                    flushLeaveNotes(id);
+                }
+                return commitBatch();
+            }
+
             function preflightThenClose() {
                 const anchor = getTab(keepId);
                 if (!anchor) return Promise.resolve(false);
                 const pending = mountedAwaitingLeave();
-                if (!pending.length) return Promise.resolve(commitBatch());
+                if (!pending.length) return Promise.resolve(flushMountedThenDestroy());
                 const entries = [];
                 for (let i = 0; i < pending.length; i++) {
                     preflighted[pending[i]] = true;
                     entries.push({ tabId: pending[i], nextHash: anchor.route });
                 }
-                return runLeaves(entries, 'close', function () {
-                    if (!getTab(keepId)) return false;
-                    if (mountedAwaitingLeave().length) return preflightThenClose();
-                    return commitBatch();
-                });
+                return runLeaves(
+                    entries,
+                    'close',
+                    function () {
+                        return flushMountedThenDestroy();
+                    },
+                    { flush: false }
+                );
             }
 
             return preflightThenClose();
