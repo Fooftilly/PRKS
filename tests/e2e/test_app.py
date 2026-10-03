@@ -3830,8 +3830,13 @@ class WorkspaceTabsTests(_BrowserE2E):
                 };
                 const coldCtx = window.prksEnsureTabContext('e2e-cold-last-page');
                 coldCtx.mount(document.createElement('div'));
-                coldCtx.setResource('pdf', {
-                    flushLastPage: function () { cold += 1; },
+                coldCtx.registerResource(coldCtx.resourceTicket(), {
+                    kind: 'pdf',
+                    value: {
+                        flushLastPage: function () { cold += 1; },
+                    },
+                    suspendable: true,
+                    dispose: function () {},
                 });
                 window.prksUnmountTabContext(coldCtx.tabId, 'cold-park');
                 window.prksFlushPdfLastPageToStorage();

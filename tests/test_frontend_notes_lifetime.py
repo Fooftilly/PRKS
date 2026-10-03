@@ -99,5 +99,19 @@ class NotesLifetimeContractTests(unittest.TestCase):
         self.assertNotIn("setResource", bind)
 
 
+    def test_notes_viewport_listener_is_an_app_singleton(self):
+        # The one global resize listener is installed once per page, holds no
+        # owner, and walks the mounted owners when it fires; per-route
+        # lifetimes (drag, split observer) go through registerCleanup.
+        works = _WORKS.read_text(encoding="utf-8")
+        guard = _slice(works, "if (!window.__prksWorkNotesViewportBound)", "\n    }\n")
+        self.assertIn("window.__prksWorkNotesViewportBound = true", guard)
+        self.assertIn("prksForEachMountedTabContext(", guard)
+        self.assertNotIn("ctx", guard.replace("prksForEachMountedTabContext", ""))
+        split = _slice(works, "new ResizeObserver(function () {", "\n    }\n")
+        self.assertIn("ctx.registerCleanup(", split)
+        drag = _slice(works, "unregisterCleanup = ctx.registerCleanup(endDrag)", "});")
+        self.assertIn("document.addEventListener('pointermove', onMove, true)", drag)
+
 if __name__ == "__main__":
     unittest.main()

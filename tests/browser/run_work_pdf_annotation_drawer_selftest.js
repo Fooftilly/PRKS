@@ -175,8 +175,8 @@ function testMainAndSecondarySessionsStayApart() {
     sidePdf.viewerSetupToken = 1;
     mainPdf.annotationCache = { items: [{ id: 'A' }], listPublished: true };
     sidePdf.annotationCache = { items: [{ id: 'B' }], listPublished: true };
-    main.setResource('pdf', mainPdf, function () { mainPdf.destroy(); });
-    side.setResource('pdf', sidePdf, function () { sidePdf.destroy(); });
+    main.registerResource(main.resourceTicket(), { kind: 'pdf', value: mainPdf, suspendable: true, dispose: function () { mainPdf.destroy(); } });
+    side.registerResource(side.resourceTicket(), { kind: 'pdf', value: sidePdf, suspendable: true, dispose: function () { sidePdf.destroy(); } });
     mainPdf.openAnnotationDrawer();
     sidePdf.openAnnotationDrawer();
     const sideEpoch = sidePdf.readAnnotationDrawer().epoch;
@@ -377,8 +377,8 @@ function testPanesStayIsolatedAcrossParkAndRouteReplacement() {
     sidePdf.viewer = sideViewer;
     mainPdf.viewerSetupToken = 3;
     sidePdf.viewerSetupToken = 5;
-    main.setResource('pdf', mainPdf, function () { mainPdf.destroy(); });
-    side.setResource('pdf', sidePdf, function () { sidePdf.destroy(); });
+    main.registerResource(main.resourceTicket(), { kind: 'pdf', value: mainPdf, suspendable: true, dispose: function () { mainPdf.destroy(); } });
+    side.registerResource(side.resourceTicket(), { kind: 'pdf', value: sidePdf, suspendable: true, dispose: function () { sidePdf.destroy(); } });
     mainPdf.openAnnotationDrawer();
     sidePdf.openAnnotationDrawer();
     mainPdf.noteAnnotationDrawerFrame(wideFrame());

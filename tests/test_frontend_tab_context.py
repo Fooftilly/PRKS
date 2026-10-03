@@ -98,16 +98,13 @@ class TestMigratedGlobalsAbsent(unittest.TestCase):
 
 
 class TestTabContextResourceAPI(unittest.TestCase):
-    """Structural guard: tab-context.js exports focused resource helpers."""
+    """Structural guard: tab-context.js exports focused helpers; registry kinds have one owner path."""
 
     def test_focused_resource_exported(self):
         tc_path = os.path.join(FRONTEND_JS, "tab-context.js")
         with open(tc_path, encoding="utf-8") as fh:
             src = fh.read()
         for name in (
-            "prksFocusedResource",
-            "prksSetFocusedResource",
-            "prksClearFocusedResource",
             "prksFocusedTimer",
             "prksClearFocusedTimer",
             "prksFocusedRouteSidebar",
@@ -134,6 +131,22 @@ class TestTabContextResourceAPI(unittest.TestCase):
             resume.find("if (!moveRoot(ctx.root, host)) return false;"),
             resume.find("resourceRegistry.resume()"),
         )
+
+    def test_focused_resource_bridge_is_retired(self):
+        for name in ("prksFocusedResource", "prksSetFocusedResource", "prksClearFocusedResource"):
+            hits = _scan_frontend_js(re.compile(r"\b" + name + r"\b"))
+            self.assertEqual(hits, [], f"{name} still referenced: {hits}")
+
+    def test_set_resource_refuses_registry_kinds(self):
+        tc_path = os.path.join(FRONTEND_JS, "tab-context.js")
+        with open(tc_path, encoding="utf-8") as fh:
+            src = fh.read()
+        at = src.index("ctx.setResource = function (name, value)")
+        body = src[at:src.index("ctx.getResource = function", at)]
+        self.assertLess(body.index("isRegistryKind(key)"), body.index("ctx.resources.set(key, value)"))
+        self.assertIn("throw new TypeError(", body)
+        self.assertNotIn("resourceRegistry.register(", body)
+        self.assertNotIn("disposer", src)
 
     def test_warm_pdf_parking_host_exists(self):
         index_path = os.path.join(ROOT, "frontend", "index.html")

@@ -359,13 +359,18 @@ async function mountedSaveRefusesReplacedOwner() {
     showWork(main, 'work-a');
     ownPanel(main);
     let release;
-    main.setResource('workRoleEditor', {
-        workId: 'work-a',
-        generation: main.generation,
-        observed: { work_id: 'work-a', scopes: [] },
-        preparing: new Promise(function (resolve) { release = resolve; }),
-        editable: true,
-        operations: [],
+    main.registerResource(main.resourceTicket(), {
+        kind: 'workRoleEditor',
+        value: {
+            workId: 'work-a',
+            generation: main.generation,
+            observed: { work_id: 'work-a', scopes: [] },
+            preparing: new Promise(function (resolve) { release = resolve; }),
+            editable: true,
+            operations: [],
+        },
+        suspendable: false,
+        dispose: function () {},
     });
     const pending = prksSaveWorkPersonRoleDurably('work-a', 'person-1', 'Author', '', null, null);
     main.beginRoute({ name: 'work', params: { workId: 'work-b' } });
@@ -380,13 +385,18 @@ async function mountedSaveRefusesReplacedOwner() {
     showWork(main, 'work-a');
     ownPanel(main);
     let releasePanel;
-    main.setResource('workRoleEditor', {
-        workId: 'work-a',
-        generation: main.generation,
-        observed: { work_id: 'work-a', scopes: [] },
-        preparing: new Promise(function (resolve) { releasePanel = resolve; }),
-        editable: true,
-        operations: [],
+    main.registerResource(main.resourceTicket(), {
+        kind: 'workRoleEditor',
+        value: {
+            workId: 'work-a',
+            generation: main.generation,
+            observed: { work_id: 'work-a', scopes: [] },
+            preparing: new Promise(function (resolve) { releasePanel = resolve; }),
+            editable: true,
+            operations: [],
+        },
+        suspendable: false,
+        dispose: function () {},
     });
     const pendingPanel = prksSaveWorkPersonRoleDurably('work-a', 'person-1', 'Author', '', null, null);
     panel().dataset.prksOwnerTabId = 'side';

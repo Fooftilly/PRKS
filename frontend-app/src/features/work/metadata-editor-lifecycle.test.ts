@@ -44,7 +44,11 @@ type WorkCtx = {
   setEntity: (type: string, value: WorkRecord | null) => void
   getEntity: (type: string) => WorkRecord | null
   getResource: (name: string) => EditorState | null
-  setResource: (name: string, value: EditorState) => void
+  resourceTicket: () => unknown
+  registerResource: (
+    ticket: unknown,
+    registration: { kind: string; value: EditorState; suspendable: boolean; dispose: () => void },
+  ) => string
   beginRoute: (route: { name: string; params?: { workId?: string } }) => number
 }
 
@@ -138,7 +142,7 @@ function editorState(ctx: WorkCtx, name: string): EditorState {
     observed: { fields: { title: 'Alpha' } },
     error: null,
   }
-  ctx.setResource(name, state)
+  ctx.registerResource(ctx.resourceTicket(), { kind: name, value: state, suspendable: false, dispose() {} })
   return state
 }
 

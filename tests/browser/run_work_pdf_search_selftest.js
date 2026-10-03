@@ -251,7 +251,7 @@ function testRouteReplacementDropsTheSearch() {
     const viewer = viewerStub();
     runtime.viewer = viewer;
     runtime.viewerSetupToken = 2;
-    ctx.setResource('pdf', runtime, function () { runtime.destroy(); });
+    ctx.registerResource(ctx.resourceTicket(), { kind: 'pdf', value: runtime, suspendable: true, dispose: function () { runtime.destroy(); } });
     const generation = ctx.generation;
     bindPdfSurfaceSearch(ctx, runtime, element('div'), generation);
     runtime.openSearch();
@@ -264,7 +264,7 @@ function testRouteReplacementDropsTheSearch() {
     const next = createWorkPdfRuntime({ workId: 'work-b' });
     const nextViewer = viewerStub({ id: 9 });
     next.viewer = nextViewer;
-    ctx.setResource('pdf', next, function () { next.destroy(); });
+    ctx.registerResource(ctx.resourceTicket(), { kind: 'pdf', value: next, suspendable: true, dispose: function () { next.destroy(); } });
     assert('late result ignored', runtime.applySearchResult({
         epoch: epoch,
         total: 4,
@@ -293,8 +293,8 @@ function testIndependentPanes() {
     const sideViewer = viewerStub({ id: 'side' });
     mainRuntime.viewer = mainViewer;
     sideRuntime.viewer = sideViewer;
-    main.setResource('pdf', mainRuntime, function () { mainRuntime.destroy(); });
-    side.setResource('pdf', sideRuntime, function () { sideRuntime.destroy(); });
+    main.registerResource(main.resourceTicket(), { kind: 'pdf', value: mainRuntime, suspendable: true, dispose: function () { mainRuntime.destroy(); } });
+    side.registerResource(side.resourceTicket(), { kind: 'pdf', value: sideRuntime, suspendable: true, dispose: function () { sideRuntime.destroy(); } });
 
     const mainSurface = element('div');
     const sideSurface = element('div');
@@ -374,7 +374,7 @@ function testCowRemountRehydratesQueryAndRebindsFind() {
     const ctx = prksMountTabContext('main', hostBox());
     ctx.beginRoute({ name: 'work' });
     const runtime = createWorkPdfRuntime({ workId: 'cow' });
-    ctx.setResource('pdf', runtime, function () { runtime.destroy(); });
+    ctx.registerResource(ctx.resourceTicket(), { kind: 'pdf', value: runtime, suspendable: true, dispose: function () { runtime.destroy(); } });
     const generation = ctx.generation;
     const oldSurface = element('div');
     const oldPage = element('div');
@@ -420,7 +420,7 @@ function testRebindDoesNotStackListeners() {
     const viewer = viewerStub();
     runtime.viewer = viewer;
     runtime.viewerSetupToken = 1;
-    ctx.setResource('pdf', runtime, function () { runtime.destroy(); });
+    ctx.registerResource(ctx.resourceTicket(), { kind: 'pdf', value: runtime, suspendable: true, dispose: function () { runtime.destroy(); } });
     const first = element('div');
     const firstPage = element('div');
     first.appendChild(firstPage);
