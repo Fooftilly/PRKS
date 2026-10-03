@@ -528,9 +528,8 @@ function prksBindPlaylistsIndexCreateBtn() {
 
 function renderPlaylistsIndex(playlists, container, ctx) {
     if (!container) return;
-    if (typeof prksPresentVuePlaylists === 'function') {
-        prksPresentVuePlaylists(ctx, container, {
-            feature: 'playlists',
+    if (typeof prksPresentVueRoute === 'function') {
+        prksPresentVueRoute(ctx, container, 'playlists', {
             availability: 'ready',
             items: Array.isArray(playlists) ? playlists : [],
             generation: ctx && ctx.generation,
@@ -596,9 +595,8 @@ function renderPlaylistDetail(ctx, pl, container) {
     }
     const route = ctx && (ctx.route || ctx.lastResolvedRoute);
     const playlistId = (pl && pl.id) || (route && route.params && route.params.playlistId) || '';
-    if (typeof prksPresentVuePlaylists === 'function') {
-        prksPresentVuePlaylists(ctx, container, {
-            feature: 'playlist-detail',
+    if (typeof prksPresentVueRoute === 'function') {
+        prksPresentVueRoute(ctx, container, 'playlist-detail', {
             availability: pl ? 'ready' : 'not-found',
             playlist: view,
             playlistId: playlistId ? String(playlistId) : '',

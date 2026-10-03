@@ -22,7 +22,7 @@ class FrontendPublishersPageTests(unittest.TestCase):
         body = app[publishers_at:types_at]
         self.assertIn("Publishers require a connection", body)
         self.assertIn("fetchPublishersInUse({ signal: routeSignal })", body)
-        self.assertIn("prksPresentVuePublishers", body)
+        self.assertIn("prksPresentVueRoute(ctx, contentDiv, 'publishers'", body)
         self.assertNotIn("renderPublishersPage", body)
         self.assertIn("async function prksReloadPublishersPage(", app)
         self.assertIn("window.prksVueDismissRoute(ctx)", app)
@@ -40,7 +40,7 @@ class FrontendPublishersPageTests(unittest.TestCase):
         self.assertIn("prksConsumeApiError(errorOwner)", reload)
         self.assertIn("prksVueReportPublishersRefreshFailure", reload)
         self.assertNotIn("prksAlertMessage", reload)
-        self.assertLess(reload.index("if (failure)"), reload.index("prksPresentVuePublishers"))
+        self.assertLess(reload.index("if (failure)"), reload.index("prksPresentVueRoute(ctx, ctx.root, 'publishers'"))
 
     def test_publishers_actions_stay_local_and_map_to_the_publishers_e2e(self):
         vue = _read(os.path.join(

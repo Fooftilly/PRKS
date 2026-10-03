@@ -2849,108 +2849,53 @@ function prksDeliverVueRoute(host, request) {
 }
 
 /**
- * Mount the Vue Progress surface in this pane.
- * `detail.rows` must already be the effective works-browse projection.
+ * Route features whose same-owner refresh repaints into the host already in
+ * this pane, so Vue-local state (index search, hierarchy shell) survives.
  */
-function prksPresentVueProgress(ctx, contentDiv, detail) {
-    contentDiv.innerHTML = '';
-    const host = document.createElement('div');
-    host.setAttribute('data-prks-vue-route-host', 'true');
-    contentDiv.appendChild(host);
-    const request = {
-        feature: 'progress',
+const PRKS_RETAINED_VUE_ROUTE_FEATURES = new Set([
+    'folder-detail',
+    'folder-library',
+    'concepts',
+    'concept-detail',
+    'positions',
+    'position-detail',
+    'arguments',
+    'argument-detail',
+    'playlists',
+    'playlist-detail',
+    'people',
+    'person',
+    'person-groups',
+    'person-group-detail',
+]);
+
+/**
+ * Paint one route feature into this pane. The coordinator owns the host and
+ * the request envelope (feature, owner, shell). `fields` is the coordinator's
+ * effective projection for that feature; the Vue presenter registered for the
+ * feature validates and normalizes it. Retained features reuse this pane's
+ * host; every other feature replaces the pane content with a fresh host.
+ */
+function prksPresentVueRoute(ctx, contentDiv, feature, fields) {
+    let host =
+        PRKS_RETAINED_VUE_ROUTE_FEATURES.has(feature) &&
+        contentDiv &&
+        typeof contentDiv.querySelector === 'function'
+            ? contentDiv.querySelector(':scope > [data-prks-vue-route-host]')
+            : null;
+    if (!host) {
+        contentDiv.innerHTML = '';
+        host = document.createElement('div');
+        host.setAttribute('data-prks-vue-route-host', 'true');
+        contentDiv.appendChild(host);
+    }
+    const request = Object.assign({}, fields, {
+        feature: feature,
         owner: ctx,
-        status: detail.status,
-        rows: detail.rows,
-        offlineCached: !!detail.offlineCached,
-        generation: detail.generation,
         // Main/Secondary is data for the route instance. Sidebar publication
         // already happened for Main in prksRenderTabRoute.
         shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
-    };
-    prksDeliverVueRoute(host, request);
-}
-
-/**
- * Mount the Vue Recent surface in this pane.
- * `detail.rows` must already be the effective Recent projection.
- */
-function prksPresentVueRecent(ctx, contentDiv, detail) {
-    contentDiv.innerHTML = '';
-    const host = document.createElement('div');
-    host.setAttribute('data-prks-vue-route-host', 'true');
-    contentDiv.appendChild(host);
-    const request = {
-        feature: 'recent',
-        owner: ctx,
-        rows: detail.rows,
-        offlineCached: !!detail.offlineCached,
-        generation: detail.generation,
-        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
-    };
-    prksDeliverVueRoute(host, request);
-}
-
-/**
- * Mount the Vue File types index in this pane.
- * `detail.rows` must already be `prksTypesIndexModel` rows.
- */
-function prksPresentVueTypesIndex(ctx, contentDiv, detail) {
-    contentDiv.innerHTML = '';
-    const host = document.createElement('div');
-    host.setAttribute('data-prks-vue-route-host', 'true');
-    contentDiv.appendChild(host);
-    const request = {
-        feature: 'types',
-        owner: ctx,
-        rows: detail.rows,
-        generation: detail.generation,
-        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
-    };
-    prksDeliverVueRoute(host, request);
-}
-
-/**
- * Mount the Vue type detail in this pane.
- * `detail.rows` must already be `prksTypesDetailModel` works.
- */
-function prksPresentVueTypeDetail(ctx, contentDiv, detail) {
-    contentDiv.innerHTML = '';
-    const host = document.createElement('div');
-    host.setAttribute('data-prks-vue-route-host', 'true');
-    contentDiv.appendChild(host);
-    const request = {
-        feature: 'type-detail',
-        owner: ctx,
-        docType: detail.docType,
-        label: detail.label,
-        canonicalHash: detail.canonicalHash,
-        rows: detail.rows,
-        offlineCached: !!detail.offlineCached,
-        generation: detail.generation,
-        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
-    };
-    prksDeliverVueRoute(host, request);
-}
-
-/**
- * Mount the Vue Tags vocabulary page in this pane.
- * `detail.tags` must already be `fetchTags({ used: true })`. Vue does not fetch.
- * `detail.resume` reopens one tag's alias dialog after a reload of this owner.
- */
-function prksPresentVueTags(ctx, contentDiv, detail) {
-    contentDiv.innerHTML = '';
-    const host = document.createElement('div');
-    host.setAttribute('data-prks-vue-route-host', 'true');
-    contentDiv.appendChild(host);
-    const request = {
-        feature: 'tags',
-        owner: ctx,
-        tags: detail.tags,
-        generation: detail.generation,
-        resume: detail.resume || null,
-        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
-    };
+    });
     prksDeliverVueRoute(host, request);
 }
 
@@ -2979,7 +2924,7 @@ async function prksReloadTagsVocabulary(ctx, generation, resume) {
         }
         return false;
     }
-    prksPresentVueTags(ctx, ctx.root, {
+    prksPresentVueRoute(ctx, ctx.root, 'tags', {
         tags: tags,
         generation: generation,
         resume: resume || null,
@@ -2988,27 +2933,6 @@ async function prksReloadTagsVocabulary(ctx, generation, resume) {
 }
 
 window.prksReloadTagsVocabulary = prksReloadTagsVocabulary;
-
-/**
- * Mount the Vue Publishers page in this pane.
- * `detail.publishers` must already be `fetchPublishersInUse`. Vue does not fetch.
- * `detail.resume` reopens one publisher's alias dialog after a reload of this owner.
- */
-function prksPresentVuePublishers(ctx, contentDiv, detail) {
-    contentDiv.innerHTML = '';
-    const host = document.createElement('div');
-    host.setAttribute('data-prks-vue-route-host', 'true');
-    contentDiv.appendChild(host);
-    const request = {
-        feature: 'publishers',
-        owner: ctx,
-        publishers: detail.publishers,
-        generation: detail.generation,
-        resume: detail.resume || null,
-        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
-    };
-    prksDeliverVueRoute(host, request);
-}
 
 /**
  * Refetch publishers in use and repaint this owner only. A finishing write
@@ -3036,7 +2960,7 @@ async function prksReloadPublishersPage(ctx, generation, resume) {
         }
         return false;
     }
-    prksPresentVuePublishers(ctx, ctx.root, {
+    prksPresentVueRoute(ctx, ctx.root, 'publishers', {
         publishers: publishers,
         generation: generation,
         resume: resume || null,
@@ -3047,12 +2971,6 @@ async function prksReloadPublishersPage(ctx, generation, resume) {
 window.prksReloadPublishersPage = prksReloadPublishersPage;
 
 /**
- * Mount the Vue Processing inbox in this pane.
- * `detail.files` is already `fetchProcessingFiles({ rescan: true })`.
- * People and folders are the catalogs the cards search. Vue does not fetch.
- * The preview iframe is released before this host is replaced.
- */
-/**
  * Mount the Vue Research Graph chrome in this pane.
  * The coordinator still owns the Cytoscape instance. Destroy the previous
  * instance before the host node is removed, then let Vue paint. `detail.attach`
@@ -3062,15 +2980,8 @@ function prksPresentVueResearchGraph(ctx, contentDiv, detail) {
     if (ctx && ctx.resourceRegistry && typeof ctx.resourceRegistry.dispose === 'function') {
         ctx.resourceRegistry.dispose('researchGraph');
     }
-    contentDiv.innerHTML = '';
-    const host = document.createElement('div');
-    host.setAttribute('data-prks-vue-route-host', 'true');
-    contentDiv.appendChild(host);
-    const focus = detail.focus || '';
-    const request = {
-        feature: 'research-graph',
-        owner: ctx,
-        focus: focus,
+    prksPresentVueRoute(ctx, contentDiv, 'research-graph', {
+        focus: detail.focus || '',
         includePeople: !!detail.includePeople,
         generation: detail.generation,
         chrome: ctx && typeof ctx.domId === 'function' ? {
@@ -3080,33 +2991,21 @@ function prksPresentVueResearchGraph(ctx, contentDiv, detail) {
             legendPanelId: ctx.domId('graph-legend-panel'),
         } : null,
         attach: detail.attach || null,
-        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
-    };
-    prksDeliverVueRoute(host, request);
+    });
 }
 
+/**
+ * Mount the Vue Processing inbox in this pane.
+ * `detail.files` is already `fetchProcessingFiles({ rescan: true })`.
+ * People and folders are the catalogs the cards search. Vue does not fetch.
+ * The preview iframe is released before this host is replaced.
+ */
 function prksPresentVueProcessing(ctx, contentDiv, detail) {
     window.__prksProcessingPeople = Array.isArray(detail.people) ? detail.people : [];
     if (typeof window.prksProcessingReleaseResources === 'function') {
         window.prksProcessingReleaseResources(ctx);
     }
-    contentDiv.innerHTML = '';
-    const host = document.createElement('div');
-    host.setAttribute('data-prks-vue-route-host', 'true');
-    contentDiv.appendChild(host);
-    const request = {
-        feature: 'processing-files',
-        owner: ctx,
-        files: detail.files,
-        people: detail.people,
-        folders: detail.folders,
-        roleTypes: detail.roleTypes,
-        domPrefix: detail.domPrefix,
-        generation: detail.generation,
-        resume: detail.resume || null,
-        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
-    };
-    prksDeliverVueRoute(host, request);
+    prksPresentVueRoute(ctx, contentDiv, 'processing-files', detail);
 }
 
 /**
@@ -3198,320 +3097,6 @@ async function prksEffectiveSearchResults(query, tag, options, signal, stale) {
     await prksHydratePendingWorkMetadata();
     if (stale()) return [];
     return typeof prksEffectiveWorksSync === 'function' ? prksEffectiveWorksSync(results) : results;
-}
-
-/**
- * Mount the Vue Search surface in this pane.
- * `detail.rows` must come from `prksEffectiveSearchResults`.
- */
-function prksPresentVueSearch(ctx, contentDiv, detail) {
-    contentDiv.innerHTML = '';
-    const host = document.createElement('div');
-    host.setAttribute('data-prks-vue-route-host', 'true');
-    contentDiv.appendChild(host);
-    const request = {
-        feature: 'search',
-        owner: ctx,
-        request: detail.request,
-        canonicalHash: detail.canonicalHash,
-        rows: detail.rows,
-        generation: detail.generation,
-        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
-    };
-    prksDeliverVueRoute(host, request);
-}
-
-/**
- * Mount the Vue Saved Views index in this pane.
- * `detail.views` is the list from `fetchSavedViews`. Vue does not fetch it.
- */
-function prksPresentVueSavedViewsIndex(ctx, contentDiv, detail) {
-    contentDiv.innerHTML = '';
-    const host = document.createElement('div');
-    host.setAttribute('data-prks-vue-route-host', 'true');
-    contentDiv.appendChild(host);
-    const request = {
-        feature: 'saved-views',
-        owner: ctx,
-        views: detail.views,
-        generation: detail.generation,
-        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
-    };
-    prksDeliverVueRoute(host, request);
-}
-
-/**
- * Mount the Vue Saved View detail surface in this pane.
- * `detail.rows` must come from `prksEffectiveSearchResults`.
- */
-function prksPresentVueSavedViewDetail(ctx, contentDiv, detail) {
-    contentDiv.innerHTML = '';
-    const host = document.createElement('div');
-    host.setAttribute('data-prks-vue-route-host', 'true');
-    contentDiv.appendChild(host);
-    const request = {
-        feature: 'saved-view-detail',
-        owner: ctx,
-        availability: detail.availability || 'ready',
-        view: detail.view,
-        viewId: detail.viewId,
-        searchHash: detail.searchHash,
-        rows: detail.rows,
-        generation: detail.generation,
-        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
-    };
-    prksDeliverVueRoute(host, request);
-}
-
-/**
- * Mount the Vue Folder detail surface in this pane.
- * `detail.folder` must already be the effective folder from the coordinator.
- * Same-owner Folder→Folder refresh reuses the host so the hierarchy shell stays.
- */
-function prksPresentVueFolderDetail(ctx, contentDiv, detail) {
-    let host =
-        contentDiv && typeof contentDiv.querySelector === 'function'
-            ? contentDiv.querySelector(':scope > [data-prks-vue-route-host]')
-            : null;
-    if (!host) {
-        contentDiv.innerHTML = '';
-        host = document.createElement('div');
-        host.setAttribute('data-prks-vue-route-host', 'true');
-        contentDiv.appendChild(host);
-    }
-    const request = {
-        feature: 'folder-detail',
-        owner: ctx,
-        availability: detail.availability || 'ready',
-        folder: detail.folder,
-        folderId: detail.folderId,
-        offlineCached: !!detail.offlineCached,
-        preserveWorkspace: !!detail.preserveWorkspace,
-        generation: detail.generation,
-        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
-    };
-    prksDeliverVueRoute(host, request);
-}
-
-/**
- * Mount the Vue Concepts index or detail surface in this pane.
- * `detail` must already be the authoritative effective Concept projection.
- * Same-owner Concepts refresh reuses the existing host so local index state
- * (searchQuery) survives an in-place projection update.
- */
-/**
- * Mount the Vue Folder Library surface in this pane.
- * `detail.folders` must already be the authoritative effective folder projection.
- */
-function prksPresentVueFolderLibrary(ctx, contentDiv, detail) {
-    let host =
-        contentDiv && typeof contentDiv.querySelector === 'function'
-            ? contentDiv.querySelector(':scope > [data-prks-vue-route-host]')
-            : null;
-    if (!host) {
-        contentDiv.innerHTML = '';
-        host = document.createElement('div');
-        host.setAttribute('data-prks-vue-route-host', 'true');
-        contentDiv.appendChild(host);
-    }
-    const request = {
-        feature: 'folder-library',
-        owner: ctx,
-        contentRoot: contentDiv,
-        availability: detail.availability || 'ready',
-        folders: detail.folders,
-        offlineCached: !!detail.offlineCached,
-        generation: detail.generation,
-        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
-    };
-    prksDeliverVueRoute(host, request);
-}
-
-function prksPresentVueConcepts(ctx, contentDiv, detail) {
-    let host =
-        contentDiv && typeof contentDiv.querySelector === 'function'
-            ? contentDiv.querySelector(':scope > [data-prks-vue-route-host]')
-            : null;
-    if (!host) {
-        contentDiv.innerHTML = '';
-        host = document.createElement('div');
-        host.setAttribute('data-prks-vue-route-host', 'true');
-        contentDiv.appendChild(host);
-    }
-    const feature = detail.feature === 'concept-detail' ? 'concept-detail' : 'concepts';
-    const request = {
-        feature: feature,
-        owner: ctx,
-        availability: detail.availability || 'ready',
-        items: detail.items,
-        concept: detail.concept,
-        conceptId: detail.conceptId,
-        generation: detail.generation,
-        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
-    };
-    prksDeliverVueRoute(host, request);
-}
-
-/**
- * Mount the Vue Positions index or detail surface in this pane.
- * `detail` must already be the authoritative effective Position projection.
- * Same-owner Positions refresh reuses the existing host so local index search
- * survives an in-place projection update.
- */
-function prksPresentVuePositions(ctx, contentDiv, detail) {
-    let host =
-        contentDiv && typeof contentDiv.querySelector === 'function'
-            ? contentDiv.querySelector(':scope > [data-prks-vue-route-host]')
-            : null;
-    if (!host) {
-        contentDiv.innerHTML = '';
-        host = document.createElement('div');
-        host.setAttribute('data-prks-vue-route-host', 'true');
-        contentDiv.appendChild(host);
-    }
-    const feature = detail.feature === 'position-detail' ? 'position-detail' : 'positions';
-    const request = {
-        feature: feature,
-        owner: ctx,
-        availability: detail.availability || 'ready',
-        items: detail.items,
-        position: detail.position,
-        positionId: detail.positionId,
-        generation: detail.generation,
-        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
-    };
-    prksDeliverVueRoute(host, request);
-}
-
-/**
- * Mount the Vue Arguments index or detail surface in this pane.
- * `detail` must already be the authoritative effective Argument projection.
- * Same-owner Arguments refresh reuses the existing host so local index
- * search survives an in-place projection update.
- */
-function prksPresentVueArguments(ctx, contentDiv, detail) {
-    let host =
-        contentDiv && typeof contentDiv.querySelector === 'function'
-            ? contentDiv.querySelector(':scope > [data-prks-vue-route-host]')
-            : null;
-    if (!host) {
-        contentDiv.innerHTML = '';
-        host = document.createElement('div');
-        host.setAttribute('data-prks-vue-route-host', 'true');
-        contentDiv.appendChild(host);
-    }
-    const feature = detail.feature === 'argument-detail' ? 'argument-detail' : 'arguments';
-    const request = {
-        feature: feature,
-        owner: ctx,
-        availability: detail.availability || 'ready',
-        items: detail.items,
-        kind: detail.kind,
-        argument: detail.argument,
-        argumentId: detail.argumentId,
-        generation: detail.generation,
-        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
-    };
-    prksDeliverVueRoute(host, request);
-}
-
-/**
- * Mount the Vue Playlists index or detail surface in this pane.
- * `detail` must already be the authoritative effective Playlist projection.
- * Same-owner Playlists refresh reuses the existing host.
- */
-function prksPresentVuePlaylists(ctx, contentDiv, detail) {
-    let host =
-        contentDiv && typeof contentDiv.querySelector === 'function'
-            ? contentDiv.querySelector(':scope > [data-prks-vue-route-host]')
-            : null;
-    if (!host) {
-        contentDiv.innerHTML = '';
-        host = document.createElement('div');
-        host.setAttribute('data-prks-vue-route-host', 'true');
-        contentDiv.appendChild(host);
-    }
-    const feature = detail.feature === 'playlist-detail' ? 'playlist-detail' : 'playlists';
-    const request = {
-        feature: feature,
-        owner: ctx,
-        availability: detail.availability || 'ready',
-        items: detail.items,
-        playlist: detail.playlist,
-        playlistId: detail.playlistId,
-        editing: detail.editing === true,
-        renaming: detail.renaming,
-        generation: detail.generation,
-        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
-    };
-    prksDeliverVueRoute(host, request);
-}
-
-/**
- * Mount the Vue People index or Person detail surface in this pane.
- * `detail` must already be the authoritative effective Person projection.
- * Same-owner People refresh reuses the existing host.
- */
-function prksPresentVuePeople(ctx, contentDiv, detail) {
-    let host =
-        contentDiv && typeof contentDiv.querySelector === 'function'
-            ? contentDiv.querySelector(':scope > [data-prks-vue-route-host]')
-            : null;
-    if (!host) {
-        contentDiv.innerHTML = '';
-        host = document.createElement('div');
-        host.setAttribute('data-prks-vue-route-host', 'true');
-        contentDiv.appendChild(host);
-    }
-    const feature = detail.feature === 'person' ? 'person' : 'people';
-    const request = {
-        feature: feature,
-        owner: ctx,
-        availability: detail.availability || 'ready',
-        items: detail.items,
-        roleFilter: detail.roleFilter || '',
-        unknownRole: detail.unknownRole === true,
-        person: detail.person,
-        personId: detail.personId,
-        editing: detail.editing === true,
-        worksEditing: detail.worksEditing === true,
-        offlineCached: detail.offlineCached === true,
-        generation: detail.generation,
-        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
-    };
-    prksDeliverVueRoute(host, request);
-}
-
-/**
- * Mount the Vue Person Groups index or detail surface in this pane.
- * `detail` must already be the authoritative effective Group projection.
- * Same-owner Group refresh reuses the existing host.
- */
-function prksPresentVuePersonGroups(ctx, contentDiv, detail) {
-    let host =
-        contentDiv && typeof contentDiv.querySelector === 'function'
-            ? contentDiv.querySelector(':scope > [data-prks-vue-route-host]')
-            : null;
-    if (!host) {
-        contentDiv.innerHTML = '';
-        host = document.createElement('div');
-        host.setAttribute('data-prks-vue-route-host', 'true');
-        contentDiv.appendChild(host);
-    }
-    const feature = detail.feature === 'person-group-detail' ? 'person-group-detail' : 'person-groups';
-    const request = {
-        feature: feature,
-        owner: ctx,
-        availability: detail.availability || 'ready',
-        items: detail.items,
-        group: detail.group,
-        groupId: detail.groupId,
-        editing: detail.editing === true,
-        membersEditing: detail.membersEditing === true,
-        generation: detail.generation,
-        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
-    };
-    prksDeliverVueRoute(host, request);
 }
 
 function prksRenderRouteLoading(contentDiv, hash) {
@@ -3991,7 +3576,8 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                 if (!folders) {
                     // A cached [] is a real empty library; only a MISSING
                     // snapshot is an unavailable state.
-                    prksPresentVueFolderLibrary(ctx, contentDiv, {
+                    prksPresentVueRoute(ctx, contentDiv, 'folder-library', {
+                        contentRoot: contentDiv,
                         availability: 'unavailable',
                         generation: generation,
                     });
@@ -4000,7 +3586,8 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     break;
                 }
                 publishSidebar({ folderCount: folders.length });
-                prksPresentVueFolderLibrary(ctx, contentDiv, {
+                prksPresentVueRoute(ctx, contentDiv, 'folder-library', {
+                    contentRoot: contentDiv,
                     availability: 'ready',
                     folders: folders,
                     offlineCached: offlineFolders.source === 'cache',
@@ -4028,8 +3615,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                         : await prksEffectivePlaylistRows([], playlistOps);
                     if (stale()) return;
                     if (!cachedPlaylists && !(pls && pls.length)) {
-                        prksPresentVuePlaylists(ctx, contentDiv, {
-                            feature: 'playlists',
+                        prksPresentVueRoute(ctx, contentDiv, 'playlists', {
                             availability: 'unavailable',
                             items: [],
                             generation: generation,
@@ -4097,8 +3683,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                         ctx.setEntity('playlist', null);
                         ctx.ui.playlistEditing = false;
                         ctx.ui.playlistRename = {};
-                        prksPresentVuePlaylists(ctx, contentDiv, {
-                            feature: 'playlist-detail',
+                        prksPresentVueRoute(ctx, contentDiv, 'playlist-detail', {
                             availability: 'unavailable',
                             playlist: null,
                             playlistId: plId,
@@ -4169,8 +3754,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                 }
                 if (resolvedFolder.unavailable) {
                     ctx.setEntity('folder', null);
-                    prksPresentVueFolderDetail(ctx, contentDiv, {
-                        feature: 'folder-detail',
+                    prksPresentVueRoute(ctx, contentDiv, 'folder-detail', {
                         availability: 'unavailable',
                         folder: null,
                         folderId: folderId,
@@ -4196,8 +3780,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                 await prksHydratePendingWorkMetadata();
                 if (stale()) return;
                 ctx.setEntity('folder', folder);
-                prksPresentVueFolderDetail(ctx, contentDiv, {
-                    feature: 'folder-detail',
+                prksPresentVueRoute(ctx, contentDiv, 'folder-detail', {
                     availability: folder ? 'ready' : 'not-found',
                     folder: folder,
                     folderId: folderId,
@@ -4248,9 +3831,8 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                 const rolePersons = prksResolveOfflinePeopleIndex(offlineRolePeople);
                 publishSidebar({ role: roleFilter || route.params.role || 'Unknown role' });
                 if (!roleFilter) {
-                    if (typeof prksPresentVuePeople === 'function') {
-                        prksPresentVuePeople(ctx, contentDiv, {
-                            feature: 'people',
+                    if (typeof prksPresentVueRoute === 'function') {
+                        prksPresentVueRoute(ctx, contentDiv, 'people', {
                             unknownRole: true,
                             items: Array.isArray(rolePersons) ? rolePersons : [],
                             roleFilter: route.params.role || '',
@@ -4296,9 +3878,8 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     : await prksEffectivePersonGroupRows(cachedGroups, ops);
                 if (stale()) return;
                 if (!groups) {
-                    if (typeof prksPresentVuePersonGroups === 'function') {
-                        prksPresentVuePersonGroups(ctx, contentDiv, {
-                            feature: 'person-groups',
+                    if (typeof prksPresentVueRoute === 'function') {
+                        prksPresentVueRoute(ctx, contentDiv, 'person-groups', {
                             availability: 'unavailable',
                             items: [],
                             generation: generation,
@@ -4315,9 +3896,8 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     break;
                 }
                 publishSidebar({ groupCount: Array.isArray(groups) ? groups.length : 0 });
-                if (typeof prksPresentVuePersonGroups === 'function') {
-                    prksPresentVuePersonGroups(ctx, contentDiv, {
-                        feature: 'person-groups',
+                if (typeof prksPresentVueRoute === 'function') {
+                    prksPresentVueRoute(ctx, contentDiv, 'person-groups', {
                         availability: 'ready',
                         items: groups,
                         generation: generation,
@@ -4366,9 +3946,8 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                         ctx.ui.personGroupMembersEditing = false;
                         ctx.ui.personGroupFieldBaseline = null;
                     }
-                    if (typeof prksPresentVuePersonGroups === 'function') {
-                        prksPresentVuePersonGroups(ctx, contentDiv, {
-                            feature: 'person-group-detail',
+                    if (typeof prksPresentVueRoute === 'function') {
+                        prksPresentVueRoute(ctx, contentDiv, 'person-group-detail', {
                             availability: 'unavailable',
                             group: null,
                             groupId: groupId,
@@ -4389,9 +3968,8 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                 if (stale()) return;
                 if (!group) {
                     ctx.setEntity('personGroup', null);
-                    if (typeof prksPresentVuePersonGroups === 'function') {
-                        prksPresentVuePersonGroups(ctx, contentDiv, {
-                            feature: 'person-group-detail',
+                    if (typeof prksPresentVueRoute === 'function') {
+                        prksPresentVueRoute(ctx, contentDiv, 'person-group-detail', {
                             availability: 'not-found',
                             group: null,
                             groupId: groupId,
@@ -4433,9 +4011,8 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                         memberCount: Array.isArray(group.members) ? group.members.length : 0,
                         subgroupCount: Array.isArray(group.children) ? group.children.length : 0,
                     });
-                    if (typeof prksPresentVuePersonGroups === 'function') {
-                        prksPresentVuePersonGroups(ctx, contentDiv, {
-                            feature: 'person-group-detail',
+                    if (typeof prksPresentVueRoute === 'function') {
+                        prksPresentVueRoute(ctx, contentDiv, 'person-group-detail', {
                             availability: 'ready',
                             group: group,
                             groupId: group.id,
@@ -4488,7 +4065,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     break;
                 }
                 publishSidebar({ workCount: works.length });
-                prksPresentVueRecent(ctx, contentDiv, {
+                prksPresentVueRoute(ctx, contentDiv, 'recent', {
                     rows: works,
                     offlineCached: offlineRecent.source === 'cache',
                     generation: generation,
@@ -4510,7 +4087,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                 }
                 const views = typeof fetchSavedViews === 'function' ? await fetchSavedViews({ signal: routeSignal }) : [];
                 if (stale()) return;
-                prksPresentVueSavedViewsIndex(ctx, contentDiv, {
+                prksPresentVueRoute(ctx, contentDiv, 'saved-views', {
                     views: views,
                     generation: generation,
                 });
@@ -4533,7 +4110,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                 if (stale()) return;
                 ctx.setEntity('savedView', view || null);
                 if (!view) {
-                    prksPresentVueSavedViewDetail(ctx, contentDiv, {
+                    prksPresentVueRoute(ctx, contentDiv, 'saved-view-detail', {
                         availability: 'not-found',
                         viewId: viewId,
                         generation: generation,
@@ -4545,7 +4122,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                 const rows = await prksEffectiveSearchResults(
                     mapped.q, mapped.tag, mapped.options, routeSignal, stale);
                 if (stale()) return;
-                prksPresentVueSavedViewDetail(ctx, contentDiv, {
+                prksPresentVueRoute(ctx, contentDiv, 'saved-view-detail', {
                     availability: 'ready',
                     view: view,
                     viewId: view.id,
@@ -4577,7 +4154,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                 const works = prksEffectiveBrowseRows(base, 'works-browse');
                 publishSidebar({ status });
                 if (stale()) return;
-                prksPresentVueProgress(ctx, contentDiv, {
+                prksPresentVueRoute(ctx, contentDiv, 'progress', {
                     status: status,
                     rows: works,
                     offlineCached: offlineBrowse.source === 'cache',
@@ -4632,7 +4209,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     publisher,
                     resultCount: Array.isArray(rows) ? rows.length : 0,
                 });
-                prksPresentVueSearch(ctx, contentDiv, {
+                prksPresentVueRoute(ctx, contentDiv, 'search', {
                     request: { q: query, tag, author, publisher, any },
                     canonicalHash: route.canonicalHash,
                     rows: rows,
@@ -4645,7 +4222,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                 // alias, merge, and delete controls. It does not fetch.
                 const tags = await fetchTags({ used: true, signal: routeSignal });
                 if (stale()) return;
-                prksPresentVueTags(ctx, contentDiv, {
+                prksPresentVueRoute(ctx, contentDiv, 'tags', {
                     tags: tags,
                     generation: generation,
                 });
@@ -4665,7 +4242,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                 }
                 const publishers = await fetchPublishersInUse({ signal: routeSignal });
                 if (stale()) return;
-                prksPresentVuePublishers(ctx, contentDiv, {
+                prksPresentVueRoute(ctx, contentDiv, 'publishers', {
                     publishers: publishers,
                     generation: generation,
                 });
@@ -4694,7 +4271,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     typeCount: typesModel.typeCount,
                     totalFiles: typesModel.totalFiles,
                 });
-                prksPresentVueTypesIndex(ctx, contentDiv, {
+                prksPresentVueRoute(ctx, contentDiv, 'types', {
                     rows: typesModel.rows,
                     generation: generation,
                 });
@@ -4723,7 +4300,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     docTypeLabel: typeDetail.label,
                     workCount: typeDetail.workCount,
                 });
-                prksPresentVueTypeDetail(ctx, contentDiv, {
+                prksPresentVueRoute(ctx, contentDiv, 'type-detail', {
                     docType: typeDetail.docType,
                     label: typeDetail.label,
                     canonicalHash: route.canonicalHash,
@@ -5126,8 +4703,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     cachedConcepts || [], conceptOps);
                 if (stale()) return;
                 if (!cachedConcepts && !(conceptItems && conceptItems.length)) {
-                    prksPresentVueConcepts(ctx, contentDiv, {
-                        feature: 'concepts',
+                    prksPresentVueRoute(ctx, contentDiv, 'concepts', {
                         availability: 'unavailable',
                         items: [],
                         generation: generation,
@@ -5142,8 +4718,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     };
                     break;
                 }
-                prksPresentVueConcepts(ctx, contentDiv, {
-                    feature: 'concepts',
+                prksPresentVueRoute(ctx, contentDiv, 'concepts', {
                     availability: 'ready',
                     items: conceptItems,
                     generation: generation,
@@ -5190,8 +4765,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     resolvedConcept.unavailable = !pendingConcept;
                 }
                 if (resolvedConcept.unavailable) {
-                    prksPresentVueConcepts(ctx, contentDiv, {
-                        feature: 'concept-detail',
+                    prksPresentVueRoute(ctx, contentDiv, 'concept-detail', {
                         availability: 'unavailable',
                         conceptId: conceptId,
                         generation: generation,
@@ -5206,8 +4780,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                 }
                 const item = resolvedConcept.concept;
                 if (!item) {
-                    prksPresentVueConcepts(ctx, contentDiv, {
-                        feature: 'concept-detail',
+                    prksPresentVueRoute(ctx, contentDiv, 'concept-detail', {
                         availability: 'not-found',
                         conceptId: conceptId,
                         generation: generation,
@@ -5237,8 +4810,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     const effective = typeof prksEffectiveWorkReferences === 'function'
                         ? prksEffectiveWorkReferences('concept', overlaid) : overlaid;
                     ctx.setEntity('concept', effective);
-                    prksPresentVueConcepts(ctx, contentDiv, {
-                        feature: 'concept-detail',
+                    prksPresentVueRoute(ctx, contentDiv, 'concept-detail', {
                         availability: 'ready',
                         concept: effective,
                         conceptId: conceptId,
@@ -5269,8 +4841,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     cachedPositions || [], positionOps);
                 if (stale()) return;
                 if (!cachedPositions && !(positionItems && positionItems.length)) {
-                    prksPresentVuePositions(ctx, contentDiv, {
-                        feature: 'positions',
+                    prksPresentVueRoute(ctx, contentDiv, 'positions', {
                         availability: 'unavailable',
                         items: [],
                         generation: generation,
@@ -5283,8 +4854,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     };
                     break;
                 }
-                prksPresentVuePositions(ctx, contentDiv, {
-                    feature: 'positions',
+                prksPresentVueRoute(ctx, contentDiv, 'positions', {
                     availability: 'ready',
                     items: positionItems,
                     generation: generation,
@@ -5331,8 +4901,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     resolvedPosition.unavailable = !pendingPosition;
                 }
                 if (resolvedPosition.unavailable) {
-                    prksPresentVuePositions(ctx, contentDiv, {
-                        feature: 'position-detail',
+                    prksPresentVueRoute(ctx, contentDiv, 'position-detail', {
                         availability: 'unavailable',
                         positionId: positionId,
                         generation: generation,
@@ -5347,8 +4916,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                 }
                 const item = resolvedPosition.position;
                 if (!item) {
-                    prksPresentVuePositions(ctx, contentDiv, {
-                        feature: 'position-detail',
+                    prksPresentVueRoute(ctx, contentDiv, 'position-detail', {
                         availability: 'not-found',
                         positionId: positionId,
                         generation: generation,
@@ -5375,8 +4943,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                         }
                     }
                     ctx.setEntity('position', item2);
-                    prksPresentVuePositions(ctx, contentDiv, {
-                        feature: 'position-detail',
+                    prksPresentVueRoute(ctx, contentDiv, 'position-detail', {
                         availability: 'ready',
                         position: item2,
                         positionId: positionId,
@@ -5411,8 +4978,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                 const allArguments = await prksEffectiveArgumentRows(
                     cachedArguments || [], argumentOps);
                 if (!cachedArguments && !(allArguments && allArguments.length)) {
-                    prksPresentVueArguments(ctx, contentDiv, {
-                        feature: 'arguments',
+                    prksPresentVueRoute(ctx, contentDiv, 'arguments', {
                         availability: 'unavailable',
                         items: [],
                         kind: kind || 'all',
@@ -5427,8 +4993,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     break;
                 }
                 const argumentItems = prksFilterArgumentsByKind(allArguments, kind);
-                prksPresentVueArguments(ctx, contentDiv, {
-                    feature: 'arguments',
+                prksPresentVueRoute(ctx, contentDiv, 'arguments', {
                     availability: 'ready',
                     items: argumentItems,
                     kind: kind || 'all',
@@ -5476,8 +5041,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     resolvedArgument.unavailable = !pendingArgument;
                 }
                 if (resolvedArgument.unavailable) {
-                    prksPresentVueArguments(ctx, contentDiv, {
-                        feature: 'argument-detail',
+                    prksPresentVueRoute(ctx, contentDiv, 'argument-detail', {
                         availability: 'unavailable',
                         argumentId: argumentId,
                         generation: generation,
@@ -5492,8 +5056,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                 }
                 const item = resolvedArgument.argument;
                 if (!item) {
-                    prksPresentVueArguments(ctx, contentDiv, {
-                        feature: 'argument-detail',
+                    prksPresentVueRoute(ctx, contentDiv, 'argument-detail', {
                         availability: 'not-found',
                         argumentId: argumentId,
                         generation: generation,
@@ -5545,8 +5108,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     // A freshly rendered route always starts read-only, even if a
                     // previous mount left an edit session behind.
                     ctx.ui.argumentEditing = false;
-                    prksPresentVueArguments(ctx, contentDiv, {
-                        feature: 'argument-detail',
+                    prksPresentVueRoute(ctx, contentDiv, 'argument-detail', {
                         availability: 'ready',
                         argument: effectiveArgument,
                         argumentId: argumentId,
@@ -5628,9 +5190,8 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     ctx.ui.personDetailEditing = false;
                     ctx.ui.personProfileDraft = null;
                     ctx.ui.personWorksEditing = false;
-                    if (typeof prksPresentVuePeople === 'function') {
-                        prksPresentVuePeople(ctx, contentDiv, {
-                            feature: 'person',
+                    if (typeof prksPresentVueRoute === 'function') {
+                        prksPresentVueRoute(ctx, contentDiv, 'person', {
                             availability: 'unavailable',
                             person: null,
                             personId: personId,

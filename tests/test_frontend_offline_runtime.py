@@ -222,7 +222,7 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         self.assertIn("PRKS_POSITIONS_LIST_KEY", index_body)
         self.assertIn("domain: PRKS_POSITIONS_DOMAIN", index_body)
         self.assertIn("validate: prksIsPositionIndexShape", index_body)
-        self.assertIn("prksPresentVuePositions(", index_body)
+        self.assertIn("prksPresentVueRoute(ctx, contentDiv, 'positions'", index_body)
         self.assertIn("availability: 'unavailable'", index_body)
         self.assertIn("prksOfflinePrependBanner(", index_body)
         # The plain online-only fetch helper is no longer the route's read path.
@@ -694,7 +694,7 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         self.assertIn("PRKS_ARGUMENTS_LIST_KEY", index_body)
         self.assertIn("domain: PRKS_ARGUMENTS_DOMAIN", index_body)
         self.assertIn("validate: prksIsArgumentIndexShape", index_body)
-        self.assertIn("prksPresentVueArguments(", index_body)
+        self.assertIn("prksPresentVueRoute(ctx, contentDiv, 'arguments'", index_body)
         self.assertIn("availability: 'unavailable'", index_body)
         self.assertIn("prksOfflinePrependBanner(", index_body)
         # The COMPLETE collection is fetched and cached under one key; ?kind= is
@@ -1041,7 +1041,7 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         nxt = app.find("case 'playlists':", folders_at)
         body = app[folders_at: nxt if nxt > folders_at else folders_at + 8000]
         # Vue present paints the host; chrome title still uses titleOpts.
-        self.assertIn("prksPresentVueFolderLibrary(", body)
+        self.assertIn("prksPresentVueRoute(ctx, contentDiv, 'folder-library'", body)
         self.assertIn("availability: 'unavailable'", body)
         self.assertIn(
             "titleOpts = { notFound: true, notFoundTitle: 'Folders not available offline' }",

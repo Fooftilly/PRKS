@@ -41,7 +41,10 @@ class PeopleVueContracts(unittest.TestCase):
         app = (FRONTEND / "app.js").read_text()
         self.assertIn("samePeopleWorkspace", app)
         self.assertIn("__prksRetainPeopleSurface", app)
-        present = app[app.index("function prksPresentVuePeople") : app.index("function prksRenderRouteLoading")]
+        retained = app[app.index("const PRKS_RETAINED_VUE_ROUTE_FEATURES") : app.index("function prksPresentVueRoute(")]
+        self.assertIn("'people',", retained)
+        self.assertIn("'person',", retained)
+        present = app[app.index("function prksPresentVueRoute(") : app.index("async function prksReloadTagsVocabulary")]
         self.assertIn(":scope > [data-prks-vue-route-host]", present)
         self.assertIn("contentDiv.innerHTML = '';", present)
         self.assertLess(present.index("querySelector"), present.index("contentDiv.innerHTML = '';"))

@@ -5263,9 +5263,8 @@ async function prksReloadEntityTagsUI(entityType, entityId, ownerCtx, coherenceT
             return;
         }
         if (typeof ctx.setEntity === 'function') ctx.setEntity('folder', _tf);
-        if (ctx.root && ctx.mounted && typeof prksPresentVueFolderDetail === 'function') {
-            prksPresentVueFolderDetail(ctx, ctx.root, {
-                feature: 'folder-detail',
+        if (ctx.root && ctx.mounted && typeof prksPresentVueRoute === 'function') {
+            prksPresentVueRoute(ctx, ctx.root, 'folder-detail', {
                 availability: 'ready',
                 folder: _tf,
                 folderId: _tf && _tf.id,

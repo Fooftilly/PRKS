@@ -16,7 +16,7 @@ class ArgumentsVueContracts(unittest.TestCase):
         detail = app[app.index("case 'argument-detail': {") : app.index("case 'research-graph': {")]
         self.assertIn("prksEffectiveArgumentRows(", index)
         self.assertIn("prksFilterArgumentsByKind(allArguments, kind)", index)
-        self.assertIn("prksPresentVueArguments(", index)
+        self.assertIn("prksPresentVueRoute(ctx, contentDiv, 'arguments'", index)
         self.assertIn("availability: 'unavailable'", index)
         self.assertIn("prksEffectiveArgumentDetail(item, argumentOps)", detail)
         self.assertIn("prksPendingCreatedArgument", detail)
@@ -25,7 +25,7 @@ class ArgumentsVueContracts(unittest.TestCase):
         self.assertIn("prksApplyPendingArgumentNames(effectiveArgument.responses)", detail)
         self.assertIn("prksEffectiveWorkReferences('argument', effectiveArgument)", detail)
         self.assertIn("ctx.ui.argumentEditing = false;", detail)
-        self.assertIn("prksPresentVueArguments(", detail)
+        self.assertIn("prksPresentVueRoute(ctx, contentDiv, 'argument-detail'", detail)
         self.assertIn("availability: 'not-found'", detail)
         self.assertNotIn("renderArgumentsIndex", app)
         self.assertNotIn("renderArgumentDetail", app)
@@ -35,8 +35,11 @@ class ArgumentsVueContracts(unittest.TestCase):
         app = (FRONTEND / "app.js").read_text()
         self.assertIn("sameArgumentsWorkspace", app)
         self.assertIn("__prksRetainArgumentsSurface", app)
+        retained = app[app.index("const PRKS_RETAINED_VUE_ROUTE_FEATURES") : app.index("function prksPresentVueRoute(")]
+        self.assertIn("'arguments',", retained)
+        self.assertIn("'argument-detail',", retained)
         present = app[
-            app.index("function prksPresentVueArguments") : app.index("function prksRenderRouteLoading")
+            app.index("function prksPresentVueRoute(") : app.index("async function prksReloadTagsVocabulary")
         ]
         self.assertIn(":scope > [data-prks-vue-route-host]", present)
         self.assertIn("contentDiv.innerHTML = '';", present)

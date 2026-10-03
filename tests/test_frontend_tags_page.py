@@ -22,13 +22,13 @@ class FrontendTagsPageTests(unittest.TestCase):
         search_at = app.index("case 'search':")
         tags_body = app[tags_at:publishers_at]
         self.assertIn("fetchTags({ used: true, signal: routeSignal })", tags_body)
-        self.assertIn("prksPresentVueTags", tags_body)
+        self.assertIn("prksPresentVueRoute(ctx, contentDiv, 'tags'", tags_body)
         self.assertNotIn("renderTagsPage", tags_body)
         self.assertIn("async function prksReloadTagsVocabulary(", app)
         self.assertIn("window.prksVueDismissRoute(ctx)", app)
         publishers = app[publishers_at:types_at]
         self.assertIn("fetchPublishersInUse({ signal: routeSignal })", publishers)
-        self.assertIn("prksPresentVuePublishers", publishers)
+        self.assertIn("prksPresentVueRoute(ctx, contentDiv, 'publishers'", publishers)
         self.assertNotIn("renderPublishersPage", publishers)
         processing = app[processing_at:search_at]
         self.assertIn("prksLoadProcessingInbox(routeSignal)", processing)
@@ -57,7 +57,7 @@ class FrontendTagsPageTests(unittest.TestCase):
         self.assertIn("errorOwner: errorOwner", reload)
         self.assertIn("prksConsumeApiError(errorOwner)", reload)
         self.assertIn("prksVueReportTagsRefreshFailure", reload)
-        self.assertLess(reload.index("if (failure)"), reload.index("prksPresentVueTags"))
+        self.assertLess(reload.index("if (failure)"), reload.index("prksPresentVueRoute(ctx, ctx.root, 'tags'"))
         ui = _read(os.path.join(_PROJECT_DIR, "frontend", "js", "ui.js"))
         closer = ui[ui.index("function prksCloseStandalonePageModal"):ui.index("function prksDismissModalInnerEscapeLayer")]
         self.assertIn("closer(modal)", closer)
