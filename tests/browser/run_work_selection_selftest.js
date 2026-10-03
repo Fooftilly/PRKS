@@ -350,6 +350,7 @@ function runScript(rel) {
     vm.runInNewContext(code, sandbox, { filename: file });
 }
 
+runScript('frontend/js/route-model.js');
 runScript('frontend/js/navigation.js');
 runScript('frontend/js/components/work-cards.js');
 runScript('frontend/js/work-selection.js');

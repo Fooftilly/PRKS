@@ -14,7 +14,7 @@ import type { SearchRouteInstance } from './route'
 export interface SearchPresentInput {
   owner: RouteSurfaceOwner & SearchIntentOwner
   host: HTMLElement
-  /** Route params as parsed by `prksParseRoute`. */
+  /** Route params as parsed by the route model's `parseRoute`. */
   request: unknown
   canonicalHash?: string
   /** Already-effective rows from `prksEffectiveSearchResults`. */

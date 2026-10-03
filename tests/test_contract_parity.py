@@ -18,6 +18,7 @@ from backend.work_role_sync import PEOPLE_ROLE_TYPES, PEOPLE_ROLE_TYPE_SET, ROLE
 
 
 ROOT = Path(__file__).resolve().parents[1]
+_ROUTE_MODEL = "frontend-app/src/routing/route-model.ts"
 
 
 def read(rel: str) -> str:
@@ -426,6 +427,17 @@ def js_string_array(source: str, name: str) -> tuple[str, ...]:
     return _parse_js_string_array_body(match.group(1), f"array {name}")
 
 
+def ts_const_string_array(source: str, name: str) -> tuple[str, ...]:
+    """`export const NAME = [...] as const` in a TypeScript module."""
+    match = _require_exactly_one_span(
+        source,
+        r"export\s+const\s+" + re.escape(name) + r"\s*=\s*\[(.*?)\]\s*as\s+const\b",
+        f"array {name}",
+        flags=re.S,
+    )
+    return _parse_js_string_array_body(match.group(1), f"array {name}")
+
+
 def js_true_object_keys(source: str, name: str) -> tuple[str, ...]:
     match = _require_exactly_one_span(
         source,
@@ -538,11 +550,8 @@ class ContractParityTests(unittest.TestCase):
             "work metadata sync": js_string_array(
                 read("frontend/js/work-metadata-state.js"), "WORK_STATUSES"
             ),
-            "navigation/progress links": js_string_array(
-                read("frontend/js/navigation.js"), "PRKS_PROGRESS_STATUS_VALUES"
-            ),
-            "Progress page": js_string_array(
-                read("frontend-app/src/features/progress/status.ts"), "PROGRESS_STATUSES"
+            "route model (navigation, progress links, Progress page)": ts_const_string_array(
+                read(_ROUTE_MODEL), "PROGRESS_STATUS_VALUES"
             ),
         }
         for label, actual in mirrors.items():
@@ -587,9 +596,7 @@ class ContractParityTests(unittest.TestCase):
             PEOPLE_ROLE_TYPE_SET,
         )
 
-        people = js_string_array(
-            read("frontend/js/navigation.js"), "PRKS_PEOPLE_ROLES"
-        )
+        people = ts_const_string_array(read(_ROUTE_MODEL), "PEOPLE_ROLES")
         self.assertEqual(people, PEOPLE_ROLE_TYPES)
 
         processing = read("frontend/js/components/processing-files.js")
@@ -611,9 +618,7 @@ class ContractParityTests(unittest.TestCase):
         )
 
     def test_people_role_sidebar_and_palette_match_navigation_registry(self):
-        people = js_string_array(
-            read("frontend/js/navigation.js"), "PRKS_PEOPLE_ROLES"
-        )
+        people = ts_const_string_array(read(_ROUTE_MODEL), "PEOPLE_ROLES")
         expected_hrefs = tuple(
             f"#/people/role/{role}" for role in people
         )

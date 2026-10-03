@@ -34,7 +34,7 @@ class FrontendNavigationTests(unittest.TestCase):
         self.assertLess(nav_at, app_at)
         self.assertTrue(os.path.isfile(_NAV))
         src = _read(_NAV)
-        self.assertIn("function prksParseRoute", src)
+        self.assertIn("const prksParseRoute = prksRouteModel.parseRoute;", src)
         self.assertIn("function prksNavigate", src)
         self.assertIn("function prksSyncSidebarActive", src)
         self.assertIn("prks.routeStates.v1", src)

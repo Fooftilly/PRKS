@@ -20,10 +20,11 @@
     // committed Vue bundle, frontend/js/workspace-model.js,
     // frontend/js/work-route-projection.js,
     // frontend/js/search-query-codec.js,
-    // frontend/js/tab-leave.js, or
-    // frontend/js/owner-resource.js) retires old
+    // frontend/js/tab-leave.js,
+    // frontend/js/owner-resource.js, or
+    // frontend/js/route-model.js) retires old
     // shell/static caches.
-    const DEPENDENCY_REVISION = '0feb843e5cc2';
+    const DEPENDENCY_REVISION = 'e7507b84e4ca';
     const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
     const PDF_CACHE = 'prks-pdf-v1';
@@ -97,6 +98,7 @@
         '/vendor/lucide/lucide.min.js',
         '/js/icons.js',
         '/js/date-format.js',
+        '/js/route-model.js',
         '/js/navigation.js',
         '/js/workspace-hosts.js',
         '/js/workspace-model.js',

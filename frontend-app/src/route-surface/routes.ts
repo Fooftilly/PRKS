@@ -2,9 +2,10 @@
  * Discriminated identity of one Vue-mounted PRKS route instance.
  *
  * Feature modules own their params. This union imports those types. It does
- * not parse hashes and it is not a second router: `prksParseRoute` in
- * `frontend/js/navigation.js` remains the only hash parser. Work/PDF and
- * unrecognized hashes stay on that router and are not members here.
+ * not parse hashes and it is not a second router: `parseRoute` in
+ * `../routing/route-model` is the only hash parser, and every member's `name` is one
+ * of its registry names. Work/PDF and unrecognized hashes stay on the classic
+ * runtime and are not members here.
  *
  * `app.js` route dispatch is still coordinator-owned. The search query codec
  * is `features/search/codec.ts`, not this type. Per-feature dismiss globals

@@ -113,6 +113,14 @@ if (ownerResourceBuild.status !== 0) {
   process.exit(ownerResourceBuild.status || 1);
 }
 
+const routeModelBuild = spawnSync(process.execPath, [join(appRoot, "scripts/build-route-model.mjs")], {
+  cwd: appRoot,
+  stdio: "inherit",
+});
+if (routeModelBuild.status !== 0) {
+  process.exit(routeModelBuild.status || 1);
+}
+
 const py = resolvePython();
 const gate = spawnSync(
   py.executable,
