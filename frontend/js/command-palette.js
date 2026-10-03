@@ -473,7 +473,9 @@
     }
 
     function searchHash(kind, q) {
-        const hashFromDefinition = root.prksSearchQueryCodec.hashFromDefinition;
+        const codec = root.prksSearchQueryCodec;
+        if (!codec || typeof codec.hashFromDefinition !== 'function') return null;
+        const hashFromDefinition = codec.hashFromDefinition;
         if (kind === 'all') {
             return hashFromDefinition({
                 mode: 'all',
@@ -551,7 +553,9 @@
                 hash: searchHash('publisher', trimmed),
                 section: 'search',
             },
-        ];
+        ].filter(function (row) {
+            return row.hash != null;
+        });
     }
 
     function filterCommands(query, opts) {

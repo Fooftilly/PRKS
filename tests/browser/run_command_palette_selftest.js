@@ -560,6 +560,31 @@ root.PRKS_PALETTE_COMMANDS.forEach(function (cmd) {
     assert('hash recognized ' + cmd.id, parsed && parsed.name && parsed.name !== 'unknown');
 });
 
+(function () {
+    const savedCodec = root.prksSearchQueryCodec;
+    root.prksSearchQueryCodec = null;
+    let missingThrew = false;
+    let missingRows = null;
+    try {
+        missingRows = root.prksPaletteSearchCommands('critical theory');
+    } catch (err) {
+        missingThrew = true;
+    }
+    assert('missing codec does not throw', !missingThrew);
+    assertEq('missing codec skips search rows', missingRows ? missingRows.length : -1, 0);
+    assert('missing codec hash is null', root.prksPaletteSearchHash('all', 'x') === null);
+    root.prksSearchQueryCodec = { hashFromDefinition: 'nope' };
+    assert('non-function hash is null', root.prksPaletteSearchHash('publisher', 'x') === null);
+    let badFnRows = null;
+    try {
+        badFnRows = root.prksPaletteSearchCommands('critical theory');
+    } catch (err) {
+        badFnRows = 'threw';
+    }
+    assertEq('non-function codec skips search rows', badFnRows ? badFnRows.length : -1, 0);
+    root.prksSearchQueryCodec = savedCodec;
+})();
+
 const sentinel = 'Adorno & Horkheimer';
 const hashes = {
     all: root.prksPaletteSearchHash('all', sentinel),
