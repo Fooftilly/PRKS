@@ -128,7 +128,7 @@
       "runtime_files": [
         {
           "path": "/js/route-model.js",
-          "sha256": "69a1cc5149ab917bd560ac6b6eae8aafddf8b4cf460674f937d0cc3151607273"
+          "sha256": "e30d91e66981b83df668e343da3582104923ee01250741f292e3e3dabb3147ad"
         }
       ],
       "source_category": "frontend-app:route-model",
@@ -161,7 +161,7 @@
       "runtime_files": [
         {
           "path": "/vue/prks-vue.js",
-          "sha256": "41b403b9ded03b0d987615ca626d6de5b7b692b1fdcb1696ad8334d91c0b7861"
+          "sha256": "dc5f9321fb82a9022af9299ef6724337317e65ee7eb299087800e2236996d6ac"
         }
       ],
       "source_category": "npm:frontend-app",

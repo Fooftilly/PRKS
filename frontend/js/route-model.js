@@ -1,29 +1,13 @@
 var prksRouteModel = (function(exports) {
 	Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
-	//#region src/routing/route-model.ts
+	//#region src/domain/people-roles.ts
 	/**
-	* Typed PRKS route model: the hash parser, the route registry, and the
-	* route-owned value lists. This is the only hash parser. It is not a router:
-	* the coordinator in `app.js` still loads and dispatches each route, and
-	* `navigation.js` keeps session state, Back, titles, and sidebar matching.
-	*
-	* The maintainer build emits this module as the classic script
-	* `frontend/js/route-model.js` (global `prksRouteModel`), loaded before
-	* `navigation.js`, which publishes the same names on `window`. Vue imports the
-	* module directly.
-	*/
-	var HOME_HASH = "#/folders";
-	/** Canonical Work progress statuses. Mirrors the DB check. */
-	var PROGRESS_STATUS_VALUES = [
-		"Not Started",
-		"Planned",
-		"In Progress",
-		"Completed",
-		"Paused"
-	];
-	/**
-	* People-navigation roles. Intentionally excludes Mentioned. Mirrors backend
+	* The People/Processing bibliographic role subset. Intentionally excludes
+	* Mentioned, which stays a Work-role-only type. Mirrors backend
 	* work_role_sync.PEOPLE_ROLE_TYPES; pinned by tests/test_contract_parity.py.
+	*
+	* Domain owner: the route parser imports it to mark known `#/people/role/…`
+	* roles; People and Processing code import it directly, not through routing.
 	*/
 	var PEOPLE_ROLES = [
 		"Author",
@@ -34,6 +18,43 @@ var prksRouteModel = (function(exports) {
 		"Foreword",
 		"Afterword"
 	];
+	function isPeopleRole(value) {
+		return PEOPLE_ROLES.indexOf(value) >= 0;
+	}
+	//#endregion
+	//#region src/domain/work-status.ts
+	/**
+	* Work progress status vocabulary. Mirrors the DB check and backend
+	* work_metadata_sync.WORK_STATUSES; pinned by tests/test_contract_parity.py.
+	*
+	* Domain owner: the route parser imports it to validate `#/progress`, and
+	* Work and Progress code import it directly, not through routing.
+	*/
+	var WORK_STATUSES = [
+		"Not Started",
+		"Planned",
+		"In Progress",
+		"Completed",
+		"Paused"
+	];
+	function isWorkStatus(value) {
+		return WORK_STATUSES.indexOf(value) >= 0;
+	}
+	//#endregion
+	//#region src/routing/route-model.ts
+	/**
+	* Typed PRKS route model: the hash parser, the route registry, and
+	* canonical hashes. This is the only hash parser. It is not a router:
+	* the coordinator in `app.js` still loads and dispatches each route, and
+	* `navigation.js` keeps session state, Back, titles, and sidebar matching.
+	*
+	* The maintainer build emits this module as the classic script
+	* `frontend/js/route-model.js` (global `prksRouteModel`), loaded before
+	* `navigation.js`, which publishes the same names on `window`. That script also
+	* bundles the domain vocabularies the parser validates against (`src/domain/`),
+	* which own those lists. Vue imports each module directly.
+	*/
+	var HOME_HASH = "#/folders";
 	var ROUTE_META = {
 		folders: {
 			title: "Folders",
@@ -386,9 +407,6 @@ var prksRouteModel = (function(exports) {
 			any: usp.get("any") || ""
 		};
 	}
-	function isProgressStatus(value) {
-		return PROGRESS_STATUS_VALUES.indexOf(value) >= 0;
-	}
 	function parseProgressStatus(query) {
 		if (!query) return null;
 		const usp = queryParams(query);
@@ -396,7 +414,7 @@ var prksRouteModel = (function(exports) {
 		const raw = usp.get("status");
 		if (raw == null || String(raw).trim() === "") return null;
 		const decoded = String(raw).trim();
-		return isProgressStatus(decoded) ? decoded : null;
+		return isWorkStatus(decoded) ? decoded : null;
 	}
 	/** Canonical `#/progress` hash for a status. */
 	function progressCanonicalHash(status) {
@@ -497,7 +515,7 @@ var prksRouteModel = (function(exports) {
 		if (head === "search" && segs.length === 1) return routeRecord("search", rawHash, split.query ? "#/search?" + split.query : "#/search", parseSearchParams(split.query));
 		if (head === "progress" && segs.length === 1) {
 			const parsed = parseProgressStatus(split.query);
-			const status = parsed || PROGRESS_STATUS_VALUES[0];
+			const status = parsed || WORK_STATUSES[0];
 			return routeRecord("progress", rawHash, progressCanonicalHash(status), { status }, { canonicalize: !parsed });
 		}
 		if (head === "works" && segs.length === 2) {
@@ -510,7 +528,7 @@ var prksRouteModel = (function(exports) {
 			if (segs[1] === "role" && segs.length >= 3) {
 				const role = safeDecode(segs.slice(2).join("/"));
 				if (role == null) return unknownRoute(rawHash);
-				const knownRole = PEOPLE_ROLES.indexOf(role) >= 0;
+				const knownRole = isPeopleRole(role);
 				return routeRecord("people-role", rawHash, "#/people/role/" + encodePathSegment(role), {
 					role,
 					knownRole
@@ -537,11 +555,10 @@ var prksRouteModel = (function(exports) {
 	//#endregion
 	exports.HOME_HASH = HOME_HASH;
 	exports.PEOPLE_ROLES = PEOPLE_ROLES;
-	exports.PROGRESS_STATUS_VALUES = PROGRESS_STATUS_VALUES;
 	exports.ROUTE_META = ROUTE_META;
 	exports.ROUTE_NAMES = ROUTE_NAMES;
+	exports.WORK_STATUSES = WORK_STATUSES;
 	exports.graphFocusHash = graphFocusHash;
-	exports.isProgressStatus = isProgressStatus;
 	exports.isRecognizedRoute = isRecognizedRoute;
 	exports.normalizeHashInput = normalizeHashInput;
 	exports.parseGraphFocus = parseGraphFocus;

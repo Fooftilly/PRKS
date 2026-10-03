@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { WORK_STATUSES } from '../../domain/work-status'
 import {
-  PROGRESS_STATUS_VALUES,
   canonicalProgressStatus,
   normalizeProgressStatusParam,
   progressCanonicalHash,
@@ -8,11 +8,11 @@ import {
 
 describe('Progress status', () => {
   it('keeps the five canonical statuses', () => {
-    expect(PROGRESS_STATUS_VALUES).toEqual(['Not Started', 'Planned', 'In Progress', 'Completed', 'Paused'])
+    expect(WORK_STATUSES).toEqual(['Not Started', 'Planned', 'In Progress', 'Completed', 'Paused'])
   })
 
   it('normalizes each canonical status and rejects invalid or missing values', () => {
-    for (const status of PROGRESS_STATUS_VALUES) {
+    for (const status of WORK_STATUSES) {
       expect(normalizeProgressStatusParam(status)).toBe(status)
     }
     expect(normalizeProgressStatusParam(null)).toBeNull()

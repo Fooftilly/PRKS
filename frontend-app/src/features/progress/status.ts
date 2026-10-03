@@ -1,11 +1,9 @@
-import { isProgressStatus, type ProgressStatus } from '../../routing/route-model'
+import { isWorkStatus, type WorkStatus } from '../../domain/work-status'
 
-export {
-  PROGRESS_STATUS_VALUES,
-  isProgressStatus,
-  progressCanonicalHash,
-  type ProgressStatus,
-} from '../../routing/route-model'
+export { progressCanonicalHash } from '../../routing/route-model'
+
+/** A Progress page filter is one Work status. */
+export type ProgressStatus = WorkStatus
 
 /**
  * Invalid or missing status parameters are not a status.
@@ -19,7 +17,7 @@ export function normalizeProgressStatusParam(raw: string | null | undefined): Pr
   } catch {
     return null
   }
-  return isProgressStatus(decoded) ? decoded : null
+  return isWorkStatus(decoded) ? decoded : null
 }
 
 /** Route paint status. Missing and invalid values use the navigation default. */

@@ -7,7 +7,8 @@ import {
   progressRowsForStatus,
   progressVisibleRows,
 } from './rows'
-import { PROGRESS_STATUS_VALUES, type ProgressStatus } from './status'
+import { WORK_STATUSES } from '../../domain/work-status'
+import type { ProgressStatus } from './status'
 
 describe('Progress effective rows', () => {
   const catalog = [
@@ -20,7 +21,7 @@ describe('Progress effective rows', () => {
   it('filters each canonical status without mutating the handed rows', () => {
     const frozen = catalog.map((row) => Object.freeze({ ...row }))
     const snapshot = Object.freeze(frozen.slice())
-    for (const status of PROGRESS_STATUS_VALUES as readonly ProgressStatus[]) {
+    for (const status of WORK_STATUSES as readonly ProgressStatus[]) {
       const visible = progressVisibleRows(snapshot, status)
       expect(visible.every((row) => row.status === status)).toBe(true)
       expect(snapshot.map((row) => row.id)).toEqual(['c', 'a', 'b', 'd'])

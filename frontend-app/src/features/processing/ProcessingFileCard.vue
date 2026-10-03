@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import { WORK_STATUSES } from '../../domain/work-status'
 import type { ProcessingIntents } from './intents'
 import {
-  PROCESSING_STATUS_LABELS,
   filterProcessingFolders,
   filterProcessingPeople,
   filterProcessingTags,
@@ -192,7 +192,7 @@ function mountWidgets(): void {
   const statusHtml = window.prksSegmentedControlHtml?.(
     statusPrefix,
     'File status',
-    [...PROCESSING_STATUS_LABELS],
+    [...WORK_STATUSES],
     draft.status_draft,
     'status',
     { dataField: 'status_draft' },

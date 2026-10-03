@@ -40,7 +40,7 @@ class RouteModelContracts(unittest.TestCase):
         self.assertIn("require('./route-model.js')", nav)
         for alias in (
             "const PRKS_HOME_HASH = prksRouteModel.HOME_HASH;",
-            "const PRKS_PROGRESS_STATUS_VALUES = prksRouteModel.PROGRESS_STATUS_VALUES;",
+            "const PRKS_PROGRESS_STATUS_VALUES = prksRouteModel.WORK_STATUSES;",
             "const PRKS_PEOPLE_ROLES = prksRouteModel.PEOPLE_ROLES;",
             "const PRKS_ROUTE_META = prksRouteModel.ROUTE_META;",
             "const prksParseRoute = prksRouteModel.parseRoute;",
@@ -59,10 +59,26 @@ class RouteModelContracts(unittest.TestCase):
         ):
             self.assertNotIn(gone, nav)
 
-    def test_progress_feature_has_no_second_status_list_or_parser(self):
-        status = (ROOT / "frontend-app" / "src" / "features" / "progress" / "status.ts").read_text(encoding="utf-8")
-        self.assertIn("from '../../routing/route-model'", status)
-        self.assertNotIn("'Not Started', 'Planned'", status)
+    def test_domain_vocabularies_are_not_owned_by_routing(self):
+        """The parser depends on domain vocabularies; domain code never learns them from routing."""
+        src = ROOT / "frontend-app" / "src"
+        model = MODEL.read_text(encoding="utf-8")
+        self.assertIn("from '../domain/work-status'", model)
+        self.assertIn("from '../domain/people-roles'", model)
+        self.assertNotIn("'Not Started', 'Planned'", model)
+        self.assertNotIn("'Author', 'Editor'", model)
+        for path in (src / "domain").glob("*.ts"):
+            self.assertNotRegex(path.read_text(encoding="utf-8"), r"from '[./]+/routing/", path.name)
+        literals = []
+        for path in src.rglob("*"):
+            if path.suffix not in (".ts", ".vue") or ".test." in path.name or path.parent.name == "domain":
+                continue
+            text = path.read_text(encoding="utf-8")
+            if "'Not Started', 'Planned'" in text or "'Author', 'Editor', 'Reviewer'" in text:
+                literals.append(str(path.relative_to(ROOT)))
+        self.assertEqual(literals, [])
+        status = (src / "features" / "progress" / "status.ts").read_text(encoding="utf-8")
+        self.assertIn("from '../../domain/work-status'", status)
         self.assertNotIn("progressStatusFromHash", status)
         self.assertNotIn("URLSearchParams", status)
 

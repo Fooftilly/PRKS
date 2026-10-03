@@ -1,8 +1,6 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import {
   HOME_HASH,
-  PEOPLE_ROLES,
-  PROGRESS_STATUS_VALUES,
   ROUTE_META,
   ROUTE_NAMES,
   graphFocusHash,
@@ -12,6 +10,8 @@ import {
   type PrksParsedRoute,
   type PrksRouteName,
 } from './route-model'
+import { PEOPLE_ROLES } from '../domain/people-roles'
+import { WORK_STATUSES } from '../domain/work-status'
 import type { PrksRouteInstance } from '../route-surface/routes'
 
 describe('route model', () => {
@@ -46,8 +46,8 @@ describe('route model', () => {
   })
 
   it('canonicalizes progress status and keeps the shared list', () => {
-    expect(PROGRESS_STATUS_VALUES).toEqual(['Not Started', 'Planned', 'In Progress', 'Completed', 'Paused'])
-    for (const status of PROGRESS_STATUS_VALUES) {
+    expect(WORK_STATUSES).toEqual(['Not Started', 'Planned', 'In Progress', 'Completed', 'Paused'])
+    for (const status of WORK_STATUSES) {
       const route = parseRoute('#/progress?status=' + encodeURIComponent(status))
       expect(route).toMatchObject({ name: 'progress', params: { status }, canonicalize: false })
     }

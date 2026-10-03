@@ -8,8 +8,9 @@
 
     // The hash parser, route registry, and route-owned value lists live in the
     // typed route model (frontend-app/src/routing/route-model.ts), built
-    // as frontend/js/route-model.js and loaded before this file. These names
-    // are aliases, not copies.
+    // as frontend/js/route-model.js and loaded before this file. That script
+    // also carries the Work status and People role vocabularies, owned by
+    // frontend-app/src/domain/. These names are aliases, not copies.
     const prksRouteModel =
         root.prksRouteModel ||
         (typeof module !== 'undefined' && module.exports && typeof require === 'function'
@@ -22,7 +23,7 @@
     const PRKS_ROUTE_STATE_LIMIT = 50;
     const PRKS_TITLE_SUFFIX = ' — PRKS';
 
-    const PRKS_PROGRESS_STATUS_VALUES = prksRouteModel.PROGRESS_STATUS_VALUES;
+    const PRKS_PROGRESS_STATUS_VALUES = prksRouteModel.WORK_STATUSES;
     const PRKS_PEOPLE_ROLES = prksRouteModel.PEOPLE_ROLES;
     const PRKS_ROUTE_META = prksRouteModel.ROUTE_META;
     const prksParseRoute = prksRouteModel.parseRoute;

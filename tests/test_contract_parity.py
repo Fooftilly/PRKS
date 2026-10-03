@@ -18,7 +18,8 @@ from backend.work_role_sync import PEOPLE_ROLE_TYPES, PEOPLE_ROLE_TYPE_SET, ROLE
 
 
 ROOT = Path(__file__).resolve().parents[1]
-_ROUTE_MODEL = "frontend-app/src/routing/route-model.ts"
+_WORK_STATUS = "frontend-app/src/domain/work-status.ts"
+_PEOPLE_ROLES = "frontend-app/src/domain/people-roles.ts"
 
 
 def read(rel: str) -> str:
@@ -550,8 +551,8 @@ class ContractParityTests(unittest.TestCase):
             "work metadata sync": js_string_array(
                 read("frontend/js/work-metadata-state.js"), "WORK_STATUSES"
             ),
-            "route model (navigation, progress links, Progress page)": ts_const_string_array(
-                read(_ROUTE_MODEL), "PROGRESS_STATUS_VALUES"
+            "Work status owner (navigation, progress links, Progress, Processing)": ts_const_string_array(
+                read(_WORK_STATUS), "WORK_STATUSES"
             ),
         }
         for label, actual in mirrors.items():
@@ -596,7 +597,7 @@ class ContractParityTests(unittest.TestCase):
             PEOPLE_ROLE_TYPE_SET,
         )
 
-        people = ts_const_string_array(read(_ROUTE_MODEL), "PEOPLE_ROLES")
+        people = ts_const_string_array(read(_PEOPLE_ROLES), "PEOPLE_ROLES")
         self.assertEqual(people, PEOPLE_ROLE_TYPES)
 
         processing = read("frontend/js/components/processing-files.js")
@@ -618,7 +619,7 @@ class ContractParityTests(unittest.TestCase):
         )
 
     def test_people_role_sidebar_and_palette_match_navigation_registry(self):
-        people = ts_const_string_array(read(_ROUTE_MODEL), "PEOPLE_ROLES")
+        people = ts_const_string_array(read(_PEOPLE_ROLES), "PEOPLE_ROLES")
         expected_hrefs = tuple(
             f"#/people/role/{role}" for role in people
         )
