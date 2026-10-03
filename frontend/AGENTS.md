@@ -402,15 +402,17 @@ Reads are bounded (foreground 4, background 1). Mutations are serialized (max 1)
 and never automatically retried. Safe GET retry covers network errors and
 502/503/504 only, up to the initial attempt plus two retries.
 
-Only complete-value autosaves may set `coalesceKey` (research notes and private
-notes). Creates, deletes, relationships, bulk, reorder, PDF, and backup must not.
+The coordinator never merges or replaces queued mutations: every write it
+accepts is sent, in order. Coalescing of complete-value edits belongs to the
+durable local-store owners (for example `coalesceWorkTag`, note and field
+writers), never to the transport.
 
 `window.__prksRouteAbortController` is for route reads. Canonical writes survive
 navigation. Route generation (`window.__prksRouteGen` / `prksRouteStale`) still
 guards paint after abort.
 
 Coordinator diagnostics are aggregate counters and occupancy only. They must never
-contain private URL, query, body, Work ID, search text, or coalesce-key content.
+contain private URL, query, body, Work ID, or search text content.
 
 Persistent cache, IndexedDB, outbox, and offline synchronization do not belong in
 `frontend/js/request-coordinator.js`. The burst catalog cache is memory-only and

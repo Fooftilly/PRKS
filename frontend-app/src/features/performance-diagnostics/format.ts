@@ -101,9 +101,7 @@ export function formatClientRequestBody(
     String(counts.dedupeJoins) +
     ' in-flight deduplicated, ' +
     String(counts.burstCacheHits) +
-    ' burst-cache hits, ' +
-    String(counts.coalescedMutations) +
-    ' autosaves coalesced. Retries: ' +
+    ' burst-cache hits. Retries: ' +
     String(counts.retries) +
     '. Aborted obsolete reads: ' +
     String(counts.aborted) +
@@ -132,7 +130,7 @@ export function formatClientRequestReport(
   if (!client) return ''
   const counts = client.counts
   const current = client.current
-  const avoided = counts.dedupeJoins + counts.burstCacheHits + counts.coalescedMutations
+  const avoided = counts.dedupeJoins + counts.burstCacheHits
   const queuedReads = current.queuedForegroundReads + current.queuedBackgroundReads
   return [
     'Client request coordinator',
@@ -143,8 +141,6 @@ export function formatClientRequestReport(
       String(counts.dedupeJoins) +
       ', cache ' +
       String(counts.burstCacheHits) +
-      ', coalesced ' +
-      String(counts.coalescedMutations) +
       ')',
     'Retries: ' + String(counts.retries),
     'Aborted obsolete reads: ' + String(counts.aborted),
