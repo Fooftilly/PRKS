@@ -3253,6 +3253,19 @@ async function prksRenderTabRoute(ctx, hash, options) {
     return renderTask;
 }
 
+/**
+ * A painted Saved View detail follows its record from before its search read:
+ * a write from any surface that changes or deletes the record re-resolves this
+ * owner through prksRenderTabRoute (so prksTabLeave), which also aborts that
+ * read. The follow ends with the route's signal.
+ */
+function prksFollowSavedViewDetail(ctx, route, view, routeSignal, stale) {
+    if (!routeSignal) return;
+    window.prksSavedViewRecords.follow(view, routeSignal, function () {
+        if (!stale()) void prksRenderTabRoute(ctx, route.canonicalHash);
+    });
+}
+
 async function prksCommitTabRouteRender(ctx, hash, options) {
     if (!ctx || ctx.destroyed) return;
     const opts = options || {};
@@ -4098,6 +4111,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     titleOpts = { notFound: true, notFoundTitle: 'Saved View not found' };
                     break;
                 }
+                prksFollowSavedViewDetail(ctx, route, view, routeSignal, stale);
                 const mapped = prksSearchQueryCodec.optionsFromDefinition(view.search || {});
                 const rows = await prksEffectiveSearchResults(
                     mapped.q, mapped.tag, mapped.options, routeSignal, stale);
@@ -4111,13 +4125,6 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     generation: generation,
                 });
                 titleOpts = { entityTitle: view.name || 'Saved View' };
-                // A write from another surface re-resolves this owner through
-                // prksTabLeave; the follow ends with this route's signal.
-                if (routeSignal) {
-                    window.prksSavedViewRecords.follow(view, routeSignal, function () {
-                        if (!stale()) void prksRenderTabRoute(ctx, route.canonicalHash);
-                    });
-                }
                 break;
             }
             case 'progress': {

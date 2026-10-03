@@ -129,9 +129,13 @@ class FrontendSavedViewsTests(unittest.TestCase):
         self.assertIn("window.prksSavedViewRecords.get(viewId, routeSignal)", detail_body)
         self.assertIn("availability: 'error'", detail_body)
         detail_case = app[detail_at: app.index("case 'progress': {", detail_at)]
-        self.assertIn("window.prksSavedViewRecords.follow(view, routeSignal,", detail_case)
-        self.assertIn("prksRenderTabRoute(ctx, route.canonicalHash)", detail_case)
-        self.assertNotIn("leaveApproved", detail_case)
+        follow_at = detail_case.index("prksFollowSavedViewDetail(ctx, route, view, routeSignal, stale);")
+        self.assertLess(follow_at, detail_case.index("prksEffectiveSearchResults("))
+        helper_at = app.index("function prksFollowSavedViewDetail(")
+        helper = app[helper_at: app.index("\n}\n", helper_at)]
+        self.assertIn("window.prksSavedViewRecords.follow(view, routeSignal,", helper)
+        self.assertIn("prksRenderTabRoute(ctx, route.canonicalHash)", helper)
+        self.assertNotIn("leaveApproved", helper)
         self.assertNotIn("renderSavedViewsIndex", app)
         src = _read(_SV)
         for name in (

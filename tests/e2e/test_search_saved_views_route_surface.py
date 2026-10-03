@@ -174,14 +174,38 @@ class SearchSavedViewsRouteSurfaceTests(unittest.TestCase):
                 search: { mode: 'all', q: 'Related Work', tag: '', author: '', publisher: '' },
             })).id"""
         )
-        page.evaluate("(id) => prksNavigate('#/views/' + encodeURIComponent(id))", second_id)
+        # A write that lands while the detail's search read is still loading
+        # is not missed: the detail re-resolves without another write.
+        held = []
+
+        def hold_first_search(route):
+            if held:
+                route.continue_()
+            else:
+                held.append(route)
+
+        page.route("**/api/search?**", hold_first_search)
+        with page.expect_request(lambda request: "/api/search?" in request.url, timeout=15000):
+            page.evaluate(
+                "(id) => { void prksNavigate('#/views/' + encodeURIComponent(id)); }", second_id
+            )
+        page.evaluate(
+            """(id) => window.prksSavedViewRecords.update(id, {
+                name: 'E2E Second Renamed',
+                search: { mode: 'all', q: 'Related Work', tag: '', author: '', publisher: '' },
+            })""",
+            second_id,
+        )
+        self.assertEqual(len(held), 1)
+        held[0].continue_()
         page.wait_for_function(
             """() => {
                 const title = document.querySelector('.prks-tile--main .saved-view-detail .prks-page-title');
-                return !!title && title.textContent.trim() === 'E2E Second Search';
+                return !!title && title.textContent.trim() === 'E2E Second Renamed';
             }""",
             timeout=15000,
         )
+        page.unroute("**/api/search?**", hold_first_search)
         page.locator(".prks-tile--main #prks-saved-view-delete").click()
         page.wait_for_selector("#prks-modal-confirm-ok", state="visible", timeout=15000)
         page.locator("#prks-modal-confirm-ok").click()

@@ -215,11 +215,13 @@ describe('Saved View records', () => {
         const method = init.method ?? 'GET'
         if (method === 'GET') {
           reads += 1
+          // The server answers from the state it read when the request arrived.
+          const seen = stored
           if (gate) await gate
           if (init.signal?.aborted) throw new DOMException('aborted', 'AbortError')
           if (failReads) return new Response(JSON.stringify(null), { status: 500 })
-          if (!stored) return new Response(JSON.stringify({ error: 'Saved View not found.' }), { status: 404 })
-          return new Response(JSON.stringify(stored), { status: 200 })
+          if (!seen) return new Response(JSON.stringify({ error: 'Saved View not found.' }), { status: 404 })
+          return new Response(JSON.stringify(seen), { status: 200 })
         }
         if (method === 'POST') return new Response(JSON.stringify(view('SV-2', 'Other')), { status: 201 })
         if (method === 'DELETE') {
@@ -315,5 +317,44 @@ describe('Saved View records', () => {
     await records.remove('SV-1')
     await settle()
     expect(gone).not.toHaveBeenCalled()
+  })
+
+  it('checks once on attach when a write landed while the record was being read', async () => {
+    const server = viewServer()
+    const client = createPrksQueryClient()
+    const records = savedViewRecords(client)
+    const release = server.holdReads()
+    const read = records.get('SV-1')
+    await vi.waitFor(() => expect(server.reads()).toBe(1))
+    await records.update('SV-1', { name: 'Renamed', search: { ...SEARCH } })
+    release()
+    const painted = (await read)!
+    expect(painted.name).toBe('First')
+    const changed = vi.fn()
+    records.follow(painted, new AbortController().signal, changed)
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1))
+  })
+
+  it('checks once on attach when a write landed after the read but before the follow', async () => {
+    viewServer()
+    const records = savedViewRecords(createPrksQueryClient())
+    const painted = (await records.get('SV-1'))!
+    await records.remove('SV-1')
+    const changed = vi.fn()
+    records.follow(painted, new AbortController().signal, changed)
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1))
+  })
+
+  it('does not re-read on attach when no write was sent since the read began', async () => {
+    const server = viewServer()
+    const records = savedViewRecords(createPrksQueryClient())
+    await records.create({ name: 'Other', search: { ...SEARCH } })
+    const painted = (await records.get('SV-1'))!
+    const reads = server.reads()
+    const changed = vi.fn()
+    records.follow(painted, new AbortController().signal, changed)
+    await settle()
+    expect(server.reads()).toBe(reads)
+    expect(changed).not.toHaveBeenCalled()
   })
 })

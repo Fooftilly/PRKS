@@ -66,6 +66,9 @@ export interface SavedViewRecords {
    * was renamed, redefined or deleted, or if it can no longer be read, it
    * calls `onChange` once and stops. An unchanged record stays quiet. When
    * `signal` aborts it stops listening and drops any re-read in flight.
+   * Attaching also checks once when a write was sent after the request behind
+   * `view` began, or was still unanswered then, so a write that landed before
+   * the follow started is not missed.
    */
   follow(view: SavedView, signal: AbortSignal, onChange: () => void): void
 }
@@ -79,6 +82,17 @@ function abortError(): DOMException {
 
 /** Page-wide: writes from any records instance reach every subscriber. */
 const writeListeners = new Set<() => void>()
+
+/** Page-wide count of writes sent, and how many are still unanswered. */
+let writesSent = 0
+let writesPending = 0
+
+/**
+ * When the request behind each record began: the writes sent by then, and
+ * whether one was still unanswered. `follow` uses it to tell whether a write
+ * could have landed after the server produced the painted record.
+ */
+const readEpochs = new WeakMap<SavedView, { sent: number; pending: boolean }>()
 
 function notifyWrite(): void {
   for (const listener of [...writeListeners]) {
@@ -113,12 +127,15 @@ export function savedViewRecords(queryClient?: QueryClient): SavedViewRecords {
   async function write<T>(run: () => Promise<T>): Promise<T> {
     guardOffline()
     const shared = client()
+    writesSent += 1
+    writesPending += 1
     // A mutation, not a bare call, so the client's mutation defaults (no
     // retry) and its transport-failure reporting apply.
     const mutation = new MutationObserver(shared, { mutationFn: run })
     try {
       return await mutation.mutate()
     } finally {
+      writesPending -= 1
       mutation.reset()
       await shared.invalidateQueries({ queryKey: prksQueryKeys.savedViews.all() })
       notifyWrite()
@@ -151,7 +168,12 @@ export function savedViewRecords(queryClient?: QueryClient): SavedViewRecords {
       }
       const read = shared.fetchQuery({
         queryKey,
-        queryFn: ({ signal: requestSignal }) => getSavedView(viewId, requestSignal),
+        queryFn: async ({ signal: requestSignal }) => {
+          const epoch = { sent: writesSent, pending: writesPending > 0 }
+          const found = await getSavedView(viewId, requestSignal)
+          if (found) readEpochs.set(found, epoch)
+          return found
+        },
         staleTime: 0,
         meta: SAVED_VIEWS_READ_META,
       })
@@ -230,6 +252,10 @@ export function savedViewRecords(queryClient?: QueryClient): SavedViewRecords {
         void check()
       })
       signal.addEventListener('abort', stop, { once: true })
+      // A write that was sent while, or after, the server produced `view`
+      // may already have landed. Check once now rather than wait for another.
+      const epoch = readEpochs.get(view)
+      if (!epoch || epoch.pending || epoch.sent !== writesSent) void check()
     },
   }
   return records
