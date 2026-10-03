@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 
 const rootDir = path.resolve(__dirname, '../..');
+globalThis.prksOwnerResource = require(path.join(rootDir, 'frontend/js/owner-resource.js'));
 const tabContext = require(path.join(rootDir, 'frontend/js/tab-context.js'));
 const pdfRuntime = require(path.join(rootDir, 'frontend/js/pdf-work-runtime.js'));
 

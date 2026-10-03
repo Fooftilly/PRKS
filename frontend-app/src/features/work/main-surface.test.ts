@@ -1,5 +1,6 @@
 import { nextTick } from 'vue'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import ownerResourceSource from '../../../../frontend/js/owner-resource.js?raw'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
 import videoSource from '../../../../frontend/js/components/works-video.js?raw'
 import {
@@ -63,6 +64,7 @@ function surface(ctx: WorkCtx, over: Partial<WorkMainSurfaceModel> = {}): WorkMa
 }
 
 beforeAll(() => {
+  surfaceWindow.eval(ownerResourceSource)
   surfaceWindow.eval(tabContextSource)
   surfaceWindow.eval(videoSource)
 })

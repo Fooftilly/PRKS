@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 
 const rootDir = path.resolve(__dirname, '../..');
+globalThis.prksOwnerResource = require(path.join(rootDir, 'frontend/js/owner-resource.js'));
 const tabContext = require(path.join(rootDir, 'frontend/js/tab-context.js'));
 globalThis.prksTabLeave = require(path.join(rootDir, 'frontend/js/tab-leave.js'));
 const pdfRuntime = require(path.join(rootDir, 'frontend/js/pdf-work-runtime.js'));
@@ -20,7 +21,11 @@ const {
     prksUnmountTabContext,
     prksIsMainTabContext,
 } = tabContext;
-const { createWorkPdfRuntime, prksHasPendingWorkAnnotationSync } = pdfRuntime;
+const {
+    createWorkPdfRuntime,
+    prksHasPendingWorkAnnotationSync,
+    prksInstallPdfAnnotationPersistenceIfCurrent,
+} = pdfRuntime;
 
 let passed = 0;
 let failed = 0;
@@ -43,6 +48,7 @@ function assertEq(name, got, want) {
 const requests = [];
 const viewers = [];
 let viewerSeq = 0;
+let viewerFactory = null;
 
 global.window = global;
 global.localStorage = {
@@ -66,7 +72,7 @@ global.prksRequest = function (url, opts, extra) {
     });
     return Promise.resolve({ ok: true });
 };
-global.__createPrksPdfViewer = function (opts) {
+function defaultViewerFactory(opts) {
     const viewer = {
         id: ++viewerSeq,
         target: opts.target,
@@ -79,6 +85,10 @@ global.__createPrksPdfViewer = function (opts) {
     };
     viewers.push(viewer);
     return Promise.resolve(viewer);
+}
+viewerFactory = defaultViewerFactory;
+global.__createPrksPdfViewer = function (opts) {
+    return viewerFactory(opts);
 };
 
 const timers = [];
@@ -111,6 +121,7 @@ function resetWorld() {
     requests.length = 0;
     viewers.length = 0;
     timers.length = 0;
+    viewerFactory = defaultViewerFactory;
 }
 
 function hostBox() {
@@ -201,7 +212,13 @@ function assertPdfSourceContract() {
     const legacyPost = pdfSource.indexOf('`/api/works/${workId}/annotations`') !== -1
         && pdfSource.indexOf("method: 'POST'") !== -1;
     assert('legacy annotation POST path is still in works-pdf.js', legacyPost);
-    assert('init still installs the pdf resource', pdfSource.indexOf("ctx.setResource('pdf', runtime, function () {") !== -1);
+    const initStart = pdfSource.indexOf('function initPdfViewerForWork');
+    const initEnd = pdfSource.indexOf('function prksReconcilePdfMutationMode');
+    const initBody = pdfSource.slice(initStart, initEnd);
+    assert('init captures the resource ticket before the deferred timer', initBody.indexOf('ctx.resourceTicket(_pdfGen)') !== -1 && initBody.indexOf('ctx.resourceTicket(_pdfGen)') < initBody.indexOf('setTimeout'));
+    assert('init registers pdf on the captured ticket', initBody.indexOf('ctx.registerResource(_pdfTicket') !== -1 && initBody.indexOf("kind: 'pdf'") !== -1 && initBody.indexOf('suspendable: true') !== -1);
+    assert('init does not use the compatibility setter', initBody.indexOf("ctx.setResource('pdf'") === -1);
+    assert('init keeps the pdf disposer', initBody.indexOf('runtime.destroy();') !== -1 && initBody.indexOf('prksVueDismissWorkPdfAnnotationPopup') !== -1 && initBody.indexOf('prksVueDismissWorkPdfAnnotationDrawer') !== -1);
 }
 
 async function scenarioCurrentMount() {
@@ -212,6 +229,9 @@ async function scenarioCurrentMount() {
     await settle();
     const currentRuntime = current.ctx.getResource('pdf');
     assert('current generation mounts a runtime', !!currentRuntime);
+    assert('current pdf is the registry slot', current.ctx.readResource('pdf') === currentRuntime);
+    assert('current pdf is not in the legacy map', !current.ctx.resources.has('pdf'));
+    assert('registry lists pdf', current.ctx.resourceRegistry.kinds().indexOf('pdf') !== -1);
     assertEq('current runtime work', currentRuntime && currentRuntime.workId, 'work-current');
     assertEq('current host is cleared for the viewer', current.node.innerHTML, '');
     assertEq('current viewer count', viewers.length, 1);
@@ -372,8 +392,17 @@ async function scenarioTabClose() {
     initPdfViewerForWork(closing.ctx, { id: 'work-close', file_path: '/api/pdfs/close' });
     flushLiveTimers();
     await settle();
-    const closingViewer = closing.ctx.getResource('pdf').viewer;
+    const closingRuntime = closing.ctx.getResource('pdf');
+    const closingViewer = closingRuntime.viewer;
+    let closingDisposes = 0;
+    const originalDestroy = closingRuntime.destroy.bind(closingRuntime);
+    closingRuntime.destroy = function () {
+        closingDisposes += 1;
+        originalDestroy();
+    };
     prksDestroyTabContext('closing');
+    prksDestroyTabContext('closing');
+    assertEq('tab close disposes the pdf runtime once', closingDisposes, 1);
     assert('tab close destroys the viewer', closingViewer.destroyed === true);
     assert('tab close drops the context', tabContext.prksGetTabContext('closing') == null);
 }
@@ -410,6 +439,9 @@ async function scenarioWarmParkResume() {
     assert('warm park keeps the host element', warm.ctx.root === warmRoot);
     assert('warm park moves the host into parking', warmRoot.parentNode === parking);
     const viewersBeforeResume = viewers.length;
+    const requestsBeforeResume = requests.length;
+    const generationBeforeResume = warm.ctx.generation;
+    const htmlBeforeResume = warm.node.innerHTML;
     const visible = hostBox();
     const resumed = prksResumeWarmTabContext('warm', visible);
     assert('warm resume returns the same context', resumed === warm.ctx);
@@ -417,6 +449,10 @@ async function scenarioWarmParkResume() {
     assertEq('warm resume does not create a viewer', viewers.length, viewersBeforeResume);
     assertEq('warm resume resizes the existing viewer', warmViewer.resized, 1);
     assert('warm resume places the same host', warm.ctx.root === warmRoot && warmRoot.parentNode === visible);
+    assertEq('warm resume does not prime the file again', requests.length, requestsBeforeResume);
+    assertEq('warm resume does not advance the route generation', warm.ctx.generation, generationBeforeResume);
+    assertEq('warm resume does not repaint the host', warm.node.innerHTML, htmlBeforeResume);
+    assert('warm resume keeps the registry slot', warm.ctx.readResource('pdf') === warmRuntime);
 }
 
 async function scenarioWarmEviction() {
@@ -571,6 +607,274 @@ async function scenarioPendingLeave(app) {
     assertEq('destroyed owner does not commit', commits, 1);
 }
 
+function watchDestroy(runtime) {
+    let count = 0;
+    const original = runtime.destroy.bind(runtime);
+    runtime.destroy = function () {
+        count += 1;
+        original();
+    };
+    return function () { return count; };
+}
+
+async function scenarioColdParkTicket() {
+    resetWorld();
+    const parked = openTab('cold-ticket');
+    const seen = [];
+    const originalTicket = parked.ctx.resourceTicket.bind(parked.ctx);
+    parked.ctx.resourceTicket = function (generation) {
+        const ticket = originalTicket(generation);
+        seen.push(ticket);
+        return ticket;
+    };
+    initPdfViewerForWork(parked.ctx, { id: 'work-cold-ticket', file_path: '/api/pdfs/cold-ticket' });
+    assertEq('setup captures one ticket before the timer runs', seen.length, 1);
+    assert('captured ticket is current before the timer', parked.ctx.resourceRegistry.accepts(seen[0]));
+    assertEq('timer has not run yet', viewers.length, 0);
+    const lateTimer = timers[timers.length - 1];
+    global.clearTimeout = function () {};
+    prksUnmountTabContext('cold-ticket', 'park');
+    assert('cold park rejects the captured ticket', !parked.ctx.resourceRegistry.accepts(seen[0]));
+    lateTimer.fn();
+    await settle();
+    assertEq('cold park before registration creates no viewer', viewers.length, 0);
+    assert('cold park before registration installs nothing', parked.ctx.getResource('pdf') == null);
+
+    parked.ctx.mount(hostBox());
+    const node = { innerHTML: 'remounted', tabId: 'cold-ticket' };
+    parked.ctx.root.querySelector = function (selector) {
+        if (String(selector).indexOf('pdf-viewer') !== -1) return node;
+        return null;
+    };
+    parked.node = node;
+    assert('remount does not revive the pre-park ticket', !parked.ctx.resourceRegistry.accepts(seen[0]));
+    lateTimer.fn();
+    await settle();
+    assertEq('remount does not let the pre-park timer mount', viewers.length, 0);
+    assert('remount does not install the pre-park runtime', parked.ctx.getResource('pdf') == null);
+    assertEq('remount leaves the new host untouched', node.innerHTML, 'remounted');
+
+    global.clearTimeout = function (id) {
+        for (let i = 0; i < timers.length; i++) {
+            if (timers[i].id === id) timers[i].dead = true;
+        }
+    };
+    lateTimer.dead = true;
+    const beforeFresh = seen.length;
+    initPdfViewerForWork(parked.ctx, { id: 'work-fresh', file_path: '/api/pdfs/fresh' });
+    assert('a fresh lifetime captures a new ticket', seen.length === beforeFresh + 1);
+    assert('the fresh ticket is current', parked.ctx.resourceRegistry.accepts(seen[seen.length - 1]));
+    assert('the pre-park ticket stays rejected', !parked.ctx.resourceRegistry.accepts(seen[0]));
+    assertEq('fresh setup mounts', flushLiveTimers(), 1);
+    await settle();
+    const fresh = parked.ctx.getResource('pdf');
+    assert('fresh ticket registers a runtime', !!fresh && fresh.workId === 'work-fresh');
+    assert('fresh runtime is the registry slot', parked.ctx.readResource('pdf') === fresh);
+    assertEq('fresh setup creates one viewer', viewers.length, 1);
+}
+
+async function scenarioReplaceDisposesOnce() {
+    resetWorld();
+    const replaced = openTab('replace');
+    initPdfViewerForWork(replaced.ctx, { id: 'work-first', file_path: '/api/pdfs/first' });
+    flushLiveTimers();
+    await settle();
+    const first = replaced.ctx.getResource('pdf');
+    const firstViewer = first.viewer;
+    const destroys = watchDestroy(first);
+    initPdfViewerForWork(replaced.ctx, { id: 'work-second', file_path: '/api/pdfs/second' });
+    flushLiveTimers();
+    await settle();
+    const second = replaced.ctx.getResource('pdf');
+    assertEq('replacing a pdf disposes the previous runtime once', destroys(), 1);
+    assert('replacement runtime is distinct', second && second !== first && second.workId === 'work-second');
+    assert('replacement is the registry slot', replaced.ctx.readResource('pdf') === second);
+    assert('previous viewer is destroyed', firstViewer.destroyed === true);
+    assert('replacement viewer stays', second.viewer && second.viewer.destroyed !== true);
+    assert('replacement is not in the legacy map', !replaced.ctx.resources.has('pdf'));
+}
+
+async function scenarioPaneIsolation() {
+    resetWorld();
+    global.prksWorkspaceSnapshot = function () {
+        return { mainTabId: 'iso-main', focusedTabId: 'iso-main' };
+    };
+    const main = openTab('iso-main');
+    const side = openTab('iso-side');
+    initPdfViewerForWork(main.ctx, { id: 'work-main', file_path: '/api/pdfs/main' });
+    initPdfViewerForWork(side.ctx, { id: 'work-side', file_path: '/api/pdfs/side' });
+    flushLiveTimers();
+    await settle();
+    const mainRuntime = main.ctx.getResource('pdf');
+    const sideRuntime = side.ctx.getResource('pdf');
+    const mainDestroys = watchDestroy(mainRuntime);
+    const sideDestroys = watchDestroy(sideRuntime);
+    prksUnmountTabContext('iso-side', 'park');
+    assertEq('cold-parking secondary disposes its pdf once', sideDestroys(), 1);
+    assert('cold-parking secondary leaves main pdf', main.ctx.getResource('pdf') === mainRuntime);
+    assert('cold-parking secondary leaves the main viewer', mainRuntime.viewer.destroyed !== true);
+    assertEq('cold-parking secondary does not dispose main', mainDestroys(), 0);
+
+    const sideAgain = openTab('iso-side-2');
+    initPdfViewerForWork(sideAgain.ctx, { id: 'work-side-2', file_path: '/api/pdfs/side-2' });
+    flushLiveTimers();
+    await settle();
+    const sideAgainRuntime = sideAgain.ctx.getResource('pdf');
+    const sideAgainDestroys = watchDestroy(sideAgainRuntime);
+    prksUnmountTabContext('iso-main', 'park');
+    assertEq('cold-parking main disposes its pdf once', mainDestroys(), 1);
+    assert('cold-parking main leaves secondary pdf', sideAgain.ctx.getResource('pdf') === sideAgainRuntime);
+    assert('cold-parking main leaves the secondary viewer', sideAgainRuntime.viewer.destroyed !== true);
+    assertEq('cold-parking main does not dispose secondary', sideAgainDestroys(), 0);
+
+    const mainB = openTab('iso-main-b');
+    const sideB = openTab('iso-side-b');
+    initPdfViewerForWork(mainB.ctx, { id: 'work-main-b', file_path: '/api/pdfs/main-b' });
+    initPdfViewerForWork(sideB.ctx, { id: 'work-side-b', file_path: '/api/pdfs/side-b' });
+    flushLiveTimers();
+    await settle();
+    const mainBRuntime = mainB.ctx.getResource('pdf');
+    const sideBRuntime = sideB.ctx.getResource('pdf');
+    const mainBViewer = mainBRuntime.viewer;
+    const sideBViewer = sideBRuntime.viewer;
+    prksDestroyTabContext('iso-main-b');
+    assert('destroying main leaves secondary pdf', sideB.ctx.getResource('pdf') === sideBRuntime);
+    assert('destroying main leaves the secondary viewer', sideBViewer.destroyed !== true);
+    prksDestroyTabContext('iso-side-b');
+    assert('destroying secondary after main does not revive main', tabContext.prksGetTabContext('iso-main-b') == null);
+    assert('destroyed main pdf stays gone', mainB.ctx.getResource('pdf') == null);
+    assert('destroyed secondary pdf is gone', sideB.ctx.getResource('pdf') == null);
+    assert('destroyed secondary viewer is gone', sideBViewer.destroyed === true);
+    assert('destroyed main viewer is gone', mainBViewer.destroyed === true);
+}
+
+async function scenarioRoleSwap() {
+    resetWorld();
+    let mainId = 'role-main';
+    global.prksWorkspaceSnapshot = function () {
+        return { mainTabId: mainId, focusedTabId: mainId };
+    };
+    const main = openTab('role-main');
+    const side = openTab('role-side');
+    initPdfViewerForWork(main.ctx, { id: 'work-role-main', file_path: '/api/pdfs/role-main' });
+    initPdfViewerForWork(side.ctx, { id: 'work-role-side', file_path: '/api/pdfs/role-side' });
+    flushLiveTimers();
+    await settle();
+    const mainRuntime = main.ctx.getResource('pdf');
+    const sideRuntime = side.ctx.getResource('pdf');
+    const mainViewer = mainRuntime.viewer;
+    const sideViewer = sideRuntime.viewer;
+    const mainDestroys = watchDestroy(mainRuntime);
+    const sideDestroys = watchDestroy(sideRuntime);
+    const viewersBefore = viewers.length;
+    const requestsBefore = requests.length;
+    mainId = 'role-side';
+    assert('role swap makes the secondary context main', prksIsMainTabContext(side.ctx));
+    assert('role swap demotes the previous main', !prksIsMainTabContext(main.ctx));
+    assert('role swap keeps the main pdf runtime', main.ctx.getResource('pdf') === mainRuntime);
+    assert('role swap keeps the secondary pdf runtime', side.ctx.getResource('pdf') === sideRuntime);
+    assert('role swap keeps both viewers', mainRuntime.viewer === mainViewer && sideRuntime.viewer === sideViewer);
+    assertEq('role swap does not dispose main', mainDestroys(), 0);
+    assertEq('role swap does not dispose secondary', sideDestroys(), 0);
+    assertEq('role swap does not create a viewer', viewers.length, viewersBefore);
+    assertEq('role swap does not refetch', requests.length, requestsBefore);
+    assert('role swap does not destroy either viewer', mainViewer.destroyed !== true && sideViewer.destroyed !== true);
+}
+
+async function scenarioStaleCompletion() {
+    resetWorld();
+    const owner = openTab('stale-completion');
+    const pending = [];
+    viewerFactory = function (opts) {
+        return new Promise(function (resolve) {
+            pending.push(function () { resolve(defaultViewerFactory(opts)); });
+        });
+    };
+    const generationA = owner.ctx.generation;
+    initPdfViewerForWork(owner.ctx, { id: 'work-a', file_path: '/api/pdfs/a' });
+    flushLiveTimers();
+    await settle();
+    const runtimeA = owner.ctx.getResource('pdf');
+    assert('A is registered before its viewer resolves', !!runtimeA);
+    assertEq('A viewer is still pending', pending.length, 1);
+    owner.ctx.beginRoute({ name: 'work', hash: '#/works/b' });
+    const node = { innerHTML: 'work-b', tabId: 'stale-completion' };
+    owner.ctx.root.querySelector = function (selector) {
+        if (String(selector).indexOf('pdf-viewer') !== -1) return node;
+        return null;
+    };
+    initPdfViewerForWork(owner.ctx, { id: 'work-b', file_path: '/api/pdfs/b' });
+    flushLiveTimers();
+    await settle();
+    const runtimeB = owner.ctx.getResource('pdf');
+    assert('B replaced A', runtimeB && runtimeB !== runtimeA && runtimeB.workId === 'work-b');
+    node.innerHTML = 'painted-b';
+    const releaseA = pending[0];
+    releaseA();
+    await settle();
+    assert('stale viewer completion does not become B', runtimeB.viewer == null);
+    assert('stale viewer completion does not replace B', owner.ctx.getResource('pdf') === runtimeB);
+    assertEq('stale viewer completion leaves B host', node.innerHTML, 'painted-b');
+    const viewerA = viewers[0];
+    assert('stale viewer is destroyed', viewerA && viewerA.destroyed === true);
+    const releaseB = pending[1];
+    releaseB();
+    await settle();
+    const viewerB = runtimeB.viewer;
+    assert('B viewer attaches after its own completion', viewerB && viewerB.destroyed !== true && viewerB !== viewerA);
+    let mutated = 0;
+    const installed = prksInstallPdfAnnotationPersistenceIfCurrent(
+        owner.ctx,
+        generationA,
+        runtimeA,
+        viewerA,
+        runtimeA.viewerSetupToken,
+        function () {
+            mutated += 1;
+            runtimeB.workId = 'hijacked';
+            runtimeB.viewer = viewerA;
+        }
+    );
+    assert('stale persistence completion does not install', installed === false);
+    assertEq('stale persistence completion does not mutate B', mutated, 0);
+    assert('B keeps its work and viewer', runtimeB.workId === 'work-b' && runtimeB.viewer === viewerB);
+}
+
+async function scenarioWarmPendingLeave() {
+    resetWorld();
+    const leaving = openTab('warm-pending');
+    const pendingRuntime = createWorkPdfRuntime({ workId: 'work-warm-pending' });
+    leaving.ctx.setResource('pdf', pendingRuntime, function () { pendingRuntime.destroy(); });
+    pendingRuntime.syncState.pendingChanges = true;
+    leaving.ctx.lastResolvedRoute = { name: 'work', canonicalHash: '#/works/warm-pending', hash: '#/works/warm-pending' };
+    global.prksParseRoute = function (hash) {
+        const value = String(hash || '');
+        if (value.indexOf('#/works/') === 0) return { name: 'work', canonicalHash: value, hash: value };
+        return { name: 'folders', canonicalHash: value, hash: value };
+    };
+    assert('warm park keeps the pending pdf', prksWarmParkTabContext('warm-pending', hostBox()) === true);
+    assert('warm-suspended pdf stays readable', leaving.ctx.getResource('pdf') === pendingRuntime);
+    assertEq('warm-suspended pdf still reports pending sync', prksHasPendingWorkAnnotationSync(leaving.ctx), true);
+    const prompts = [];
+    global.confirm = function (message) {
+        prompts.push(message);
+        return false;
+    };
+    let commits = 0;
+    const denied = await runPdfLeave(leaving.ctx, '#/folders', function () {
+        commits += 1;
+        return true;
+    });
+    assertEq('warm-suspended pending sync blocks leave', denied && denied.status, 'rejected-pending-pdf-sync');
+    assertEq('warm-suspended pending sync confirms once', prompts.length, 1);
+    assertEq('warm-suspended pending sync does not commit', commits, 0);
+    assert(
+        'warm-suspended pending sync uses the existing confirm',
+        prompts[0] === 'PDF annotation sync still running. Leave page before all changes save to server?'
+    );
+    assert('denied warm leave keeps the pdf', leaving.ctx.getResource('pdf') === pendingRuntime && leaving.ctx.suspended === true);
+}
+
 async function main() {
     assertPdfSourceContract();
     const app = fs.readFileSync(path.join(rootDir, 'frontend/js/app.js'), 'utf8');
@@ -586,6 +890,12 @@ async function main() {
     await scenarioWarmEviction();
     await scenarioOfflineReopen();
     await scenarioPendingLeave(app);
+    await scenarioColdParkTicket();
+    await scenarioReplaceDisposesOnce();
+    await scenarioPaneIsolation();
+    await scenarioRoleSwap();
+    await scenarioStaleCompletion();
+    await scenarioWarmPendingLeave();
     console.log((failed ? 'FAILED ' : 'OK ') + passed + ' passed, ' + failed + ' failed');
     process.exit(failed ? 1 : 0);
 }
