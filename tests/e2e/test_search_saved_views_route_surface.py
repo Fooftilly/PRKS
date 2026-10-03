@@ -140,6 +140,48 @@ class SearchSavedViewsRouteSurfaceTests(unittest.TestCase):
             page.locator(".prks-tile--main .saved-view-detail .prks-page-title").inner_text(),
             "E2E Renamed Search",
         )
+
+        # An open detail follows writes made by any other surface through the
+        # shared records service: a rename re-resolves it in place and a
+        # delete leaves it not-found, with no navigation. (Saved View routes
+        # are Main-only, so the other surface writes through the bridge.)
+        view_id = view_hash.rsplit("/", 1)[1]
+        page.evaluate(
+            """(id) => window.prksSavedViewRecords.update(id, {
+                name: 'E2E Cross-Surface Search',
+                search: { mode: 'all', q: 'Related Work', tag: '', author: '', publisher: '' },
+            })""",
+            view_id,
+        )
+        page.wait_for_function(
+            """() => {
+                const title = document.querySelector('.prks-tile--main .saved-view-detail .prks-page-title');
+                return !!title && title.textContent.trim() === 'E2E Cross-Surface Search';
+            }""",
+            timeout=15000,
+        )
+        self.assertEqual(page.evaluate("() => location.hash"), view_hash)
+        page.evaluate("(id) => window.prksSavedViewRecords.remove(id)", view_id)
+        page.wait_for_selector(
+            ".prks-tile--main [data-prks-saved-view-not-found]", timeout=15000
+        )
+        self.assertEqual(page.evaluate("() => location.hash"), view_hash)
+
+        # Deleting from the detail itself still sends that owner to the index.
+        second_id = page.evaluate(
+            """async () => (await window.prksSavedViewRecords.create({
+                name: 'E2E Second Search',
+                search: { mode: 'all', q: 'Related Work', tag: '', author: '', publisher: '' },
+            })).id"""
+        )
+        page.evaluate("(id) => prksNavigate('#/views/' + encodeURIComponent(id))", second_id)
+        page.wait_for_function(
+            """() => {
+                const title = document.querySelector('.prks-tile--main .saved-view-detail .prks-page-title');
+                return !!title && title.textContent.trim() === 'E2E Second Search';
+            }""",
+            timeout=15000,
+        )
         page.locator(".prks-tile--main #prks-saved-view-delete").click()
         page.wait_for_selector("#prks-modal-confirm-ok", state="visible", timeout=15000)
         page.locator("#prks-modal-confirm-ok").click()
@@ -152,7 +194,6 @@ class SearchSavedViewsRouteSurfaceTests(unittest.TestCase):
             "No Saved Views yet.",
             page.locator(".prks-tile--main .saved-views-page").inner_text(),
         )
-
 
 if __name__ == "__main__":
     unittest.main()

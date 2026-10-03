@@ -1,5 +1,5 @@
 import { MutationObserver, type QueryClient } from '@tanstack/vue-query'
-import { PRKS_API_FALLBACK_ERROR, PrksApiError } from '../../api/http'
+import { isAbortError, PRKS_API_FALLBACK_ERROR, PrksApiError } from '../../api/http'
 import {
   createSavedView,
   deleteSavedView,
@@ -59,6 +59,15 @@ export interface SavedViewRecords {
    * a query observer (the open command palette). Returns the unsubscribe.
    */
   onWrite(listener: () => void): () => void
+  /**
+   * Keep one painted record honest for as long as `signal` lives (a route's
+   * abort signal). After each Saved View write from any surface it re-reads
+   * `view`. If the server's record is no longer the one painted, because it
+   * was renamed, redefined or deleted, or if it can no longer be read, it
+   * calls `onChange` once and stops. An unchanged record stays quiet. When
+   * `signal` aborts it stops listening and drops any re-read in flight.
+   */
+  follow(view: SavedView, signal: AbortSignal, onChange: () => void): void
 }
 
 /** Readers still waiting on each detail key, page-wide. */
@@ -116,7 +125,7 @@ export function savedViewRecords(queryClient?: QueryClient): SavedViewRecords {
     }
   }
 
-  return {
+  const records: SavedViewRecords = {
     list() {
       return client().fetchQuery({
         queryKey: prksQueryKeys.savedViews.list(),
@@ -176,5 +185,52 @@ export function savedViewRecords(queryClient?: QueryClient): SavedViewRecords {
         writeListeners.delete(listener)
       }
     },
+    follow(view, signal, onChange) {
+      if (signal.aborted) return
+      const painted = JSON.stringify(view)
+      let done = false
+      let checking = false
+      let again = false
+      const stop = () => {
+        if (done) return
+        done = true
+        unsubscribe()
+        signal.removeEventListener('abort', stop)
+      }
+      // Writes that land while a re-read is in flight are folded into one
+      // more re-read, so the last write is always checked.
+      const check = async (): Promise<void> => {
+        if (checking) {
+          again = true
+          return
+        }
+        checking = true
+        try {
+          do {
+            again = false
+            let changed: boolean
+            try {
+              changed = JSON.stringify(await records.get(view.id, signal)) !== painted
+            } catch (err) {
+              if (done || isAbortError(err)) return
+              changed = true
+            }
+            if (done) return
+            if (changed) {
+              stop()
+              onChange()
+              return
+            }
+          } while (again)
+        } finally {
+          checking = false
+        }
+      }
+      const unsubscribe = records.onWrite(() => {
+        void check()
+      })
+      signal.addEventListener('abort', stop, { once: true })
+    },
   }
+  return records
 }

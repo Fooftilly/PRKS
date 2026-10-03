@@ -46,6 +46,7 @@ function fakeRecords(overrides: Partial<SavedViewRecords> = {}): SavedViewRecord
     remove: vi.fn(async () => {}),
     actionMessage: savedViewActionMessage,
     onWrite: () => () => {},
+    follow: () => {},
     ...overrides,
   }
 }

@@ -128,6 +128,10 @@ class FrontendSavedViewsTests(unittest.TestCase):
         detail_body = app[detail_at: detail_at + 2400]
         self.assertIn("window.prksSavedViewRecords.get(viewId, routeSignal)", detail_body)
         self.assertIn("availability: 'error'", detail_body)
+        detail_case = app[detail_at: app.index("case 'progress': {", detail_at)]
+        self.assertIn("window.prksSavedViewRecords.follow(view, routeSignal,", detail_case)
+        self.assertIn("prksRenderTabRoute(ctx, route.canonicalHash)", detail_case)
+        self.assertNotIn("leaveApproved", detail_case)
         self.assertNotIn("renderSavedViewsIndex", app)
         src = _read(_SV)
         for name in (

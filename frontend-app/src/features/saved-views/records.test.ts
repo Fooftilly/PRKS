@@ -202,4 +202,118 @@ describe('Saved View records', () => {
     server.release()
     await expect(staying).resolves.toMatchObject({ id: 'SV-1', name: 'Held' })
   })
+
+  /** One stored view that PATCH renames and DELETE removes; POST adds another. */
+  function viewServer() {
+    let stored: SavedView | null = view('SV-1', 'First')
+    let failReads = false
+    let gate: Promise<void> | null = null
+    let reads = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init: RequestInit = {}) => {
+        const method = init.method ?? 'GET'
+        if (method === 'GET') {
+          reads += 1
+          if (gate) await gate
+          if (init.signal?.aborted) throw new DOMException('aborted', 'AbortError')
+          if (failReads) return new Response(JSON.stringify(null), { status: 500 })
+          if (!stored) return new Response(JSON.stringify({ error: 'Saved View not found.' }), { status: 404 })
+          return new Response(JSON.stringify(stored), { status: 200 })
+        }
+        if (method === 'POST') return new Response(JSON.stringify(view('SV-2', 'Other')), { status: 201 })
+        if (method === 'DELETE') {
+          stored = null
+          return new Response(JSON.stringify({ status: 'deleted' }), { status: 200 })
+        }
+        const body = JSON.parse(String(init.body)) as { name: string }
+        stored = { ...view('SV-1', body.name), updated_at: '2026-10-03 12:00:00' }
+        expect(url).toBe('/api/saved-views/SV-1')
+        return new Response(JSON.stringify(stored), { status: 200 })
+      }),
+    )
+    return {
+      failReads: () => {
+        failReads = true
+      },
+      /** Hold every GET until the returned release is called. */
+      holdReads: () => {
+        let release: () => void = () => {}
+        gate = new Promise((resolve) => {
+          release = resolve
+        })
+        return () => {
+          gate = null
+          release()
+        }
+      },
+      reads: () => reads,
+    }
+  }
+
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+  it('follows a painted record: quiet for unrelated writes, once for a rename made elsewhere', async () => {
+    viewServer()
+    const client = createPrksQueryClient()
+    const detail = savedViewRecords(client)
+    const painted = await detail.get('SV-1')
+    const route = new AbortController()
+    const changed = vi.fn()
+    detail.follow(painted!, route.signal, changed)
+
+    const elsewhere = savedViewRecords(client)
+    await elsewhere.create({ name: 'Other', search: { ...SEARCH } })
+    await settle()
+    expect(changed).not.toHaveBeenCalled()
+
+    await elsewhere.update('SV-1', { name: 'Renamed', search: { ...SEARCH } })
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1))
+    await elsewhere.update('SV-1', { name: 'Again', search: { ...SEARCH } })
+    await settle()
+    expect(changed).toHaveBeenCalledTimes(1)
+  })
+
+  it('follows a painted record to its deletion or a failed re-read', async () => {
+    const server = viewServer()
+    const client = createPrksQueryClient()
+    const records = savedViewRecords(client)
+    const painted = (await records.get('SV-1'))!
+
+    const deleted = vi.fn()
+    records.follow(painted, new AbortController().signal, deleted)
+    await records.remove('SV-1')
+    await vi.waitFor(() => expect(deleted).toHaveBeenCalledTimes(1))
+
+    server.failReads()
+    const failed = vi.fn()
+    records.follow(painted, new AbortController().signal, failed)
+    await records.create({ name: 'Other', search: { ...SEARCH } })
+    await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1))
+  })
+
+  it('stops following when its route signal aborts, including a re-read in flight', async () => {
+    const server = viewServer()
+    const client = createPrksQueryClient()
+    const records = savedViewRecords(client)
+    const painted = (await records.get('SV-1'))!
+    const route = new AbortController()
+    const changed = vi.fn()
+    records.follow(painted, route.signal, changed)
+    const release = server.holdReads()
+    await records.update('SV-1', { name: 'Renamed', search: { ...SEARCH } })
+    await vi.waitFor(() => expect(server.reads()).toBe(2))
+    route.abort()
+    release()
+    await settle()
+    await records.update('SV-1', { name: 'Again', search: { ...SEARCH } })
+    await settle()
+    expect(changed).not.toHaveBeenCalled()
+
+    const gone = vi.fn()
+    records.follow(painted, AbortSignal.abort(), gone)
+    await records.remove('SV-1')
+    await settle()
+    expect(gone).not.toHaveBeenCalled()
+  })
 })

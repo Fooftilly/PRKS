@@ -4111,6 +4111,13 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     generation: generation,
                 });
                 titleOpts = { entityTitle: view.name || 'Saved View' };
+                // A write from another surface re-resolves this owner through
+                // prksTabLeave; the follow ends with this route's signal.
+                if (routeSignal) {
+                    window.prksSavedViewRecords.follow(view, routeSignal, function () {
+                        if (!stale()) void prksRenderTabRoute(ctx, route.canonicalHash);
+                    });
+                }
                 break;
             }
             case 'progress': {
