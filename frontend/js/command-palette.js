@@ -410,6 +410,8 @@
         playlistPromise: null,
         savedViewPromise: null,
         savedViewUnwatch: null,
+        savedViewLoading: false,
+        savedViewReloadDue: false,
         conceptPromise: null,
         positionPromise: null,
         argumentPromise: null,
@@ -1364,6 +1366,8 @@
         state.groupPromise = null;
         state.playlistPromise = null;
         state.savedViewPromise = null;
+        state.savedViewLoading = false;
+        state.savedViewReloadDue = false;
         state.conceptPromise = null;
         state.positionPromise = null;
         state.argumentPromise = null;
@@ -1411,20 +1415,32 @@
         const listSaved = records && typeof records.list === 'function'
             ? function () { return records.list(); }
             : null;
-        state.savedViewPromise = wrapCatalog(listSaved, function (v) { state.savedViewCache = v; });
+        const session = state.sessionGen;
+        state.savedViewLoading = true;
+        state.savedViewReloadDue = false;
+        state.savedViewPromise = wrapCatalog(listSaved, function (v) { state.savedViewCache = v; })
+            .then(function (list) {
+                if (session !== state.sessionGen) return list;
+                state.savedViewLoading = false;
+                if (state.savedViewReloadDue && state.open) loadSavedViews();
+                return list;
+            });
     }
 
     /**
      * A Saved View write anywhere on the page re-reads the open palette's
      * list, so a renamed or deleted view does not linger until it reopens.
+     * A write during a read queues one more read after it settles; several
+     * such writes still queue one.
      */
     function watchSavedViewWrites() {
         unwatchSavedViewWrites();
         const records = root.prksSavedViewRecords;
         if (!records || typeof records.onWrite !== 'function') return;
         state.savedViewUnwatch = records.onWrite(function () {
-            if (!state.open) return;
-            if (state.savedViewPromise) loadSavedViews();
+            if (!state.open || !state.savedViewPromise) return;
+            if (state.savedViewLoading) state.savedViewReloadDue = true;
+            else loadSavedViews();
         });
     }
 
