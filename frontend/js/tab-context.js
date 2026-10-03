@@ -2,7 +2,8 @@
  * Per-workspace-tab runtime. Cold-parked contexts are inert. Up to three PDF
  * contexts may instead be warm-suspended with their DOM/runtime preserved.
  * Owner-registry resources that are not suspendable are released on that warm
- * suspend. Role changes do not suspend, release, or replace them.
+ * suspend. Warm park does not invalidate a resource ticket. Cold park does.
+ * Role changes do not suspend, release, or replace them.
  */
 (function (root) {
     'use strict';
@@ -211,11 +212,16 @@
         ctx.ownerToken = ownerToken;
         const resourceApi = root.prksOwnerResource;
         if (resourceApi && typeof resourceApi.createOwnerResourceRegistry === 'function') {
+            let resourceEpoch = 0;
             const resourceHost = {
                 ownerId: id,
                 ownerToken: ownerToken,
                 generation: function () { return ctx.generation; },
-                alive: function () { return !ctx.destroyed; },
+                alive: function () {
+                    return !ctx.destroyed && (ctx.mounted || ctx.suspended);
+                },
+                epoch: function () { return resourceEpoch; },
+                advanceEpoch: function () { resourceEpoch += 1; },
             };
             ctx.resourceRegistry = resourceApi.createOwnerResourceRegistry(resourceHost);
             ctx.resourceTicket = function (generation) {
@@ -329,6 +335,20 @@
         ctx.setResource = function (name, value, disposer) {
             if (!assertAlive()) return value;
             const key = String(name);
+            if (key === 'researchGraph' && ctx.resourceRegistry) {
+                const orphan = ctx.resources.get(key);
+                ctx.resources.delete(key);
+                if (orphan) safeCall(orphan.disposer, key);
+                const ticket = typeof ctx.resourceTicket === 'function' ? ctx.resourceTicket() : null;
+                const result = ctx.resourceRegistry.register(ticket, {
+                    kind: 'researchGraph',
+                    value: value,
+                    suspendable: false,
+                    dispose: function () { safeCall(disposer, key); },
+                });
+                if (result === 'rejected') return value;
+                return value;
+            }
             ctx.clearResource(key);
             ctx.resources.set(key, { value: value, disposer: disposer });
             return value;
@@ -347,6 +367,9 @@
             const key = String(name);
             if (key === 'researchGraph' && ctx.resourceRegistry) {
                 ctx.resourceRegistry.dispose('researchGraph');
+                const orphan = ctx.resources.get(key);
+                ctx.resources.delete(key);
+                if (orphan) safeCall(orphan.disposer, key);
                 return;
             }
             const rec = ctx.resources.get(key);

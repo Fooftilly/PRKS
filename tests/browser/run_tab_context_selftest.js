@@ -421,7 +421,8 @@ assertEq('cleanup continues after throw', boom, 11);
     let warmGraphDisposes = 0;
     let warmPdfDisposes = 0;
     const pdf = { id: 'pdf' };
-    warm.registerResource(warm.resourceTicket(), {
+    const warmTicket = warm.resourceTicket();
+    warm.registerResource(warmTicket, {
         kind: 'researchGraph',
         value: { id: 'warm-graph' },
         suspendable: false,
@@ -440,7 +441,7 @@ assertEq('cleanup continues after throw', boom, 11);
     });
     assertEq('parked owner rejects a later graph', lateGraph, 'rejected');
     assertEq('parked owner does not attach the later graph', warm.getResource('researchGraph'), undefined);
-    assert('warm park leaves the ticket current', warm.resourceRegistry.accepts(warm.resourceTicket()));
+    assert('warm park leaves the captured ticket current', warm.resourceRegistry.accepts(warmTicket));
     let latePdfSuspends = 0;
     let latePdfResumes = 0;
     let latePdfDisposes = 0;
@@ -522,6 +523,94 @@ assertEq('cleanup continues after throw', boom, 11);
     assertEq('replacement context rejects the old owner ticket', foreign, 'rejected');
     assertEq('old ticket does not dispose a graph it never owned', foreignDisposes, 0);
     assertEq('replacement context has no planted graph', replacement.getResource('researchGraph'), undefined);
+
+    const parked = prksEnsureTabContext('resource-cold-ticket');
+    parked.mount(makeHost());
+    const parkedGeneration = parked.beginRoute({ name: 'research-graph', hash: '#/graph' });
+    const parkedTicket = parked.resourceTicket();
+    let parkedDisposes = 0;
+    parked.registerResource(parkedTicket, {
+        kind: 'researchGraph',
+        value: { id: 'before-park' },
+        dispose: function () { parkedDisposes += 1; },
+    });
+    prksUnmountTabContext('resource-cold-ticket', 'park');
+    assert('cold park leaves the context alive', !parked.destroyed);
+    assertEq('cold park does not change the route generation', parked.generation, parkedGeneration);
+    let lateDisposes = 0;
+    const late = parked.registerResource(parkedTicket, {
+        kind: 'researchGraph',
+        value: { id: 'late' },
+        dispose: function () { lateDisposes += 1; },
+    });
+    assertEq('cold park rejects a ticket captured while mounted', late, 'rejected');
+    assertEq('cold park does not attach the late graph', parked.getResource('researchGraph'), undefined);
+    assertEq('rejected late registration keeps its disposer', lateDisposes, 0);
+    assertEq('cold park disposed the mounted graph once', parkedDisposes, 1);
+    assert('cold park does not leave the captured ticket current', !parked.resourceRegistry.accepts(parkedTicket));
+
+    parked.mount(makeHost());
+    assert('remount does not revive the pre-park ticket', !parked.resourceRegistry.accepts(parkedTicket));
+    const remountLate = parked.registerResource(parkedTicket, {
+        kind: 'researchGraph',
+        value: { id: 'remount-old' },
+        dispose: function () { lateDisposes += 1; },
+    });
+    assertEq('remount rejects the pre-park ticket', remountLate, 'rejected');
+    assertEq('remount does not attach the pre-park graph', parked.getResource('researchGraph'), undefined);
+    assertEq('remount does not run the rejected disposer', lateDisposes, 0);
+    assertEq('remount keeps the route generation', parked.generation, parkedGeneration);
+    const afterRemount = parked.registerResource(parked.resourceTicket(), {
+        kind: 'researchGraph',
+        value: { id: 'after-remount' },
+        dispose: function () { lateDisposes += 1; },
+    });
+    assertEq('a ticket taken after remount attaches', afterRemount, 'attached');
+    assertEq('remounted owner reads the new graph', parked.getResource('researchGraph').id, 'after-remount');
+
+    const beforeRoute = parked.resourceTicket();
+    const nextGeneration = parked.beginRoute({ name: 'research-graph', hash: '#/graph?next=1' });
+    assert('beginRoute stays mounted', parked.mounted);
+    assertEq('beginRoute advances generation', nextGeneration, parkedGeneration + 1);
+    let routeDisposer = 0;
+    const routeAttach = parked.registerResource(parked.resourceTicket(), {
+        kind: 'researchGraph',
+        value: { id: 'after-route' },
+        dispose: function () { routeDisposer += 1; },
+    });
+    assertEq('beginRoute accepts the new generation', routeAttach, 'attached');
+    assertEq('beginRoute graph is readable', parked.getResource('researchGraph').id, 'after-route');
+    const staleRoute = parked.registerResource(beforeRoute, {
+        kind: 'researchGraph',
+        value: { id: 'stale-route' },
+        dispose: function () { routeDisposer += 1; },
+    });
+    assertEq('beginRoute rejects the previous ticket', staleRoute, 'rejected');
+    assertEq('beginRoute keeps the new graph', parked.getResource('researchGraph').id, 'after-route');
+    assertEq('rejected beginRoute registration keeps its disposer', routeDisposer, 0);
+
+    const stored = prksEnsureTabContext('resource-set');
+    stored.mount(makeHost());
+    stored.beginRoute({ name: 'research-graph', hash: '#/graph' });
+    let firstDispose = 0;
+    const graphValue = { id: 'via-set' };
+    stored.setResource('researchGraph', graphValue, function () { firstDispose += 1; });
+    assert('setResource researchGraph is readable', stored.getResource('researchGraph') === graphValue);
+    assert('setResource researchGraph skips the legacy map', !stored.resources.has('researchGraph'));
+    let secondDispose = 0;
+    stored.setResource('researchGraph', { id: 'via-set-2' }, function () { secondDispose += 1; });
+    assertEq('setResource replace disposes the first graph once', firstDispose, 1);
+    assertEq('setResource replace keeps the new disposer', secondDispose, 0);
+    assert('replaced setResource value is readable', stored.getResource('researchGraph').id === 'via-set-2');
+    assert('replaced setResource still skips the legacy map', !stored.resources.has('researchGraph'));
+    stored.unmount('park');
+    let rejectedDispose = 0;
+    stored.setResource('researchGraph', { id: 'after-park' }, function () { rejectedDispose += 1; });
+    assertEq('setResource after cold park does not attach', stored.getResource('researchGraph'), undefined);
+    assert('setResource after cold park leaves no legacy entry', !stored.resources.has('researchGraph'));
+    assertEq('rejected setResource does not run the new disposer', rejectedDispose, 0);
+    assertEq('cold park disposes the setResource graph once', secondDispose, 1);
+
     prksDestroyAllTabContexts();
 }
 

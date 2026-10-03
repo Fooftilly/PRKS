@@ -17,6 +17,8 @@ var prksOwnerResource = (function(exports) {
 			if (ticket.ownerToken !== host.ownerToken) return false;
 			if (ticket.ownerId !== host.ownerId) return false;
 			if (typeof ticket.generation !== "number") return false;
+			if (typeof ticket.epoch !== "number") return false;
+			if (ticket.epoch !== host.epoch()) return false;
 			return ticket.generation === host.generation();
 		}
 		function drop(slot) {
@@ -93,6 +95,7 @@ var prksOwnerResource = (function(exports) {
 			}
 		}
 		function releaseAll() {
+			host.advanceEpoch();
 			releasing += 1;
 			try {
 				for (const slot of Array.from(slots.values())) drop(slot);
@@ -119,7 +122,8 @@ var prksOwnerResource = (function(exports) {
 		return {
 			ownerId: host.ownerId,
 			ownerToken: host.ownerToken,
-			generation: typeof generation === "number" ? generation : host.generation()
+			generation: typeof generation === "number" ? generation : host.generation(),
+			epoch: host.epoch()
 		};
 	}
 	//#endregion

@@ -149,11 +149,14 @@ function attachRegistry(ctx) {
     const token = {};
     if (typeof ctx.generation !== 'number') ctx.generation = 1;
     if (typeof ctx.destroyed !== 'boolean') ctx.destroyed = false;
+    let resourceEpoch = 0;
     const host = {
         ownerId: String(ctx.tabId || ''),
         ownerToken: token,
         generation: function () { return ctx.generation; },
         alive: function () { return !ctx.destroyed; },
+        epoch: function () { return resourceEpoch; },
+        advanceEpoch: function () { resourceEpoch += 1; },
     };
     ctx.ownerToken = token;
     ctx.resourceRegistry = ownerResource.createOwnerResourceRegistry(host);

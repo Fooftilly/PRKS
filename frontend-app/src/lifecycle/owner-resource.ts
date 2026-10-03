@@ -10,8 +10,10 @@
  * `suspendable`. While the owner is suspended, a non-suspendable registration
  * is rejected and not attached; a suspendable registration attaches already
  * suspended and its suspend hook runs. The ticket stays current across warm
- * park. Research Graph is not suspendable. The PDF runtime will be, in a
- * later slice; this module does not register one.
+ * park. Cold release advances a resource epoch, so a ticket captured before
+ * that release cannot attach again, including after the same owner remounts.
+ * Route generation is not used for that. Research Graph is not suspendable.
+ * The PDF runtime will be, in a later slice; this module does not register one.
  *
  * VueUse is not used here. Cytoscape, the PDF viewer, and other owned browser
  * resources outlive a component mount, and their dispose stays on this registry.
@@ -27,13 +29,22 @@ export interface ResourceTicket {
   ownerToken: object
   /** Route generation captured when the work started. */
   generation: number
+  /**
+   * Resource lifetime captured when the work started.
+   * Cold release advances it. Warm park does not.
+   */
+  epoch: number
 }
 
 export interface OwnerResourceHost {
   ownerId: string
   ownerToken: object
   generation: () => number
+  /** Active when the owner is not destroyed and is mounted or warm-suspended. */
   alive: () => boolean
+  /** Current resource lifetime. Cold release advances it. */
+  epoch: () => number
+  advanceEpoch: () => void
 }
 
 export interface ResourceRegistration<T> {
@@ -93,6 +104,8 @@ export function createOwnerResourceRegistry(host: OwnerResourceHost): OwnerResou
     if (ticket.ownerToken !== host.ownerToken) return false
     if (ticket.ownerId !== host.ownerId) return false
     if (typeof ticket.generation !== 'number') return false
+    if (typeof ticket.epoch !== 'number') return false
+    if (ticket.epoch !== host.epoch()) return false
     return ticket.generation === host.generation()
   }
 
@@ -178,6 +191,7 @@ export function createOwnerResourceRegistry(host: OwnerResourceHost): OwnerResou
   }
 
   function releaseAll(): void {
+    host.advanceEpoch()
     releasing += 1
     try {
       for (const slot of Array.from(slots.values())) drop(slot)
@@ -208,5 +222,6 @@ export function resourceTicket(host: OwnerResourceHost, generation?: number): Re
     ownerId: host.ownerId,
     ownerToken: host.ownerToken,
     generation: typeof generation === 'number' ? generation : host.generation(),
+    epoch: host.epoch(),
   }
 }

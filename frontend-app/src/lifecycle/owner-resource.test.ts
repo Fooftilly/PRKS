@@ -12,6 +12,9 @@ interface HostState {
   token: object
   generation: number
   alive: boolean
+  mounted: boolean
+  suspended: boolean
+  epoch: number
 }
 
 function hostOf(state: HostState): OwnerResourceHost {
@@ -19,12 +22,24 @@ function hostOf(state: HostState): OwnerResourceHost {
     ownerId: state.ownerId,
     ownerToken: state.token,
     generation: () => state.generation,
-    alive: () => state.alive,
+    alive: () => state.alive && (state.mounted || state.suspended),
+    epoch: () => state.epoch,
+    advanceEpoch: () => {
+      state.epoch += 1
+    },
   }
 }
 
 function openHost(ownerId = 'tab-a'): { state: HostState; host: OwnerResourceHost; registry: OwnerResourceRegistry } {
-  const state: HostState = { ownerId, token: {}, generation: 1, alive: true }
+  const state: HostState = {
+    ownerId,
+    token: {},
+    generation: 1,
+    alive: true,
+    mounted: true,
+    suspended: false,
+    epoch: 0,
+  }
   const host = hostOf(state)
   return { state, host, registry: createOwnerResourceRegistry(host) }
 }
@@ -273,13 +288,19 @@ describe('owner resource lifetime', () => {
     })).toBe('rejected')
     expect(coldDisposed).toBe(0)
     cold.registry.releaseAll()
-    expect(cold.registry.accepts(coldTicket)).toBe(true)
+    expect(cold.state.generation).toBe(1)
+    expect(cold.registry.accepts(coldTicket)).toBe(false)
     expect(cold.registry.register(coldTicket, {
       kind: 'researchGraph',
       value: 'after-cold',
       dispose: () => {},
+    })).toBe('rejected')
+    expect(cold.registry.get('researchGraph')).toBeUndefined()
+    expect(cold.registry.register(resourceTicket(cold.host), {
+      kind: 'researchGraph',
+      value: 'fresh-after-cold',
+      dispose: () => {},
     })).toBe('attached')
-    expect(cold.registry.get('researchGraph')).toBe('after-cold')
   })
 
   it('attaches a suspendable registration during warm park and resumes or cold-releases it', () => {
@@ -338,12 +359,133 @@ describe('owner resource lifetime', () => {
     expect(coldDisposed).toBe(1)
     expect(coldResumed).toBe(0)
     expect(cold.registry.get('pdf')).toBeUndefined()
-    expect(cold.registry.accepts(coldTicket)).toBe(true)
+    expect(cold.state.generation).toBe(1)
+    expect(cold.registry.accepts(coldTicket)).toBe(false)
     expect(cold.registry.register(coldTicket, {
       kind: 'researchGraph',
       value: 'after-cold',
       dispose: () => {},
+    })).toBe('rejected')
+    expect(cold.registry.get('researchGraph')).toBeUndefined()
+    expect(cold.registry.register(resourceTicket(cold.host), {
+      kind: 'researchGraph',
+      value: 'fresh-after-cold',
+      dispose: () => {},
     })).toBe('attached')
+  })
+
+  it('cold release invalidates a captured ticket, including after the owner remounts', () => {
+    const { state, host, registry } = openHost('cold-epoch')
+    const ticket = resourceTicket(host)
+    const generation = state.generation
+    const epoch = state.epoch
+    let disposed = 0
+    registry.register(ticket, {
+      kind: 'researchGraph',
+      value: 'mounted',
+      dispose: () => {
+        disposed += 1
+      },
+    })
+    registry.releaseAll()
+    state.mounted = false
+    expect(state.generation).toBe(generation)
+    expect(state.epoch).toBe(epoch + 1)
+    expect(registry.accepts(ticket)).toBe(false)
+    expect(registry.register(ticket, {
+      kind: 'researchGraph',
+      value: 'late',
+      dispose: () => {
+        disposed += 1
+      },
+    })).toBe('rejected')
+    expect(disposed).toBe(1)
+    expect(registry.get('researchGraph')).toBeUndefined()
+
+    state.mounted = true
+    expect(registry.accepts(ticket)).toBe(false)
+    expect(registry.register(ticket, {
+      kind: 'researchGraph',
+      value: 'remounted-old',
+      dispose: () => {
+        disposed += 1
+      },
+    })).toBe('rejected')
+    expect(disposed).toBe(1)
+    expect(registry.get('researchGraph')).toBeUndefined()
+
+    const fresh = resourceTicket(host)
+    expect(fresh.generation).toBe(generation)
+    expect(fresh.epoch).toBe(epoch + 1)
+    expect(registry.register(fresh, {
+      kind: 'researchGraph',
+      value: 'after-remount',
+      dispose: () => {
+        disposed += 1
+      },
+    })).toBe('attached')
+    expect(registry.get('researchGraph')).toBe('after-remount')
+  })
+
+  it('warm park does not advance the resource epoch', () => {
+    const { state, host, registry } = openHost('warm-epoch')
+    const ticket = resourceTicket(host)
+    const epoch = state.epoch
+    state.mounted = false
+    state.suspended = true
+    registry.warmSuspend()
+    expect(state.epoch).toBe(epoch)
+    expect(registry.accepts(ticket)).toBe(true)
+    expect(registry.register(ticket, {
+      kind: 'researchGraph',
+      value: 'still-rejected',
+      suspendable: false,
+      dispose: () => {},
+    })).toBe('rejected')
+    expect(registry.register(ticket, {
+      kind: 'pdf',
+      value: 'parked-pdf',
+      suspendable: true,
+      dispose: () => {},
+      suspend: () => {},
+    })).toBe('attached')
+    expect(registry.get('pdf')).toBe('parked-pdf')
+  })
+
+  it('beginRoute on a mounted owner accepts a ticket for the new generation', () => {
+    const { state, host, registry } = openHost('route-epoch')
+    const oldTicket = resourceTicket(host)
+    let disposed = 0
+    registry.register(oldTicket, {
+      kind: 'researchGraph',
+      value: 'before',
+      dispose: () => {
+        disposed += 1
+      },
+    })
+    registry.releaseAll()
+    state.generation += 1
+    expect(state.mounted).toBe(true)
+    expect(disposed).toBe(1)
+    expect(registry.accepts(oldTicket)).toBe(false)
+    const next = resourceTicket(host)
+    expect(registry.register(next, {
+      kind: 'researchGraph',
+      value: 'next',
+      dispose: () => {
+        disposed += 1
+      },
+    })).toBe('attached')
+    expect(registry.get('researchGraph')).toBe('next')
+    expect(registry.register(oldTicket, {
+      kind: 'researchGraph',
+      value: 'stale',
+      dispose: () => {
+        disposed += 1
+      },
+    })).toBe('rejected')
+    expect(disposed).toBe(1)
+    expect(registry.get('researchGraph')).toBe('next')
   })
 
   it('disposes a slot installed by a reentrant register and keeps the outer value', () => {

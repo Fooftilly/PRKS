@@ -98,7 +98,7 @@
       "runtime_files": [
         {
           "path": "/js/owner-resource.js",
-          "sha256": "a6e27013606e64a94ae4a112af07bc10cef6ef92e68ab60414b79b783320afe4"
+          "sha256": "19d06a0b25b35e709b45c3294c7e9c8061a2674e38587f184bba4b4242c54c8b"
         }
       ],
       "source_category": "frontend-app:owner-resource",
