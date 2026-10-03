@@ -1448,19 +1448,31 @@
                 const promo = mainPromotionLeaveEntry(leavingId);
                 if (promo) entries.push(promo);
                 /* Target leave, then the old Main's cold-park leave, then one commit.
-                 * promoteSecondaryToMain stays the unchecked mutation. */
+                 * promoteSecondaryToMain stays the unchecked mutation. The render
+                 * promise stays outside the lock so a later navigation can start
+                 * while this detail request is still open. */
+                let pendingPromotion = null;
                 return runLeaves(entries, 'promote-main', function () {
                     if (!getTab(leavingId) || !root.containsTab(state.secondaryTree, leavingId)) return false;
                     if (!promoteSecondaryToMain(leavingId)) return false;
                     announce('', 'promote');
                     const promoted = getMainTab();
                     if (!promoted || promoted.id !== leavingId) return false;
-                    return applyCurrentNavigation(promoted, route, replace);
+                    pendingPromotion = applyCurrentNavigation(promoted, route, replace);
+                    return true;
+                }).then(function (ok) {
+                    if (!ok) return false;
+                    return pendingPromotion;
                 });
             }
+            let pendingRender = null;
             return runLeave(tab.id, route, 'route-replace', function () {
                 if (!getTab(tab.id)) return false;
-                return applyCurrentNavigation(tab, route, replace);
+                pendingRender = applyCurrentNavigation(tab, route, replace);
+                return true;
+            }).then(function (ok) {
+                if (!ok) return false;
+                return pendingRender;
             });
         }
 

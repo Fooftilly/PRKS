@@ -3670,6 +3670,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
         return { cancelled: true, reason: 'cancelled' };
     }
     const destination = route.canonicalHash || suppliedHash;
+    let renderTask = null;
     const decision = await prksTabLeave.run({
         ownerId: String(ctx.tabId || 'detached'),
         destination: destination,
@@ -3678,12 +3679,18 @@ async function prksRenderTabRoute(ctx, hash, options) {
         still: function (snap) { return prksTabLeaveStill(ctx, snap); },
         assess: function () { return prksTabLeave.assessOwner(ctx, destination); },
         flushNotes: function () { prksTabLeave.flushOwner(ctx); },
-        commit: function () { return prksCommitTabRouteRender(ctx, hash, options); },
+        /* Claim the route inside the lock, then let the render's network wait
+         * run without it. A later navigation on this owner must be able to
+         * start while an earlier detail GET is still in flight. */
+        commit: function () {
+            renderTask = prksCommitTabRouteRender(ctx, hash, options);
+            return true;
+        },
     });
     if (!decision || decision.status !== 'approved') {
         return { cancelled: true, reason: prksLeaveDecisionReason(decision) };
     }
-    return decision.value;
+    return renderTask;
 }
 
 async function prksCommitTabRouteRender(ctx, hash, options) {

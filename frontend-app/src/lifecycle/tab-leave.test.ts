@@ -394,7 +394,16 @@ describe('tab leave preflight', () => {
     const onUnhandled = (reason: unknown) => {
       stray.push(reason)
     }
-    process.on('unhandledRejection', onUnhandled)
+    const nodeProcess = (
+      globalThis as {
+        process?: {
+          on: (event: 'unhandledRejection', listener: (reason: unknown) => void) => void
+          off: (event: 'unhandledRejection', listener: (reason: unknown) => void) => void
+        }
+      }
+    ).process
+    if (!nodeProcess) throw new Error('missing process')
+    nodeProcess.on('unhandledRejection', onUnhandled)
     try {
       await expect(
         leave.run(
@@ -413,7 +422,7 @@ describe('tab leave preflight', () => {
       expect(next.status).toBe('approved')
       expect(owner.route).toBe('#/people/p')
     } finally {
-      process.off('unhandledRejection', onUnhandled)
+      nodeProcess.off('unhandledRejection', onUnhandled)
     }
   })
 })
