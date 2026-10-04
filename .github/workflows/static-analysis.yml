@@ -180,6 +180,9 @@ jobs:
       - name: Install Vue toolchain from the lockfile
         run: npm ci --ignore-scripts --prefix frontend-app
 
+      - name: OpenAPI TypeScript types match checked-in artifacts
+        run: npm run openapi:check --prefix frontend-app
+
       - name: Typecheck
         run: npm run typecheck --prefix frontend-app
 

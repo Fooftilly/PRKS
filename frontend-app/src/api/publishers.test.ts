@@ -1,17 +1,37 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PrksApiError } from './http'
+import type { PublisherAliasAdded, PublisherCreated, PublisherDeleted, PublisherInUse } from './generated/publishers'
 import {
+  PUBLISHER_ALIAS_ADDED_KEYS,
+  PUBLISHER_CREATED_KEYS,
+  PUBLISHER_DELETED_KEYS,
+  PUBLISHER_IN_USE_KEYS,
   deletePublisher,
   listPublishersInUse,
   parsePublisherCreated,
   parsePublishersInUse,
 } from './publishers'
 
+type SameKeys<T, Keys extends readonly (keyof T)[]> = [Exclude<keyof T, Keys[number]>, Exclude<Keys[number], keyof T>] extends [
+  never,
+  never,
+]
+  ? true
+  : false
+
 afterEach(() => {
   vi.unstubAllGlobals()
 })
 
 describe('Publishers client', () => {
+  it('keeps runtime response keys aligned with the generated transport types', () => {
+    const inUse: SameKeys<PublisherInUse, typeof PUBLISHER_IN_USE_KEYS> = true
+    const created: SameKeys<PublisherCreated, typeof PUBLISHER_CREATED_KEYS> = true
+    const aliasAdded: SameKeys<PublisherAliasAdded, typeof PUBLISHER_ALIAS_ADDED_KEYS> = true
+    const deleted: SameKeys<PublisherDeleted, typeof PUBLISHER_DELETED_KEYS> = true
+    expect(inUse && created && aliasAdded && deleted).toBe(true)
+  })
+
   it('parses the in-use list exactly', () => {
     expect(
       parsePublishersInUse([{ id: 'R-1', name: 'OUP', aliases: ['Oxford UP'], work_count: 3 }]),

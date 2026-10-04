@@ -1,9 +1,12 @@
 /**
  * Typed client for the online-only Publishers HTTP family.
- * Wire keys match backend/api_contract/publishers.py (#45). Version matches
- * the Publishers OpenAPI document. This module does not own query caching.
+ * Transport types come from docs/api/openapi-publishers.json. Runtime parsers
+ * still check response shape. This module does not own query caching.
  */
 import { PrksApiError, prksApiRequest } from './http'
+import type { PublisherCreated, PublisherInUse } from './generated/publishers'
+
+export type { PublisherCreated, PublisherInUse }
 
 export const PUBLISHERS_CONTRACT_VERSION = '0.1.0'
 
@@ -11,19 +14,6 @@ export const PUBLISHER_IN_USE_KEYS = ['id', 'name', 'aliases', 'work_count'] as 
 export const PUBLISHER_CREATED_KEYS = ['id', 'name', 'existed'] as const
 export const PUBLISHER_ALIAS_ADDED_KEYS = ['status'] as const
 export const PUBLISHER_DELETED_KEYS = ['status'] as const
-
-export interface PublisherInUse {
-  id: string
-  name: string
-  aliases: string[]
-  work_count: number
-}
-
-export interface PublisherCreated {
-  id: string
-  name: string
-  existed: boolean
-}
 
 const LIST_ERROR = 'Could not load publishers.'
 const CREATE_ERROR = 'Could not add publisher.'

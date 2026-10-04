@@ -1,9 +1,12 @@
 /**
  * Typed client for the online-only Saved Views HTTP family.
- * Wire keys match backend/api_contract/saved_views.py (#45). Version matches
- * the Saved Views OpenAPI document. This module does not own query caching.
+ * Transport types come from docs/api/openapi-saved-views.json. Runtime parsers
+ * still check response shape. This module does not own query caching.
  */
 import { PrksApiError, prksApiRequest } from './http'
+import type { SavedView, SavedViewSearch } from './generated/saved-views'
+
+export type { SavedView, SavedViewSearch }
 
 export const SAVED_VIEWS_CONTRACT_VERSION = '0.1.0'
 
@@ -12,28 +15,15 @@ export const SAVED_VIEW_SEARCH_KEYS = ['mode', 'q', 'tag', 'author', 'publisher'
 export const SAVED_VIEW_DELETED_KEYS = ['status'] as const
 
 export const SAVED_VIEW_MODES = ['all', 'advanced', 'tag'] as const
-export type SavedViewMode = (typeof SAVED_VIEW_MODES)[number]
+export type SavedViewMode = SavedViewSearch['mode']
 
-export interface SavedViewSearch {
-  mode: SavedViewMode
-  q: string
-  tag: string
-  author: string
-  publisher: string
-}
-
-export interface SavedView {
-  id: string
-  name: string
-  search: SavedViewSearch
-  created_at: string | null
-  updated_at: string | null
-}
-
-export interface SavedViewInput {
-  name: string
-  search: SavedViewSearch
-}
+/**
+ * Client write body. Both fields are always sent. `search` is the closed
+ * response definition, a subset of the looser request schema the server
+ * accepts. The update wire schema allows omitted or null fields; this client
+ * does not send those.
+ */
+export type SavedViewInput = Pick<SavedView, 'name' | 'search'>
 
 const LIST_ERROR = 'Could not load Saved Views.'
 const READ_ERROR = 'Could not load Saved View.'
