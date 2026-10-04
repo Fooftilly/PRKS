@@ -184,8 +184,8 @@ onUpdated(stampEditor)
             <div class="form-pane group-sidebar-form">
               <section class="group-sidebar-form__section">
                 <h4>Identity</h4>
-                <PrksField label="Name" for-id="gd-name">
-                  <input id="gd-name" type="text" />
+                <PrksField v-slot="{ labelledBy, describedBy }" label="Name" for-id="gd-name">
+                  <input id="gd-name" type="text"  :aria-labelledby="labelledBy" :aria-describedby="describedBy" />
                 </PrksField>
               </section>
               <section class="group-sidebar-form__section">

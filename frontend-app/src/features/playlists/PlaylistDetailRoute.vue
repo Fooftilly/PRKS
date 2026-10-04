@@ -387,25 +387,25 @@ function onAddBlur(): void {
             &times;
           </PrksIconButton>
         </div>
-        <PrksField label="Title" for-id="prks-playlist-edit-title">
+        <PrksField v-slot="{ labelledBy, describedBy }" label="Title" for-id="prks-playlist-edit-title">
         <input
           id="prks-playlist-edit-title"
           v-model="draft.title"
           type="text"
           autocomplete="off"
-        >
+         :aria-labelledby="labelledBy" :aria-describedby="describedBy">
         </PrksField>
-        <PrksField label="Description" for-id="prks-playlist-edit-desc">
-        <textarea id="prks-playlist-edit-desc" v-model="draft.description" class="textarea-sm"></textarea>
+        <PrksField v-slot="{ labelledBy, describedBy }" label="Description" for-id="prks-playlist-edit-desc">
+        <textarea id="prks-playlist-edit-desc" v-model="draft.description" class="textarea-sm" :aria-labelledby="labelledBy" :aria-describedby="describedBy"></textarea>
         </PrksField>
-        <PrksField label="Original playlist URL" for-id="prks-playlist-edit-original-url">
+        <PrksField v-slot="{ labelledBy, describedBy }" label="Original playlist URL" for-id="prks-playlist-edit-original-url">
         <input
           id="prks-playlist-edit-original-url"
           v-model="draft.original_url"
           type="url"
           placeholder="https://..."
           autocomplete="off"
-        >
+         :aria-labelledby="labelledBy" :aria-describedby="describedBy">
         </PrksField>
         <div class="prks-form-actions prks-form-actions--split form-actions">
           <PrksButton id="prks-playlist-edit-cancel" @click="onCancel">

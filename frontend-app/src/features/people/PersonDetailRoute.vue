@@ -275,52 +275,52 @@ function workCard(work: {
         <div class="form-pane person-edit-form">
           <section class="person-edit-section" aria-labelledby="person-edit-identity-heading">
             <h4 id="person-edit-identity-heading">Identity</h4>
-            <PrksField label="First name" for-id="pd-first-name">
-              <input id="pd-first-name" v-model="draft.first_name" type="text" />
+            <PrksField v-slot="{ labelledBy, describedBy }" label="First name" for-id="pd-first-name">
+              <input id="pd-first-name" v-model="draft.first_name" type="text"  :aria-labelledby="labelledBy" :aria-describedby="describedBy" />
             </PrksField>
-            <PrksField label="Last name" for-id="pd-last-name">
-              <input id="pd-last-name" v-model="draft.last_name" type="text" />
+            <PrksField v-slot="{ labelledBy, describedBy }" label="Last name" for-id="pd-last-name">
+              <input id="pd-last-name" v-model="draft.last_name" type="text"  :aria-labelledby="labelledBy" :aria-describedby="describedBy" />
             </PrksField>
-            <PrksField label="Aliases" for-id="pd-aliases">
-              <input id="pd-aliases" v-model="draft.aliases" type="text" />
+            <PrksField v-slot="{ labelledBy, describedBy }" label="Aliases" for-id="pd-aliases">
+              <input id="pd-aliases" v-model="draft.aliases" type="text"  :aria-labelledby="labelledBy" :aria-describedby="describedBy" />
             </PrksField>
           </section>
           <section class="person-edit-section" aria-labelledby="person-edit-biography-heading">
             <h4 id="person-edit-biography-heading">Biography</h4>
-            <PrksField label="About / expertise" for-id="pd-about">
-              <textarea id="pd-about" v-model="draft.about" class="textarea-sm"></textarea>
+            <PrksField v-slot="{ labelledBy, describedBy }" label="About / expertise" for-id="pd-about">
+              <textarea id="pd-about" v-model="draft.about" class="textarea-sm" :aria-labelledby="labelledBy" :aria-describedby="describedBy"></textarea>
             </PrksField>
           </section>
           <section class="person-edit-section" aria-labelledby="person-edit-dates-heading">
             <h4 id="person-edit-dates-heading">Dates</h4>
             <div class="form-grid-2 form-grid-2--compact">
-              <PrksField label="Birth date" for-id="pd-birth-date">
-                <input id="pd-birth-date" v-model="draft.birth_date" type="text" placeholder="dd/mm/yyyy or yyyy" autocomplete="off" />
+              <PrksField v-slot="{ labelledBy, describedBy }" label="Birth date" for-id="pd-birth-date">
+                <input id="pd-birth-date" v-model="draft.birth_date" type="text" placeholder="dd/mm/yyyy or yyyy" autocomplete="off"  :aria-labelledby="labelledBy" :aria-describedby="describedBy" />
               </PrksField>
-              <PrksField label="Date of death" for-id="pd-death-date">
-                <input id="pd-death-date" v-model="draft.death_date" type="text" placeholder="dd/mm/yyyy or yyyy" autocomplete="off" />
+              <PrksField v-slot="{ labelledBy, describedBy }" label="Date of death" for-id="pd-death-date">
+                <input id="pd-death-date" v-model="draft.death_date" type="text" placeholder="dd/mm/yyyy or yyyy" autocomplete="off"  :aria-labelledby="labelledBy" :aria-describedby="describedBy" />
               </PrksField>
             </div>
           </section>
           <section class="person-edit-section" aria-labelledby="person-edit-portrait-heading">
             <h4 id="person-edit-portrait-heading">Portrait</h4>
-            <PrksField label="Portrait image URL" for-id="pd-image-url">
-              <input id="pd-image-url" v-model="draft.image_url" type="url" />
+            <PrksField v-slot="{ labelledBy, describedBy }" label="Portrait image URL" for-id="pd-image-url">
+              <input id="pd-image-url" v-model="draft.image_url" type="url"  :aria-labelledby="labelledBy" :aria-describedby="describedBy" />
             </PrksField>
           </section>
           <section class="person-edit-section" aria-labelledby="person-edit-references-heading">
             <h4 id="person-edit-references-heading">References</h4>
-            <PrksField label="Wikipedia" for-id="pd-link-wikipedia">
-              <input id="pd-link-wikipedia" v-model="draft.link_wikipedia" type="url" />
+            <PrksField v-slot="{ labelledBy, describedBy }" label="Wikipedia" for-id="pd-link-wikipedia">
+              <input id="pd-link-wikipedia" v-model="draft.link_wikipedia" type="url"  :aria-labelledby="labelledBy" :aria-describedby="describedBy" />
             </PrksField>
-            <PrksField label="Stanford Encyclopedia of Philosophy" for-id="pd-link-stanford">
-              <input id="pd-link-stanford" v-model="draft.link_stanford_encyclopedia" type="url" />
+            <PrksField v-slot="{ labelledBy, describedBy }" label="Stanford Encyclopedia of Philosophy" for-id="pd-link-stanford">
+              <input id="pd-link-stanford" v-model="draft.link_stanford_encyclopedia" type="url"  :aria-labelledby="labelledBy" :aria-describedby="describedBy" />
             </PrksField>
-            <PrksField label="Internet Encyclopedia of Philosophy" for-id="pd-link-iep">
-              <input id="pd-link-iep" v-model="draft.link_iep" type="url" />
+            <PrksField v-slot="{ labelledBy, describedBy }" label="Internet Encyclopedia of Philosophy" for-id="pd-link-iep">
+              <input id="pd-link-iep" v-model="draft.link_iep" type="url"  :aria-labelledby="labelledBy" :aria-describedby="describedBy" />
             </PrksField>
-            <PrksField label="Other links" for-id="pd-links-other">
-              <textarea id="pd-links-other" v-model="draft.links_other" class="textarea-sm" placeholder="One URL per line, or [Title](https://...)"></textarea>
+            <PrksField v-slot="{ labelledBy, describedBy }" label="Other links" for-id="pd-links-other">
+              <textarea id="pd-links-other" v-model="draft.links_other" class="textarea-sm" placeholder="One URL per line, or [Title](https://...)" :aria-labelledby="labelledBy" :aria-describedby="describedBy"></textarea>
             </PrksField>
           </section>
           <section class="person-edit-section" aria-labelledby="person-edit-groups-heading">

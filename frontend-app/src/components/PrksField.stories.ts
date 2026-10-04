@@ -14,8 +14,8 @@ export const Idle: Story = {
   render: () => ({
     components: { PrksField },
     template: `
-      <PrksField label="Title" for-id="story-title">
-        <input id="story-title" type="text" value="Agency">
+      <PrksField v-slot="{ labelledBy, describedBy }" label="Title" for-id="story-title">
+        <input id="story-title" type="text" value="Agency" :aria-labelledby="labelledBy" :aria-describedby="describedBy">
       </PrksField>
     `,
   }),
@@ -26,8 +26,8 @@ export const Invalid: Story = {
   render: () => ({
     components: { PrksField },
     template: `
-      <PrksField label="Title" for-id="story-title-err" error="Title is required.">
-        <input id="story-title-err" type="text" aria-invalid="true" aria-describedby="story-title-err-error">
+      <PrksField v-slot="{ labelledBy, describedBy }" label="Title" for-id="story-title-err" error="Title is required.">
+        <input id="story-title-err" type="text" aria-invalid="true" :aria-labelledby="labelledBy" :aria-describedby="describedBy">
       </PrksField>
     `,
   }),
@@ -42,8 +42,31 @@ export const WithHelp: Story = {
   render: () => ({
     components: { PrksField },
     template: `
-      <PrksField label="DOI" for-id="story-doi" help="Provenance only. This does not change the file kind.">
-        <input id="story-doi" type="text">
+      <PrksField v-slot="{ labelledBy, describedBy }" label="DOI" for-id="story-doi" help="Provenance only. This does not change the file kind.">
+        <input id="story-doi" type="text" :aria-labelledby="labelledBy" :aria-describedby="describedBy">
+      </PrksField>
+    `,
+  }),
+}
+
+export const HelpAndError: Story = {
+  args: {
+    label: 'YouTube URL',
+    forId: 'story-video-url',
+    help: 'Replaces which video this file is.',
+    error: 'Enter a YouTube URL.',
+  },
+  render: () => ({
+    components: { PrksField },
+    template: `
+      <PrksField
+        v-slot="{ labelledBy, describedBy }"
+        label="YouTube URL"
+        for-id="story-video-url"
+        help="Replaces which video this file is."
+        error="Enter a YouTube URL."
+      >
+        <input id="story-video-url" type="url" aria-invalid="true" :aria-labelledby="labelledBy" :aria-describedby="describedBy">
       </PrksField>
     `,
   }),

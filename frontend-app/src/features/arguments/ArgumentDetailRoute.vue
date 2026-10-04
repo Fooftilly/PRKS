@@ -352,17 +352,17 @@ watch(
         </section>
       </div>
       <form v-else-if="draft" id="prks-arg-form" class="prks-arg-form form-pane" @submit.prevent="onSave">
-        <PrksField label="Name" for-id="prks-arg-name">
-          <input id="prks-arg-name" v-model="draft.name" type="text">
+        <PrksField v-slot="{ labelledBy, describedBy }" label="Name" for-id="prks-arg-name">
+          <input id="prks-arg-name" v-model="draft.name" type="text" :aria-labelledby="labelledBy" :aria-describedby="describedBy">
         </PrksField>
-        <PrksField label="Kind" for-id="prks-arg-kind">
-          <select id="prks-arg-kind" v-model="draft.kind">
+        <PrksField v-slot="{ labelledBy, describedBy }" label="Kind" for-id="prks-arg-kind">
+          <select id="prks-arg-kind" v-model="draft.kind" :aria-labelledby="labelledBy" :aria-describedby="describedBy">
             <option value="argument">Argument</option>
             <option value="stance">Stance</option>
           </select>
         </PrksField>
-        <PrksField label="Main text" for-id="prks-arg-text">
-          <textarea id="prks-arg-text" v-model="draft.main_text" class="textarea-md" rows="8"></textarea>
+        <PrksField v-slot="{ labelledBy, describedBy }" label="Main text" for-id="prks-arg-text">
+          <textarea id="prks-arg-text" v-model="draft.main_text" class="textarea-md" rows="8" :aria-labelledby="labelledBy" :aria-describedby="describedBy"></textarea>
         </PrksField>
         <h3>Responds to</h3>
         <div id="prks-arg-targets">
@@ -379,18 +379,17 @@ watch(
             >
               {{ row.name || row.id || 'Choose…' }}
             </PrksButton>
-            <PrksField :label="'Verdict'" :for-id="`prks-arg-verdict-${row.rowKey}`">
-              <select
-                :id="`prks-arg-verdict-${row.rowKey}`"
-                v-model="row.verdict_id"
-                data-field="verdict"
-                aria-label="Verdict"
-              >
-                <option v-for="choice in verdictChoices(row.verdict_id)" :key="choice.id" :value="choice.id">
-                  {{ choice.label }}
-                </option>
-              </select>
-            </PrksField>
+            <label class="form-field-label" :for="`prks-arg-verdict-${row.rowKey}`">Verdict</label>
+            <select
+              :id="`prks-arg-verdict-${row.rowKey}`"
+              v-model="row.verdict_id"
+              data-field="verdict"
+              aria-label="Verdict"
+            >
+              <option v-for="choice in verdictChoices(row.verdict_id)" :key="choice.id" :value="choice.id">
+                {{ choice.label }}
+              </option>
+            </select>
             <PrksButton
               variant="ghost"
               size="sm"

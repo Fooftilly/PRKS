@@ -2,30 +2,55 @@
 /**
  * Label + native control slot + optional help/error.
  * The control stays a visible input, select, or textarea in the slot.
+ * Slot props `labelledBy` / `describedBy` must be bound on that control
+ * so help and error ids compose (help then error) instead of replacing.
  */
-defineProps<{
+import { computed, onMounted, onUpdated, ref } from 'vue'
+
+const props = defineProps<{
   label: string
   forId: string
   /** Present (including '') reserves the live error node. Omit when the field has no error region. */
   error?: string | null
   help?: string
-  required?: boolean
 }>()
+
+const controlHost = ref<HTMLElement | null>(null)
+
+const labelledBy = computed(() => `${props.forId}-label`)
+const helpId = computed(() => (props.help ? `${props.forId}-help` : ''))
+const errorId = computed(() => (props.error != null ? `${props.forId}-error` : ''))
+const describedBy = computed(() => {
+  const ids = [helpId.value, errorId.value].filter(Boolean)
+  return ids.length ? ids.join(' ') : undefined
+})
+
+function applyControlNames(): void {
+  const host = controlHost.value
+  if (!host) return
+  const control = host.querySelector<HTMLElement>('input, select, textarea')
+  if (!control) return
+  control.setAttribute('aria-labelledby', labelledBy.value)
+  if (describedBy.value) control.setAttribute('aria-describedby', describedBy.value)
+  else control.removeAttribute('aria-describedby')
+}
+
+onMounted(applyControlNames)
+onUpdated(applyControlNames)
 </script>
 
 <template>
   <div class="prks-field" :class="{ 'prks-field--error': !!error }">
-    <label class="prks-field__label" :for="forId">
+    <label :id="labelledBy" class="prks-field__label" :for="forId">
       {{ label }}
-      <span v-if="required" class="prks-field__required" aria-hidden="true">Required</span>
     </label>
-    <div class="prks-field__control">
-      <slot />
+    <div ref="controlHost" class="prks-field__control">
+      <slot :labelled-by="labelledBy" :described-by="describedBy" />
     </div>
-    <p v-if="help" :id="`${forId}-help`" class="prks-field__help">{{ help }}</p>
+    <p v-if="help" :id="helpId" class="prks-field__help">{{ help }}</p>
     <p
       v-if="error != null"
-      :id="`${forId}-error`"
+      :id="errorId"
       class="prks-field__error field-error"
       aria-live="polite"
     >{{ error }}</p>

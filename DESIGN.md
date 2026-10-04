@@ -468,7 +468,7 @@ Preserve specialized EasyMDE, combobox, and segmented controls; their outer visu
 
 `.prks-field__label` is `text-xs` / 600. Do not uppercase it.
 
-Migrated Vue forms wrap ordinary labeled native `input` / `select` / `textarea` in `PrksField`. Comboboxes, segmented status, EasyMDE, and search-advanced rows stay specialized and do not go through `PrksField`.
+Migrated Vue forms wrap ordinary labeled native `input` / `select` / `textarea` in `PrksField`. The native control binds slot props `labelledBy` and `describedBy`: the label id, then help and error ids composed in that order (not replaced). Comboboxes, segmented status, EasyMDE, and search-advanced rows stay specialized and do not go through `PrksField`. Compact Argument target-row Verdict stays a direct flex child of `.prks-arg-row` (label + select), not `PrksField`, so `.prks-arg-row select { flex: 1 1 8rem; }` still applies. `PrksField` has no `required` prop; `.prks-field__required` remains the CSS marker for surfaces that actually mark required (Work create).
 
 `.prks-field__required` is the required marker: the word `Required` in `text-2xs` tertiary text after a label (or a section title when the whole section is required). Required is never communicated by color, an asterisk, or placeholder text alone. Pair it with `aria-required="true"` on a native control; when the marker sits inside a `<label>`, mark the span `aria-hidden="true"` so the accessible name stays the field name. Optional groups use the matching `Optional` wording on their disclosure.
 

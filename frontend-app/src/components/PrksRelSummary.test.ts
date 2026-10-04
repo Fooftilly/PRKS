@@ -12,4 +12,14 @@ describe('PrksRelSummary', () => {
     expect(line.text()).toContain('2 note mentions')
     expect(line.findAll('.prks-summary-sep')).toHaveLength(1)
   })
+
+  it('does not render links even when a part object carries href', () => {
+    const wrapper = mount(PrksRelSummary, {
+      props: {
+        parts: [{ text: '1 parent', href: 'javascript:alert(1)' } as never],
+      },
+    })
+    expect(wrapper.find('a').exists()).toBe(false)
+    expect(wrapper.text()).toContain('1 parent')
+  })
 })

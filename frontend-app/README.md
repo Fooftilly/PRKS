@@ -58,7 +58,7 @@ npm run build-storybook   # catalog only; gitignored storybook-static/
 | `src/components/PrksButton.vue` | `.prks-btn` with variant, disabled, and busy (`disabled` plus `aria-busy`) |
 | `src/components/PrksLinkButton.vue` | Native `<a class="prks-btn">`; required `href`; `secondary` plus `sm`/`md` only |
 | `src/components/PrksIconButton.vue` | `.prks-icon-btn` with a required accessible name, disabled, and busy |
-| `src/components/PrksField.vue` | `.prks-field` label + native control slot + optional help/error |
+| `src/components/PrksField.vue` | `.prks-field` label + native control slot + optional help/error; slot `labelledBy`/`describedBy` (help then error) |
 | `src/components/PrksInlineMessage.vue` | `.prks-inline-message`; `tone="error"` adds `--error`; `status` keeps an existing `role="status"` |
 | `src/components/PrksState.vue` | `.prks-state` for `loading` and `error` (`role="status"`, optional retry slot) and `empty` (no live role) |
 | `src/components/PrksStatusText.vue` | `.prks-settings-hint`, polite live region unless `live` is false |
