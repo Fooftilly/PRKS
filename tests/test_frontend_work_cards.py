@@ -66,6 +66,8 @@ class FrontendWorkCardTests(unittest.TestCase):
         self.assertIn("function prksWorkBrowseModeToggleHtml", src)
         self.assertIn("function prksBindWorkBrowseMode", src)
         self.assertIn("function prksShowWorkThumbPreview", src)
+        self.assertIn("function prksWorkThumbFromHoverTarget", src)
+        self.assertIn("function prksWorkCardFromEventTarget", src)
         self.assertIn("prksForgetPreviewImgSrc", src)
         self.assertIn("function prksReleaseWorkThumbPreview", src)
         self.assertIn("function prksReleaseLazyWorkThumbs", src)

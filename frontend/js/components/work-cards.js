@@ -815,6 +815,11 @@ function prksWorkThumbFromCard(card) {
     return card.querySelector('.work-card__thumb[data-prks-thumb-preview-kind]');
 }
 
+function prksWorkCardFromNode(t) {
+    if (!t || !t.closest) return null;
+    return t.closest('.project-card--work-card[data-work-id]');
+}
+
 function prksWorkCardKeyBlocked(t) {
     if (!t || !t.closest) return true;
     if (t.closest('input, button, textarea, select, [contenteditable="true"]')) return true;
@@ -825,7 +830,26 @@ function prksWorkCardKeyBlocked(t) {
 
 function prksWorkCardFromEventTarget(t) {
     if (prksWorkCardKeyBlocked(t)) return null;
-    return t.closest('.project-card--work-card[data-work-id]');
+    return prksWorkCardFromNode(t);
+}
+
+/**
+ * Hover target is the Work card / native work-card__link, not only the thumb
+ * slot. Bulk checkbox and other controls stay out of the preview hover path.
+ */
+function prksWorkThumbFromHoverTarget(t) {
+    if (!t || !t.closest) return null;
+    if (t.closest('.work-card__select, input, button, textarea, select')) return null;
+    const direct = t.closest('.work-card__thumb[data-prks-thumb-preview-kind]');
+    if (direct) return direct;
+    return prksWorkThumbFromCard(prksWorkCardFromNode(t));
+}
+
+function prksWorkCardPointerStillInside(card, related) {
+    if (!card || !related) return false;
+    if (typeof card.contains === 'function' && card.contains(related)) return true;
+    const preview = document.getElementById('prks-work-thumb-preview');
+    return !!(preview && typeof preview.contains === 'function' && preview.contains(related));
 }
 
 function prksWorkCardBulkOwnsKeys() {
@@ -846,28 +870,24 @@ if (typeof document !== 'undefined' && !window.__prksWorkCardKeyNavBound) {
                 return;
             }
         }
-        /* Preview without navigating: P while a Work card (or its link) is focused. */
+        /* Preview without navigating: P while the Work card or its native link is focused. */
         if (
             (e.key === 'p' || e.key === 'P') &&
             !e.metaKey &&
             !e.ctrlKey &&
             !e.altKey
         ) {
-            const t = e.target;
-            const card = prksWorkCardFromEventTarget(t);
+            const card = prksWorkCardFromEventTarget(e.target);
             if (!card) return;
-            const link = card.querySelector('a.work-card__link');
-            if (t !== card && t !== link && !(link && link.contains(t))) return;
             const thumb = prksWorkThumbFromCard(card);
             if (thumb) {
                 e.preventDefault();
                 prksShowWorkThumbPreview(thumb);
-                return;
             }
+            return;
         }
         if (e.key !== 'Enter' && e.key !== ' ') return;
-        const t = e.target;
-        const card = prksWorkCardFromEventTarget(t);
+        const card = prksWorkCardFromEventTarget(e.target);
         if (!card) return;
         /* Bulk selection owns Enter/Space on Work cards (toggle, not navigate). */
         if (prksWorkCardBulkOwnsKeys()) return;
@@ -886,9 +906,7 @@ if (typeof document !== 'undefined' && !window.__prksWorkCardKeyNavBound) {
     document.addEventListener(
         'pointerover',
         function (e) {
-            const t = e.target;
-            if (!t || !t.closest) return;
-            const thumb = t.closest('.work-card__thumb[data-prks-thumb-preview-kind]');
+            const thumb = prksWorkThumbFromHoverTarget(e.target);
             if (!thumb) return;
             if (window.matchMedia && window.matchMedia('(hover: none)').matches) return;
             prksShowWorkThumbPreview(thumb);
@@ -899,14 +917,10 @@ if (typeof document !== 'undefined' && !window.__prksWorkCardKeyNavBound) {
     document.addEventListener(
         'pointerout',
         function (e) {
-            const t = e.target;
-            if (!t || !t.closest) return;
-            const thumb = t.closest('.work-card__thumb[data-prks-thumb-preview-kind]');
-            if (!thumb) return;
-            const related = e.relatedTarget;
-            if (related && thumb.contains(related)) return;
-            const preview = document.getElementById('prks-work-thumb-preview');
-            if (preview && related && preview.contains(related)) return;
+            const card = prksWorkCardFromNode(e.target);
+            if (!card) return;
+            if (prksWorkCardPointerStillInside(card, e.relatedTarget)) return;
+            const thumb = prksWorkThumbFromCard(card);
             if (window.__prksWorkThumbPreviewSource === thumb) prksHideWorkThumbPreview();
         },
         true

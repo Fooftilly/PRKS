@@ -322,6 +322,75 @@
             } else {
                 root.prksHideWorkThumbPreview();
             }
+
+            if (typeof document._dispatch === 'function') {
+                const nativeCard = document.createElement('div');
+                nativeCard.className = 'project-card project-card--work-card';
+                nativeCard.setAttribute('data-work-id', 'W-preview-link');
+                nativeCard.setAttribute('data-prks-route', '#/works/W-preview-link');
+                const nativeLink = document.createElement('a');
+                nativeLink.className = 'work-card__link';
+                nativeLink.setAttribute('href', '#/works/W-preview-link');
+                const nativeThumb = document.createElement('div');
+                nativeThumb.className = 'work-card__thumb work-card__thumb--ready';
+                nativeThumb.setAttribute('data-prks-thumb-preview-kind', 'pdf');
+                nativeThumb.setAttribute('data-prks-thumb-page', '1');
+                const nativeBody = document.createElement('div');
+                nativeBody.className = 'work-card__body';
+                const nativeTitle = document.createElement('div');
+                nativeTitle.className = 'card-title';
+                nativeBody.appendChild(nativeTitle);
+                nativeLink.appendChild(nativeThumb);
+                nativeLink.appendChild(nativeBody);
+                nativeCard.appendChild(nativeLink);
+                document.body.appendChild(nativeCard);
+
+                document._dispatch('keydown', { key: 'p', target: nativeLink });
+                let kbdPreview = document.getElementById('prks-work-thumb-preview');
+                assert(
+                    'P on native work-card__link shows preview',
+                    !!(kbdPreview && !kbdPreview.hidden && window.__prksWorkThumbPreviewSource === nativeThumb)
+                );
+
+                root.prksHideWorkThumbPreview();
+                document._dispatch('pointerover', { target: nativeTitle });
+                kbdPreview = document.getElementById('prks-work-thumb-preview');
+                assert(
+                    'hover on card body (not only thumb) shows preview',
+                    !!(kbdPreview && !kbdPreview.hidden && window.__prksWorkThumbPreviewSource === nativeThumb)
+                );
+
+                document._dispatch('pointerout', { target: nativeTitle, relatedTarget: nativeThumb });
+                kbdPreview = document.getElementById('prks-work-thumb-preview');
+                assert(
+                    'pointerout within the same card keeps preview',
+                    !!(kbdPreview && !kbdPreview.hidden && window.__prksWorkThumbPreviewSource === nativeThumb)
+                );
+
+                const outside = document.createElement('div');
+                document.body.appendChild(outside);
+                document._dispatch('pointerout', { target: nativeTitle, relatedTarget: outside });
+                kbdPreview = document.getElementById('prks-work-thumb-preview');
+                assert(
+                    'pointerout leaving the card hides preview',
+                    !!(kbdPreview && kbdPreview.hidden)
+                );
+
+                const select = document.createElement('div');
+                select.className = 'work-card__select';
+                nativeCard.appendChild(select);
+                document._dispatch('pointerover', { target: select });
+                kbdPreview = document.getElementById('prks-work-thumb-preview');
+                assert(
+                    'hover on bulk checkbox does not show preview',
+                    !!(kbdPreview && kbdPreview.hidden)
+                );
+
+                if (typeof document.body.removeChild === 'function') {
+                    document.body.removeChild(nativeCard);
+                    document.body.removeChild(outside);
+                }
+            }
         }
 
         // Lazy-thumb IntersectionObserver must not retain detached card trees.
