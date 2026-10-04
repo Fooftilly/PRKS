@@ -1112,6 +1112,19 @@ introduce canonical primitive
 
 Do not delete a legacy rule first and then repair every broken page.
 
+B4 ownership (Vue class application lives in `frontend-app/src/components/`; rules stay here):
+
+| Section | Shared component family | B4 vs B5 |
+| --- | --- | --- |
+| 01–04 | tokens, reset, a11y, layout | Keep. Tokens/base for the whole app |
+| 05 | `.prks-btn`, `.prks-icon-btn` | B4 shared. Classic callers remain |
+| 06 | `.prks-field` + form-pane | B4 shared. Combobox/segmented/EasyMDE stay specialized |
+| 08 | `.prks-list-row`, `.prks-research-row` | B4 shared for research rows. Work cards stay B5 |
+| 09 | `.prks-inline-message`, `.prks-state`, `.prks-scope-line`, `.prks-rel-summary` | B4 shared. Classic Work-card summaries stay |
+| 11–13 | shell, feature layouts, third-party | B5. Do not split the file in B4 |
+
+B4 does not split `style.css` into multiple HTTP files. Dead-rule deletion waits until B5 can prove no classic caller.
+
 ---
 
 ## Research entities

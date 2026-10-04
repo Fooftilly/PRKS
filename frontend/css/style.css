@@ -1,5 +1,17 @@
 /*
  * PRKS stylesheet. Authority: DESIGN.md.
+ *
+ * B4 shared families (Vue primitives + remaining classic callers). Keep in this
+ * file until B5 proves the last classic consumer is gone. Do not copy into SFCs.
+ *   05 Buttons / controls — .prks-btn, .prks-icon-btn, segmented, disclosure
+ *   06 Forms — .prks-field, native form-pane controls
+ *   08 Cards / lists — .prks-list-row, .prks-research-row
+ *   09 Status / messages — .prks-inline-message, .prks-state, .prks-scope-line, .prks-rel-summary
+ *
+ * B5 classic / feature (do not delete in B4): 11 application shell, 12 feature
+ * layouts (work cards, PDF, ribbon, folder tree, processing, graph canvas),
+ * 13 third-party, remaining innerHTML hosts.
+ *
  * 01 Tokens
  * 02 Reset / base
  * 03 Accessibility
