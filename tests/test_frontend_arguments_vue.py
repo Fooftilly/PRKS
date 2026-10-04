@@ -110,9 +110,11 @@ class ArgumentsVueContracts(unittest.TestCase):
         self.assertIn("target:${row.rowKey}", detail)
         self.assertIn("source:${row.rowKey}", detail)
         self.assertIn("argumentEditorDraftFromForm", detail)
-        self.assertIn('for="`prks-arg-verdict-${row.rowKey}`"', detail)
+        self.assertIn(':for="`prks-arg-verdict-${row.rowKey}`"', detail)
         self.assertIn(':id="`prks-arg-verdict-${row.rowKey}`"', detail)
         self.assertIn(">Verdict</label>", detail)
+        targets = detail[detail.index('id="prks-arg-targets"') : detail.index('id="prks-arg-add-target"')]
+        self.assertNotIn("PrksField", targets)
         self.assertIn('aria-label="Verdict"', detail)
         self.assertIn('busy-label="Saving…"', detail)
         self.assertIn('busy-label="Editing…"', detail)

@@ -415,24 +415,6 @@ interface Window {
       isCurrent?: (generation: number) => boolean
     },
   ) => Promise<unknown>
-  prksResearchIndexRowHtml?: (opts: {
-    href: string
-    title: string
-    kind?: string
-    icon?: string
-    meta?: string[]
-  }) => string
-  prksResearchSectionHeadHtml?: (
-    title: string,
-    opts?: {
-      headingId?: string
-      actionId?: string
-      actionLabel?: string
-      actionRole?: string
-      count?: number | string | null
-      sub?: string
-    },
-  ) => string
   prksResearchMarkdownHtml?: (text: string) => string
   prksEscapeHtml?: (value: unknown) => string
   prksPageHeaderIconHtml?: (name: string) => string

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, onUpdated, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import PrksField from '../../components/PrksField.vue'
 import PrksIconButton from '../../components/PrksIconButton.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import { playlistIntentsKey, type PlaylistSaveResult, type PlaylistVideoChoice } from './intents'
@@ -386,23 +387,26 @@ function onAddBlur(): void {
             &times;
           </PrksIconButton>
         </div>
-        <label for="prks-playlist-edit-title">Title</label>
+        <PrksField v-slot="{ labelledBy, describedBy }" label="Title" for-id="prks-playlist-edit-title">
         <input
           id="prks-playlist-edit-title"
           v-model="draft.title"
           type="text"
           autocomplete="off"
-        >
-        <label for="prks-playlist-edit-desc">Description</label>
-        <textarea id="prks-playlist-edit-desc" v-model="draft.description" class="textarea-sm"></textarea>
-        <label for="prks-playlist-edit-original-url">Original playlist URL</label>
+         :aria-labelledby="labelledBy" :aria-describedby="describedBy">
+        </PrksField>
+        <PrksField v-slot="{ labelledBy, describedBy }" label="Description" for-id="prks-playlist-edit-desc">
+        <textarea id="prks-playlist-edit-desc" v-model="draft.description" class="textarea-sm" :aria-labelledby="labelledBy" :aria-describedby="describedBy"></textarea>
+        </PrksField>
+        <PrksField v-slot="{ labelledBy, describedBy }" label="Original playlist URL" for-id="prks-playlist-edit-original-url">
         <input
           id="prks-playlist-edit-original-url"
           v-model="draft.original_url"
           type="url"
           placeholder="https://..."
           autocomplete="off"
-        >
+         :aria-labelledby="labelledBy" :aria-describedby="describedBy">
+        </PrksField>
         <div class="prks-form-actions prks-form-actions--split form-actions">
           <PrksButton id="prks-playlist-edit-cancel" @click="onCancel">
             Cancel

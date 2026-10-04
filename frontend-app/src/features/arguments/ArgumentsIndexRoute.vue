@@ -2,6 +2,7 @@
 import { computed, inject, ref } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
+import PrksScopeLine from '../../components/PrksScopeLine.vue'
 import { useResearchIndexList } from '../../research-index/useResearchIndexList'
 import { argumentIntentsKey } from './intents'
 import { useArgumentPendingAction } from './pending-action'
@@ -21,7 +22,6 @@ const unavailable = computed(() => props.projection.availability === 'unavailabl
 const kindUi = computed(() => argumentKindUi(props.projection.kind))
 const rootEl = ref<HTMLElement | null>(null)
 const titleIconHost = ref<HTMLElement | null>(null)
-const scopeHost = ref<HTMLElement | null>(null)
 const searchInput = ref<HTMLInputElement | null>(null)
 const {
   searchQuery,
@@ -31,6 +31,7 @@ const {
   showEmptyData,
   showSearchEmpty,
   rowIconHtml,
+  scopeLine,
   clearSearch,
 } = useResearchIndexList({
   icon: 'messages-square',
@@ -42,7 +43,6 @@ const {
   generation: computed(() => props.projection.generation),
   rootEl,
   titleIconHost,
-  scopeHost,
   searchInput,
 })
 
@@ -109,7 +109,7 @@ function onCreate(kind: ArgumentKind): void {
             </PrksButton>
           </div>
         </div>
-        <div ref="scopeHost" data-prks-role="index-scope-host"></div>
+        <PrksScopeLine v-bind="scopeLine" />
       </div>
       <div class="prks-tabs" role="tablist" aria-label="Argument kind">
         <button

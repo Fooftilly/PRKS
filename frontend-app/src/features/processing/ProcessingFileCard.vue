@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import PrksField from '../../components/PrksField.vue'
 import { WORK_STATUSES } from '../../domain/work-status'
 import type { ProcessingIntents } from './intents'
 import {
@@ -65,6 +66,10 @@ let hideTimer = 0
 const statusPrefix = processingWidgetPrefix(props.domPrefix, props.file.id, 'status')
 const docPrefix = processingWidgetPrefix(props.domPrefix, props.file.id, 'doctype')
 const rolePrefix = processingWidgetPrefix(props.domPrefix, props.file.id, 'role')
+
+function fieldId(name: string): string {
+  return processingWidgetPrefix(props.domPrefix, props.file.id, name)
+}
 const linkIcon = computed(() => window.prksIcon?.('link', { size: 'sm' }) ?? '')
 const plusIcon = computed(() => window.prksIcon?.('plus', { size: 'sm' }) ?? '')
 const userIcon = computed(() => window.prksIcon?.('user', { size: 'sm' }) ?? '')
@@ -435,8 +440,9 @@ onBeforeUnmount(() => {
     <div ref="rootEl" class="form-pane form-pane--tight prks-processing-card__core">
       <div class="prks-processing-card__section">
         <div class="prks-processing-card__title-row">
-          <label>Title</label>
-          <input v-model="draft.title" type="text" data-field="title" placeholder="Library title">
+          <PrksField v-slot="{ labelledBy, describedBy }" label="Title" :for-id="fieldId('title')">
+            <input :id="fieldId('title')" v-model="draft.title" type="text" data-field="title" placeholder="Library title" :aria-labelledby="labelledBy" :aria-describedby="describedBy">
+          </PrksField>
         </div>
         <div class="prks-processing-card__status-field prks-work-upload-status-field">
           <label>Status</label>
@@ -556,28 +562,24 @@ onBeforeUnmount(() => {
       <div class="prks-processing-card__section">
         <div class="prks-processing-card__section-title">Bibliographic</div>
         <div class="form-grid-2">
-          <div>
-            <label>Year</label>
-            <input v-model="draft.year" type="text" data-field="year">
-          </div>
-          <div>
-            <label>Published date</label>
-            <input v-model="draft.published_date" type="text" data-field="published_date" placeholder="dd/mm/yyyy" inputmode="numeric" autocomplete="off">
-          </div>
+          <PrksField v-slot="{ labelledBy, describedBy }" label="Year" :for-id="fieldId('year')">
+            <input :id="fieldId('year')" v-model="draft.year" type="text" data-field="year" :aria-labelledby="labelledBy" :aria-describedby="describedBy">
+          </PrksField>
+          <PrksField v-slot="{ labelledBy, describedBy }" label="Published date" :for-id="fieldId('published_date')">
+            <input :id="fieldId('published_date')" v-model="draft.published_date" type="text" data-field="published_date" placeholder="dd/mm/yyyy" inputmode="numeric" autocomplete="off" :aria-labelledby="labelledBy" :aria-describedby="describedBy">
+          </PrksField>
         </div>
         <div>
           <label :for="`${docPrefix}-trigger`">Document type (BibLaTeX)</label>
           <div ref="docTypeHost" v-once class="work-html-slot" data-prks-processing-doctype-host></div>
         </div>
         <div class="form-grid-2">
-          <div>
-            <label>Publisher</label>
-            <input v-model="draft.publisher" type="text" data-field="publisher">
-          </div>
-          <div>
-            <label>Location</label>
-            <input v-model="draft.location" type="text" data-field="location">
-          </div>
+          <PrksField v-slot="{ labelledBy, describedBy }" label="Publisher" :for-id="fieldId('publisher')">
+            <input :id="fieldId('publisher')" v-model="draft.publisher" type="text" data-field="publisher" :aria-labelledby="labelledBy" :aria-describedby="describedBy">
+          </PrksField>
+          <PrksField v-slot="{ labelledBy, describedBy }" label="Location" :for-id="fieldId('location')">
+            <input :id="fieldId('location')" v-model="draft.location" type="text" data-field="location" :aria-labelledby="labelledBy" :aria-describedby="describedBy">
+          </PrksField>
         </div>
       </div>
       <div class="prks-processing-card__section">
@@ -631,52 +633,47 @@ onBeforeUnmount(() => {
       <details class="prks-processing-card__more">
         <summary>More metadata</summary>
         <div class="prks-processing-card__more-body">
-          <label>Original URL</label>
-          <input v-model="draft.source_url" type="url" data-field="source_url" placeholder="https://...">
+          <PrksField v-slot="{ labelledBy, describedBy }" label="Original URL" :for-id="fieldId('source_url')">
+            <input :id="fieldId('source_url')" v-model="draft.source_url" type="url" data-field="source_url" placeholder="https://..." :aria-labelledby="labelledBy" :aria-describedby="describedBy">
+          </PrksField>
           <div class="form-grid-2">
-            <div>
-              <label>Edition</label>
-              <input v-model="draft.edition" type="text" data-field="edition">
-            </div>
-            <div>
-              <label>Journal</label>
-              <input v-model="draft.journal" type="text" data-field="journal">
-            </div>
+            <PrksField v-slot="{ labelledBy, describedBy }" label="Edition" :for-id="fieldId('edition')">
+              <input :id="fieldId('edition')" v-model="draft.edition" type="text" data-field="edition" :aria-labelledby="labelledBy" :aria-describedby="describedBy">
+            </PrksField>
+            <PrksField v-slot="{ labelledBy, describedBy }" label="Journal" :for-id="fieldId('journal')">
+              <input :id="fieldId('journal')" v-model="draft.journal" type="text" data-field="journal" :aria-labelledby="labelledBy" :aria-describedby="describedBy">
+            </PrksField>
           </div>
           <div class="form-grid-2">
-            <div>
-              <label>Volume</label>
-              <input v-model="draft.volume" type="text" data-field="volume">
-            </div>
-            <div>
-              <label>Issue</label>
-              <input v-model="draft.issue" type="text" data-field="issue">
-            </div>
+            <PrksField v-slot="{ labelledBy, describedBy }" label="Volume" :for-id="fieldId('volume')">
+              <input :id="fieldId('volume')" v-model="draft.volume" type="text" data-field="volume" :aria-labelledby="labelledBy" :aria-describedby="describedBy">
+            </PrksField>
+            <PrksField v-slot="{ labelledBy, describedBy }" label="Issue" :for-id="fieldId('issue')">
+              <input :id="fieldId('issue')" v-model="draft.issue" type="text" data-field="issue" :aria-labelledby="labelledBy" :aria-describedby="describedBy">
+            </PrksField>
           </div>
           <div class="form-grid-2">
-            <div>
-              <label>Pages</label>
-              <input v-model="draft.pages" type="text" data-field="pages">
-            </div>
-            <div>
-              <label>ISBN</label>
-              <input v-model="draft.isbn" type="text" data-field="isbn">
-            </div>
+            <PrksField v-slot="{ labelledBy, describedBy }" label="Pages" :for-id="fieldId('pages')">
+              <input :id="fieldId('pages')" v-model="draft.pages" type="text" data-field="pages" :aria-labelledby="labelledBy" :aria-describedby="describedBy">
+            </PrksField>
+            <PrksField v-slot="{ labelledBy, describedBy }" label="ISBN" :for-id="fieldId('isbn')">
+              <input :id="fieldId('isbn')" v-model="draft.isbn" type="text" data-field="isbn" :aria-labelledby="labelledBy" :aria-describedby="describedBy">
+            </PrksField>
           </div>
           <div class="form-grid-2">
-            <div>
-              <label>DOI</label>
-              <input v-model="draft.doi" type="text" data-field="doi">
-            </div>
-            <div>
-              <label>Thumbnail page</label>
-              <input v-model="draft.thumb_page" type="number" min="1" step="1" data-field="thumb_page">
-            </div>
+            <PrksField v-slot="{ labelledBy, describedBy }" label="DOI" :for-id="fieldId('doi')">
+              <input :id="fieldId('doi')" v-model="draft.doi" type="text" data-field="doi" :aria-labelledby="labelledBy" :aria-describedby="describedBy">
+            </PrksField>
+            <PrksField v-slot="{ labelledBy, describedBy }" label="Thumbnail page" :for-id="fieldId('thumb_page')">
+              <input :id="fieldId('thumb_page')" v-model="draft.thumb_page" type="number" min="1" step="1" data-field="thumb_page" :aria-labelledby="labelledBy" :aria-describedby="describedBy">
+            </PrksField>
           </div>
-          <label>Abstract</label>
-          <textarea v-model="draft.abstract" class="textarea-sm" data-field="abstract"></textarea>
-          <label>Private notes</label>
-          <textarea v-model="draft.private_notes" class="textarea-sm" data-field="private_notes"></textarea>
+          <PrksField v-slot="{ labelledBy, describedBy }" label="Abstract" :for-id="fieldId('abstract')">
+            <textarea :id="fieldId('abstract')" v-model="draft.abstract" class="textarea-sm" data-field="abstract" :aria-labelledby="labelledBy" :aria-describedby="describedBy"></textarea>
+          </PrksField>
+          <PrksField v-slot="{ labelledBy, describedBy }" label="Private notes" :for-id="fieldId('private_notes')">
+            <textarea :id="fieldId('private_notes')" v-model="draft.private_notes" class="textarea-sm" data-field="private_notes" :aria-labelledby="labelledBy" :aria-describedby="describedBy"></textarea>
+          </PrksField>
         </div>
       </details>
     </div>

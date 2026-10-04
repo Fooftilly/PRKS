@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
+import PrksLinkButton from '../../components/PrksLinkButton.vue'
 import { usePendingAction } from '../../route-surface/pending-action'
 import SearchResultsCollection from '../search/SearchResultsCollection.vue'
 import type { SavedViewIntents } from './intents'
@@ -54,7 +55,7 @@ watch(() => props.projection.generation, paintMode, { flush: 'post' })
         </div>
         <div class="page-header__actions">
           <div ref="modeHost" class="work-html-slot" data-prks-saved-view-mode-host></div>
-          <a class="prks-btn prks-btn--secondary" :href="projection.searchHash">Open as Search</a>
+          <PrksLinkButton :href="projection.searchHash">Open as Search</PrksLinkButton>
           <PrksButton id="prks-saved-view-edit" @click="edit">Edit</PrksButton>
           <PrksButton
             id="prks-saved-view-delete"
@@ -78,12 +79,12 @@ watch(() => props.projection.generation, paintMode, { flush: 'post' })
     <div class="prks-page-header page-header">
       <h2 class="prks-page-title">Could not load Saved View.</h2>
     </div>
-    <p class="meta-row"><a class="prks-btn prks-btn--secondary" href="#/views">Back to Saved Views</a></p>
+    <p class="meta-row"><PrksLinkButton href="#/views">Back to Saved Views</PrksLinkButton></p>
   </div>
   <div v-else data-prks-saved-view-not-found>
     <div class="prks-page-header page-header">
       <h2 class="prks-page-title">Saved View not found.</h2>
     </div>
-    <p class="meta-row"><a class="prks-btn prks-btn--secondary" href="#/views">Back to Saved Views</a></p>
+    <p class="meta-row"><PrksLinkButton href="#/views">Back to Saved Views</PrksLinkButton></p>
   </div>
 </template>

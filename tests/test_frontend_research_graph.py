@@ -216,11 +216,13 @@ class FrontendResearchGraphTests(unittest.TestCase):
         self.assertIn('data-prks-role="graph-reset">Reset layout', vue)
         self.assertIn('data-prks-role="graph-filters-toggle"', vue)
         self.assertIn('data-prks-role="graph-legend-toggle"', vue)
-        self.assertIn(">Filters</button>", vue)
-        self.assertIn(">Legend</button>", vue)
+        self.assertIn(">Filters</PrksDisclosureButton>", vue)
+        self.assertIn(">Legend</PrksDisclosureButton>", vue)
         # Filters/legend are real disclosure buttons, not a floating popover.
-        self.assertIn("aria-expanded=\"false\"", vue)
-        self.assertIn("aria-controls=", vue)
+        # Vue starts collapsed; classic graph JS mutates the live aria-expanded.
+        self.assertIn(':expanded="false"', vue)
+        self.assertIn(':controls="chrome?.filtersPanelId"', vue)
+        self.assertIn(':controls="chrome?.legendPanelId"', vue)
         # Filter checkboxes and legend content are disclosed, hidden by default.
         filters = vue.split('data-prks-role="graph-filters-panel"', 1)[1][:120]
         self.assertIn("hidden", filters)

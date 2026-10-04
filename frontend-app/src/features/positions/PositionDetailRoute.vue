@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { computed, inject, onMounted, ref, watch } from 'vue'
+import { computed, inject, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
+import PrksLinkButton from '../../components/PrksLinkButton.vue'
+import PrksRelSummary from '../../components/PrksRelSummary.vue'
+import PrksResearchRow from '../../components/PrksResearchRow.vue'
+import PrksResearchSectionHead from '../../components/PrksResearchSectionHead.vue'
 import { positionIntentsKey } from './intents'
 import { researchMarkdownHtml } from './markdown'
 import type { PositionDetailProjection } from './projection'
-import type { PositionArgumentRef } from './types'
 
 const props = defineProps<{
   projection: PositionDetailProjection
@@ -13,100 +16,22 @@ const props = defineProps<{
 
 const intents = inject(positionIntentsKey)
 const rootEl = ref<HTMLElement | null>(null)
-const summaryHost = ref<HTMLElement | null>(null)
-const descriptionHeadHost = ref<HTMLElement | null>(null)
-const descriptionHost = ref<HTMLElement | null>(null)
-const argumentsHeadHost = ref<HTMLElement | null>(null)
-const argumentsHost = ref<HTMLElement | null>(null)
 
 const availability = computed(() => props.projection.availability)
 const position = computed(() => props.projection.position)
 const ready = computed(() => availability.value === 'ready' && !!position.value)
 const argumentList = computed(() => position.value?.arguments ?? [])
-
 const descriptionHtml = computed(() => {
   const text = String(position.value?.description || '')
   if (!text.trim()) return '<p class="meta-row">No description yet.</p>'
   return researchMarkdownHtml(text)
 })
-
-function escHtml(value: string): string {
-  const fn = window.prksEscapeHtml
-  if (typeof fn === 'function') return fn(value)
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-}
-
-/** DESIGN.md: Argument/Stance rows via shared `prksResearchIndexRowHtml`. */
-function argumentRowsHtml(rows: readonly PositionArgumentRef[]): string {
-  const rowHtml = window.prksResearchIndexRowHtml
-  if (typeof rowHtml !== 'function') return ''
-  return rows
-    .map((row) => {
-      const kindLabel = row.kind === 'stance' ? 'Stance' : 'Argument'
-      const html = rowHtml({
-        href: `#/arguments/${encodeURIComponent(row.id)}`,
-        title: escHtml(row.name || row.id),
-        kind: escHtml(kindLabel),
-        meta: [escHtml(row.verdict_label || row.verdict_id || '')],
-      })
-      return html.replace('<a ', '<a data-prks-role="position-argument-link" ')
-    })
-    .join('')
-}
-
-function paintSectionHead(
-  host: HTMLElement | null,
-  title: string,
-  opts: { headingId?: string; count?: number },
-): void {
-  if (!host) return
-  const fn = window.prksResearchSectionHeadHtml
-  host.innerHTML = typeof fn === 'function' ? fn(title, opts) : ''
-}
-
-function paintSummary(): void {
-  const host = summaryHost.value
-  const p = position.value
-  if (!host || !p) return
-  if (typeof window.prksRelSummaryHtml !== 'function') {
-    host.innerHTML = ''
-    return
-  }
-  const n = p.arguments.length
-  host.innerHTML = window.prksRelSummaryHtml({
-    parts: [
-      n
-        ? `${n} ${n === 1 ? 'targeting Argument/Stance' : 'targeting Arguments/Stances'}`
-        : null,
-    ],
-  })
-}
-
-function paintDescription(): void {
-  const host = descriptionHost.value
-  if (!host) return
-  host.innerHTML = descriptionHtml.value
-}
-
-function paintArguments(): void {
-  const host = argumentsHost.value
-  if (!host) return
-  host.innerHTML = argumentList.value.length ? argumentRowsHtml(argumentList.value) : ''
-}
-
-function paintSectionHeads(): void {
-  paintSectionHead(descriptionHeadHost.value, 'Description', {
-    headingId: 'prks-position-desc-h',
-  })
-  paintSectionHead(argumentsHeadHost.value, 'Arguments & Stances', {
-    headingId: 'prks-position-args-h',
-    count: argumentList.value.length,
-  })
-}
+const summaryParts = computed(() => {
+  const n = argumentList.value.length
+  return [
+    n ? `${n} ${n === 1 ? 'targeting Argument/Stance' : 'targeting Arguments/Stances'}` : null,
+  ]
+})
 
 function refreshIcons(): void {
   const root = rootEl.value
@@ -116,18 +41,6 @@ function refreshIcons(): void {
 function onViewGraph(): void {
   if (position.value) intents?.viewGraph(position.value)
 }
-
-function paintAll(): void {
-  paintSummary()
-  paintSectionHeads()
-  paintDescription()
-  paintArguments()
-  refreshIcons()
-}
-
-onMounted(() => {
-  paintAll()
-})
 
 watch(
   () =>
@@ -139,7 +52,7 @@ watch(
       position.value?.arguments,
     ] as const,
   () => {
-    paintAll()
+    refreshIcons()
   },
   { flush: 'post' },
 )
@@ -160,7 +73,7 @@ watch(
         <h2 class="prks-page-title">Position not found.</h2>
       </div>
       <p class="meta-row">
-        <a class="prks-btn prks-btn--secondary" href="#/positions">Back to Positions</a>
+        <PrksLinkButton href="#/positions">Back to Positions</PrksLinkButton>
       </p>
     </template>
     <template v-else-if="ready && position">
@@ -169,7 +82,7 @@ watch(
           <div>
             <p class="saved-view-detail__kicker">Position</p>
             <h2 class="prks-page-title">{{ position.name || 'Position' }}</h2>
-            <div ref="summaryHost"></div>
+            <PrksRelSummary :parts="summaryParts" />
           </div>
           <div class="page-header__actions">
             <PrksButton id="prks-position-view-graph" @click="onViewGraph">
@@ -180,16 +93,26 @@ watch(
       </div>
       <div class="research-entity">
         <section class="research-entity__section" aria-labelledby="prks-position-desc-h">
-          <div ref="descriptionHeadHost"></div>
-          <div ref="descriptionHost" class="research-md"></div>
+          <PrksResearchSectionHead title="Description" heading-id="prks-position-desc-h" />
+          <div class="research-md" v-html="descriptionHtml"></div>
         </section>
         <section class="research-entity__section" aria-labelledby="prks-position-args-h">
-          <div ref="argumentsHeadHost"></div>
-          <div
-            v-if="argumentList.length"
-            ref="argumentsHost"
-            class="list-view prks-research-index"
-          ></div>
+          <PrksResearchSectionHead
+            title="Arguments &amp; Stances"
+            heading-id="prks-position-args-h"
+            :count="argumentList.length"
+          />
+          <div v-if="argumentList.length" class="list-view prks-research-index">
+            <PrksResearchRow
+              v-for="row in argumentList"
+              :key="row.id"
+              :href="`#/arguments/${encodeURIComponent(row.id)}`"
+              :title="row.name || row.id"
+              :kind="row.kind === 'stance' ? 'Stance' : 'Argument'"
+              :meta="[row.verdict_label || row.verdict_id || ''].filter(Boolean)"
+              data-prks-role="position-argument-link"
+            />
+          </div>
           <p v-else class="meta-row">No Arguments or Stances target this Position yet.</p>
         </section>
       </div>

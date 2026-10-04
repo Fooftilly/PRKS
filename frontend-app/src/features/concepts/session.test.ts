@@ -22,8 +22,6 @@ afterEach(() => {
   delete window.prksPaintScopeHost
   delete window.prksRefreshIcons
   delete window.prksRelSummaryHtml
-  delete window.prksResearchSectionHeadHtml
-  delete window.prksResearchIndexRowHtml
 })
 
 function host(): HTMLElement {
@@ -112,25 +110,6 @@ describe('Concepts route bridge', () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
     window.prksResearchMarkdownHtml = (text) => `<p>${text || ''}</p>`
-    window.prksRelSummaryHtml = () => '<p class="prks-rel-summary"></p>'
-    window.prksResearchSectionHeadHtml = (title, opts) => {
-      const o = opts || {}
-      const action = o.actionId
-        ? `<button type="button" id="${o.actionId}" data-prks-role="${o.actionRole || ''}">${
-            o.actionLabel || 'Edit'
-          }</button>`
-        : ''
-      const count =
-        o.count != null ? `<span class="research-entity__section-count">${o.count}</span>` : ''
-      return (
-        `<div class="research-entity__section-head"><h3 id="${o.headingId || ''}">${title}</h3>` +
-        (action || count
-          ? `<div class="research-entity__section-head-actions">${count}${action}</div>`
-          : '') +
-        `</div>` +
-        (o.sub ? `<p class="research-entity__section-sub meta-row">${o.sub}</p>` : '')
-      )
-    }
     window.prksRefreshIcons = () => {}
     const pane = owner()
     const el = host()
@@ -197,14 +176,7 @@ describe('Concepts route bridge', () => {
 
   it('repaints the relation summary when parents/mentions change in place', async () => {
     window.prksResearchMarkdownHtml = (text) => `<p>${text || ''}</p>`
-    window.prksResearchSectionHeadHtml = () => '<div class="research-entity__section-head"></div>'
     window.prksRefreshIcons = () => {}
-    const summaries: string[] = []
-    window.prksRelSummaryHtml = (opts) => {
-      const text = (opts.parts || []).filter(Boolean).join(' · ')
-      summaries.push(text)
-      return `<p class="prks-rel-summary" data-summary="${text}"></p>`
-    }
     const pane = owner()
     const el = host()
     presentConceptDetail({
@@ -222,7 +194,7 @@ describe('Concepts route bridge', () => {
       },
       generation: 7,
     })
-    expect(el.querySelector('[data-summary]')?.getAttribute('data-summary') || '').toBe('')
+    expect(el.querySelector('.prks-rel-summary')).toBeNull()
     presentConceptDetail({
       owner: pane,
       host: el,
@@ -239,13 +211,9 @@ describe('Concepts route bridge', () => {
       generation: 7,
     })
     await nextTick()
-    expect(el.querySelector('[data-summary]')?.getAttribute('data-summary')).toContain('1 parent')
-    expect(el.querySelector('[data-summary]')?.getAttribute('data-summary')).toContain(
-      '3 note mentions',
-    )
-    expect(summaries.some((s) => s.includes('1 parent') && s.includes('3 note mentions'))).toBe(
-      true,
-    )
+    const summary = el.querySelector('.prks-rel-summary')?.textContent || ''
+    expect(summary).toContain('1 parent')
+    expect(summary).toContain('3 note mentions')
   })
 
   it('keeps index searchQuery across same-generation in-place projection updates', async () => {
