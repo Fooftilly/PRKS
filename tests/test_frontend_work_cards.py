@@ -109,6 +109,9 @@ class FrontendWorkCardTests(unittest.TestCase):
         self.assertGreater(present_at, read_at)
         self.assertIn("prksReleaseWorkThumbPreview", session[read_at:present_at])
         self.assertIn("previous.params.folderId", session[read_at:present_at])
+        self.assertIn("previous.mounted", session[read_at:present_at])
+        self.assertIn("previous.generation", session[read_at:present_at])
+        self.assertIn("input.host.isConnected", session[read_at:present_at])
         self.assertIn("input.host", session[read_at:present_at])
         lifetime = _read(os.path.join(
             _PROJECT_DIR, "frontend-app", "src", "components", "use-work-card-collection.ts"))

@@ -244,6 +244,47 @@ describe('Folder detail route bridge', () => {
     expect(preview.__prksWorkThumbPreviewSource).toBe(later)
   })
 
+  it('leaves the current Folder DOM and preview when a stale different-folder generation arrives', () => {
+    const preview = window as Window & { __prksWorkThumbPreviewSource?: Element | null }
+    const released: ParentNode[] = []
+    window.prksReleaseWorkThumbPreview = (root) => {
+      if (root) released.push(root)
+      const src = preview.__prksWorkThumbPreviewSource
+      if (!src || !root || typeof root.contains !== 'function' || !root.contains(src)) return
+      preview.__prksWorkThumbPreviewSource = null
+    }
+    window.prksReleaseLazyWorkThumbs = () => {}
+    const pane = owner()
+    const el = host()
+    presentFolderDetail({
+      owner: pane,
+      host: el,
+      folder: { id: 'f-b', title: 'Folder B', works: [{ id: 'w-b', file_path: '/api/pdfs/wb.pdf' }], children: [] },
+      generation: 6,
+    })
+    const thumb = el.querySelector('.work-card__thumb')
+    expect(thumb).not.toBeNull()
+    preview.__prksWorkThumbPreviewSource = thumb
+    presentFolderDetail({
+      owner: pane,
+      host: el,
+      folder: { id: 'f-a', title: 'Folder A', works: [{ id: 'w-a', file_path: '/api/pdfs/wa.pdf' }], children: [] },
+      preserveWorkspace: true,
+      generation: 5,
+    })
+    expect(released).toEqual([])
+    expect(preview.__prksWorkThumbPreviewSource).toBe(thumb)
+    expect(el.querySelector('[data-work-id="w-b"]')).not.toBeNull()
+    expect(el.querySelector('[data-work-id="w-a"]')).toBeNull()
+    expect(el.querySelector('.prks-page-title')?.textContent).toContain('Folder B')
+    expect(readRouteSurface(pane)).toMatchObject({
+      name: 'folder-detail',
+      canonicalHash: '#/folders/f-b',
+      generation: 6,
+      mounted: true,
+    })
+  })
+
   it('does not release another pane preview when this host paints another folder', () => {
     const preview = window as Window & { __prksWorkThumbPreviewSource?: Element | null }
     window.prksReleaseWorkThumbPreview = (root) => {

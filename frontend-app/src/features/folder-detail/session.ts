@@ -82,12 +82,20 @@ export function presentFolderDetail(input: FolderDetailPresentInput): void {
   }
   // Folder→Folder retain keeps this host. Release this pane's body-mounted
   // preview while the previous thumb is still connected, before the next
-  // Folder paint replaces it. Scoped to input.host so another pane's
-  // connected preview stays up.
+  // eligible Folder paint replaces it. Skip stale/rejected generations so a
+  // late Folder A response cannot dismiss Folder B's still-current preview.
+  // Scoped to input.host so another pane's connected preview stays up.
   const previous = readRouteSurface(input.owner)
+  const requestedGeneration =
+    typeof input.generation === 'number' && Number.isFinite(input.generation)
+      ? input.generation
+      : null
   if (
     previous?.name === 'folder-detail' &&
-    String(previous.params.folderId || '') !== folderId
+    previous.mounted &&
+    input.host.isConnected &&
+    String(previous.params.folderId || '') !== folderId &&
+    (requestedGeneration == null || requestedGeneration >= previous.generation)
   ) {
     window.prksReleaseWorkThumbPreview?.(input.host)
   }
