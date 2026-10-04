@@ -98,7 +98,7 @@ Storybook 10.6 has no lightweight story or accessibility command that avoids a b
 
 ### Vue/TypeScript ESLint
 
-`npm run lint` in `frontend-app` runs ESLint 10 with `eslint-plugin-vue` essential rules and `typescript-eslint` recommended on `.vue` / `.ts`. It is correctness-oriented, not a formatter. CI’s Vue job runs it. The repository-root `eslint.config.mjs` remains the legacy `frontend/**/*.js` bug-rule set. Generated OpenAPI types are ignored. `vue/no-v-html` is off because Lucide icon HTML and sanitizer-backed research markdown still use `v-html`. Narrow file comments document other exceptions.
+`npm run lint` in `frontend-app` runs ESLint 10 with `eslint-plugin-vue` essential rules and `typescript-eslint` recommended, including the `eslintRecommended` core slice (`prefer-const`, `no-var`, and the rest), on both `.ts` and Vue `<script lang="ts">`. `vue-eslint-parser` is used for `.vue` only; plain `.ts` stays on the TypeScript parser. It is correctness-oriented, not a formatter. CI’s Vue job runs it. The repository-root `eslint.config.mjs` remains the legacy `frontend/**/*.js` bug-rule set. Generated OpenAPI types are ignored. `vue/no-v-html` is off because Lucide icon HTML and sanitizer-backed research markdown still use `v-html`. Narrow file comments document other exceptions.
 
 Storybook is a maintainer catalog. It does not ship in `frontend/vue/`, does not change the production mount, and does not require Node to run PRKS.
 
