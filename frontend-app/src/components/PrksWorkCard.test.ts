@@ -2,6 +2,8 @@ import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import PrksWorkCard from './PrksWorkCard.vue'
 import {
+  WORK_THUMB_PLACEHOLDER,
+  workCardCollectionFingerprint,
   workCardCreditText,
   workCardEmptyThumbTitle,
   workCardFileSizeLabel,
@@ -36,6 +38,24 @@ describe('Work-card helpers', () => {
     })
     expect(workCardThumbOptions(false, { subtitle: 'sub' })).toEqual({ subtitle: 'sub' })
   })
+
+  it('fingerprints work/thumb identity, not parent noise', () => {
+    const pdf = { id: 'W-8', file_path: '/api/pdfs/w8.pdf', thumb_page: 1, title: 'One' }
+    const sameThumb = workCardCollectionFingerprint([{ ...pdf, title: 'Edited' }])
+    const origin = workCardCollectionFingerprint([pdf])
+    expect(sameThumb).toBe(origin)
+    expect(workCardCollectionFingerprint([{ ...pdf, thumb_page: 2 }])).not.toBe(origin)
+    expect(
+      workCardCollectionFingerprint([
+        { id: 'W-5', source_kind: 'video', thumb_url: 'https://img.example/a.jpg' },
+      ]),
+    ).not.toBe(
+      workCardCollectionFingerprint([
+        { id: 'W-5', sourceKind: 'video', thumbUrl: 'https://img.example/b.jpg' },
+      ]),
+    )
+    expect(workCardCollectionFingerprint([pdf], { suppressThumbnail: true })).not.toBe(origin)
+  })
 })
 
 describe('PrksWorkCard', () => {
@@ -55,11 +75,15 @@ describe('PrksWorkCard', () => {
       },
     })
     const card = wrapper.get('.project-card--work-card')
-    expect(card.attributes('role')).toBe('link')
-    expect(card.attributes('tabindex')).toBe('0')
     expect(card.attributes('data-work-id')).toBe('W-1')
     expect(card.attributes('data-prks-route')).toBe('#/works/W-1')
-    expect(card.attributes('aria-label')).toBe('The Culture Industry')
+    expect(card.attributes('role')).toBeUndefined()
+    expect(card.attributes('tabindex')).toBeUndefined()
+    const link = wrapper.get('a.work-card__link')
+    expect(link.element.tagName).toBe('A')
+    expect(link.attributes('href')).toBe('#/works/W-1')
+    expect(link.attributes('aria-label')).toBe('The Culture Industry')
+    expect(wrapper.find('.work-card__select').exists()).toBe(false)
     expect(wrapper.get('.card-title').text()).toBe('The Culture Industry')
     expect(wrapper.get('.work-card__meta').text()).toBe('Author: Theodor W. Adorno · 1972')
     expect(wrapper.get('.work-card__context').text()).toBe('Added Sep 5, 2026')
@@ -110,5 +134,35 @@ describe('PrksWorkCard', () => {
     expect(empty.get('.work-card__thumb').classes()).toContain('work-card__thumb--empty')
     expect(empty.get('.work-card__thumb').classes()).toContain('work-card__thumb--video')
     expect(empty.get('.work-card__thumb').attributes('title')).toBe('No video preview')
+  })
+
+  it('recreates the thumb subtree when the same Work changes page', async () => {
+    const wrapper = mount(PrksWorkCard, {
+      props: {
+        work: {
+          id: 'W-8',
+          title: 'Paged',
+          file_path: '/api/pdfs/w8.pdf',
+          thumb_page: 1,
+        },
+      },
+    })
+    const img = wrapper.get('img').element as HTMLImageElement
+    expect(img.getAttribute('data-prks-thumb-lazy')).toBe('1')
+    img.setAttribute('src', '/hydrated-page-1.png')
+    img.removeAttribute('data-prks-thumb-lazy')
+    await wrapper.setProps({
+      work: {
+        id: 'W-8',
+        title: 'Paged',
+        file_path: '/api/pdfs/w8.pdf',
+        thumb_page: 2,
+      },
+    })
+    const next = wrapper.get('img').element as HTMLImageElement
+    expect(next).not.toBe(img)
+    expect(next.getAttribute('data-prks-thumb-lazy')).toBe('1')
+    expect(next.getAttribute('src')).toBe(WORK_THUMB_PLACEHOLDER)
+    expect(wrapper.get('.work-card__thumb').attributes('data-prks-thumb-page')).toBe('2')
   })
 })

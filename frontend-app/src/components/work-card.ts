@@ -160,3 +160,33 @@ export function workCardThumbOptions(
   if (offlineCached) return { ...extra, suppressThumbnail: true }
   return extra
 }
+
+function workCardSourceField(work: Record<string, unknown>, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = work[key]
+    if (value != null && value !== '') return String(value)
+  }
+  return ''
+}
+
+/**
+ * Collection lifetime key: Work id plus effective thumb identity.
+ * Parent noise (draft text, generation, overlay titles) must not live here.
+ */
+export function workCardCollectionFingerprint(
+  works: readonly unknown[] | null | undefined,
+  extra: { suppressThumbnail?: boolean } = {},
+): string {
+  const rows = Array.isArray(works) ? works : []
+  const lines = rows.map((raw) => {
+    const work = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+    return [
+      workCardSourceField(work, 'id'),
+      workCardSourceField(work, 'thumb_page', 'thumbPage'),
+      workCardSourceField(work, 'thumb_url', 'thumbUrl'),
+      workCardSourceField(work, 'file_path', 'filePath'),
+      workCardSourceField(work, 'source_kind', 'sourceKind'),
+    ].join('\t')
+  })
+  return `${extra.suppressThumbnail ? '1' : '0'}\n${lines.join('\n')}`
+}

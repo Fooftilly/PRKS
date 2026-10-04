@@ -90,25 +90,41 @@ class FrontendWorkCardTests(unittest.TestCase):
         self.assertGreater(at, 0)
         window = app[max(0, at - 280) : at]
         self.assertNotIn("!sameFolderWorkspace && typeof window.prksReleaseWorkThumbPreview", window)
-        # Folder→Folder keeps the shell. Vue releases thumbs in onBeforeUpdate
-        # while previous cards are still under main, then paints PrksWorkCard.
+        # Folder→Folder keeps the shell. Vue releases thumbs when the work/thumb
+        # source changes, flush-pre while previous cards are still under main.
         detail = _read(os.path.join(
             _PROJECT_DIR, "frontend-app", "src", "features", "folder-detail", "FolderDetailRoute.vue"))
         self.assertIn("useWorkCardCollection(mainEl", detail)
+        self.assertIn("workCardCollectionFingerprint", detail)
         self.assertIn("PrksWorkCard", detail)
-        self.assertIn("onBeforeUpdate(release)", _read(os.path.join(
-            _PROJECT_DIR, "frontend-app", "src", "components", "use-work-card-collection.ts")))
-        self.assertIn("prksReleaseWorkThumbPreview", _read(os.path.join(
-            _PROJECT_DIR, "frontend-app", "src", "components", "use-work-card-collection.ts")))
-        self.assertIn("prksReleaseLazyWorkThumbs", _read(os.path.join(
-            _PROJECT_DIR, "frontend-app", "src", "components", "use-work-card-collection.ts")))
+        lifetime = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "components", "use-work-card-collection.ts"))
+        self.assertIn("flush: 'pre'", lifetime)
+        self.assertIn("flush: 'post'", lifetime)
+        self.assertNotIn("onBeforeUpdate", lifetime)
+        self.assertNotIn("onUpdated", lifetime)
+        self.assertIn("prksReleaseWorkThumbPreview", lifetime)
+        self.assertIn("prksReleaseLazyWorkThumbs", lifetime)
         unmount = detail.find("onBeforeUnmount")
         self.assertEqual(unmount, -1)
         recent = _read(os.path.join(
             _PROJECT_DIR, "frontend-app", "src", "features", "recent", "RecentRoute.vue"))
         self.assertIn("useWorkCardCollection(rootEl", recent)
+        self.assertIn("workCardCollectionFingerprint", recent)
         self.assertIn("PrksWorkCard", recent)
         self.assertIn("initWhen: () => !offlineCached.value", recent)
+        consumers = [
+            os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "search", "SearchResultsCollection.vue"),
+            os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "progress", "ProgressView.vue"),
+            os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "types", "TypeDetailRoute.vue"),
+            os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "people", "PersonDetailRoute.vue"),
+            os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "folder-library", "RecentlyAddedPane.vue"),
+        ]
+        for path in consumers:
+            src = _read(path)
+            self.assertIn("useWorkCardCollection", src, path)
+            self.assertIn("workCardCollectionFingerprint", src, path)
+            self.assertIn("source:", src, path)
 
     def test_saved_view_detail_exposes_browse_mode_toggle(self):
         sv = _read(os.path.join(

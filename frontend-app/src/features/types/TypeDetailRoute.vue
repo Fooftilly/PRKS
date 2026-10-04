@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import PrksWorkCard from '../../components/PrksWorkCard.vue'
 import { useWorkCardCollection } from '../../components/use-work-card-collection'
-import { workCardThumbOptions } from '../../components/work-card'
+import { workCardCollectionFingerprint, workCardThumbOptions } from '../../components/work-card'
 import type { TypeDetailProjection } from './projection'
 
 const props = defineProps<{
@@ -33,7 +33,11 @@ const collectionClass = computed(() => {
 const modeHost = ref<HTMLElement | null>(null)
 const rootEl = ref<HTMLElement | null>(null)
 
-useWorkCardCollection(rootEl, { initWhen: () => !offlineCached.value })
+useWorkCardCollection(rootEl, {
+  initWhen: () => !offlineCached.value,
+  source: () =>
+    workCardCollectionFingerprint(rows.value, { suppressThumbnail: offlineCached.value }),
+})
 
 function paintMode(): void {
   const host = modeHost.value

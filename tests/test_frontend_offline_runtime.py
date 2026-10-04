@@ -963,7 +963,7 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         # the Vue detail, which skips the portrait URL and the thumbnail request.
         self.assertIn("offlineCached: !!(ctx && ctx.ui && ctx.ui.personOfflineCached)", people)
         self.assertIn("props.projection.offlineCached", detail)
-        self.assertIn("suppressThumbnail: props.projection.offlineCached", detail)
+        self.assertIn("workCardThumbOptions(projection.offlineCached", detail)
         self.assertIn("/profile-image", detail)
         portrait = detail[detail.index("const portraitSrc"): detail.index("function emptyFields")]
         self.assertLess(portrait.index("offlineCached"), portrait.index("profile-image"))
@@ -1187,7 +1187,8 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         self.assertIn("suppressThumbnail: true", helpers)
         self.assertIn("workCardThumbOptions(projection.offlineCached)", detail)
         # Lazy hydration must be skipped too, not just the src.
-        self.assertIn("useWorkCardCollection(mainEl, { initWhen: () => !props.projection.offlineCached })", detail)
+        self.assertIn("initWhen: () => !props.projection.offlineCached", detail)
+        self.assertIn("workCardCollectionFingerprint", detail)
         self.assertIn("if (shouldInit()) window.prksInitLazyWorkThumbs?.(el)", lifetime)
 
     def test_recently_added_reads_through_its_own_offline_snapshot(self):

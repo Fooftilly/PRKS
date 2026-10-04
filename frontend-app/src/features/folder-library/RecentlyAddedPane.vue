@@ -5,7 +5,7 @@ import PrksButton from '../../components/PrksButton.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import PrksWorkCard from '../../components/PrksWorkCard.vue'
 import { useWorkCardCollection } from '../../components/use-work-card-collection'
-import { workCardThumbOptions } from '../../components/work-card'
+import { workCardCollectionFingerprint, workCardThumbOptions } from '../../components/work-card'
 import { folderLibraryIntentsKey } from './intents'
 import {
   effectiveRecentlyAddedRows,
@@ -56,7 +56,10 @@ function cardSubtitle(work: RecentlyAddedWork): string {
   return dateLabel ? `Added ${dateLabel}` : ''
 }
 
-const { release } = useWorkCardCollection(collectionEl)
+const { release } = useWorkCardCollection(collectionEl, {
+  source: () =>
+    workCardCollectionFingerprint(filtered.value, { suppressThumbnail: props.offlineCached }),
+})
 
 // Generic click listener with VueUse scope cleanup (#233). Preview ownership
 // stays in work-thumb-lifecycle / legacy helpers.

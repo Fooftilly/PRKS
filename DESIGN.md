@@ -554,7 +554,9 @@ Both share surface, border, selection, hover, focus, and metadata hierarchy. Wor
 
 **Thumbnail lifecycle** on the shared thumb slot: `loading` (skeleton) → `ready` | `error` (Unavailable) | `empty` (no applicable preview / offline suppress). Do not treat a white PDF page as unavailable. PDF thumbs stay `object-fit: contain`; video stays `cover`.
 
-**Quick preview:** hover (fine pointer) or keyboard `P` on a focused Work card shows a larger copy of the same thumb asset (viewport-safe, Escape dismisses). Preview never replaces open/navigation; click/Enter still opens the Work.
+**Navigation:** card content is a real internal `<a class="work-card__link" href="#/works/:id">`. `.project-card--work-card` stays the bulk-selection container; the injected checkbox is a card child **outside** that anchor. While bulk selection is active, Enter/Space on the card or its Work link toggle selection instead of navigating.
+
+**Quick preview:** hover (fine pointer) or keyboard `P` on a focused Work card (or its Work link) shows a larger copy of the same thumb asset (viewport-safe, Escape dismisses). Preview never replaces open/navigation; click/Enter still opens the Work.
 
 Bibliographic identity precedes contextual metadata. The card reads, top to bottom:
 
@@ -565,7 +567,7 @@ Bibliographic identity precedes contextual metadata. The card reads, top to bott
 
 Thumbnails carry a source class (`work-card__thumb--pdf` or `work-card__thumb--video`) from already-known `source_kind`/`file_path` data — no extra request to determine it. PDF thumbnails get a neutral padded frame (`object-fit: contain`, page visually separated from the frame) so a bright page doesn't read as a full-bleed photo in dark mode; video thumbnails stay `object-fit: cover`, full-bleed. Empty/broken thumbnails fall back to a source-appropriate label ("PDF"/"VIDEO"), never a blanket "PDF". Thumbnail `alt` stays empty — the card title is the semantic identity, not the image.
 
-Work cards are navigation surfaces, not control panels: no per-card `…` menu, favorite, quick delete/edit, or status buttons. Clicking the card remains the one action; existing bulk-selection behavior is unaffected.
+Work cards are navigation surfaces, not control panels: no per-card `…` menu, favorite, quick delete/edit, or status buttons. Clicking the Work link remains the one action; existing bulk-selection behavior is unaffected.
 
 ### Panels
 

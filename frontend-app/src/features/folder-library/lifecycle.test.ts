@@ -217,8 +217,46 @@ describe('Folder Library preview lifecycle (#170)', () => {
     overlayTitle = 'Overlay Title'
     await wrapper.setProps({ overlayRevision: 1 })
     await nextTick()
+    expect(releasePreview).not.toHaveBeenCalled()
+    expect(initLazy).not.toHaveBeenCalled()
+    expect(wrapper.find('#prks-folder-library-recently-added').html()).toContain('Overlay Title')
+  })
+
+  it('re-inits thumbs when overlay changes thumb identity', async () => {
+    const releasePreview = vi.fn()
+    const initLazy = vi.fn()
+    window.prksReleaseWorkThumbPreview = releasePreview
+    window.prksReleaseLazyWorkThumbs = () => {}
+    window.prksInitLazyWorkThumbs = initLazy
+    window.prksWorkBrowseCollectionClass = () => 'card-grid'
+    let overlayPage = 1
+    window.prksEffectiveProjectionRows = (rows) =>
+      rows.map((r) => ({ ...(r as object), thumb_page: overlayPage }))
+
+    const wrapper = mount(RecentlyAddedPane, {
+      props: {
+        folders: [],
+        filterQuery: '',
+        works: [{ id: 'W1', title: 'One', file_path: '/api/pdfs/w1.pdf', thumb_page: 1 }],
+        offlineCached: false,
+        unavailable: false,
+        loading: false,
+        generation: 1,
+        overlayRevision: 0,
+      },
+      global: {
+        provide: {
+          [folderLibraryIntentsKey as symbol]: noopIntents,
+        },
+      },
+    })
+    await nextTick()
+    releasePreview.mockClear()
+    initLazy.mockClear()
+    overlayPage = 2
+    await wrapper.setProps({ overlayRevision: 1 })
+    await nextTick()
     expect(releasePreview).toHaveBeenCalled()
     expect(initLazy).toHaveBeenCalled()
-    expect(wrapper.find('#prks-folder-library-recently-added').html()).toContain('Overlay Title')
   })
 })

@@ -43,6 +43,9 @@
             file_path: '/api/pdfs/w1.pdf',
         };
         const withContext = cardHtml(pdfWork, { subtitle: 'Added Sep 5, 2026' });
+        assert('card uses a real work href', withContext.indexOf('href="#/works/W-1"') !== -1);
+        assert('card wraps content in work-card__link', withContext.indexOf('class="work-card__link"') !== -1);
+        assert('card is not a synthetic role=link', withContext.indexOf('role="link"') === -1);
         assert('meta line present', withContext.indexOf('work-card__meta') !== -1);
         assert('context line present', withContext.indexOf('work-card__context') !== -1);
         assert('meta line has author + year', /work-card__meta">Author: Theodor W\. Adorno · 1972</.test(withContext));

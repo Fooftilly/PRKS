@@ -4,7 +4,7 @@ import PrksWorkCard from '../../components/PrksWorkCard.vue'
 import PrksScopeLine from '../../components/PrksScopeLine.vue'
 import PrksState from '../../components/PrksState.vue'
 import { useWorkCardCollection } from '../../components/use-work-card-collection'
-import { workCardThumbOptions } from '../../components/work-card'
+import { workCardCollectionFingerprint, workCardThumbOptions } from '../../components/work-card'
 import { progressCardSubtitle, progressFileCountLabel, progressPageTitle, progressVisibleRows } from './rows'
 import type { ProgressSnapshot } from './state'
 
@@ -28,7 +28,10 @@ const collectionClass = computed(() => {
 const modeHost = ref<HTMLElement | null>(null)
 const collectionEl = ref<HTMLElement | null>(null)
 
-useWorkCardCollection(collectionEl)
+useWorkCardCollection(collectionEl, {
+  source: () =>
+    workCardCollectionFingerprint(visible.value, { suppressThumbnail: offlineCached.value }),
+})
 
 function paintMode(): void {
   const host = modeHost.value

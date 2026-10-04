@@ -648,7 +648,8 @@ function prksWorkCardHtml(w, options = {}) {
     const contextHtml = subtitle ? `<div class="work-card__context">${subtitle}</div>` : '';
 
     return `
-        <div class="project-card project-card--work-card" data-work-id="${wid}" data-prks-route="#/works/${wid}" data-prks-middleclick-nav="1" role="link" tabindex="0" aria-label="${title}">
+        <div class="project-card project-card--work-card" data-work-id="${wid}" data-prks-route="#/works/${wid}" data-prks-middleclick-nav="1">
+            <a class="work-card__link" href="#/works/${wid}" aria-label="${title}">
             ${thumbHtml}
             <div class="work-card__body">
                 <div class="card-title" title="${title}">${title}</div>
@@ -662,6 +663,7 @@ function prksWorkCardHtml(w, options = {}) {
                     ${fileSizeHtml ? `<div class="work-card__badges-right">${fileSizeHtml}</div>` : ''}
                 </div>
             </div>
+            </a>
         </div>
     `;
 }
@@ -813,6 +815,26 @@ function prksWorkThumbFromCard(card) {
     return card.querySelector('.work-card__thumb[data-prks-thumb-preview-kind]');
 }
 
+function prksWorkCardKeyBlocked(t) {
+    if (!t || !t.closest) return true;
+    if (t.closest('input, button, textarea, select, [contenteditable="true"]')) return true;
+    const a = t.closest('a');
+    if (!a) return false;
+    return !a.classList.contains('work-card__link');
+}
+
+function prksWorkCardFromEventTarget(t) {
+    if (prksWorkCardKeyBlocked(t)) return null;
+    return t.closest('.project-card--work-card[data-work-id]');
+}
+
+function prksWorkCardBulkOwnsKeys() {
+    if (typeof window.prksWorkSelectionIsActive === 'function' && window.prksWorkSelectionIsActive()) {
+        return true;
+    }
+    return !!(document.body && document.body.classList.contains('prks-bulk-selection-active'));
+}
+
 if (typeof document !== 'undefined' && !window.__prksWorkCardKeyNavBound) {
     window.__prksWorkCardKeyNavBound = true;
     document.addEventListener('keydown', function (e) {
@@ -824,7 +846,7 @@ if (typeof document !== 'undefined' && !window.__prksWorkCardKeyNavBound) {
                 return;
             }
         }
-        /* Preview without navigating: P while a Work card is focused. */
+        /* Preview without navigating: P while a Work card (or its link) is focused. */
         if (
             (e.key === 'p' || e.key === 'P') &&
             !e.metaKey &&
@@ -832,36 +854,29 @@ if (typeof document !== 'undefined' && !window.__prksWorkCardKeyNavBound) {
             !e.altKey
         ) {
             const t = e.target;
-            if (t && t.closest && t.closest('input, button, a, textarea, select, [contenteditable="true"]')) {
+            const card = prksWorkCardFromEventTarget(t);
+            if (!card) return;
+            const link = card.querySelector('a.work-card__link');
+            if (t !== card && t !== link && !(link && link.contains(t))) return;
+            const thumb = prksWorkThumbFromCard(card);
+            if (thumb) {
+                e.preventDefault();
+                prksShowWorkThumbPreview(thumb);
                 return;
-            }
-            const card =
-                t && t.closest
-                    ? t.closest('.project-card--work-card[data-prks-route][role="link"]')
-                    : null;
-            if (card && t === card) {
-                const thumb = prksWorkThumbFromCard(card);
-                if (thumb) {
-                    e.preventDefault();
-                    prksShowWorkThumbPreview(thumb);
-                    return;
-                }
             }
         }
         if (e.key !== 'Enter' && e.key !== ' ') return;
         const t = e.target;
-        if (!t || !t.closest) return;
-        if (t.closest('input, button, a, textarea, select, [contenteditable="true"]')) return;
+        const card = prksWorkCardFromEventTarget(t);
+        if (!card) return;
         /* Bulk selection owns Enter/Space on Work cards (toggle, not navigate). */
-        if (typeof window.prksWorkSelectionIsActive === 'function' && window.prksWorkSelectionIsActive()) {
-            return;
-        }
-        if (document.body && document.body.classList.contains('prks-bulk-selection-active')) {
-            return;
-        }
-        const card = t.closest('.project-card--work-card[data-prks-route][role="link"]');
-        if (!card || t !== card) return;
-        const hash = card.getAttribute('data-prks-route');
+        if (prksWorkCardBulkOwnsKeys()) return;
+        /* Enter on the native <a href> follows the hash; Space still opens the Work. */
+        if (e.key === 'Enter') return;
+        const hash =
+            card.getAttribute('data-prks-route') ||
+            (card.querySelector('a.work-card__link') || {}).getAttribute('href') ||
+            '';
         if (!hash) return;
         e.preventDefault();
         prksHideWorkThumbPreview();

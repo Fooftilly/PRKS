@@ -91,9 +91,12 @@ describe('shared primitive a11y contracts', () => {
       props: { work: { id: 'W-1', title: 'Notes' } },
     })
     const card = wrapper.get('.project-card--work-card').element as HTMLElement
-    expect(card.getAttribute('role')).toBe('link')
-    expect(card.getAttribute('tabindex')).toBe('0')
-    expect(card.getAttribute('aria-label')).toBe('Notes')
+    const link = wrapper.get('a.work-card__link').element as HTMLAnchorElement
+    expect(card.getAttribute('role')).toBeNull()
+    expect(card.getAttribute('tabindex')).toBeNull()
+    expect(link.tagName).toBe('A')
+    expect(link.getAttribute('href')).toBe('#/works/W-1')
+    expect(link.getAttribute('aria-label')).toBe('Notes')
     expect(card.getAttribute('data-prks-route')).toBe('#/works/W-1')
   })
 })

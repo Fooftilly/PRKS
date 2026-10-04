@@ -4,7 +4,7 @@ import PrksButton from '../../components/PrksButton.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import PrksWorkCard from '../../components/PrksWorkCard.vue'
 import { useWorkCardCollection } from '../../components/use-work-card-collection'
-import { workCardThumbOptions, type PrksWorkCardWork } from '../../components/work-card'
+import { workCardCollectionFingerprint, workCardThumbOptions, type PrksWorkCardWork } from '../../components/work-card'
 import { folderDetailIntentsKey } from './intents'
 import type { FolderDetailProjection } from './projection'
 
@@ -67,7 +67,13 @@ function paintMode(): void {
   window.prksBindWorkBrowseMode?.(rootEl.value)
 }
 
-useWorkCardCollection(mainEl, { initWhen: () => !props.projection.offlineCached })
+useWorkCardCollection(mainEl, {
+  initWhen: () => !props.projection.offlineCached,
+  source: () =>
+    workCardCollectionFingerprint(works.value, {
+      suppressThumbnail: props.projection.offlineCached,
+    }),
+})
 
 
 function rebindHierarchyNav(): void {

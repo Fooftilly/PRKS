@@ -4323,6 +4323,25 @@ a.tag {
     gap: var(--space-sm);
 }
 
+.project-card--work-card > .work-card__link {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: inherit;
+    align-items: inherit;
+    gap: inherit;
+    min-width: 0;
+    min-height: 0;
+    width: 100%;
+    color: inherit;
+    text-decoration: none;
+}
+
+.project-card--work-card > .work-card__link:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+    border-radius: inherit;
+}
+
 .work-browse-collection--list .project-card--work-card {
     flex-direction: row;
     align-items: stretch;

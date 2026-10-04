@@ -69,45 +69,45 @@ watch(
   <div
     class="project-card project-card--work-card"
     :data-work-id="workId"
-    :data-prks-route="href"
+    :data-prks-route="href || undefined"
     data-prks-middleclick-nav="1"
-    role="link"
-    tabindex="0"
-    :aria-label="title"
   >
-    <div
-      v-if="thumbSrc"
-      class="work-card__thumb work-card__thumb--loading"
-      :class="thumbKindClass"
-      data-prks-thumb-state="loading"
-      :data-prks-thumb-preview-kind="isVideoKind ? 'video' : 'pdf'"
-      :data-prks-thumb-page="thumbPage || undefined"
-    >
-      <img loading="lazy" alt="" :src="WORK_THUMB_PLACEHOLDER" data-prks-thumb-lazy="1" />
-    </div>
-    <div
-      v-else
-      class="work-card__thumb work-card__thumb--empty"
-      :class="thumbKindClass"
-      data-prks-thumb-state="empty"
-      :title="emptyTitle"
-      aria-hidden="true"
-    ></div>
-    <div class="work-card__body">
-      <div class="card-title" :title="title">{{ title }}</div>
-      <div v-if="meta" class="meta-row work-card__meta">{{ meta }}</div>
-      <div v-if="subtitle" class="work-card__context">{{ subtitle }}</div>
-      <div class="work-card__badges">
-        <div class="work-card__badges-left">
-          <span v-if="status" class="status-badge" :class="statusClass">
-            <span v-if="statusIconHtml" style="display: contents" v-html="statusIconHtml"></span>{{ status }}
-          </span>
-          <span v-if="typeBadgeHtml" style="display: contents" v-html="typeBadgeHtml"></span>
-        </div>
-        <div v-if="fileSizeLabel" class="work-card__badges-right">
-          <span class="work-card__file-size">{{ fileSizeLabel }}</span>
+    <a v-if="href" class="work-card__link" :href="href" :aria-label="title">
+      <div
+        v-if="thumbSrc"
+        :key="thumbSrc"
+        class="work-card__thumb work-card__thumb--loading"
+        :class="thumbKindClass"
+        data-prks-thumb-state="loading"
+        :data-prks-thumb-preview-kind="isVideoKind ? 'video' : 'pdf'"
+        :data-prks-thumb-page="thumbPage || undefined"
+      >
+        <img loading="lazy" alt="" :src="WORK_THUMB_PLACEHOLDER" data-prks-thumb-lazy="1" />
+      </div>
+      <div
+        v-else
+        class="work-card__thumb work-card__thumb--empty"
+        :class="thumbKindClass"
+        data-prks-thumb-state="empty"
+        :title="emptyTitle"
+        aria-hidden="true"
+      ></div>
+      <div class="work-card__body">
+        <div class="card-title" :title="title">{{ title }}</div>
+        <div v-if="meta" class="meta-row work-card__meta">{{ meta }}</div>
+        <div v-if="subtitle" class="work-card__context">{{ subtitle }}</div>
+        <div class="work-card__badges">
+          <div class="work-card__badges-left">
+            <span v-if="status" class="status-badge" :class="statusClass">
+              <span v-if="statusIconHtml" style="display: contents" v-html="statusIconHtml"></span>{{ status }}
+            </span>
+            <span v-if="typeBadgeHtml" style="display: contents" v-html="typeBadgeHtml"></span>
+          </div>
+          <div v-if="fileSizeLabel" class="work-card__badges-right">
+            <span class="work-card__file-size">{{ fileSizeLabel }}</span>
+          </div>
         </div>
       </div>
-    </div>
+    </a>
   </div>
 </template>

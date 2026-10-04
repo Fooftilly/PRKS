@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import PrksWorkCard from '../../components/PrksWorkCard.vue'
 import { useWorkCardCollection } from '../../components/use-work-card-collection'
+import { workCardCollectionFingerprint } from '../../components/work-card'
 import { searchResultSubtitle } from './search-result-subtitle'
 import type { SearchResultsProjection } from './types'
 
@@ -18,7 +19,9 @@ const collectionClass = computed(() => {
   return typeof fn === 'function' ? fn() : 'card-grid'
 })
 
-useWorkCardCollection(collectionEl)
+useWorkCardCollection(collectionEl, {
+  source: () => workCardCollectionFingerprint(rows.value),
+})
 </script>
 
 <template>

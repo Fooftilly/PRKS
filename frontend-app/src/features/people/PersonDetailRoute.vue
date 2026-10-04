@@ -5,7 +5,7 @@ import PrksField from '../../components/PrksField.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import PrksWorkCard from '../../components/PrksWorkCard.vue'
 import { useWorkCardCollection } from '../../components/use-work-card-collection'
-import { workCardThumbOptions, type PrksWorkCardWork } from '../../components/work-card'
+import { workCardCollectionFingerprint, workCardThumbOptions, type PrksWorkCardWork } from '../../components/work-card'
 import { peopleIntentsKey } from './intents'
 import { usePeoplePendingAction } from './pending-action'
 import type { PersonDetailProjection } from './projection'
@@ -226,7 +226,13 @@ function personWorkAsCard(work: PersonWorkItem): PrksWorkCardWork {
   }
 }
 
-useWorkCardCollection(worksHost, { initWhen: () => !props.projection.offlineCached })
+useWorkCardCollection(worksHost, {
+  initWhen: () => !props.projection.offlineCached,
+  source: () =>
+    workCardCollectionFingerprint(person.value?.works, {
+      suppressThumbnail: props.projection.offlineCached,
+    }),
+})
 </script>
 
 <template>
