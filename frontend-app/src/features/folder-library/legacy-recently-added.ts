@@ -9,18 +9,6 @@ export function recentlyAddedDateLabel(createdAt: unknown): string {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
-export function recentlyAddedWorkCardHtml(
-  work: RecentlyAddedWork,
-  offlineCached: boolean,
-): string {
-  const fn = window.prksWorkCardHtml
-  if (typeof fn !== 'function') return ''
-  const dateLabel = recentlyAddedDateLabel(work.created_at)
-  const subtitle = dateLabel ? `Added ${dateLabel}` : ''
-  if (offlineCached) return fn(work, { subtitle, suppressThumbnail: true })
-  return fn(work, { subtitle })
-}
-
 export function effectiveRecentlyAddedRows(acknowledged: RecentlyAddedWork[]): RecentlyAddedWork[] {
   const fn = window.prksEffectiveProjectionRows
   if (typeof fn !== 'function') return acknowledged

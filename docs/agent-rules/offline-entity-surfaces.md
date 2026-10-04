@@ -264,7 +264,7 @@ router: every one of these destinations is reached through the same
 are never part of the disposable cache. A Person route
 mounted from cache sets `ctx.ui.personOfflineCached`, which suppresses the
 portrait (`/api/persons/:id/profile-image`) and passes `suppressThumbnail: true`
-to `prksWorkCardHtml()`, so a cached mount issues no PRKS media request and
+to `PrksWorkCard` (`suppressThumbnail: true`), so a cached mount issues no PRKS media request and
 shows the ordinary no-photo/empty-thumb presentation rather than broken images.
 Portrait and thumbnail bytes are never cached — not in IndexedDB, not in the
 service worker. Media already loaded online is not torn down when connectivity

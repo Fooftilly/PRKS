@@ -14,7 +14,6 @@ afterEach(() => {
   vi.unstubAllGlobals()
   delete window.prksVuePresentRoute
   delete window.prksVueDismissRoute
-  delete window.prksWorkCardHtml
   delete window.prksDocTypeBadgeHtml
   delete window.prksIcon
   delete window.prksWorkBrowseModeToggleHtml
@@ -140,8 +139,6 @@ describe('File types route bridge', () => {
 
   it('dismisses one owner and leaves the other mounted', () => {
     stubBadge()
-    window.prksWorkCardHtml = (work, options) =>
-      `<div data-work-id="${String(work.id)}" data-hide="${options.hideDocTypeBadge ? '1' : '0'}" data-thumb="${options.suppressThumbnail ? 'off' : 'on'}"></div>`
     registerTypesBridge(window)
     const main = owner()
     const secondary = owner()
@@ -183,8 +180,6 @@ describe('File types route bridge', () => {
     stubBadge()
     window.prksWorkBrowseCollectionClass = (extra) => `card-grid ${extra || ''}`.trim()
     window.prksWorkBrowseModeToggleHtml = (id) => `<div data-mode="${id || ''}"></div>`
-    window.prksWorkCardHtml = (work, options) =>
-      `<div data-work-id="${String(work.id)}" data-hide="${options.hideDocTypeBadge ? '1' : '0'}" data-thumb="${options.suppressThumbnail ? 'off' : 'on'}"></div>`
     const pane = owner()
     const el = host()
     presentTypeDetail({
@@ -203,20 +198,15 @@ describe('File types route bridge', () => {
     expect(el.querySelector('[data-mode="prks-work-browse-mode-types"]')).not.toBeNull()
     expect(el.querySelector('.types-page__detail-grid')).not.toBeNull()
     const card = el.querySelector('[data-work-id="a"]')
-    expect(card?.getAttribute('data-hide')).toBe('1')
-    expect(card?.getAttribute('data-thumb')).toBe('off')
+    expect(card).not.toBeNull()
+    expect(card?.querySelector('.doc-type-badge')).toBeNull()
+    expect(card?.querySelector('.work-card__thumb--empty')).not.toBeNull()
     expect(fetchMock).not.toHaveBeenCalled()
     expect(readRouteSurface(pane)?.canonicalHash).toBe('#/types/book')
   })
 
   it('releases preview and lazy thumbs while they are still under the type detail root', async () => {
     stubBadge()
-    window.prksWorkCardHtml = (work, options) => {
-      const thumb = options?.suppressThumbnail
-        ? ''
-        : `<img data-prks-thumb-lazy data-for="${String(work.id)}">`
-      return `<div data-work-id="${String(work.id)}">${thumb}</div>`
-    }
     const preview = window as Window & { __prksWorkThumbPreviewSource?: Element | null }
     const releaseLog: Array<{ id: string | null; connected: boolean; underDetail: boolean }> = []
     window.prksReleaseWorkThumbPreview = (root) => {
@@ -228,7 +218,7 @@ describe('File types route bridge', () => {
       const img = root?.querySelector?.('img[data-prks-thumb-lazy]') ?? null
       if (!img || !root || typeof root.contains !== 'function' || !root.contains(img)) return
       releaseLog.push({
-        id: img.getAttribute('data-for'),
+        id: img.closest('[data-work-id]')?.getAttribute('data-work-id') ?? img.getAttribute('data-for'),
         connected: img.isConnected,
         underDetail: !!img.closest('[data-prks-types-detail]'),
       })
@@ -244,12 +234,12 @@ describe('File types route bridge', () => {
       host: el,
       docType: 'article',
       label: 'Article',
-      rows: [{ id: 'a' }],
+      rows: [{ id: 'a', file_path: '/api/pdfs/a.pdf' }],
       offlineCached: false,
       generation: 1,
     })
     const first = el.querySelector('img[data-prks-thumb-lazy]')
-    expect(first?.getAttribute('data-for')).toBe('a')
+    expect(first?.closest('[data-work-id]')?.getAttribute('data-work-id')).toBe('a')
     expect(inits).toEqual(['a'])
     preview.__prksWorkThumbPreviewSource = first
     presentTypeDetail({
@@ -257,7 +247,7 @@ describe('File types route bridge', () => {
       host: el,
       docType: 'article',
       label: 'Article',
-      rows: [{ id: 'b' }],
+      rows: [{ id: 'b', file_path: '/api/pdfs/b.pdf' }],
       offlineCached: false,
       generation: 1,
     })

@@ -3,10 +3,13 @@ import { computed, inject, onUpdated, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import PrksField from '../../components/PrksField.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
+import PrksWorkCard from '../../components/PrksWorkCard.vue'
+import { useWorkCardCollection } from '../../components/use-work-card-collection'
+import { workCardCollectionFingerprint, workCardThumbOptions, type PrksWorkCardWork } from '../../components/work-card'
 import { peopleIntentsKey } from './intents'
 import { usePeoplePendingAction } from './pending-action'
 import type { PersonDetailProjection } from './projection'
-import type { PersonFieldDraft, PersonGroupChip } from './types'
+import type { PersonFieldDraft, PersonGroupChip, PersonWorkItem } from './types'
 
 const FIELD_KEYS = [
   'first_name',
@@ -30,6 +33,7 @@ const intents = inject(peopleIntentsKey)
 const { actionBusy, actionBlocked, resetPending, withBusy } = usePeoplePendingAction()
 const rootEl = ref<HTMLElement | null>(null)
 const editorEl = ref<HTMLElement | null>(null)
+const worksHost = ref<HTMLElement | null>(null)
 const draft = ref<PersonFieldDraft>(emptyFields())
 const fieldBaseline = ref<PersonFieldDraft>(emptyFields())
 const groupBaseline = ref<string[]>([])
@@ -199,56 +203,36 @@ async function onUnlink(workId: string, roleType: string, orderIndex: string, ti
   })
 }
 
-function workCard(work: {
-  id: string
-  title: string
-  subtitle: string
-  filePath: string
-  thumbUrl: string
-  thumbPage: number | null
-  status: string
-  docType: string
-  year: string
-  publishedDate: string
-  sizeBytes: number | null
-  linkedAuthors: string
-  authorText: string
-  primaryAuthor: string
-  primaryEditor: string
-  sourceKind: string
-  sourceUrl: string
-  provider: string
-  providerId: string
-}): string {
-  const html = window.prksWorkCardHtml
-  if (typeof html !== 'function') return ''
-  return html(
-    {
-      id: work.id,
-      title: work.title,
-      file_path: work.filePath,
-      thumb_url: work.thumbUrl,
-      thumb_page: work.thumbPage,
-      status: work.status,
-      doc_type: work.docType,
-      year: work.year,
-      published_date: work.publishedDate,
-      file_size_bytes: work.sizeBytes,
-      linked_authors: work.linkedAuthors,
-      author_text: work.authorText,
-      primary_author: work.primaryAuthor,
-      primary_editor: work.primaryEditor,
-      source_kind: work.sourceKind,
-      source_url: work.sourceUrl,
-      provider: work.provider,
-      provider_id: work.providerId,
-    },
-    {
-      subtitle: work.subtitle || undefined,
-      suppressThumbnail: props.projection.offlineCached,
-    },
-  )
+function personWorkAsCard(work: PersonWorkItem): PrksWorkCardWork {
+  return {
+    id: work.id,
+    title: work.title,
+    file_path: work.filePath,
+    thumb_url: work.thumbUrl,
+    thumb_page: work.thumbPage,
+    status: work.status,
+    doc_type: work.docType,
+    year: work.year,
+    published_date: work.publishedDate,
+    file_size_bytes: work.sizeBytes,
+    linked_authors: work.linkedAuthors,
+    author_text: work.authorText,
+    primary_author: work.primaryAuthor,
+    primary_editor: work.primaryEditor,
+    source_kind: work.sourceKind,
+    source_url: work.sourceUrl,
+    provider: work.provider,
+    provider_id: work.providerId,
+  }
 }
+
+useWorkCardCollection(worksHost, {
+  initWhen: () => !props.projection.offlineCached,
+  source: () =>
+    workCardCollectionFingerprint(person.value?.works, {
+      suppressThumbnail: props.projection.offlineCached,
+    }),
+})
 </script>
 
 <template>
@@ -424,23 +408,35 @@ function workCard(work: {
               </PrksButton>
             </div>
             <PrksInlineMessage v-if="!person.works.length">This person is not linked to any files.</PrksInlineMessage>
-            <div v-for="work in person.works" :key="`${work.id}:${work.roleType}:${work.orderIndex}`" class="person-profile__work-card-wrap">
-              <div v-if="workCard(work)" v-html="workCard(work)"></div>
-              <p v-else class="meta-row">{{ work.title }} <span v-if="work.roleType">· {{ work.roleType }}</span></p>
-              <PrksButton
-                v-if="projection.worksEditing"
-                variant="ghost"
-                size="sm"
-                class="person-profile__card-unlink"
-                data-prks-role="person-mutation-control"
-                :aria-label="`Remove link to ${work.title} (${work.roleType})`"
-                :busy="actionBusy(`unlink:${work.id}:${work.roleType}`)"
-                :disabled="actionBlocked(`unlink:${work.id}:${work.roleType}`)"
-                busy-label="Removing…"
-                @click="onUnlink(work.id, work.roleType, work.orderIndex, work.title)"
+            <div
+              v-if="person.works.length"
+              ref="worksHost"
+              class="person-profile__works-list"
+            >
+              <div
+                v-for="work in person.works"
+                :key="`${work.id}:${work.roleType}:${work.orderIndex}`"
+                class="person-profile__work-card-wrap"
               >
-                ×
-              </PrksButton>
+                <PrksWorkCard
+                  :work="personWorkAsCard(work)"
+                  :options="workCardThumbOptions(projection.offlineCached, { subtitle: work.subtitle || undefined })"
+                />
+                <PrksButton
+                  v-if="projection.worksEditing"
+                  variant="ghost"
+                  size="sm"
+                  class="person-profile__card-unlink"
+                  data-prks-role="person-mutation-control"
+                  :aria-label="`Remove link to ${work.title} (${work.roleType})`"
+                  :busy="actionBusy(`unlink:${work.id}:${work.roleType}`)"
+                  :disabled="actionBlocked(`unlink:${work.id}:${work.roleType}`)"
+                  busy-label="Removing…"
+                  @click="onUnlink(work.id, work.roleType, work.orderIndex, work.title)"
+                >
+                  ×
+                </PrksButton>
+              </div>
             </div>
           </section>
         </div>

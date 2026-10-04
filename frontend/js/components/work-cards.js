@@ -548,6 +548,9 @@ function prksWorkCardCreditLine(w) {
 
 /**
  * Work card HTML for card-grid and compact-list layouts (CSS mode via collection class).
+ * Vue `PrksWorkCard` is the production renderer for migrated collections.
+ * This helper remains for the classic Folder Library Recently Added painter
+ * when `!st.vueOwned`. Do not add new callers.
  * @param {object} w
  * @param {object} options { subtitle?: string, thumbPage?: number, hideDocTypeBadge?: boolean,
  *   suppressThumbnail?: boolean }
@@ -645,7 +648,8 @@ function prksWorkCardHtml(w, options = {}) {
     const contextHtml = subtitle ? `<div class="work-card__context">${subtitle}</div>` : '';
 
     return `
-        <div class="project-card project-card--work-card" data-work-id="${wid}" data-prks-route="#/works/${wid}" data-prks-middleclick-nav="1" role="link" tabindex="0" aria-label="${title}">
+        <div class="project-card project-card--work-card" data-work-id="${wid}" data-prks-route="#/works/${wid}" data-prks-middleclick-nav="1">
+            <a class="work-card__link" href="#/works/${wid}" aria-label="${title}">
             ${thumbHtml}
             <div class="work-card__body">
                 <div class="card-title" title="${title}">${title}</div>
@@ -659,6 +663,7 @@ function prksWorkCardHtml(w, options = {}) {
                     ${fileSizeHtml ? `<div class="work-card__badges-right">${fileSizeHtml}</div>` : ''}
                 </div>
             </div>
+            </a>
         </div>
     `;
 }
@@ -712,31 +717,36 @@ function prksHideWorkThumbPreview() {
  * is left alone. With no root, dismiss only if the source left the document.
  * @param {ParentNode|null} [root]
  */
+function prksWorkThumbPreviewSourceConnected(src) {
+    if (!src) return false;
+    if (typeof src.isConnected === 'boolean') return src.isConnected;
+    return !!(typeof document !== 'undefined' && document.contains && document.contains(src));
+}
+
+function prksWorkThumbPreviewSourceUnder(root, src) {
+    if (!root || !src) return false;
+    if (typeof root.contains === 'function') return !!root.contains(src);
+    let n = src;
+    while (n) {
+        if (n === root) return true;
+        n = n.parentNode;
+    }
+    return false;
+}
+
 function prksReleaseWorkThumbPreview(root) {
     const src = window.__prksWorkThumbPreviewSource;
     if (!src) return;
+    // Folder→Folder preserve keeps the shell and may detach the previous
+    // thumb before a contains(root) check. A disconnected source is this
+    // pane's leftover body-mounted preview, not another tile's live one.
     if (root) {
-        let under = false;
-        if (typeof root.contains === 'function') {
-            under = !!root.contains(src);
-        } else {
-            let n = src;
-            while (n) {
-                if (n === root) {
-                    under = true;
-                    break;
-                }
-                n = n.parentNode;
-            }
+        if (prksWorkThumbPreviewSourceUnder(root, src) || !prksWorkThumbPreviewSourceConnected(src)) {
+            prksHideWorkThumbPreview();
         }
-        if (under) prksHideWorkThumbPreview();
         return;
     }
-    const connected =
-        typeof src.isConnected === 'boolean'
-            ? src.isConnected
-            : !!(typeof document !== 'undefined' && document.contains && document.contains(src));
-    if (!connected) prksHideWorkThumbPreview();
+    if (!prksWorkThumbPreviewSourceConnected(src)) prksHideWorkThumbPreview();
 }
 
 function prksPositionWorkThumbPreview(el, anchor) {
@@ -810,6 +820,48 @@ function prksWorkThumbFromCard(card) {
     return card.querySelector('.work-card__thumb[data-prks-thumb-preview-kind]');
 }
 
+function prksWorkCardFromNode(t) {
+    if (!t || !t.closest) return null;
+    return t.closest('.project-card--work-card[data-work-id]');
+}
+
+function prksWorkCardKeyBlocked(t) {
+    if (!t || !t.closest) return true;
+    if (t.closest('input, button, textarea, select, [contenteditable="true"]')) return true;
+    const a = t.closest('a');
+    if (!a) return false;
+    return !a.classList.contains('work-card__link');
+}
+
+function prksWorkCardFromEventTarget(t) {
+    if (prksWorkCardKeyBlocked(t)) return null;
+    return prksWorkCardFromNode(t);
+}
+
+/**
+ * Hover open/close is the thumbnail slot only (pre-#451 Work-card contract).
+ * Keyboard P still opens from the native work-card__link.
+ */
+function prksWorkThumbFromHoverTarget(t) {
+    if (!t || !t.closest) return null;
+    if (t.closest('.work-card__select, input, button, textarea, select')) return null;
+    return t.closest('.work-card__thumb[data-prks-thumb-preview-kind]');
+}
+
+function prksWorkThumbPointerStillInside(thumb, related) {
+    if (!thumb || !related) return false;
+    if (typeof thumb.contains === 'function' && thumb.contains(related)) return true;
+    const preview = document.getElementById('prks-work-thumb-preview');
+    return !!(preview && typeof preview.contains === 'function' && preview.contains(related));
+}
+
+function prksWorkCardBulkOwnsKeys() {
+    if (typeof window.prksWorkSelectionIsActive === 'function' && window.prksWorkSelectionIsActive()) {
+        return true;
+    }
+    return !!(document.body && document.body.classList.contains('prks-bulk-selection-active'));
+}
+
 if (typeof document !== 'undefined' && !window.__prksWorkCardKeyNavBound) {
     window.__prksWorkCardKeyNavBound = true;
     document.addEventListener('keydown', function (e) {
@@ -821,44 +873,33 @@ if (typeof document !== 'undefined' && !window.__prksWorkCardKeyNavBound) {
                 return;
             }
         }
-        /* Preview without navigating: P while a Work card is focused. */
+        /* Preview without navigating: P while the Work card or its native link is focused. */
         if (
             (e.key === 'p' || e.key === 'P') &&
             !e.metaKey &&
             !e.ctrlKey &&
             !e.altKey
         ) {
-            const t = e.target;
-            if (t && t.closest && t.closest('input, button, a, textarea, select, [contenteditable="true"]')) {
-                return;
+            const card = prksWorkCardFromEventTarget(e.target);
+            if (!card) return;
+            const thumb = prksWorkThumbFromCard(card);
+            if (thumb) {
+                e.preventDefault();
+                prksShowWorkThumbPreview(thumb);
             }
-            const card =
-                t && t.closest
-                    ? t.closest('.project-card--work-card[data-prks-route][role="link"]')
-                    : null;
-            if (card && t === card) {
-                const thumb = prksWorkThumbFromCard(card);
-                if (thumb) {
-                    e.preventDefault();
-                    prksShowWorkThumbPreview(thumb);
-                    return;
-                }
-            }
+            return;
         }
         if (e.key !== 'Enter' && e.key !== ' ') return;
-        const t = e.target;
-        if (!t || !t.closest) return;
-        if (t.closest('input, button, a, textarea, select, [contenteditable="true"]')) return;
+        const card = prksWorkCardFromEventTarget(e.target);
+        if (!card) return;
         /* Bulk selection owns Enter/Space on Work cards (toggle, not navigate). */
-        if (typeof window.prksWorkSelectionIsActive === 'function' && window.prksWorkSelectionIsActive()) {
-            return;
-        }
-        if (document.body && document.body.classList.contains('prks-bulk-selection-active')) {
-            return;
-        }
-        const card = t.closest('.project-card--work-card[data-prks-route][role="link"]');
-        if (!card || t !== card) return;
-        const hash = card.getAttribute('data-prks-route');
+        if (prksWorkCardBulkOwnsKeys()) return;
+        /* Enter on the native <a href> follows the hash; Space still opens the Work. */
+        if (e.key === 'Enter') return;
+        const hash =
+            card.getAttribute('data-prks-route') ||
+            (card.querySelector('a.work-card__link') || {}).getAttribute('href') ||
+            '';
         if (!hash) return;
         e.preventDefault();
         prksHideWorkThumbPreview();
@@ -869,9 +910,9 @@ if (typeof document !== 'undefined' && !window.__prksWorkCardKeyNavBound) {
         'pointerover',
         function (e) {
             const t = e.target;
-            if (!t || !t.closest) return;
-            const thumb = t.closest('.work-card__thumb[data-prks-thumb-preview-kind]');
+            const thumb = prksWorkThumbFromHoverTarget(t);
             if (!thumb) return;
+            if (t && t.closest && t.closest('[aria-busy="true"]')) return;
             if (window.matchMedia && window.matchMedia('(hover: none)').matches) return;
             prksShowWorkThumbPreview(thumb);
         },
@@ -881,14 +922,9 @@ if (typeof document !== 'undefined' && !window.__prksWorkCardKeyNavBound) {
     document.addEventListener(
         'pointerout',
         function (e) {
-            const t = e.target;
-            if (!t || !t.closest) return;
-            const thumb = t.closest('.work-card__thumb[data-prks-thumb-preview-kind]');
+            const thumb = prksWorkThumbFromHoverTarget(e.target);
             if (!thumb) return;
-            const related = e.relatedTarget;
-            if (related && thumb.contains(related)) return;
-            const preview = document.getElementById('prks-work-thumb-preview');
-            if (preview && related && preview.contains(related)) return;
+            if (prksWorkThumbPointerStillInside(thumb, e.relatedTarget)) return;
             if (window.__prksWorkThumbPreviewSource === thumb) prksHideWorkThumbPreview();
         },
         true
@@ -922,6 +958,7 @@ window.prksReleaseLazyWorkThumbs = prksReleaseLazyWorkThumbs;
 window.prksWorkCardCreditText = prksWorkCardCreditText;
 window.prksWorkCardCreditLine = prksWorkCardCreditLine;
 window.prksSafeWorkThumbSrc = prksSafeWorkThumbSrc;
+window.prksRegisterWorkThumbUrl = prksRegisterWorkThumbUrl;
 window.prksLookupRegisteredWorkThumbUrl = prksLookupRegisteredWorkThumbUrl;
 window.prksResolveWorkThumbSrc = prksResolveWorkThumbSrc;
 window.prksGetWorkBrowseMode = prksGetWorkBrowseMode;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { progressWorkCardOptions } from './legacy-work-card'
+import { workCardThumbOptions } from '../../components/work-card'
 import {
   acceptEffectiveRows,
   progressCardSubtitle,
@@ -77,7 +77,7 @@ describe('Progress effective rows', () => {
     expect(acceptEffectiveRows([{ id: 'ok', status: 'Planned' }, null, 'no', []])).toEqual([
       { id: 'ok', status: 'Planned' },
     ])
-    expect(progressWorkCardOptions(true, 'sub')).toEqual({ subtitle: 'sub', suppressThumbnail: true })
-    expect(progressWorkCardOptions(false, 'sub')).toEqual({ subtitle: 'sub' })
+    expect(workCardThumbOptions(true, { subtitle: 'sub' })).toEqual({ subtitle: 'sub', suppressThumbnail: true })
+    expect(workCardThumbOptions(false, { subtitle: 'sub' })).toEqual({ subtitle: 'sub' })
   })
 })

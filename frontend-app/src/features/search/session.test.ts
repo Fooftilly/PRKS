@@ -9,7 +9,6 @@ afterEach(() => {
   vi.unstubAllGlobals()
   delete window.prksVuePresentRoute
   delete window.prksVueDismissRoute
-  delete window.prksWorkCardHtml
   delete window.prksAbstractExcerpt
   delete window.prksReleaseWorkThumbPreview
   delete window.prksReleaseLazyWorkThumbs
@@ -37,10 +36,7 @@ function owner(tabId: string) {
   }
 }
 
-function cards(): void {
-  window.prksWorkCardHtml = (work, options) =>
-    `<div class="work-card" data-work-id="${String(work.id)}" data-sub="${options.subtitle || ''}"></div>`
-}
+function cards(): void {}
 
 describe('Search route bridge', () => {
   it('paints already-effective rows per owner without fetching or publishing shell state', () => {
@@ -74,7 +70,7 @@ describe('Search route bridge', () => {
       shell: false,
     })
     expect(mainHost.querySelector('.prks-page-title')?.textContent).toBe('Search results for “adorno”')
-    expect(mainHost.querySelector('[data-work-id="w1"]')?.getAttribute('data-sub')).toBe('abc…')
+    expect(mainHost.querySelector('[data-work-id="w1"] .work-card__context')?.textContent).toBe('abc…')
     expect(mainHost.querySelector('.prks-scope-line')?.textContent).toBe('1 result')
     expect((mainHost.querySelector('#search-q-input') as HTMLInputElement).value).toBe('adorno')
     expect(mainHost.querySelector('#prks-save-view-btn')).not.toBeNull()
@@ -125,7 +121,9 @@ describe('Search route bridge', () => {
   it('releases scoped thumb resources before a rewrite and on dismiss', async () => {
     const released: string[] = []
     window.prksReleaseLazyWorkThumbs = (root) => {
-      released.push((root as HTMLElement).querySelector('.work-card')?.getAttribute('data-work-id') || 'empty')
+      released.push(
+        (root as HTMLElement).querySelector('[data-work-id]')?.getAttribute('data-work-id') || 'empty',
+      )
     }
     cards()
     const pane = owner('main')
@@ -134,9 +132,10 @@ describe('Search route bridge', () => {
     presentSearch({ owner: pane, host: el, request: { q: 'a' }, rows: [{ id: 'a' }], generation: 1 })
     presentSearch({ owner: pane, host: el, request: { q: 'a' }, rows: [{ id: 'b' }], generation: 2 })
     await nextTick()
-    expect(released).toEqual(['empty', 'a'])
+    // First mount has nothing to release. The rewrite must still see card `a`.
+    expect(released).toEqual(['a'])
     dismissRouteSurface(pane)
-    expect(released).toEqual(['empty', 'a', 'b'])
+    expect(released).toEqual(['a', 'b'])
     expect(el.querySelector('[data-prks-search-view]')).toBeNull()
   })
 

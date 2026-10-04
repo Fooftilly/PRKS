@@ -1547,8 +1547,8 @@ function prksRefreshLiveFolderDetailTrees() {
  * This module still owns the hierarchy tree resource, the layout observer, and
  * the canonical new-folder / delete wrappers. Vue calls prksCommitFolderDetailSurface
  * after it paints the host. #303 B2 removes that host-side writer when TabContext
- * resource lifetime is consolidated. The Work-card HTML mount in the Vue route
- * is removed by #303 B4 when a shared Vue Work card replaces prksWorkCardHtml.
+ * resource lifetime is consolidated. Vue Folder-detail Work cards are PrksWorkCard.
+ * This classic Recently Added painter remains only for !st.vueOwned.
  */
 
 function prksEffectiveFolderDetailWorks(folder) {

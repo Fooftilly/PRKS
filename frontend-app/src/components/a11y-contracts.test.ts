@@ -4,6 +4,7 @@ import PrksDisclosureButton from './PrksDisclosureButton.vue'
 import PrksField from './PrksField.vue'
 import PrksInlineMessage from './PrksInlineMessage.vue'
 import PrksLinkButton from './PrksLinkButton.vue'
+import PrksWorkCard from './PrksWorkCard.vue'
 import PrksState from './PrksState.vue'
 
 /**
@@ -83,5 +84,19 @@ describe('shared primitive a11y contracts', () => {
     })
     expect(wrapper.get('[role="status"]').attributes('aria-live')).toBeUndefined()
     expect(wrapper.findAll('[aria-live]')).toHaveLength(0)
+  })
+
+  it('keeps a Work card as a named navigation surface', () => {
+    const wrapper = mount(PrksWorkCard, {
+      props: { work: { id: 'W-1', title: 'Notes' } },
+    })
+    const card = wrapper.get('.project-card--work-card').element as HTMLElement
+    const link = wrapper.get('a.work-card__link').element as HTMLAnchorElement
+    expect(card.getAttribute('role')).toBeNull()
+    expect(card.getAttribute('tabindex')).toBeNull()
+    expect(link.tagName).toBe('A')
+    expect(link.getAttribute('href')).toBe('#/works/W-1')
+    expect(link.getAttribute('aria-label')).toBe('Notes')
+    expect(card.getAttribute('data-prks-route')).toBe('#/works/W-1')
   })
 })

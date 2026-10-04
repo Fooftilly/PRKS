@@ -2218,9 +2218,10 @@ function prksIsBrowseFolderId(row) {
     return value === null || (typeof value === 'string' && !!value.trim());
 }
 
-/* Shared by all three: exactly what prksWorkCardHtml() dereferences, plus the
- * source fields prksInferWorkSourceKind() reads. `file_size_bytes` is fed to
- * Number(), so a wrong type there renders "NaN MB" from cache. */
+/* Shared by all three: exactly what PrksWorkCard / prksWorkCardHtml()
+ * dereference, plus the source fields prksInferWorkSourceKind() reads.
+ * `file_size_bytes` is fed to Number(), so a wrong type there renders
+ * "NaN MB" from cache. */
 function prksIsBrowseCardRowShape(row) {
     if (!prksHasUsableRowId(row)) return false;
     return prksIsOptionalString(row.title) && prksIsOptionalString(row.status) &&
@@ -2435,7 +2436,7 @@ const PRKS_FOLDERS_DOMAIN = 'folders';
 /* Folder validators gate cache publication, so they protect exactly what the
  * Folder renderers dereference. The index feeds the hierarchy tree (title,
  * parent_id, work_count, child_count); the detail additionally feeds whole
- * Work cards through prksWorkCardHtml() and the right-panel tag list. Backend
+ * Work cards through PrksWorkCard and the right-panel tag list. Backend
  * hierarchy rules (cycles, unique titles, count correctness) stay canonical --
  * this only stops a malformed payload from being cached or rendered. See
  * docs/agent-rules/offline-folder-tag-coherence.md. */
@@ -2467,7 +2468,7 @@ function prksIsFoldersIndexShape(value) {
     return Array.isArray(value) && value.every(prksIsFolderSummaryShape);
 }
 
-/* A Folder detail's Work rows are rendered by prksWorkCardHtml(), which reads
+/* A Folder detail's Work rows are rendered by PrksWorkCard, which reads
  * these fields. Most coerce safely, but `year`/`published_date` take direct
  * string operations and `file_size_bytes` is fed to Number() -- so a wrong
  * type there would render "NaN MB" from cache. Validated as the card's row

@@ -43,6 +43,9 @@
             file_path: '/api/pdfs/w1.pdf',
         };
         const withContext = cardHtml(pdfWork, { subtitle: 'Added Sep 5, 2026' });
+        assert('card uses a real work href', withContext.indexOf('href="#/works/W-1"') !== -1);
+        assert('card wraps content in work-card__link', withContext.indexOf('class="work-card__link"') !== -1);
+        assert('card is not a synthetic role=link', withContext.indexOf('role="link"') === -1);
         assert('meta line present', withContext.indexOf('work-card__meta') !== -1);
         assert('context line present', withContext.indexOf('work-card__context') !== -1);
         assert('meta line has author + year', /work-card__meta">Author: Theodor W\. Adorno · 1972</.test(withContext));
@@ -312,12 +315,104 @@
                         !document.getElementById('prks-work-thumb-preview').hidden)
                 );
                 if (card.parentNode) card.parentNode.removeChild(card);
-                root.prksReleaseWorkThumbPreview();
+                root.prksReleaseWorkThumbPreview(document.body);
                 preview = document.getElementById('prks-work-thumb-preview');
-                assert('detach+release hides preview', !!(preview && preview.hidden));
-                assert('detach+release clears source', window.__prksWorkThumbPreviewSource == null);
+                assert('detach+scoped-release hides leftover preview', !!(preview && preview.hidden));
+                assert('detach+scoped-release clears source', window.__prksWorkThumbPreviewSource == null);
             } else {
                 root.prksHideWorkThumbPreview();
+            }
+
+            if (typeof document._dispatch === 'function') {
+                const nativeCard = document.createElement('div');
+                nativeCard.className = 'project-card project-card--work-card';
+                nativeCard.setAttribute('data-work-id', 'W-preview-link');
+                nativeCard.setAttribute('data-prks-route', '#/works/W-preview-link');
+                const nativeLink = document.createElement('a');
+                nativeLink.className = 'work-card__link';
+                nativeLink.setAttribute('href', '#/works/W-preview-link');
+                const nativeThumb = document.createElement('div');
+                nativeThumb.className = 'work-card__thumb work-card__thumb--ready';
+                nativeThumb.setAttribute('data-prks-thumb-preview-kind', 'pdf');
+                nativeThumb.setAttribute('data-prks-thumb-page', '1');
+                const nativeBody = document.createElement('div');
+                nativeBody.className = 'work-card__body';
+                const nativeTitle = document.createElement('div');
+                nativeTitle.className = 'card-title';
+                nativeBody.appendChild(nativeTitle);
+                nativeLink.appendChild(nativeThumb);
+                nativeLink.appendChild(nativeBody);
+                nativeCard.appendChild(nativeLink);
+                document.body.appendChild(nativeCard);
+
+                document._dispatch('keydown', { key: 'p', target: nativeLink });
+                let kbdPreview = document.getElementById('prks-work-thumb-preview');
+                assert(
+                    'P on native work-card__link shows preview',
+                    !!(kbdPreview && !kbdPreview.hidden && window.__prksWorkThumbPreviewSource === nativeThumb)
+                );
+
+                root.prksHideWorkThumbPreview();
+                document._dispatch('pointerover', { target: nativeTitle });
+                kbdPreview = document.getElementById('prks-work-thumb-preview');
+                assert(
+                    'hover on card body does not show preview',
+                    !!(kbdPreview && kbdPreview.hidden)
+                );
+                document._dispatch('pointerover', { target: nativeThumb });
+                kbdPreview = document.getElementById('prks-work-thumb-preview');
+                assert(
+                    'hover on thumbnail shows preview',
+                    !!(kbdPreview && !kbdPreview.hidden && window.__prksWorkThumbPreviewSource === nativeThumb)
+                );
+
+                const thumbInner = document.createElement('img');
+                nativeThumb.appendChild(thumbInner);
+                document._dispatch('pointerout', { target: nativeThumb, relatedTarget: thumbInner });
+                kbdPreview = document.getElementById('prks-work-thumb-preview');
+                assert(
+                    'pointerout within the thumbnail keeps preview',
+                    !!(kbdPreview && !kbdPreview.hidden && window.__prksWorkThumbPreviewSource === nativeThumb)
+                );
+
+                document._dispatch('pointerout', { target: nativeThumb, relatedTarget: kbdPreview });
+                kbdPreview = document.getElementById('prks-work-thumb-preview');
+                assert(
+                    'pointerout into preview overlay keeps preview',
+                    !!(kbdPreview && !kbdPreview.hidden && window.__prksWorkThumbPreviewSource === nativeThumb)
+                );
+
+                document._dispatch('pointerout', { target: nativeThumb, relatedTarget: nativeTitle });
+                kbdPreview = document.getElementById('prks-work-thumb-preview');
+                assert(
+                    'pointerout from thumbnail to card body hides preview',
+                    !!(kbdPreview && kbdPreview.hidden)
+                );
+
+                document._dispatch('pointerover', { target: nativeThumb });
+                const outside = document.createElement('div');
+                document.body.appendChild(outside);
+                document._dispatch('pointerout', { target: nativeThumb, relatedTarget: outside });
+                kbdPreview = document.getElementById('prks-work-thumb-preview');
+                assert(
+                    'pointerout leaving the thumbnail hides preview',
+                    !!(kbdPreview && kbdPreview.hidden)
+                );
+
+                const select = document.createElement('div');
+                select.className = 'work-card__select';
+                nativeCard.appendChild(select);
+                document._dispatch('pointerover', { target: select });
+                kbdPreview = document.getElementById('prks-work-thumb-preview');
+                assert(
+                    'hover on bulk checkbox does not show preview',
+                    !!(kbdPreview && kbdPreview.hidden)
+                );
+
+                if (typeof document.body.removeChild === 'function') {
+                    document.body.removeChild(nativeCard);
+                    document.body.removeChild(outside);
+                }
             }
         }
 

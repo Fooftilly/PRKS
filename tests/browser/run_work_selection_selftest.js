@@ -364,13 +364,16 @@ function addCard(id, title, hidden) {
     card.className = 'project-card project-card--work-card';
     card.setAttribute('data-work-id', id);
     card.setAttribute('data-prks-route', '#/works/' + id);
-    card.setAttribute('role', 'link');
-    card.setAttribute('tabindex', '0');
     card.hidden = !!hidden;
+    const link = document.createElement('a');
+    link.className = 'work-card__link';
+    link.setAttribute('href', '#/works/' + id);
+    link.setAttribute('aria-label', title || id);
     const t = document.createElement('div');
     t.className = 'card-title';
     t.textContent = title || id;
-    card.appendChild(t);
+    link.appendChild(t);
+    card.appendChild(link);
     page.appendChild(card);
     return card;
 }
@@ -397,6 +400,9 @@ function assertEq(name, got, want) {
 const html = root.prksWorkCardHtml({ id: 'W-1', title: 'Alpha', status: 'Paused' });
 assert('card has data-work-id', html.indexOf('data-work-id="W-1"') >= 0);
 assert('card keeps hash nav', html.indexOf("#/works/W-1") >= 0);
+assert('card uses a real work href', html.indexOf('href="#/works/W-1"') >= 0);
+assert('card wraps content in work-card__link', html.indexOf('class="work-card__link"') >= 0);
+assert('card is not a synthetic role=link', html.indexOf('role="link"') < 0);
 assert('card has no checkbox by default', html.indexOf('type="checkbox"') < 0 && html.indexOf("type='checkbox'") < 0);
 
 assert('folder-detail supported', root.prksWorkSelectionIsSupportedRoute({ name: 'folder-detail' }));
@@ -469,34 +475,38 @@ document._dispatch('click', clickEv);
 assert('click again deselects', root.prksWorkSelectionGetIds().indexOf('W-1') < 0);
 assertEq('hash unchanged', location.hash, hashBefore);
 
-/* Bulk selection: Enter/Space toggles; card is not a navigable link. */
+/* Bulk selection: Enter/Space toggles; Work href is not a tab stop. */
 root.prksWorkSelectionEnter();
-assertEq('selection removes link role', c1.getAttribute('role'), null);
-assertEq('selection removes tab stop', c1.getAttribute('tabindex'), '-1');
+const c1Link = c1.querySelector('a.work-card__link');
+assertEq('selection removes leftover card role', c1.getAttribute('role'), null);
+assertEq('selection parks card tab stop', c1.getAttribute('tabindex'), '-1');
+assertEq('selection parks work-link tab stop', c1Link.getAttribute('tabindex'), '-1');
 assert('selection has checkbox', !!c1.querySelector('.work-card__checkbox'));
+assert('checkbox stays outside the work link', !c1.querySelector('a.work-card__link .work-card__select'));
+assert('checkbox is a card child', !!c1.querySelector('.work-card__select') && c1.children[0].classList.contains('work-card__select'));
 const keyNavCalls = { n: 0 };
 root.prksNavigate = function () { keyNavCalls.n += 1; };
 const keyEv = {
     key: 'Enter',
-    target: c1,
+    target: c1Link,
     preventDefault: function () { this.prevented = true; },
     stopPropagation: function () { this.stopped = true; },
 };
 document._dispatch('keydown', keyEv);
-assert('enter toggles select', root.prksWorkSelectionGetIds().indexOf('W-1') >= 0);
+assert('enter on work link toggles select', root.prksWorkSelectionGetIds().indexOf('W-1') >= 0);
 assert('enter prevented nav default', !!keyEv.prevented);
 assertEq('enter did not navigate', keyNavCalls.n, 0);
 const spaceEv = {
     key: ' ',
-    target: c1,
+    target: c1Link,
     preventDefault: function () { this.prevented = true; },
     stopPropagation: function () { this.stopped = true; },
 };
 document._dispatch('keydown', spaceEv);
-assert('space deselects', root.prksWorkSelectionGetIds().indexOf('W-1') < 0);
+assert('space on work link deselects', root.prksWorkSelectionGetIds().indexOf('W-1') < 0);
 root.prksWorkSelectionExit();
-assertEq('exit restores link role', c1.getAttribute('role'), 'link');
-assertEq('exit restores tabindex', c1.getAttribute('tabindex'), '0');
+assertEq('exit does not invent a link role', c1.getAttribute('role'), null);
+assertEq('exit restores work-link tab stop', c1Link.getAttribute('tabindex'), null);
 
 let navCalls = 0;
 let navReplace = false;
