@@ -67,9 +67,12 @@ class FrontendNavigationTests(unittest.TestCase):
         self.assertNotIn("prksHasPendingWorkAnnotationSync", app)
 
     def test_component_filter_keys_remain(self):
-        people = _read(_PEOPLE)
+        people_vue = _read(
+            os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "people", "PeopleIndexRoute.vue")
+        )
         folders = _read(_FOLDERS)
-        self.assertIn("PRKS_PEOPLE_LIBRARY_FILTER_KEY", people)
+        self.assertIn("prks-people-library-filter", people_vue)
+        self.assertNotIn("PRKS_PEOPLE_LIBRARY_FILTER_KEY", _read(_PEOPLE))
         self.assertIn("PRKS_FOLDER_LIBRARY_FILTER_KEY", folders)
         self.assertNotIn("PRKS_PEOPLE_LIBRARY_FILTER_KEY", _read(_NAV))
 

@@ -230,7 +230,8 @@ panel.
 The read cache below still backs the pages themselves. The index caches the
 complete
 collection under one key, `people:index`, and every role view is a local
-projection of it via `filterPersonsByAssignedRole()` — both routes go through
+projection of that same list in Vue (`PeopleIndexRoute` filters
+`projection.people` by role). Both routes go through
 the single `prksOfflinePeopleFetch()` helper so a future People route cannot
 introduce a second, role-filtered cache. Visiting one role view online warms
 every other view. A legitimately empty *role subset* (cached People, none

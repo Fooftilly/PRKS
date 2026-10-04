@@ -3889,8 +3889,6 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                         items: groups,
                         generation: generation,
                     });
-                } else if (typeof renderPersonGroupsPage === 'function') {
-                    renderPersonGroupsPage(groups, contentDiv, ctx);
                 }
                 prksOfflinePrependBanner(contentDiv, offlineGroups);
                 titleOpts = { skipPageEnter: samePersonGroupsWorkspace };
@@ -4007,8 +4005,6 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                             membersEditing: !!(ctx.ui && ctx.ui.personGroupMembersEditing),
                             generation: generation,
                         });
-                    } else if (typeof renderPersonGroupDetail === 'function') {
-                        renderPersonGroupDetail(group, contentDiv, ctx);
                     }
                     prksOfflinePrependBanner(contentDiv, offlineGroup);
                     titleOpts = {

@@ -178,6 +178,7 @@ class FrontendPeopleGroupsTests(unittest.TestCase):
         self.assertIn("function prksTogglePersonGroupMembersEdit", src)
         self.assertIn("is-group-members-editing", _read(_VUE_DETAIL))
         self.assertNotIn("renderPersonGroupAddMemberPanelHtml()", ui)
+        self.assertNotIn("function renderPersonGroupAddMemberPanelHtml", src)
         self.assertNotIn("mountPersonGroupAddMemberControls(g)", ui)
         self.assertNotIn("renderPersonGroupEditSidebarHtml", ui)
 
@@ -204,7 +205,7 @@ class FrontendPeopleGroupsTests(unittest.TestCase):
     def test_member_picker_async_mount_checks_original_owner_state(self):
         src = _read(_GROUPS)
         mount = src.split("async function mountPersonGroupAddMemberControls", 1)[1].split(
-            "function renderPersonGroupAddMemberPanelHtml", 1
+            "function prksPersonEditFindGroupByNameInsensitive", 1
         )[0]
         self.assertIn("const generation =", mount)
         self.assertLess(mount.index("const generation ="), mount.index("const persons ="))

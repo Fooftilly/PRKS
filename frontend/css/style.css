@@ -4681,43 +4681,12 @@ a.tag {
     stroke-width: 2.2;
 }
 
-.project-card:not(.project-card--work):not(.project-card--work-card) .status-badge {
+.project-card:not(.project-card--work-card) .status-badge {
     position: absolute;
     top: 16px;
     right: 16px;
 }
 
-/* Work file rows: title + meta left; status then doc type stacked on the right */
-.project-card--work {
-    display: flex;
-    flex-direction: row;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: var(--space-md);
-}
-
-.project-card--work .project-card__body {
-    flex: 1;
-    min-width: 0;
-}
-
-.project-card--work .project-card__rail {
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: var(--space-sm);
-    text-align: right;
-    max-width: 42%;
-}
-
-.project-card--work .card-title {
-    padding-right: 0;
-}
-
-.project-card--work .status-badge {
-    position: static;
-}
 .status-badge.Not.Started { background-color: var(--status-not-started); color: var(--status-not-started-text); }
 .status-badge.Planned { background-color: var(--status-planned); color: var(--status-planned-text); }
 .status-badge.In.Progress { background-color: var(--status-progress); color: var(--status-progress-text); }
@@ -4761,10 +4730,6 @@ a.tag {
 
 .list-view .project-card {
     padding-right: 140px;
-}
-
-.list-view .project-card--work {
-    padding-right: 18px;
 }
 
 /* Processing inbox: no work rail — avoid global list-view right gutter */
@@ -11785,11 +11750,6 @@ button.prks-research-row {
         padding: 7px 9px;
         gap: 0;
     }
-
-    /* Make cards and rails wrap better on narrow widths. */
-    .project-card--work .project-card__rail {
-        max-width: 48%;
-    }
 }
 
 /* Same shell as @media (max-width: 900px) when Settings → Force mobile layout is on. */
@@ -11929,10 +11889,6 @@ html.prks-force-mobile .top-ribbon__center::-webkit-scrollbar {
 html.prks-force-mobile .top-ribbon .ribbon-btn {
     padding: 7px 9px;
     gap: 0;
-}
-
-html.prks-force-mobile .project-card--work .project-card__rail {
-    max-width: 48%;
 }
 
 @media (max-width: 600px) {

@@ -138,7 +138,7 @@ class FrontendResearchGraphTests(unittest.TestCase):
     def test_person_profile_hierarchy(self):
         people = _read(_PEOPLE)
         sidebar = people.split("function renderPersonProfileDetailsSidebarHtml", 1)[1].split(
-            "function renderPersonProfileEditFormHtml", 1
+            "const PRKS_PERSON_PROFILE_FIELDS", 1
         )[0]
         self.assertNotIn("Biography, portrait, and external links are in the main column.", sidebar)
         self.assertIn("prks-btn--primary", sidebar)
@@ -153,6 +153,9 @@ class FrontendResearchGraphTests(unittest.TestCase):
         vue = _read(os.path.join(
             _PROJECT_DIR, "frontend-app", "src", "features", "people", "PersonDetailRoute.vue"
         ))
+        index = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "people", "PeopleIndexRoute.vue"
+        ))
         self.assertIn("person-profile__summary", vue)
         self.assertIn("person-profile__about", vue)
         self.assertIn("person-profile__works-head", vue)
@@ -160,8 +163,8 @@ class FrontendResearchGraphTests(unittest.TestCase):
         self.assertIn("prksPersonWorkRolesById", detail)
         self.assertIn("worksEditing ? (person.works || []) : prksUniquePersonWorks(person)", detail)
         self.assertNotIn("acc[role].push(w)", detail)
-        self.assertIn("prks-people-list__lifespan", people)
-        self.assertNotIn("/api/persons/", people.split("function buildPersonListRowHtml", 1)[1].split("window.buildPersonListRowHtml", 1)[0])
+        self.assertIn("prks-people-list__lifespan", index)
+        self.assertNotIn("/api/persons/", index)
         self.assertIn("LATEST_SCHEMA_VERSION = 17", _read(_SCHEMA))
 
     def test_docs(self):

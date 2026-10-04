@@ -380,7 +380,6 @@ interface Window {
     switchTab?: (tab: string) => void | Promise<void>
     [key: string]: unknown
   }
-  __prksRecentlyAddedDirty?: boolean
   __prksFolderLibraryBrandHomeReset?: boolean
   prksSync?: { subscribe?: (listener: () => void) => () => void }
   prksCreateConceptFlow?: (

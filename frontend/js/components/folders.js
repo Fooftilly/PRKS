@@ -60,21 +60,6 @@ function prksSetFolderNodeCollapsed(folderId, collapsed) {
     m[String(folderId)] = !!collapsed;
 }
 
-function prksRerenderFolderDashboard() {
-    /* Vue owns Folder Library presentation. Rebuild through the coordinator. */
-    if (typeof window.prksNavigate === 'function') {
-        window.prksNavigate('#/folders', { replace: true });
-    }
-}
-
-function prksFolderLibraryFilterFromStorage() {
-    try {
-        return sessionStorage.getItem(PRKS_FOLDER_LIBRARY_FILTER_KEY) || '';
-    } catch (_e) {
-        return '';
-    }
-}
-
 function prksFolderLibraryTreeInnerHtml(list, filterQuery, options) {
     const opts = options && typeof options === 'object' ? options : {};
     if (!list || !list.length) {
@@ -605,10 +590,6 @@ function prksRecentlyAddedDateLabel(createdAt) {
     const d = new Date(createdAt);
     if (Number.isNaN(d.getTime())) return '';
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-}
-
-function prksFolderLibraryScrollHost() {
-    return document.getElementById('main-content') || document.getElementById('page-content');
 }
 
 function prksSwitchFolderLibraryTab(tab) {
@@ -1524,7 +1505,6 @@ window.prksToggleFolderNodeInHost = prksToggleFolderNodeInHost;
 window.prksSetAllFolderNodesCollapsed = prksSetAllFolderNodesCollapsed;
 window.prksToggleAllFolderNodes = prksToggleAllFolderNodes;
 window.prksToggleAllFolderNodesInHost = prksToggleAllFolderNodesInHost;
-window.prksRerenderFolderDashboard = prksRerenderFolderDashboard;
 window.prksRefreshLiveFolderDetailTrees = prksRefreshLiveFolderDetailTrees;
 window.prksFillFolderDetailTree = prksFillFolderDetailTree;
 window.prksFolderLibraryTreeInnerHtml = prksFolderLibraryTreeInnerHtml;

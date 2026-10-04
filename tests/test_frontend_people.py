@@ -44,16 +44,12 @@ def _extract_function(src: str, name: str) -> str:
 
 class FrontendPeopleTests(unittest.TestCase):
     def test_people_creation_uses_canonical_modal_from_header_and_true_empty(self):
-        src = _read(_PEOPLE)
         vue = _read(os.path.join(
             _PROJECT_DIR, "frontend-app", "src", "features", "people", "PeopleIndexRoute.vue"
         ))
         intents = _read(os.path.join(
             _PROJECT_DIR, "frontend-app", "src", "features", "people", "intents.ts"
         ))
-        empty = src.split("function prksPeopleListEmptyHtml", 1)[1].split(
-            "function prksPeopleListInnerHtml", 1
-        )[0]
         self.assertIn("New Person", vue)
         self.assertIn("open('person-modal')", intents)
         self.assertIn('id="prks-people-empty-new"', vue)
@@ -61,60 +57,42 @@ class FrontendPeopleTests(unittest.TestCase):
         self.assertIn("No people match your search.", vue)
         self.assertIn("No people with the", vue)
         self.assertLess(vue.index("roleEmpty"), vue.index("searchMiss"))
-        self.assertIn("No people yet.", empty)
-        self.assertIn("openModal(\\'person-modal\\')", empty)
-        search_empty = next(line for line in empty.splitlines() if "No people match your search." in line)
+        search_empty = next(line for line in vue.splitlines() if "No people match your search." in line)
         self.assertNotIn("person-modal", search_empty)
 
     def test_rows_show_research_context_not_reference_completion(self):
-        src = _read(_PEOPLE)
-        details = src.split("function buildPersonListDetailsHtml", 1)[1].split(
-            "/** Inner HTML", 1
-        )[0]
-        self.assertIn("person-card-about", details)
-        self.assertIn("prks-people-list__roles", details)
-        self.assertIn('href="#/people/groups/${encodeURIComponent', details)
-        self.assertNotIn("personExternalRefsSummary", details)
-        self.assertNotIn("prks-people-list__refs", details)
-        self.assertNotIn("No biography or links yet.", details)
+        vue = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "people", "PeopleIndexRoute.vue"
+        ))
+        self.assertIn("person-card-about", vue)
+        self.assertIn("prks-people-list__roles", vue)
+        self.assertIn("groupHref(group.id)", vue)
+        self.assertIn("`#/people/groups/${encodeURIComponent(id)}`", vue)
+        self.assertNotIn("personExternalRefsSummary", vue)
+        self.assertNotIn("prks-people-list__refs", vue)
+        self.assertNotIn("No biography or links yet.", vue)
         self.assertIn("-webkit-line-clamp: 2", _read(_CSS))
 
     def test_people_search_runtime_state_is_local_to_its_rendered_root(self):
         src = _read(_PEOPLE)
-        rerender = src.split("function prksRerenderPeopleListOnly", 1)[1].split(
-            "function prksSyncPeopleLibrarySearchClear", 1
-        )[0]
-        apply_filter = src.split("function prksApplyPeopleLibrarySearchFilter", 1)[1].split(
-            "function prksBindPeopleLibrarySearch", 1
-        )[0]
         vue = _read(os.path.join(
             _PROJECT_DIR, "frontend-app", "src", "features", "people", "PeopleIndexRoute.vue"
         ))
-        empty = src.split("function prksPeopleListEmptyHtml", 1)[1].split(
-            "function prksPeopleListInnerHtml", 1
-        )[0]
         self.assertNotIn("window.__prksPeopleLibraryState", src)
         self.assertNotIn("window.__prksPeopleLibraryState", vue)
+        self.assertNotIn("root.__prksPeopleLibraryState", src)
+        self.assertNotIn("function prksRerenderPeopleListOnly", src)
+        self.assertNotIn("function prksPeopleListInnerHtml", src)
         self.assertIn("prks-people-library-filter", vue)
-        self.assertIn("root.__prksPeopleLibraryState", rerender)
-        self.assertIn("function prksRerenderPeopleListOnly(root)", src)
-        self.assertIn("input.closest('.prks-people-library')", apply_filter)
-        self.assertIn("prksRerenderPeopleListOnly(root)", apply_filter)
-        self.assertLess(
-            empty.index("if (roleFilter && roleFiltered.length === 0)"),
-            empty.index("if (q)"),
-        )
+        self.assertIn("const query = ref(readFilter())", vue)
+        self.assertLess(vue.index("roleEmpty"), vue.index("searchMiss"))
 
     def test_role_route_hides_redundant_role_and_keeps_other_roles(self):
-        src = _read(_PEOPLE)
-        details = src.split("function buildPersonListDetailsHtml", 1)[1].split(
-            "/** Inner HTML", 1
-        )[0]
-        self.assertIn("assignedRoles.filter((role) => role !== roleFilter)", details)
-        listing = src.split("function prksPeopleListInnerHtml", 1)[1].split(
-            "function prksRerenderPeopleListOnly", 1
-        )[0]
-        self.assertIn("buildPersonListRowHtml(p, { roleFilter })", listing)
+        vue = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "people", "PeopleIndexRoute.vue"
+        ))
+        self.assertIn("person.roles.filter((item) => item !== role)", vue)
+        self.assertIn("function visibleRoles", vue)
 
     def test_profile_uses_anchor_groups_and_local_relationship_action(self):
         src = _read(_PEOPLE)
@@ -134,11 +112,11 @@ class FrontendPeopleTests(unittest.TestCase):
 
     def test_sidebar_demotes_advanced_actions_and_edit_form_is_grouped(self):
         src = _read(_PEOPLE)
+        vue = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "people", "PersonDetailRoute.vue"
+        ))
         sidebar = src.split("function renderPersonProfileDetailsSidebarHtml", 1)[1].split(
-            "function renderPersonProfileEditFormHtml", 1
-        )[0]
-        form = src.split("function renderPersonProfileEditFormHtml", 1)[1].split(
-            "async function savePersonProfile", 1
+            "const PRKS_PERSON_PROFILE_FIELDS", 1
         )[0]
         self.assertIn("<summary>More</summary>", sidebar)
         self.assertIn("Edit using template", sidebar)
@@ -146,18 +124,21 @@ class FrontendPeopleTests(unittest.TestCase):
         self.assertIn("disabled title=\"Unlink all files first\"", sidebar)
         self.assertNotIn("Edit works", sidebar)
         for heading in ("Identity", "Biography", "Dates", "Portrait", "References", "Groups"):
-            self.assertIn(f">{heading}</h4>", form)
-        self.assertIn("person-edit-footer", form)
-        self.assertIn('id="pd-save-btn"', form)
-        self.assertNotIn("person-groups-fieldset__action\" onclick=\"savePersonProfile", form)
+            self.assertIn(f">{heading}</h4>", vue)
+        self.assertIn("person-edit-footer", vue)
+        self.assertIn('id="pd-save-btn"', vue)
+        self.assertNotIn("person-groups-fieldset__action\" onclick=\"savePersonProfile", vue)
 
     def test_profile_editor_is_tab_context_draft_owned(self):
         src = _read(_PEOPLE)
+        vue = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "people", "PersonDetailRoute.vue"
+        ))
         groups = _read(os.path.join(_PROJECT_DIR, "frontend", "js", "components", "people-groups.js"))
         self.assertIn("function prksEnsurePersonProfileDraft(ctx, person)", src)
         self.assertNotIn("function prksMountPersonProfileEditor(ctx, person)", src)
-        self.assertIn('data-person-edit-id="${id}"', src)
-        self.assertIn("renderPersonProfileEditFormHtml(person, draft)", src)
+        self.assertNotIn("function renderPersonProfileEditFormHtml", src)
+        self.assertIn(':data-person-edit-id="person.id"', vue)
         self.assertIn("prksSyncPersonProfileDraftFromEditor(ctx, editor, personId, generation)", src)
         for field in (
             "first_name",

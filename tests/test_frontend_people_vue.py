@@ -110,7 +110,7 @@ class PeopleVueContracts(unittest.TestCase):
         self.assertIn("function prksBindPersonProfileDraft(", people)
         self.assertIn("async function deletePerson(explicitCtx, explicitGeneration)", people)
         self.assertIn("new Event('input'", people)
-        sidebar = people[people.index("function renderPersonProfileDetailsSidebarHtml") : people.index("function renderPersonProfileEditFormHtml")]
+        sidebar = people[people.index("function renderPersonProfileDetailsSidebarHtml") : people.index("const PRKS_PERSON_PROFILE_FIELDS")]
         self.assertIn("Edit profile", sidebar)
         self.assertIn("Done", sidebar)
         self.assertIn('id="prks-person-view-graph"', sidebar)
