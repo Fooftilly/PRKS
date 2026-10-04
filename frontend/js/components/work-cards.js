@@ -695,7 +695,18 @@ function prksForgetPreviewImgSrc(img) {
     if (map && img) map.delete(img);
 }
 
+let prksWorkThumbPreviewHoverArmed = true;
+
+function prksArmWorkThumbPreviewHover() {
+    prksWorkThumbPreviewHoverArmed = true;
+}
+
 function prksHideWorkThumbPreview() {
+    // Route dismiss / Escape must stick: replacing Folder cards under the
+    // pointer can fire pointerover without a pointermove and would otherwise
+    // reopen the body-mounted overlay after the source was cleared.
+    prksWorkThumbPreviewHoverArmed = false;
+    window.__prksWorkThumbPreviewSource = null;
     const el = document.getElementById('prks-work-thumb-preview');
     if (!el) return;
     el.hidden = true;
@@ -708,7 +719,6 @@ function prksHideWorkThumbPreview() {
         img.removeAttribute('src');
         prksForgetPreviewImgSrc(img);
     }
-    window.__prksWorkThumbPreviewSource = null;
 }
 
 /**
@@ -911,6 +921,7 @@ if (typeof document !== 'undefined' && !window.__prksWorkCardKeyNavBound) {
     document.addEventListener(
         'pointerover',
         function (e) {
+            if (!prksWorkThumbPreviewHoverArmed) return;
             const t = e.target;
             const thumb = prksWorkThumbFromHoverTarget(t);
             if (!thumb) return;
@@ -954,6 +965,14 @@ if (typeof document !== 'undefined' && !window.__prksWorkCardKeyNavBound) {
             if (window.__prksWorkThumbPreviewSource) prksHideWorkThumbPreview();
         });
     }
+
+    document.addEventListener(
+        'pointermove',
+        function () {
+            prksArmWorkThumbPreviewHover();
+        },
+        true
+    );
 }
 
 window.prksInitLazyWorkThumbs = prksInitLazyWorkThumbs;

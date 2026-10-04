@@ -356,6 +356,20 @@
                 document._dispatch('pointerover', { target: nativeTitle });
                 kbdPreview = document.getElementById('prks-work-thumb-preview');
                 assert(
+                    'pointerover after hide without pointermove does not restore preview',
+                    !!(kbdPreview && kbdPreview.hidden)
+                );
+                document._dispatch('keydown', { key: 'p', target: nativeLink });
+                kbdPreview = document.getElementById('prks-work-thumb-preview');
+                assert(
+                    'P after hide still shows without pointermove',
+                    !!(kbdPreview && !kbdPreview.hidden && window.__prksWorkThumbPreviewSource === nativeThumb)
+                );
+                root.prksHideWorkThumbPreview();
+                document._dispatch('pointermove', { target: nativeTitle });
+                document._dispatch('pointerover', { target: nativeTitle });
+                kbdPreview = document.getElementById('prks-work-thumb-preview');
+                assert(
                     'hover on card body (not only thumb) shows preview',
                     !!(kbdPreview && !kbdPreview.hidden && window.__prksWorkThumbPreviewSource === nativeThumb)
                 );

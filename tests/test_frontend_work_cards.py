@@ -121,6 +121,8 @@ class FrontendWorkCardTests(unittest.TestCase):
         self.assertNotIn("onUpdated", lifetime)
         self.assertIn("prksReleaseWorkThumbPreview", lifetime)
         self.assertIn("function prksWorkThumbPreviewSourceConnected", src)
+        self.assertIn("prksWorkThumbPreviewHoverArmed", src)
+        self.assertIn("'pointermove'", src)
         self.assertIn("prksReleaseLazyWorkThumbs", lifetime)
         unmount = detail.find("onBeforeUnmount")
         self.assertEqual(unmount, -1)
