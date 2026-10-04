@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mountWorkDetail } from './detail-lifecycle'
 
 type PresentCall = {
@@ -29,6 +29,8 @@ afterEach(() => {
     'renderVideoViewerPane',
     'prksTabContextIsFocused',
     'updatePanelContent',
+    'prksRequest',
+    'prksIsAbortError',
   ]) {
     delete g[name]
   }
@@ -175,5 +177,50 @@ describe('mountWorkDetail', () => {
     expect(order).not.toContain('refresh')
     expect(order.indexOf('video-html')).toBeLessThan(order.indexOf('present'))
     expect(order).toContain('/js/components/works-video.js')
+  })
+
+  it('logs related-folder load failures with the caught error and suppresses aborts', async () => {
+    const presented: PresentCall[] = []
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    g.prksInferWorkSourceKind = () => 'pdf'
+    g.prksPresentVueRoute = (_ctx: unknown, _host: unknown, feature: string, fields: PresentCall['fields']) => {
+      presented.push({ feature, fields })
+    }
+    g.prksIsAbortError = (err: unknown) =>
+      !!(err && typeof err === 'object' && (err as { name?: string }).name === 'AbortError')
+    const ctx = {
+      generation: 1,
+      ui: {},
+      isCurrent: () => true,
+      resourceTicket: () => 'ticket',
+      setEntity() {},
+      setTimer() {},
+      query: () => null,
+      domId: (name: string) => name,
+    }
+    try {
+      const networkErr = new Error('related folders network')
+      g.prksRequest = () => Promise.reject(networkErr)
+      await mountWorkDetail(
+        ctx,
+        host(),
+        { id: 'w1', title: 'Paper', file_path: '/files/a.pdf' },
+        { generation: 1, sourcePrepared: true, workId: 'w1' },
+        async () => ({ initPdfViewerForWork() {} }),
+      )
+      presented[0]?.fields.attach?.()
+      await vi.waitFor(() => {
+        expect(errorSpy).toHaveBeenCalledWith('related folders fetch failed', networkErr)
+      })
+
+      errorSpy.mockClear()
+      const abortErr = Object.assign(new Error('aborted'), { name: 'AbortError' })
+      g.prksRequest = () => Promise.reject(abortErr)
+      presented[0]?.fields.attach?.()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(errorSpy).not.toHaveBeenCalled()
+    } finally {
+      errorSpy.mockRestore()
+    }
   })
 })

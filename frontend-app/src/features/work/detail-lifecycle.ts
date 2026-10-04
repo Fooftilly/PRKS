@@ -337,7 +337,7 @@ export async function mountWorkDetail(
     }).catch((err: unknown) => {
       const aborted = classic('prksIsAbortError')
       if (aborted && aborted(err as never)) return
-      console.error('related folders fetch failed')
+      console.error('related folders fetch failed', err)
     })
   }
 
