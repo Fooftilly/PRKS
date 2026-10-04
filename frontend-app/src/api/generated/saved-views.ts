@@ -63,7 +63,7 @@ export interface components {
              * @description Stable machine-readable code when the domain provides one.
              * @default null
              */
-            code: string | null;
+            code?: string | null;
             /**
              * Error
              * @description Human-readable error message.
@@ -144,9 +144,9 @@ export interface components {
              * Name
              * @default null
              */
-            name: string | null;
+            name?: string | null;
             /** @default null */
-            search: components["schemas"]["SavedViewSearchInput"] | null;
+            search?: components["schemas"]["SavedViewSearchInput"] | null;
         };
     };
     responses: never;

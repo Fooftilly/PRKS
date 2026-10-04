@@ -50,6 +50,17 @@ class OpenApiTypescriptTypesTests(unittest.TestCase):
             self.assertIn("components['schemas']", text)
             for token in _BANNED:
                 self.assertNotIn(token, text, token)
+        saved = (_GENERATED / "saved-views.ts").read_text(encoding="utf-8")
+        update = saved.split("SavedViewUpdateRequest: {", 1)[1].split("};", 1)[0]
+        self.assertIn("name?:", update)
+        self.assertIn("search?:", update)
+        view = saved.split("SavedView: {", 1)[1].split("};", 1)[0]
+        self.assertIn("\n            name: string;", view)
+        self.assertNotIn("name?:", view)
+        envelope = saved.split("ApiErrorEnvelope: {", 1)[1].split("};", 1)[0]
+        self.assertIn("code?:", envelope)
+        self.assertIn("\n            error: string;", envelope)
+        self.assertNotIn("error?:", envelope)
 
     def test_hand_written_clients_reexport_generated_transport_types(self):
         publishers = (_ROOT / "frontend-app" / "src" / "api" / "publishers.ts").read_text(encoding="utf-8")

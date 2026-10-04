@@ -19,6 +19,15 @@ type SameKeys<T, Keys extends readonly (keyof T)[]> = [Exclude<keyof T, Keys[num
   ? true
   : false
 
+type RequiredKeys<T> = { [K in keyof T]-?: undefined extends T[K] ? never : K }[keyof T]
+
+type SameRequired<T, Keys extends readonly (keyof T)[]> = [
+  Exclude<RequiredKeys<T>, Keys[number]>,
+  Exclude<Keys[number], RequiredKeys<T>>,
+] extends [never, never]
+  ? true
+  : false
+
 afterEach(() => {
   vi.unstubAllGlobals()
 })
@@ -29,7 +38,11 @@ describe('Publishers client', () => {
     const created: SameKeys<PublisherCreated, typeof PUBLISHER_CREATED_KEYS> = true
     const aliasAdded: SameKeys<PublisherAliasAdded, typeof PUBLISHER_ALIAS_ADDED_KEYS> = true
     const deleted: SameKeys<PublisherDeleted, typeof PUBLISHER_DELETED_KEYS> = true
-    expect(inUse && created && aliasAdded && deleted).toBe(true)
+    const inUseRequired: SameRequired<PublisherInUse, typeof PUBLISHER_IN_USE_KEYS> = true
+    const createdRequired: SameRequired<PublisherCreated, typeof PUBLISHER_CREATED_KEYS> = true
+    const aliasAddedRequired: SameRequired<PublisherAliasAdded, typeof PUBLISHER_ALIAS_ADDED_KEYS> = true
+    const deletedRequired: SameRequired<PublisherDeleted, typeof PUBLISHER_DELETED_KEYS> = true
+    expect(inUse && created && aliasAdded && deleted && inUseRequired && createdRequired && aliasAddedRequired && deletedRequired).toBe(true)
   })
 
   it('parses the in-use list exactly', () => {

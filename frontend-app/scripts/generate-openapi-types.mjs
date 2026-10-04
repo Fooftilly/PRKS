@@ -9,16 +9,22 @@
  * Offline: reads docs/api/*.json. Does not start PRKS.
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import openapiTS, { COMMENT_HEADER, astToString } from "openapi-typescript";
 
 const appRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = join(appRoot, "..");
 const manifestPath = join(appRoot, "scripts/openapi-type-families.json");
+const artifactRoot = resolve(repoRoot, "docs/api");
+const outputRoot = resolve(repoRoot, "frontend-app/src/api/generated");
 
 const OPTIONS = {
   alphabetize: true,
+  // A property is required only when the schema lists it in `required`.
+  // The library default treats `default` as required, which marked PATCH
+  // fields and ApiErrorEnvelope.code required even though `required` omitted them.
+  defaultNonNullable: false,
   rootTypes: true,
   rootTypesNoSchemaPrefix: true,
   rootTypesKeepCasing: true,
@@ -50,19 +56,30 @@ function loadFamilies() {
   return manifest.families;
 }
 
-function assertFamilyPaths(family) {
-  if (!family.artifact.startsWith("docs/api/") || !family.artifact.endsWith(".json")) {
-    throw new Error(`${family.name}: artifact must be a docs/api/*.json file`);
-  }
-  const outputRel = family.output.replaceAll("\\", "/");
-  if (!outputRel.startsWith("frontend-app/src/api/generated/") || !outputRel.endsWith(".ts")) {
-    throw new Error(`${family.name}: output must be frontend-app/src/api/generated/*.ts`);
-  }
+function containedFile(rootDir, candidate, suffix) {
+  if (typeof candidate !== "string" || candidate.length === 0) return null;
+  const resolved = resolve(repoRoot, candidate);
+  const rel = relative(rootDir, resolved);
+  if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null;
+  if (!resolved.endsWith(suffix)) return null;
+  return resolved;
 }
 
-async function renderFamily(family) {
-  assertFamilyPaths(family);
-  const artifactPath = resolve(repoRoot, family.artifact);
+/** Resolve artifact and output, and reject either path before any read or write. */
+export function resolveFamilyPaths(family) {
+  const name = family && typeof family.name === "string" ? family.name : "family";
+  const artifactPath = containedFile(artifactRoot, family?.artifact, ".json");
+  if (!artifactPath) {
+    throw new Error(`${name}: artifact must resolve inside docs/api`);
+  }
+  const outputPath = containedFile(outputRoot, family?.output, ".ts");
+  if (!outputPath) {
+    throw new Error(`${name}: output must resolve inside frontend-app/src/api/generated`);
+  }
+  return { artifactPath, outputPath };
+}
+
+async function renderFamily(artifactPath) {
   const ast = await openapiTS(pathToFileURL(artifactPath), OPTIONS);
   const text = PRKS_HEADER + COMMENT_HEADER + astToString(ast);
   if (!text.endsWith("\n")) {
@@ -79,12 +96,12 @@ function assertTypesOnly(family, text) {
   }
 }
 
-export async function generateOpenApiTypes({ check = false } = {}) {
+export async function generateOpenApiTypes({ check = false, families } = {}) {
   const mismatches = [];
-  for (const family of loadFamilies()) {
-    const outputPath = resolve(repoRoot, family.output);
-    const first = await renderFamily(family);
-    const second = await renderFamily(family);
+  for (const family of families ?? loadFamilies()) {
+    const { artifactPath, outputPath } = resolveFamilyPaths(family);
+    const first = await renderFamily(artifactPath);
+    const second = await renderFamily(artifactPath);
     assertTypesOnly(family, first);
     if (first !== second) {
       mismatches.push(`${family.output} (generation is not deterministic)`);
