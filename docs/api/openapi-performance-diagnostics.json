@@ -1,0 +1,437 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "PRKS API \u2014 Performance diagnostics slice",
+    "version": "0.1.0",
+    "description": "Vertical-slice OpenAPI for performance diagnostics (#45 / #232). Schemas are generated from the same Pydantic boundary as the rest of backend/api_contract. The snapshot is disposable process metadata, not canonical library data."
+  },
+  "paths": {
+    "/api/diagnostics/performance": {
+      "get": {
+        "operationId": "getPerformanceDiagnostics",
+        "summary": "Runtime performance diagnostics snapshot",
+        "tags": [
+          "diagnostics"
+        ],
+        "responses": {
+          "200": {
+            "description": "Aggregate in-process measurements.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PerformanceSnapshot"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/diagnostics/performance/reset": {
+      "post": {
+        "operationId": "resetPerformanceDiagnostics",
+        "summary": "Clear the in-process performance window",
+        "tags": [
+          "diagnostics"
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Empty JSON object. Additional properties are rejected.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PerformanceDiagnosticsResetRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Measurements were reset.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PerformanceDiagnosticsReset"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "JSON body gate refusal, or a body that is not an empty object.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body larger than the JSON body limit (request_too_large).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Missing or unsupported Content-Type (unsupported_media_type).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ApiErrorEnvelope": {
+        "additionalProperties": false,
+        "description": "Standard JSON error body at the HTTP adapter boundary.",
+        "properties": {
+          "error": {
+            "description": "Human-readable error message.",
+            "minLength": 1,
+            "title": "Error",
+            "type": "string"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Stable machine-readable code when the domain provides one.",
+            "title": "Code"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "PerformanceRequestTotals": {
+        "additionalProperties": false,
+        "properties": {
+          "total": {
+            "minimum": 0,
+            "title": "Total",
+            "type": "integer"
+          },
+          "slow": {
+            "minimum": 0,
+            "title": "Slow",
+            "type": "integer"
+          },
+          "response_bytes": {
+            "minimum": 0,
+            "title": "Response Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "slow",
+          "response_bytes"
+        ],
+        "type": "object"
+      },
+      "PerformanceRouteStat": {
+        "additionalProperties": false,
+        "properties": {
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "route": {
+            "title": "Route",
+            "type": "string"
+          },
+          "count": {
+            "minimum": 0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "status_4xx": {
+            "minimum": 0,
+            "title": "Status 4Xx",
+            "type": "integer"
+          },
+          "status_5xx": {
+            "minimum": 0,
+            "title": "Status 5Xx",
+            "type": "integer"
+          },
+          "slow_count": {
+            "minimum": 0,
+            "title": "Slow Count",
+            "type": "integer"
+          },
+          "avg_ms": {
+            "title": "Avg Ms",
+            "type": "number"
+          },
+          "p50_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P50 Ms"
+          },
+          "p95_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95 Ms"
+          },
+          "max_ms": {
+            "title": "Max Ms",
+            "type": "number"
+          },
+          "avg_db_ms": {
+            "title": "Avg Db Ms",
+            "type": "number"
+          },
+          "db_calls": {
+            "minimum": 0,
+            "title": "Db Calls",
+            "type": "integer"
+          },
+          "db_calls_avg": {
+            "title": "Db Calls Avg",
+            "type": "number"
+          },
+          "measured_db_share_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measured Db Share Percent"
+          },
+          "avg_response_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Response Bytes"
+          }
+        },
+        "required": [
+          "method",
+          "route",
+          "count",
+          "status_4xx",
+          "status_5xx",
+          "slow_count",
+          "avg_ms",
+          "p50_ms",
+          "p95_ms",
+          "max_ms",
+          "avg_db_ms",
+          "db_calls",
+          "db_calls_avg",
+          "measured_db_share_percent",
+          "avg_response_bytes"
+        ],
+        "type": "object"
+      },
+      "PerformanceSpanStat": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "minimum": 0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "avg_ms": {
+            "title": "Avg Ms",
+            "type": "number"
+          },
+          "p50_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P50 Ms"
+          },
+          "p95_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95 Ms"
+          },
+          "max_ms": {
+            "title": "Max Ms",
+            "type": "number"
+          }
+        },
+        "required": [
+          "count",
+          "avg_ms",
+          "p50_ms",
+          "p95_ms",
+          "max_ms"
+        ],
+        "type": "object"
+      },
+      "PerformanceCounters": {
+        "additionalProperties": false,
+        "description": "Exact counter map the registry always emits (zeros included).",
+        "properties": {
+          "thumbnail_cache_hits": {
+            "minimum": 0,
+            "title": "Thumbnail Cache Hits",
+            "type": "integer"
+          },
+          "thumbnail_cache_misses": {
+            "minimum": 0,
+            "title": "Thumbnail Cache Misses",
+            "type": "integer"
+          },
+          "pdf_file_stat_rows": {
+            "minimum": 0,
+            "title": "Pdf File Stat Rows",
+            "type": "integer"
+          },
+          "pdf_file_stat_files": {
+            "minimum": 0,
+            "title": "Pdf File Stat Files",
+            "type": "integer"
+          },
+          "db_read": {
+            "minimum": 0,
+            "title": "Db Read",
+            "type": "integer"
+          },
+          "db_write": {
+            "minimum": 0,
+            "title": "Db Write",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "thumbnail_cache_hits",
+          "thumbnail_cache_misses",
+          "pdf_file_stat_rows",
+          "pdf_file_stat_files",
+          "db_read",
+          "db_write"
+        ],
+        "type": "object"
+      },
+      "PerformanceSnapshot": {
+        "additionalProperties": false,
+        "description": "GET /api/diagnostics/performance body.\n\nRuntime aggregate metadata. No research content, query strings, or names.",
+        "properties": {
+          "process_started_at": {
+            "title": "Process Started At",
+            "type": "number"
+          },
+          "uptime_seconds": {
+            "minimum": 0,
+            "title": "Uptime Seconds",
+            "type": "integer"
+          },
+          "measured_for_seconds": {
+            "minimum": 0,
+            "title": "Measured For Seconds",
+            "type": "integer"
+          },
+          "slow_threshold_ms": {
+            "title": "Slow Threshold Ms",
+            "type": "number"
+          },
+          "requests": {
+            "$ref": "#/components/schemas/PerformanceRequestTotals"
+          },
+          "routes": {
+            "items": {
+              "$ref": "#/components/schemas/PerformanceRouteStat"
+            },
+            "title": "Routes",
+            "type": "array"
+          },
+          "spans": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PerformanceSpanStat"
+            },
+            "title": "Spans",
+            "type": "object"
+          },
+          "counters": {
+            "$ref": "#/components/schemas/PerformanceCounters"
+          }
+        },
+        "required": [
+          "process_started_at",
+          "uptime_seconds",
+          "measured_for_seconds",
+          "slow_threshold_ms",
+          "requests",
+          "routes",
+          "spans",
+          "counters"
+        ],
+        "type": "object"
+      },
+      "PerformanceDiagnosticsReset": {
+        "additionalProperties": false,
+        "description": "POST /api/diagnostics/performance/reset body.",
+        "properties": {
+          "status": {
+            "pattern": "^reset$",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "PerformanceDiagnosticsResetRequest": {
+        "additionalProperties": false,
+        "description": "POST /api/diagnostics/performance/reset request.\n\nEmpty object only. The JSON body exists so the request passes the body\ngate; additional fields are not part of the contract.",
+        "properties": {},
+        "type": "object"
+      }
+    }
+  }
+}

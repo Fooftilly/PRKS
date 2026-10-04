@@ -1,10 +1,27 @@
 /**
  * Typed client for GET/POST /api/diagnostics/performance.
- * Wire keys match backend/api_contract/performance.py (#45). Version matches
- * the performance-diagnostics OpenAPI document. This module does not own
- * query caching.
+ * Transport types come from docs/api/openapi-performance-diagnostics.json.
+ * Runtime parsers still check response shape. This module does not own query
+ * caching, invalidation, or reset behavior.
  */
 import { PrksApiError, prksApiRequest } from './http'
+import type {
+  PerformanceCounters,
+  PerformanceDiagnosticsReset,
+  PerformanceRequestTotals,
+  PerformanceRouteStat,
+  PerformanceSnapshot,
+  PerformanceSpanStat,
+} from './generated/performance-diagnostics'
+
+export type {
+  PerformanceCounters,
+  PerformanceDiagnosticsReset,
+  PerformanceRequestTotals,
+  PerformanceRouteStat,
+  PerformanceSnapshot,
+  PerformanceSpanStat,
+}
 
 export const PERFORMANCE_DIAGNOSTICS_CONTRACT_VERSION = '0.1.0'
 
@@ -54,62 +71,6 @@ export const PERFORMANCE_RESET_KEYS = ['status'] as const
 
 const LOAD_ERROR = 'Could not load performance diagnostics.'
 const RESET_ERROR = 'Could not reset performance diagnostics.'
-
-export interface PerformanceRequestTotals {
-  total: number
-  slow: number
-  response_bytes: number
-}
-
-export interface PerformanceRouteStat {
-  method: string
-  route: string
-  count: number
-  status_4xx: number
-  status_5xx: number
-  slow_count: number
-  avg_ms: number
-  p50_ms: number | null
-  p95_ms: number | null
-  max_ms: number
-  avg_db_ms: number
-  db_calls: number
-  db_calls_avg: number
-  measured_db_share_percent: number | null
-  avg_response_bytes: number | null
-}
-
-export interface PerformanceSpanStat {
-  count: number
-  avg_ms: number
-  p50_ms: number | null
-  p95_ms: number | null
-  max_ms: number
-}
-
-export interface PerformanceCounters {
-  thumbnail_cache_hits: number
-  thumbnail_cache_misses: number
-  pdf_file_stat_rows: number
-  pdf_file_stat_files: number
-  db_read: number
-  db_write: number
-}
-
-export interface PerformanceSnapshot {
-  process_started_at: number
-  uptime_seconds: number
-  measured_for_seconds: number
-  slow_threshold_ms: number
-  requests: PerformanceRequestTotals
-  routes: PerformanceRouteStat[]
-  spans: Record<string, PerformanceSpanStat>
-  counters: PerformanceCounters
-}
-
-export interface PerformanceDiagnosticsReset {
-  status: 'reset'
-}
 
 function invalid(message: string): PrksApiError {
   return new PrksApiError(message, 200, 'invalid_response')

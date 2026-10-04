@@ -94,6 +94,12 @@ Route extraction (#67) is a separate track; typed models do not require it.
    python -c "import json; from backend.api_contract.openapi import positions_openapi_document as d; print(json.dumps(d(), indent=2))" > docs/api/openapi-positions.json
    ```
 
+   Performance diagnostics uses the same checked-in fragment,
+   `docs/api/openapi-performance-diagnostics.json`, from
+   `performance_diagnostics_openapi_document()`. `GET /api/openapi/performance-diagnostics.json`
+   still serves that function. The type generator reads the file, not the server.
+   Do not fold these fragments into a combined document here.
+
    `test_checked_in_openapi_artifact_matches_generator` only detects drift
    against the generator; it does not rewrite the file.
 7. For a family whose Vue client already owns typed transport DTOs, regenerate

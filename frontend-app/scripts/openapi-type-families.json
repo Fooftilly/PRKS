@@ -10,6 +10,21 @@
       "name": "saved-views",
       "artifact": "docs/api/openapi-saved-views.json",
       "output": "frontend-app/src/api/generated/saved-views.ts"
+    },
+    {
+      "name": "processing-files",
+      "artifact": "docs/api/openapi-processing-files.json",
+      "output": "frontend-app/src/api/generated/processing-files.ts"
+    },
+    {
+      "name": "performance-diagnostics",
+      "artifact": "docs/api/openapi-performance-diagnostics.json",
+      "output": "frontend-app/src/api/generated/performance-diagnostics.ts"
+    },
+    {
+      "name": "positions",
+      "artifact": "docs/api/openapi-positions.json",
+      "output": "frontend-app/src/api/generated/positions.ts"
     }
   ]
 }
