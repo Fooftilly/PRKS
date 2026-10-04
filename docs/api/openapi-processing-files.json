@@ -56,8 +56,8 @@
           "processing-files"
         ],
         "requestBody": {
-          "required": false,
-          "description": "An empty body changes nothing and returns the file. The `application/json` Content-Type is required either way (415 otherwise).",
+          "required": true,
+          "description": "A JSON object. `{}` changes nothing and returns the file.",
           "content": {
             "application/json": {
               "schema": {
@@ -129,8 +129,8 @@
           "processing-files"
         ],
         "requestBody": {
-          "required": false,
-          "description": "Ignored: any JSON value, or an empty body. The `application/json` Content-Type is required either way (415 otherwise).",
+          "required": true,
+          "description": "Any JSON value, ignored. Send `{}`.",
           "content": {
             "application/json": {
               "schema": {}

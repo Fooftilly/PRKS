@@ -5170,7 +5170,7 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual([tag["id"] for tag in patched["tags"]], [tag_id])
         status, listed = self._processing_call("GET", "/api/processing-files")
         self.assertEqual(listed, [patched])
-        # The import body is ignored: any JSON value, or an empty body.
+        # The import body is ignored: any JSON value.
         status, imported = self._processing_call(
             "POST", f"/api/processing-files/{file_id}/import", []
         )
@@ -5178,12 +5178,18 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(imported["processing_file_id"], file_id)
         self.assertTrue(imported["work_id"])
         # Importing again returns the same Work.
-        for body in (b"", b"{}", b'"x"'):
+        for body in (b"{}", b'"x"'):
             with self.subTest(body=body):
                 status, again = self._processing_call(
                     "POST", f"/api/processing-files/{file_id}/import", raw=body
                 )
                 self.assertEqual((status, again), (200, imported))
+        # The contract requires a body; the boundary still tolerates an empty
+        # one sent with the JSON Content-Type.
+        status, again = self._processing_call(
+            "POST", f"/api/processing-files/{file_id}/import", schema_valid=False, raw=b""
+        )
+        self.assertEqual((status, again), (200, imported))
         status, listed = self._processing_call("GET", "/api/processing-files?rescan=1")
         self.assertEqual((status, listed), (200, []))
 
@@ -5210,8 +5216,8 @@ class TestServerAPI(unittest.TestCase):
             "POST", "/api/processing-files/PF-missing/import", {}
         )
         self.assertEqual((status, body), (400, {"error": "Processing file not found."}))
-        # Both writes need the JSON Content-Type, even without a body, and
-        # refuse malformed JSON.
+        # Both writes need the JSON Content-Type (the contract makes clients
+        # send a JSON body, so they always send it) and refuse malformed JSON.
         for method, path in (
             ("POST", "/api/processing-files/PF-missing/import"),
             ("PATCH", f"/api/processing-files/{file_id}"),
@@ -5225,8 +5231,13 @@ class TestServerAPI(unittest.TestCase):
                     method, path, schema_valid=False, raw=b"{"
                 )
                 self.assertEqual((status, body), (400, {"error": "invalid_json"}))
-        # An empty PATCH body changes nothing.
-        status, row = self._processing_call("PATCH", f"/api/processing-files/{file_id}", raw=b"")
+        # An empty PATCH object changes nothing. The boundary also tolerates an
+        # empty body with the JSON Content-Type, which the contract does not offer.
+        status, row = self._processing_call("PATCH", f"/api/processing-files/{file_id}", {})
+        self.assertEqual((status, row["id"]), (200, file_id))
+        status, row = self._processing_call(
+            "PATCH", f"/api/processing-files/{file_id}", schema_valid=False, raw=b""
+        )
         self.assertEqual((status, row["id"]), (200, file_id))
 
     def test_processing_files_request_schema_matches_the_live_endpoint(self):
@@ -5293,6 +5304,19 @@ class TestServerAPI(unittest.TestCase):
         status, body = self._processing_call("PATCH", path, ["title"], schema_valid=False)
         self.assertEqual((status, body), (400, {"error": "JSON object body required"}))
         api = OpenAPI.from_dict(processing_files_openapi_document())
+        # No schema-valid write omits the body, so none can omit the JSON
+        # Content-Type the boundary refuses with 415.
+        for method, write_path in (("patch", path), ("post", f"{path}/import")):
+            for data in (None, b""):
+                with self.subTest(method=method, data=data), self.assertRaises(Exception):
+                    api.validate_request(
+                        MockRequest(
+                            host_url="http://127.0.0.1",
+                            method=method,
+                            path=write_path,
+                            data=data,
+                        )
+                    )
         for payload in ({"roles": "Author"}, ["title"]):
             with self.subTest(payload=payload), self.assertRaises(Exception):
                 api.validate_request(

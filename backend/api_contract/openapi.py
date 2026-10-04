@@ -848,13 +848,10 @@ def processing_files_openapi_document() -> dict[str, Any]:
                 "summary": "Save an inbox file's staged Work metadata",
                 "tags": ["processing-files"],
                 "requestBody": {
-                    # An empty body with the JSON Content-Type changes nothing.
-                    "required": False,
-                    "description": (
-                        "An empty body changes nothing and returns the file. "
-                        "The `application/json` Content-Type is required either "
-                        "way (415 otherwise)."
-                    ),
+                    # Required so a client always sends a JSON body, and with
+                    # it the JSON Content-Type the boundary needs (415 without).
+                    "required": True,
+                    "description": "A JSON object. `{}` changes nothing and returns the file.",
                     "content": _json_content(
                         {"$ref": "#/components/schemas/ProcessingFileUpdateRequest"}
                     ),
@@ -887,12 +884,9 @@ def processing_files_openapi_document() -> dict[str, Any]:
                 ),
                 "tags": ["processing-files"],
                 "requestBody": {
-                    "required": False,
-                    "description": (
-                        "Ignored: any JSON value, or an empty body. The "
-                        "`application/json` Content-Type is required either "
-                        "way (415 otherwise)."
-                    ),
+                    # Required for the same reason as the PATCH body.
+                    "required": True,
+                    "description": "Any JSON value, ignored. Send `{}`.",
                     "content": _json_content({}),
                 },
                 "responses": {
