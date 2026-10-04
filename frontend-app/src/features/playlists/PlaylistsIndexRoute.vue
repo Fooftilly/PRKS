@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, inject } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import { playlistItemCountLabel } from './format'
 import { playlistIntentsKey } from './intents'
@@ -46,14 +47,9 @@ function activateRouteLink(event: KeyboardEvent): void {
         <div class="page-header__title-row">
           <h2 class="prks-page-title">Playlists</h2>
           <div class="page-header__actions">
-            <button
-              id="prks-playlists-header-new"
-              type="button"
-              class="prks-btn prks-btn--secondary"
-              @click="onCreate"
-            >
+            <PrksButton id="prks-playlists-header-new" @click="onCreate">
               New playlist
-            </button>
+            </PrksButton>
           </div>
         </div>
         <p class="tags-page__sub playlists-page__sub">Open playlist row to view or edit ordered items.</p>
@@ -86,14 +82,9 @@ function activateRouteLink(event: KeyboardEvent): void {
         <div v-else class="playlists-page__empty">
           <p class="meta-row">No playlists yet.</p>
           <p>
-            <button
-              id="prks-playlists-empty-new"
-              type="button"
-              class="prks-btn prks-btn--primary"
-              @click="onCreate"
-            >
+            <PrksButton id="prks-playlists-empty-new" variant="primary" @click="onCreate">
               New playlist
-            </button>
+            </PrksButton>
           </p>
         </div>
       </div>

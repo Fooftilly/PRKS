@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import { folderDetailIntentsKey } from './intents'
 import { folderDetailWorksHtml } from './legacy-work-card'
@@ -202,16 +203,15 @@ watch(collectionHtml, () => {
             <span style="display: contents" v-html="headerIcon"></span>
             {{ title }}
           </h2>
-          <button
+          <PrksButton
             v-if="canDelete"
-            type="button"
-            class="prks-btn prks-btn--danger"
+            variant="danger"
             :data-delete-folder-id="encodedId"
             @click="onDelete"
           >
             <span style="display: contents" v-html="trashIcon"></span>
             Delete Folder
-          </button>
+          </PrksButton>
         </div>
         <span style="display: contents" v-html="summaryHtml"></span>
       </div>

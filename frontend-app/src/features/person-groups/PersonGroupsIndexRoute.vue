@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, ref, watch } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import { personGroupIntentsKey } from './intents'
 import { buildGroupTree, collapsibleGroupIds } from './projection'
@@ -59,15 +60,10 @@ function onToggleAll(): void {
     <div v-else class="prks-group-library">
       <div class="prks-page-header page-header prks-group-library__header page-header--split">
         <h2 class="prks-page-title">People groups</h2>
-        <button
-          type="button"
-          class="prks-btn prks-btn--secondary"
-          data-prks-role="group-mutation-control"
-          @click="onCreate"
-        >
+        <PrksButton data-prks-role="group-mutation-control" @click="onCreate">
           <span v-html="icon('plus')"></span>
           New group
-        </button>
+        </PrksButton>
       </div>
       <p class="meta-row prks-group-library__intro">
         Organize people into hierarchical groups. A person can belong to multiple groups.
@@ -116,9 +112,9 @@ function onToggleAll(): void {
       </div>
       <div v-if="!groups.length" class="prks-group-library__empty-state">
         <PrksInlineMessage class="prks-group-library__empty">No Person Groups yet.</PrksInlineMessage>
-        <button type="button" class="prks-btn prks-btn--primary" data-prks-role="group-mutation-control" @click="onCreate">
+        <PrksButton variant="primary" data-prks-role="group-mutation-control" @click="onCreate">
           New Group
-        </button>
+        </PrksButton>
       </div>
       <div v-else class="prks-group-library__scroll" data-prks-group-tree-host>
         <PrksInlineMessage v-if="tree.emptySearch" class="prks-group-tree__empty">No groups match your search.</PrksInlineMessage>

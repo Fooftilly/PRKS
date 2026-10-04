@@ -273,10 +273,14 @@ class FrontendResearchLinksTests(unittest.TestCase):
         args = _read(_ARGS_VUE_DETAIL)
         css = _read(os.path.join(_FRONTEND, "css", "style.css"))
         self.assertIn(".prks-btn--quiet-danger", css)
-        self.assertIn("prks-concept-delete", concepts_detail)
-        self.assertIn("prks-btn--quiet-danger", concepts_detail)
-        self.assertIn("prks-arg-delete", args)
-        self.assertIn("prks-btn--quiet-danger", args)
+        self.assertIn('id="prks-concept-delete"', concepts_detail)
+        self.assertIn('variant="quiet-danger"', concepts_detail)
+        self.assertIn('id="prks-arg-delete"', args)
+        self.assertIn('variant="quiet-danger"', args)
+        button = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "components", "PrksButton.vue"
+        ))
+        self.assertIn("prks-btn--quiet-danger", button)
         # New response stays a prominent, always-visible primary action -- not moved
         # aside. Asserted on the button and its label rather than on exact
         # attribute order, which offline control roles legitimately extend.
@@ -329,7 +333,11 @@ class FrontendResearchLinksTests(unittest.TestCase):
         )
         app = _read(_APP)
         self.assertIn('class="prks-arg-form form-pane"', args)
-        self.assertIn('class="prks-btn prks-btn--primary"', args)
+        self.assertIn('type="submit" variant="primary"', args)
+        button = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "components", "PrksButton.vue"
+        ))
+        self.assertIn("prks-btn--primary", button)
         self.assertIn("research-entity", args)
         self.assertIn("prks-arg-edit", args)
         self.assertIn("ctx.ui.argumentEditing = false", app)

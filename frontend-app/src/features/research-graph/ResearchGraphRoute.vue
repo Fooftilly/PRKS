@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import type { ResearchGraphChromeIds } from './session'
 
@@ -51,8 +52,8 @@ onBeforeUnmount(() => {
         data-prks-role="graph-find"
         :aria-controls="chrome?.resultsId || undefined"
       >
-      <button type="button" class="prks-btn prks-btn--secondary" data-prks-role="graph-fit">Fit</button>
-      <button type="button" class="prks-btn prks-btn--secondary" data-prks-role="graph-reset">Reset layout</button>
+      <PrksButton data-prks-role="graph-fit">Fit</PrksButton>
+      <PrksButton data-prks-role="graph-reset">Reset layout</PrksButton>
       <button
         type="button"
         class="prks-btn prks-btn--secondary"

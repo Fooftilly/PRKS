@@ -217,8 +217,8 @@ onUpdated(stampEditor)
               </section>
             </div>
             <div class="form-actions prks-form-actions--split group-sidebar__sticky-actions">
-              <button type="button" class="prks-btn prks-btn--secondary" data-prks-group-edit-cancel @click="onCancel">Cancel</button>
-              <button id="gd-save-btn" type="button" class="prks-btn prks-btn--primary">Save changes</button>
+              <PrksButton data-prks-group-edit-cancel @click="onCancel">Cancel</PrksButton>
+              <PrksButton id="gd-save-btn" variant="primary">Save changes</PrksButton>
             </div>
             <details class="group-sidebar__advanced">
               <summary>Advanced</summary>
@@ -260,15 +260,14 @@ onUpdated(stampEditor)
             <div class="group-detail__section-head">
               <h3 id="group-members-heading">Members</h3>
               <span class="group-detail__count">{{ group.members.length }}</span>
-              <button
-                type="button"
-                class="prks-btn prks-btn--secondary prks-btn--sm"
+              <PrksButton
+                size="sm"
                 data-prks-group-members-toggle
                 :data-prks-role="membersEditing ? undefined : 'group-mutation-control'"
                 @click="onToggleMembers"
               >
                 {{ membersEditing ? 'Done' : 'Manage members' }}
-              </button>
+              </PrksButton>
             </div>
             <div v-if="membersEditing" class="group-detail__member-add">
               <p class="tag-add-field__caption">Add a person</p>
@@ -287,7 +286,7 @@ onUpdated(stampEditor)
                 </div>
                 <div id="group-add-member-results" class="combobox-results combobox-results--tag-panel hidden"></div>
               </div>
-              <button id="group-add-member-btn" type="button" class="prks-btn prks-btn--primary">Add to group</button>
+              <PrksButton id="group-add-member-btn" variant="primary">Add to group</PrksButton>
             </div>
             <div
               v-if="group.members.length"

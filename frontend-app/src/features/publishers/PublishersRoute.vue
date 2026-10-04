@@ -249,16 +249,16 @@ onUnmounted(() => {
           <p class="meta-row publishers-page__list-stats">{{ row.stats }}</p>
         </div>
         <div class="publishers-page__list-actions">
-          <button
-            type="button"
-            class="prks-btn prks-btn--secondary prks-btn--sm publishers-page__alias-btn"
+          <PrksButton
+            size="sm"
+            class="publishers-page__alias-btn"
             :data-publisher-alias-edit="row.id"
             title="Aliases"
             :aria-label="`Edit aliases for ${row.name}`"
             @click.stop="openAlias(row, $event)"
           >
             ⋯<span>Aliases</span>
-          </button>
+          </PrksButton>
         </div>
       </div>
     </div>

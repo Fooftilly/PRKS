@@ -399,6 +399,7 @@ If a layout is specific to one real component, give that component a meaningful 
 .prks-btn--secondary
 .prks-btn--ghost
 .prks-btn--danger
+.prks-btn--quiet-danger
 .prks-btn--sm
 .prks-btn--md
 .prks-btn--lg
@@ -411,6 +412,7 @@ If a layout is specific to one real component, give that component a meaningful 
 | Secondary | Normal explicit action |
 | Ghost | Low-priority / chrome action |
 | Danger | Destructive action |
+| Quiet danger | Destructive action that stays visually subordinate to everyday actions |
 
 Rules:
 

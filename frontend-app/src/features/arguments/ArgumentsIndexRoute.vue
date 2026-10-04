@@ -194,14 +194,9 @@ function onCreate(kind: ArgumentKind): void {
         <div v-else-if="showSearchEmpty" class="prks-research-index__empty">
           <p class="meta-row">No {{ scopeLabel }} match “{{ normalizedQuery }}”.</p>
           <p>
-            <button
-              type="button"
-              class="prks-btn prks-btn--ghost prks-btn--sm"
-              data-research-search-clear
-              @click="clearSearch"
-            >
+            <PrksButton variant="ghost" size="sm" data-research-search-clear @click="clearSearch">
               Clear search
-            </button>
+            </PrksButton>
           </p>
         </div>
       </div>
