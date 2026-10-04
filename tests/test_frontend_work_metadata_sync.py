@@ -89,7 +89,12 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         # Sonar reads the template source. v-if branches are not mutually
         # exclusive there, and v-model writes the draft prop in place.
         self.assertNotIn('v-model="draft.', editor)
-        self.assertEqual(editor.count('id="meta-author-text"'), 1)
+        # for-id="meta-author-text" contains the substring id="meta-author-text".
+        self.assertEqual(editor.count('for-id="meta-author-text"'), 1)
+        self.assertEqual(
+            editor.count('id="meta-author-text"') - editor.count('for-id="meta-author-text"'),
+            1,
+        )
         self.assertEqual(editor.count('id="save-work-bib-btn"'), 1)
 
     def test_no_frontend_code_patches_a_local_first_work_field(self):
