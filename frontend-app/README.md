@@ -43,7 +43,7 @@ npm run build-storybook   # catalog only; gitignored storybook-static/
 | `src/features/progress/` | Progress route, first route-surface consumer. Consumes the effective works-browse snapshot; not a Query cache |
 | `src/api/` | Typed PRKS API client used by feature services |
 | `src/query/` | Application QueryClient |
-| `src/components/` | Shared primitives (`PrksButton`, `PrksIconButton`, `PrksInlineMessage`, `PrksState`, `PrksStatusText`, `PrksSectionHeader`) and their stories |
+| `src/components/` | Shared primitives (`PrksButton`, `PrksLinkButton`, `PrksIconButton`, `PrksField`, `PrksInlineMessage`, `PrksState`, `PrksStatusText`, `PrksSectionHeader`, `PrksScopeLine`, `PrksRelSummary`, `PrksResearchRow`, `PrksResearchSectionHead`, `PrksDisclosureButton`) and their stories |
 | `src/composables/` | Feature-local Vue logic, when a slice needs it |
 | `frontend/js/` | Legacy runtime. Leave it in place until a slice replaces a specific responsibility |
 
@@ -56,7 +56,9 @@ npm run build-storybook   # catalog only; gitignored storybook-static/
 | Path | Role |
 | --- | --- |
 | `src/components/PrksButton.vue` | `.prks-btn` with variant, disabled, and busy (`disabled` plus `aria-busy`) |
+| `src/components/PrksLinkButton.vue` | Native `<a class="prks-btn">`; required `href`; `secondary` plus `sm`/`md` only |
 | `src/components/PrksIconButton.vue` | `.prks-icon-btn` with a required accessible name, disabled, and busy |
+| `src/components/PrksField.vue` | `.prks-field` label + native control slot + optional help/error |
 | `src/components/PrksInlineMessage.vue` | `.prks-inline-message`; `tone="error"` adds `--error`; `status` keeps an existing `role="status"` |
 | `src/components/PrksState.vue` | `.prks-state` for `loading` and `error` (`role="status"`, optional retry slot) and `empty` (no live role) |
 | `src/components/PrksStatusText.vue` | `.prks-settings-hint`, polite live region unless `live` is false |

@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, inject, onMounted, onUpdated, ref, watch } from 'vue'
+import { computed, inject, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
+import PrksScopeLine from '../../components/PrksScopeLine.vue'
 import { peopleIntentsKey } from './intents'
 import type { PeopleIndexProjection } from './projection'
 import type { PersonIndexItem } from './types'
@@ -13,7 +14,6 @@ const props = defineProps<{
 }>()
 
 const intents = inject(peopleIntentsKey)
-const rootEl = ref<HTMLElement | null>(null)
 const query = ref(readFilter())
 
 const unavailable = computed(() => props.projection.availability === 'unavailable')
@@ -105,24 +105,10 @@ watch(query, (value) => {
     /* ignore */
   }
 })
-
-function paintScope(): void {
-  const paint = window.prksPaintScopeHost
-  if (typeof paint !== 'function' || !rolePeople.value.length) return
-  paint(rootEl.value, {
-    shown: shown.value.length,
-    total: rolePeople.value.length,
-    filter: query.value.trim(),
-    label: roleFilter.value || 'People',
-  })
-}
-
-onMounted(paintScope)
-onUpdated(paintScope)
 </script>
 
 <template>
-  <div ref="rootEl" data-prks-people-index-view>
+  <div data-prks-people-index-view>
     <template v-if="unavailable">
       <div class="prks-page-header page-header">
         <h2 class="prks-page-title">People not available offline</h2>
@@ -148,7 +134,13 @@ onUpdated(paintScope)
         >
           New Person
         </PrksButton>
-        <div v-if="rolePeople.length" data-prks-role="index-scope-host"></div>
+        <PrksScopeLine
+          v-if="rolePeople.length"
+          :shown="shown.length"
+          :total="rolePeople.length"
+          :filter="query.trim()"
+          :label="roleFilter || 'People'"
+        />
       </div>
       <div v-if="rolePeople.length" class="prks-people-library__toolbar">
         <div class="tag-add-shell tag-add-shell--flush prks-people-library__search">

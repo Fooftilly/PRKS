@@ -19,8 +19,6 @@ afterEach(() => {
   delete window.prksIcon
   delete window.prksPaintScopeHost
   delete window.prksRefreshIcons
-  delete window.prksResearchSectionHeadHtml
-  delete window.prksResearchIndexRowHtml
   delete window.prksResearchMarkdownHtml
   delete window.prksEscapeHtml
   delete window.prksPrepareArgumentEdit
@@ -63,13 +61,6 @@ function paintHelpers(): void {
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
   window.prksResearchMarkdownHtml = (text) => `<p>${text || ''}</p>`
-  window.prksResearchSectionHeadHtml = (title, opts) => {
-    const count =
-      opts?.count != null ? `<span class="research-entity__section-count">${opts.count}</span>` : ''
-    return `<div class="research-entity__section-head"><h3 id="${opts?.headingId || ''}">${title}</h3>${count}</div>`
-  }
-  window.prksResearchIndexRowHtml = (opts) =>
-    `<a class="prks-list-row prks-research-row" href="${opts.href}"><span class="prks-research-row__title">${opts.title}</span></a>`
 }
 
 function coordinationOwner() {

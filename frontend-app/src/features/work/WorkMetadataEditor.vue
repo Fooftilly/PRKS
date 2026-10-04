@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import PrksField from '../../components/PrksField.vue'
 import PrksIconButton from '../../components/PrksIconButton.vue'
 import { WORK_STATUSES } from '../../domain/work-status'
 import type { WorkMetaDraft, WorkMetaField } from './metadata-draft'
@@ -167,7 +168,7 @@ watch(() => props.draft.doc_type, () => {
 
     <section class="work-meta-editor__section" data-prks-role="work-identity-editor">
       <h4>Identity</h4>
-      <label for="meta-title">Title</label>
+      <PrksField label="Title" for-id="meta-title" :error="errorText('title')">
       <input
         id="meta-title"
         type="text"
@@ -181,7 +182,7 @@ watch(() => props.draft.doc_type, () => {
         @focus="onFocus('title')"
         @blur="onBlur('title')"
       >
-      <p id="meta-title-error" class="field-error" aria-live="polite">{{ errorText('title') }}</p>
+      </PrksField>
 
       <label for="meta-doc-type-trigger">Document type (BibLaTeX)</label>
       <div class="prks-doc-type-menu combobox-container">
@@ -264,7 +265,12 @@ watch(() => props.draft.doc_type, () => {
 
     <section v-if="isVideo" class="work-meta-editor__section" data-prks-role="work-source-editor">
       <h4>Video source</h4>
-      <label for="meta-video-url">YouTube URL</label>
+      <PrksField
+        label="YouTube URL"
+        for-id="meta-video-url"
+        :error="errorText('source_url')"
+        help="Replaces which video this file is. Different links to the same video are the same source."
+      >
       <input
         id="meta-video-url"
         type="url"
@@ -279,8 +285,7 @@ watch(() => props.draft.doc_type, () => {
         @focus="onFocus('source_url')"
         @blur="onBlur('source_url')"
       >
-      <p id="meta-video-url-error" class="field-error" aria-live="polite">{{ errorText('source_url') }}</p>
-      <p class="meta-row meta-row--hint">Replaces which video this file is. Different links to the same video are the same source.</p>
+      </PrksField>
       <div class="prks-form-actions form-actions">
         <PrksButton id="save-work-source-btn" :disabled="saveDisabled('source')" @click="saveSource">Save video source</PrksButton>
       </div>
@@ -300,7 +305,11 @@ watch(() => props.draft.doc_type, () => {
 
     <section class="work-meta-editor__section" data-prks-role="work-bib-editor">
       <h4>{{ isVideo ? 'Channel' : 'Bibliographic details' }}</h4>
-      <label for="meta-author-text">{{ isVideo ? 'Channel name' : 'Author (text)' }}</label>
+      <PrksField
+        :label="isVideo ? 'Channel name' : 'Author (text)'"
+        for-id="meta-author-text"
+        :help="isVideo ? '' : 'Used for the credit line only when no Author is linked to this file. A linked Author always takes precedence; a linked Editor stands in when this is empty.'"
+      >
       <input
         id="meta-author-text"
         type="text"
@@ -313,16 +322,14 @@ watch(() => props.draft.doc_type, () => {
         @focus="onFocus('author_text')"
         @blur="onBlur('author_text')"
       >
-      <p v-if="!isVideo" class="meta-row meta-row--hint">Used for the credit line only when no Author is linked to this file. A linked Author always takes precedence; a linked Editor stands in when this is empty.</p>
+      </PrksField>
       <template v-if="!isVideo">
 
       <div class="form-grid-2 form-grid-2--compact">
-        <div>
-          <label for="meta-year">Year</label>
+        <PrksField label="Year" for-id="meta-year">
           <input id="meta-year" type="text" data-prks-work-field="year" :value="draft.year" @input="onInput('year', $event)" :disabled="fieldOff('year')" :title="fieldTitle('year')" @focus="onFocus('year')" @blur="onBlur('year')">
-        </div>
-        <div>
-          <label for="meta-date">Published Date</label>
+        </PrksField>
+        <PrksField label="Published Date" for-id="meta-date" :error="errorText('published_date')">
           <input
             id="meta-date"
             type="text"
@@ -339,49 +346,56 @@ watch(() => props.draft.doc_type, () => {
             @focus="onFocus('published_date')"
             @blur="onBlur('published_date')"
           >
-        </div>
+        </PrksField>
       </div>
-      <p id="meta-date-error" class="field-error" aria-live="polite">{{ errorText('published_date') }}</p>
 
-      <label for="meta-publisher">Publisher</label>
+      <PrksField label="Publisher" for-id="meta-publisher">
       <input id="meta-publisher" type="text" data-prks-work-field="publisher" :value="draft.publisher" @input="onInput('publisher', $event)" :disabled="fieldOff('publisher')" :title="fieldTitle('publisher')" @focus="onFocus('publisher')" @blur="onBlur('publisher')">
+      </PrksField>
 
-      <label for="meta-location">Location (place of publication)</label>
+      <PrksField
+        label="Location (place of publication)"
+        for-id="meta-location"
+        help="Separate multiple places with semicolons; BibLaTeX export joins them with &quot; and &quot;."
+      >
       <input id="meta-location" type="text" data-prks-work-field="location" placeholder="e.g. Cambridge, UK or Paris; Berlin" autocomplete="off" :value="draft.location" @input="onInput('location', $event)" :disabled="fieldOff('location')" :title="fieldTitle('location')" @focus="onFocus('location')" @blur="onBlur('location')">
-      <p class="meta-row meta-row--hint">Separate multiple places with semicolons; BibLaTeX export joins them with &quot; and &quot;.</p>
+      </PrksField>
 
-      <label for="meta-edition">Edition</label>
+      <PrksField label="Edition" for-id="meta-edition">
       <input id="meta-edition" type="text" data-prks-work-field="edition" placeholder="e.g. 2 or revised" autocomplete="off" :value="draft.edition" @input="onInput('edition', $event)" :disabled="fieldOff('edition')" :title="fieldTitle('edition')" @focus="onFocus('edition')" @blur="onBlur('edition')">
+      </PrksField>
 
-      <label for="meta-journal">Journal</label>
+      <PrksField label="Journal" for-id="meta-journal">
       <input id="meta-journal" type="text" data-prks-work-field="journal" :value="draft.journal" @input="onInput('journal', $event)" :disabled="fieldOff('journal')" :title="fieldTitle('journal')" @focus="onFocus('journal')" @blur="onBlur('journal')">
+      </PrksField>
 
       <div class="form-grid-2 form-grid-2--compact">
-        <div>
-          <label for="meta-volume">Volume</label>
+        <PrksField label="Volume" for-id="meta-volume">
           <input id="meta-volume" type="text" data-prks-work-field="volume" :value="draft.volume" @input="onInput('volume', $event)" :disabled="fieldOff('volume')" :title="fieldTitle('volume')" @focus="onFocus('volume')" @blur="onBlur('volume')">
-        </div>
-        <div>
-          <label for="meta-issue">Issue</label>
+        </PrksField>
+        <PrksField label="Issue" for-id="meta-issue">
           <input id="meta-issue" type="text" data-prks-work-field="issue" :value="draft.issue" @input="onInput('issue', $event)" :disabled="fieldOff('issue')" :title="fieldTitle('issue')" @focus="onFocus('issue')" @blur="onBlur('issue')">
-        </div>
+        </PrksField>
       </div>
 
       <div class="form-grid-2 form-grid-2--compact">
-        <div>
-          <label for="meta-pages">Pages</label>
+        <PrksField label="Pages" for-id="meta-pages">
           <input id="meta-pages" type="text" data-prks-work-field="pages" :value="draft.pages" @input="onInput('pages', $event)" :disabled="fieldOff('pages')" :title="fieldTitle('pages')" @focus="onFocus('pages')" @blur="onBlur('pages')">
-        </div>
-        <div>
-          <label for="meta-isbn">ISBN</label>
+        </PrksField>
+        <PrksField label="ISBN" for-id="meta-isbn">
           <input id="meta-isbn" type="text" data-prks-work-field="isbn" :value="draft.isbn" @input="onInput('isbn', $event)" :disabled="fieldOff('isbn')" :title="fieldTitle('isbn')" @focus="onFocus('isbn')" @blur="onBlur('isbn')">
-        </div>
+        </PrksField>
       </div>
 
-      <label for="meta-doi">DOI</label>
+      <PrksField label="DOI" for-id="meta-doi">
       <input id="meta-doi" type="text" data-prks-work-field="doi" :value="draft.doi" @input="onInput('doi', $event)" :disabled="fieldOff('doi')" :title="fieldTitle('doi')" @focus="onFocus('doi')" @blur="onBlur('doi')">
+      </PrksField>
 
-      <label for="meta-source-url">Original URL (optional)</label>
+      <PrksField
+        label="Original URL (optional)"
+        for-id="meta-source-url"
+        help="Online location if this file was converted or downloaded from the web. This is provenance only: it does not change what kind of file PRKS treats this as."
+      >
       <input
         id="meta-source-url"
         type="url"
@@ -395,9 +409,9 @@ watch(() => props.draft.doc_type, () => {
         @focus="onFocus('source_url')"
         @blur="onBlur('source_url')"
       >
-      <p class="meta-row meta-row--hint">Online location if this file was converted or downloaded from the web. This is provenance only: it does not change what kind of file PRKS treats this as.</p>
+      </PrksField>
 
-      <label for="meta-abstract">Abstract</label>
+      <PrksField label="Abstract" for-id="meta-abstract">
       <textarea
         id="meta-abstract"
         class="textarea-md"
@@ -409,8 +423,14 @@ watch(() => props.draft.doc_type, () => {
         @focus="onFocus('abstract')"
         @blur="onBlur('abstract')"
       ></textarea>
+      </PrksField>
 
-      <label for="meta-thumb-page">Thumbnail page</label>
+      <PrksField
+        label="Thumbnail page"
+        for-id="meta-thumb-page"
+        :error="errorText('thumb_page')"
+        help="Which page of the PDF to use as the card image. Leave empty for page 1."
+      >
       <input
         id="meta-thumb-page"
         type="number"
@@ -428,8 +448,7 @@ watch(() => props.draft.doc_type, () => {
         @focus="onFocus('thumb_page')"
         @blur="onBlur('thumb_page')"
       >
-      <p id="meta-thumb-page-error" class="field-error" aria-live="polite">{{ errorText('thumb_page') }}</p>
-      <p class="meta-row meta-row--hint">Which page of the PDF to use as the card image. Leave empty for page 1.</p>
+      </PrksField>
       </template>
 
       <div class="prks-form-actions form-actions">

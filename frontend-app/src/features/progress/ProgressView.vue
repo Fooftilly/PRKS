@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import PrksScopeLine from '../../components/PrksScopeLine.vue'
 import PrksState from '../../components/PrksState.vue'
 import { legacyWorkCardHtml } from './legacy-work-card'
 import { progressCardSubtitle, progressFileCountLabel, progressPageTitle, progressVisibleRows } from './rows'
@@ -65,7 +66,7 @@ watch(collectionHtml, () => {
       <!-- display:contents keeps the shared browse-mode control a title-row child. -->
       <div ref="modeHost" data-prks-progress-mode-host style="display: contents"></div>
     </div>
-    <p class="prks-scope-line" role="status">{{ countLabel }}</p>
+    <PrksScopeLine :text="countLabel" />
   </div>
   <div v-if="visible.length" ref="collectionEl" :class="collectionClass"></div>
   <PrksState v-else kind="empty" heading="No files with this progress status yet." />

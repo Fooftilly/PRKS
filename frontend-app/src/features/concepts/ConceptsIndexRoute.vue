@@ -2,6 +2,7 @@
 import { computed, inject, ref } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
+import PrksScopeLine from '../../components/PrksScopeLine.vue'
 import { useResearchIndexList } from '../../research-index/useResearchIndexList'
 import ConceptRow from './ConceptRow.vue'
 import { conceptIntentsKey } from './intents'
@@ -18,7 +19,6 @@ const intents = inject(conceptIntentsKey)
 const unavailable = computed(() => props.projection.availability === 'unavailable')
 const rootEl = ref<HTMLElement | null>(null)
 const titleIconHost = ref<HTMLElement | null>(null)
-const scopeHost = ref<HTMLElement | null>(null)
 const searchInput = ref<HTMLInputElement | null>(null)
 const {
   searchQuery,
@@ -28,6 +28,7 @@ const {
   showEmptyData,
   showSearchEmpty,
   rowIconHtml,
+  scopeLine,
   clearSearch,
 } = useResearchIndexList({
   items: computed(() => props.projection.items),
@@ -39,7 +40,6 @@ const {
   scopeLabel: 'Concepts',
   rootEl,
   titleIconHost,
-  scopeHost,
   searchInput,
 })
 
@@ -71,7 +71,7 @@ function onCreate(): void {
             </PrksButton>
           </div>
         </div>
-        <div ref="scopeHost" data-prks-role="index-scope-host"></div>
+        <PrksScopeLine v-bind="scopeLine" />
       </div>
       <div v-if="showToolbar" class="prks-toolbar prks-research-index__toolbar">
         <input

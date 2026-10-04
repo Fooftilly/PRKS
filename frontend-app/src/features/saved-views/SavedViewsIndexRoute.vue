@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
+import PrksLinkButton from '../../components/PrksLinkButton.vue'
 import PrksState from '../../components/PrksState.vue'
 import { usePendingAction } from '../../route-surface/pending-action'
 import type { SavedViewIntents } from './intents'
@@ -99,7 +100,7 @@ watch(rows, refreshIcons, { flush: 'post' })
             <p class="meta-row saved-views-page__summary">{{ row.summary }}</p>
           </a>
           <div class="saved-views-page__row-actions">
-            <a class="prks-btn prks-btn--secondary prks-btn--sm" :href="row.href">Open</a>
+            <PrksLinkButton :href="row.href" size="sm">Open</PrksLinkButton>
             <PrksButton
               variant="secondary"
               size="sm"

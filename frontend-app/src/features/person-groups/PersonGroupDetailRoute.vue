@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, onUpdated, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import PrksField from '../../components/PrksField.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import { personGroupIntentsKey } from './intents'
 import { usePersonGroupPendingAction } from './pending-action'
@@ -183,8 +184,9 @@ onUpdated(stampEditor)
             <div class="form-pane group-sidebar-form">
               <section class="group-sidebar-form__section">
                 <h4>Identity</h4>
-                <label for="gd-name">Name</label>
-                <input id="gd-name" type="text" />
+                <PrksField label="Name" for-id="gd-name">
+                  <input id="gd-name" type="text" />
+                </PrksField>
               </section>
               <section class="group-sidebar-form__section">
                 <h4>Hierarchy</h4>

@@ -1,7 +1,11 @@
 <script setup lang="ts">
-import { computed, inject, onMounted, ref, watch } from 'vue'
+import { computed, inject, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
+import PrksLinkButton from '../../components/PrksLinkButton.vue'
+import PrksRelSummary from '../../components/PrksRelSummary.vue'
+import PrksResearchRow from '../../components/PrksResearchRow.vue'
+import PrksResearchSectionHead from '../../components/PrksResearchSectionHead.vue'
 import { conceptIntentsKey } from './intents'
 import { researchMarkdownHtml } from './markdown'
 import type { ConceptDetailProjection } from './projection'
@@ -14,15 +18,6 @@ const props = defineProps<{
 
 const intents = inject(conceptIntentsKey)
 const rootEl = ref<HTMLElement | null>(null)
-const summaryHost = ref<HTMLElement | null>(null)
-const definitionHeadHost = ref<HTMLElement | null>(null)
-const definitionHost = ref<HTMLElement | null>(null)
-const aliasesHeadHost = ref<HTMLElement | null>(null)
-const parentsHeadHost = ref<HTMLElement | null>(null)
-const childrenHeadHost = ref<HTMLElement | null>(null)
-const parentsHost = ref<HTMLElement | null>(null)
-const childrenHost = ref<HTMLElement | null>(null)
-const mentionsHeadHost = ref<HTMLElement | null>(null)
 
 const availability = computed(() => props.projection.availability)
 const concept = computed(() => props.projection.concept)
@@ -41,155 +36,18 @@ const parentSub = computed(() => {
 })
 
 const mentionCount = computed(() => Number(concept.value?.mention_count) || 0)
-
 const definitionHtml = computed(() => researchMarkdownHtml(concept.value?.description))
-
-function escHtml(value: string): string {
-  const fn = window.prksEscapeHtml
-  if (typeof fn === 'function') return fn(value)
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-}
-
-/** DESIGN.md: relationship rows via shared `prksResearchIndexRowHtml`. */
-function researchRelationRowsHtml(
-  rows: readonly { id: string; name: string }[],
-): string {
-  const rowHtml = window.prksResearchIndexRowHtml
-  if (typeof rowHtml !== 'function') return ''
-  return rows
-    .map((row) =>
-      rowHtml({
-        href: `#/concepts/${encodeURIComponent(row.id)}`,
-        title: escHtml(row.name || row.id),
-        kind: 'Concept',
-      }),
-    )
-    .join('')
-}
-
-/** DESIGN.md: section heads via shared `prksResearchSectionHeadHtml`. */
-function paintSectionHead(
-  host: HTMLElement | null,
-  title: string,
-  opts: {
-    headingId?: string
-    actionId?: string
-    actionLabel?: string
-    actionRole?: string
-    count?: number
-    sub?: string
-  },
-  onAction?: () => void,
-): void {
-  if (!host) return
-  const fn = window.prksResearchSectionHeadHtml
-  if (typeof fn !== 'function') {
-    host.innerHTML = ''
-    return
-  }
-  host.innerHTML = fn(title, opts)
-  if (opts.actionId && onAction) {
-    // Action ids are static PRKS tokens (hyphenated); avoid CSS.escape for jsdom.
-    const btn = host.querySelector(`[id="${opts.actionId}"]`)
-    if (btn instanceof HTMLElement) {
-      btn.addEventListener('click', onAction)
-    }
-  }
-}
-
-function paintSummary(): void {
-  const host = summaryHost.value
+const summaryParts = computed(() => {
   const c = concept.value
-  if (!host || !c) return
-  if (typeof window.prksRelSummaryHtml !== 'function') {
-    host.innerHTML = ''
-    return
-  }
+  if (!c) return []
   const parentCount = c.parents.length
-  host.innerHTML = window.prksRelSummaryHtml({
-    parts: [
-      parentCount ? `${parentCount} ${parentCount === 1 ? 'parent' : 'parents'}` : null,
-      Number(c.mention_count) > 0
-        ? `${Number(c.mention_count)} ${
-            Number(c.mention_count) === 1 ? 'note mention' : 'note mentions'
-          }`
-        : null,
-    ],
-  })
-}
-
-function paintDefinition(): void {
-  const host = definitionHost.value
-  if (!host) return
-  host.innerHTML = definitionHtml.value
-}
-
-function paintRelations(): void {
-  const c = concept.value
-  const parents = parentsHost.value
-  const children = childrenHost.value
-  if (parents) {
-    parents.innerHTML = c && c.parents.length ? researchRelationRowsHtml(c.parents) : ''
-  }
-  if (children) {
-    children.innerHTML = c && c.children.length ? researchRelationRowsHtml(c.children) : ''
-  }
-}
-
-function paintSectionHeads(): void {
-  paintSectionHead(
-    definitionHeadHost.value,
-    'Definition',
-    {
-      headingId: 'prks-concept-def-h',
-      actionId: 'prks-concept-edit-def',
-      actionLabel: 'Edit',
-      actionRole: MUTATION_ROLE,
-    },
-    () => {
-      if (concept.value) void intents?.editDefinition(concept.value)
-    },
-  )
-  paintSectionHead(
-    aliasesHeadHost.value,
-    'Search keys / aliases',
-    {
-      headingId: 'prks-concept-aliases-h',
-      actionId: 'prks-concept-edit-aliases',
-      actionLabel: 'Edit',
-      actionRole: MUTATION_ROLE,
-      sub: aliasSub.value || undefined,
-    },
-    () => {
-      if (concept.value) void intents?.editAliases(concept.value)
-    },
-  )
-  paintSectionHead(
-    parentsHeadHost.value,
-    'Parent concepts',
-    {
-      headingId: 'prks-concept-parents-h',
-      actionId: 'prks-concept-edit-parents',
-      actionLabel: 'Edit',
-      actionRole: MUTATION_ROLE,
-      sub: parentSub.value || undefined,
-    },
-    () => {
-      if (concept.value) void intents?.editParents(concept.value)
-    },
-  )
-  paintSectionHead(childrenHeadHost.value, 'Subconcepts', {
-    headingId: 'prks-concept-children-h',
-  })
-  paintSectionHead(mentionsHeadHost.value, 'Mentioned in research notes', {
-    headingId: 'prks-concept-mentions-h',
-    count: mentionCount.value,
-  })
-}
+  return [
+    parentCount ? `${parentCount} ${parentCount === 1 ? 'parent' : 'parents'}` : null,
+    mentionCount.value > 0
+      ? `${mentionCount.value} ${mentionCount.value === 1 ? 'note mention' : 'note mentions'}`
+      : null,
+  ]
+})
 
 function refreshIcons(): void {
   const root = rootEl.value
@@ -206,18 +64,6 @@ function onDelete(): void {
   if (concept.value) void intents?.remove(concept.value)
 }
 
-function paintAll(): void {
-  paintSummary()
-  paintSectionHeads()
-  paintDefinition()
-  paintRelations()
-  refreshIcons()
-}
-
-onMounted(() => {
-  paintAll()
-})
-
 watch(
   () =>
     [
@@ -231,7 +77,7 @@ watch(
       concept.value?.mention_count,
     ] as const,
   () => {
-    paintAll()
+    refreshIcons()
   },
   { flush: 'post' },
 )
@@ -252,7 +98,7 @@ watch(
         <h2 class="prks-page-title">Concept not found.</h2>
       </div>
       <p class="meta-row">
-        <a class="prks-btn prks-btn--secondary" href="#/concepts">Back to Concepts</a>
+        <PrksLinkButton href="#/concepts">Back to Concepts</PrksLinkButton>
       </p>
     </template>
     <template v-else-if="ready && concept">
@@ -261,7 +107,7 @@ watch(
           <div>
             <p class="saved-view-detail__kicker">Concept</p>
             <h2 class="prks-page-title">{{ concept.name || 'Concept' }}</h2>
-            <div ref="summaryHost"></div>
+            <PrksRelSummary :parts="summaryParts" />
           </div>
           <div class="page-header__actions">
             <PrksButton id="prks-concept-view-graph" @click="onViewGraph">
@@ -288,12 +134,27 @@ watch(
       </div>
       <div class="research-entity">
         <section class="research-entity__section" aria-labelledby="prks-concept-def-h">
-          <div ref="definitionHeadHost"></div>
-          <div ref="definitionHost" class="research-md"></div>
+          <PrksResearchSectionHead
+            title="Definition"
+            heading-id="prks-concept-def-h"
+            action-id="prks-concept-edit-def"
+            action-label="Edit"
+            :action-role="MUTATION_ROLE"
+            @action="concept && intents?.editDefinition(concept)"
+          />
+          <div class="research-md" v-html="definitionHtml"></div>
         </section>
 
         <section class="research-entity__section" aria-labelledby="prks-concept-aliases-h">
-          <div ref="aliasesHeadHost"></div>
+          <PrksResearchSectionHead
+            title="Search keys / aliases"
+            heading-id="prks-concept-aliases-h"
+            action-id="prks-concept-edit-aliases"
+            action-label="Edit"
+            :action-role="MUTATION_ROLE"
+            :sub="aliasSub || undefined"
+            @action="concept && intents?.editAliases(concept)"
+          />
           <div v-if="concept.aliases.length" class="research-entity__chips">
             <span
               v-for="alias in concept.aliases"
@@ -305,27 +166,47 @@ watch(
         </section>
 
         <section class="research-entity__section" aria-labelledby="prks-concept-parents-h">
-          <div ref="parentsHeadHost"></div>
-          <div
-            v-if="concept.parents.length"
-            ref="parentsHost"
-            class="list-view prks-research-index"
-          ></div>
+          <PrksResearchSectionHead
+            title="Parent concepts"
+            heading-id="prks-concept-parents-h"
+            action-id="prks-concept-edit-parents"
+            action-label="Edit"
+            :action-role="MUTATION_ROLE"
+            :sub="parentSub || undefined"
+            @action="concept && intents?.editParents(concept)"
+          />
+          <div v-if="concept.parents.length" class="list-view prks-research-index">
+            <PrksResearchRow
+              v-for="row in concept.parents"
+              :key="row.id"
+              :href="`#/concepts/${encodeURIComponent(row.id)}`"
+              :title="row.name || row.id"
+              kind="Concept"
+            />
+          </div>
           <p v-else class="meta-row">Top-level concept.</p>
         </section>
 
         <section class="research-entity__section" aria-labelledby="prks-concept-children-h">
-          <div ref="childrenHeadHost"></div>
-          <div
-            v-if="concept.children.length"
-            ref="childrenHost"
-            class="list-view prks-research-index"
-          ></div>
+          <PrksResearchSectionHead title="Subconcepts" heading-id="prks-concept-children-h" />
+          <div v-if="concept.children.length" class="list-view prks-research-index">
+            <PrksResearchRow
+              v-for="row in concept.children"
+              :key="row.id"
+              :href="`#/concepts/${encodeURIComponent(row.id)}`"
+              :title="row.name || row.id"
+              kind="Concept"
+            />
+          </div>
           <p v-else class="meta-row">No subconcepts.</p>
         </section>
 
         <section class="research-entity__section" aria-labelledby="prks-concept-mentions-h">
-          <div ref="mentionsHeadHost"></div>
+          <PrksResearchSectionHead
+            title="Mentioned in research notes"
+            heading-id="prks-concept-mentions-h"
+            :count="mentionCount"
+          />
           <div v-if="concept.mentions.length" class="research-entity__mentions">
             <div
               v-for="mention in concept.mentions"

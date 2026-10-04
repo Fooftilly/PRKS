@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import PrksDisclosureButton from '../../components/PrksDisclosureButton.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import type { ResearchGraphChromeIds } from './session'
 
@@ -54,20 +55,16 @@ onBeforeUnmount(() => {
       >
       <PrksButton data-prks-role="graph-fit">Fit</PrksButton>
       <PrksButton data-prks-role="graph-reset">Reset layout</PrksButton>
-      <button
-        type="button"
-        class="prks-btn prks-btn--secondary"
+      <PrksDisclosureButton
+        :expanded="false"
+        :controls="chrome?.filtersPanelId"
         data-prks-role="graph-filters-toggle"
-        aria-expanded="false"
-        :aria-controls="chrome?.filtersPanelId || undefined"
-      >Filters</button>
-      <button
-        type="button"
-        class="prks-btn prks-btn--secondary"
+      >Filters</PrksDisclosureButton>
+      <PrksDisclosureButton
+        :expanded="false"
+        :controls="chrome?.legendPanelId"
         data-prks-role="graph-legend-toggle"
-        aria-expanded="false"
-        :aria-controls="chrome?.legendPanelId || undefined"
-      >Legend</button>
+      >Legend</PrksDisclosureButton>
     </div>
     <div
       :id="chrome?.resultsId || undefined"
