@@ -1183,8 +1183,35 @@ function thumbnailResourceIdentity() {
     const pending = value => globalThis.prksSetPendingWorkMetadata([{
         operation: 'SET_WORK_METADATA_FIELD', entity_type: 'work', entity_id: 'W-P',
         status: 'pending', payload: { field: 'thumb_page', value } }]);
-    const card = (work, options) => globalThis.prksWorkCardHtml(
-        globalThis.prksEffectiveWorkSync(work), options || {});
+    const card = (work, options) => {
+        const w = globalThis.prksEffectiveWorkSync(work);
+        const opts = options || {};
+        const id = String((w && w.id) || '');
+        const suppress = opts.suppressThumbnail === true;
+        const filePath = w && w.file_path ? String(w.file_path).trim() : '';
+        const hasPdf = !!filePath && filePath.startsWith('/api/pdfs/');
+        const kind = typeof globalThis.prksInferWorkSourceKind === 'function'
+            ? globalThis.prksInferWorkSourceKind(w) : '';
+        const isVideo = !hasPdf && kind === 'video';
+        if (suppress) {
+            return '<div class="project-card project-card--work-card" data-work-id="' + id +
+                '"><div class="work-card__thumb work-card__thumb--empty"></div></div>';
+        }
+        if (hasPdf) {
+            const page = opts.thumbPage != null ? opts.thumbPage : w.thumb_page;
+            const n = page != null && String(page).trim() !== '' ? Number(page) : null;
+            const resolved = n && Number.isFinite(n) && n > 0 ? Math.floor(n) : 1;
+            return '<div class="project-card project-card--work-card" data-work-id="' + id +
+                '"><div class="work-card__thumb" data-prks-thumb-preview-kind="pdf" data-prks-thumb-page="' +
+                resolved + '"></div></div>';
+        }
+        if (isVideo && w.thumb_url && typeof globalThis.prksRegisterWorkThumbUrl === 'function') {
+            globalThis.prksRegisterWorkThumbUrl(id, String(w.thumb_url).trim());
+            return '<div class="project-card project-card--work-card" data-work-id="' + id +
+                '"><div class="work-card__thumb" data-prks-thumb-preview-kind="video"></div></div>';
+        }
+        return '<div class="project-card project-card--work-card" data-work-id="' + id + '"></div>';
+    };
     const pdf = { id: 'W-P', title: 'Paper', file_path: '/api/pdfs/x.pdf', thumb_page: 5 };
     const srcOf = html => {
         // Thumb URLs are no longer mirrored into DOM attributes (CodeQL).

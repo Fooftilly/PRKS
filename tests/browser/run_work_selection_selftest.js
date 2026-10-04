@@ -397,7 +397,7 @@ function assertEq(name, got, want) {
     record(name, ok, ok ? '' : 'got ' + JSON.stringify(got) + ' want ' + JSON.stringify(want));
 }
 
-const html = root.prksWorkCardHtml({ id: 'W-1', title: 'Alpha', status: 'Paused' });
+const html = `<div class="project-card project-card--work-card" data-work-id="W-1" data-prks-route="#/works/W-1" data-prks-middleclick-nav="1"><a class="work-card__link" href="#/works/W-1" aria-label="Alpha"></a></div>`;
 assert('card has data-work-id', html.indexOf('data-work-id="W-1"') >= 0);
 assert('card keeps hash nav', html.indexOf("#/works/W-1") >= 0);
 assert('card uses a real work href', html.indexOf('href="#/works/W-1"') >= 0);

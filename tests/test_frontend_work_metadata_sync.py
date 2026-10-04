@@ -227,29 +227,34 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         self.assertIn('if (!listKey) return false;', guard)
 
     def test_recently_added_does_not_reimplement_the_overlay(self):
-        """The Folder component says "repaint"; it must not grow a second
+        """The Folder Library says "repaint"; it must not grow a second
         opinion about which fields are pending or what they mean. Two
         interpretations of operation semantics would drift the moment either
         changed."""
-        folders = (FRONTEND / 'components' / 'folders.js').read_text()
-        self.assertIn("prksEffectiveProjectionRows(acknowledged, 'recently-added')", folders)
-        self.assertIn('prksRefreshPendingWorkMetadata', folders)
+        app = ROOT / 'frontend-app' / 'src' / 'features' / 'folder-library'
+        legacy = (app / 'legacy-recently-added.ts').read_text()
+        intents = (app / 'intents.ts').read_text()
+        self.assertIn("fn(acknowledged, 'recently-added')", legacy)
+        self.assertIn('prksEffectiveProjectionRows', legacy)
+        self.assertIn('prksRefreshPendingWorkMetadata', intents)
         for forbidden in ('SET_WORK_METADATA_FIELD', 'listOperations', 'server_result',
                           'payload.field'):
-            self.assertNotIn(forbidden, folders, forbidden)
+            self.assertNotIn(forbidden, legacy, forbidden)
+            self.assertNotIn(forbidden, intents, forbidden)
 
     def test_pending_values_never_enter_the_acknowledged_recently_added_rows(self):
         """This tab already shipped a bug where its RAM copy outlived an
         IndexedDB invalidation. Baking unsynchronized values into that array
         would be the same mistake with a longer fuse."""
-        folders = (FRONTEND / 'components' / 'folders.js').read_text()
-        at = folders.index('function prksRenderFolderLibraryRecentlyAdded(')
-        body = folders[at: folders.index('async function prksLoadFolderLibraryRecentlyAdded(', at)]
-        self.assertIn('const acknowledged =', body)
-        self.assertNotIn('st.recentlyAddedWorks =', body)
-        # The memoized render is refused when the overlay moved, not only when
-        # the coherence domain did.
-        self.assertIn('recentlyAddedPendingGeneration', folders)
+        app = ROOT / 'frontend-app' / 'src' / 'features' / 'folder-library'
+        pane = (app / 'RecentlyAddedPane.vue').read_text()
+        intents = (app / 'intents.ts').read_text()
+        route = (app / 'FolderLibraryRoute.vue').read_text()
+        self.assertIn('effectiveRecentlyAddedRows([...props.works])', pane)
+        self.assertNotIn('recentlyAddedWorks.value =', pane)
+        self.assertNotIn('st.recentlyAddedWorks =', pane)
+        self.assertIn('pendingGeneration', intents)
+        self.assertIn('recentlyAddedPendingGeneration', route)
 
     def test_progress_filters_effective_rows_and_stays_ignorant_of_operations(self):
         """Status is the first synchronized field that changes which GROUP a
@@ -460,15 +465,14 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         and easy mistake: the card would show the pending Year while a search
         for it found nothing, and a search for the OLD year would still match a
         value the user had already replaced."""
-        folders = (FRONTEND / 'components' / 'folders.js').read_text()
-        at = folders.index('function prksRenderFolderLibraryRecentlyAdded(')
-        body = folders[at: folders.index('async function prksLoadFolderLibraryRecentlyAdded(', at)]
-        filter_line = [ln for ln in body.splitlines() if 'MatchesQuery(' in ln and '.filter(' in ln]
+        app = ROOT / 'frontend-app' / 'src' / 'features' / 'folder-library'
+        pane = (app / 'RecentlyAddedPane.vue').read_text()
+        filter_line = [ln for ln in pane.splitlines() if 'recentlyAddedMatchesQuery(' in ln and '.filter(' in ln]
         self.assertEqual(len(filter_line), 1, 'expected exactly one local filter over the rows')
-        self.assertIn('all.filter(', filter_line[0],
+        self.assertIn('effectiveRows.value.filter(', filter_line[0],
                       'the filter must run over the overlaid rows, not the acknowledged array')
-        self.assertNotIn('acknowledged.filter(', body)
-        # And the haystack has to include the fields that reach this projection.
+        self.assertNotIn('props.works.filter(', pane)
+        folders = (FRONTEND / 'components' / 'folders.js').read_text()
         haystack = folders[folders.index('function prksRecentlyAddedWorkMatchesQuery('):]
         haystack = haystack[: haystack.index('\n}')]
         for field in ('year', 'published_date', 'publisher'):

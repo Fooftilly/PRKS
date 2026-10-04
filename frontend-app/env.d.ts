@@ -59,31 +59,6 @@ interface Window {
   prksResetRequestCoordinatorDiagnostics?: () => void
   PRKS_REQUEST_MAX_READS?: number
   prksAbstractExcerpt?: (value: unknown) => string
-  prksWorkCardHtml?: (
-    work: {
-      id?: unknown
-      title?: unknown
-      status?: unknown
-      file_path?: unknown
-      thumb_url?: unknown
-      thumb_page?: unknown
-      doc_type?: unknown
-      year?: unknown
-      published_date?: unknown
-      file_size_bytes?: unknown
-      linked_authors?: unknown
-      author_text?: unknown
-      primary_author?: unknown
-      primary_editor?: unknown
-      source_kind?: unknown
-      source_url?: unknown
-      provider?: unknown
-      provider_id?: unknown
-      abstract_excerpt?: unknown
-      abstract?: unknown
-    },
-    options: { subtitle?: string; suppressThumbnail?: boolean; hideDocTypeBadge?: boolean },
-  ) => string
   prksDocTypeBadgeHtml?: (docType: string) => string
   prksWorkBrowseModeToggleHtml?: (hiddenId?: string) => string
   prksWorkBrowseCollectionClass?: (extraClass?: string) => string

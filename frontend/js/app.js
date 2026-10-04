@@ -2218,7 +2218,7 @@ function prksIsBrowseFolderId(row) {
     return value === null || (typeof value === 'string' && !!value.trim());
 }
 
-/* Shared by all three: exactly what PrksWorkCard / prksWorkCardHtml()
+/* Shared by all three: exactly what PrksWorkCard
  * dereference, plus the source fields prksInferWorkSourceKind() reads.
  * `file_size_bytes` is fed to Number(), so a wrong type there renders
  * "NaN MB" from cache. */

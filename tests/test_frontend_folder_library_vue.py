@@ -73,7 +73,6 @@ class FolderLibraryVueContracts(unittest.TestCase):
         folders = (FRONTEND / "components" / "folders.js").read_text()
         self.assertIn("prksToggleFolderNodeInHost", folders)
         self.assertIn("prksToggleAllFolderNodesInHost", folders)
-        self.assertIn("st.vueOwned", folders)
         self.assertIn("delegateToggle", folders)
         tree = (FRONTEND_APP / "FolderTree.vue").read_text()
         self.assertIn("delegateToggle: true", tree)
@@ -81,7 +80,6 @@ class FolderLibraryVueContracts(unittest.TestCase):
         switch = folders[folders.index("function prksSwitchFolderLibraryTab") :]
         switch = switch[: switch.index("\nfunction prksFolderLibraryCatalogGlanceParts")]
         self.assertIn("st.switchTab", switch)
-        self.assertIn("vueOwned", switch)
         route = (FRONTEND_APP / "FolderLibraryRoute.vue").read_text()
         self.assertIn("switchTab: (tab: string) =>", route)
         self.assertIn("Re-entering Recently Added always awaits load", route)
@@ -108,11 +106,8 @@ class FolderLibraryVueContracts(unittest.TestCase):
         self.assertIn("prksPublishFolderDashboardState", sync)
         self.assertIn("scheduleOwnerGlance", route)
         folders = (FRONTEND / "components" / "folders.js").read_text()
-        rerender = folders[
-            folders.index("function prksRerenderFolderLibraryRecentlyAddedOnly") :
-        ]
-        rerender = rerender[: rerender.index("\nfunction prksApplyFolderLibraryFilesSearchFilter")]
-        self.assertIn("if (st.vueOwned) return;", rerender)
+        self.assertNotIn("function prksRerenderFolderLibraryRecentlyAddedOnly", folders)
+        self.assertNotIn("function renderDashboard", folders)
         self.assertIn("function prksPublishFolderDashboardState", folders)
         self.assertIn("function prksUnpublishFolderDashboardState", folders)
         self.assertIn("prksFolderDashboardStateForRoot", folders)
@@ -120,7 +115,7 @@ class FolderLibraryVueContracts(unittest.TestCase):
         glance = glance[: glance.index("\nasync function prksScheduleFolderLibraryGlance")]
         self.assertIn("opts.recentlyAddedWorks", glance)
         schedule = folders[folders.index("async function prksScheduleFolderLibraryGlance") :]
-        schedule = schedule[: schedule.index("\nfunction renderDashboard")]
+        schedule = schedule[: schedule.index("\nconst PRKS_FOLDER_DETAIL_NARROW_PX")]
         self.assertIn("opts.folders", schedule)
         self.assertIn("recentlyAddedWorks", schedule)
 
