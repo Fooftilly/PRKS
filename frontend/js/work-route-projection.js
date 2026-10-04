@@ -30,7 +30,7 @@ var prksWorkRoute = (function(exports) {
 	function projectWorkRoute(input) {
 		const workId = String(input.workId);
 		let availability = input.availability;
-		let lifecycle = input.lifecycle;
+		const lifecycle = input.lifecycle;
 		let provenance = input.provenance;
 		let work = input.work;
 		let effectiveWork = input.effectiveWork ?? null;
