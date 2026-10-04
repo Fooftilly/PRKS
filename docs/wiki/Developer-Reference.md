@@ -10,11 +10,16 @@ Positions is the first HTTP family with Pydantic request/response models at the
 adapter boundary only. See [docs/api-contract-boundary.md](https://github.com/Fooftilly/PRKS/blob/master/docs/api-contract-boundary.md)
 for the migration pattern, error envelope, and openapi-core / Schemathesis notes.
 Live fragment: `GET /api/openapi.json`. Checked-in artifact:
-`docs/api/openapi-positions.json`. Publishers, Saved Views, and Files for
-Processing follow the same pattern (`GET /api/openapi/publishers.json`,
-`docs/api/openapi-publishers.json`; `GET /api/openapi/saved-views.json`,
-`docs/api/openapi-saved-views.json`; `GET /api/openapi/processing-files.json`,
-`docs/api/openapi-processing-files.json`).
+`docs/api/openapi-positions.json`. Publishers, Saved Views, Files for
+Processing, and performance diagnostics follow the same pattern
+(`GET /api/openapi/publishers.json`, `docs/api/openapi-publishers.json`;
+`GET /api/openapi/saved-views.json`, `docs/api/openapi-saved-views.json`;
+`GET /api/openapi/processing-files.json`, `docs/api/openapi-processing-files.json`;
+`GET /api/openapi/performance-diagnostics.json`,
+`docs/api/openapi-performance-diagnostics.json`). `npm run openapi:types`
+reads those checked-in artifacts and writes compile-time modules under
+`frontend-app/src/api/generated/`. It does not read a live server and does
+not build the combined `/api/openapi.json` document.
 
 ## UI design
 

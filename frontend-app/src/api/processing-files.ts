@@ -1,10 +1,18 @@
 /**
  * Typed client for the online-only Files for Processing HTTP family.
- * Wire keys match backend/api_contract/processing_files.py (#45). Version
- * matches the Files for Processing OpenAPI document. This module does not own
- * query caching.
+ * Transport types come from docs/api/openapi-processing-files.json. Runtime
+ * parsers still check response shape. This module does not own query caching,
+ * write sequencing, or rescan cancellation.
  */
 import { PrksApiError, prksApiRequest } from './http'
+import type {
+  ProcessingFile,
+  ProcessingFileImported,
+  ProcessingFileRole,
+  ProcessingFileTag,
+} from './generated/processing-files'
+
+export type { ProcessingFile, ProcessingFileImported, ProcessingFileRole, ProcessingFileTag }
 
 export const PROCESSING_FILES_CONTRACT_VERSION = '0.1.0'
 
@@ -53,20 +61,6 @@ export type ProcessingFileStatus = (typeof PROCESSING_FILE_STATUSES)[number]
 export const PROCESSING_DRAFT_STATUSES = ['Planned', 'In Progress', 'Completed', 'Paused', 'Not Started'] as const
 export type ProcessingDraftStatus = (typeof PROCESSING_DRAFT_STATUSES)[number]
 
-export interface ProcessingFileRole {
-  person_id: string
-  person_name: string
-  role_type: string
-  order_index: number
-}
-
-export interface ProcessingFileTag {
-  id: string
-  name: string
-  color: string | null
-  created_at: string | null
-}
-
 const TEXT_KEYS = [
   'title',
   'published_date',
@@ -90,55 +84,39 @@ const TEXT_KEYS = [
 
 type ProcessingFileText = Record<(typeof TEXT_KEYS)[number], string>
 
-export interface ProcessingFile extends ProcessingFileText {
-  id: string
-  rel_path: string
-  filename: string
-  folder: string
-  status: ProcessingFileStatus
-  last_error: string | null
-  imported_work_id: string | null
-  imported_at: string | null
-  discovered_at: string | null
-  updated_at: string | null
-  exists: boolean
-  status_draft: ProcessingDraftStatus
-  thumb_page: number | null
-  roles: ProcessingFileRole[]
-  tags: ProcessingFileTag[]
-}
-
-export interface ProcessingFileImported {
-  processing_file_id: string
-  work_id: string
-}
+type ProcessingFileCardTextKey =
+  | 'title'
+  | 'published_date'
+  | 'abstract'
+  | 'source_url'
+  | 'year'
+  | 'publisher'
+  | 'location'
+  | 'edition'
+  | 'journal'
+  | 'volume'
+  | 'issue'
+  | 'pages'
+  | 'isbn'
+  | 'doi'
+  | 'doc_type'
+  | 'private_notes'
+  | 'target_folder_id'
 
 /**
- * A PATCH body as the inbox card sends it. Omitted fields stay unchanged;
- * `roles` and `tags` replace the staged lists.
+ * PATCH body the inbox card sends. Omitted fields stay unchanged; `roles`
+ * and `tags` replace the staged lists.
+ *
+ * `ProcessingFileUpdateRequest` is the permissive live wire schema. This
+ * client sends strings and replacement object lists only. `status_draft` and
+ * `thumb_page` stay strings because the card draft is text, not the response
+ * enum or page number.
  */
-export interface ProcessingFileUpdate {
-  title?: string
+export type ProcessingFileUpdate = Partial<Pick<ProcessingFile, ProcessingFileCardTextKey>> & {
   status_draft?: string
-  published_date?: string
-  abstract?: string
-  source_url?: string
-  year?: string
-  publisher?: string
-  location?: string
-  edition?: string
-  journal?: string
-  volume?: string
-  issue?: string
-  pages?: string
-  isbn?: string
-  doi?: string
-  doc_type?: string
-  private_notes?: string
   thumb_page?: string
-  target_folder_id?: string
-  roles?: Array<{ person_id: string; role_type: string }>
-  tags?: Array<{ id: string }>
+  roles?: Array<Pick<ProcessingFileRole, 'person_id' | 'role_type'>>
+  tags?: Array<Pick<ProcessingFileTag, 'id'>>
 }
 
 const LIST_ERROR = 'Could not load files for processing.'
