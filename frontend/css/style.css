@@ -4196,6 +4196,18 @@ a.tag {
     overflow: hidden;
 }
 
+/* Vue route-surface host must participate in the Work detail flex chain.
+ * The PDF pane and Research Notes share this column. */
+.prks-tab-root > [data-prks-vue-route-host]:has(.work-detail) {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-self: stretch;
+}
+
 .prks-nav-back-row {
     margin: 0 0 var(--space-sm);
 }

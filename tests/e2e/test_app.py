@@ -4463,7 +4463,7 @@ class TabContextHostRootTests(_BrowserE2E):
                 const ctxB = window.prksEnsureTabContext('prks-test-secondary');
                 ctxB.mount(host);
                 const workB = await fetchWorkDetails(workBId);
-                await renderWorkDetails(ctxB, workB, { generation: ctxB.generation });
+                await window.prksMountWorkDetail(ctxB, ctxB.root, workB, { generation: ctxB.generation, workId: workBId });
                 const afterFocused = window.prksGetFocusedTabContext();
                 const afterWork = afterFocused && afterFocused.getEntity ? afterFocused.getEntity('work') : null;
                 const annBtn = document.querySelector('#right-panel .tab-btn[data-target="annotations"]');

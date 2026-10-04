@@ -708,9 +708,13 @@ function runNotesAnchorIsNotABox() {
     assert('notes anchor rule exists', anchorAt !== -1);
     const block = css.slice(anchorAt, css.indexOf('}', anchorAt));
     assert('notes anchor is display contents', /display:\s*contents/.test(block));
-    const shellAt = worksSrc.indexOf('data-prks-role="work-research-notes-anchor"');
+    const shellSrc = fs.readFileSync(
+        path.join(rootDir, 'frontend-app/src/features/work/WorkMainSurface.vue'),
+        'utf8',
+    );
+    const shellAt = shellSrc.indexOf('data-prks-role="work-research-notes-anchor"');
     assert('shell wraps the notes pane in the anchor', shellAt !== -1);
-    const shell = worksSrc.slice(shellAt, shellAt + 180);
+    const shell = shellSrc.slice(shellAt, shellAt + 180);
     assert('notes pane is inside the anchor', shell.indexOf('class="work-notes-pane"') !== -1);
 }
 

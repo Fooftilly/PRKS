@@ -56,12 +56,16 @@ class NotesLifetimeContractTests(unittest.TestCase):
                 self.assertLessEqual(commas, 1, f"{path.name}: setResource with a disposer")
 
     def test_research_notes_ticket_is_captured_when_the_paint_begins(self):
+        lifecycle = (
+            _PROJECT / "frontend-app" / "src" / "features" / "work" / "detail-lifecycle.ts"
+        ).read_text(encoding="utf-8")
+        mount = lifecycle[lifecycle.index("export async function mountWorkDetail") :]
+        ticket_at = mount.index("ctx.resourceTicket(generation)")
+        self.assertLess(ticket_at, mount.index("await "))
+        self.assertLess(ticket_at, mount.index("setTimeout("))
+        self.assertIn("initNotes(ctx as never, current as never, notesTicket as never)", lifecycle)
         works = _WORKS.read_text(encoding="utf-8")
-        render = _slice(works, "async function renderWorkDetails(", "\nfunction ")
-        ticket_at = render.index("ctx.resourceTicket(generation)")
-        self.assertLess(ticket_at, render.index("await "))
-        self.assertLess(ticket_at, render.index("setTimeout("))
-        self.assertIn("initEasyMDE(ctx, work, notesTicket)", render)
+        self.assertNotIn("function renderWorkDetails", works)
         init = _slice(works, "function initEasyMDE(", "\nwindow.initEasyMDE")
         self.assertLess(init.index("resourceRegistry.accepts(ticket)"), init.index("new EasyMDE("))
         register = _slice(init, "ctx.registerResource(ticket", "});")

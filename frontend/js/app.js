@@ -2841,9 +2841,10 @@ function prksDeliverVueRoute(host, request) {
         typeof window.prksVuePresentRoute === 'function' &&
         window.prksVuePresentRoute(Object.assign({ host: host }, request)) === true
     ) {
-        return;
+        return true;
     }
     host.__prksVueRouteRequest = request;
+    return false;
 }
 
 /**
@@ -2894,7 +2895,7 @@ function prksPresentVueRoute(ctx, contentDiv, feature, fields) {
         // already happened for Main in prksRenderTabRoute.
         shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
     });
-    prksDeliverVueRoute(host, request);
+    return prksDeliverVueRoute(host, request);
 }
 
 /**
@@ -4649,18 +4650,18 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     titleOpts = { notFound: true, notFoundTitle: 'File not available offline' };
                     break;
                 }
-                await renderWorkDetails(ctx, work, {
-                    generation: generation,
-                    signal: routeSignal,
-                    sourcePrepared: true,
-                });
-                if (stale()) return;
-                if (work && typeof prksAdoptPaintedWorkRoute === 'function') {
-                    prksAdoptPaintedWorkRoute(ctx, generation, work.id);
+                if (typeof prksMountWorkDetail === 'function') {
+                    await prksMountWorkDetail(ctx, contentDiv, work, {
+                        generation: generation,
+                        signal: routeSignal,
+                        sourcePrepared: true,
+                        workId: workId,
+                    });
                 }
-                /* The painter publishes the Work it was given. If the folder
-                 * or playlist refresh landed during that paint, reapply the
-                 * in-memory placement onto this same owner. */
+                if (stale()) return;
+                /* The mount installs the Work this route already published.
+                 * If the folder or playlist refresh landed during that paint,
+                 * reapply the in-memory placement onto this same owner. */
                 if (work && ctx.getEntity && typeof prksReplaceWorkRoutePlacement === 'function') {
                     const painted = ctx.getEntity('work');
                     if (painted && painted.id === work.id) {

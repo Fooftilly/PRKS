@@ -161,7 +161,7 @@
       "runtime_files": [
         {
           "path": "/vue/prks-vue.js",
-          "sha256": "dfd893be0f832ea0e70ecd241be771aa11b33f9f6254a9e3e290136a021b54a1"
+          "sha256": "429e7856f630e672b9a6bdb929e6f8b47d60e4af168a5e1e0bd2ee47dc0d67d4"
         }
       ],
       "source_category": "npm:frontend-app",
@@ -172,7 +172,7 @@
       "runtime_files": [
         {
           "path": "/js/work-route-projection.js",
-          "sha256": "f4226799beeeef882c530a6aa61b7251a621942313ea29f96ae64eaab73359b9"
+          "sha256": "0169350c039649544ac986eafa7e04bd3e3e7dc3a9422b4e968856d789d0f5dd"
         }
       ],
       "source_category": "frontend-app:work-route-projection",
