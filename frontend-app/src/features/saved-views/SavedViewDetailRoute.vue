@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import { usePendingAction } from '../../route-surface/pending-action'
 import SearchResultsCollection from '../search/SearchResultsCollection.vue'
 import type { SavedViewIntents } from './intents'
@@ -68,14 +69,9 @@ watch(() => props.projection.generation, paintMode, { flush: 'post' })
         </div>
       </div>
     </div>
-    <p
-      v-if="deleteError"
-      class="prks-inline-message prks-inline-message--error"
-      role="status"
-      data-sv-delete-error
-    >
+    <PrksInlineMessage v-if="deleteError" tone="error" status data-sv-delete-error>
       {{ deleteError }}
-    </p>
+    </PrksInlineMessage>
     <SearchResultsCollection :projection="projection.results" />
   </div>
   <div v-else-if="projection.availability === 'error'" data-prks-saved-view-load-error>

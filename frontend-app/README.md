@@ -43,7 +43,7 @@ npm run build-storybook   # catalog only; gitignored storybook-static/
 | `src/features/progress/` | Progress route, first route-surface consumer. Consumes the effective works-browse snapshot; not a Query cache |
 | `src/api/` | Typed PRKS API client used by feature services |
 | `src/query/` | Application QueryClient |
-| `src/components/` | Shared primitives (`PrksButton`, `PrksStatusText`, `PrksSectionHeader`) and their stories |
+| `src/components/` | Shared primitives (`PrksButton`, `PrksIconButton`, `PrksInlineMessage`, `PrksState`, `PrksStatusText`, `PrksSectionHeader`) and their stories |
 | `src/composables/` | Feature-local Vue logic, when a slice needs it |
 | `frontend/js/` | Legacy runtime. Leave it in place until a slice replaces a specific responsibility |
 
@@ -56,6 +56,9 @@ npm run build-storybook   # catalog only; gitignored storybook-static/
 | Path | Role |
 | --- | --- |
 | `src/components/PrksButton.vue` | `.prks-btn` with variant, disabled, and busy (`disabled` plus `aria-busy`) |
+| `src/components/PrksIconButton.vue` | `.prks-icon-btn` with a required accessible name, disabled, and busy |
+| `src/components/PrksInlineMessage.vue` | `.prks-inline-message`; `tone="error"` adds `--error`; `status` keeps an existing `role="status"` |
+| `src/components/PrksState.vue` | `.prks-state` for `loading`, `error` (optional retry slot), and `empty` |
 | `src/components/PrksStatusText.vue` | `.prks-settings-hint`, polite live region unless `live` is false |
 | `src/components/PrksSectionHeader.vue` | Settings `h5.prks-settings-section__title` |
 | `src/components/*.stories.ts` | Real states for those primitives |
@@ -70,11 +73,13 @@ npm run storybook          # http://localhost:6006
 npm run build-storybook    # writes frontend-app/storybook-static (gitignored)
 ```
 
-CI runs `build-storybook` from the Vue job after a successful diff against the PR base or a fetched nonzero push-before SHA touches `frontend-app/` or `.github/workflows/static-analysis.yml`. A missing or unreadable baseline fails that step. A manual `workflow_dispatch` run builds Storybook without a diff. Typecheck and Vitest still cover the primitives. Storybook 10.6 has no lightweight story or accessibility command that avoids a browser runner, so CI does not add `@storybook/test-runner` or the Vitest browser addon. The accessibility addon checks stories in the Storybook UI.
+CI runs `build-storybook` from the Vue job after a successful diff against the PR base or a fetched nonzero push-before SHA touches `frontend-app/` or `.github/workflows/static-analysis.yml`. A missing or unreadable baseline fails that step. A manual `workflow_dispatch` run builds Storybook without a diff. Typecheck and Vitest still cover the primitives. Storybook 10.6 has no lightweight story or accessibility command that avoids a browser runner, so CI does not add `@storybook/test-runner` or the Vitest browser addon. `@storybook/addon-vitest@10.6.0` peers on Vitest 3 or 4 and `@vitest/browser-playwright@4`. This package pins Vitest 5.0.2, so that addon is not a clean fit: it would downgrade Vitest or wait for a Vitest 5 peer, and it would add a Playwright browser runner. Ordinary Vitest covers primitive contracts (keyboard is the native button; tests cover disabled click, busy label, accessible name, and focus). Playwright E2E covers route behavior. A later runner slice needs an addon release that peers on this Vitest major, its browser provider, and a vitest workspace that does not replace `npm test`. The accessibility addon checks stories in the Storybook UI.
+
+Docgen stays off. `vue-docgen-api` is deprecated. `vue-component-meta` extracts the declared props, then also lists Vue internals (`key`, `ref`, `onVue:*`) and leaves local aliases such as `Variant` and `Size` unresolved. Explicit stories are the catalog. Autodocs is not enabled.
 
 Storybook MCP (`@storybook/addon-mcp`) is preview and needs a running Storybook dev server plus a user-level agent connection. It is not committed. Maintainer setup:
 
-1. From `frontend-app`, pin the addon that matches this Storybook: `npm install --save-dev --save-exact --ignore-scripts @storybook/addon-mcp@10.6.0`. Its peer is `@storybook/addon-vitest@10.6.0`, a browser test runner this repository does not install. Add that peer only in the same change that decides to run story tests in a browser.
+1. From `frontend-app`, pin the addon that matches this Storybook: `npm install --save-dev --save-exact --ignore-scripts @storybook/addon-mcp@10.6.0`. Its peer is `@storybook/addon-vitest@10.6.0`, which does not peer on this package's Vitest 5. Add that peer only in the same change that adopts a Vitest-5-compatible story runner.
 2. Register the MCP addon in `.storybook/main.ts` `addons`, and set `features.componentsManifest` and `features.experimentalDocgenServer` so the Vue docs toolset can read component props. Turn docgen back on if the manifest needs it.
 3. Run `npm run storybook`. The server is `http://127.0.0.1:6006/mcp`.
 4. Add that HTTP MCP server in the agent client (Cursor MCP settings, or `npx mcp-add --type http --url "http://127.0.0.1:6006/mcp" --scope project`). Do not commit a machine-local MCP config.

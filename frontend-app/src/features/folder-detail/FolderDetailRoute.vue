@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import { folderDetailIntentsKey } from './intents'
 import { folderDetailWorksHtml } from './legacy-work-card'
 import type { FolderDetailProjection } from './projection'
@@ -161,9 +162,9 @@ watch(collectionHtml, () => {
     <div class="prks-page-header page-header">
       <h2 class="prks-page-title">Folder not available offline</h2>
     </div>
-    <p class="prks-inline-message" data-prks-role="offline-unavailable">This item is not available offline.</p>
+    <PrksInlineMessage data-prks-role="offline-unavailable">This item is not available offline.</PrksInlineMessage>
   </template>
-  <p v-else-if="!ready" class="prks-inline-message prks-inline-message--error">Folder not found.</p>
+  <PrksInlineMessage v-else-if="!ready" tone="error">Folder not found.</PrksInlineMessage>
   <div
     v-else
     ref="rootEl"
@@ -191,7 +192,7 @@ watch(collectionHtml, () => {
         data-prks-folder-tree-host
         data-prks-folder-detail-tree-host
       >
-        <p class="prks-inline-message prks-folder-tree__empty">Loading folders…</p>
+        <PrksInlineMessage class="prks-folder-tree__empty">Loading folders…</PrksInlineMessage>
       </div>
     </aside>
     <div ref="mainEl" class="prks-folder-detail__main">

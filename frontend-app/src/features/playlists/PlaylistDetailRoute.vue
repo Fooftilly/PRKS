@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, onUpdated, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import PrksIconButton from '../../components/PrksIconButton.vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import { playlistIntentsKey, type PlaylistSaveResult, type PlaylistVideoChoice } from './intents'
 import { usePlaylistPendingAction } from './pending-action'
 import type { PlaylistDetailProjection } from './projection'
@@ -339,9 +341,9 @@ function onAddBlur(): void {
       <div class="prks-page-header page-header">
         <h2 class="prks-page-title">Playlist not available offline</h2>
       </div>
-      <p class="prks-inline-message" data-prks-role="offline-unavailable">
+      <PrksInlineMessage data-prks-role="offline-unavailable">
         This item is not available offline.
-      </p>
+      </PrksInlineMessage>
     </template>
     <template v-else-if="notFound || !playlist">
       <div class="prks-page-header page-header">
@@ -380,15 +382,9 @@ function onAddBlur(): void {
       <div v-if="editing" class="doc-meta-card form-pane doc-meta-card--editing prks-playlist-detail__editor">
         <div class="card-heading-row">
           <h3 class="doc-meta-card__accent-title">Edit playlist</h3>
-          <button
-            id="prks-playlist-edit-close"
-            type="button"
-            class="prks-icon-btn close-btn"
-            aria-label="Close"
-            @click="onCancel"
-          >
+          <PrksIconButton id="prks-playlist-edit-close" class="close-btn" label="Close" @click="onCancel">
             &times;
-          </button>
+          </PrksIconButton>
         </div>
         <label for="prks-playlist-edit-title">Title</label>
         <input

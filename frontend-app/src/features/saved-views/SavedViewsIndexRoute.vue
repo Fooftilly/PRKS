@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
+import PrksState from '../../components/PrksState.vue'
 import { usePendingAction } from '../../route-surface/pending-action'
 import type { SavedViewIntents } from './intents'
 import { SAVED_VIEWS_EMPTY, SAVED_VIEWS_EMPTY_HINT } from './projection'
@@ -79,21 +81,13 @@ watch(rows, refreshIcons, { flush: 'post' })
         Saved Views
       </h2>
     </div>
-    <p
-      v-if="refreshError"
-      class="prks-inline-message prks-inline-message--error"
-      role="status"
-      data-saved-views-refresh-error
-    >
+    <PrksInlineMessage v-if="refreshError" tone="error" status data-saved-views-refresh-error>
       {{ refreshError }}
-    </p>
-    <div v-if="loading" class="prks-state prks-state--loading" role="status" data-saved-views-loading>
-      <p class="prks-state__body">Loading Saved Views…</p>
-    </div>
-    <div v-else-if="loadError" class="prks-state prks-state--error" role="status" data-saved-views-load-error>
-      <p class="prks-state__body">{{ loadError }}</p>
+    </PrksInlineMessage>
+    <PrksState v-if="loading" kind="loading" message="Loading Saved Views…" data-saved-views-loading />
+    <PrksState v-else-if="loadError" kind="error" :message="loadError" data-saved-views-load-error>
       <PrksButton variant="secondary" size="sm" @click="retry">Try again</PrksButton>
-    </div>
+    </PrksState>
     <div v-if="loaded" class="list-view saved-views-page__list">
       <template v-if="rows.length">
         <div v-for="row in rows" :key="row.id" class="project-card saved-views-page__list-item">
@@ -129,14 +123,15 @@ watch(rows, refreshIcons, { flush: 'post' })
               Delete
             </PrksButton>
           </div>
-          <p
+          <PrksInlineMessage
             v-if="rowErrors[row.id]"
-            class="prks-inline-message prks-inline-message--error saved-views-page__row-error"
-            role="status"
+            tone="error"
+            status
+            class="saved-views-page__row-error"
             :data-sv-index-error="row.id"
           >
             {{ rowErrors[row.id] }}
-          </p>
+          </PrksInlineMessage>
         </div>
       </template>
       <template v-else-if="!refreshError">

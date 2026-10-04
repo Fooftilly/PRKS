@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import { argumentIntentsKey } from './intents'
 import { useArgumentPendingAction } from './pending-action'
 import { defaultArgumentVerdict } from './match'
@@ -348,9 +349,9 @@ watch(
       <div class="prks-page-header page-header">
         <h2 class="prks-page-title">Argument or Stance not available offline</h2>
       </div>
-      <p class="prks-inline-message" data-prks-role="offline-unavailable">
+      <PrksInlineMessage data-prks-role="offline-unavailable">
         This item is not available offline.
-      </p>
+      </PrksInlineMessage>
     </template>
     <template v-else-if="availability === 'not-found' || !argument">
       <div class="prks-page-header page-header">

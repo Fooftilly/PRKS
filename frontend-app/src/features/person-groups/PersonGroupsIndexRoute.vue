@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, ref, watch } from 'vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import { personGroupIntentsKey } from './intents'
 import { buildGroupTree, collapsibleGroupIds } from './projection'
 import type { PersonGroupsIndexProjection } from './projection'
@@ -53,7 +54,7 @@ function onToggleAll(): void {
       <div class="prks-page-header page-header">
         <h2 class="prks-page-title">Person Groups not available offline</h2>
       </div>
-      <p class="prks-inline-message" data-prks-role="offline-unavailable">This item is not available offline.</p>
+      <PrksInlineMessage data-prks-role="offline-unavailable">This item is not available offline.</PrksInlineMessage>
     </template>
     <div v-else class="prks-group-library">
       <div class="prks-page-header page-header prks-group-library__header page-header--split">
@@ -114,13 +115,13 @@ function onToggleAll(): void {
         </div>
       </div>
       <div v-if="!groups.length" class="prks-group-library__empty-state">
-        <p class="prks-inline-message prks-group-library__empty">No Person Groups yet.</p>
+        <PrksInlineMessage class="prks-group-library__empty">No Person Groups yet.</PrksInlineMessage>
         <button type="button" class="prks-btn prks-btn--primary" data-prks-role="group-mutation-control" @click="onCreate">
           New Group
         </button>
       </div>
       <div v-else class="prks-group-library__scroll" data-prks-group-tree-host>
-        <p v-if="tree.emptySearch" class="prks-inline-message prks-group-tree__empty">No groups match your search.</p>
+        <PrksInlineMessage v-if="tree.emptySearch" class="prks-group-tree__empty">No groups match your search.</PrksInlineMessage>
         <div v-else class="prks-group-tree" role="tree">
           <PersonGroupTreeNode
             v-for="node in tree.nodes"

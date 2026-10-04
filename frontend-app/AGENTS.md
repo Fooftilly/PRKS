@@ -19,7 +19,7 @@ The Vue/legacy bridge is transitional under #230/#303. Preserve current behavior
 
 `DESIGN.md` is authoritative for user-visible interaction and visual behavior. Read the sections relevant to the changed component rather than loading the whole file by default.
 
-Reuse shared components in `src/components/` and existing PRKS CSS/component families before adding another button, status, card, section-header, tab, or modal family. Storybook is a maintainer catalog and does not define product behavior independently of `DESIGN.md`.
+Reuse shared components in `src/components/` and existing PRKS CSS/component families before adding another button, icon button, inline message, page state, status, card, section-header, tab, or modal family. The shared set is `PrksButton`, `PrksIconButton`, `PrksInlineMessage`, `PrksState`, `PrksStatusText`, and `PrksSectionHeader`. Storybook is a maintainer catalog and does not define product behavior independently of `DESIGN.md`.
 
 ## Route and workspace ownership
 

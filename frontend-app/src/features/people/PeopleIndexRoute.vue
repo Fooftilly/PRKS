@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, onUpdated, ref, watch } from 'vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import { peopleIntentsKey } from './intents'
 import type { PeopleIndexProjection } from './projection'
 import type { PersonIndexItem } from './types'
@@ -125,15 +126,15 @@ onUpdated(paintScope)
       <div class="prks-page-header page-header">
         <h2 class="prks-page-title">People not available offline</h2>
       </div>
-      <p class="prks-inline-message" data-prks-role="offline-unavailable">
+      <PrksInlineMessage data-prks-role="offline-unavailable">
         This list has not been cached on this device.
-      </p>
+      </PrksInlineMessage>
     </template>
     <template v-else-if="unknownRole">
       <div class="prks-page-header page-header">
         <h2 class="prks-page-title">People</h2>
       </div>
-      <p class="prks-inline-message">Unknown role filter.</p>
+      <PrksInlineMessage>Unknown role filter.</PrksInlineMessage>
     </template>
     <div v-else class="prks-people-library">
       <div class="prks-page-header page-header prks-people-library__header">
@@ -234,7 +235,7 @@ onUpdated(paintScope)
       </div>
       <div v-else class="prks-people-library__empty">
         <div v-if="collectionEmpty" class="prks-people-list__empty-state">
-          <p class="prks-inline-message prks-people-list__empty">No people yet.</p>
+          <PrksInlineMessage class="prks-people-list__empty">No people yet.</PrksInlineMessage>
           <button
             id="prks-people-empty-new"
             type="button"
@@ -245,11 +246,11 @@ onUpdated(paintScope)
             New Person
           </button>
         </div>
-        <p v-else-if="roleEmpty" class="prks-inline-message prks-people-list__empty">
+        <PrksInlineMessage v-else-if="roleEmpty" class="prks-people-list__empty">
           No people with the <strong>{{ roleFilter }}</strong> role yet. Use
           <strong>Link Person to Work</strong> in the ribbon to assign roles.
-        </p>
-        <p v-else-if="searchMiss" class="prks-inline-message prks-people-list__empty">No people match your search.</p>
+        </PrksInlineMessage>
+        <PrksInlineMessage v-else-if="searchMiss" class="prks-people-list__empty">No people match your search.</PrksInlineMessage>
       </div>
     </div>
   </div>

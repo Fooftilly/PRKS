@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, onUpdated, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import { personGroupIntentsKey } from './intents'
 import { usePersonGroupPendingAction } from './pending-action'
 import type { PersonGroupDetailProjection } from './projection'
@@ -150,7 +151,7 @@ onUpdated(stampEditor)
       <div class="prks-page-header page-header">
         <h2 class="prks-page-title">Group not available offline</h2>
       </div>
-      <p class="prks-inline-message" data-prks-role="offline-unavailable">This item is not available offline.</p>
+      <PrksInlineMessage data-prks-role="offline-unavailable">This item is not available offline.</PrksInlineMessage>
     </template>
     <template v-else-if="notFound">
       <div class="prks-page-header page-header">

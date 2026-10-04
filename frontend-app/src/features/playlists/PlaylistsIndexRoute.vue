@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, inject } from 'vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import { playlistItemCountLabel } from './format'
 import { playlistIntentsKey } from './intents'
 import type { PlaylistIndexProjection } from './projection'
@@ -36,9 +37,9 @@ function activateRouteLink(event: KeyboardEvent): void {
       <div class="prks-page-header page-header">
         <h2 class="prks-page-title">Playlists not available offline</h2>
       </div>
-      <p class="prks-inline-message" data-prks-role="offline-unavailable">
+      <PrksInlineMessage data-prks-role="offline-unavailable">
         This item is not available offline.
-      </p>
+      </PrksInlineMessage>
     </template>
     <div v-else class="playlists-page">
       <div class="prks-page-header page-header tags-page__header">
