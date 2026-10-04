@@ -1,15 +1,41 @@
 /*
- * PRKS stylesheet. Authority: DESIGN.md.
+ * PRKS stylesheet. Authority: DESIGN.md "CSS organization".
  *
- * B4 shared families (Vue primitives + remaining classic callers). Keep in this
- * file until B5 proves the last classic consumer is gone. Do not copy into SFCs.
- *   05 Buttons / controls — .prks-btn, .prks-icon-btn, segmented, disclosure
- *   06 Forms — .prks-field, native form-pane controls
- *   08 Cards / lists — .prks-list-row, .prks-research-row
- *   09 Status / messages — .prks-inline-message, .prks-state, .prks-scope-line, .prks-rel-summary
+ * Selector/consumer contract wins. Physical section comments are not a
+ * deletion boundary. B5 deletion follows proven selector consumers, never
+ * section number. Unlisted is not a license to purge; 01-15 are classified.
+ * Not every family in a section is a B4 Vue primitive. Do not copy shared
+ * rules into SFCs. Do not split this file in B4.
  *
- * B5 classic / feature (do not delete in B4): 11 application shell, 12 feature
- * layouts (work cards, PDF, ribbon, folder tree, processing, graph canvas),
+ * Keep (app-wide): 01 tokens, 02 reset, 03 a11y, 04 layout primitives.
+ * 15 reduced motion is permanent global accessibility, not B5 cleanup.
+ * 14 responsive/container rules are cross-cutting: ownership follows the
+ * selectors/features they modify.
+ *
+ * Shared / retained (keep until the last Vue or classic consumer is gone).
+ * Physical placement may differ from the semantic section:
+ *   .prks-btn, .prks-icon-btn — B4 Vue primitives; canonical rules in 05;
+ *     .prks-btn--quiet-danger is physically in 12.
+ *   .prks-field — B4 Vue primitive; 06. Combobox/EasyMDE stay specialized.
+ *   .prks-tab, .prks-tabs — shared/retained; Vue Arguments + Folder Library
+ *     and classic callers. Canonical rules in 07. Not dead, not classic-only.
+ *   .prks-list-row — shared; 08. Work cards stay B5 feature CSS.
+ *   .prks-research-row — shared primitive; physically in 12.
+ *   .prks-state — shared; 09.
+ *   .prks-inline-message — shared; base rule physically in 12.
+ *   .prks-scope-line, .prks-rel-summary — shared; physically in 08.
+ *   .prks-dialog — canonical shared structural contract; 10. Classic
+ *     research picker in works.js remains; B5 retire/audit that caller.
+ *
+ * Specialized canonical control family (NOT a B4 Vue primitive):
+ *   .prks-segmented — Vue + classic; physically in 12.
+ * There is no generic .prks-disclosure family in 05. PrksDisclosureButton
+ * uses the button contract; classic graph JS still owns live expanded state.
+ * .nav-disclosure is sidebar shell (11), classic-owned.
+ *
+ * B5 feature/shell (do not delete wholesale): 11 application shell,
+ * 12 feature layouts (work cards, PDF, ribbon, folder tree, processing,
+ * graph canvas) except shared/specialized selectors that live there,
  * 13 third-party, remaining innerHTML hosts.
  *
  * 01 Tokens
