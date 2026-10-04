@@ -23,6 +23,20 @@ describe('PrksResearchRow', () => {
     ])
   })
 
+  it('renders duplicate metadata values as separate items', () => {
+    const wrapper = mount(PrksResearchRow, {
+      props: {
+        href: '#/concepts/C1',
+        title: 'Agency',
+        meta: ['supports', 'supports'],
+      },
+    })
+    expect(wrapper.findAll('.prks-research-row__meta-item').map((el) => el.text())).toEqual([
+      'supports',
+      'supports',
+    ])
+  })
+
   it('shows a kind badge when present', () => {
     const wrapper = mount(PrksResearchRow, {
       props: {

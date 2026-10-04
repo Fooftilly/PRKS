@@ -27,7 +27,7 @@ withDefaults(
         <span v-if="kind" class="prks-research-row__kind">{{ kind }}</span>
       </span>
       <span v-if="meta.length" class="prks-research-row__meta">
-        <span v-for="part in meta" :key="part" class="prks-research-row__meta-item">{{ part }}</span>
+        <span v-for="(part, index) in meta" :key="`${index}:${part}`" class="prks-research-row__meta-item">{{ part }}</span>
       </span>
     </span>
   </a>
