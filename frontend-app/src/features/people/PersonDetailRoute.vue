@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, onUpdated, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import { peopleIntentsKey } from './intents'
 import { usePeoplePendingAction } from './pending-action'
 import type { PersonDetailProjection } from './projection'
@@ -255,7 +256,7 @@ function workCard(work: {
       <div class="prks-page-header page-header">
         <h2 class="prks-page-title">Person not available offline</h2>
       </div>
-      <p class="prks-inline-message" data-prks-role="offline-unavailable">This item is not available offline.</p>
+      <PrksInlineMessage data-prks-role="offline-unavailable">This item is not available offline.</PrksInlineMessage>
     </template>
     <template v-else-if="notFound">
       <div class="prks-page-header page-header">
@@ -337,7 +338,7 @@ function workCard(work: {
             </fieldset>
           </section>
         </div>
-        <p v-if="status" class="prks-inline-message prks-inline-message--error" data-prks-role="person-save-status">{{ status }}</p>
+        <PrksInlineMessage v-if="status" tone="error" data-prks-role="person-save-status">{{ status }}</PrksInlineMessage>
         <div class="form-actions prks-form-actions--split person-edit-footer">
           <button type="button" class="prks-btn prks-btn--secondary" data-prks-person-cancel @click="onCancel">Cancel</button>
           <PrksButton
@@ -414,7 +415,7 @@ function workCard(work: {
                 {{ projection.worksEditing ? 'Done' : 'Edit relationships' }}
               </button>
             </div>
-            <p v-if="!person.works.length" class="prks-inline-message">This person is not linked to any files.</p>
+            <PrksInlineMessage v-if="!person.works.length">This person is not linked to any files.</PrksInlineMessage>
             <div v-for="work in person.works" :key="`${work.id}:${work.roleType}:${work.orderIndex}`" class="person-profile__work-card-wrap">
               <div v-if="workCard(work)" v-html="workCard(work)"></div>
               <p v-else class="meta-row">{{ work.title }} <span v-if="work.roleType">· {{ work.roleType }}</span></p>

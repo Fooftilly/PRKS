@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, ref } from 'vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import { useResearchIndexList } from '../../research-index/useResearchIndexList'
 import { positionIntentsKey } from './intents'
 import { filterPositionIndexItems, normalizePositionSearchQuery } from './match'
@@ -52,9 +53,9 @@ function onCreate(): void {
       <div class="prks-page-header page-header">
         <h2 class="prks-page-title">Positions not available offline</h2>
       </div>
-      <p class="prks-inline-message" data-prks-role="offline-unavailable">
+      <PrksInlineMessage data-prks-role="offline-unavailable">
         This list has not been cached on this device.
-      </p>
+      </PrksInlineMessage>
     </template>
     <template v-else>
       <div class="prks-page-header page-header">

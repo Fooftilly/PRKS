@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, ref } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import { useResearchIndexList } from '../../research-index/useResearchIndexList'
 import { argumentIntentsKey } from './intents'
 import { useArgumentPendingAction } from './pending-action'
@@ -74,9 +75,9 @@ function onCreate(kind: ArgumentKind): void {
       <div class="prks-page-header page-header">
         <h2 class="prks-page-title">Arguments &amp; Stances not available offline</h2>
       </div>
-      <p class="prks-inline-message" data-prks-role="offline-unavailable">
+      <PrksInlineMessage data-prks-role="offline-unavailable">
         This list has not been cached on this device.
-      </p>
+      </PrksInlineMessage>
     </template>
     <template v-else>
       <div class="prks-page-header page-header">

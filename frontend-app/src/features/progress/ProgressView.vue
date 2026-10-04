@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import PrksState from '../../components/PrksState.vue'
 import { legacyWorkCardHtml } from './legacy-work-card'
 import { progressCardSubtitle, progressFileCountLabel, progressPageTitle, progressVisibleRows } from './rows'
 import type { ProgressSnapshot } from './state'
@@ -67,7 +68,5 @@ watch(collectionHtml, () => {
     <p class="prks-scope-line" role="status">{{ countLabel }}</p>
   </div>
   <div v-if="visible.length" ref="collectionEl" :class="collectionClass"></div>
-  <div v-else class="prks-state prks-state--empty">
-    <p class="prks-state__heading">No files with this progress status yet.</p>
-  </div>
+  <PrksState v-else kind="empty" heading="No files with this progress status yet." />
 </template>

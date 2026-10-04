@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, ref, watch } from 'vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import { conceptIntentsKey } from './intents'
 import { researchMarkdownHtml } from './markdown'
 import type { ConceptDetailProjection } from './projection'
@@ -241,9 +242,9 @@ watch(
       <div class="prks-page-header page-header">
         <h2 class="prks-page-title">Concept not available offline</h2>
       </div>
-      <p class="prks-inline-message" data-prks-role="offline-unavailable">
+      <PrksInlineMessage data-prks-role="offline-unavailable">
         This item is not available offline.
-      </p>
+      </PrksInlineMessage>
     </template>
     <template v-else-if="availability === 'not-found' || !concept">
       <div class="prks-page-header page-header">

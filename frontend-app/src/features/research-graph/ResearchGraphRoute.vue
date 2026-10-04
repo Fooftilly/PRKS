@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import type { ResearchGraphChromeIds } from './session'
 
 const props = defineProps<{
@@ -132,7 +133,7 @@ onBeforeUnmount(() => {
       </div>
     </div>
     <div data-prks-role="graph-body">
-      <p v-if="graphUnavailable" class="prks-inline-message" role="status">Graph UI unavailable.</p>
+      <PrksInlineMessage v-if="graphUnavailable" status>Graph UI unavailable.</PrksInlineMessage>
       <template v-else>
         <div class="research-graph__stage" data-prks-role="graph-stage">
           <div class="prks-panel research-graph__canvas-wrap">

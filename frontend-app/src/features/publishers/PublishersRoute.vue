@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import PrksIconButton from '../../components/PrksIconButton.vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
+import PrksState from '../../components/PrksState.vue'
 import { usePendingAction } from '../../route-surface/pending-action'
 import { registerPublishersAliasCloser } from './closers'
 import type { PublishersIntents } from './intents'
@@ -202,32 +205,24 @@ onUnmounted(() => {
             Add
           </PrksButton>
         </div>
-        <p
+        <PrksInlineMessage
           v-if="createError"
           id="publishers-page-create-error"
-          class="prks-inline-message prks-inline-message--error"
-          role="status"
+          tone="error"
+          status
           data-publishers-create-error
         >
           {{ createError }}
-        </p>
+        </PrksInlineMessage>
       </div>
     </div>
-    <p
-      v-if="refreshError"
-      class="prks-inline-message prks-inline-message--error"
-      role="status"
-      data-publishers-refresh-error
-    >
+    <PrksInlineMessage v-if="refreshError" tone="error" status data-publishers-refresh-error>
       {{ refreshError }}
-    </p>
-    <div v-if="loading" class="prks-state prks-state--loading" role="status" data-publishers-loading>
-      <p class="prks-state__body">Loading publishers…</p>
-    </div>
-    <div v-else-if="loadError" class="prks-state prks-state--error" role="status" data-publishers-load-error>
-      <p class="prks-state__body">{{ loadError }}</p>
+    </PrksInlineMessage>
+    <PrksState v-if="loading" kind="loading" message="Loading publishers…" data-publishers-loading />
+    <PrksState v-else-if="loadError" kind="error" :message="loadError" data-publishers-load-error>
       <PrksButton variant="secondary" size="sm" @click="retry">Try again</PrksButton>
-    </div>
+    </PrksState>
     <div v-if="loaded" id="publishers-page-cloud" class="list-view publishers-page__list">
       <p v-if="!rows.length" class="tags-page__empty publishers-page__empty">
         No publisher groups yet. Add a canonical name below, then add alternate spellings that appear on your files (⋯).
@@ -285,15 +280,14 @@ onUnmounted(() => {
       >
         <div class="modal-header">
           <h3 id="publishers-page-alias-heading">Publisher aliases</h3>
-          <button
+          <PrksIconButton
             id="publishers-page-alias-modal-close"
-            type="button"
-            class="prks-icon-btn close-btn"
-            aria-label="Close"
+            class="close-btn"
+            label="Close"
             @click="closeAlias"
           >
             ×
-          </button>
+          </PrksIconButton>
         </div>
         <div class="modal-body tags-page-alias-modal__body">
           <p class="modal-helper">
@@ -323,15 +317,15 @@ onUnmounted(() => {
               </button>
             </li>
           </ul>
-          <p
+          <PrksInlineMessage
             v-if="aliasRemoveError"
             id="publishers-page-alias-remove-error"
-            class="prks-inline-message prks-inline-message--error"
-            role="status"
+            tone="error"
+            status
             data-publishers-alias-remove-error
           >
             {{ aliasRemoveError }}
-          </p>
+          </PrksInlineMessage>
           <div class="tags-page-alias-add">
             <input
               id="publishers-page-alias-input"
@@ -358,15 +352,15 @@ onUnmounted(() => {
               Add alias
             </PrksButton>
           </div>
-          <p
+          <PrksInlineMessage
             v-if="aliasAddError"
             id="publishers-page-alias-add-error"
-            class="prks-inline-message prks-inline-message--error"
-            role="status"
+            tone="error"
+            status
             data-publishers-alias-add-error
           >
             {{ aliasAddError }}
-          </p>
+          </PrksInlineMessage>
           <div class="tags-page-alias-delete">
             <PrksButton
               id="publishers-page-delete-btn"
@@ -378,15 +372,15 @@ onUnmounted(() => {
             >
               Delete publisher
             </PrksButton>
-            <p
+            <PrksInlineMessage
               v-if="aliasDeleteError"
               id="publishers-page-delete-error"
-              class="prks-inline-message prks-inline-message--error"
-              role="status"
+              tone="error"
+              status
               data-publishers-delete-error
             >
               {{ aliasDeleteError }}
-            </p>
+            </PrksInlineMessage>
           </div>
         </div>
       </div>

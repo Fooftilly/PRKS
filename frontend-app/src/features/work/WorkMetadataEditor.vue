@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
+import PrksIconButton from '../../components/PrksIconButton.vue'
 import { WORK_STATUSES } from '../../domain/work-status'
 import type { WorkMetaDraft, WorkMetaField } from './metadata-draft'
 import type { WorkMetadataChrome, WorkMetadataConflict, WorkMetadataGroupChrome } from './metadata-session'
@@ -160,7 +161,7 @@ watch(() => props.draft.doc_type, () => {
   <div class="doc-meta-card form-pane doc-meta-card--editing work-meta-editor">
     <div class="card-heading-row">
       <h3 class="doc-meta-card__accent-title">Edit Metadata</h3>
-      <button type="button" class="prks-icon-btn prks-icon-btn--ghost inline-action-btn inline-action-btn--close" aria-label="Close metadata editor" @click="closeEditor"><span aria-hidden="true">&times;</span></button>
+      <PrksIconButton variant="ghost" class="inline-action-btn inline-action-btn--close" label="Close metadata editor" @click="closeEditor"><span aria-hidden="true">&times;</span></PrksIconButton>
     </div>
 
     <section class="work-meta-editor__section" data-prks-role="work-identity-editor">
