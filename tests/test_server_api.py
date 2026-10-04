@@ -5058,26 +5058,32 @@ class TestServerAPI(unittest.TestCase):
                 )
             )
 
-    def _processing_call(self, method, path, payload=None, *, schema_valid=True):
+    def _processing_call(
+        self, method, path, payload=None, *, schema_valid=True, raw=None, content_type=None
+    ):
         """Send one Files for Processing request and check it against its OpenAPI slice.
 
         ``schema_valid=False`` sends a body the schema refuses; only the
-        response is checked then.
+        response is checked then. ``raw`` sends those bytes as the body
+        instead of ``payload``; ``content_type`` overrides the JSON header
+        (an empty string sends none).
         """
         from openapi_core import OpenAPI
         from openapi_core.testing import MockRequest, MockResponse
 
         from backend.api_contract.openapi import processing_files_openapi_document
 
-        data = None if payload is None else json.dumps(payload).encode()
+        data = raw if raw is not None else (None if payload is None else json.dumps(payload).encode())
         req = urllib.request.Request(f"{self._base_url}{path}", data=data, method=method)
-        if payload is not None:
-            req.add_header("Content-Type", "application/json")
+        if content_type is None and (payload is not None or raw is not None):
+            content_type = "application/json"
+        if content_type:
+            req.add_header("Content-Type", content_type)
         try:
             with urllib.request.urlopen(req) as res:
-                status, raw = res.status, res.read()
+                status, body = res.status, res.read()
         except urllib.error.HTTPError as exc:
-            status, raw = exc.code, exc.read()
+            status, body = exc.code, exc.read()
         api = OpenAPI.from_dict(processing_files_openapi_document())
         split = urllib.parse.urlsplit(path)
         request = MockRequest(
@@ -5091,9 +5097,9 @@ class TestServerAPI(unittest.TestCase):
             api.validate_request(request)
         api.validate_response(
             request,
-            MockResponse(data=raw, status_code=status, content_type="application/json"),
+            MockResponse(data=body, status_code=status, content_type="application/json"),
         )
-        return status, json.loads(raw.decode())
+        return status, json.loads(body.decode())
 
     def _fresh_processing_inbox(self, *names):
         """Empty the inbox folder, drop one PDF per name into it, and rescan."""
@@ -5164,17 +5170,20 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual([tag["id"] for tag in patched["tags"]], [tag_id])
         status, listed = self._processing_call("GET", "/api/processing-files")
         self.assertEqual(listed, [patched])
+        # The import body is ignored: any JSON value, or an empty body.
         status, imported = self._processing_call(
-            "POST", f"/api/processing-files/{file_id}/import", {}
+            "POST", f"/api/processing-files/{file_id}/import", []
         )
         self.assertEqual(status, 200)
         self.assertEqual(imported["processing_file_id"], file_id)
         self.assertTrue(imported["work_id"])
         # Importing again returns the same Work.
-        status, again = self._processing_call(
-            "POST", f"/api/processing-files/{file_id}/import", {}
-        )
-        self.assertEqual((status, again), (200, imported))
+        for body in (b"", b"{}", b'"x"'):
+            with self.subTest(body=body):
+                status, again = self._processing_call(
+                    "POST", f"/api/processing-files/{file_id}/import", raw=body
+                )
+                self.assertEqual((status, again), (200, imported))
         status, listed = self._processing_call("GET", "/api/processing-files?rescan=1")
         self.assertEqual((status, listed), (200, []))
 
@@ -5201,6 +5210,24 @@ class TestServerAPI(unittest.TestCase):
             "POST", "/api/processing-files/PF-missing/import", {}
         )
         self.assertEqual((status, body), (400, {"error": "Processing file not found."}))
+        # Both writes need the JSON Content-Type, even without a body, and
+        # refuse malformed JSON.
+        for method, path in (
+            ("POST", "/api/processing-files/PF-missing/import"),
+            ("PATCH", f"/api/processing-files/{file_id}"),
+        ):
+            with self.subTest(method=method):
+                status, body = self._processing_call(
+                    method, path, schema_valid=False, raw=b"", content_type=""
+                )
+                self.assertEqual(status, 415)
+                status, body = self._processing_call(
+                    method, path, schema_valid=False, raw=b"{"
+                )
+                self.assertEqual((status, body), (400, {"error": "invalid_json"}))
+        # An empty PATCH body changes nothing.
+        status, row = self._processing_call("PATCH", f"/api/processing-files/{file_id}", raw=b"")
+        self.assertEqual((status, row["id"]), (200, file_id))
 
     def test_processing_files_request_schema_matches_the_live_endpoint(self):
         """Inputs the schema accepts, the server accepts, and the reverse."""

@@ -848,7 +848,13 @@ def processing_files_openapi_document() -> dict[str, Any]:
                 "summary": "Save an inbox file's staged Work metadata",
                 "tags": ["processing-files"],
                 "requestBody": {
-                    "required": True,
+                    # An empty body with the JSON Content-Type changes nothing.
+                    "required": False,
+                    "description": (
+                        "An empty body changes nothing and returns the file. "
+                        "The `application/json` Content-Type is required either "
+                        "way (415 otherwise)."
+                    ),
                     "content": _json_content(
                         {"$ref": "#/components/schemas/ProcessingFileUpdateRequest"}
                     ),
@@ -861,9 +867,10 @@ def processing_files_openapi_document() -> dict[str, Any]:
                         ),
                     },
                     "400": _json_error(
-                        "No such file, a body that is not an object, roles or "
-                        "tags that are not arrays, or a domain refusal of the "
-                        "draft status, folder, person, tag, or role type."
+                        "Malformed JSON, no such file, a body that is not an "
+                        "object, roles or tags that are not arrays, or a domain "
+                        "refusal of the draft status, folder, person, tag, or "
+                        "role type."
                     ),
                     **mutation_body_read_errors,
                 },
@@ -881,8 +888,12 @@ def processing_files_openapi_document() -> dict[str, Any]:
                 "tags": ["processing-files"],
                 "requestBody": {
                     "required": False,
-                    "description": "Ignored.",
-                    "content": _json_content({"type": "object"}),
+                    "description": (
+                        "Ignored: any JSON value, or an empty body. The "
+                        "`application/json` Content-Type is required either "
+                        "way (415 otherwise)."
+                    ),
+                    "content": _json_content({}),
                 },
                 "responses": {
                     "200": {
@@ -892,8 +903,8 @@ def processing_files_openapi_document() -> dict[str, Any]:
                         ),
                     },
                     "400": _json_error(
-                        "No such file, an unknown target folder, a file that is "
-                        "gone or not a PDF, or a failed import."
+                        "Malformed JSON, no such file, an unknown target folder, "
+                        "a file that is gone or not a PDF, or a failed import."
                     ),
                     **mutation_body_read_errors,
                 },
