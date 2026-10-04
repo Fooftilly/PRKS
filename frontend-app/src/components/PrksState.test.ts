@@ -27,6 +27,7 @@ describe('PrksState', () => {
       },
     })
     const region = wrapper.get('[role="status"]')
+    expect(region.attributes('role')).toBe('status')
     expect(region.classes()).toContain('prks-state--error')
     expect(region.get('p').text()).toBe('Could not load Saved Views.')
     const retry = region.get('button')
@@ -40,6 +41,7 @@ describe('PrksState', () => {
       props: { kind: 'empty', heading: 'No files with this progress status yet.' },
     })
     const region = wrapper.get('div')
+    expect(region.attributes('role')).toBeUndefined()
     expect(region.classes()).toContain('prks-state--empty')
     expect(region.get('p').classes()).toContain('prks-state__heading')
     expect(region.find('.prks-state__body').exists()).toBe(false)
