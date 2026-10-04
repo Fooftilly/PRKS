@@ -1112,6 +1112,31 @@ introduce canonical primitive
 
 Do not delete a legacy rule first and then repair every broken page.
 
+B4/B5 CSS ownership (Vue class application for primitives lives in `frontend-app/src/components/`; rules stay here).
+
+**B5 deletion follows proven selector consumers, never section number alone.** Physical `/* 0N */` placement is migration-era and is not a purge boundary. A selector that is unlisted in an older draft of this table is not safe to delete; this table is exhaustive for sections 01–15. Not every family in a section has a Vue primitive: §05 is not “all controls are now B4 Vue-owned.”
+
+| Section | Semantic / shared families | Ownership | Physical placement now (not a delete boundary) |
+| --- | --- | --- | --- |
+| 01–04 | tokens, reset, a11y, layout primitives | Keep. App-wide | Canonical sections |
+| 05 | `.prks-btn`, `.prks-icon-btn` | B4 Vue primitives (`PrksButton`, `PrksLinkButton`, `PrksIconButton`) plus remaining classic callers. Other controls in this numbered section are not automatically Vue primitives. There is no generic `.prks-disclosure` family. Research Graph uses `PrksDisclosureButton` on the button contract; classic graph JS still owns live expanded state. | Canonical button rules in §05. `.prks-btn--quiet-danger` is physically in §12. `.prks-tab:focus-visible` is grouped with §05 focus-visible rules; the tab family itself is §07. |
+| 06 | `.prks-field` + form-pane | B4 Vue primitive (`PrksField`) for ordinary labeled native controls, plus remaining classic form-pane callers. Combobox, EasyMDE, and search-advanced stay specialized. | Canonical field rules in §06. Segmented is **not** a §06 Vue primitive; see specialized families. |
+| 07 | `.prks-tab`, `.prks-tabs` | Shared/retained. Used by current Vue routes (Arguments, Folder Library) **and** classic callers. Not dead. Not classic-only. No B4 Vue tab primitive. | Canonical tab rules in §07 |
+| 08 | `.prks-list-row` | B4 shared list-row contract. Work cards stay B5 feature CSS. | `.prks-list-row` in §08. `.prks-research-row` is a shared primitive but physically in §12. `.prks-scope-line` / `.prks-rel-summary` are physically in §08; semantically they belong with status/summary. |
+| 09 | `.prks-state`, `.prks-inline-message` | B4 Vue primitives (`PrksState`, `PrksInlineMessage`) plus remaining classic callers. Classic Work-card summaries stay. | `.prks-state` in §09. Base `.prks-inline-message` (and `--empty` / duplicate `--error`) are physically in §12; a `--error` color rule also sits in §09. |
+| 10 | `.prks-dialog` | Canonical shared structural contract (header/body/actions). Not a B4 Vue dialog primitive. Remaining classic caller: research picker in `frontend/js/components/works.js`. B5 retires/audits that caller; do not delete the family while it has consumers. | Canonical rules in §10 |
+| 11 | application shell, sidebar `.nav-disclosure` | B5 shell/feature. `.nav-disclosure` is sidebar navigation, not `PrksDisclosureButton`. | Canonical section |
+| 12 | feature layouts (work cards, PDF, ribbon, folder tree, processing, graph canvas) | B5 feature CSS **except** any shared/specialized selector that currently lives here. Deleting “all of §12” is forbidden. | Shared/specialized selectors physically here include `.prks-research-row`, base `.prks-inline-message`, `.prks-segmented*`, `.prks-btn--quiet-danger` |
+| 13 | third-party integrations | B5. Keep while those integrations exist. | Canonical section |
+| 14 | responsive / container rules | Cross-cutting. Ownership follows the selectors/features they modify. A media query wrapping a shared primitive is still that primitive’s CSS. | Canonical section |
+| 15 | reduced motion | Permanent global accessibility behavior. Not B5 cleanup. | Canonical section |
+
+Specialized canonical control family (used by Vue and classic; **not** a B4 Vue primitive):
+
+- `.prks-segmented` — physically in §12. Keep the existing family (normal / status / icon). B5 may later wrap or migrate callers; do not treat it as a B4 primitive family and do not purge it as “§12 feature CSS.”
+
+B4 does not split `style.css` into multiple HTTP files. Dead-rule deletion waits until B5 can prove no classic (or Vue) caller of that **selector**.
+
 ---
 
 ## Research entities
