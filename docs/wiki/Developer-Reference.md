@@ -164,9 +164,12 @@ Rebuild vendored assets after changing a pin:
 
 # Vue application bundle (Node >=24.15.0 <25; writes frontend/vue/ and refreshes the dependency manifest)
 (cd frontend-app && npm ci --ignore-scripts && npm run build)
+
+# OpenAPI transport types (compile-time only; not part of the Vue bundle)
+(cd frontend-app && npm run openapi:types)
 ```
 
-Each build refreshes `frontend/vendor/DEPENDENCY-MANIFEST.json` and `frontend/sw.js`'s `DEPENDENCY_REVISION` so service-worker static/shell caches retire when vendor bytes, the Vue bundle, `frontend/js/workspace-model.js`, `frontend/js/work-route-projection.js`, `frontend/js/search-query-codec.js`, `frontend/js/tab-leave.js`, `frontend/js/owner-resource.js`, or `frontend/js/route-model.js` change. Those classic scripts are built before that manifest is written. Inter is intentionally raw-managed (npm would alter the CSS/woff2 contract); update its `VERSION` + assets, then `python scripts/dependency_gate.py --write-manifest`.
+`npm run openapi:types` writes `frontend-app/src/api/generated/` only. It does not change the Vue bundle or `DEPENDENCY_REVISION`. Each Vue or vendor build refreshes `frontend/vendor/DEPENDENCY-MANIFEST.json` and `frontend/sw.js`'s `DEPENDENCY_REVISION` so service-worker static/shell caches retire when vendor bytes, the Vue bundle, `frontend/js/workspace-model.js`, `frontend/js/work-route-projection.js`, `frontend/js/search-query-codec.js`, `frontend/js/tab-leave.js`, `frontend/js/owner-resource.js`, or `frontend/js/route-model.js` change. Those classic scripts are built before that manifest is written. Inter is intentionally raw-managed (npm would alter the CSS/woff2 contract); update its `VERSION` + assets, then `python scripts/dependency_gate.py --write-manifest`.
 
 ## See also
 

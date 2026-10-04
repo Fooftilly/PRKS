@@ -33,6 +33,8 @@ When a change touches the classic coordinator, offline runtime, service worker, 
 
 Use `src/api/` and the typed PRKS service/API boundary rather than issuing arbitrary transport calls from components. Keep generated/transport DTOs separate from PRKS domain semantics.
 
+OpenAPI owns wire schema. `src/api/generated/` holds one compile-time module per checked-in family artifact (`docs/api/openapi-*.json`), produced by `npm run openapi:types` and checked by `npm run openapi:check`. `prksApiRequest` and the hand-written feature API modules remain the transport and service layer. Do not generate fetch clients, TanStack Query hooks, mutations, cache logic, or domain services from OpenAPI. Generated types do not replace runtime response parsers. Query keys, cancellation, retry, invalidation, reconciliation, telemetry, and offline/durable semantics stay PRKS-owned. A combined `/api/openapi.json` belongs to #45; this generator does not create it.
+
 Accepted target architecture in #310/#311 means the frontend must not assume forever that PRKS is single-owner, SQLite-backed, tied to one host filesystem path, or served by one process. At the same time, do not implement future account/PostgreSQL/storage behavior in an unrelated frontend slice. Consume explicit API/application contracts as they land.
 
 ## Toolchain and validation

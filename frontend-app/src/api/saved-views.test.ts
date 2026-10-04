@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { ApiErrorEnvelope, SavedView, SavedViewDeleted, SavedViewSearch, SavedViewUpdateRequest } from './generated/saved-views'
 import {
+  SAVED_VIEW_DELETED_KEYS,
+  SAVED_VIEW_KEYS,
+  SAVED_VIEW_MODES,
+  SAVED_VIEW_SEARCH_KEYS,
   createSavedView,
   deleteSavedView,
   getSavedView,
@@ -7,7 +12,33 @@ import {
   parseSavedView,
   parseSavedViews,
   updateSavedView,
+  type SavedViewMode,
 } from './saved-views'
+
+type SameKeys<T, Keys extends readonly (keyof T)[]> = [Exclude<keyof T, Keys[number]>, Exclude<Keys[number], keyof T>] extends [
+  never,
+  never,
+]
+  ? true
+  : false
+
+type SameModes = [Exclude<SavedViewMode, (typeof SAVED_VIEW_MODES)[number]>, Exclude<(typeof SAVED_VIEW_MODES)[number], SavedViewMode>] extends [
+  never,
+  never,
+]
+  ? true
+  : false
+
+type RequiredKeys<T> = { [K in keyof T]-?: undefined extends T[K] ? never : K }[keyof T]
+
+type SameRequired<T, Keys extends readonly (keyof T)[]> = [
+  Exclude<RequiredKeys<T>, Keys[number]>,
+  Exclude<Keys[number], RequiredKeys<T>>,
+] extends [never, never]
+  ? true
+  : false
+
+type OptionalKey<T, K extends keyof T> = undefined extends T[K] ? true : false
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -23,6 +54,33 @@ function stub(status: number, body: unknown) {
 }
 
 describe('Saved Views client', () => {
+  it('keeps runtime response keys aligned with the generated transport types', () => {
+    const view: SameKeys<SavedView, typeof SAVED_VIEW_KEYS> = true
+    const search: SameKeys<SavedViewSearch, typeof SAVED_VIEW_SEARCH_KEYS> = true
+    const deleted: SameKeys<SavedViewDeleted, typeof SAVED_VIEW_DELETED_KEYS> = true
+    const viewRequired: SameRequired<SavedView, typeof SAVED_VIEW_KEYS> = true
+    const searchRequired: SameRequired<SavedViewSearch, typeof SAVED_VIEW_SEARCH_KEYS> = true
+    const deletedRequired: SameRequired<SavedViewDeleted, typeof SAVED_VIEW_DELETED_KEYS> = true
+    const modes: SameModes = true
+    const updateName: OptionalKey<SavedViewUpdateRequest, 'name'> = true
+    const updateSearch: OptionalKey<SavedViewUpdateRequest, 'search'> = true
+    const errorCode: OptionalKey<ApiErrorEnvelope, 'code'> = true
+    const errorText: SameRequired<ApiErrorEnvelope, readonly ['error']> = true
+    expect(
+      view &&
+        search &&
+        deleted &&
+        viewRequired &&
+        searchRequired &&
+        deletedRequired &&
+        modes &&
+        updateName &&
+        updateSearch &&
+        errorCode &&
+        errorText,
+    ).toBe(true)
+  })
+
   it('parses rows exactly, including a null timestamp', () => {
     expect(parseSavedViews([ROW])).toEqual([ROW])
     expect(parseSavedView(ROW)).toEqual(ROW)

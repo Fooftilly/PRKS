@@ -1,0 +1,15 @@
+{
+  "source": "Checked-in OpenAPI family artifacts under docs/api/. Generation does not start PRKS and does not read a live server. When #45 replaces these fragments with a combined document, point each family at that artifact or at one slice of it. Do not generate a second combined contract here.",
+  "families": [
+    {
+      "name": "publishers",
+      "artifact": "docs/api/openapi-publishers.json",
+      "output": "frontend-app/src/api/generated/publishers.ts"
+    },
+    {
+      "name": "saved-views",
+      "artifact": "docs/api/openapi-saved-views.json",
+      "output": "frontend-app/src/api/generated/saved-views.ts"
+    }
+  ]
+}
