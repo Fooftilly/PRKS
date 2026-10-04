@@ -370,19 +370,14 @@ watch(
           </div>
           <div class="page-header__actions">
             <template v-if="editing">
-              <button type="button" class="prks-btn prks-btn--secondary" id="prks-arg-cancel" @click="onCancel">
+              <PrksButton id="prks-arg-cancel" @click="onCancel">
                 Cancel
-              </button>
+              </PrksButton>
             </template>
             <template v-else>
-              <button
-                type="button"
-                class="prks-btn prks-btn--secondary"
-                id="prks-arg-view-graph"
-                @click="onViewGraph"
-              >
+              <PrksButton id="prks-arg-view-graph" @click="onViewGraph">
                 View in graph
-              </button>
+              </PrksButton>
               <PrksButton
                 id="prks-arg-edit"
                 :data-prks-role="MUTATION_ROLE"
@@ -405,8 +400,8 @@ watch(
               </PrksButton>
               <PrksButton
                 id="prks-arg-delete"
-                variant="ghost"
-                class="prks-btn--quiet-danger prks-page-action--destructive"
+                variant="quiet-danger"
+                class="prks-page-action--destructive"
                 :data-prks-role="MUTATION_ROLE"
                 :busy="actionBusy('delete')"
                 :disabled="actionBlocked('delete')"
@@ -481,14 +476,14 @@ watch(
                 {{ choice.label }}
               </option>
             </select>
-            <button
-              type="button"
-              class="prks-btn prks-btn--ghost prks-btn--sm"
+            <PrksButton
+              variant="ghost"
+              size="sm"
               data-remove="target"
               @click="removeTarget(row.rowKey)"
             >
               Remove
-            </button>
+            </PrksButton>
           </div>
         </div>
         <PrksButton
@@ -524,14 +519,14 @@ watch(
               maxlength="100"
               aria-label="Pages"
             >
-            <button
-              type="button"
-              class="prks-btn prks-btn--ghost prks-btn--sm"
+            <PrksButton
+              variant="ghost"
+              size="sm"
               data-remove="source"
               @click="removeSource(row.rowKey)"
             >
               Remove
-            </button>
+            </PrksButton>
           </div>
         </div>
         <PrksButton
@@ -545,7 +540,7 @@ watch(
           Add source
         </PrksButton>
         <p class="prks-arg-form__actions">
-          <PrksButton type="submit" variant="primary" class="prks-btn prks-btn--primary" :busy="actionBusy('save')" busy-label="Saving…">
+          <PrksButton type="submit" variant="primary" :busy="actionBusy('save')" busy-label="Saving…">
             Save
           </PrksButton>
         </p>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, ref, watch } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import { positionIntentsKey } from './intents'
 import { researchMarkdownHtml } from './markdown'
@@ -171,14 +172,9 @@ watch(
             <div ref="summaryHost"></div>
           </div>
           <div class="page-header__actions">
-            <button
-              type="button"
-              class="prks-btn prks-btn--secondary"
-              id="prks-position-view-graph"
-              @click="onViewGraph"
-            >
+            <PrksButton id="prks-position-view-graph" @click="onViewGraph">
               View in graph
-            </button>
+            </PrksButton>
           </div>
         </div>
       </div>

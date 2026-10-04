@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, ref } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import { useResearchIndexList } from '../../research-index/useResearchIndexList'
 import ConceptRow from './ConceptRow.vue'
@@ -65,15 +66,9 @@ function onCreate(): void {
             Concepts
           </h2>
           <div class="page-header__actions">
-            <button
-              type="button"
-              class="prks-btn prks-btn--secondary"
-              id="prks-concept-new"
-              :data-prks-role="MUTATION_ROLE"
-              @click="onCreate"
-            >
+            <PrksButton id="prks-concept-new" :data-prks-role="MUTATION_ROLE" @click="onCreate">
               New Concept
-            </button>
+            </PrksButton>
           </div>
         </div>
         <div ref="scopeHost" data-prks-role="index-scope-host"></div>
@@ -102,15 +97,9 @@ function onCreate(): void {
         <div v-else-if="showEmptyData" class="prks-research-index__empty">
           <p class="meta-row">No Concepts yet.</p>
           <p>
-            <button
-              type="button"
-              class="prks-btn prks-btn--secondary"
-              id="prks-concept-new-empty"
-              :data-prks-role="MUTATION_ROLE"
-              @click="onCreate"
-            >
+            <PrksButton id="prks-concept-new-empty" :data-prks-role="MUTATION_ROLE" @click="onCreate">
               New Concept
-            </button>
+            </PrksButton>
           </p>
           <p class="meta-row prks-research-index__empty-hint">
             Concepts are also created automatically when you type
@@ -120,14 +109,9 @@ function onCreate(): void {
         <div v-else-if="showSearchEmpty" class="prks-research-index__empty">
           <p class="meta-row">No Concepts match “{{ normalizedQuery }}”.</p>
           <p>
-            <button
-              type="button"
-              class="prks-btn prks-btn--ghost prks-btn--sm"
-              data-research-search-clear
-              @click="clearSearch"
-            >
+            <PrksButton variant="ghost" size="sm" data-research-search-clear @click="clearSearch">
               Clear search
-            </button>
+            </PrksButton>
           </p>
         </div>
       </div>

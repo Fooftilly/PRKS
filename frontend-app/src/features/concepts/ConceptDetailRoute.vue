@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, ref, watch } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import { conceptIntentsKey } from './intents'
 import { researchMarkdownHtml } from './markdown'
@@ -263,32 +264,25 @@ watch(
             <div ref="summaryHost"></div>
           </div>
           <div class="page-header__actions">
-            <button
-              type="button"
-              class="prks-btn prks-btn--secondary"
-              id="prks-concept-view-graph"
-              @click="onViewGraph"
-            >
+            <PrksButton id="prks-concept-view-graph" @click="onViewGraph">
               View in graph
-            </button>
-            <button
-              type="button"
-              class="prks-btn prks-btn--secondary"
+            </PrksButton>
+            <PrksButton
               id="prks-concept-rename"
               :data-prks-role="MUTATION_ROLE"
               @click="onRename"
             >
               Rename
-            </button>
-            <button
-              type="button"
-              class="prks-btn prks-btn--quiet-danger prks-page-action--destructive"
+            </PrksButton>
+            <PrksButton
               id="prks-concept-delete"
+              variant="quiet-danger"
+              class="prks-page-action--destructive"
               :data-prks-role="MUTATION_ROLE"
               @click="onDelete"
             >
               Delete
-            </button>
+            </PrksButton>
           </div>
         </div>
       </div>

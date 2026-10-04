@@ -404,14 +404,9 @@ function onAddBlur(): void {
           autocomplete="off"
         >
         <div class="prks-form-actions prks-form-actions--split form-actions">
-          <button
-            id="prks-playlist-edit-cancel"
-            type="button"
-            class="prks-btn prks-btn--secondary"
-            @click="onCancel"
-          >
+          <PrksButton id="prks-playlist-edit-cancel" @click="onCancel">
             Cancel
-          </button>
+          </PrksButton>
           <PrksButton
             id="prks-playlist-edit-save"
             variant="primary"

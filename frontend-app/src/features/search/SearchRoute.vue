@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
 import SearchResultsCollection from './SearchResultsCollection.vue'
 import type { SearchIntents } from './intents'
 import type { SearchRouteProjection } from './projection'
@@ -61,15 +62,13 @@ watch(() => props.projection.generation, paintMode, { flush: 'post' })
         <h2 class="prks-page-title">{{ projection.title }}</h2>
         <div class="page-header__actions">
           <div ref="modeHost" class="work-html-slot" data-prks-search-mode-host></div>
-          <button
+          <PrksButton
             v-if="projection.canOfferSave"
             id="prks-save-view-btn"
-            type="button"
-            class="prks-btn prks-btn--secondary"
             @click="intents.saveView()"
           >
             Save View
-          </button>
+          </PrksButton>
         </div>
       </div>
       <div class="work-html-slot" v-html="scopeHtml"></div>
@@ -152,9 +151,9 @@ watch(() => props.projection.generation, paintMode, { flush: 'post' })
             </div>
           </div>
         </template>
-        <button id="search-run-btn" type="button" class="prks-btn prks-btn--secondary search-advanced__submit" @click="run">
+        <PrksButton id="search-run-btn" class="search-advanced__submit" @click="run">
           Search
-        </button>
+        </PrksButton>
       </div>
     </div>
     <SearchResultsCollection :projection="projection.results" />

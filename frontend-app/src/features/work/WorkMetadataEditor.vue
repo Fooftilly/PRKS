@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
 import PrksIconButton from '../../components/PrksIconButton.vue'
 import { WORK_STATUSES } from '../../domain/work-status'
 import type { WorkMetaDraft, WorkMetaField } from './metadata-draft'
@@ -201,19 +202,18 @@ watch(() => props.draft.doc_type, () => {
         <div id="meta-doc-type-listbox" class="prks-doc-type-menu__panel hidden" role="listbox"></div>
       </div>
       <div class="prks-form-actions form-actions">
-        <button id="save-work-identity-btn" type="button" class="prks-btn prks-btn--secondary" :disabled="saveDisabled('identity')" @click="saveGroup('identity')">Save identity</button>
+        <PrksButton id="save-work-identity-btn" :disabled="saveDisabled('identity')" @click="saveGroup('identity')">Save identity</PrksButton>
       </div>
       <div class="meta-row" data-prks-role="work-identity-sync" aria-live="polite">
         <span>{{ statusLine('identity') }}</span>
         <div v-for="conflict in conflicts('identity')" :key="conflict.opId" :data-prks-work-field-conflict="conflict.field">
           {{ conflict.text }}
-          <button
+          <PrksButton
             v-for="action in conflict.actions"
             :key="action.label"
-            type="button"
-            class="prks-btn prks-btn--secondary prks-btn--sm"
+            size="sm"
             @click="resolveField(conflict, action.apply)"
-          >{{ action.label }}</button>
+          >{{ action.label }}</PrksButton>
         </div>
       </div>
     </section>
@@ -246,19 +246,18 @@ watch(() => props.draft.doc_type, () => {
         </div>
       </div>
       <div class="prks-form-actions form-actions">
-        <button id="save-work-status-btn" type="button" class="prks-btn prks-btn--secondary" :disabled="saveDisabled('status')" @click="saveGroup('status')">Save status</button>
+        <PrksButton id="save-work-status-btn" :disabled="saveDisabled('status')" @click="saveGroup('status')">Save status</PrksButton>
       </div>
       <div class="meta-row" data-prks-role="work-status-sync" aria-live="polite">
         <span>{{ statusLine('status') }}</span>
         <div v-for="conflict in conflicts('status')" :key="conflict.opId" :data-prks-work-field-conflict="conflict.field">
           {{ conflict.text }}
-          <button
+          <PrksButton
             v-for="action in conflict.actions"
             :key="action.label"
-            type="button"
-            class="prks-btn prks-btn--secondary prks-btn--sm"
+            size="sm"
             @click="resolveField(conflict, action.apply)"
-          >{{ action.label }}</button>
+          >{{ action.label }}</PrksButton>
         </div>
       </div>
     </section>
@@ -283,19 +282,18 @@ watch(() => props.draft.doc_type, () => {
       <p id="meta-video-url-error" class="field-error" aria-live="polite">{{ errorText('source_url') }}</p>
       <p class="meta-row meta-row--hint">Replaces which video this file is. Different links to the same video are the same source.</p>
       <div class="prks-form-actions form-actions">
-        <button id="save-work-source-btn" type="button" class="prks-btn prks-btn--secondary" :disabled="saveDisabled('source')" @click="saveSource">Save video source</button>
+        <PrksButton id="save-work-source-btn" :disabled="saveDisabled('source')" @click="saveSource">Save video source</PrksButton>
       </div>
       <div class="meta-row" data-prks-role="work-source-sync" aria-live="polite">
         <span>{{ statusLine('source') }}</span>
         <div v-for="conflict in conflicts('source')" :key="conflict.opId" data-prks-work-source-conflict="">
           {{ conflict.text }}
-          <button
+          <PrksButton
             v-for="action in conflict.actions"
             :key="action.label"
-            type="button"
-            class="prks-btn prks-btn--secondary prks-btn--sm"
+            size="sm"
             @click="resolveSource(conflict, action.apply)"
-          >{{ action.label }}</button>
+          >{{ action.label }}</PrksButton>
         </div>
       </div>
     </section>
@@ -435,25 +433,24 @@ watch(() => props.draft.doc_type, () => {
       </template>
 
       <div class="prks-form-actions form-actions">
-        <button id="save-work-bib-btn" type="button" class="prks-btn prks-btn--secondary" :disabled="saveDisabled('bib')" @click="saveGroup('bib')">{{ isVideo ? 'Save channel name' : 'Save bibliographic details' }}</button>
+        <PrksButton id="save-work-bib-btn" :disabled="saveDisabled('bib')" @click="saveGroup('bib')">{{ isVideo ? 'Save channel name' : 'Save bibliographic details' }}</PrksButton>
       </div>
       <div class="meta-row" data-prks-role="work-bib-sync" aria-live="polite">
         <span>{{ statusLine('bib') }}</span>
         <div v-for="conflict in conflicts('bib')" :key="conflict.opId" :data-prks-work-field-conflict="conflict.field">
           {{ conflict.text }}
-          <button
+          <PrksButton
             v-for="action in conflict.actions"
             :key="action.label"
-            type="button"
-            class="prks-btn prks-btn--secondary prks-btn--sm"
+            size="sm"
             @click="resolveField(conflict, action.apply)"
-          >{{ action.label }}</button>
+          >{{ action.label }}</PrksButton>
         </div>
       </div>
     </section>
 
     <div class="prks-form-actions prks-form-actions--split form-actions work-meta-editor__sticky-actions">
-      <button type="button" class="prks-btn prks-btn--secondary" @click="closeEditor">Close</button>
+      <PrksButton @click="closeEditor">Close</PrksButton>
     </div>
   </div>
 </template>

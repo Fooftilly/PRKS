@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, onUpdated, ref, watch } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import { peopleIntentsKey } from './intents'
 import type { PeopleIndexProjection } from './projection'
@@ -139,16 +140,14 @@ onUpdated(paintScope)
     <div v-else class="prks-people-library">
       <div class="prks-page-header page-header prks-people-library__header">
         <h2 class="prks-page-title">{{ title }}</h2>
-        <button
+        <PrksButton
           id="prks-people-header-new"
-          type="button"
-          class="prks-btn"
-          :class="collectionEmpty ? 'prks-btn--secondary' : 'prks-btn--primary'"
+          :variant="collectionEmpty ? 'secondary' : 'primary'"
           :data-prks-role="collectionEmpty ? undefined : 'person-create-control'"
           @click="onCreate"
         >
           New Person
-        </button>
+        </PrksButton>
         <div v-if="rolePeople.length" data-prks-role="index-scope-host"></div>
       </div>
       <div v-if="rolePeople.length" class="prks-people-library__toolbar">
@@ -236,15 +235,14 @@ onUpdated(paintScope)
       <div v-else class="prks-people-library__empty">
         <div v-if="collectionEmpty" class="prks-people-list__empty-state">
           <PrksInlineMessage class="prks-people-list__empty">No people yet.</PrksInlineMessage>
-          <button
+          <PrksButton
             id="prks-people-empty-new"
-            type="button"
-            class="prks-btn prks-btn--primary"
+            variant="primary"
             data-prks-role="person-create-control"
             @click="onCreate"
           >
             New Person
-          </button>
+          </PrksButton>
         </div>
         <PrksInlineMessage v-else-if="roleEmpty" class="prks-people-list__empty">
           No people with the <strong>{{ roleFilter }}</strong> role yet. Use

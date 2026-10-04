@@ -55,7 +55,7 @@ watch(() => props.projection.generation, paintMode, { flush: 'post' })
         <div class="page-header__actions">
           <div ref="modeHost" class="work-html-slot" data-prks-saved-view-mode-host></div>
           <a class="prks-btn prks-btn--secondary" :href="projection.searchHash">Open as Search</a>
-          <button id="prks-saved-view-edit" type="button" class="prks-btn prks-btn--secondary" @click="edit">Edit</button>
+          <PrksButton id="prks-saved-view-edit" @click="edit">Edit</PrksButton>
           <PrksButton
             id="prks-saved-view-delete"
             variant="danger"

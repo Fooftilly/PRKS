@@ -138,14 +138,9 @@ watch(rows, refreshIcons, { flush: 'post' })
         <p class="meta-row saved-views-page__empty">{{ SAVED_VIEWS_EMPTY }}</p>
         <p class="meta-row">{{ SAVED_VIEWS_EMPTY_HINT }}</p>
         <p>
-          <button
-            id="prks-saved-views-empty-search"
-            type="button"
-            class="prks-btn prks-btn--secondary"
-            @click="intents.openSearch()"
-          >
+          <PrksButton id="prks-saved-views-empty-search" @click="intents.openSearch()">
             Search or jump
-          </button>
+          </PrksButton>
         </p>
       </template>
     </div>

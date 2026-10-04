@@ -332,15 +332,15 @@ function workCard(work: {
                 <input id="pd-group-pick-id" type="hidden" value="" />
                 <div id="pd-group-results" class="combobox-results combobox-results--tag-panel hidden"></div>
               </div>
-              <button id="pd-group-add-btn" type="button" class="prks-btn prks-btn--primary person-groups-fieldset__action">
+              <PrksButton id="pd-group-add-btn" variant="primary" class="person-groups-fieldset__action">
                 Add group
-              </button>
+              </PrksButton>
             </fieldset>
           </section>
         </div>
         <PrksInlineMessage v-if="status" tone="error" data-prks-role="person-save-status">{{ status }}</PrksInlineMessage>
         <div class="form-actions prks-form-actions--split person-edit-footer">
-          <button type="button" class="prks-btn prks-btn--secondary" data-prks-person-cancel @click="onCancel">Cancel</button>
+          <PrksButton data-prks-person-cancel @click="onCancel">Cancel</PrksButton>
           <PrksButton
             id="pd-save-btn"
             variant="primary"
@@ -405,15 +405,15 @@ function workCard(work: {
             <div class="person-profile__works-head">
               <h2 id="person-profile-works-heading" class="person-profile__works-title">Linked files</h2>
               <span class="person-profile__works-count">{{ person.works.length }}</span>
-              <button
+              <PrksButton
                 v-if="person.works.length || projection.worksEditing"
-                type="button"
-                class="prks-btn prks-btn--secondary prks-btn--sm person-profile__works-action"
+                size="sm"
+                class="person-profile__works-action"
                 :data-prks-role="projection.worksEditing ? undefined : 'person-mutation-control'"
                 @click="onToggleWorks"
               >
                 {{ projection.worksEditing ? 'Done' : 'Edit relationships' }}
-              </button>
+              </PrksButton>
             </div>
             <PrksInlineMessage v-if="!person.works.length">This person is not linked to any files.</PrksInlineMessage>
             <div v-for="work in person.works" :key="`${work.id}:${work.roleType}:${work.orderIndex}`" class="person-profile__work-card-wrap">
