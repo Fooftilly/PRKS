@@ -90,30 +90,25 @@ class FrontendWorkCardTests(unittest.TestCase):
         self.assertGreater(at, 0)
         window = app[max(0, at - 280) : at]
         self.assertNotIn("!sameFolderWorkspace && typeof window.prksReleaseWorkThumbPreview", window)
-        # Preserve path releases the preview on the main element before the card rewrite.
+        # Folder→Folder keeps the shell. Vue releases thumbs in onBeforeUpdate
+        # while previous cards are still under main, then paints PrksWorkCard.
         detail = _read(os.path.join(
             _PROJECT_DIR, "frontend-app", "src", "features", "folder-detail", "FolderDetailRoute.vue"))
-        release = detail.find("releaseOwnedThumbResources(main)")
-        rewrite = detail.find("el.innerHTML = collectionHtml.value")
-        self.assertGreater(release, 0)
-        self.assertGreater(rewrite, release)
-        self.assertIn("prksReleaseWorkThumbPreview", detail)
-        self.assertIn("prksReleaseLazyWorkThumbs", detail)
-        unmount = detail.find("onBeforeUnmount(() => {")
-        self.assertGreater(unmount, 0)
-        self.assertIn("releaseOwnedThumbResources", detail[unmount : unmount + 500])
+        self.assertIn("useWorkCardCollection(mainEl", detail)
+        self.assertIn("PrksWorkCard", detail)
+        self.assertIn("onBeforeUpdate(release)", _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "components", "use-work-card-collection.ts")))
+        self.assertIn("prksReleaseWorkThumbPreview", _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "components", "use-work-card-collection.ts")))
+        self.assertIn("prksReleaseLazyWorkThumbs", _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "components", "use-work-card-collection.ts")))
+        unmount = detail.find("onBeforeUnmount")
+        self.assertEqual(unmount, -1)
         recent = _read(os.path.join(
             _PROJECT_DIR, "frontend-app", "src", "features", "recent", "RecentRoute.vue"))
-        recent_release = recent.find("releaseOwnedThumbResources(root || collectionEl.value)")
-        recent_rewrite = recent.find("el.innerHTML = collectionHtml.value")
-        self.assertGreater(recent_release, 0)
-        self.assertGreater(recent_rewrite, recent_release)
-        self.assertIn("prksReleaseWorkThumbPreview", recent)
-        self.assertIn("prksReleaseLazyWorkThumbs", recent)
-        self.assertIn("if (!offlineCached && typeof window.prksInitLazyWorkThumbs", recent)
-        recent_unmount = recent.find("onBeforeUnmount(() => {")
-        self.assertGreater(recent_unmount, 0)
-        self.assertIn("releaseOwnedThumbResources", recent[recent_unmount : recent_unmount + 500])
+        self.assertIn("useWorkCardCollection(rootEl", recent)
+        self.assertIn("PrksWorkCard", recent)
+        self.assertIn("initWhen: () => !offlineCached.value", recent)
 
     def test_saved_view_detail_exposes_browse_mode_toggle(self):
         sv = _read(os.path.join(

@@ -24,7 +24,6 @@ afterEach(() => {
   delete window.prksPageHeaderIconHtml
   delete window.prksIcon
   delete window.prksRefreshIcons
-  delete window.prksWorkCardHtml
   delete window.prksAbstractExcerpt
   delete window.prksReleaseLazyWorkThumbs
   delete window.prksOpenSavedViewModal
@@ -76,8 +75,6 @@ function indexOwner(tabId: string, generation: number) {
 }
 
 function cards(): void {
-  window.prksWorkCardHtml = (work, options) =>
-    `<div class="work-card" data-work-id="${String(work.id)}" data-sub="${options.subtitle || ''}"></div>`
 }
 
 function chrome(): void {
@@ -480,10 +477,10 @@ describe('Saved View detail route', () => {
     expect(viewHost.querySelector('.prks-page-title')?.textContent).toBe('Critical theory')
     expect(viewHost.querySelector('a[href="#/search?any=1&q=x"]')?.textContent).toBe('Open as Search')
     expect(viewHost.querySelector('#prks-saved-view-delete')?.getAttribute('data-sv-delete')).toBe('SV 1')
-    expect(viewHost.querySelector('[data-prks-search-results]')?.innerHTML).toBe(
-      searchHost.querySelector('[data-prks-search-results]')?.innerHTML,
+    expect(viewHost.querySelector('[data-prks-search-results] .project-card--work-card')?.getAttribute('data-work-id')).toBe(
+      searchHost.querySelector('[data-prks-search-results] .project-card--work-card')?.getAttribute('data-work-id'),
     )
-    expect(viewHost.querySelector('[data-work-id="w1"]')?.getAttribute('data-sub')).toBe('ab…')
+    expect(viewHost.querySelector('[data-work-id="w1"] .work-card__context')?.textContent).toBe('ab…')
     expect(readRouteSurface(viewOwner)).toMatchObject({ name: 'saved-view-detail', canonicalHash: '#/views/SV%201' })
   })
 

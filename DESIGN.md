@@ -548,7 +548,7 @@ Both share surface, border, selection, hover, focus, and metadata hierarchy. Wor
 
 ### Work-card metadata hierarchy
 
-`prksWorkCardHtml()` (`frontend/js/components/work-cards.js`) is the single shared Work-card renderer across Recent, Progress, Search, Person profiles, and the Folder Library. Do not fork it into per-context components; vary presentation through its `options` (`subtitle`, `thumbPage`, `hideDocTypeBadge`, `suppressThumbnail`).
+`PrksWorkCard` (`frontend-app/src/components/PrksWorkCard.vue`) is the single shared Work-card renderer across Recent, Progress, Search, Saved View detail, Person profiles, Type detail, Folder detail, and Folder Library Recently Added. Do not fork it into per-context components; vary presentation through its `options` (`subtitle`, `thumbPage`, `hideDocTypeBadge`, `suppressThumbnail`). Classic `prksWorkCardHtml()` remains only for the unused `!vueOwned` Folder Library Recently Added painter in `frontend/js/components/folders.js` until that fallback is deleted.
 
 **Work browse density** is one global client preference (`localStorage` `prks.ui.workBrowseMode`: `cards` | `list`, default `cards`). Collection chrome hosts a compact Cards | List segmented control. Layout switches via a parent class on `.work-browse-collection` (`--cards` / `--list`) — never a per-route card fork, and never a refetch. Cards remain the default for visual ID; list mode is a dense research-library row (small thumb, fuller title/meta).
 

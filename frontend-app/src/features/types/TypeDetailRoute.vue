@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { typeDetailWorkCardHtml } from './legacy-work-card'
+import { computed, onMounted, ref, watch } from 'vue'
+import PrksWorkCard from '../../components/PrksWorkCard.vue'
+import { useWorkCardCollection } from '../../components/use-work-card-collection'
+import { workCardThumbOptions } from '../../components/work-card'
 import type { TypeDetailProjection } from './projection'
 
 const props = defineProps<{
@@ -27,17 +29,11 @@ const collectionClass = computed(() => {
   const fn = window.prksWorkBrowseCollectionClass
   return typeof fn === 'function' ? fn('types-page__detail-grid') : 'card-grid types-page__detail-grid'
 })
-const collectionHtml = computed(() => {
-  if (!rows.value.length) {
-    return '<p class="tags-page__empty types-page__empty">No files in this type yet.</p>'
-  }
-  const cached = offlineCached.value
-  return rows.value.map((work) => typeDetailWorkCardHtml(work, cached)).join('')
-})
 
 const modeHost = ref<HTMLElement | null>(null)
-const collectionEl = ref<HTMLElement | null>(null)
 const rootEl = ref<HTMLElement | null>(null)
+
+useWorkCardCollection(rootEl, { initWhen: () => !offlineCached.value })
 
 function paintMode(): void {
   const host = modeHost.value
@@ -47,34 +43,8 @@ function paintMode(): void {
   window.prksRefreshIcons?.(rootEl.value)
 }
 
-function releaseOwnedThumbResources(root: ParentNode | null): void {
-  if (!root) return
-  // Scoped only. Another pane may own the preview or its own lazy thumbs.
-  window.prksReleaseWorkThumbPreview?.(root)
-  window.prksReleaseLazyWorkThumbs?.(root)
-}
-
-function paintCollection(): void {
-  const root = rootEl.value
-  // Release while the previous cards are still inside this type-detail root.
-  // beginRoute removes the subtree before app.js can release on contentDiv.
-  releaseOwnedThumbResources(root || collectionEl.value)
-  const el = collectionEl.value
-  if (!el) return
-  el.innerHTML = collectionHtml.value
-  if (!offlineCached.value && typeof window.prksInitLazyWorkThumbs === 'function') {
-    window.prksInitLazyWorkThumbs(el)
-  }
-  window.prksRefreshIcons?.(root)
-}
-
 onMounted(() => {
   paintMode()
-  paintCollection()
-})
-
-onBeforeUnmount(() => {
-  releaseOwnedThumbResources(rootEl.value || collectionEl.value)
 })
 
 watch(
@@ -84,10 +54,6 @@ watch(
   },
   { flush: 'post' },
 )
-
-watch(collectionHtml, () => {
-  paintCollection()
-}, { flush: 'post' })
 </script>
 
 <template>
@@ -99,6 +65,14 @@ watch(collectionHtml, () => {
         <div ref="modeHost" class="work-html-slot" data-prks-types-mode-host></div>
       </div>
     </div>
-    <div ref="collectionEl" :class="collectionClass"></div>
+    <div :class="collectionClass">
+      <p v-if="!rows.length" class="tags-page__empty types-page__empty">No files in this type yet.</p>
+      <PrksWorkCard
+        v-for="work in rows"
+        :key="String(work.id ?? '')"
+        :work="work"
+        :options="workCardThumbOptions(offlineCached, { hideDocTypeBadge: true })"
+      />
+    </div>
   </div>
 </template>

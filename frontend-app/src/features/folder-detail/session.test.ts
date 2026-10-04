@@ -13,7 +13,6 @@ afterEach(() => {
   vi.unstubAllGlobals()
   delete window.prksVuePresentRoute
   delete window.prksVueDismissRoute
-  delete window.prksWorkCardHtml
   delete window.prksEffectiveFolderDetailWorks
   delete window.prksCommitFolderDetailSurface
   delete window.prksDeleteFolderFromDetail
@@ -63,7 +62,6 @@ describe('Folder detail route bridge', () => {
         preserve: options?.preserveFolderWorkspace === true,
       })
     }
-    window.prksWorkCardHtml = (work) => `<div data-work-id="${String(work.id)}"></div>`
     window.prksEffectiveFolderDetailWorks = () => [{ id: 'overlay' }]
     const main = owner()
     const secondary = owner()
@@ -110,7 +108,6 @@ describe('Folder detail route bridge', () => {
   it('keeps a retained hierarchy shell and drops a stale generation', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
-    window.prksWorkCardHtml = () => ''
     const released: ParentNode[] = []
     window.prksReleaseWorkThumbPreview = (root) => {
       if (root) released.push(root)
@@ -124,7 +121,9 @@ describe('Folder detail route bridge', () => {
       generation: 2,
     })
     expect(el.querySelector('[data-delete-folder-id="f1"]')).not.toBeNull()
-    expect(released.length).toBeGreaterThan(0)
+    // First Vue mount has nothing previous to release. Leave/rewrite coverage
+    // is the next test: "releases preview and lazy thumbs before leave unmount".
+    expect(released.length).toBe(0)
     pane.__prksRetainFolderDetailSurface = true
     pane.runCleanup()
     expect(el.querySelector('[data-prks-role="folder-detail"]')).not.toBeNull()
@@ -155,8 +154,6 @@ describe('Folder detail route bridge', () => {
   })
 
   it('releases preview and lazy thumbs before leave unmount detaches them', () => {
-    window.prksWorkCardHtml = () =>
-      '<div class="project-card--work-card" data-work-id="w1"><img class="work-card__thumb" data-prks-thumb-preview-kind="pdf" data-prks-thumb-lazy></div>'
     const preview = window as Window & { __prksWorkThumbPreviewSource?: Element | null }
     window.prksReleaseWorkThumbPreview = (root) => {
       const src = preview.__prksWorkThumbPreviewSource
@@ -172,7 +169,7 @@ describe('Folder detail route bridge', () => {
     presentFolderDetail({
       owner: pane,
       host: el,
-      folder: { id: 'f1', title: 'First', works: [{ id: 'w1' }], children: [] },
+      folder: { id: 'f1', title: 'First', works: [{ id: 'w1', file_path: '/api/pdfs/w1.pdf' }], children: [] },
       generation: 1,
     })
     const thumb = el.querySelector('.work-card__thumb')
@@ -194,7 +191,6 @@ describe('Folder detail route bridge', () => {
     window.prksOpenNewFolderFromDetail = (folder) => {
       opened.push(folder.title)
     }
-    window.prksWorkCardHtml = () => ''
     const pane = owner()
     pane.getEntity = () => ({ id: 'f1' })
     const el = host()
@@ -223,7 +219,6 @@ describe('Folder detail route bridge', () => {
     window.prksMountFolderHierarchyNav = (_ctx, _folder, container) => {
       mounts.push(container?.querySelector?.('[data-prks-role="folder-hierarchy-nav"]')?.textContent || '')
     }
-    window.prksWorkCardHtml = () => ''
     const pane = owner()
     const el = host()
     presentFolderDetail({
@@ -291,7 +286,6 @@ describe('Folder detail route bridge', () => {
       generation: 1,
       shell: true,
     }
-    window.prksWorkCardHtml = () => ''
     registerFolderDetailBridge(window)
     expect(window.prksVuePresentRoute).toBeTypeOf('function')
     expect((el as HTMLElement & { __prksVueRouteRequest?: unknown }).__prksVueRouteRequest).toBeUndefined()
@@ -300,7 +294,6 @@ describe('Folder detail route bridge', () => {
   })
 
   it('dismisses one owner and leaves the other mounted', () => {
-    window.prksWorkCardHtml = () => ''
     registerFolderDetailBridge(window)
     const main = owner()
     const secondary = owner()

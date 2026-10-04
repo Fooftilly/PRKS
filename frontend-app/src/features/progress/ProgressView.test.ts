@@ -7,7 +7,6 @@ afterEach(() => {
   resetProgressSessionForTests()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
-  delete window.prksWorkCardHtml
   delete window.prksWorkBrowseModeToggleHtml
   delete window.prksWorkBrowseCollectionClass
   delete window.prksBindWorkBrowseMode
@@ -25,27 +24,21 @@ function owner(): Record<string, unknown> {
   return {}
 }
 
-function installCardSpy() {
-  const calls: { id: unknown; options: { subtitle?: string; suppressThumbnail?: boolean } }[] = []
-  window.prksWorkCardHtml = (work, options) => {
-    calls.push({ id: work.id, options })
-    return `<div class="project-card project-card--work-card" data-work-id="${String(work.id)}"></div>`
-  }
+function installBrowseChrome() {
   window.prksWorkBrowseModeToggleHtml = () =>
     '<div class="work-browse-mode" data-prks-role="work-browse-mode"></div>'
   window.prksWorkBrowseCollectionClass = () => 'work-browse-collection work-browse-collection--cards card-grid'
   window.prksBindWorkBrowseMode = () => {}
-  return calls
 }
 
 describe('ProgressView', () => {
   it('renders each status, alphabetical cards, the file count, and the empty state', async () => {
-    const calls = installCardSpy()
+    installBrowseChrome()
     const el = host()
     const pane = owner()
     const rows = [
-      { id: 'b', title: 'b', status: 'Paused', abstract_excerpt: 'second' },
-      { id: 'a', title: 'A', status: 'Paused', abstract_excerpt: 'first' },
+      { id: 'b', title: 'b', status: 'Paused', abstract_excerpt: 'second', file_path: '/api/pdfs/b.pdf' },
+      { id: 'a', title: 'A', status: 'Paused', abstract_excerpt: 'first', file_path: '/api/pdfs/a.pdf' },
       { id: 'other', title: 'Other', status: 'Planned', abstract_excerpt: 'no' },
     ]
     presentProgress({ owner: pane, host: el, status: 'Paused', rows, offlineCached: false, generation: 1 })
@@ -55,12 +48,11 @@ describe('ProgressView', () => {
       'a',
       'b',
     ])
-    expect(calls.map((call) => call.options.suppressThumbnail)).toEqual([undefined, undefined])
+    expect(el.querySelector('[data-work-id="a"] .work-card__thumb--empty')).toBeNull()
     expect(el.querySelector('[data-prks-role="work-browse-mode"]')).not.toBeNull()
     expect(el.querySelector('.work-browse-collection--cards')).not.toBeNull()
 
     for (const status of WORK_STATUSES) {
-      calls.length = 0
       presentProgress({
         owner: pane,
         host: el,
@@ -87,7 +79,7 @@ describe('ProgressView', () => {
   })
 
   it('suppresses cached thumbnails and drops stale rows when the status changes', async () => {
-    const calls = installCardSpy()
+    installBrowseChrome()
     const el = host()
     const pane = owner()
     presentProgress({
@@ -95,22 +87,21 @@ describe('ProgressView', () => {
       host: el,
       status: 'Planned',
       rows: [
-        { id: 'stay', title: 'Stay', status: 'Planned', abstract_excerpt: 'p' },
-        { id: 'move', title: 'Move', status: 'Planned', abstract_excerpt: 'p' },
+        { id: 'stay', title: 'Stay', status: 'Planned', abstract_excerpt: 'p', file_path: '/api/pdfs/stay.pdf' },
+        { id: 'move', title: 'Move', status: 'Planned', abstract_excerpt: 'p', file_path: '/api/pdfs/move.pdf' },
       ],
       offlineCached: true,
       generation: 1,
     })
-    expect(calls.every((call) => call.options.suppressThumbnail === true)).toBe(true)
+    expect(el.querySelectorAll('.work-card__thumb--empty').length).toBe(2)
 
-    calls.length = 0
     presentProgress({
       owner: pane,
       host: el,
       status: 'Completed',
       rows: [
         { id: 'stay', title: 'Stay', status: 'Planned', abstract_excerpt: 'p' },
-        { id: 'move', title: 'Move', status: 'Completed', abstract_excerpt: 'c' },
+        { id: 'move', title: 'Move', status: 'Completed', abstract_excerpt: 'c', file_path: '/api/pdfs/move.pdf' },
       ],
       offlineCached: true,
       generation: 2,
@@ -120,11 +111,12 @@ describe('ProgressView', () => {
       'move',
     ])
     expect(el.querySelector('.prks-page-title')?.textContent).toBe('Files · Completed')
-    expect(calls).toEqual([{ id: 'move', options: { subtitle: 'c…', suppressThumbnail: true } }])
+    expect(el.querySelector('[data-work-id="move"] .work-card__context')?.textContent).toBe('c…')
+    expect(el.querySelector('[data-work-id="move"] .work-card__thumb--empty')).not.toBeNull()
   })
 
   it('canonicalizes an invalid status and ignores an older generation', async () => {
-    installCardSpy()
+    installBrowseChrome()
     const el = host()
     const pane = owner()
     const hash = window.location.hash

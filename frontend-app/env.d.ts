@@ -90,9 +90,10 @@ interface Window {
   prksBindWorkBrowseMode?: (root: ParentNode | null) => void
   prksTagSearchIconHtml?: () => string
   prksInitLazyWorkThumbs?: (root: ParentNode | null) => void
+  prksRegisterWorkThumbUrl?: (workId: string, rawSrc: string) => string
   prksRefreshIcons?: (root: ParentNode | Document | null) => void
   prksBindAutosizeTextareas?: (root: ParentNode | null) => void
-  prksProgressStatusIconHtml?: (status: string, opts?: { size?: string | number }) => string
+  prksProgressStatusIconHtml?: (status: string, opts?: { className?: string; size?: string | number }) => string
   initPrksDocTypeMenu?: (hiddenInputId: string, opts?: { disabled?: boolean; selectedValue?: string }) => void
   prksSaveWorkMetadataFields?: (workId: string, groupName?: string) => void
   prksSaveWorkSource?: (workId: string) => void

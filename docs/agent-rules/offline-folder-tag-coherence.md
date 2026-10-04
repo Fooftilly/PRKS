@@ -39,7 +39,7 @@ what the renderers dereference: `id`/`title`/`description`/`parent_id` plus
 non-negative integer `work_count`/`child_count` on hierarchy rows, and on a
 detail additionally `private_notes`, a null-or-valid `parent` summary, and
 `children`/`works`/`tags` arrays. Because Folder detail feeds `folder.works[]`
-straight to `prksWorkCardHtml()`, `prksIsWorkCardRowShape()` validates that
+straight to `PrksWorkCard`, `prksIsWorkCardRowShape()` validates that
 card's row contract — `title`, `year`, `published_date`, `status`, `doc_type`,
 `file_path`, `author_text`, `linked_authors`, `primary_author`,
 `primary_editor`, `thumb_url` and a non-negative `file_size_bytes`. Validating

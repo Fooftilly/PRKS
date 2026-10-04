@@ -42,7 +42,6 @@ describe('Folder Library preview lifecycle (#170)', () => {
     window.prksReleaseWorkThumbPreview = releasePreview
     window.prksReleaseLazyWorkThumbs = releaseLazy
     window.prksInitLazyWorkThumbs = initLazy
-    window.prksWorkCardHtml = () => '<article class="work-card">card</article>'
     window.prksWorkBrowseCollectionClass = () => 'card-grid'
 
     const wrapper = mount(RecentlyAddedPane, {
@@ -101,7 +100,6 @@ describe('Folder Library preview lifecycle (#170)', () => {
     window.prksReleaseWorkThumbPreview = releasePreview
     window.prksReleaseLazyWorkThumbs = releaseLazy
     window.prksHideWorkThumbPreview = () => {}
-    window.prksWorkCardHtml = () => '<article class="work-card">card</article>'
     window.prksWorkBrowseCollectionClass = () => 'card-grid'
 
     const wrapper = mount(RecentlyAddedPane, {
@@ -133,7 +131,6 @@ describe('Folder Library preview lifecycle (#170)', () => {
     window.prksReleaseWorkThumbPreview = () => {}
     window.prksReleaseLazyWorkThumbs = () => {}
     window.prksInitLazyWorkThumbs = initLazy
-    window.prksWorkCardHtml = () => '<article class="work-card">card</article>'
     window.prksWorkBrowseCollectionClass = () => 'card-grid'
 
     mount(RecentlyAddedPane, {
@@ -161,7 +158,6 @@ describe('Folder Library preview lifecycle (#170)', () => {
     window.prksReleaseWorkThumbPreview = () => {}
     window.prksReleaseLazyWorkThumbs = () => {}
     window.prksInitLazyWorkThumbs = () => {}
-    window.prksWorkCardHtml = () => '<article class="work-card" data-work-id="W1">card</article>'
     window.prksWorkBrowseCollectionClass = () => 'card-grid'
 
     const wrapper = mount(RecentlyAddedPane, {
@@ -193,8 +189,6 @@ describe('Folder Library preview lifecycle (#170)', () => {
     window.prksReleaseWorkThumbPreview = releasePreview
     window.prksReleaseLazyWorkThumbs = () => {}
     window.prksInitLazyWorkThumbs = initLazy
-    window.prksWorkCardHtml = (w) =>
-      `<article class="work-card">${String((w && w.title) || '')}</article>`
     window.prksWorkBrowseCollectionClass = () => 'card-grid'
     let overlayTitle = 'One'
     window.prksEffectiveProjectionRows = (rows) =>

@@ -9,7 +9,6 @@ afterEach(() => {
   vi.unstubAllGlobals()
   delete window.prksVuePresentRoute
   delete window.prksVueDismissRoute
-  delete window.prksWorkCardHtml
   delete (window as Window & { prksSyncSidebarActive?: unknown }).prksSyncSidebarActive
 })
 
@@ -29,7 +28,6 @@ describe('Progress route bridge', () => {
     ;(window as Window & { prksSyncSidebarActive?: () => void }).prksSyncSidebarActive = () => {
       calls.push('sidebar')
     }
-    window.prksWorkCardHtml = (work) => `<div data-work-id="${String(work.id)}"></div>`
     const main = owner()
     const secondary = owner()
     const mainHost = host()
@@ -67,7 +65,6 @@ describe('Progress route bridge', () => {
   it('does not fetch and does not repaint a dismissed generation', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
-    window.prksWorkCardHtml = (work) => `<div data-work-id="${String(work.id)}"></div>`
     const pane = owner()
     const el = host()
     presentProgress({
@@ -116,7 +113,6 @@ describe('Progress route bridge', () => {
       generation: 1,
       shell: true,
     }
-    window.prksWorkCardHtml = (work) => `<div data-work-id="${String(work.id)}"></div>`
     registerProgressBridge(window)
     expect(window.prksVuePresentRoute).toBeTypeOf('function')
     expect(window.prksVueDismissRoute).toBeTypeOf('function')
@@ -128,7 +124,6 @@ describe('Progress route bridge', () => {
   })
 
   it('dismisses one owner through the bridge and leaves the other mounted', () => {
-    window.prksWorkCardHtml = (work) => `<div data-work-id="${String(work.id)}"></div>`
     registerProgressBridge(window)
     const main = owner()
     const secondary = owner()

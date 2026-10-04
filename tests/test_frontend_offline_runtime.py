@@ -1178,13 +1178,17 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         self.assertIn("role === 'Author' || role === 'Editor'", role_body)
 
     def test_cached_folder_detail_suppresses_thumbnails(self):
-        cards = _read(os.path.join(
-            _PROJECT_DIR, "frontend-app", "src", "features", "folder-detail", "legacy-work-card.ts"))
+        helpers = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "components", "work-card.ts"))
         detail = _read(os.path.join(
             _PROJECT_DIR, "frontend-app", "src", "features", "folder-detail", "FolderDetailRoute.vue"))
-        self.assertIn("suppressThumbnail: true", cards)
+        lifetime = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "components", "use-work-card-collection.ts"))
+        self.assertIn("suppressThumbnail: true", helpers)
+        self.assertIn("workCardThumbOptions(projection.offlineCached)", detail)
         # Lazy hydration must be skipped too, not just the src.
-        self.assertIn("if (!offlineCached && typeof window.prksInitLazyWorkThumbs", detail)
+        self.assertIn("useWorkCardCollection(mainEl, { initWhen: () => !props.projection.offlineCached })", detail)
+        self.assertIn("if (shouldInit()) window.prksInitLazyWorkThumbs?.(el)", lifetime)
 
     def test_recently_added_reads_through_its_own_offline_snapshot(self):
         """Recently added is cached now, so it is no longer connectivity-gated:
@@ -1452,22 +1456,23 @@ class FrontendBrowseProjectionTests(unittest.TestCase):
         self.assertIn("hasOwnProperty.call(row, 'folder_id')", folder_id)
 
     def test_cached_browse_renders_suppress_thumbnails(self):
+        helpers = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "components", "work-card.ts"))
+        self.assertIn("offlineCached", helpers)
+        self.assertIn("suppressThumbnail", helpers)
         progress = _read(os.path.join(
-            _PROJECT_DIR, "frontend-app", "src", "features", "progress", "legacy-work-card.ts"))
-        with self.subTest(module="features/progress/legacy-work-card.ts"):
-            self.assertIn("offlineCached", progress)
-            self.assertIn("suppressThumbnail", progress)
+            _PROJECT_DIR, "frontend-app", "src", "features", "progress", "ProgressView.vue"))
+        with self.subTest(module="features/progress/ProgressView.vue"):
+            self.assertIn("workCardThumbOptions(offlineCached", progress)
         recent = _read(os.path.join(
-            _PROJECT_DIR, "frontend-app", "src", "features", "recent", "legacy-work-card.ts"))
-        with self.subTest(module="features/recent/legacy-work-card.ts"):
-            self.assertIn("offlineCached", recent)
-            self.assertIn("suppressThumbnail", recent)
-        types_card = _read(os.path.join(
-            _PROJECT_DIR, "frontend-app", "src", "features", "types", "legacy-work-card.ts"))
-        with self.subTest(module="features/types/legacy-work-card.ts"):
-            self.assertIn("offlineCached", types_card)
-            self.assertIn("suppressThumbnail", types_card)
-            self.assertIn("hideDocTypeBadge", types_card)
+            _PROJECT_DIR, "frontend-app", "src", "features", "recent", "RecentRoute.vue"))
+        with self.subTest(module="features/recent/RecentRoute.vue"):
+            self.assertIn("workCardThumbOptions(offlineCached", recent)
+        types_detail = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "types", "TypeDetailRoute.vue"))
+        with self.subTest(module="features/types/TypeDetailRoute.vue"):
+            self.assertIn("workCardThumbOptions(offlineCached", types_detail)
+            self.assertIn("hideDocTypeBadge: true", types_detail)
         types_js = _read(os.path.join(_FRONTEND, "js", "components", "types.js"))
         self.assertNotIn("function renderWorksByDocType(", types_js)
         self.assertNotIn("function renderTypesIndex(", types_js)

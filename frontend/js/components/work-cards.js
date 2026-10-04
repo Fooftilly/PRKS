@@ -548,6 +548,9 @@ function prksWorkCardCreditLine(w) {
 
 /**
  * Work card HTML for card-grid and compact-list layouts (CSS mode via collection class).
+ * Vue `PrksWorkCard` is the production renderer for migrated collections.
+ * This helper remains for the classic Folder Library Recently Added painter
+ * when `!st.vueOwned`. Do not add new callers.
  * @param {object} w
  * @param {object} options { subtitle?: string, thumbPage?: number, hideDocTypeBadge?: boolean,
  *   suppressThumbnail?: boolean }
@@ -922,6 +925,7 @@ window.prksReleaseLazyWorkThumbs = prksReleaseLazyWorkThumbs;
 window.prksWorkCardCreditText = prksWorkCardCreditText;
 window.prksWorkCardCreditLine = prksWorkCardCreditLine;
 window.prksSafeWorkThumbSrc = prksSafeWorkThumbSrc;
+window.prksRegisterWorkThumbUrl = prksRegisterWorkThumbUrl;
 window.prksLookupRegisteredWorkThumbUrl = prksLookupRegisteredWorkThumbUrl;
 window.prksResolveWorkThumbSrc = prksResolveWorkThumbSrc;
 window.prksGetWorkBrowseMode = prksGetWorkBrowseMode;

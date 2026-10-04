@@ -1,14 +1,18 @@
 <script setup lang="ts">
 import { useEventListener } from '@vueuse/core'
-import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, inject, ref } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
+import PrksWorkCard from '../../components/PrksWorkCard.vue'
+import { useWorkCardCollection } from '../../components/use-work-card-collection'
+import { workCardThumbOptions } from '../../components/work-card'
 import { folderLibraryIntentsKey } from './intents'
 import {
   effectiveRecentlyAddedRows,
+  recentlyAddedDateLabel,
   recentlyAddedMatchesQuery,
-  recentlyAddedWorkCardHtml,
 } from './legacy-recently-added'
 import type { FolderRow, RecentlyAddedWork } from './types'
-import { initLazyWorkThumbs, releaseWorkThumbResources } from './work-thumb-lifecycle'
 
 const props = defineProps<{
   folders: readonly FolderRow[]
@@ -45,40 +49,14 @@ const collectionClass = computed(() => {
     : 'prks-folder-library__grid card-grid'
 })
 
-const collectionHtml = computed(() => {
-  if (props.unavailable) {
-    return '<p class="prks-inline-message">Recently added is not available offline.</p>'
-  }
-  // Match legacy: leave the pane empty while the first fetch is in flight so
-  // E2E `children.length > 0` waits for real cards (or empty/filter states),
-  // not a loading placeholder that resolves the wait early.
-  if (props.loading && !props.works) {
-    return ''
-  }
-  if (!filtered.value.length) {
-    const q = props.filterQuery.trim()
-    if (q) return '<p class="prks-inline-message">No files match your search.</p>'
-    return (
-      '<div class="prks-folder-tree__empty-state">' +
-      '<p class="prks-inline-message">No files in the library yet.</p>' +
-      '<button type="button" class="prks-btn prks-btn--primary prks-folder-tree__create-btn" data-prks-role="new-work-from-recently-added">New File</button>' +
-      '</div>'
-    )
-  }
-  const cached = props.offlineCached
-  return filtered.value.map((w) => recentlyAddedWorkCardHtml(w, cached)).join('')
-})
+const waitingFirstFetch = computed(() => props.loading && !props.works)
 
-function paintCollection(): void {
-  const el = collectionEl.value
-  if (!el) return
-  // #170: release before every DOM replace; always re-init (incl. cached) so
-  // IntersectionObserver prune runs after detach.
-  releaseWorkThumbResources(el)
-  el.innerHTML = collectionHtml.value
-  window.prksRefreshIcons?.(el)
-  initLazyWorkThumbs(el)
+function cardSubtitle(work: RecentlyAddedWork): string {
+  const dateLabel = recentlyAddedDateLabel(work.created_at)
+  return dateLabel ? `Added ${dateLabel}` : ''
 }
+
+const { release } = useWorkCardCollection(collectionEl)
 
 // Generic click listener with VueUse scope cleanup (#233). Preview ownership
 // stays in work-thumb-lifecycle / legacy helpers.
@@ -92,21 +70,7 @@ useEventListener(collectionEl, 'click', (event: MouseEvent) => {
   }
 })
 
-onMounted(() => {
-  paintCollection()
-})
-
-onBeforeUnmount(() => {
-  releaseWorkThumbResources(collectionEl.value)
-})
-
-// Paint synchronously so awaited tab switches and fill+150ms filter waits see
-// cards in the same turn (debounce(0) raced offline metadata E2E helpers).
-watch(collectionHtml, () => {
-  paintCollection()
-}, { flush: 'post' })
-
-defineExpose({ releaseThumbs: () => releaseWorkThumbResources(collectionEl.value) })
+defineExpose({ releaseThumbs: () => release() })
 </script>
 
 <template>
@@ -115,6 +79,29 @@ defineExpose({ releaseThumbs: () => releaseWorkThumbResources(collectionEl.value
       id="prks-folder-library-recently-added"
       ref="collectionEl"
       :class="collectionClass"
-    ></div>
+    >
+      <PrksInlineMessage v-if="unavailable">Recently added is not available offline.</PrksInlineMessage>
+      <template v-else-if="!waitingFirstFetch">
+        <PrksWorkCard
+          v-for="work in filtered"
+          :key="String(work.id ?? '')"
+          :work="work"
+          :options="workCardThumbOptions(offlineCached, { subtitle: cardSubtitle(work) })"
+        />
+        <PrksInlineMessage v-if="!filtered.length && filterQuery.trim()">
+          No files match your search.
+        </PrksInlineMessage>
+        <div v-else-if="!filtered.length" class="prks-folder-tree__empty-state">
+          <PrksInlineMessage>No files in the library yet.</PrksInlineMessage>
+          <PrksButton
+            variant="primary"
+            class="prks-folder-tree__create-btn"
+            data-prks-role="new-work-from-recently-added"
+          >
+            New File
+          </PrksButton>
+        </div>
+      </template>
+    </div>
   </div>
 </template>
