@@ -38,7 +38,7 @@ function freezeProjection(projection: WorkRouteProjection): WorkRouteProjection 
 export function projectWorkRoute(input: WorkRouteProjectInput): WorkRouteProjection {
   const workId = String(input.workId)
   let availability: WorkRouteAvailability = input.availability
-  let lifecycle: WorkRouteLifecycle = input.lifecycle
+  const lifecycle: WorkRouteLifecycle = input.lifecycle
   let provenance: WorkRouteProvenance = input.provenance
   let work = input.work
   let effectiveWork = input.effectiveWork ?? null

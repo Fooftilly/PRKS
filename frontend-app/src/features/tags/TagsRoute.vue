@@ -262,12 +262,16 @@ watch(mergeTargetId, () => {
 
 onMounted(() => {
   window.prksRefreshIcons?.(rootEl.value)
+  // Owner-scoped callback slot, not component state. Vue forbids assigning
+  // to props, but this sink is a WeakMap handle the session owns.
+  // eslint-disable-next-line vue/no-mutating-props -- refresh sink protocol
   if (props.refreshSink) props.refreshSink.set = showRefreshFailure
   unregisterAlias = registerTagsAliasCloser(closeAliasFor)
   unregisterMerge = registerTagsMergeCloser(closeMergeFor)
 })
 
 onUnmounted(() => {
+  // eslint-disable-next-line vue/no-mutating-props -- refresh sink protocol
   if (props.refreshSink?.set === showRefreshFailure) props.refreshSink.set = null
   unregisterAlias?.()
   unregisterMerge?.()

@@ -47,6 +47,7 @@ During implementation prefer the narrowest relevant checks:
 cd frontend-app
 npm ci --ignore-scripts
 npm run typecheck
+npm run lint
 npm test
 npm run build
 ```

@@ -101,7 +101,7 @@ function mount(tabId: string) {
   ctx.beginRoute({ name: 'work' })
   const viewer = document.createElement('div')
   viewer.setAttribute('data-prks-role', 'pdf-viewer')
-  ctx.root instanceof HTMLElement && ctx.root.appendChild(viewer)
+  if (ctx.root instanceof HTMLElement) ctx.root.appendChild(viewer)
   return ctx
 }
 
@@ -178,6 +178,7 @@ describe('work PDF adapter', () => {
 
   it('requires a Work id from a typed caller and still rejects a missing id at runtime', () => {
     type MountArg = NonNullable<Parameters<typeof intentMountWorkPdf>[1]>
+    // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- `{} extends Pick` is the required-key check
     type MountIdIsRequired = {} extends Pick<MountArg, 'id'> ? false : true
     const mountIdIsRequired: MountIdIsRequired = true
     expect(mountIdIsRequired).toBe(true)

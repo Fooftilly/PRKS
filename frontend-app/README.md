@@ -63,8 +63,42 @@ npm run build-storybook   # catalog only; gitignored storybook-static/
 | `src/components/PrksState.vue` | `.prks-state` for `loading` and `error` (`role="status"`, optional retry slot) and `empty` (no live role) |
 | `src/components/PrksStatusText.vue` | `.prks-settings-hint`, polite live region unless `live` is false |
 | `src/components/PrksSectionHeader.vue` | Settings `h5.prks-settings-section__title` |
+| `src/components/PrksDisclosureButton.vue` | Secondary button that owns `aria-expanded` / optional `aria-controls` |
+| `src/components/PrksResearchRow.vue` | `.prks-list-row.prks-research-row` anchor with title/kind/meta |
+| `src/components/PrksResearchSectionHead.vue` | Research-entity section title, count, optional Edit |
+| `src/components/PrksScopeLine.vue` | `.prks-scope-line` collection counts |
+| `src/components/PrksRelSummary.vue` | `.prks-rel-summary` identity strip (plain text; no href) |
 | `src/components/*.stories.ts` | Real states for those primitives |
 | `.storybook/` | Vue 3 + Vite Storybook config |
+
+### When to use which primitive
+
+| Need | Use | Do not use |
+| --- | --- | --- |
+| Labeled in-page action | `PrksButton` | `PrksLinkButton`, `PrksIconButton` |
+| Navigation that looks like a button | `PrksLinkButton` (real `<a href>`) | `PrksButton` with a click that `prksNavigate`s; polymorphic button |
+| Square icon chrome (`.prks-icon-btn`) | `PrksIconButton` with a required name | `PrksButton`; do not move folder-tree New folder, folder/group expand-collapse, or playlist rename/cancel here (those stay raw `.prks-btn`) |
+| Ordinary labeled `input` / `select` / `textarea` | `PrksField` (bind `labelledBy`/`describedBy`; no `required` prop). Compact Argument Verdict stays raw in `.prks-arg-row` | Wrapping comboboxes, segmented status, EasyMDE, or search-advanced rows |
+| Filters/Legend-style panel trigger | `PrksDisclosureButton` | Fake menus that are really comboboxes |
+| Concept/Position/Argument dense row | `PrksResearchRow` | People portraits, Saved Views action rows, Processing cards, work cards |
+| Loading / fetch error / empty collection | `PrksState` | `innerHTML` of `.prks-state` |
+| In-flow note or save error | `PrksInlineMessage` | A second `role="status"` live region for the same text |
+
+Shared CSS stays in `frontend/css/style.css` (`.prks-btn`, `.prks-icon-btn`, `.prks-field`, `.prks-inline-message`, `.prks-state`, `.prks-scope-line`, `.prks-rel-summary`, `.prks-list-row`, `.prks-research-row`). Do not copy those rules into SFCs while classic consumers exist.
+
+### Accessibility coverage
+
+| Layer | What it covers |
+| --- | --- |
+| Vitest (`src/components/*` plus `a11y-contracts.test.ts`) | Names, native control, `href`, field label/`for`/error live region, disclosure `aria-expanded`/`aria-controls`, disabled/busy, `PrksState` roles, no duplicate live regions on `PrksInlineMessage` |
+| Storybook `@storybook/addon-a11y` | Visual inspection in the Storybook UI. Not a CI gate |
+| Playwright | Route/modal/form behavior in GitHub Full E2E. Not run locally by agents |
+
+Storybook 10.6 has no lightweight story or accessibility command that avoids a browser runner, so CI does not add `@storybook/test-runner` or the Vitest browser addon. `@storybook/addon-vitest@10.6.0` peers on Vitest 3 or 4 and `@vitest/browser-playwright@4`. This package pins Vitest 5.0.2, so that addon is not a clean fit: it would downgrade Vitest or wait for a Vitest 5 peer. Ordinary Vitest covers primitive contracts. A later runner slice needs an addon release that peers on this Vitest major.
+
+### Vue/TypeScript ESLint
+
+`npm run lint` in `frontend-app` runs ESLint 10 with `eslint-plugin-vue` essential rules and `typescript-eslint` recommended, including the `eslintRecommended` core slice (`prefer-const`, `no-var`, and the rest), on both `.ts` and Vue `<script lang="ts">`. `vue-eslint-parser` is used for `.vue` only; plain `.ts` stays on the TypeScript parser. It is correctness-oriented, not a formatter. CI’s Vue job runs it. The repository-root `eslint.config.mjs` remains the legacy `frontend/**/*.js` bug-rule set. Generated OpenAPI types are ignored. `vue/no-v-html` is off because Lucide icon HTML and sanitizer-backed research markdown still use `v-html`. Narrow file comments document other exceptions.
 
 Storybook is a maintainer catalog. It does not ship in `frontend/vue/`, does not change the production mount, and does not require Node to run PRKS.
 
@@ -75,7 +109,7 @@ npm run storybook          # http://localhost:6006
 npm run build-storybook    # writes frontend-app/storybook-static (gitignored)
 ```
 
-CI runs `build-storybook` from the Vue job after a successful diff against the PR base or a fetched nonzero push-before SHA touches `frontend-app/` or `.github/workflows/static-analysis.yml`. A missing or unreadable baseline fails that step. A manual `workflow_dispatch` run builds Storybook without a diff. Typecheck and Vitest still cover the primitives. Storybook 10.6 has no lightweight story or accessibility command that avoids a browser runner, so CI does not add `@storybook/test-runner` or the Vitest browser addon. `@storybook/addon-vitest@10.6.0` peers on Vitest 3 or 4 and `@vitest/browser-playwright@4`. This package pins Vitest 5.0.2, so that addon is not a clean fit: it would downgrade Vitest or wait for a Vitest 5 peer, and it would add a Playwright browser runner. Ordinary Vitest covers primitive contracts (keyboard is the native button; tests cover disabled click, busy label, accessible name, and focus). Playwright E2E covers route behavior. A later runner slice needs an addon release that peers on this Vitest major, its browser provider, and a vitest workspace that does not replace `npm test`. The accessibility addon checks stories in the Storybook UI.
+CI runs `build-storybook` from the Vue job after a successful diff against the PR base or a fetched nonzero push-before SHA touches `frontend-app/` or `.github/workflows/static-analysis.yml`. A missing or unreadable baseline fails that step. A manual `workflow_dispatch` run builds Storybook without a diff. Typecheck, `npm run lint`, and Vitest still cover the primitives.
 
 Docgen stays off. `vue-docgen-api` is deprecated. `vue-component-meta` extracts the declared props, then also lists Vue internals (`key`, `ref`, `onVue:*`) and leaves local aliases such as `Variant` and `Size` unresolved. Explicit stories are the catalog. Autodocs is not enabled.
 
@@ -85,5 +119,3 @@ Storybook MCP (`@storybook/addon-mcp`) is preview and needs a running Storybook 
 2. Register the MCP addon in `.storybook/main.ts` `addons`, and set `features.componentsManifest` and `features.experimentalDocgenServer` so the Vue docs toolset can read component props. Turn docgen back on if the manifest needs it.
 3. Run `npm run storybook`. The server is `http://127.0.0.1:6006/mcp`.
 4. Add that HTTP MCP server in the agent client (Cursor MCP settings, or `npx mcp-add --type http --url "http://127.0.0.1:6006/mcp" --scope project`). Do not commit a machine-local MCP config.
-
-Official Vue/TypeScript ESLint is not enabled. The repository ESLint config is a small bug-rule set for legacy `frontend/**/*.js`. `eslint-plugin-vue` plus `typescript-eslint` would be a second rule family and is left for a later PR so this one does not start a format sweep.

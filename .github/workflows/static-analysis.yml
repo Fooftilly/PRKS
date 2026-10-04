@@ -183,6 +183,9 @@ jobs:
       - name: OpenAPI TypeScript types match checked-in artifacts
         run: npm run openapi:check --prefix frontend-app
 
+      - name: Vue/TypeScript ESLint
+        run: npm run lint --prefix frontend-app
+
       - name: Typecheck
         run: npm run typecheck --prefix frontend-app
 
