@@ -430,6 +430,24 @@ failure, and JSON/domain errors must not be treated as a connectivity change.
 Do not add another probe timer in the coordinator — recovery stays in
 `offline-runtime.js`.
 
+### Closed B3 boundary
+
+Publishers, Saved Views, Processing Files, and Performance Diagnostics own their server state through `prksApiRequest` and TanStack Query. They must not call `prksRequest`. Query cache stays disposable. Do not add a Query family for a catalogue that already has an effective or durable owner.
+
+These `prksRequest` families stay, because moving them would add a second cache or drop a PRKS-owned responsibility:
+
+- Folders and Persons, including folder filing and the person catalogue: offline/durable catalogue.
+- Tags, aliases, and merge: durable tag semantics and effective state.
+- Search (`fetchSearch` / `prksEffectiveSearchResults`): pending Work overlays.
+- PDF bytes, annotations, and `sync-runtime.js`: byte, annotation, and sync ownership.
+- Works browse, Recent, and Recently added: effective browse snapshots (`prksOfflineBrowseFetch`), not the removed `fetchRecent` / `fetchRecentlyAdded` wrappers.
+- Concepts, Positions, Arguments, and Argument verdicts: effective catalogues and detail snapshots. Verdict choices ride on the Argument detail. The removed `fetchConcept`, `fetchPosition`, `fetchArgument`, and `fetchArgumentVerdicts` wrappers are not the read path.
+- Person Groups and Playlists: effective/durable catalogue state. Group detail uses the offline entity read, not `fetchPersonGroupDetails`.
+- Settings, backup, PDF reindex, and linearize: operational requests. Backup progress/stage/restore stay the reviewed raw-`fetch` bypass.
+- BibTeX export and the online Work-create POST: one-shot reads and writes.
+
+`fetchFolders`, `fetchConcepts`, `fetchPositions`, and `fetchArguments` read only the effective catalogue. They must not grow a raw `prksRequest` fallback.
+
 ## Offline / PWA
 
 Offline/local-first work has a large, load-bearing domain contract that is

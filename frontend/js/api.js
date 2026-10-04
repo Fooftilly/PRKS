@@ -20,9 +20,6 @@ const PRKS_API_ERROR_SOURCES = {
     'work-details': 'works.details',
     'person-details': 'persons.details',
     'person-groups': 'person-groups.fetch',
-    'person-group-details': 'person-groups.details',
-    recent: 'recent.fetch',
-    'recently-added': 'recently-added.fetch',
     search: 'search.fetch',
     tags: 'tags.fetch',
     'works-bulk': 'works.bulk',
@@ -228,21 +225,10 @@ async function fetchWorks(options = {}) {
  */
 async function fetchFolders(options = {}) {
     const errorOwner = prksApiErrorOwner(options);
-    if (typeof prksEffectiveFolderCatalogue === 'function') {
-        try {
-            const rows = await prksEffectiveFolderCatalogue();
-            return Array.isArray(rows) ? rows : [];
-        } catch (e) {
-            if (prksAbortFallback(e)) return [];
-            prksSetApiError('folders', 'Could not load folders.', '', errorOwner);
-            prksReportApiClientError('folders');
-            return [];
-        }
-    }
+    if (typeof prksEffectiveFolderCatalogue !== 'function') return [];
     try {
-        const res = await prksRequest('/api/folders', { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
-        const data = await prksParseJsonResponse(res, [], 'folders', errorOwner);
-        return Array.isArray(data) ? data : [];
+        const rows = await prksEffectiveFolderCatalogue();
+        return Array.isArray(rows) ? rows : [];
     } catch (e) {
         if (prksAbortFallback(e)) return [];
         prksSetApiError('folders', 'Could not load folders.', '', errorOwner);
@@ -309,44 +295,6 @@ async function fetchPersonGroups(options = {}) {
         if (prksAbortFallback(e)) return [];
         prksSetApiError('person-groups', 'Could not load groups.', '', errorOwner);
         prksReportApiClientError('person-groups');
-        return [];
-    }
-}
-async function fetchPersonGroupDetails(id, options = {}) {
-    const errorOwner = prksApiErrorOwner(options);
-    try {
-        const res = await prksRequest('/api/person-groups/' + encodeURIComponent(id), { signal: prksApiSignal(options) });
-        return await prksParseJsonResponse(res, null, 'person-group-details', errorOwner);
-    } catch (e) {
-        if (prksAbortFallback(e)) return null;
-        prksSetApiError('person-group-details', 'Could not load group details.', '', errorOwner);
-        prksReportApiClientError('person-group-details');
-        return null;
-    }
-}
-async function fetchRecent(options = {}) {
-    const errorOwner = prksApiErrorOwner(options);
-    try {
-        const res = await prksRequest('/api/recent', { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
-        const data = await prksParseJsonResponse(res, [], 'recent', errorOwner);
-        return Array.isArray(data) ? data : [];
-    } catch (e) {
-        if (prksAbortFallback(e)) return [];
-        prksSetApiError('recent', 'Could not load recent files.', '', errorOwner);
-        prksReportApiClientError('recent');
-        return [];
-    }
-}
-async function fetchRecentlyAdded(options = {}) {
-    const errorOwner = prksApiErrorOwner(options);
-    try {
-        const res = await prksRequest('/api/recently-added', { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
-        const data = await prksParseJsonResponse(res, [], 'recently-added', errorOwner);
-        return Array.isArray(data) ? data : [];
-    } catch (e) {
-        if (prksAbortFallback(e)) return [];
-        prksSetApiError('recently-added', 'Could not load recently added files.', '', errorOwner);
-        prksReportApiClientError('recently-added');
         return [];
     }
 }
@@ -897,37 +845,10 @@ async function prksResearchJson(res, fallbackMessage, source) {
  * unsynchronized intent applied. A Concept created here is real, so it is
  * pickable as a parent before any server has heard of it.
  */
-async function fetchConcepts(options = {}) {
-    if (typeof prksEffectiveConceptCatalogue === 'function') {
-        try { return await prksEffectiveConceptCatalogue() || []; }
-        catch (_e) { return []; }
-    }
-    const errorOwner = prksApiErrorOwner(options);
-    try {
-        const res = await prksRequest('/api/concepts', { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
-        const data = await prksParseJsonResponse(res, [], 'concepts.fetch', errorOwner);
-        return Array.isArray(data) ? data : [];
-    } catch (e) {
-        if (prksAbortFallback(e)) return [];
-        prksSetApiError('concepts', 'Could not load Concepts.', '', errorOwner);
-        prksReportApiClientError('concepts.fetch');
-        return [];
-    }
-}
-
-async function fetchConcept(id, options = {}) {
-    const errorOwner = prksApiErrorOwner(options);
-    try {
-        const res = await prksRequest('/api/concepts/' + encodeURIComponent(id), { signal: prksApiSignal(options) });
-        if (res.status === 404) return null;
-        const data = await prksParseJsonResponse(res, null, 'concepts.fetch', errorOwner);
-        return data && data.id ? data : null;
-    } catch (e) {
-        if (prksAbortFallback(e)) return null;
-        prksSetApiError('concepts', 'Could not load Concept.', '', errorOwner);
-        prksReportApiClientError('concepts.fetch');
-        return null;
-    }
+async function fetchConcepts() {
+    if (typeof prksEffectiveConceptCatalogue !== 'function') return [];
+    try { return await prksEffectiveConceptCatalogue() || []; }
+    catch (_e) { return []; }
 }
 
 /**
@@ -1312,37 +1233,10 @@ async function putConceptAliases(id, aliases) {
  * unsynchronized intent applied. A Position created here is real, so it is
  * pickable as an Argument target before any server has heard of it.
  */
-async function fetchPositions(options = {}) {
-    if (typeof prksEffectivePositionCatalogue === 'function') {
-        try { return await prksEffectivePositionCatalogue() || []; }
-        catch (_e) { return []; }
-    }
-    const errorOwner = prksApiErrorOwner(options);
-    try {
-        const res = await prksRequest('/api/positions', { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
-        const data = await prksParseJsonResponse(res, [], 'positions.fetch', errorOwner);
-        return Array.isArray(data) ? data : [];
-    } catch (e) {
-        if (prksAbortFallback(e)) return [];
-        prksSetApiError('positions', 'Could not load Positions.', '', errorOwner);
-        prksReportApiClientError('positions.fetch');
-        return [];
-    }
-}
-
-async function fetchPosition(id, options = {}) {
-    const errorOwner = prksApiErrorOwner(options);
-    try {
-        const res = await prksRequest('/api/positions/' + encodeURIComponent(id), { signal: prksApiSignal(options) });
-        if (res.status === 404) return null;
-        const data = await prksParseJsonResponse(res, null, 'positions.fetch', errorOwner);
-        return data && data.id ? data : null;
-    } catch (e) {
-        if (prksAbortFallback(e)) return null;
-        prksSetApiError('positions', 'Could not load Position.', '', errorOwner);
-        prksReportApiClientError('positions.fetch');
-        return null;
-    }
+async function fetchPositions() {
+    if (typeof prksEffectivePositionCatalogue !== 'function') return [];
+    try { return await prksEffectivePositionCatalogue() || []; }
+    catch (_e) { return []; }
 }
 
 /* --- Durable Position mutations -------------------------------------------
@@ -1436,53 +1330,13 @@ async function deletePosition(id) {
     return { status: 'deleted' };
 }
 
-async function fetchArguments(kind, options = {}) {
-    if (typeof prksEffectiveArgumentCatalogue === 'function') {
-        try {
-            const rows = await prksEffectiveArgumentCatalogue();
-            return typeof prksFilterArgumentsByKind === 'function'
-                ? prksFilterArgumentsByKind(rows || [], kind || '') : (rows || []);
-        } catch (_e) { return []; }
-    }
-    const errorOwner = prksApiErrorOwner(options);
+async function fetchArguments(kind) {
+    if (typeof prksEffectiveArgumentCatalogue !== 'function') return [];
     try {
-        const q = kind ? '?kind=' + encodeURIComponent(kind) : '';
-        const res = await prksRequest('/api/arguments' + q, { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
-        const data = await prksParseJsonResponse(res, [], 'arguments.fetch', errorOwner);
-        return Array.isArray(data) ? data : [];
-    } catch (e) {
-        if (prksAbortFallback(e)) return [];
-        prksSetApiError('arguments', 'Could not load Arguments.', '', errorOwner);
-        prksReportApiClientError('arguments.fetch');
-        return [];
-    }
-}
-
-async function fetchArgument(id, options = {}) {
-    const errorOwner = prksApiErrorOwner(options);
-    try {
-        const res = await prksRequest('/api/arguments/' + encodeURIComponent(id), { signal: prksApiSignal(options) });
-        if (res.status === 404) return null;
-        const data = await prksParseJsonResponse(res, null, 'arguments.fetch', errorOwner);
-        return data && data.id ? data : null;
-    } catch (e) {
-        if (prksAbortFallback(e)) return null;
-        prksSetApiError('arguments', 'Could not load Argument.', '', errorOwner);
-        prksReportApiClientError('arguments.fetch');
-        return null;
-    }
-}
-
-async function fetchArgumentVerdicts(options = {}) {
-    const errorOwner = prksApiErrorOwner(options);
-    try {
-        const res = await prksRequest('/api/argument-verdicts', { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
-        const data = await prksParseJsonResponse(res, [], 'arguments.fetch', errorOwner);
-        return Array.isArray(data) ? data : [];
-    } catch (e) {
-        if (prksAbortFallback(e)) return [];
-        return [];
-    }
+        const rows = await prksEffectiveArgumentCatalogue();
+        return typeof prksFilterArgumentsByKind === 'function'
+            ? prksFilterArgumentsByKind(rows || [], kind || '') : (rows || []);
+    } catch (_e) { return []; }
 }
 
 /* --- Durable Argument mutations ------------------------------------------
@@ -1666,20 +1520,16 @@ window.prksMarkWorkRoleChanged = prksMarkWorkRoleChanged;
 window.prksMarkWorkRoleDependenciesChanged = prksMarkWorkRoleDependenciesChanged;
 window.prksMarkWorkAuthorDisplayChanged = prksMarkWorkAuthorDisplayChanged;
 window.fetchConcepts = fetchConcepts;
-window.fetchConcept = fetchConcept;
 window.createConcept = createConcept;
 window.updateConcept = updateConcept;
 window.deleteConcept = deleteConcept;
 window.putConceptParents = putConceptParents;
 window.putConceptAliases = putConceptAliases;
 window.fetchPositions = fetchPositions;
-window.fetchPosition = fetchPosition;
 window.createPosition = createPosition;
 window.updatePosition = updatePosition;
 window.deletePosition = deletePosition;
 window.fetchArguments = fetchArguments;
-window.fetchArgument = fetchArgument;
-window.fetchArgumentVerdicts = fetchArgumentVerdicts;
 window.createArgument = createArgument;
 window.updateArgument = updateArgument;
 window.deleteArgument = deleteArgument;
