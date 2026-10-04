@@ -451,6 +451,54 @@
       "dependabot_monitored": true
     },
     {
+      "name": "eslint",
+      "scope": "build",
+      "authoritative_source": "frontend-app/package.json -> devDependencies.eslint",
+      "manifest": "frontend-app/package.json",
+      "lockfile": "frontend-app/package-lock.json",
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true,
+      "notes": "Vue/TS ESLint 10 for frontend-app. Maintainer lint only; not bundled into prks-vue.js."
+    },
+    {
+      "name": "eslint-plugin-vue",
+      "scope": "build",
+      "authoritative_source": "frontend-app/package.json -> devDependencies.eslint-plugin-vue",
+      "manifest": "frontend-app/package.json",
+      "lockfile": "frontend-app/package-lock.json",
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true,
+      "notes": "Vue SFC rules for frontend-app ESLint. Maintainer lint only; not bundled into prks-vue.js."
+    },
+    {
+      "name": "typescript-eslint",
+      "scope": "build",
+      "authoritative_source": "frontend-app/package.json -> devDependencies.typescript-eslint",
+      "manifest": "frontend-app/package.json",
+      "lockfile": "frontend-app/package-lock.json",
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true,
+      "notes": "typed lint for frontend-app TypeScript. Maintainer lint only; not bundled into prks-vue.js."
+    },
+    {
+      "name": "vue-eslint-parser",
+      "scope": "build",
+      "authoritative_source": "frontend-app/package.json -> devDependencies.vue-eslint-parser",
+      "manifest": "frontend-app/package.json",
+      "lockfile": "frontend-app/package-lock.json",
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true,
+      "notes": "Vue SFC parser for frontend-app ESLint. Maintainer lint only; not bundled into prks-vue.js."
+    },
+    {
       "name": "inter",
       "scope": "vendor",
       "authoritative_source": "frontend/vendor/inter/VERSION",
