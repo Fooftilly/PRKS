@@ -79,8 +79,11 @@ export interface components {
         };
         /** @description POST /api/diagnostics/performance/reset body. */
         PerformanceDiagnosticsReset: {
-            /** Status */
-            status: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "reset";
         };
         /**
          * @description POST /api/diagnostics/performance/reset request.

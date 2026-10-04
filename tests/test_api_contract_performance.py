@@ -54,6 +54,13 @@ class PerformanceDiagnosticsContractTests(unittest.TestCase):
             dump_response(PerformanceDiagnosticsReset, {"status": "reset"}),
             {"status": "reset"},
         )
+        status = performance_diagnostics_openapi_document()["components"]["schemas"][
+            "PerformanceDiagnosticsReset"
+        ]["properties"]["status"]
+        self.assertEqual(status.get("const"), "reset")
+        self.assertNotIn("pattern", status)
+        with self.assertRaises(ValidationError):
+            PerformanceDiagnosticsReset.model_validate({"status": "cleared"})
 
     def test_unknown_snapshot_key_is_refused(self):
         raw = snapshot()

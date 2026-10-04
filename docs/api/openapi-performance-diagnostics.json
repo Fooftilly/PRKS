@@ -416,7 +416,7 @@
         "description": "POST /api/diagnostics/performance/reset body.",
         "properties": {
           "status": {
-            "pattern": "^reset$",
+            "const": "reset",
             "title": "Status",
             "type": "string"
           }

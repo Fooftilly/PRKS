@@ -86,6 +86,10 @@ class OpenApiTypescriptTypesTests(unittest.TestCase):
         self.assertIn("code?:", envelope)
         self.assertIn("\n            error: string;", envelope)
         self.assertNotIn("error?:", envelope)
+        performance = (_GENERATED / "performance-diagnostics.ts").read_text(encoding="utf-8")
+        reset = performance.split("PerformanceDiagnosticsReset: {", 1)[1].split("};", 1)[0]
+        self.assertIn('status: "reset";', reset)
+        self.assertNotIn("status: string", reset)
 
     def test_hand_written_clients_reexport_generated_transport_types(self):
         publishers = (_ROOT / "frontend-app" / "src" / "api" / "publishers.ts").read_text(encoding="utf-8")
