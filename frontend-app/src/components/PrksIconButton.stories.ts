@@ -10,6 +10,7 @@ export default meta
 type Story = StoryObj<typeof meta>
 
 export const TagAlias: Story = {
+  args: { label: 'Edit aliases for History', title: 'Aliases', size: 'sm' },
   render: () => ({
     components: { PrksIconButton },
     template: `
@@ -21,6 +22,7 @@ export const TagAlias: Story = {
 }
 
 export const PaneActions: Story = {
+  args: { label: 'Pane actions', title: 'Pane actions', variant: 'ghost' },
   render: () => ({
     components: { PrksIconButton },
     template: `
@@ -39,6 +41,7 @@ export const PaneActions: Story = {
 }
 
 export const Close: Story = {
+  args: { label: 'Close' },
   render: () => ({
     components: { PrksIconButton },
     template: `
@@ -50,6 +53,7 @@ export const Close: Story = {
 }
 
 export const Disabled: Story = {
+  args: { label: 'Close', disabled: true },
   render: () => ({
     components: { PrksIconButton },
     template: '<PrksIconButton label="Close" disabled><span aria-hidden="true">×</span></PrksIconButton>',
@@ -57,6 +61,7 @@ export const Disabled: Story = {
 }
 
 export const RemovingAlias: Story = {
+  args: { label: 'Remove alias', variant: 'danger', size: 'sm', busy: true, busyLabel: 'Removing…' },
   render: () => ({
     components: { PrksIconButton },
     template: `

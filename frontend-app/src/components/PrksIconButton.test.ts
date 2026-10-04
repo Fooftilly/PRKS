@@ -5,6 +5,7 @@ import PrksIconButton from './PrksIconButton.vue'
 describe('PrksIconButton', () => {
   it('is a named icon button', () => {
     const wrapper = mount(PrksIconButton, {
+      attachTo: document.body,
       props: { label: 'Edit aliases for History', title: 'Aliases', size: 'sm' },
       attrs: { 'data-tag-alias-edit': 'tag-1' },
       slots: { default: '<span class="work-html-slot"></span>' },
@@ -21,6 +22,7 @@ describe('PrksIconButton', () => {
     expect(button.attributes('tabindex')).toBeUndefined()
     button.element.focus()
     expect(document.activeElement).toBe(button.element)
+    wrapper.unmount()
   })
 
   it('does not emit click when disabled', async () => {
