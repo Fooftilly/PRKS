@@ -92,15 +92,24 @@ class FrontendWorkCardTests(unittest.TestCase):
         self.assertGreater(at, 0)
         window = app[max(0, at - 280) : at]
         self.assertNotIn("!sameFolderWorkspace && typeof window.prksReleaseWorkThumbPreview", window)
-        # Folder→Folder keeps the shell. Vue releases thumbs when the work/thumb
-        # source changes, flush-pre while previous cards are still under main.
+        # Folder→Folder keeps the shell. Collection lifetime still follows the
+        # work/thumb fingerprint; Folder A→B preview dismiss is owned by the
+        # presentation boundary while the previous thumb is still connected.
         detail = _read(os.path.join(
             _PROJECT_DIR, "frontend-app", "src", "features", "folder-detail", "FolderDetailRoute.vue"))
         self.assertIn("useWorkCardCollection(mainEl", detail)
         self.assertIn("workCardCollectionFingerprint", detail)
         self.assertIn("PrksWorkCard", detail)
-        self.assertIn("folder.value?.id", detail)
-        self.assertIn("prksReleaseWorkThumbPreview", detail)
+        self.assertNotIn("prksReleaseWorkThumbPreview", detail)
+        session = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "folder-detail", "session.ts"))
+        read_at = session.find("readRouteSurface(input.owner)")
+        present_at = session.find("presentRouteSurface({")
+        self.assertGreater(read_at, 0)
+        self.assertGreater(present_at, read_at)
+        self.assertIn("prksReleaseWorkThumbPreview", session[read_at:present_at])
+        self.assertIn("previous.params.folderId", session[read_at:present_at])
+        self.assertIn("input.host", session[read_at:present_at])
         lifetime = _read(os.path.join(
             _PROJECT_DIR, "frontend-app", "src", "components", "use-work-card-collection.ts"))
         self.assertIn("flush: 'pre'", lifetime)

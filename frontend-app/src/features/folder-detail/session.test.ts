@@ -184,14 +184,23 @@ describe('Folder detail route bridge', () => {
 
   it('dismisses preview when a retained shell paints another folder', async () => {
     const preview = window as Window & { __prksWorkThumbPreviewSource?: Element | null }
+    const releases: Array<{
+      root: ParentNode | null | undefined
+      connected: boolean
+      workId: string | null
+    }> = []
     window.prksReleaseWorkThumbPreview = (root) => {
       const src = preview.__prksWorkThumbPreviewSource
+      const workEl = src instanceof Element ? src.closest('[data-work-id]') : null
+      releases.push({
+        root,
+        connected: !!(src instanceof Node && src.isConnected),
+        workId: workEl?.getAttribute('data-work-id') ?? null,
+      })
       if (!src) return
       if (root && typeof root.contains === 'function' && root.contains(src)) {
         preview.__prksWorkThumbPreviewSource = null
-        return
       }
-      if (src instanceof Node && !src.isConnected) preview.__prksWorkThumbPreviewSource = null
     }
     window.prksHideWorkThumbPreview = () => {
       preview.__prksWorkThumbPreviewSource = null
@@ -215,10 +224,64 @@ describe('Folder detail route bridge', () => {
       preserveWorkspace: true,
       generation: 2,
     })
-    await nextTick()
+    expect(releases[0]).toEqual({ root: el, connected: true, workId: 'w1' })
     expect(preview.__prksWorkThumbPreviewSource).toBeNull()
+    await nextTick()
     expect(el.querySelector('[data-work-id="w2"]')).not.toBeNull()
     expect(el.querySelector('[data-work-id="w1"]')).toBeNull()
+
+    const afterFolderChange = releases.length
+    const later = el.querySelector('.work-card__thumb')
+    preview.__prksWorkThumbPreviewSource = later
+    presentFolderDetail({
+      owner: pane,
+      host: el,
+      folder: { id: 'f2', title: 'Second', works: [{ id: 'w2', file_path: '/api/pdfs/w2.pdf' }], children: [] },
+      preserveWorkspace: true,
+      generation: 3,
+    })
+    expect(releases).toHaveLength(afterFolderChange)
+    expect(preview.__prksWorkThumbPreviewSource).toBe(later)
+  })
+
+  it('does not release another pane preview when this host paints another folder', () => {
+    const preview = window as Window & { __prksWorkThumbPreviewSource?: Element | null }
+    window.prksReleaseWorkThumbPreview = (root) => {
+      const src = preview.__prksWorkThumbPreviewSource
+      if (!src || !root || typeof root.contains !== 'function' || !root.contains(src)) return
+      preview.__prksWorkThumbPreviewSource = null
+    }
+    window.prksReleaseLazyWorkThumbs = () => {}
+    const main = owner()
+    const side = owner()
+    const mainHost = host()
+    const sideHost = host()
+    presentFolderDetail({
+      owner: main,
+      host: mainHost,
+      folder: { id: 'f1', title: 'Main', works: [{ id: 'w1', file_path: '/api/pdfs/w1.pdf' }], children: [] },
+      generation: 1,
+    })
+    const thumb = mainHost.querySelector('.work-card__thumb')
+    expect(thumb).not.toBeNull()
+    preview.__prksWorkThumbPreviewSource = thumb
+    presentFolderDetail({
+      owner: side,
+      host: sideHost,
+      folder: { id: 'side-a', title: 'Side A', works: [], children: [] },
+      generation: 1,
+      shell: false,
+    })
+    expect(preview.__prksWorkThumbPreviewSource).toBe(thumb)
+    presentFolderDetail({
+      owner: side,
+      host: sideHost,
+      folder: { id: 'side-b', title: 'Side B', works: [], children: [] },
+      preserveWorkspace: true,
+      generation: 2,
+      shell: false,
+    })
+    expect(preview.__prksWorkThumbPreviewSource).toBe(thumb)
   })
 
   it('sends delete and new-folder through the canonical wrappers', async () => {

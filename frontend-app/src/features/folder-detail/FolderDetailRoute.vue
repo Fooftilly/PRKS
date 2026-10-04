@@ -126,17 +126,6 @@ watch(
   },
   { flush: 'post' },
 )
-
-watch(
-  () => String(folder.value?.id || ''),
-  (id, previous) => {
-    if (!previous || previous === id) return
-    // Folder→Folder keeps the shell. paintMode/innerHTML can re-fire hover on
-    // the replacement cards; scoped release after that paint matches leave.
-    window.prksReleaseWorkThumbPreview?.(rootEl.value || mainEl.value)
-  },
-  { flush: 'post' },
-)
 </script>
 
 <template>
