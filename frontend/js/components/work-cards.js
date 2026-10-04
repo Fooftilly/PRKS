@@ -839,7 +839,7 @@ function prksWorkCardFromEventTarget(t) {
 }
 
 /**
- * Hover-open is the thumbnail slot only (pre-#451 Work-card contract).
+ * Hover open/close is the thumbnail slot only (pre-#451 Work-card contract).
  * Keyboard P still opens from the native work-card__link.
  */
 function prksWorkThumbFromHoverTarget(t) {
@@ -848,9 +848,9 @@ function prksWorkThumbFromHoverTarget(t) {
     return t.closest('.work-card__thumb[data-prks-thumb-preview-kind]');
 }
 
-function prksWorkCardPointerStillInside(card, related) {
-    if (!card || !related) return false;
-    if (typeof card.contains === 'function' && card.contains(related)) return true;
+function prksWorkThumbPointerStillInside(thumb, related) {
+    if (!thumb || !related) return false;
+    if (typeof thumb.contains === 'function' && thumb.contains(related)) return true;
     const preview = document.getElementById('prks-work-thumb-preview');
     return !!(preview && typeof preview.contains === 'function' && preview.contains(related));
 }
@@ -922,10 +922,9 @@ if (typeof document !== 'undefined' && !window.__prksWorkCardKeyNavBound) {
     document.addEventListener(
         'pointerout',
         function (e) {
-            const card = prksWorkCardFromNode(e.target);
-            if (!card) return;
-            if (prksWorkCardPointerStillInside(card, e.relatedTarget)) return;
-            const thumb = prksWorkThumbFromCard(card);
+            const thumb = prksWorkThumbFromHoverTarget(e.target);
+            if (!thumb) return;
+            if (prksWorkThumbPointerStillInside(thumb, e.relatedTarget)) return;
             if (window.__prksWorkThumbPreviewSource === thumb) prksHideWorkThumbPreview();
         },
         true

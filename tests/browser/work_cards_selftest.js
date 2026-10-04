@@ -366,19 +366,36 @@
                     !!(kbdPreview && !kbdPreview.hidden && window.__prksWorkThumbPreviewSource === nativeThumb)
                 );
 
-                document._dispatch('pointerout', { target: nativeTitle, relatedTarget: nativeThumb });
+                const thumbInner = document.createElement('img');
+                nativeThumb.appendChild(thumbInner);
+                document._dispatch('pointerout', { target: nativeThumb, relatedTarget: thumbInner });
                 kbdPreview = document.getElementById('prks-work-thumb-preview');
                 assert(
-                    'pointerout within the same card keeps preview',
+                    'pointerout within the thumbnail keeps preview',
                     !!(kbdPreview && !kbdPreview.hidden && window.__prksWorkThumbPreviewSource === nativeThumb)
                 );
 
-                const outside = document.createElement('div');
-                document.body.appendChild(outside);
-                document._dispatch('pointerout', { target: nativeTitle, relatedTarget: outside });
+                document._dispatch('pointerout', { target: nativeThumb, relatedTarget: kbdPreview });
                 kbdPreview = document.getElementById('prks-work-thumb-preview');
                 assert(
-                    'pointerout leaving the card hides preview',
+                    'pointerout into preview overlay keeps preview',
+                    !!(kbdPreview && !kbdPreview.hidden && window.__prksWorkThumbPreviewSource === nativeThumb)
+                );
+
+                document._dispatch('pointerout', { target: nativeThumb, relatedTarget: nativeTitle });
+                kbdPreview = document.getElementById('prks-work-thumb-preview');
+                assert(
+                    'pointerout from thumbnail to card body hides preview',
+                    !!(kbdPreview && kbdPreview.hidden)
+                );
+
+                document._dispatch('pointerover', { target: nativeThumb });
+                const outside = document.createElement('div');
+                document.body.appendChild(outside);
+                document._dispatch('pointerout', { target: nativeThumb, relatedTarget: outside });
+                kbdPreview = document.getElementById('prks-work-thumb-preview');
+                assert(
+                    'pointerout leaving the thumbnail hides preview',
                     !!(kbdPreview && kbdPreview.hidden)
                 );
 
