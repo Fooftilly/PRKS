@@ -182,6 +182,45 @@ describe('Folder detail route bridge', () => {
     expect(el.querySelector('img[data-prks-thumb-lazy]')).toBeNull()
   })
 
+  it('dismisses preview when a retained shell paints another folder', async () => {
+    const preview = window as Window & { __prksWorkThumbPreviewSource?: Element | null }
+    window.prksReleaseWorkThumbPreview = (root) => {
+      const src = preview.__prksWorkThumbPreviewSource
+      if (!src) return
+      if (root && typeof root.contains === 'function' && root.contains(src)) {
+        preview.__prksWorkThumbPreviewSource = null
+        return
+      }
+      if (src instanceof Node && !src.isConnected) preview.__prksWorkThumbPreviewSource = null
+    }
+    window.prksHideWorkThumbPreview = () => {
+      preview.__prksWorkThumbPreviewSource = null
+    }
+    window.prksReleaseLazyWorkThumbs = () => {}
+    const pane = owner()
+    const el = host()
+    presentFolderDetail({
+      owner: pane,
+      host: el,
+      folder: { id: 'f1', title: 'First', works: [{ id: 'w1', file_path: '/api/pdfs/w1.pdf' }], children: [] },
+      generation: 1,
+    })
+    const thumb = el.querySelector('.work-card__thumb')
+    expect(thumb).not.toBeNull()
+    preview.__prksWorkThumbPreviewSource = thumb
+    presentFolderDetail({
+      owner: pane,
+      host: el,
+      folder: { id: 'f2', title: 'Second', works: [{ id: 'w2', file_path: '/api/pdfs/w2.pdf' }], children: [] },
+      preserveWorkspace: true,
+      generation: 2,
+    })
+    await nextTick()
+    expect(preview.__prksWorkThumbPreviewSource).toBeNull()
+    expect(el.querySelector('[data-work-id="w2"]')).not.toBeNull()
+    expect(el.querySelector('[data-work-id="w1"]')).toBeNull()
+  })
+
   it('sends delete and new-folder through the canonical wrappers', async () => {
     const deleted: string[] = []
     const opened: unknown[] = []

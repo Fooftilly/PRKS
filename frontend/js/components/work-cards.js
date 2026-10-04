@@ -717,31 +717,36 @@ function prksHideWorkThumbPreview() {
  * is left alone. With no root, dismiss only if the source left the document.
  * @param {ParentNode|null} [root]
  */
+function prksWorkThumbPreviewSourceConnected(src) {
+    if (!src) return false;
+    if (typeof src.isConnected === 'boolean') return src.isConnected;
+    return !!(typeof document !== 'undefined' && document.contains && document.contains(src));
+}
+
+function prksWorkThumbPreviewSourceUnder(root, src) {
+    if (!root || !src) return false;
+    if (typeof root.contains === 'function') return !!root.contains(src);
+    let n = src;
+    while (n) {
+        if (n === root) return true;
+        n = n.parentNode;
+    }
+    return false;
+}
+
 function prksReleaseWorkThumbPreview(root) {
     const src = window.__prksWorkThumbPreviewSource;
     if (!src) return;
+    // Folder→Folder preserve keeps the shell and may detach the previous
+    // thumb before a contains(root) check. A disconnected source is this
+    // pane's leftover body-mounted preview, not another tile's live one.
     if (root) {
-        let under = false;
-        if (typeof root.contains === 'function') {
-            under = !!root.contains(src);
-        } else {
-            let n = src;
-            while (n) {
-                if (n === root) {
-                    under = true;
-                    break;
-                }
-                n = n.parentNode;
-            }
+        if (prksWorkThumbPreviewSourceUnder(root, src) || !prksWorkThumbPreviewSourceConnected(src)) {
+            prksHideWorkThumbPreview();
         }
-        if (under) prksHideWorkThumbPreview();
         return;
     }
-    const connected =
-        typeof src.isConnected === 'boolean'
-            ? src.isConnected
-            : !!(typeof document !== 'undefined' && document.contains && document.contains(src));
-    if (!connected) prksHideWorkThumbPreview();
+    if (!prksWorkThumbPreviewSourceConnected(src)) prksHideWorkThumbPreview();
 }
 
 function prksPositionWorkThumbPreview(el, anchor) {
@@ -906,8 +911,10 @@ if (typeof document !== 'undefined' && !window.__prksWorkCardKeyNavBound) {
     document.addEventListener(
         'pointerover',
         function (e) {
-            const thumb = prksWorkThumbFromHoverTarget(e.target);
+            const t = e.target;
+            const thumb = prksWorkThumbFromHoverTarget(t);
             if (!thumb) return;
+            if (t && t.closest && t.closest('[aria-busy="true"]')) return;
             if (window.matchMedia && window.matchMedia('(hover: none)').matches) return;
             prksShowWorkThumbPreview(thumb);
         },

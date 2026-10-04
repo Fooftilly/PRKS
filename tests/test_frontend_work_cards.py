@@ -99,6 +99,8 @@ class FrontendWorkCardTests(unittest.TestCase):
         self.assertIn("useWorkCardCollection(mainEl", detail)
         self.assertIn("workCardCollectionFingerprint", detail)
         self.assertIn("PrksWorkCard", detail)
+        self.assertIn("folder.value?.id", detail)
+        self.assertIn("prksReleaseWorkThumbPreview", detail)
         lifetime = _read(os.path.join(
             _PROJECT_DIR, "frontend-app", "src", "components", "use-work-card-collection.ts"))
         self.assertIn("flush: 'pre'", lifetime)
@@ -106,6 +108,7 @@ class FrontendWorkCardTests(unittest.TestCase):
         self.assertNotIn("onBeforeUpdate", lifetime)
         self.assertNotIn("onUpdated", lifetime)
         self.assertIn("prksReleaseWorkThumbPreview", lifetime)
+        self.assertIn("function prksWorkThumbPreviewSourceConnected", src)
         self.assertIn("prksReleaseLazyWorkThumbs", lifetime)
         unmount = detail.find("onBeforeUnmount")
         self.assertEqual(unmount, -1)

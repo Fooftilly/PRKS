@@ -315,10 +315,10 @@
                         !document.getElementById('prks-work-thumb-preview').hidden)
                 );
                 if (card.parentNode) card.parentNode.removeChild(card);
-                root.prksReleaseWorkThumbPreview();
+                root.prksReleaseWorkThumbPreview(document.body);
                 preview = document.getElementById('prks-work-thumb-preview');
-                assert('detach+release hides preview', !!(preview && preview.hidden));
-                assert('detach+release clears source', window.__prksWorkThumbPreviewSource == null);
+                assert('detach+scoped-release hides leftover preview', !!(preview && preview.hidden));
+                assert('detach+scoped-release clears source', window.__prksWorkThumbPreviewSource == null);
             } else {
                 root.prksHideWorkThumbPreview();
             }
