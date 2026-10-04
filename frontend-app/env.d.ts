@@ -13,30 +13,6 @@ interface ProcessingPeopleCatalogueEntry {
   last_name?: string
 }
 
-interface ProcessingDraft {
-  title?: string
-  status_draft?: string
-  abstract?: string
-  source_url?: string
-  published_date?: string
-  year?: string
-  publisher?: string
-  location?: string
-  edition?: string
-  journal?: string
-  volume?: string
-  issue?: string
-  pages?: string
-  isbn?: string
-  doi?: string
-  doc_type?: string
-  private_notes?: string
-  thumb_page?: string
-  target_folder_id?: string
-  roles?: Array<{ person_id?: string; person_name?: string; role_type?: string }>
-  tags?: Array<{ id?: string; name?: string }>
-}
-
 interface ProcessingPreviewTarget {
   id: string
   filename?: string
@@ -185,8 +161,9 @@ interface Window {
     owner: object,
     file: ProcessingPreviewTarget,
   ) => 'card' | 'side' | 'unavailable'
-  prksProcessingSave?: (fileId: string, draft: ProcessingDraft) => Promise<unknown>
-  prksProcessingImport?: (fileId: string) => Promise<unknown>
+  prksProcessingRecords?: import('./src/features/processing/records').ProcessingRecords
+  prksMarkProcessingImportChanged?: () => void
+  prksParsePublishedDateInput?: (raw: string) => string
   prksProcessingSearchTags?: () => Promise<unknown>
   prksProcessingCreateTag?: (name: string) => Promise<{ id: string; name: string }>
   prksProcessingQuickCreateFolder?: (title: string) => Promise<{

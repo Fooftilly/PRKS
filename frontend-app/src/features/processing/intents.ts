@@ -8,6 +8,7 @@ import {
   type ProcessingResume,
   type ProcessingTagOption,
 } from './projection'
+import { processingRecords, type ProcessingRecords } from './records'
 
 /** Owning TabContext fields Processing intents need. Not a second route model. */
 export interface ProcessingIntentOwner {
@@ -124,14 +125,15 @@ async function reloadIfCurrent(
 }
 
 /**
- * Inbox writes stay on the classic upload-style wrappers. There is no
- * processing-file durable queue. Preview and the resize listener are the
- * same module: Vue asks, the coordinator owns the iframe and the listener.
- * `still` is this owner's generation.
+ * Save and import go through the Processing records service (typed client,
+ * TanStack mutations). There is no processing-file durable queue. Preview and
+ * the resize listener are the coordinator's: Vue asks, the coordinator owns
+ * the iframe and the listener. `generation` is this owner's generation.
  */
 export function browserProcessingIntents(
   owner: ProcessingIntentOwner | null,
   generation: number,
+  records: ProcessingRecords = processingRecords(),
 ): ProcessingIntents {
   return {
     reload(resume) {
@@ -139,29 +141,24 @@ export function browserProcessingIntents(
     },
     async save(fileId, draft) {
       if (!ownsProcessing(owner, generation)) return quiet()
-      const save = window.prksProcessingSave
-      if (typeof save !== 'function') return failure(SAVE_FAILURE)
       try {
-        await save(fileId, draft)
+        await records.save(fileId, draft)
       } catch (err) {
         if (!ownsProcessing(owner, generation)) return quiet()
-        return failure(actionMessage(err, SAVE_FAILURE))
+        return failure(records.actionMessage(err, SAVE_FAILURE))
       }
       if (!ownsProcessing(owner, generation)) return quiet()
       return success()
     },
     async importFile(fileId, draft, resume) {
       if (!ownsProcessing(owner, generation)) return quiet()
-      const save = window.prksProcessingSave
-      const importFile = window.prksProcessingImport
-      if (typeof save !== 'function' || typeof importFile !== 'function') return failure(IMPORT_FAILURE)
       try {
-        await save(fileId, draft)
+        await records.save(fileId, draft)
         if (!ownsProcessing(owner, generation)) return quiet()
-        await importFile(fileId)
+        await records.importFile(fileId)
       } catch (err) {
         if (!ownsProcessing(owner, generation)) return quiet()
-        return failure(actionMessage(err, IMPORT_FAILURE))
+        return failure(records.actionMessage(err, IMPORT_FAILURE))
       }
       return reloadIfCurrent(owner, generation, resume)
     },

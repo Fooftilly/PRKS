@@ -365,22 +365,6 @@ async function testDedupe() {
         c.resolve(jsonResponse([]));
     });
     await Promise.all([da, db]);
-
-    const pBox = makeDeferredFetch();
-    const pCoord = makeCoordinator({ fetchBundle: pBox });
-    const pa = pCoord.prksRequest('/api/processing-files?rescan=1');
-    const pb = pCoord.prksRequest('/api/processing-files?rescan=1');
-    await waitUntil(function () {
-        return pBox.calls.length === 1;
-    });
-    record('processing rescan is mutation-serialized not deduped', pBox.calls.length === 1 && pCoord.snapshot().current.queuedMutations === 1, '');
-    pBox.calls[0].resolve(jsonResponse([]));
-    await waitUntil(function () {
-        return pBox.calls.length === 2;
-    });
-    pBox.calls[1].resolve(jsonResponse([]));
-    await Promise.all([pa, pb]);
-    record('processing-files?rescan=1 does not dedupe', pBox.calls.length === 2, 'calls=' + pBox.calls.length);
 }
 
 async function testSubscriberAbort() {

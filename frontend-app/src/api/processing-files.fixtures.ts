@@ -1,0 +1,41 @@
+import type { ProcessingFile } from './processing-files'
+
+/** A wire-exact inbox row for tests. */
+export function processingFileRow(overrides: Partial<ProcessingFile> = {}): ProcessingFile {
+  return {
+    id: 'PF-1',
+    rel_path: 'inbox/notes.pdf',
+    filename: 'notes.pdf',
+    folder: 'inbox',
+    status: 'pending',
+    last_error: null,
+    imported_work_id: null,
+    imported_at: null,
+    discovered_at: '2026-10-03 10:00:00',
+    updated_at: null,
+    exists: true,
+    title: '',
+    status_draft: 'Not Started',
+    published_date: '',
+    abstract: '',
+    source_url: '',
+    author_text: '',
+    year: '',
+    publisher: '',
+    location: '',
+    edition: '',
+    journal: '',
+    volume: '',
+    issue: '',
+    pages: '',
+    isbn: '',
+    doi: '',
+    doc_type: 'article',
+    private_notes: '',
+    thumb_page: null,
+    target_folder_id: '',
+    roles: [{ person_id: 'P-1', person_name: 'Ada Lovelace', role_type: 'Author', order_index: 0 }],
+    tags: [{ id: 'T-1', name: 'logic', color: '#6d6cf7', created_at: null }],
+    ...overrides,
+  }
+}

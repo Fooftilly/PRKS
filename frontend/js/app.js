@@ -187,14 +187,11 @@ async function prksRefreshProcessingNavBadge(options) {
         prksSetProcessingAttentionCount(null);
         return;
     }
-    if (typeof fetchProcessingFiles !== 'function') return;
+    const records = window.prksProcessingRecords;
+    if (!records) return;
     try {
-        const rows = await fetchProcessingFiles({
-            rescan: !!opts.rescan,
-            signal: opts.signal,
-        });
-        if (Array.isArray(rows)) prksSetProcessingAttentionCount(rows.length);
-        else prksSetProcessingAttentionCount(null);
+        const rows = await records.inbox({ rescan: !!opts.rescan, signal: opts.signal });
+        prksSetProcessingAttentionCount(rows.length);
     } catch (_e) {
         prksSetProcessingAttentionCount(null);
     }
@@ -2960,7 +2957,7 @@ function prksPresentVueResearchGraph(ctx, contentDiv, detail) {
 
 /**
  * Mount the Vue Processing inbox in this pane.
- * `detail.files` is already `fetchProcessingFiles({ rescan: true })`.
+ * `detail.files` is already a `prksProcessingRecords.inbox({ rescan: true })` read.
  * People and folders are the catalogs the cards search. Vue does not fetch.
  * The preview iframe is released before this host is replaced.
  */
@@ -3013,21 +3010,32 @@ async function prksReloadProcessingFiles(ctx, generation, resume) {
     return true;
 }
 
+/**
+ * One inbox load: the rescan through the Processing records service, plus the
+ * people and folders the cards pick from. With `trackErrors`, each failed read
+ * returns its message; an aborted read is not a failure.
+ */
 async function prksLoadProcessingInbox(signal, trackErrors) {
     const request = signal ? { signal: signal } : {};
-    const filesOwner = {};
     const peopleOwner = {};
     const foldersOwner = {};
-    const fileRequest = Object.assign({ rescan: true }, request);
     const peopleRequest = Object.assign({}, request);
     const folderRequest = Object.assign({}, request);
     if (trackErrors) {
-        fileRequest.errorOwner = filesOwner;
         peopleRequest.errorOwner = peopleOwner;
         folderRequest.errorOwner = foldersOwner;
     }
+    const records = window.prksProcessingRecords;
+    const filesFallback = 'Could not load files for processing.';
+    let filesError = '';
+    const filesRead = records
+        ? records.inbox({ rescan: true, signal: signal || undefined }).catch(function (err) {
+              if (!prksAbortFallback(err)) filesError = records.actionMessage(err, filesFallback);
+              return [];
+          })
+        : Promise.resolve([]);
     const [items, people, folders] = await Promise.all([
-        fetchProcessingFiles(fileRequest),
+        filesRead,
         typeof fetchPersons === 'function' ? fetchPersons(peopleRequest) : Promise.resolve([]),
         typeof fetchFolders === 'function' ? fetchFolders(folderRequest) : Promise.resolve([]),
     ]);
@@ -3040,7 +3048,7 @@ async function prksLoadProcessingInbox(signal, trackErrors) {
         items: Array.isArray(items) ? items : [],
         people: Array.isArray(people) ? people : [],
         folders: Array.isArray(folders) ? folders : [],
-        filesError: failureMessage(filesOwner, 'Could not load files for processing.'),
+        filesError: trackErrors ? filesError : '',
         peopleError: failureMessage(peopleOwner, 'Could not load people.'),
         foldersError: failureMessage(foldersOwner, 'Could not load folders.'),
     };

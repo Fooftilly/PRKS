@@ -4,6 +4,7 @@ import { prksQueryKeys, type PrksQueryDomain } from './keys'
 
 const DOMAIN_KEYS: Record<PrksQueryDomain, string> = {
   performanceDiagnostics: 'performance-diagnostics',
+  processingFiles: 'processing-files',
   publishers: 'publishers',
   savedViews: 'saved-views',
 }
@@ -39,5 +40,16 @@ describe('prksQueryKeys', () => {
     await client.invalidateQueries({ queryKey: prksQueryKeys.savedViews.all() })
     expect(client.getQueryState(prksQueryKeys.savedViews.list())?.isInvalidated).toBe(true)
     expect(client.getQueryState(prksQueryKeys.savedViews.detail('SV-1'))?.isInvalidated).toBe(true)
+  })
+
+  it('keeps the rescan and stored inbox reads apart under one domain prefix', async () => {
+    const client = createPrksQueryClient()
+    expect(prksQueryKeys.processingFiles.inbox('rescan')).toEqual(['processing-files', 'inbox', 'rescan'])
+    expect(prksQueryKeys.processingFiles.inbox('stored')).toEqual(['processing-files', 'inbox', 'stored'])
+    client.setQueryData(prksQueryKeys.processingFiles.inbox('rescan'), [])
+    client.setQueryData(prksQueryKeys.processingFiles.inbox('stored'), [])
+    await client.invalidateQueries({ queryKey: prksQueryKeys.processingFiles.all() })
+    expect(client.getQueryState(prksQueryKeys.processingFiles.inbox('rescan'))?.isInvalidated).toBe(true)
+    expect(client.getQueryState(prksQueryKeys.processingFiles.inbox('stored'))?.isInvalidated).toBe(true)
   })
 })

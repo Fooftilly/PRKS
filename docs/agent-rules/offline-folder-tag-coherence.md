@@ -84,8 +84,9 @@ successful Work creation invalidates Folders, unconditionally: unlike Playlist
 membership, folder membership is not optional — the create endpoint files every
 new Work into the requested folder or into the default "Uncategorized" one, so
 a `work_count` always changes. Do not make this conditional on an explicit
-`folder_id`. `importProcessingFile()` is the same canonical shape and owes the
-same hooks. Second, **Editor** counts alongside Author, because a Work card's
+`folder_id`. A Files for Processing import is the same canonical shape and owes
+the same hooks (`prksMarkProcessingImportChanged()`, called by the Processing
+records service after every import that was sent). Second, **Editor** counts alongside Author, because a Work card's
 credit line is `linked_authors` → `author_text` → `primary_editor`; other roles
 (Reviewer, Translator, Mentioned) are not rendered there and deliberately leave
 Folders eligible.
