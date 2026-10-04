@@ -146,6 +146,26 @@ describe('Processing records', () => {
     await expect(during).resolves.toEqual([])
   })
 
+  it('keeps a read blocked on an earlier write when a later overlapping write settles first', async () => {
+    const calls = heldFetch()
+    const records = processingRecords(createPrksQueryClient())
+    const first = records.importFile('PF-1')
+    await vi.waitFor(() => expect(calls).toHaveLength(1))
+    const during = records.inbox({ rescan: true })
+    const second = records.importFile('PF-2')
+    await vi.waitFor(() => expect(calls).toHaveLength(2))
+    calls[1].release(json({ processing_file_id: 'PF-2', work_id: 'W-2' }))
+    await expect(second).resolves.toMatchObject({ work_id: 'W-2' })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(calls).toHaveLength(2)
+    calls[0].release(json(IMPORTED))
+    await expect(first).resolves.toEqual(IMPORTED)
+    await vi.waitFor(() => expect(calls).toHaveLength(3))
+    expect(calls[2].url).toBe('/api/processing-files?rescan=1')
+    calls[2].release(json([]))
+    await expect(during).resolves.toEqual([])
+  })
+
   it('saves the normalized draft and invalidates the domain, without retrying a write', async () => {
     window.prksParsePublishedDateInput = (raw: string) => (raw === '03.10.2026' ? '2026-10-03' : '')
     const fetchMock = vi.fn(async () => json({ ...ROW, title: 'Notes' }))

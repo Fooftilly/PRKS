@@ -53,24 +53,32 @@ export interface ProcessingRecords {
 /** Readers still waiting on each inbox key, page-wide. */
 const pendingReads = new Map<string, number>()
 
-/** Page-wide count of writes sent and settled. */
+/**
+ * Page-wide write sequence. Each write takes the next number when it is sent.
+ * `writesSettled` is the settled prefix: every write numbered up to it has
+ * settled. Writes can overlap and settle out of order, so a later write
+ * settling first does not advance the prefix past an earlier one still in
+ * flight.
+ */
 let writesSent = 0
 let writesSettled = 0
+const settledAhead = new Set<number>()
 
 /** Reads waiting for the writes sent before them to settle. */
-const settleWaiters = new Set<{ count: number; resolve: () => void }>()
+const settleWaiters = new Set<{ through: number; resolve: () => void }>()
 
-function untilSettled(count: number): Promise<void> {
-  if (writesSettled >= count) return Promise.resolve()
+function untilSettled(through: number): Promise<void> {
+  if (writesSettled >= through) return Promise.resolve()
   return new Promise((resolve) => {
-    settleWaiters.add({ count, resolve })
+    settleWaiters.add({ through, resolve })
   })
 }
 
-function noteWriteSettled(): void {
-  writesSettled += 1
+function noteWriteSettled(seq: number): void {
+  settledAhead.add(seq)
+  while (settledAhead.delete(writesSettled + 1)) writesSettled += 1
   for (const waiter of [...settleWaiters]) {
-    if (writesSettled < waiter.count) continue
+    if (writesSettled < waiter.through) continue
     settleWaiters.delete(waiter)
     waiter.resolve()
   }
@@ -147,10 +155,11 @@ export function processingRecords(queryClient?: QueryClient): ProcessingRecords 
     // retry) and its transport-failure reporting apply.
     const mutation = new MutationObserver(shared, { mutationFn: run })
     writesSent += 1
+    const seq = writesSent
     try {
       return await mutation.mutate()
     } finally {
-      noteWriteSettled()
+      noteWriteSettled(seq)
       mutation.reset()
       settled?.()
       await shared.invalidateQueries({ queryKey: prksQueryKeys.processingFiles.all() })
