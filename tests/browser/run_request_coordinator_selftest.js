@@ -1149,12 +1149,12 @@ async function testApiWarningOwnership() {
     const ownerA = {};
     const ownerB = {};
     nextStatus = 500;
-    await sandbox.fetchFolders({ signal: ownerA });
+    await sandbox.fetchWorks({ signal: ownerA });
     nextStatus = 200;
-    await sandbox.fetchFolders({ signal: ownerB });
+    await sandbox.fetchWorks({ signal: ownerB });
     record('successful B cannot consume A warning', sandbox.prksConsumeApiError(ownerB) === null, '');
     const warningA = sandbox.prksConsumeApiError(ownerA);
-    record('failed A consumes its own warning', !!(warningA && warningA.context === 'folders'), JSON.stringify(warningA));
+    record('failed A consumes its own warning', !!(warningA && warningA.context === 'works'), JSON.stringify(warningA));
     record('A warning consumed once', sandbox.prksConsumeApiError(ownerA) === null, '');
 }
 

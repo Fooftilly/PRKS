@@ -145,6 +145,80 @@ class FrontendRequestCoordinatorTests(unittest.TestCase):
             "raw fetch() outside the reviewed bypass contract:\n" + "\n".join(leftover),
         )
 
+    def test_retired_query_families_stay_out_of_prks_request(self):
+        """Publishers, Saved Views, Processing Files, and Performance Diagnostics
+        already own their reads outside the coordinator. A prksRequest of those
+        paths would be a second client."""
+        retired = (
+            "/api/publishers",
+            "/api/saved-views",
+            "/api/processing-files",
+            "/api/diagnostics",
+        )
+        hits = []
+        for path in _frontend_js_files():
+            src = _read(path)
+            start = 0
+            while True:
+                at = src.find("prksRequest(", start)
+                if at < 0:
+                    break
+                end = src.find(";", at)
+                if end < 0:
+                    end = min(len(src), at + 500)
+                call = src[at:end]
+                for token in retired:
+                    if token in call:
+                        rel = os.path.relpath(path, _PROJECT_DIR)
+                        hits.append("%s: %s" % (rel, token))
+                start = at + len("prksRequest(")
+        self.assertEqual(hits, [], "retired family drifted back into prksRequest:\n" + "\n".join(hits))
+        coord = _read(_COORD)
+        for token in ("publishers", "saved-views", "savedViews", "processing-files", "performance-diagnostics"):
+            self.assertNotIn(token, coord)
+
+    def test_dead_coordinator_wrappers_stay_removed(self):
+        api = _read(_API)
+        for name in (
+            "function fetchConcept(",
+            "function fetchPosition(",
+            "function fetchArgument(",
+            "function fetchArgumentVerdicts(",
+            "function fetchRecent(",
+            "function fetchRecentlyAdded(",
+            "function fetchPersonGroupDetails(",
+            "window.fetchConcept =",
+            "window.fetchPosition =",
+            "window.fetchArgument =",
+            "window.fetchArgumentVerdicts",
+        ):
+            self.assertNotIn(name, api)
+        for name, marker in (
+            ("fetchFolders", "async function fetchFolders("),
+            ("fetchConcepts", "async function fetchConcepts("),
+            ("fetchPositions", "async function fetchPositions("),
+            ("fetchArguments", "async function fetchArguments("),
+        ):
+            body = api.split(marker, 1)[1].split("\nasync function ", 1)[0]
+            self.assertNotIn("prksRequest(", body, name)
+        # Live owners that the audit kept.
+        for snippet in (
+            "prksRequest('/api/works'",
+            "prksRequest('/api/folders/'",
+            "prksRequest('/api/persons'",
+            "prksRequest('/api/person-groups'",
+            "prksRequest('/api/search?'",
+            "prksRequest('/api/tags'",
+            "prksRequest('/api/settings'",
+            "prksRequest('/api/works/reindex-pdf-text'",
+            "prksRequest('/api/works/linearize-existing-pdfs'",
+            "prksRequest('/api/works/bulk'",
+            "window.fetchConcepts = fetchConcepts",
+            "window.fetchPositions = fetchPositions",
+            "window.fetchArguments = fetchArguments",
+        ):
+            self.assertIn(snippet, api)
+
     def test_node_selftest(self):
         node = shutil.which("node")
         self.assertIsNotNone(node, "node is required for request coordinator tests")
