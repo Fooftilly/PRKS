@@ -8,6 +8,8 @@ _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _FRONTEND = os.path.join(_PROJECT_DIR, "frontend")
 _INDEX = os.path.join(_FRONTEND, "index.html")
 _CARDS = os.path.join(_FRONTEND, "js", "components", "work-cards.js")
+_VUE_CARD = os.path.join(
+    _PROJECT_DIR, "frontend-app", "src", "components", "PrksWorkCard.vue")
 _SEL = os.path.join(_FRONTEND, "js", "work-selection.js")
 _APP = os.path.join(_FRONTEND, "js", "app.js")
 _API = os.path.join(_FRONTEND, "js", "api.js")
@@ -21,15 +23,17 @@ def _read(path: str) -> str:
 
 class FrontendWorkSelectionTests(unittest.TestCase):
     def test_card_emits_data_work_id_without_checkbox(self):
-        src = _read(_CARDS)
-        self.assertIn('data-work-id="${wid}"', src)
+        src = _read(_VUE_CARD)
+        self.assertIn(':data-work-id="workId"', src)
         self.assertIn("project-card--work-card", src)
-        self.assertIn('data-prks-route="#/works/${wid}"', src)
-        self.assertIn('class="work-card__link" href="#/works/${wid}"', src)
+        self.assertIn(':data-prks-route="href || undefined"', src)
+        self.assertIn('class="work-card__link" :href="href"', src)
         self.assertNotIn('role="link" tabindex="0"', src)
         self.assertNotIn("onclick=\"window.location.hash='#/works/${wid}'\"", src)
         self.assertNotIn('type="checkbox"', src)
         self.assertNotIn("onclick.split", src)
+        cards = _read(_CARDS)
+        self.assertNotIn("function prksWorkCardHtml", cards)
 
     def test_selection_module_loads_before_app(self):
         html = _read(_INDEX)

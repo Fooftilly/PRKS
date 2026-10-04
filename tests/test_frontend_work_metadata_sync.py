@@ -378,14 +378,26 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         self.assertIn('?page=', body)
         self.assertNotIn('/thumbnail`', body,
                          'a page-less thumbnail URL is reachable again')
+        helpers = (ROOT / 'frontend-app' / 'src' / 'components' / 'work-card.ts').read_text()
+        vue = (ROOT / 'frontend-app' / 'src' / 'components' / 'PrksWorkCard.vue').read_text()
+        helper_fn = helpers[helpers.index('export function workCardThumbUrl('):]
+        helper_fn = helper_fn[: helper_fn.index('\n}')]
+        self.assertIn('?page=', helper_fn)
+        self.assertNotIn('/thumbnail`', helper_fn,
+                         'a page-less thumbnail URL is reachable again')
         # Suppression decides BEFORE any URL exists, never after.
-        self.assertIn('const thumbSrc = suppressThumbnail', cards)
-        suppression = cards.index('const suppressThumbnail =')
-        self.assertLess(suppression, cards.index('const thumbSrc ='))
+        self.assertIn('if (!work || options.suppressThumbnail === true) return \'\'', helpers)
+        self.assertLess(
+            helpers.index('options.suppressThumbnail === true'),
+            helpers.index('thumbnail?page='),
+        )
+        self.assertIn('thumbSrc = computed(() => workCardThumbUrl(props.work, options.value))', vue)
         # And the card never learns what a durable operation is.
         for forbidden in ('SET_WORK_METADATA_FIELD', 'listOperations', 'prksSync',
                           'prksEffective', 'payload.field'):
             self.assertNotIn(forbidden, cards, forbidden)
+            self.assertNotIn(forbidden, helpers, forbidden)
+            self.assertNotIn(forbidden, vue, forbidden)
 
     def test_the_request_coordinator_classifies_by_pathname(self):
         """The added `?page=` must not change how a thumbnail request is

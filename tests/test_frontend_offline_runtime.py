@@ -969,10 +969,17 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         self.assertLess(portrait.index("offlineCached"), portrait.index("profile-image"))
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
         self.assertIn("ctx.ui.personOfflineCached = offlinePerson.source === 'cache';", app)
-        # The card option exists and only removes the source, never the layout.
-        cards = _read(os.path.join(_FRONTEND, "js", "components", "work-cards.js"))
-        self.assertIn("const suppressThumbnail = options.suppressThumbnail === true;", cards)
-        self.assertIn("const thumbSrc = suppressThumbnail", cards)
+        # Vue owns the card option: suppression returns no src, never changes layout.
+        helpers = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "components", "work-card.ts"))
+        vue = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "components", "PrksWorkCard.vue"))
+        self.assertIn("if (!work || options.suppressThumbnail === true) return ''", helpers)
+        self.assertIn("thumbSrc = computed(() => workCardThumbUrl(props.work, options.value))", vue)
+        self.assertLess(
+            helpers.index("options.suppressThumbnail === true"),
+            helpers.index("thumbnail?page="),
+        )
         # No image bytes anywhere in the offline stack.
         store = _read(_STORE)
         for forbidden in ("profile-image", "thumbnail", "image/"):
