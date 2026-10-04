@@ -121,8 +121,16 @@ class FrontendWorkCardTests(unittest.TestCase):
         self.assertNotIn("onUpdated", lifetime)
         self.assertIn("prksReleaseWorkThumbPreview", lifetime)
         self.assertIn("function prksWorkThumbPreviewSourceConnected", src)
-        self.assertIn("prksWorkThumbPreviewHoverArmed", src)
-        self.assertIn("'pointermove'", src)
+        hover_fn = src.find("function prksWorkThumbFromHoverTarget")
+        hover_end = src.find("function prksWorkCardPointerStillInside")
+        self.assertGreater(hover_fn, 0)
+        self.assertGreater(hover_end, hover_fn)
+        self.assertIn(
+            "t.closest('.work-card__thumb[data-prks-thumb-preview-kind]')",
+            src[hover_fn:hover_end],
+        )
+        self.assertNotIn("prksWorkThumbFromCard", src[hover_fn:hover_end])
+        self.assertNotIn("prksWorkThumbPreviewHoverArmed", src)
         self.assertIn("prksReleaseLazyWorkThumbs", lifetime)
         unmount = detail.find("onBeforeUnmount")
         self.assertEqual(unmount, -1)

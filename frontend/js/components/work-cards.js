@@ -695,18 +695,7 @@ function prksForgetPreviewImgSrc(img) {
     if (map && img) map.delete(img);
 }
 
-let prksWorkThumbPreviewHoverArmed = true;
-
-function prksArmWorkThumbPreviewHover() {
-    prksWorkThumbPreviewHoverArmed = true;
-}
-
 function prksHideWorkThumbPreview() {
-    // Route dismiss / Escape must stick: replacing Folder cards under the
-    // pointer can fire pointerover without a pointermove and would otherwise
-    // reopen the body-mounted overlay after the source was cleared.
-    prksWorkThumbPreviewHoverArmed = false;
-    window.__prksWorkThumbPreviewSource = null;
     const el = document.getElementById('prks-work-thumb-preview');
     if (!el) return;
     el.hidden = true;
@@ -719,6 +708,7 @@ function prksHideWorkThumbPreview() {
         img.removeAttribute('src');
         prksForgetPreviewImgSrc(img);
     }
+    window.__prksWorkThumbPreviewSource = null;
 }
 
 /**
@@ -849,15 +839,13 @@ function prksWorkCardFromEventTarget(t) {
 }
 
 /**
- * Hover target is the Work card / native work-card__link, not only the thumb
- * slot. Bulk checkbox and other controls stay out of the preview hover path.
+ * Hover-open is the thumbnail slot only (pre-#451 Work-card contract).
+ * Keyboard P still opens from the native work-card__link.
  */
 function prksWorkThumbFromHoverTarget(t) {
     if (!t || !t.closest) return null;
     if (t.closest('.work-card__select, input, button, textarea, select')) return null;
-    const direct = t.closest('.work-card__thumb[data-prks-thumb-preview-kind]');
-    if (direct) return direct;
-    return prksWorkThumbFromCard(prksWorkCardFromNode(t));
+    return t.closest('.work-card__thumb[data-prks-thumb-preview-kind]');
 }
 
 function prksWorkCardPointerStillInside(card, related) {
@@ -921,7 +909,6 @@ if (typeof document !== 'undefined' && !window.__prksWorkCardKeyNavBound) {
     document.addEventListener(
         'pointerover',
         function (e) {
-            if (!prksWorkThumbPreviewHoverArmed) return;
             const t = e.target;
             const thumb = prksWorkThumbFromHoverTarget(t);
             if (!thumb) return;
@@ -965,14 +952,6 @@ if (typeof document !== 'undefined' && !window.__prksWorkCardKeyNavBound) {
             if (window.__prksWorkThumbPreviewSource) prksHideWorkThumbPreview();
         });
     }
-
-    document.addEventListener(
-        'pointermove',
-        function () {
-            prksArmWorkThumbPreviewHover();
-        },
-        true
-    );
 }
 
 window.prksInitLazyWorkThumbs = prksInitLazyWorkThumbs;
