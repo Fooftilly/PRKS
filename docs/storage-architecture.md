@@ -1701,6 +1701,10 @@ parallel configuration system:
   install directory. A source checkout refuses only the checkout itself or a
   root containing it, so existing self-hosted roots inside a checkout keep
   starting. The nested-marker scan is bounded to two levels and 2000 entries.
+- **Log file.** The error log (`PRKS_LOG_FILE`) must not resolve to the
+  marker, anything under `.prks-maintenance/`, or the bootstrap config file or
+  its lock; appending log text would corrupt them. This is refused as
+  `log_file_operational`, compared by real path, before anything is written.
 - **V9** refuses a filesystem type known with certainty to be a network mount,
   before anything is written: Linux types from `/proc/mounts` (`nfs`, `cifs`,
   `smb3`, network FUSE such as `fuse.sshfs`, …), macOS types from `mount(8)`

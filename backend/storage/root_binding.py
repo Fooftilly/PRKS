@@ -57,6 +57,7 @@ from backend.storage.file_lock import (
     LockUnavailable,
     is_link_or_reparse_point,
 )
+from backend.storage.bootstrap_config import LOCK_SUFFIX
 from backend.storage.resolver import SOURCE_CONFIG_FILE
 from backend.storage.preflight import (
     PREFLIGHT_DIRNAME,
@@ -344,6 +345,33 @@ def _check_not_over_config_or_install(
         raise InvalidStorageRoot(
             "root_inside_install",
             "The storage root cannot be inside the PRKS installation directory.",
+        )
+
+
+def _check_log_file_not_operational(
+    log_file: Optional[str], root_real: str, *, config_file_path: Optional[str]
+) -> None:
+    """The error log never aliases the marker, the lease or the bootstrap file.
+
+    Logging appends text to ``log_file``; landing on one of those would corrupt
+    it, and the next startup would refuse the root or the configuration as
+    malformed. Compared by real path, so a link or an override spelling the
+    same file another way is caught before anything is written.
+    """
+    if not (log_file or "").strip():
+        return
+    log_real = os.path.realpath(os.path.abspath(log_file or ""))
+    operational = [os.path.join(root_real, MARKER_FILENAME)]
+    if config_file_path:
+        config_real = os.path.realpath(config_file_path)
+        operational += [config_real, config_real + LOCK_SUFFIX]
+    if any(_same_path(log_real, path) for path in operational) or _is_within(
+        log_real, os.path.join(root_real, MAINTENANCE_DIRNAME)
+    ):
+        raise InvalidStorageRoot(
+            "log_file_operational",
+            f"The log file {log_file} cannot be the storage root marker, a file in "
+            f"{MAINTENANCE_DIRNAME}/, or the PRKS bootstrap configuration file or its lock.",
         )
 
 
@@ -997,6 +1025,10 @@ def _open_storage_root(
         config_file_path=config_file_path,
         distribution=dist,
         home=home,
+    )
+
+    _check_log_file_not_operational(
+        getattr(config, "log_file", None), root_real, config_file_path=config_file_path
     )
 
     check_filesystem_type(_nearest_existing(root_real))

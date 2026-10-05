@@ -352,6 +352,36 @@ class TestPlacement(RootTestCase):
         os.makedirs(self.path("PRKS"))
         self.open(self.path("PRKS", "Library"), config_file_path=self.path("PRKS", "config.json"))
 
+    def test_log_file_never_aliases_an_operational_file(self):
+        root = self.path("lib")
+        cfg_dir = self.path("PRKS")
+        os.makedirs(cfg_dir)
+        config_file = os.path.join(cfg_dir, "config.json")
+        os.symlink(os.path.join(root, MARKER), self.path("marker-alias.log"))
+        aliases = (
+            os.path.join(root, MARKER),
+            self.path("marker-alias.log"),
+            os.path.join(root, root_marker.MAINTENANCE_DIRNAME, root_marker.ROOT_LOCK_NAME),
+            os.path.join(root, root_marker.MAINTENANCE_DIRNAME, "errors.log"),
+            config_file,
+            config_file + ".lock",
+            os.path.join(cfg_dir, ".", "config.json"),
+        )
+        for log_file in aliases:
+            with self.subTest(log_file=log_file):
+                config = replace(StorageConfig.for_testing(root), log_file=log_file)
+                with self.assertRaises(InvalidStorageRoot) as ctx:
+                    root_binding.open_storage_root(
+                        config, config_file_path=config_file, register=False
+                    )
+                self.assertEqual(ctx.exception.reason, "log_file_operational")
+                # Refused before anything is written.
+                self.assertFalse(os.path.lexists(root))
+        # A log beside them is fine.
+        config = replace(StorageConfig.for_testing(root), log_file=os.path.join(cfg_dir, "prks.log"))
+        bound = root_binding.open_storage_root(config, config_file_path=config_file, register=False)
+        self._bound.append(bound)
+
     def test_install_directory_rules(self):
         fake_repo = self.path("checkout")
         os.makedirs(os.path.join(fake_repo, "lib"))
