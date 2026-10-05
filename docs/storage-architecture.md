@@ -1671,8 +1671,9 @@ parallel configuration system:
   so a file bind mount is caught -- on a device other than the root's. The one
   relaxation is an overlayfs root, where unmodified files may report the lower
   layer's device: there only directories are held to the device rule, with a
-  warning. A directory that cannot be read is refused, because the invariant
-  cannot be proven for it. Components an override places outside the root are
+  warning. A directory that cannot be listed, or an entry that cannot be
+  inspected, is refused as `root_unreadable`, because the invariant cannot be
+  proven for it. Components an override places outside the root are
   not part of the walk. Device numbers alone cannot see a bind mount from the
   same filesystem, across which `rename()` still fails with `EXDEV`, so the
   mount table is consulted too (`/proc/self/mountinfo` on Linux, `mount(8)`
