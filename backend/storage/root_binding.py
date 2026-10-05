@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import socket
 import stat
@@ -77,6 +78,41 @@ LOGGER = logging.getLogger("prks.storage")
 
 # Hidden OS metadata that does not make a directory "non-empty" for V3.
 OS_METADATA_NAMES = frozenset({".DS_Store", "desktop.ini", "Thumbs.db", "lost+found"})
+# Volume metadata the OS keeps at the top of a mounted volume, so a library at
+# the root of an external disk (which may be a mount point, §7.2) still opens.
+# PRKS never reads or writes these; they are often unlistable by the owner
+# (macOS ``.Trashes``, privacy-protected ``.Spotlight-V100``), so the V7/V13
+# walk skips them like ``lost+found``. Matched case-insensitively at the top
+# level only.
+VOLUME_METADATA_NAMES = frozenset(
+    name.casefold()
+    for name in (
+        # macOS
+        ".Trashes",
+        ".Spotlight-V100",
+        ".fseventsd",
+        ".TemporaryItems",
+        ".DocumentRevisions-V100",
+        ".VolumeIcon.icns",
+        ".com.apple.timemachine.donotpresent",
+        ".apdisk",
+        # Linux desktops (the per-user form is ``.Trash-<uid>``)
+        ".Trash",
+        # Windows, NTFS/exFAT
+        "System Volume Information",
+        "$RECYCLE.BIN",
+    )
+)
+_PER_USER_TRASH = re.compile(r"\.Trash-[0-9]+\Z")
+
+
+def is_top_level_os_metadata(name: str) -> bool:
+    """Whether a top-level root entry is OS or volume metadata PRKS ignores."""
+    return (
+        name in OS_METADATA_NAMES
+        or name.casefold() in VOLUME_METADATA_NAMES
+        or _PER_USER_TRASH.match(name) is not None
+    )
 # V10 (startup): warn below this much free space. Choose/relocate enforce a
 # computed requirement in a later phase.
 LOW_FREE_SPACE_WARNING_BYTES = 1024 * 1024 * 1024
@@ -458,7 +494,7 @@ def classify_unmarked_root(root: str, *, db_filename: str) -> str:
     foreign = False
     for name in names:
         path = os.path.join(root, name)
-        if name in OS_METADATA_NAMES:
+        if is_top_level_os_metadata(name):
             continue
         if name.startswith(".prks-write-") and name.endswith(".tmp") and _is_plain_file(path):
             continue
@@ -592,7 +628,8 @@ def _check_tree(root_real: str, *, file_devices: bool = True) -> None:
     whose device differs from the root's. ``file_devices=False`` relaxes the
     device rule for regular files only, for overlayfs (see
     ``OVERLAY_FILESYSTEM_TYPES``). OS metadata at the top level (a volume's
-    ``lost+found``) is not PRKS's to walk. A directory that cannot be listed,
+    ``lost+found``, or ``.Trashes`` at the top of a mounted volume, see
+    ``VOLUME_METADATA_NAMES``) is not PRKS's to walk. A directory that cannot be listed,
     or an entry that cannot be ``lstat``-ed, is refused: the invariant cannot
     be proven for it.
     """
@@ -609,7 +646,7 @@ def _check_tree(root_real: str, *, file_devices: bool = True) -> None:
                 "root_unreadable", f"{current} inside the storage root cannot be read."
             ) from exc
         for name in names:
-            if current == root_real and name in OS_METADATA_NAMES:
+            if current == root_real and is_top_level_os_metadata(name):
                 continue
             path = os.path.join(current, name)
             try:

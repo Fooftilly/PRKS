@@ -1057,6 +1057,52 @@ class TestWholeRootInvariants(RootTestCase):
                 self._refused(root, "root_contains_link")
                 shutil.rmtree(root)
 
+    _VOLUME_METADATA = (".Trashes", ".Spotlight-V100", ".fseventsd", ".Trash-1000",
+                        "System Volume Information", "$Recycle.Bin")
+
+    def _unlistable(self, *paths):
+        """os.listdir as the owner sees an OS-protected directory (tests run as root)."""
+        real_listdir = os.listdir
+        blocked = {os.path.realpath(p) for p in paths}
+
+        def fake(path="."):
+            if os.path.realpath(path) in blocked:
+                raise PermissionError(13, "Permission denied", path)
+            return real_listdir(path)
+
+        return patch.object(root_binding.os, "listdir", fake)
+
+    def test_volume_metadata_on_a_fresh_volume_root_makes_a_new_root(self):
+        root = self.path("volume")
+        os.mkdir(root)
+        for name in self._VOLUME_METADATA:
+            os.mkdir(os.path.join(root, name))
+        with self._unlistable(*(os.path.join(root, n) for n in self._VOLUME_METADATA)):
+            bound = self.open(root)
+        self.assertTrue(bound.created)
+        self.assertTrue(os.path.isfile(os.path.join(root, MARKER)))
+
+    def test_unlistable_volume_metadata_does_not_refuse_a_marked_root(self):
+        root = self._marked()
+        trashes = os.path.join(root, ".Trashes")
+        os.mkdir(trashes)
+        with self._unlistable(trashes):
+            self.open(root)
+
+    def test_other_unlistable_entries_are_still_refused(self):
+        root = self._marked()
+        private = os.path.join(root, "private")
+        os.mkdir(private)
+        with self._unlistable(private):
+            self._refused(root, "root_unreadable")
+
+    def test_volume_metadata_names_are_exempt_only_at_the_top(self):
+        root = self._marked()
+        nested = os.path.join(root, "pdfs", ".Trashes")
+        os.makedirs(nested)
+        _symlink_or_skip(self, self.tmp, os.path.join(nested, "l"))
+        self._refused(root, "root_contains_link")
+
     def test_os_metadata_at_the_top_is_not_walked(self):
         root = self._marked()
         lost = os.path.join(root, "lost+found")
