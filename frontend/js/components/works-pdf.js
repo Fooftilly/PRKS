@@ -3776,6 +3776,11 @@ async function prksMountPdfViewer(ctx, work, runtime, targetNode, initialPage, m
 }
 
 export function initPdfViewerForWork(ctx, work) {
+    if (typeof window !== 'undefined') {
+        window.__prksB5InitCounts = window.__prksB5InitCounts || {};
+        window.__prksB5InitCounts.initPdfViewerForWork =
+            (window.__prksB5InitCounts.initPdfViewerForWork || 0) + 1;
+    }
     if (!work || !work.file_path || !ctx) return;
     const _pdfGen = ctx.generation;
     // Capture the owner ticket before any deferred or async work. A later

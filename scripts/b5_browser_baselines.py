@@ -16,6 +16,7 @@ import base64
 import json
 import os
 import platform
+import re
 import socket
 import statistics
 import subprocess
@@ -28,6 +29,7 @@ from urllib.parse import urlparse
 
 REPO = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = REPO / "docs" / "b5-browser-baselines" / "browser-baselines.json"
+DEFAULT_MARKDOWN = REPO / "docs" / "b5-browser-baselines.md"
 DEFAULT_STORAGE = Path("/tmp/prks-b5-baselines-454")
 VIEWPORT = {"width": 1400, "height": 900}
 
@@ -35,27 +37,30 @@ TITLE_ONLY = 120
 TINY_PDF = 20
 PDF_PAGES = 3
 
+NEUTRAL_HASH = "#/tags"
+
 INIT_SCRIPT = r"""
 (() => {
-  const kinds = ["ResizeObserver", "IntersectionObserver", "MutationObserver"];
-  window.__prksB5ObserverProbe = { live: {}, constructed: {}, disconnected: {} };
-  kinds.forEach((name) => {
+  const probe = {
+    live: { ResizeObserver: 0, IntersectionObserver: 0, MutationObserver: 0, eventListener: 0 },
+    constructed: { ResizeObserver: 0, IntersectionObserver: 0, MutationObserver: 0, eventListener: 0 },
+    disconnected: { ResizeObserver: 0, IntersectionObserver: 0, MutationObserver: 0, eventListener: 0 },
+  };
+  window.__prksB5ObserverProbe = probe;
+  ["ResizeObserver", "IntersectionObserver", "MutationObserver"].forEach((name) => {
     const Orig = window[name];
     if (typeof Orig !== "function") return;
-    window.__prksB5ObserverProbe.live[name] = 0;
-    window.__prksB5ObserverProbe.constructed[name] = 0;
-    window.__prksB5ObserverProbe.disconnected[name] = 0;
     function Wrapped(...args) {
-      window.__prksB5ObserverProbe.constructed[name] += 1;
-      window.__prksB5ObserverProbe.live[name] += 1;
+      probe.constructed[name] += 1;
+      probe.live[name] += 1;
       const inst = new Orig(...args);
       const origDisc = inst.disconnect.bind(inst);
       let dead = false;
       inst.disconnect = function () {
         if (!dead) {
           dead = true;
-          window.__prksB5ObserverProbe.live[name] -= 1;
-          window.__prksB5ObserverProbe.disconnected[name] += 1;
+          probe.live[name] -= 1;
+          probe.disconnected[name] += 1;
         }
         return origDisc();
       };
@@ -65,6 +70,18 @@ INIT_SCRIPT = r"""
     try { Object.setPrototypeOf(Wrapped, Orig); } catch (_e) {}
     window[name] = Wrapped;
   });
+  const origAdd = EventTarget.prototype.addEventListener;
+  const origRemove = EventTarget.prototype.removeEventListener;
+  EventTarget.prototype.addEventListener = function (type, listener, options) {
+    probe.constructed.eventListener += 1;
+    probe.live.eventListener += 1;
+    return origAdd.call(this, type, listener, options);
+  };
+  EventTarget.prototype.removeEventListener = function (type, listener, options) {
+    if (probe.live.eventListener > 0) probe.live.eventListener -= 1;
+    probe.disconnected.eventListener += 1;
+    return origRemove.call(this, type, listener, options);
+  };
 })();
 """
 
@@ -75,19 +92,6 @@ INSTALL_HOOKS = r"""
     createWorkPdfRuntime: 0,
     createPrksPdfViewer: 0,
   };
-  const wrap = (name) => {
-    const orig = window[name];
-    if (typeof orig !== "function" || orig.__prksB5Wrapped) return;
-    const wrapped = function (...args) {
-      window.__prksB5InitCounts[name] = (window.__prksB5InitCounts[name] || 0) + 1;
-      return orig.apply(this, args);
-    };
-    wrapped.__prksB5Wrapped = true;
-    window[name] = wrapped;
-  };
-  wrap("initPdfViewerForWork");
-  wrap("createWorkPdfRuntime");
-  wrap("createPrksPdfViewer");
   if (!window.__prksB5Stamps) {
     window.__prksB5Stamps = new WeakMap();
     window.__prksB5StampN = 0;
@@ -134,8 +138,8 @@ RESOURCE_PROBE_JS = r"""
     pdfViewerSetupToken: pdf && typeof pdf.viewerSetupToken === "number" ? pdf.viewerSetupToken : null,
     graphRuntimeStamp: stamp(graph),
     graphLiveCount: Number(window.__prksResearchGraphLiveCount || 0),
-    graphResizeObserverLive: !!(graphDbg && graphDbg.resizeObserverLive),
-    graphChromeListenerCount: graphDbg && typeof graphDbg.chromeListenerCount === "number"
+    currentGraphResizeObserverLive: !!(graphDbg && graphDbg.resizeObserverLive),
+    currentGraphChromeListenerCount: graphDbg && typeof graphDbg.chromeListenerCount === "number"
       ? graphDbg.chromeListenerCount : null,
     cleanupCount: dbg ? dbg.cleanupCount : null,
     timerCount: dbg ? dbg.timerCount : null,
@@ -146,7 +150,7 @@ RESOURCE_PROBE_JS = r"""
     thumbTrackedDisconnected: thumbs.filter((n) => !n || !n.isConnected).length,
     thumbObservingAttr: document.querySelectorAll("img[data-prks-thumb-observing]").length,
     lazyThumbImgs: document.querySelectorAll("img[data-prks-thumb-lazy]").length,
-    workCards: document.querySelectorAll(".work-card").length,
+        workCards: document.querySelectorAll(".project-card--work-card").length,
     domNodes: document.getElementsByTagName("*").length,
     canvases: document.querySelectorAll("canvas").length,
     pdfHosts: document.querySelectorAll("[data-prks-role='pdf-viewer']").length,
@@ -219,24 +223,34 @@ def _tiny_pdf_bytes(title: str, pages: int = 1) -> bytes:
     return data
 
 
+def _walk_folders(folders):
+    for item in folders or []:
+        yield item
+        children = item.get("children") or item.get("subfolders") or []
+        yield from _walk_folders(children)
+
+
+def _folder_by_title(folders, title: str):
+    for item in _walk_folders(folders):
+        if (item.get("title") or "") == title:
+            return item
+    return None
+
+
 def seed_library(base: str) -> dict:
     folders = _http_json("GET", base + "/api/folders") or []
     works = _http_json("GET", base + "/api/works") or []
-    if any((f.get("title") or "") == "Synthetic Library" for f in folders) and len(works) >= 140:
-        lib = next(f for f in folders if (f.get("title") or "") == "Synthetic Library")
-        batch = None
-        for child in lib.get("children") or []:
-            if (child.get("title") or "") == "Large Batch":
-                batch = child
-                break
-        a = next((w for w in works if (w.get("title") or "") == "Synthetic Work A"), None)
-        b = next((w for w in works if (w.get("title") or "") == "Synthetic Work B"), None)
+    lib = _folder_by_title(folders if isinstance(folders, list) else [], "Synthetic Library")
+    batch = _folder_by_title(folders if isinstance(folders, list) else [], "Large Batch")
+    a = next((w for w in works if (w.get("title") or "") == "Synthetic Work A"), None)
+    b = next((w for w in works if (w.get("title") or "") == "Synthetic Work B"), None)
+    if lib and batch and a and b and len(works) >= 140:
         return {
             "reused": True,
             "library_id": lib.get("id"),
-            "batch_id": batch.get("id") if batch else None,
-            "work_a": a.get("id") if a else None,
-            "work_b": b.get("id") if b else None,
+            "batch_id": batch.get("id"),
+            "work_a": a.get("id"),
+            "work_b": b.get("id"),
             "work_count": len(works),
         }
 
@@ -318,13 +332,20 @@ def _median(samples: list[float]) -> float | None:
     return float(statistics.median(samples))
 
 
-def _classify_path(path: str) -> str:
-    if path.startswith("/api/works/") and "/thumbnail" in path:
+def _classify_path(method: str, path: str) -> str:
+    m = method.upper()
+    if path.startswith("/api/works/") and path.endswith("/thumbnail"):
         return "work-thumbnail"
-    if path.startswith("/api/works"):
-        return "work"
+    if path.startswith("/api/works/") and path.endswith("/opened"):
+        return "work-opened"
+    if path.startswith("/api/works/") and path.endswith("/annotations-snapshot"):
+        return "work-annotations-snapshot"
     if path.startswith("/api/pdfs"):
         return "pdf"
+    if m == "GET" and path.startswith("/api/works/") and path.count("/") == 3:
+        return "work-detail-get"
+    if path.startswith("/api/works"):
+        return "work-other"
     if path.startswith("/api/folders"):
         return "folder"
     if path.startswith("/api/search"):
@@ -336,38 +357,124 @@ def _classify_path(path: str) -> str:
     return "other"
 
 
+def _template_path(path: str) -> str:
+    path = re.sub(r"/W-[A-Za-z0-9]+", "/:workId", path)
+    path = re.sub(r"/F-[A-Za-z0-9]+", "/:folderId", path)
+    path = re.sub(r"/C-[A-Za-z0-9]+", "/:conceptId", path)
+    return path[:160]
+
+
 class RequestTap:
     def __init__(self, page):
         self.counts: dict[str, int] = {}
         self.total = 0
+        self.events: list[dict] = []
         page.on("request", self._on_request)
 
     def _on_request(self, request) -> None:
-        url = request.url
-        path = urlparse(url).path
-        kind = _classify_path(path)
+        path = urlparse(request.url).path
+        kind = _classify_path(request.method, path)
         self.counts[kind] = self.counts.get(kind, 0) + 1
         self.total += 1
+        self.events.append(
+            {"i": self.total, "method": request.method, "kind": kind, "path": _template_path(path)}
+        )
+        if len(self.events) > 400:
+            self.events = self.events[-200:]
 
     def snapshot(self) -> dict:
-        return {"total": self.total, "byKind": dict(self.counts)}
+        return {"total": self.total, "byKind": dict(self.counts), "eventIndex": self.total}
 
     def delta_since(self, earlier: dict) -> dict:
         now = self.snapshot()
         kinds = set(now["byKind"]) | set(earlier.get("byKind") or {})
         by_kind = {k: now["byKind"].get(k, 0) - (earlier.get("byKind") or {}).get(k, 0) for k in sorted(kinds)}
-        return {"total": now["total"] - earlier.get("total", 0), "byKind": by_kind}
+        start = int(earlier.get("eventIndex") or 0)
+        recent = [e for e in self.events if e["i"] > start]
+        return {
+            "total": now["total"] - earlier.get("total", 0),
+            "byKind": by_kind,
+            "events": recent,
+            "workDetailGet": by_kind.get("work-detail-get", 0),
+            "pdfGet": by_kind.get("pdf", 0),
+        }
 
 
 def _wait_ready(page, timeout: float = 30000) -> None:
     page.wait_for_function("() => window.__prksWorkspaceReady === true", timeout=timeout)
 
 
-def _time_until(page, start_js: str, predicate: str, timeout: float = 30000) -> float:
-    page.evaluate("() => { window.__prksB5T0 = performance.now(); }")
-    page.evaluate(start_js)
-    page.wait_for_function(predicate, timeout=timeout)
-    return float(page.evaluate("() => performance.now() - window.__prksB5T0"))
+def _go_neutral(page) -> None:
+    page.evaluate("h => prksNavigate(h)", NEUTRAL_HASH)
+    page.wait_for_function(
+        """() => {
+          if (location.hash !== '#/tags') return false;
+          const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+          return !!(ctx && ctx.root && ctx.root.querySelector('[data-prks-tags-page]'));
+        }""",
+        timeout=20000,
+    )
+
+
+def _mark_start(page) -> dict:
+    return page.evaluate(
+        """() => {
+          const snap = (function () {
+            const gens = {};
+            if (typeof prksForEachLiveTabContext === 'function') {
+              prksForEachLiveTabContext((ctx) => {
+                if (ctx && ctx.tabId) gens[String(ctx.tabId)] = ctx.generation;
+              });
+            }
+            const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+            return {
+              gens: gens,
+              focusedTabId: focused ? focused.tabId : null,
+              focusedGen: focused ? focused.generation : 0,
+              hash: String(location.hash || ''),
+            };
+          })();
+          window.__prksB5Mark = Object.assign({ t0: performance.now() }, snap);
+          return window.__prksB5Mark;
+        }"""
+    )
+
+
+def _elapsed(page) -> float:
+    return float(page.evaluate("() => performance.now() - window.__prksB5Mark.t0"))
+
+
+def _wait_main_route(page, hash_path: str, selector: str) -> None:
+    page.wait_for_function(
+        """({hashPath, selector}) => {
+          if (location.hash !== hashPath) return false;
+          const mark = window.__prksB5Mark;
+          const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+          if (!ctx || !ctx.root || !mark) return false;
+          if (!ctx.root.querySelector(selector)) return false;
+          const prev = mark.gens[String(ctx.tabId)];
+          if (typeof prev === 'number') return ctx.generation > prev;
+          return ctx.generation > (mark.focusedGen || 0);
+        }""",
+        arg={"hashPath": hash_path, "selector": selector},
+        timeout=30000,
+    )
+
+
+def _pdf_work_ready_js() -> str:
+    return """(id) => {
+      const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+      if (!ctx || !ctx.root) return false;
+      const work = typeof ctx.getEntity === 'function' ? ctx.getEntity('work') : null;
+      const pdf = typeof ctx.getResource === 'function' ? ctx.getResource('pdf') : null;
+      if (!work || String(work.id) !== String(id)) return false;
+      if (!pdf || String(pdf.workId) !== String(id)) return false;
+      return !!ctx.root.querySelector('[data-prks-role="pdf-viewer"] .prks-pdf-page');
+    }"""
+
+
+def _wait_pdf_work(page, work_id: str, timeout: float = 60000) -> None:
+    page.wait_for_function(_pdf_work_ready_js(), arg=work_id, timeout=timeout)
 
 
 def _probe(page) -> dict:
@@ -384,8 +491,6 @@ def _lifetime_keys(probe: dict) -> dict:
         "pdfHosts": probe.get("pdfHosts"),
         "easyMde": probe.get("easyMde"),
         "researchGraphLive": probe.get("graphLiveCount"),
-        "graphResizeObserverLive": probe.get("graphResizeObserverLive"),
-        "graphChromeListenerCount": probe.get("graphChromeListenerCount"),
         "cleanupCount": probe.get("cleanupCount"),
         "timerCount": probe.get("timerCount"),
         "thumbObserverPresent": probe.get("thumbObserverPresent"),
@@ -396,9 +501,7 @@ def _lifetime_keys(probe: dict) -> dict:
         "resizeObserverLive": live.get("ResizeObserver"),
         "intersectionObserverLive": live.get("IntersectionObserver"),
         "mutationObserverLive": live.get("MutationObserver"),
-        "initPdfViewerForWork": (probe.get("initCounts") or {}).get("initPdfViewerForWork"),
-        "createWorkPdfRuntime": (probe.get("initCounts") or {}).get("createWorkPdfRuntime"),
-        "createPrksPdfViewer": (probe.get("initCounts") or {}).get("createPrksPdfViewer"),
+        "eventListenerLive": live.get("eventListener"),
     }
 
 
@@ -454,12 +557,8 @@ def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:
     work_b = "#/works/" + seed["work_b"]
     batch = "#/folders/" + seed["batch_id"]
     lib = "#/folders/" + seed["library_id"]
-    cards_pred = "() => document.querySelectorAll('.work-card').length >= 100"
-    pdf_main_pred = (
-        "() => !!document.querySelector('.prks-tile--main [data-prks-role=\"pdf-viewer\"] .prks-pdf-page')"
-    )
-    graph_pred = "() => { const d = prksGetResearchGraphDebug && prksGetResearchGraphDebug(); return !!(d && d.cy); }"
-
+    work_a_id = seed["work_a"]
+    work_b_id = seed["work_b"]
     scenarios = {}
 
     nav = page.evaluate(
@@ -479,61 +578,116 @@ def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:
     )
     scenarios["initialLoad"] = {"method": "Navigation Timing on /", "result": nav}
 
-    def timed_hash(name, hash_path, pred, n=5, warmup=1):
+    def timed_main(name, hash_path, selector, n=5, warmup=1, after_wait=None):
         samples = []
         for i in range(warmup + n):
-            page.evaluate("() => { window.__prksB5T0 = performance.now(); }")
+            _go_neutral(page)
+            _mark_start(page)
             page.evaluate("h => prksNavigate(h)", hash_path)
-            page.wait_for_function(pred, timeout=30000)
-            ms = float(page.evaluate("() => performance.now() - window.__prksB5T0"))
+            _wait_main_route(page, hash_path, selector)
+            if after_wait:
+                after_wait()
+            ms = _elapsed(page)
             if i >= warmup:
                 samples.append(ms)
         scenarios[name] = {
-            "method": "prksNavigate + performance.now until settle",
+            "method": "leave to #/tags, prksNavigate, wait generation bump + route root",
             "warmupDropped": warmup,
             "samplesMs": [round(s, 3) for s in samples],
             "medianMs": round(_median(samples) or 0.0, 3),
-            "settle": pred,
+            "settle": "generation > mark AND " + selector,
+            "hash": hash_path if "works" not in hash_path else None,
         }
 
-    timed_hash("routeFolderLibrary", "#/folders", "() => location.hash === '#/folders'")
-    timed_hash("routeRecent", "#/recent", "() => location.hash === '#/recent'")
-    timed_hash("routeProgress", "#/progress", "() => location.hash.indexOf('#/progress') === 0")
-    timed_hash("routePeople", "#/people", "() => location.hash === '#/people'")
-    timed_hash("routeConcepts", "#/concepts", "() => location.hash === '#/concepts'")
-    timed_hash("routeGraphChrome", "#/graph", "() => location.hash === '#/graph'")
-    timed_hash("routeFolderDetail", lib, "() => location.hash.indexOf('#/folders/') === 0")
-    timed_hash("largeFolderCollection", batch, cards_pred)
-    timed_hash("searchBatch", "#/search?q=Batch", cards_pred)
-    timed_hash("researchGraphMount", "#/graph", graph_pred)
+    def wait_cards():
+        page.wait_for_function(
+            """() => {
+              const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+              if (!ctx || !ctx.root) return false;
+              return ctx.root.querySelectorAll('.project-card--work-card').length >= 100;
+            }""",
+            timeout=30000,
+        )
 
-    page.evaluate("h => prksNavigate(h)", "#/folders")
-    page.wait_for_function("() => location.hash === '#/folders'", timeout=15000)
+    def wait_graph_cy():
+        page.wait_for_function(
+            "() => { const d = prksGetResearchGraphDebug && prksGetResearchGraphDebug(); return !!(d && d.cy); }",
+            timeout=30000,
+        )
 
-    split_ms = _time_until(
-        page,
-        "() => prksNavigate('#/folders', {target: 'tile'})",
-        "() => document.querySelectorAll('.prks-tile').length >= 2",
+    timed_main("routeFolderLibrary", "#/folders", "[data-prks-folder-library-view]")
+    timed_main("routeRecent", "#/recent", "[data-prks-recent-view]")
+    timed_main("routeProgress", "#/progress", "[data-prks-progress-view]")
+    timed_main("routePeople", "#/people", "[data-prks-people-index-view]")
+    timed_main("routeConcepts", "#/concepts", "[data-prks-concepts-index-view]")
+    timed_main("routeGraphChrome", "#/graph", "[data-prks-role='graph-body']")
+    timed_main("routeFolderDetail", lib, "[data-prks-folder-detail-view]")
+    timed_main(
+        "largeFolderCollection",
+        batch,
+        "[data-prks-folder-detail-view]",
+        after_wait=wait_cards,
+    )
+    timed_main(
+        "searchBatch",
+        "#/search?q=Batch",
+        "[data-prks-search-view]",
+        after_wait=wait_cards,
+    )
+    timed_main(
+        "researchGraphMount",
+        "#/graph",
+        "[data-prks-role='graph-body']",
+        after_wait=wait_graph_cy,
+    )
+
+    large_cards = page.evaluate("() => document.querySelectorAll('.project-card--work-card').length")
+    if scenarios.get("largeFolderCollection"):
+        scenarios["largeFolderCollection"]["cardCount"] = large_cards
+
+    _go_neutral(page)
+    page.evaluate("h => prksNavigate(h)", lib)
+    _wait_main_route(page, lib, "[data-prks-folder-detail-view]")
+    _mark_start(page)
+    page.evaluate("h => prksNavigate(h, {target: 'tile'})", lib)
+    page.wait_for_function(
+        "() => document.querySelectorAll('.prks-tile[data-prks-tab-id]').length >= 2",
         timeout=30000,
     )
+    split_ms = _elapsed(page)
     scenarios["splitOpen"] = {
-        "method": "prksNavigate(folder, {target:'tile'})",
+        "method": "prksNavigate(folder-detail, {target:'tile'}) from a single Main pane",
         "samplesMs": [round(split_ms, 3)],
         "medianMs": round(split_ms, 3),
     }
+
     side_samples = []
     for i in range(4):
-        ms = _time_until(
-            page,
-            "() => prksNavigate('#/recent', {target: 'tile'})" if i % 2 == 0
-            else "() => prksNavigate('#/people', {target: 'tile'})",
-            "() => document.querySelectorAll('.prks-tile').length >= 2",
+        dest = "#/people" if i % 2 == 0 else "#/concepts"
+        dest_name = "people" if dest == "#/people" else "concepts"
+        _mark_start(page)
+        page.evaluate("h => prksNavigate(h, {target: 'tile'})", dest)
+        page.wait_for_function(
+            """name => {
+              const mark = window.__prksB5Mark;
+              if (!mark || typeof prksForEachLiveTabContext !== 'function') return false;
+              let found = false;
+              prksForEachLiveTabContext((ctx) => {
+                const route = ctx.lastResolvedRoute || ctx.route;
+                if (!route || route.name !== name) return;
+                const prev = mark.gens[String(ctx.tabId)];
+                if (prev == null || ctx.generation > prev) found = true;
+              });
+              return found;
+            }""",
+            arg=dest_name,
             timeout=30000,
         )
+        ms = _elapsed(page)
         if i > 0:
             side_samples.append(ms)
     scenarios["secondaryNavWhileSplit"] = {
-        "method": "prksNavigate(..., {target:'tile'})",
+        "method": "prksNavigate(people|concepts, {target:'tile'}); settle on secondary route name + generation",
         "warmupDropped": 1,
         "samplesMs": [round(s, 3) for s in side_samples],
         "medianMs": round(_median(side_samples) or 0.0, 3),
@@ -541,23 +695,28 @@ def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:
 
     page.evaluate(
         """() => {
-          const ids = (prksWorkspaceSnapshot().tabs || []).map((t) => t.id);
-          if (ids.length > 1 && typeof prksWorkspaceCloseOtherTabs === 'function') {
-            return prksWorkspaceCloseOtherTabs(prksWorkspaceSnapshot().mainTabId);
+          const snap = prksWorkspaceSnapshot();
+          if (snap.tabs && snap.tabs.length > 1 && typeof prksWorkspaceCloseOtherTabs === 'function') {
+            return prksWorkspaceCloseOtherTabs(snap.mainTabId);
           }
           return false;
         }"""
     )
     time.sleep(0.3)
 
+    _go_neutral(page)
     page.evaluate("h => prksNavigate(h)", "#/folders")
-    page.wait_for_function("() => location.hash === '#/folders'", timeout=15000)
+    _wait_main_route(page, "#/folders", "[data-prks-folder-library-view]")
     page.evaluate("h => prksWorkspaceOpenTab(h, {activate: true})", "#/recent")
-    page.wait_for_function("() => location.hash === '#/recent'", timeout=15000)
+    page.wait_for_function(
+        "() => location.hash === '#/recent' && !!document.querySelector('[data-prks-recent-view]')",
+        timeout=15000,
+    )
     tab_samples = []
     for i in range(7):
         target = "#/folders" if i % 2 == 0 else "#/recent"
-        page.evaluate("() => { window.__prksB5T0 = performance.now(); }")
+        sel = "[data-prks-folder-library-view]" if target == "#/folders" else "[data-prks-recent-view]"
+        _mark_start(page)
         page.evaluate(
             """h => {
               const snap = prksWorkspaceSnapshot();
@@ -567,45 +726,58 @@ def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:
             }""",
             target,
         )
-        page.wait_for_function("h => location.hash === h", arg=target, timeout=15000)
-        ms = float(page.evaluate("() => performance.now() - window.__prksB5T0"))
+        page.wait_for_function(
+            """({hashPath, selector}) => {
+              if (location.hash !== hashPath) return false;
+              const mark = window.__prksB5Mark;
+              const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+              if (!ctx || !ctx.root || !mark) return false;
+              if (!ctx.root.querySelector(selector)) return false;
+              const prev = mark.gens[String(ctx.tabId)];
+              if (typeof prev === 'number') return ctx.generation > prev || (ctx.tabId !== mark.focusedTabId && ctx.suspended === false);
+              return ctx.tabId !== mark.focusedTabId;
+            }""",
+            arg={"hashPath": target, "selector": sel},
+            timeout=15000,
+        )
+        ms = _elapsed(page)
         if i > 0:
             tab_samples.append(ms)
     scenarios["tabSwitch"] = {
-        "method": "workspace tab activate after two stacked tabs",
+        "method": "activateTab between parked Folders and Recent; settle on destination view root",
         "warmupDropped": 1,
         "samplesMs": [round(s, 3) for s in tab_samples],
         "medianMs": round(_median(tab_samples) or 0.0, 3),
     }
 
-    page.evaluate("h => prksNavigate(h)", "#/folders")
-    page.wait_for_function("() => location.hash === '#/folders'", timeout=15000)
-    page.evaluate("() => { window.__prksB5T0 = performance.now(); }")
+    _go_neutral(page)
+    _mark_start(page)
     page.evaluate("h => prksNavigate(h)", work_a)
-    page.wait_for_function(pdf_main_pred, timeout=60000)
-    pdf_open = float(page.evaluate("() => performance.now() - window.__prksB5T0"))
+    _wait_pdf_work(page, work_a_id)
+    pdf_open = _elapsed(page)
     scenarios["pdfOpenCold"] = {
-        "method": "first prksNavigate(Work A) until PDF page in main tile",
+        "method": "first prksNavigate(Work A) until focused ctx work/pdf.workId match and a page under ctx.root",
         "samplesMs": [round(pdf_open, 3)],
         "medianMs": round(pdf_open, 3),
         "warmup": "none (cold open)",
+        "initCountsAfter": _probe(page).get("initCounts"),
     }
 
     notes_samples = []
     for i in range(4):
-        page.evaluate("h => prksNavigate(h)", "#/folders")
-        page.wait_for_function("() => location.hash === '#/folders'", timeout=15000)
-        page.evaluate("() => { window.__prksB5T0 = performance.now(); }")
+        _go_neutral(page)
+        _mark_start(page)
         page.evaluate("h => prksNavigate(h)", work_a)
+        _wait_pdf_work(page, work_a_id)
         page.wait_for_function(
             "() => document.querySelectorAll('.EasyMDEContainer, .work-notes-pane').length > 0",
             timeout=30000,
         )
-        ms = float(page.evaluate("() => performance.now() - window.__prksB5T0"))
+        ms = _elapsed(page)
         if i > 0:
             notes_samples.append(ms)
     scenarios["researchNotesMount"] = {
-        "method": "work route until notes/EasyMDE settle",
+        "method": "leave tags, open Work A until notes/EasyMDE settle",
         "warmupDropped": 1,
         "samplesMs": [round(s, 3) for s in notes_samples],
         "medianMs": round(_median(notes_samples) or 0.0, 3),
@@ -613,15 +785,17 @@ def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:
 
     close_samples = []
     for i in range(4):
+        _go_neutral(page)
         page.evaluate("h => prksNavigate(h)", work_a)
-        page.wait_for_function(pdf_main_pred, timeout=60000)
-        page.evaluate("() => { window.__prksB5T0 = performance.now(); }")
+        _wait_pdf_work(page, work_a_id)
+        _mark_start(page)
         page.evaluate("h => prksNavigate(h)", "#/folders")
+        _wait_main_route(page, "#/folders", "[data-prks-folder-library-view]")
         page.wait_for_function(
             "() => document.querySelectorAll('.prks-tile--main [data-prks-role=\"pdf-viewer\"]').length === 0",
             timeout=20000,
         )
-        ms = float(page.evaluate("() => performance.now() - window.__prksB5T0"))
+        ms = _elapsed(page)
         if i > 0:
             close_samples.append(ms)
     scenarios["pdfClose"] = {
@@ -632,14 +806,14 @@ def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:
     }
 
     cold_reopen = []
-    for i in range(3):
+    for _i in range(3):
+        _go_neutral(page)
         page.evaluate("h => prksNavigate(h)", "#/folders")
-        page.wait_for_function("() => location.hash === '#/folders'", timeout=15000)
-        page.evaluate("() => { window.__prksB5T0 = performance.now(); }")
+        _wait_main_route(page, "#/folders", "[data-prks-folder-library-view]")
+        _mark_start(page)
         page.evaluate("h => prksNavigate(h)", work_a)
-        page.wait_for_function(pdf_main_pred, timeout=60000)
-        ms = float(page.evaluate("() => performance.now() - window.__prksB5T0"))
-        cold_reopen.append(ms)
+        _wait_pdf_work(page, work_a_id)
+        cold_reopen.append(_elapsed(page))
     scenarios["pdfColdReopenAfterFolders"] = {
         "method": "reopen Work A after folders — cold route replacement, not warm resume",
         "label": "cold reopen",
@@ -649,17 +823,18 @@ def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:
     }
 
     ab_samples = []
+    _go_neutral(page)
     page.evaluate("h => prksNavigate(h)", work_a)
-    page.wait_for_function(pdf_main_pred, timeout=60000)
+    _wait_pdf_work(page, work_a_id)
     for i in range(6):
-        dest = work_b if i % 2 == 0 else work_a
-        page.evaluate("() => { window.__prksB5T0 = performance.now(); }")
-        page.evaluate("h => prksNavigate(h)", dest)
-        page.wait_for_function(pdf_main_pred, timeout=60000)
-        ms = float(page.evaluate("() => performance.now() - window.__prksB5T0"))
-        ab_samples.append(ms)
+        dest_hash = work_b if i % 2 == 0 else work_a
+        dest_id = work_b_id if i % 2 == 0 else work_a_id
+        _mark_start(page)
+        page.evaluate("h => prksNavigate(h)", dest_hash)
+        _wait_pdf_work(page, dest_id)
+        ab_samples.append(_elapsed(page))
     scenarios["workAToB"] = {
-        "method": "hash A↔B until PDF page in main tile",
+        "method": "hash A↔B until focused ctx work id + pdf.workId match dest and a page exists under ctx.root",
         "warmupDropped": 0,
         "samplesMs": [round(s, 3) for s in ab_samples],
         "medianMs": round(_median(ab_samples) or 0.0, 3),
@@ -677,24 +852,44 @@ def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:
     time.sleep(0.2)
 
     page.evaluate("h => prksNavigate(h)", work_a)
-    page.wait_for_function(pdf_main_pred, timeout=60000)
+    _wait_pdf_work(page, work_a_id)
     page.evaluate(INSTALL_HOOKS)
-    _probe(page)
 
-    # Parked-tab counterpart so activateTab warm-parks the PDF Work.
     page.evaluate("h => prksWorkspaceOpenTab(h, {activate: false})", "#/folders")
     page.wait_for_function(
         "() => (prksWorkspaceSnapshot().tabs || []).length >= 2",
         timeout=10000,
     )
 
+    def probe_work_tab(work_hash):
+        return page.evaluate(
+            """ha => {
+              const stamp = window.__prksB5Stamp || (() => null);
+              const snap = prksWorkspaceSnapshot();
+              const tab = (snap.tabs || []).find((t) => t.route === ha);
+              const ctx = tab && typeof prksGetTabContext === 'function' ? prksGetTabContext(tab.id) : null;
+              const pdf = ctx && typeof ctx.getResource === 'function' ? ctx.getResource('pdf') : null;
+              return {
+                tabId: tab ? tab.id : null,
+                ctxStamp: stamp(ctx),
+                ctxRootStamp: ctx ? stamp(ctx.root) : null,
+                ctxMounted: !!(ctx && ctx.mounted),
+                ctxSuspended: !!(ctx && ctx.suspended),
+                pdfRuntimeStamp: stamp(pdf),
+                pdfViewerStamp: pdf ? stamp(pdf.viewer) : null,
+                pdfViewerSetupToken: pdf && typeof pdf.viewerSetupToken === 'number' ? pdf.viewerSetupToken : null,
+                initCounts: Object.assign({}, window.__prksB5InitCounts || {}),
+              };
+            }""",
+            work_hash,
+        )
+
     warm_samples = []
     identity_rows = []
     for i in range(6):
         page.evaluate("h => prksNavigate(h)", work_a)
-        page.wait_for_function(pdf_main_pred, timeout=60000)
-        page.evaluate(INSTALL_HOOKS)
-        before_park = _probe(page)
+        _wait_pdf_work(page, work_a_id)
+        before_park = probe_work_tab(work_a)
         folders_tab = page.evaluate(
             """() => {
               const snap = prksWorkspaceSnapshot();
@@ -709,26 +904,22 @@ def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:
             "() => document.querySelector('#prks-tab-warm-parking [data-prks-role=\"pdf-viewer\"]')",
             timeout=20000,
         )
-        parked = _probe(page)
-        if not parked.get("pdfParked"):
-            raise RuntimeError("PDF did not warm-park into #prks-tab-warm-parking")
+        parked = probe_work_tab(work_a)
+        if not parked.get("ctxSuspended"):
+            raise RuntimeError("Work A TabContext was not suspended after folders activate")
+        time.sleep(0.15)
         req0 = tap.snapshot()
         inits0 = parked.get("initCounts") or {}
-        work_tab = page.evaluate(
-            """ha => {
-              const snap = prksWorkspaceSnapshot();
-              const tab = (snap.tabs || []).find((t) => t.route === ha);
-              return tab ? tab.id : null;
-            }""",
-            work_a,
-        )
-        page.evaluate("() => { window.__prksB5T0 = performance.now(); }")
+        work_tab = parked.get("tabId")
+        _mark_start(page)
         page.evaluate("id => prksWorkspaceActivateTab(id)", work_tab)
-        page.wait_for_function(pdf_main_pred, timeout=20000)
-        ms = float(page.evaluate("() => performance.now() - window.__prksB5T0"))
-        after = _probe(page)
+        _wait_pdf_work(page, work_a_id)
+        ms = _elapsed(page)
+        after = probe_work_tab(work_a)
         req_delta = tap.delta_since(req0)
         inits1 = after.get("initCounts") or {}
+        token_pre = before_park.get("pdfViewerSetupToken")
+        token_post = after.get("pdfViewerSetupToken")
         row = {
             "resumeMs": round(ms, 3),
             "sameTabContext": before_park.get("ctxStamp") == after.get("ctxStamp") and after.get("ctxStamp") is not None,
@@ -736,11 +927,16 @@ def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:
             and after.get("pdfRuntimeStamp") is not None,
             "samePdfViewer": before_park.get("pdfViewerStamp") == after.get("pdfViewerStamp")
             and after.get("pdfViewerStamp") is not None,
-            "viewerSetupTokenPre": before_park.get("pdfViewerSetupToken"),
-            "viewerSetupTokenPost": after.get("pdfViewerSetupToken"),
-            "workRequestDelta": (req_delta.get("byKind") or {}).get("work", 0),
-            "pdfRequestDelta": (req_delta.get("byKind") or {}).get("pdf", 0),
-            "requestDelta": req_delta,
+            "viewerSetupTokenPre": token_pre,
+            "viewerSetupTokenPost": token_post,
+            "viewerSetupTokenUnchanged": token_pre is not None and token_pre == token_post,
+            "workDetailGetDelta": req_delta.get("workDetailGet", 0),
+            "pdfRequestDelta": req_delta.get("pdfGet", 0),
+            "requestDelta": {
+                "total": req_delta.get("total"),
+                "byKind": req_delta.get("byKind"),
+                "events": req_delta.get("events"),
+            },
             "viewerInitDelta": int(inits1.get("initPdfViewerForWork") or 0) - int(inits0.get("initPdfViewerForWork") or 0),
             "createRuntimeDelta": int(inits1.get("createWorkPdfRuntime") or 0) - int(inits0.get("createWorkPdfRuntime") or 0),
             "createViewerDelta": int(inits1.get("createPrksPdfViewer") or 0) - int(inits0.get("createPrksPdfViewer") or 0),
@@ -752,6 +948,7 @@ def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:
         else:
             identity_rows.append({"warmup": True, **row})
 
+    measured_rows = [r for r in identity_rows if not r.get("warmup")]
     scenarios["pdfWarmResume"] = {
         "method": "warm-park via activateTab(folders) then prksResumeWarmTabContext via activateTab(Work A)",
         "warmupDropped": 1,
@@ -759,52 +956,63 @@ def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:
         "medianMs": round(_median(warm_samples) or 0.0, 3),
         "identity": identity_rows,
         "invariants": {
-            "sameTabContext": all(r.get("sameTabContext") for r in identity_rows if not r.get("warmup")),
-            "samePdfRuntime": all(r.get("samePdfRuntime") for r in identity_rows if not r.get("warmup")),
-            "samePdfViewer": all(r.get("samePdfViewer") for r in identity_rows if not r.get("warmup")),
-            "workRequestDeltaZero": all(
-                r.get("workRequestDelta") == 0 for r in identity_rows if not r.get("warmup")
-            ),
-            "pdfRequestDeltaZero": all(
-                r.get("pdfRequestDelta") == 0 for r in identity_rows if not r.get("warmup")
-            ),
-            "viewerInitDeltaZero": all(
-                r.get("viewerInitDelta") == 0 for r in identity_rows if not r.get("warmup")
-            ),
+            "sameTabContext": all(r.get("sameTabContext") for r in measured_rows),
+            "samePdfRuntime": all(r.get("samePdfRuntime") for r in measured_rows),
+            "samePdfViewer": all(r.get("samePdfViewer") for r in measured_rows),
+            "viewerSetupTokenUnchanged": all(r.get("viewerSetupTokenUnchanged") for r in measured_rows),
+            "workDetailGetDeltaZero": all(r.get("workDetailGetDelta") == 0 for r in measured_rows),
+            "pdfRequestDeltaZero": all(r.get("pdfRequestDelta") == 0 for r in measured_rows),
+            "viewerInitDeltaZero": all(r.get("viewerInitDelta") == 0 for r in measured_rows),
+            "createViewerDeltaZero": all(r.get("createViewerDelta") == 0 for r in measured_rows),
+            "createRuntimeDeltaZero": all(r.get("createRuntimeDelta") == 0 for r in measured_rows),
         },
     }
 
-    page.evaluate("h => prksNavigate(h)", batch)
-    page.wait_for_function(cards_pred, timeout=30000)
-    time.sleep(0.4)
+    def wait_folder_surface():
+        _mark_start(page)
+        page.evaluate("h => prksNavigate(h)", batch)
+        _wait_main_route(page, batch, "[data-prks-folder-detail-view]")
+        wait_cards()
+        time.sleep(0.3)
+
+    def wait_graph_surface():
+        _mark_start(page)
+        page.evaluate("h => prksNavigate(h)", "#/graph")
+        _wait_main_route(page, "#/graph", "[data-prks-role='graph-body']")
+        wait_graph_cy()
+        time.sleep(0.2)
+
+    wait_folder_surface()
     pre_folder = _lifetime_keys(_probe(page))
-    page.evaluate("h => prksNavigate(h)", "#/graph")
-    page.wait_for_function(graph_pred, timeout=30000)
-    time.sleep(0.2)
+    wait_graph_surface()
     pre_graph = _lifetime_keys(_probe(page))
 
     for _ in range(10):
-        page.evaluate("h => prksNavigate(h)", batch)
-        page.wait_for_function(cards_pred, timeout=30000)
+        wait_folder_surface()
+        _mark_start(page)
         page.evaluate("h => prksNavigate(h)", work_a)
-        page.wait_for_function(pdf_main_pred, timeout=60000)
-        page.evaluate("h => prksNavigate(h)", "#/graph")
-        page.wait_for_function(graph_pred, timeout=30000)
+        _wait_pdf_work(page, work_a_id)
+        wait_graph_surface()
+        _mark_start(page)
         page.evaluate("h => prksNavigate(h)", "#/recent")
-        page.wait_for_function("() => location.hash === '#/recent'", timeout=15000)
+        _wait_main_route(page, "#/recent", "[data-prks-recent-view]")
 
-    page.evaluate("h => prksNavigate(h)", batch)
-    page.wait_for_function(cards_pred, timeout=30000)
-    time.sleep(0.4)
+    wait_folder_surface()
     post_folder = _lifetime_keys(_probe(page))
-    page.evaluate("h => prksNavigate(h)", "#/graph")
-    page.wait_for_function(graph_pred, timeout=30000)
-    time.sleep(0.3)
+    folder_cards = page.evaluate(
+        """() => {
+          const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+          const root = ctx && ctx.root ? ctx.root : document;
+          return root.querySelectorAll('.project-card--work-card').length;
+        }"""
+    )
+    wait_graph_surface()
     post_graph = _lifetime_keys(_probe(page))
 
     lifetime = {
         "cycles": 10,
-        "sequence": "Large Batch folder → Work A → Graph → Recent, measured on folder then graph",
+        "sequence": "Large Batch folder → Work A → Graph → Recent; Pre/Post taken on folder then graph after a generation-bumped paint",
+        "leakProbes": "Global live Resize/Intersection/MutationObserver and EventTarget listener counts; __prksResearchGraphLiveCount; lazy-thumb tracked targets. Focused-runtime debug fields are not leak evidence.",
         "folderSurface": {"pre": pre_folder, "post": post_folder, "delta": _delta(pre_folder, post_folder)},
         "graphSurface": {"pre": pre_graph, "post": post_graph, "delta": _delta(pre_graph, post_graph)},
     }
@@ -818,18 +1026,228 @@ def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:
         "lifetime": lifetime,
         "serverDiagnostics": perf,
         "coordinatorAfterScenarios": coord,
-            "largeFolderCardCount": page.evaluate(
-            "() => document.querySelectorAll('.work-card').length"
-        ),
+        "largeFolderCardCount": folder_cards,
     }
     return _sanitize_ids(out, aliases)
 
+
+def _fmt_ms(value) -> str:
+    if value is None:
+        return "n/a"
+    try:
+        return "**%.1f** ms" % float(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _scenario_row(scenarios: dict, key: str, label: str, extra: str = "") -> str:
+    row = scenarios.get(key) or {}
+    median = row.get("medianMs")
+    samples = row.get("samplesMs") or []
+    warmup = row.get("warmupDropped")
+    method = row.get("method") or ""
+    bits = [_fmt_ms(median)]
+    if samples:
+        bits.append("n=%s" % len(samples))
+    if warmup:
+        bits.append("warmup dropped %s" % warmup)
+    if extra:
+        bits.append(extra)
+    if row.get("label"):
+        bits.append("label: %s" % row["label"])
+    result = "; ".join(bits)
+    return "| %s | %s | %s |" % (label, method.replace("|", "/"), result)
+
+
+def _probe_table(surface: dict) -> str:
+    pre = surface.get("pre") or {}
+    post = surface.get("post") or {}
+    delta = surface.get("delta") or {}
+    keys = list(pre.keys())
+    lines = ["| Probe | Pre | Post | Δ |", "| --- | --- | --- | --- |"]
+    for key in keys:
+        lines.append(
+            "| `%s` | %s | %s | %s |"
+            % (key, pre.get(key), post.get(key), delta.get(key))
+        )
+    return "\n".join(lines)
+
+
+def write_markdown(artifact: dict, path: Path) -> None:
+    ident = artifact.get("identity") or {}
+    shape = artifact.get("libraryShape") or {}
+    scenarios = artifact.get("scenarios") or {}
+    lifetime = artifact.get("lifetime") or {}
+    perf = artifact.get("serverDiagnostics") or {}
+    warm = scenarios.get("pdfWarmResume") or {}
+    invariants = warm.get("invariants") or {}
+    init_after = (scenarios.get("pdfOpenCold") or {}).get("initCountsAfter") or {}
+    nav = (scenarios.get("initialLoad") or {}).get("result") or {}
+    folder = lifetime.get("folderSurface") or {}
+    graph = lifetime.get("graphSurface") or {}
+    ua = ident.get("userAgent")
+    ua_s = ua.get("ua") if isinstance(ua, dict) else ua
+    window = perf.get("window") if isinstance(perf, dict) and "window" in perf else perf
+
+    lines = [
+        "# B5 browser performance / resource baselines (#454)",
+        "",
+        "Regression baseline and resource-lifetime evidence for the finish-line Vue",
+        "cutover. **No pass/fail thresholds** are invented here — numbers are a",
+        "comparison point for later work.",
+        "",
+        "Does **not** close #303 or #230. Does **not** mark B5 complete by itself.",
+        "Stacked on cleanup-only #453 (`cursor/b5-final-purge-228c`).",
+        "",
+        "## Measurement identity",
+        "",
+        "| Field | Value |",
+        "| --- | --- |",
+        "| Measured git HEAD | `%s` |" % ident.get("gitHead"),
+        "| App | `%s` |" % ident.get("app"),
+        "| Storage | temp `PRKS_STORAGE` (never repo `data/` / live production tree); recreate with the harness |",
+        "| Client harness | Playwright Chromium channel=`%s`, viewport %s, headless |"
+        % (ident.get("chromeChannel"), ident.get("viewport")),
+        "| Playwright browser version | `%s` |" % ident.get("playwrightBrowserVersion"),
+        "| User agent | `%s` |" % ua_s,
+        "| OS | `%s` |" % ident.get("os"),
+        "| Python | `%s` |" % ident.get("python"),
+        "| CPU | `%s` |" % ident.get("cpuModel"),
+        "| Timing | leave `#/tags`, then `performance.now()` until focused-ctx generation bump + route root |",
+        "| Server diagnostics | `GET /api/diagnostics/performance` after client scenarios |",
+        "| Leak probes | global live Resize/Intersection/MutationObserver + EventTarget listener counts; `__prksResearchGraphLiveCount`; Work-card lazy-thumb tracked targets |",
+        "| Privacy | Synthetic titles only (`Synthetic Work …`, `Synthetic Library`, …) |",
+        "",
+        "## Reproduce",
+        "",
+        "```bash",
+        "python scripts/b5_browser_baselines.py --storage /tmp/prks-b5-baselines-454 \\",
+        "  --output docs/b5-browser-baselines/browser-baselines.json \\",
+        "  --markdown docs/b5-browser-baselines.md",
+        "```",
+        "",
+        "Uses `python prks_app.py --testing` only. Seed procedure, settle predicates,",
+        "warmup policy, and raw samples live in the committed JSON next to this file.",
+        "",
+        "## Testing-library shape",
+        "",
+        "| Kind | Count / note |",
+        "| --- | --- |",
+        "| Works (browse) | %s |" % shape.get("worksBrowse"),
+        "| Title-only batch | %s in folder `Large Batch` |" % shape.get("titleOnlyBatch"),
+        "| Tiny PDF batch | %s in `Large Batch` |" % shape.get("tinyPdfBatch"),
+        "| Named PDF works | `%s` |" % "`, `".join(shape.get("namedPdfWorks") or []),
+        "| Folders | %s |" % shape.get("folders"),
+        "| Persons | %s |" % shape.get("persons"),
+        "| Concepts | %s |" % shape.get("concepts"),
+        "| Positions | %s |" % shape.get("positions"),
+        "| Research notes | %s |" % shape.get("notes"),
+        "| Seed reused | %s |" % shape.get("reusedExistingSeed"),
+        "",
+        "## Client scenario baselines (median ms unless noted)",
+        "",
+        "| Scenario | Method | Result |",
+        "| --- | --- | --- |",
+        "| Initial client load | Navigation Timing on `/` | duration %s; DCL %s; FP %s; FCP %s; transfer %s |"
+        % (
+            _fmt_ms(nav.get("durationMs")),
+            _fmt_ms(nav.get("domContentLoadedMs")),
+            _fmt_ms(nav.get("fpMs")),
+            _fmt_ms(nav.get("fcpMs")),
+            nav.get("transferSize"),
+        ),
+        _scenario_row(scenarios, "routeFolderLibrary", "Route → Folder Library"),
+        _scenario_row(scenarios, "routeRecent", "Route → Recent"),
+        _scenario_row(scenarios, "routeProgress", "Route → Progress"),
+        _scenario_row(scenarios, "routePeople", "Route → People"),
+        _scenario_row(scenarios, "routeConcepts", "Route → Concepts"),
+        _scenario_row(scenarios, "routeGraphChrome", "Route → Graph chrome"),
+        _scenario_row(scenarios, "routeFolderDetail", "Route → Folder detail"),
+        _scenario_row(scenarios, "tabSwitch", "Tab switching"),
+        _scenario_row(scenarios, "splitOpen", "Main/Secondary split open"),
+        _scenario_row(scenarios, "secondaryNavWhileSplit", "Secondary nav while split"),
+        _scenario_row(
+            scenarios,
+            "largeFolderCollection",
+            "Large folder collection",
+            extra="%s cards" % artifact.get("largeFolderCardCount"),
+        ),
+        _scenario_row(scenarios, "searchBatch", "Search `Batch`"),
+        _scenario_row(
+            scenarios,
+            "pdfOpenCold",
+            "PDF open (cold)",
+            extra="initCounts %s" % init_after,
+        ),
+        _scenario_row(
+            scenarios,
+            "pdfColdReopenAfterFolders",
+            "PDF cold reopen after folders",
+        ),
+        _scenario_row(
+            scenarios,
+            "pdfWarmResume",
+            "PDF warm resume (`prksResumeWarmTabContext`)",
+        ),
+        _scenario_row(scenarios, "pdfClose", "PDF close (cold unmount)"),
+        _scenario_row(scenarios, "workAToB", "Work A→B (dest work/pdf.workId)"),
+        _scenario_row(scenarios, "researchNotesMount", "Research Notes mount"),
+        _scenario_row(scenarios, "researchGraphMount", "Research Graph mount (cy)"),
+        "",
+        "Warm-resume invariants (measured rows, not warmup):",
+        "",
+        "```json",
+        json.dumps(invariants, indent=2, sort_keys=True),
+        "```",
+        "",
+        "## Repeated mount / resource lifetime",
+        "",
+        "%s cycles: %s"
+        % (lifetime.get("cycles"), lifetime.get("sequence") or ""),
+        "",
+        lifetime.get("leakProbes") or "",
+        "",
+        "These tables record **absolute** Pre/Post counts on the named surface after",
+        "a generation-bumped paint. Unchanged Δ is evidence only for the listed probes.",
+        "It does **not** claim that every listener or observer in the process was",
+        "released. Focused-runtime graph `debug()` fields (`resizeObserverLive`,",
+        "`chromeListenerCount`) describe the *current* mount and are omitted from the",
+        "leak table.",
+        "",
+        "### Folder surface (Large Batch)",
+        "",
+        _probe_table(folder),
+        "",
+        "### Graph surface (`#/graph`)",
+        "",
+        _probe_table(graph),
+        "",
+        "## Server diagnostics after client scenarios",
+        "",
+        "```json",
+        json.dumps(window if window else perf, indent=2, sort_keys=True)[:4000],
+        "```",
+        "",
+        "## Follow-ups",
+        "",
+        "- No tightly coupled migration defect is opened from this measurement pass.",
+        "- Known unrelated Full E2E flake: #383 (private-reminder hide→re-tile).",
+        "- Broader slowness is not turned into a threshold here.",
+        "",
+        "## Raw harness output",
+        "",
+        "Committed default capture: `docs/b5-browser-baselines/browser-baselines.json`.",
+        "Regenerate with `scripts/b5_browser_baselines.py` (this document is emitted from that JSON).",
+        "",
+    ]
+    path.write_text("\n".join(lines), encoding="utf-8")
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Record B5 browser baselines (#454)")
     parser.add_argument("--storage", default=str(DEFAULT_STORAGE), help="Testing PRKS_STORAGE (temp tree)")
     parser.add_argument("--port", type=int, default=0, help="Port (0 = ephemeral)")
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT), help="Sanitized JSON output path")
+    parser.add_argument("--markdown", default=str(DEFAULT_MARKDOWN), help="Markdown summary path")
     parser.add_argument("--keep-server", action="store_true")
     args = parser.parse_args()
 
@@ -846,16 +1264,27 @@ def main() -> int:
     log_file = storage / "prks-testing.log"
     env["PRKS_LOG_FILE"] = str(log_file)
 
+    err_path = storage / "server-stderr.log"
+    err_f = open(err_path, "wb")
     proc = subprocess.Popen(
         [sys.executable, str(REPO / "prks_app.py"), "--testing", "--port", str(port)],
         cwd=str(REPO),
         env=env,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
+        stderr=err_f,
     )
     base = "http://127.0.0.1:%s" % port
     try:
-        _wait_http(base)
+        try:
+            _wait_http(base)
+        except Exception:
+            err_f.flush()
+            snippet = ""
+            try:
+                snippet = err_path.read_text(encoding="utf-8", errors="replace")[-2000:]
+            except OSError:
+                snippet = ""
+            raise RuntimeError("server failed to start: %s" % snippet)
         seed = seed_library(base)
         sys.path.insert(0, str(REPO))
         from tests.e2e.install_browser import apply_playwright_browser_env, ensure_chromium_installed
@@ -890,7 +1319,7 @@ def main() -> int:
             browser.close()
 
         artifact = {
-            "schema": "prks-b5-browser-baselines/v2",
+            "schema": "prks-b5-browser-baselines/v3",
             "issue": 454,
             "privacy": "synthetic titles/ids only; request paths classified without query or filenames",
             "identity": {
@@ -924,11 +1353,14 @@ def main() -> int:
                 "PDF bytes may be browser-cached after the cold open."
             ),
             "settleConditions": {
-                "workspaceReady": "window.__prksWorkspaceReady === true",
-                "pdfMain": ".prks-tile--main [data-prks-role=pdf-viewer] .prks-pdf-page",
-                "graph": "prksGetResearchGraphDebug().cy truthy",
-                "largeFolder": ".work-card count >= 100",
-                "warmParked": "#prks-tab-warm-parking [data-prks-role=pdf-viewer]",
+                "neutralLeave": "#/tags + focused ctx [data-prks-tags-page]",
+                "routeMount": "location.hash + focused ctx.generation > mark + ctx.root querySelector(route root)",
+                "pdfWork": "focused ctx work.id and pdf.workId match dest; page under ctx.root",
+                "largeFolder": "focused ctx .project-card--work-card count >= 100 after folder-detail root",
+                "search": "[data-prks-search-view] after leave-to-tags, then same card count on focused ctx",
+                "graphCy": "generation bump + [data-prks-role=graph-body] + prksGetResearchGraphDebug().cy",
+                "secondaryNav": "a live ctx whose route.name is dest and generation > mark",
+                "warmParked": "#prks-tab-warm-parking [data-prks-role=pdf-viewer] and Work tab ctx.suspended",
             },
             "seed": {
                 "script": "scripts/b5_browser_baselines.py",
@@ -939,7 +1371,11 @@ def main() -> int:
         out_path = Path(args.output)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        md_path = Path(args.markdown)
+        md_path.parent.mkdir(parents=True, exist_ok=True)
+        write_markdown(artifact, md_path)
         print("wrote", out_path)
+        print("wrote", md_path)
         return 0
     finally:
         if not args.keep_server:
@@ -948,6 +1384,7 @@ def main() -> int:
                 proc.wait(timeout=8)
             except subprocess.TimeoutExpired:
                 proc.kill()
+        err_f.close()
 
 
 if __name__ == "__main__":
