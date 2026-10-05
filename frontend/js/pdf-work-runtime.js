@@ -551,11 +551,6 @@
     }
 
     function createWorkPdfRuntime(options) {
-        if (typeof root.__prksB5InitCounts !== 'object' || root.__prksB5InitCounts == null) {
-            root.__prksB5InitCounts = {};
-        }
-        root.__prksB5InitCounts.createWorkPdfRuntime =
-            (root.__prksB5InitCounts.createWorkPdfRuntime || 0) + 1;
         const opts = options || {};
         const workId = String(opts.workId || '');
         const drawerPref = readAnnotationDrawerPreference(opts.drawerStorage);

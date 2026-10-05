@@ -32,11 +32,6 @@ export function loadPrksPdfViewerModule(assetBaseUrl) {
 }
 
 export async function createPrksPdfViewer(options) {
-    if (typeof window !== 'undefined') {
-        window.__prksB5InitCounts = window.__prksB5InitCounts || {};
-        window.__prksB5InitCounts.createPrksPdfViewer =
-            (window.__prksB5InitCounts.createPrksPdfViewer || 0) + 1;
-    }
     const opts = options && typeof options === 'object' ? options : {};
     const assetBaseUrl = normalizeBase(opts.assetBaseUrl || DEFAULT_ASSET_BASE);
     const mod = await loadPrksPdfViewerModule(assetBaseUrl);

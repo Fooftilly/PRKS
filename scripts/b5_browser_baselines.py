@@ -42,11 +42,122 @@ NEUTRAL_HASH = "#/tags"
 INIT_SCRIPT = r"""
 (() => {
   const probe = {
-    live: { ResizeObserver: 0, IntersectionObserver: 0, MutationObserver: 0, eventListener: 0 },
-    constructed: { ResizeObserver: 0, IntersectionObserver: 0, MutationObserver: 0, eventListener: 0 },
-    disconnected: { ResizeObserver: 0, IntersectionObserver: 0, MutationObserver: 0, eventListener: 0 },
+    live: { ResizeObserver: 0, IntersectionObserver: 0, MutationObserver: 0 },
+    constructed: { ResizeObserver: 0, IntersectionObserver: 0, MutationObserver: 0 },
+    disconnected: { ResizeObserver: 0, IntersectionObserver: 0, MutationObserver: 0 },
   };
+  const listenerIds = new WeakMap();
+  let listenerSeq = 0;
+  const byTarget = new WeakMap();
+  const entries = new Set();
+  function listenerId(fn) {
+    if (fn == null || (typeof fn !== "function" && typeof fn !== "object")) return "null";
+    if (!listenerIds.has(fn)) {
+      listenerSeq += 1;
+      listenerIds.set(fn, listenerSeq);
+    }
+    return String(listenerIds.get(fn));
+  }
+  function captureFlag(options) {
+    if (options === true) return true;
+    if (options && typeof options === "object") return !!options.capture;
+    return false;
+  }
+  function keyOf(type, listener, capture) {
+    return String(type) + "\0" + (capture ? "1" : "0") + "\0" + listenerId(listener);
+  }
+  function isPersistentHost(t) {
+    if (t === window || t === document) return true;
+    if (!t || t.nodeType !== 1) return false;
+    if (t === document.documentElement || t === document.body) return true;
+    const id = t.id || "";
+    if (
+      id === "prks-tab-warm-parking" ||
+      id === "prks-workspace-tabs" ||
+      id === "prks-workspace-tile-layout" ||
+      id === "sidebar" ||
+      id === "prks-vue-root"
+    ) return true;
+    if (t.classList && t.classList.contains("prks-tile") && t.hasAttribute("data-prks-tab-id")) return true;
+    if (t.classList && t.classList.contains("prks-tab-root") && t.hasAttribute("data-prks-tab-id")) return true;
+    return false;
+  }
+  function liveListenerCount() {
+    let n = 0;
+    Array.from(entries).forEach((entry) => {
+      const t = entry.ref.deref();
+      if (!t) {
+        entries.delete(entry);
+        return;
+      }
+      if (isPersistentHost(t)) n += 1;
+    });
+    return n;
+  }
+  function release(entry) {
+    if (!entry || entry.dead) return;
+    entry.dead = true;
+    entries.delete(entry);
+    const t = entry.ref.deref();
+    if (t) {
+      const m = byTarget.get(t);
+      if (m) m.delete(entry.key);
+    }
+  }
+  const origAdd = EventTarget.prototype.addEventListener;
+  const origRemove = EventTarget.prototype.removeEventListener;
+  EventTarget.prototype.addEventListener = function (type, listener, options) {
+    if (!isPersistentHost(this) || listener == null) {
+      return origAdd.call(this, type, listener, options);
+    }
+    const capture = captureFlag(options);
+    const key = keyOf(type, listener, capture);
+    let map = byTarget.get(this);
+    if (!map) {
+      map = new Map();
+      byTarget.set(this, map);
+    }
+    if (map.has(key)) return origAdd.call(this, type, listener, options);
+    const once = !!(options && typeof options === "object" && options.once);
+    const signal = options && typeof options === "object" ? options.signal : null;
+    const entry = { key: key, ref: new WeakRef(this), dead: false, nativeListener: listener };
+    map.set(key, entry);
+    entries.add(entry);
+    let nativeListener = listener;
+    if (once) {
+      nativeListener = function wrappedOnce() {
+        try {
+          if (typeof listener === "function") return listener.apply(this, arguments);
+          if (listener && typeof listener.handleEvent === "function") {
+            return listener.handleEvent.apply(listener, arguments);
+          }
+        } finally {
+          release(entry);
+        }
+      };
+      entry.nativeListener = nativeListener;
+    }
+    if (signal && typeof signal.addEventListener === "function") {
+      signal.addEventListener("abort", function () { release(entry); }, { once: true });
+    }
+    return origAdd.call(this, type, nativeListener, options);
+  };
+  EventTarget.prototype.removeEventListener = function (type, listener, options) {
+    if (isPersistentHost(this) && listener != null) {
+      const map = byTarget.get(this);
+      const key = keyOf(type, listener, captureFlag(options));
+      const entry = map && map.get(key);
+      if (entry) {
+        const native = entry.nativeListener || listener;
+        release(entry);
+        return origRemove.call(this, type, native, options);
+      }
+    }
+    return origRemove.call(this, type, listener, options);
+  };
+  probe.liveListenerCount = liveListenerCount;
   window.__prksB5ObserverProbe = probe;
+  window.__prksB5LiveListenerCount = liveListenerCount;
   ["ResizeObserver", "IntersectionObserver", "MutationObserver"].forEach((name) => {
     const Orig = window[name];
     if (typeof Orig !== "function") return;
@@ -70,28 +181,11 @@ INIT_SCRIPT = r"""
     try { Object.setPrototypeOf(Wrapped, Orig); } catch (_e) {}
     window[name] = Wrapped;
   });
-  const origAdd = EventTarget.prototype.addEventListener;
-  const origRemove = EventTarget.prototype.removeEventListener;
-  EventTarget.prototype.addEventListener = function (type, listener, options) {
-    probe.constructed.eventListener += 1;
-    probe.live.eventListener += 1;
-    return origAdd.call(this, type, listener, options);
-  };
-  EventTarget.prototype.removeEventListener = function (type, listener, options) {
-    if (probe.live.eventListener > 0) probe.live.eventListener -= 1;
-    probe.disconnected.eventListener += 1;
-    return origRemove.call(this, type, listener, options);
-  };
 })();
 """
 
 INSTALL_HOOKS = r"""
 () => {
-  window.__prksB5InitCounts = window.__prksB5InitCounts || {
-    initPdfViewerForWork: 0,
-    createWorkPdfRuntime: 0,
-    createPrksPdfViewer: 0,
-  };
   if (!window.__prksB5Stamps) {
     window.__prksB5Stamps = new WeakMap();
     window.__prksB5StampN = 0;
@@ -157,7 +251,8 @@ RESOURCE_PROBE_JS = r"""
     pdfHostsMain: document.querySelectorAll(".prks-tile--main [data-prks-role='pdf-viewer']").length,
     pdfHostsParked: document.querySelectorAll("#prks-tab-warm-parking [data-prks-role='pdf-viewer']").length,
     easyMde: document.querySelectorAll(".EasyMDEContainer").length,
-    initCounts: Object.assign({}, window.__prksB5InitCounts || {}),
+    longLivedListenerLive: typeof window.__prksB5LiveListenerCount === "function"
+      ? window.__prksB5LiveListenerCount() : null,
     observers: obs,
     pdfVisibleMain: !!(mainPdf && mainPdf.getClientRects().length),
     pdfParked: !!parked,
@@ -480,6 +575,31 @@ def _wait_pdf_work(page, work_id: str, timeout: float = 60000) -> None:
     page.wait_for_function(_pdf_work_ready_js(), arg=work_id, timeout=timeout)
 
 
+def _wait_tile_route(page, route_name: str, selector: str, secondary_only: bool = True) -> None:
+    page.wait_for_function(
+        """({name, selector, secondaryOnly}) => {
+          const mark = window.__prksB5Mark;
+          if (!mark || typeof prksForEachLiveTabContext !== 'function') return false;
+          const isMain = typeof prksIsMainTabContext === 'function'
+            ? prksIsMainTabContext
+            : function () { return false; };
+          let found = false;
+          prksForEachLiveTabContext((ctx) => {
+            if (!ctx || !ctx.root) return;
+            if (secondaryOnly && isMain(ctx)) return;
+            const resolved = ctx.lastResolvedRoute;
+            if (!resolved || resolved.name !== name) return;
+            const prev = mark.gens[String(ctx.tabId)];
+            if (typeof prev === 'number' && !(ctx.generation > prev)) return;
+            if (ctx.root.querySelector(selector)) found = true;
+          });
+          return found;
+        }""",
+        arg={"name": route_name, "selector": selector, "secondaryOnly": secondary_only},
+        timeout=30000,
+    )
+
+
 def _probe(page) -> dict:
     page.evaluate(INSTALL_HOOKS)
     return page.evaluate(RESOURCE_PROBE_JS)
@@ -504,7 +624,7 @@ def _lifetime_keys(probe: dict) -> dict:
         "resizeObserverLive": live.get("ResizeObserver"),
         "intersectionObserverLive": live.get("IntersectionObserver"),
         "mutationObserverLive": live.get("MutationObserver"),
-        "eventListenerLive": live.get("eventListener"),
+        "longLivedListenerLive": probe.get("longLivedListenerLive"),
     }
 
 
@@ -657,9 +777,10 @@ def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:
         "() => document.querySelectorAll('.prks-tile[data-prks-tab-id]').length >= 2",
         timeout=30000,
     )
+    _wait_tile_route(page, "folder-detail", "[data-prks-folder-detail-view]", True)
     split_ms = _elapsed(page)
     scenarios["splitOpen"] = {
-        "method": "prksNavigate(folder-detail, {target:'tile'}) from a single Main pane",
+        "method": "prksNavigate(folder-detail, {target:'tile'}); settle on Secondary lastResolvedRoute folder-detail + view root",
         "samplesMs": [round(split_ms, 3)],
         "medianMs": round(split_ms, 3),
     }
@@ -668,29 +789,17 @@ def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:
     for i in range(4):
         dest = "#/people" if i % 2 == 0 else "#/concepts"
         dest_name = "people" if dest == "#/people" else "concepts"
+        dest_sel = (
+            "[data-prks-people-index-view]" if dest_name == "people" else "[data-prks-concepts-index-view]"
+        )
         _mark_start(page)
         page.evaluate("h => prksNavigate(h, {target: 'tile'})", dest)
-        page.wait_for_function(
-            """name => {
-              const mark = window.__prksB5Mark;
-              if (!mark || typeof prksForEachLiveTabContext !== 'function') return false;
-              let found = false;
-              prksForEachLiveTabContext((ctx) => {
-                const route = ctx.lastResolvedRoute || ctx.route;
-                if (!route || route.name !== name) return;
-                const prev = mark.gens[String(ctx.tabId)];
-                if (prev == null || ctx.generation > prev) found = true;
-              });
-              return found;
-            }""",
-            arg=dest_name,
-            timeout=30000,
-        )
+        _wait_tile_route(page, dest_name, dest_sel, True)
         ms = _elapsed(page)
         if i > 0:
             side_samples.append(ms)
     scenarios["secondaryNavWhileSplit"] = {
-        "method": "prksNavigate(people|concepts, {target:'tile'}); settle on secondary route name + generation",
+        "method": "prksNavigate(people|concepts, {target:'tile'}); Secondary lastResolvedRoute name + ctx.root view",
         "warmupDropped": 1,
         "samplesMs": [round(s, 3) for s in side_samples],
         "medianMs": round(_median(side_samples) or 0.0, 3),
@@ -763,7 +872,6 @@ def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:
         "samplesMs": [round(pdf_open, 3)],
         "medianMs": round(pdf_open, 3),
         "warmup": "none (cold open)",
-        "initCountsAfter": _probe(page).get("initCounts"),
     }
 
     notes_samples = []
@@ -881,7 +989,6 @@ def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:
                 pdfRuntimeStamp: stamp(pdf),
                 pdfViewerStamp: pdf ? stamp(pdf.viewer) : null,
                 pdfViewerSetupToken: pdf && typeof pdf.viewerSetupToken === 'number' ? pdf.viewerSetupToken : null,
-                initCounts: Object.assign({}, window.__prksB5InitCounts || {}),
               };
             }""",
             work_hash,
@@ -912,7 +1019,6 @@ def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:
             raise RuntimeError("Work A TabContext was not suspended after folders activate")
         time.sleep(0.15)
         req0 = tap.snapshot()
-        inits0 = parked.get("initCounts") or {}
         work_tab = parked.get("tabId")
         _mark_start(page)
         page.evaluate("id => prksWorkspaceActivateTab(id)", work_tab)
@@ -920,7 +1026,6 @@ def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:
         ms = _elapsed(page)
         after = probe_work_tab(work_a)
         req_delta = tap.delta_since(req0)
-        inits1 = after.get("initCounts") or {}
         token_pre = before_park.get("pdfViewerSetupToken")
         token_post = after.get("pdfViewerSetupToken")
         row = {
@@ -940,9 +1045,6 @@ def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:
                 "byKind": req_delta.get("byKind"),
                 "events": req_delta.get("events"),
             },
-            "viewerInitDelta": int(inits1.get("initPdfViewerForWork") or 0) - int(inits0.get("initPdfViewerForWork") or 0),
-            "createRuntimeDelta": int(inits1.get("createWorkPdfRuntime") or 0) - int(inits0.get("createWorkPdfRuntime") or 0),
-            "createViewerDelta": int(inits1.get("createPrksPdfViewer") or 0) - int(inits0.get("createPrksPdfViewer") or 0),
             "ctxSuspendedAfterPark": parked.get("ctxSuspended"),
         }
         if i > 0:
@@ -965,9 +1067,6 @@ def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:
             "viewerSetupTokenUnchanged": all(r.get("viewerSetupTokenUnchanged") for r in measured_rows),
             "workDetailGetDeltaZero": all(r.get("workDetailGetDelta") == 0 for r in measured_rows),
             "pdfRequestDeltaZero": all(r.get("pdfRequestDelta") == 0 for r in measured_rows),
-            "viewerInitDeltaZero": all(r.get("viewerInitDelta") == 0 for r in measured_rows),
-            "createViewerDeltaZero": all(r.get("createViewerDelta") == 0 for r in measured_rows),
-            "createRuntimeDeltaZero": all(r.get("createRuntimeDelta") == 0 for r in measured_rows),
         },
     }
 
@@ -1015,7 +1114,13 @@ def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:
     lifetime = {
         "cycles": 10,
         "sequence": "Large Batch folder → Work A → Graph → Recent; Pre/Post taken on folder then graph after a generation-bumped paint",
-        "leakProbes": "Global live Resize/Intersection/MutationObserver and EventTarget listener counts; __prksResearchGraphLiveCount; lazy-thumb tracked targets. Focused-runtime debug fields are not leak evidence.",
+        "leakProbes": (
+            "Global live Resize/Intersection/MutationObserver counts; long-lived EventTarget "
+            "listeners on window/document/body/shell/tile/tab-root only (WeakRef map; once/abort "
+            "release); __prksResearchGraphLiveCount; lazy-thumb tracked targets. Focused-runtime "
+            "graph debug fields are not leak evidence. Listener accumulation on discarded route "
+            "nodes is not counted."
+        ),
         "folderSurface": {"pre": pre_folder, "post": post_folder, "delta": _delta(pre_folder, post_folder)},
         "graphSurface": {"pre": pre_graph, "post": post_graph, "delta": _delta(pre_graph, post_graph)},
     }
@@ -1084,7 +1189,6 @@ def write_markdown(artifact: dict, path: Path) -> None:
     perf = artifact.get("serverDiagnostics") or {}
     warm = scenarios.get("pdfWarmResume") or {}
     invariants = warm.get("invariants") or {}
-    init_after = (scenarios.get("pdfOpenCold") or {}).get("initCountsAfter") or {}
     nav = (scenarios.get("initialLoad") or {}).get("result") or {}
     folder = lifetime.get("folderSurface") or {}
     graph = lifetime.get("graphSurface") or {}
@@ -1122,7 +1226,7 @@ def write_markdown(artifact: dict, path: Path) -> None:
         "| CPU | `%s` |" % ident.get("cpuModel"),
         "| Timing | leave `#/tags`, then `performance.now()` until focused-ctx generation bump + route root |",
         "| Server diagnostics | `GET /api/diagnostics/performance` after client scenarios |",
-        "| Leak probes | global live Resize/Intersection/MutationObserver + EventTarget listener counts; `__prksResearchGraphLiveCount`; Work-card lazy-thumb tracked targets |",
+        "| Leak probes | global live Resize/Intersection/MutationObserver; long-lived listeners on window/document/body/shell/tile/tab-root; `__prksResearchGraphLiveCount`; Work-card lazy-thumb tracked targets |",
         "| Privacy | Synthetic titles only (`Synthetic Work …`, `Synthetic Library`, …) |",
         "",
         "## Reproduce",
@@ -1180,12 +1284,7 @@ def write_markdown(artifact: dict, path: Path) -> None:
             extra="%s cards" % artifact.get("largeFolderCardCount"),
         ),
         _scenario_row(scenarios, "searchBatch", "Search `Batch`"),
-        _scenario_row(
-            scenarios,
-            "pdfOpenCold",
-            "PDF open (cold)",
-            extra="initCounts %s" % init_after,
-        ),
+        _scenario_row(scenarios, "pdfOpenCold", "PDF open (cold)"),
         _scenario_row(
             scenarios,
             "pdfColdReopenAfterFolders",
@@ -1216,13 +1315,12 @@ def write_markdown(artifact: dict, path: Path) -> None:
         "",
         "These tables record **absolute** Pre/Post counts on the named surface after",
         "a generation-bumped paint. Unchanged Δ is evidence only for the listed probes.",
-        "It does **not** claim that every listener or observer in the process was",
-        "released. Focused-runtime graph `debug()` fields (`resizeObserverLive`,",
-        "`chromeListenerCount`) describe the *current* mount and are omitted from the",
-        "leak table. `eventListenerLive` is a page-wide add/remove net from wrapping",
-        "`EventTarget.prototype`; a rising count is recorded here but is **not** treated",
-        "as proof that route-owned listeners leaked, and a flat count would still not",
-        "prove that every listener was released.",
+        "`longLivedListenerLive` counts registrations on `window` / `document` /",
+        "`document.body` / persistent shell, tile, and tab-root hosts, with `{once}` and",
+        "`AbortSignal` release. It is not a global add-minus-remove counter. Focused-runtime",
+        "graph `debug()` fields (`resizeObserverLive`, `chromeListenerCount`) describe the",
+        "*current* mount and are omitted from the leak table. Listener accumulation on",
+        "discarded route-owned nodes is outside this probe.",
         "",
         "### Folder surface (Large Batch)",
         "",
@@ -1369,7 +1467,8 @@ def main() -> int:
                 "largeFolder": "focused ctx .project-card--work-card count >= 100 after folder-detail root",
                 "search": "[data-prks-search-view] after leave-to-tags, then same card count on focused ctx",
                 "graphCy": "generation bump + [data-prks-role=graph-body] + prksGetResearchGraphDebug().cy",
-                "secondaryNav": "a live ctx whose route.name is dest and generation > mark",
+                "splitOpen": "second tile exists AND Secondary ctx lastResolvedRoute.name=folder-detail AND [data-prks-folder-detail-view] in that ctx.root",
+                "secondaryNav": "Secondary ctx lastResolvedRoute.name is people|concepts AND matching index view in that ctx.root AND generation > mark",
                 "warmParked": "#prks-tab-warm-parking [data-prks-role=pdf-viewer] and Work tab ctx.suspended",
             },
             "seed": {
