@@ -873,7 +873,12 @@
         }
 
         function debug() {
-            return { cy: liveCy, liveCount: liveCy ? 1 : 0 };
+            return {
+                cy: liveCy,
+                liveCount: liveCy ? 1 : 0,
+                resizeObserverLive: !!resizeObserver,
+                chromeListenerCount: unbinders.length,
+            };
         }
 
         function updateEdgeLabels(cy) {

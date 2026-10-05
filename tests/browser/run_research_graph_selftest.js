@@ -699,6 +699,9 @@ function makeCtx(tabId) {
 
     const framesBefore = pendingFrames.size;
     const mainRuntime = mainCtx.getResource('researchGraph');
+    const mainDbg = mainRuntime.debug();
+    assertEq(rows, 'main debug reports resize observer', mainDbg.resizeObserverLive, true);
+    assert(rows, 'main debug reports chrome listener count', typeof mainDbg.chromeListenerCount === 'number');
     mainRuntime.selectNode('concept:C-1');
     mainRuntime.selectNode('work:W-1');
     assertEq(rows, 'owner keeps one resize frame', pendingFrames.size, framesBefore + 1);
