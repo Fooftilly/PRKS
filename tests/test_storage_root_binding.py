@@ -174,6 +174,27 @@ class TestNewAndAdoptedRoots(RootTestCase):
         def maintenance_file(root):
             open(os.path.join(root, MAINT), "w").close()
 
+        def thumbs_file(root):
+            open(os.path.join(root, "thumbs"), "w").close()
+
+        def people_file(root):
+            open(os.path.join(root, "people"), "w").close()
+
+        def inbox_file(root):
+            open(os.path.join(root, "for_processing"), "w").close()
+
+        def text_index_dir(root):
+            os.mkdir(os.path.join(root, "prks_text_index.db"))
+
+        def research_index_link(root):
+            open(self.path("elsewhere-research.db"), "w").close()
+            os.symlink(
+                self.path("elsewhere-research.db"), os.path.join(root, "prks_research_index.db")
+            )
+
+        def log_dir(root):
+            os.mkdir(os.path.join(root, "prks-errors.log"))
+
         def database_link(root):
             with open(self.path("elsewhere.db"), "wb") as handle:
                 handle.write(root_binding.SQLITE_HEADER)
@@ -185,6 +206,12 @@ class TestNewAndAdoptedRoots(RootTestCase):
             "database_link": (database_link, "pdfs", "root_contains_link"),
             "pdfs_file": (pdfs_file, "db", "root_malformed"),
             "maintenance_file": (maintenance_file, "db", "root_malformed"),
+            "thumbs_file": (thumbs_file, "pdfs", "root_malformed"),
+            "people_file": (people_file, "db", "root_malformed"),
+            "inbox_file": (inbox_file, "pdfs", "root_malformed"),
+            "text_index_dir": (text_index_dir, "pdfs", "root_malformed"),
+            "research_index_link": (research_index_link, "db", "root_contains_link"),
+            "log_dir": (log_dir, "pdfs", "root_malformed"),
         }
         for label, (plant, proof, reason) in cases.items():
             with self.subTest(label):
@@ -201,6 +228,31 @@ class TestNewAndAdoptedRoots(RootTestCase):
                     self.open(root)
                 self.assertEqual(ctx.exception.reason, reason)
                 self.assert_untouched(root, before)
+
+    def test_reserved_names_follow_the_configured_components(self):
+        root = self.path("lib")
+        config = StorageConfig.for_testing(root)
+        names = root_binding.component_root_names(config)
+        self.assertEqual(
+            names["component_dirs"], {"pdfs", "thumbs", "people", "for_processing"}
+        )
+        self.assertEqual(
+            names["component_files"],
+            {"prks_text_index.db", "prks_research_index.db", "prks-errors.log"},
+        )
+        # Overrides placed outside the root reserve nothing in it.
+        moved = replace(
+            config, processing_dir=self.path("inbox"), log_file=self.path("errors.log")
+        )
+        names = root_binding.component_root_names(moved)
+        self.assertNotIn("for_processing", names["component_dirs"])
+        self.assertNotIn("prks-errors.log", names["component_files"])
+        # Plain components of the right type beside proof are still adopted.
+        os.makedirs(os.path.join(root, "pdfs"))
+        os.mkdir(os.path.join(root, "thumbs"))
+        open(os.path.join(root, "prks-errors.log"), "w").close()
+        open(os.path.join(root, "prks_text_index.db"), "wb").close()
+        self.assertTrue(self.open(root).adopted)
 
     def test_empty_database_file_is_not_proof_but_not_malformed(self):
         root = self.path("lib")

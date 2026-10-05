@@ -531,7 +531,43 @@ def _has_recoverable_maintenance_state(path: str) -> bool:
     return any(_is_plain_dir(os.path.join(path, name)) for name in RECOVERABLE_MAINTENANCE_DIRS)
 
 
-def classify_unmarked_root(root: str, *, db_filename: str) -> str:
+_COMPONENT_DIR_FIELDS = ("pdfs_dir", "thumbs_dir", "people_dir", "processing_dir")
+_COMPONENT_FILE_FIELDS = ("index_db_path", "research_index_db_path", "log_file")
+
+
+def component_root_names(config: Any) -> dict[str, frozenset[str]]:
+    """Top-level names ``config`` derives directly under its root, by kind.
+
+    Read from the same ``StorageConfig`` the server binds, so a new component
+    cannot drift out of :func:`classify_unmarked_root`. Overrides that place a
+    component elsewhere add nothing. The development inbox fallback counts when
+    it may be used.
+    """
+    root = os.path.abspath(config.root)
+
+    def top_level(path: Optional[str]) -> Optional[str]:
+        if not path:
+            return None
+        path = os.path.abspath(path)
+        return os.path.basename(path) if _same_path(os.path.dirname(path), root) else None
+
+    dir_paths = [getattr(config, name, None) for name in _COMPONENT_DIR_FIELDS]
+    if getattr(config, "processing_fallback_allowed", False):
+        dir_paths.append(paths.processing_prod_fallback(config.root))
+    file_paths = [getattr(config, name, None) for name in _COMPONENT_FILE_FIELDS]
+    return {
+        "component_dirs": frozenset(n for n in map(top_level, dir_paths) if n is not None),
+        "component_files": frozenset(n for n in map(top_level, file_paths) if n is not None),
+    }
+
+
+def classify_unmarked_root(
+    root: str,
+    *,
+    db_filename: str,
+    component_dirs: frozenset[str] = frozenset({"pdfs"}),
+    component_files: frozenset[str] = frozenset(),
+) -> str:
     """V3 for a directory without a marker: ``empty``, ``prks`` or ``foreign``.
 
     ``prks`` (adopt, §7.1) needs proof by type and content, not by name: the
@@ -543,12 +579,15 @@ def classify_unmarked_root(root: str, *, db_filename: str) -> str:
     leftover marker-write temporary. Anything else is ``foreign``.
 
     A reserved name of the wrong type -- the database as a directory, link or
-    non-SQLite file, ``pdfs`` or ``.prks-maintenance`` as anything but a plain
-    directory -- is ``foreign`` on its own, and next to otherwise valid proof
-    it is refused (``root_malformed``, or ``root_contains_link`` for a link)
-    rather than adopted, so such a directory is never marked as a library. An
-    empty database file, which SQLite itself can leave, is not proof but is
-    not malformed either.
+    non-SQLite file; ``.prks-maintenance`` or a component directory
+    (``component_dirs``: ``pdfs``, ``thumbs``, ``people``, the inbox) as
+    anything but a plain directory; a component file (``component_files``:
+    the index databases, the log) as anything but a plain file -- is
+    ``foreign`` on its own, and next to otherwise valid proof it is refused
+    (``root_malformed``, or ``root_contains_link`` for a link) rather than
+    adopted, so such a directory is never marked as a library. An empty
+    database file, which SQLite itself can leave, is not proof but is not
+    malformed either.
     """
     try:
         names = os.listdir(root)
@@ -585,13 +624,16 @@ def classify_unmarked_root(root: str, *, db_filename: str) -> str:
                     malformed.append(path)
                 foreign = True
             continue
-        if name == "pdfs":
-            if _is_plain_dir(path):
-                looks_like_prks = True
-            else:
+        if name in component_dirs:
+            if not _is_plain_dir(path):
                 malformed.append(path)
-                foreign = True
+            elif name == "pdfs":
+                looks_like_prks = True
+                continue
+            foreign = True
             continue
+        if name in component_files and not _is_plain_file(path):
+            malformed.append(path)
         foreign = True
     if looks_like_prks:
         for path in malformed:
@@ -1140,7 +1182,9 @@ def _look_before_leasing(
         if marker is not None:
             _refuse_unless_bindable(marker, expected_storage_root_id)
             return
-        kind = classify_unmarked_root(root_real, db_filename=db_filename)
+        kind = classify_unmarked_root(
+            root_real, db_filename=db_filename, **component_root_names(config)
+        )
         if kind == UNMARKED_FOREIGN:
             raise _foreign_root_error(root)
         if kind == UNMARKED_EMPTY and not may_create:
@@ -1205,7 +1249,9 @@ def _open_under_lease(
         _refuse_unless_bindable(marker, expected_storage_root_id)
         document: dict[str, Any] = dict(marker.document)
     else:
-        kind = classify_unmarked_root(root_real, db_filename=db_filename)
+        kind = classify_unmarked_root(
+            root_real, db_filename=db_filename, **component_root_names(config)
+        )
         if kind == UNMARKED_FOREIGN:
             raise _foreign_root_error(root)
         if expected_storage_root_id is not None:

@@ -1662,9 +1662,13 @@ parallel configuration system:
   interrupted mid-restore, whose database and `pdfs/` may be moved away, still
   reach `recover_incomplete_restore()`. A same-named entry of the wrong type, or
   arbitrary maintenance content, is foreign. A reserved name of the wrong type
-  next to otherwise valid proof (say `pdfs/` plus a directory named like the
-  database) is refused as `root_malformed` (`root_contains_link` for a link)
-  before anything is written, so that directory is never marked as a library.
+  next to otherwise valid proof is refused as `root_malformed`
+  (`root_contains_link` for a link) before anything is written, so that
+  directory is never marked as a library. Reserved names are the database,
+  `.prks-maintenance/`, and every component the bound `StorageConfig` derives
+  directly under the root: `pdfs/`, `thumbs/`, `people/` and the inbox must be
+  plain directories, and the index databases and the log plain files (say
+  `pdfs/` beside a file named `thumbs` is refused).
   An empty database file is neither proof nor malformed. Open question 5 stays
   open.
 - **Only a first run creates a root.** An empty or absent root becomes a new
