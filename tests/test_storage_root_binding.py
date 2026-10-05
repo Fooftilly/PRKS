@@ -377,6 +377,15 @@ class TestPlacement(RootTestCase):
                 self.assertEqual(ctx.exception.reason, "log_file_operational")
                 # Refused before anything is written.
                 self.assertFalse(os.path.lexists(root))
+        # A hard link keeps two distinct paths for one file.
+        with open(config_file, "w", encoding="utf-8") as handle:
+            handle.write("{}")
+        os.link(config_file, self.path("config-hardlink.log"))
+        config = replace(StorageConfig.for_testing(root), log_file=self.path("config-hardlink.log"))
+        with self.assertRaises(InvalidStorageRoot) as ctx:
+            root_binding.open_storage_root(config, config_file_path=config_file, register=False)
+        self.assertEqual(ctx.exception.reason, "log_file_operational")
+        self.assertFalse(os.path.lexists(root))
         # A log beside them is fine.
         config = replace(StorageConfig.for_testing(root), log_file=os.path.join(cfg_dir, "prks.log"))
         bound = root_binding.open_storage_root(config, config_file_path=config_file, register=False)

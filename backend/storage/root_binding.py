@@ -355,24 +355,46 @@ def _check_log_file_not_operational(
 
     Logging appends text to ``log_file``; landing on one of those would corrupt
     it, and the next startup would refuse the root or the configuration as
-    malformed. Compared by real path, so a link or an override spelling the
-    same file another way is caught before anything is written.
+    malformed. Compared by real path, so a symlink or an override spelling
+    the same file another way is caught, and by file identity, so a hard link
+    is too, before anything is written.
     """
     if not (log_file or "").strip():
         return
     log_real = os.path.realpath(os.path.abspath(log_file or ""))
-    operational = [os.path.join(root_real, MARKER_FILENAME)]
+    maintenance = os.path.join(root_real, MAINTENANCE_DIRNAME)
+    operational = [
+        os.path.join(root_real, MARKER_FILENAME),
+        os.path.join(maintenance, ROOT_LOCK_NAME),
+    ]
     if config_file_path:
         config_real = os.path.realpath(config_file_path)
         operational += [config_real, config_real + LOCK_SUFFIX]
-    if any(_same_path(log_real, path) for path in operational) or _is_within(
-        log_real, os.path.join(root_real, MAINTENANCE_DIRNAME)
+    if (
+        any(_same_path(log_real, path) for path in operational)
+        or _is_within(log_real, maintenance)
+        or _shares_a_file(log_real, operational)
     ):
         raise InvalidStorageRoot(
             "log_file_operational",
             f"The log file {log_file} cannot be the storage root marker, a file in "
             f"{MAINTENANCE_DIRNAME}/, or the PRKS bootstrap configuration file or its lock.",
         )
+
+
+def _shares_a_file(path: str, others: list[str]) -> bool:
+    """Whether an existing ``path`` is the same file as any existing ``others``."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return False
+    for other in others:
+        try:
+            if os.path.samestat(st, os.stat(other)):
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def _check_exists_or_creatable(root: str) -> None:
