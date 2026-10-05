@@ -1670,7 +1670,12 @@ parallel configuration system:
   anything. Choosing a genuinely new root is Phase D's command.
 - **V7 and V13 cover the whole root.** Under the lease, startup walks the
   resolved root completely without following links (excluding the root path
-  itself and top-level OS metadata such as `lost+found`). Any link or Windows
+  itself and top-level OS metadata: `lost+found`, and the volume metadata an
+  OS keeps at the top of a mounted volume, such as macOS `.Trashes` and
+  `.Spotlight-V100`, Linux `.Trash-<uid>`, and Windows `System Volume
+  Information` and `$RECYCLE.BIN`, which are often unlistable by the owner).
+  The same names do not make a fresh root non-empty for V3, so a library at
+  the root of an external disk keeps opening. Any link or Windows
   reparse point is refused, and so is any entry -- directory or regular file,
   so a file bind mount is caught -- on a device other than the root's. The one
   relaxation is an overlayfs root, where unmodified files may report the lower
@@ -1688,7 +1693,10 @@ parallel configuration system:
   entry re-anchors every root-relative `StorageConfig` path beneath the leased
   `root_real` (`BoundRoot.anchor()`), so retargeting a root link afterwards
   cannot move database, PDF or index I/O to a root whose marker and lease were
-  never checked. `configured_root` keeps the configured spelling.
+  never checked. `configured_root` keeps the configured spelling. The
+  development default's repository inbox fallback (used when
+  `/data/for_processing` cannot be created) is derived from the bound root
+  for the same reason.
 - **V11 install directory.** A packaged build refuses any root inside the
   install directory. A source checkout refuses only the checkout itself or a
   root containing it, so existing self-hosted roots inside a checkout keep

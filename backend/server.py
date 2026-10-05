@@ -398,7 +398,9 @@ def bind_storage(config: StorageConfig) -> StorageConfig:
     except OSError:
         if not config.processing_fallback_allowed:
             raise
-        processing_local = paths.processing_prod_fallback()
+        # Fallback is only allowed for the development-default root, so derive
+        # it from the bound root: anchored, it stays beneath the leased target.
+        processing_local = paths.processing_prod_fallback(config.root)
         os.makedirs(processing_local, exist_ok=True)
     if processing_local != config.processing_dir:
         config = replace(

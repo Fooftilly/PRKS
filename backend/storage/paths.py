@@ -168,5 +168,13 @@ def derive_log_file(*, root: str, log_override: str) -> str:
     return os.path.join(root, "prks-errors.log")
 
 
-def processing_prod_fallback() -> str:
-    return os.path.join(_REPO_ROOT, "data", "for_processing")
+def processing_prod_fallback(root: Optional[str] = None) -> str:
+    """The repo inbox used when ``/data/for_processing`` cannot be created.
+
+    The fallback applies only to the development-default root, ``<repo>/data``.
+    Pass that root as bound (anchored to the leased resolved root) so the inbox
+    stays beneath it even when ``<repo>/data`` is a link (storage-architecture
+    §7.3); without it the repository spelling is used.
+    """
+    base = root if root is not None else os.path.join(_REPO_ROOT, "data")
+    return os.path.join(base, "for_processing")
