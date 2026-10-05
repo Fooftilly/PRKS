@@ -161,11 +161,16 @@ def extract_pdf(
     except Exception:
         raise PDFTextExtractorUnavailable() from None
     parts: List[str] = []
+    total_chars = 0
     try:
         with fitz.open(pdf_path) as doc:
             for page in doc:
-                parts.append(page.get_text("text") or "")
-                if sum(len(p) for p in parts) >= max_chars:
+                page_text = page.get_text("text") or ""
+                parts.append(page_text)
+                # Running total of page text only; the "\n" separators added
+                # by the join below are deliberately not counted here.
+                total_chars += len(page_text)
+                if total_chars >= max_chars:
                     break
     except PDFTextExtractorUnavailable:
         raise
