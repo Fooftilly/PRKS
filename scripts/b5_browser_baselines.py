@@ -332,20 +332,40 @@ def _folder_by_title(folders, title: str):
     return None
 
 
+def _person_named(persons, first: str, last: str):
+    for item in persons or []:
+        if (item.get("first_name") or "") == first and (item.get("last_name") or "") == last:
+            return item
+    return None
+
+
+def _named(items, key: str, value: str):
+    for item in items or []:
+        if (item.get(key) or "") == value:
+            return item
+    return None
+
+
 def seed_library(base: str) -> dict:
     folders = _http_json("GET", base + "/api/folders") or []
     works = _http_json("GET", base + "/api/works") or []
+    persons = _http_json("GET", base + "/api/persons") or []
+    concepts = _http_json("GET", base + "/api/concepts") or []
     lib = _folder_by_title(folders if isinstance(folders, list) else [], "Synthetic Library")
     batch = _folder_by_title(folders if isinstance(folders, list) else [], "Large Batch")
     a = next((w for w in works if (w.get("title") or "") == "Synthetic Work A"), None)
     b = next((w for w in works if (w.get("title") or "") == "Synthetic Work B"), None)
-    if lib and batch and a and b and len(works) >= 140:
+    person = _person_named(persons if isinstance(persons, list) else [], "Ada", "Synthetic")
+    concept = _named(concepts if isinstance(concepts, list) else [], "name", "Synthetic Concept One")
+    if lib and batch and a and b and person and concept and len(works) >= 140:
         return {
             "reused": True,
             "library_id": lib.get("id"),
             "batch_id": batch.get("id"),
             "work_a": a.get("id"),
             "work_b": b.get("id"),
+            "person_a": person.get("id"),
+            "concept_one": concept.get("id"),
             "work_count": len(works),
         }
 
@@ -355,7 +375,7 @@ def seed_library(base: str) -> dict:
         base + "/api/folders",
         {"title": "Large Batch", "description": "", "parent_id": library["id"]},
     )
-    _http_json("POST", base + "/api/persons", {"first_name": "Ada", "last_name": "Synthetic"})
+    p1 = _http_json("POST", base + "/api/persons", {"first_name": "Ada", "last_name": "Synthetic"})
     _http_json("POST", base + "/api/persons", {"first_name": "Alan", "last_name": "Baseline"})
     c1 = _http_json("POST", base + "/api/concepts", {"name": "Synthetic Concept One", "description": ""})
     _http_json("POST", base + "/api/concepts", {"name": "Synthetic Concept Two", "description": ""})
@@ -416,8 +436,9 @@ def seed_library(base: str) -> dict:
         "batch_id": batch["id"],
         "work_a": work_a["id"],
         "work_b": work_b["id"],
-        "work_count": len(works),
+        "person_a": p1.get("id") if isinstance(p1, dict) else None,
         "concept_one": c1.get("id") if isinstance(c1, dict) else None,
+        "work_count": len(works),
     }
 
 
@@ -675,7 +696,10 @@ def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:
         seed["work_b"]: "WORK_B",
         seed["library_id"]: "FOLDER_LIB",
         seed["batch_id"]: "FOLDER_BATCH",
+        seed.get("person_a"): "PERSON_A",
+        seed.get("concept_one"): "CONCEPT_ONE",
     }
+    aliases = {k: v for k, v in aliases.items() if k}
     work_a = "#/works/" + seed["work_a"]
     work_b = "#/works/" + seed["work_b"]
     batch = "#/folders/" + seed["batch_id"]
@@ -785,21 +809,44 @@ def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:
         "medianMs": round(split_ms, 3),
     }
 
+    person_hash = "#/people/" + seed["person_a"]
+    concept_hash = "#/concepts/" + seed["concept_one"]
+    if not seed.get("person_a") or not seed.get("concept_one"):
+        raise RuntimeError("seed missing person_a/concept_one for Secondary nav")
+
     side_samples = []
     for i in range(4):
-        dest = "#/people" if i % 2 == 0 else "#/concepts"
-        dest_name = "people" if dest == "#/people" else "concepts"
+        dest = person_hash if i % 2 == 0 else concept_hash
+        dest_name = "person" if dest == person_hash else "concept-detail"
         dest_sel = (
-            "[data-prks-people-index-view]" if dest_name == "people" else "[data-prks-concepts-index-view]"
+            "[data-prks-person-detail-view]"
+            if dest_name == "person"
+            else "[data-prks-concept-detail-view]"
         )
+        secondary_id = page.evaluate(
+            """() => {
+              const snap = prksWorkspaceSnapshot();
+              if (!snap) return null;
+              const tab = (snap.tabs || []).find((t) => t.id !== snap.mainTabId);
+              return tab ? tab.id : null;
+            }"""
+        )
+        if not secondary_id:
+            raise RuntimeError("no Secondary tab for in-place tile nav")
         _mark_start(page)
-        page.evaluate("h => prksNavigate(h, {target: 'tile'})", dest)
+        page.evaluate(
+            "({h, id}) => prksNavigate(h, {tabId: id})",
+            {"h": dest, "id": secondary_id},
+        )
         _wait_tile_route(page, dest_name, dest_sel, True)
         ms = _elapsed(page)
         if i > 0:
             side_samples.append(ms)
     scenarios["secondaryNavWhileSplit"] = {
-        "method": "prksNavigate(people|concepts, {target:'tile'}); Secondary lastResolvedRoute name + ctx.root view",
+        "method": (
+            "in-place prksNavigate(person-detail|concept-detail, {tabId: secondary}); "
+            "people/concepts indexes are not tile-capable. Settle on Secondary lastResolvedRoute + view root"
+        ),
         "warmupDropped": 1,
         "samplesMs": [round(s, 3) for s in side_samples],
         "medianMs": round(_median(side_samples) or 0.0, 3),
@@ -1468,7 +1515,7 @@ def main() -> int:
                 "search": "[data-prks-search-view] after leave-to-tags, then same card count on focused ctx",
                 "graphCy": "generation bump + [data-prks-role=graph-body] + prksGetResearchGraphDebug().cy",
                 "splitOpen": "second tile exists AND Secondary ctx lastResolvedRoute.name=folder-detail AND [data-prks-folder-detail-view] in that ctx.root",
-                "secondaryNav": "Secondary ctx lastResolvedRoute.name is people|concepts AND matching index view in that ctx.root AND generation > mark",
+                "secondaryNav": "in-place Secondary tabId to person|concept-detail; lastResolvedRoute.name + matching detail view in that ctx.root (indexes are not tile-capable)",
                 "warmParked": "#prks-tab-warm-parking [data-prks-role=pdf-viewer] and Work tab ctx.suspended",
             },
             "seed": {
