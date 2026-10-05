@@ -1429,6 +1429,58 @@ def write_markdown(artifact: dict, path: Path) -> None:
     ]
     path.write_text("\n".join(lines), encoding="utf-8")
 
+
+class B5StorageGuardError(ValueError):
+    """Selected --storage is /data, repo data/, or an inherited live PRKS_STORAGE."""
+
+
+def _resolve_storage_path(raw: str | os.PathLike[str]) -> Path:
+    return Path(raw).expanduser().resolve(strict=False)
+
+
+def _is_same_or_beneath(candidate: Path, root: Path) -> bool:
+    try:
+        return candidate == root or candidate.is_relative_to(root)
+    except (OSError, ValueError):
+        return False
+
+
+def assert_b5_storage_allowed(
+    storage: str | os.PathLike[str],
+    *,
+    inherited_raw: str | None,
+) -> Path:
+    """Refuse repo data/, /data, and an inherited live PRKS_STORAGE root.
+
+    ``inherited_raw`` must be captured from ``os.environ['PRKS_STORAGE']``
+    *before* the harness copies and overwrites ``env``. Selected storage is
+    refused when it equals or sits beneath that live root. Path containment
+    is used, not string prefix matching.
+    """
+    canonical = _resolve_storage_path(storage)
+    repo = _resolve_storage_path(REPO)
+    production = _resolve_storage_path("/data")
+    repo_data = _resolve_storage_path(repo / "data")
+    if _is_same_or_beneath(canonical, production):
+        raise B5StorageGuardError("Refusing storage path under /data")
+    if _is_same_or_beneath(canonical, repo_data):
+        raise B5StorageGuardError(
+            "Refusing storage path under the repository data directory"
+        )
+    if canonical.name == "data":
+        raise B5StorageGuardError(
+            "Refusing storage path that looks like production data/"
+        )
+    inherited = "" if inherited_raw is None else str(inherited_raw).strip()
+    if inherited:
+        live_root = _resolve_storage_path(inherited)
+        if _is_same_or_beneath(canonical, live_root):
+            raise B5StorageGuardError(
+                "Refusing storage path that equals or is beneath the inherited live PRKS_STORAGE"
+            )
+    return canonical
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Record B5 browser baselines (#454)")
     parser.add_argument("--storage", default=str(DEFAULT_STORAGE), help="Testing PRKS_STORAGE (temp tree)")
@@ -1438,9 +1490,11 @@ def main() -> int:
     parser.add_argument("--keep-server", action="store_true")
     args = parser.parse_args()
 
-    storage = Path(args.storage).resolve()
-    if "data" in storage.parts and str(storage).endswith("/data") or storage.name == "data":
-        print("Refusing storage path that looks like production data/", file=sys.stderr)
+    inherited_raw = os.environ.get("PRKS_STORAGE")
+    try:
+        storage = assert_b5_storage_allowed(args.storage, inherited_raw=inherited_raw)
+    except B5StorageGuardError as exc:
+        print(str(exc), file=sys.stderr)
         return 2
     storage.mkdir(parents=True, exist_ok=True)
     port = args.port or _find_port()
