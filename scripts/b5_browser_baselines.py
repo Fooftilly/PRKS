@@ -1109,8 +1109,12 @@ def write_markdown(artifact: dict, path: Path) -> None:
         "| Measured git HEAD | `%s` |" % ident.get("gitHead"),
         "| App | `%s` |" % ident.get("app"),
         "| Storage | temp `PRKS_STORAGE` (never repo `data/` / live production tree); recreate with the harness |",
-        "| Client harness | Playwright Chromium channel=`%s`, viewport %s, headless |"
-        % (ident.get("chromeChannel"), ident.get("viewport")),
+        "| Client harness | Playwright Chromium channel=`%s`, viewport %s×%s, headless |"
+        % (
+            ident.get("chromeChannel"),
+            (ident.get("viewport") or {}).get("width") if isinstance(ident.get("viewport"), dict) else VIEWPORT["width"],
+            (ident.get("viewport") or {}).get("height") if isinstance(ident.get("viewport"), dict) else VIEWPORT["height"],
+        ),
         "| Playwright browser version | `%s` |" % ident.get("playwrightBrowserVersion"),
         "| User agent | `%s` |" % ua_s,
         "| OS | `%s` |" % ident.get("os"),
@@ -1215,7 +1219,10 @@ def write_markdown(artifact: dict, path: Path) -> None:
         "It does **not** claim that every listener or observer in the process was",
         "released. Focused-runtime graph `debug()` fields (`resizeObserverLive`,",
         "`chromeListenerCount`) describe the *current* mount and are omitted from the",
-        "leak table.",
+        "leak table. `eventListenerLive` is a page-wide add/remove net from wrapping",
+        "`EventTarget.prototype`; a rising count is recorded here but is **not** treated",
+        "as proof that route-owned listeners leaked, and a flat count would still not",
+        "prove that every listener was released.",
         "",
         "### Folder surface (Large Batch)",
         "",
