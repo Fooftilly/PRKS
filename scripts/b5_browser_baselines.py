@@ -87,7 +87,11 @@ INIT_SCRIPT = r"""
     Array.from(entries).forEach((entry) => {
       const t = entry.ref.deref();
       if (!t) {
-        entries.delete(entry);
+        release(entry);
+        return;
+      }
+      if (t !== window && t !== document && !t.isConnected) {
+        release(entry);
         return;
       }
       if (isPersistentHost(t)) n += 1;
@@ -1164,9 +1168,8 @@ def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:
         "leakProbes": (
             "Global live Resize/Intersection/MutationObserver counts; long-lived EventTarget "
             "listeners on window/document/body/shell/tile/tab-root only (WeakRef map; once/abort "
-            "release); __prksResearchGraphLiveCount; lazy-thumb tracked targets. Focused-runtime "
-            "graph debug fields are not leak evidence. Listener accumulation on discarded route "
-            "nodes is not counted."
+            "release; disconnected tile/tab-root hosts are dropped). __prksResearchGraphLiveCount; "
+            "lazy-thumb tracked targets. Focused-runtime graph debug fields are not leak evidence."
         ),
         "folderSurface": {"pre": pre_folder, "post": post_folder, "delta": _delta(pre_folder, post_folder)},
         "graphSurface": {"pre": pre_graph, "post": post_graph, "delta": _delta(pre_graph, post_graph)},
@@ -1228,6 +1231,33 @@ def _probe_table(surface: dict) -> str:
     return "\n".join(lines)
 
 
+def _summarize_server_diagnostics(perf: dict, top_n: int = 8) -> dict:
+    if not isinstance(perf, dict):
+        return {}
+    src = perf.get("window") if isinstance(perf.get("window"), dict) else perf
+    routes = list(src.get("routes") or [])
+    ranked = sorted(routes, key=lambda r: int((r or {}).get("count") or 0), reverse=True)[:top_n]
+    slim = []
+    for row in ranked:
+        slim.append(
+            {
+                "method": row.get("method"),
+                "route": row.get("route"),
+                "count": row.get("count"),
+                "avg_ms": row.get("avg_ms"),
+                "p50_ms": row.get("p50_ms"),
+                "p95_ms": row.get("p95_ms"),
+                "slow_count": row.get("slow_count"),
+            }
+        )
+    return {
+        "counters": src.get("counters"),
+        "requests": src.get("requests"),
+        "measured_for_seconds": src.get("measured_for_seconds"),
+        "topRoutesByCount": slim,
+    }
+
+
 def write_markdown(artifact: dict, path: Path) -> None:
     ident = artifact.get("identity") or {}
     shape = artifact.get("libraryShape") or {}
@@ -1241,7 +1271,7 @@ def write_markdown(artifact: dict, path: Path) -> None:
     graph = lifetime.get("graphSurface") or {}
     ua = ident.get("userAgent")
     ua_s = ua.get("ua") if isinstance(ua, dict) else ua
-    window = perf.get("window") if isinstance(perf, dict) and "window" in perf else perf
+    diag_summary = _summarize_server_diagnostics(perf)
 
     lines = [
         "# B5 browser performance / resource baselines (#454)",
@@ -1273,7 +1303,7 @@ def write_markdown(artifact: dict, path: Path) -> None:
         "| CPU | `%s` |" % ident.get("cpuModel"),
         "| Timing | leave `#/tags`, then `performance.now()` until focused-ctx generation bump + route root |",
         "| Server diagnostics | `GET /api/diagnostics/performance` after client scenarios |",
-        "| Leak probes | global live Resize/Intersection/MutationObserver; long-lived listeners on window/document/body/shell/tile/tab-root; `__prksResearchGraphLiveCount`; Work-card lazy-thumb tracked targets |",
+        "| Leak probes | global live Resize/Intersection/MutationObserver; long-lived listeners on connected window/document/body/shell/tile/tab-root hosts; `__prksResearchGraphLiveCount`; Work-card lazy-thumb tracked targets |",
         "| Privacy | Synthetic titles only (`Synthetic Work …`, `Synthetic Library`, …) |",
         "",
         "## Reproduce",
@@ -1364,10 +1394,10 @@ def write_markdown(artifact: dict, path: Path) -> None:
         "a generation-bumped paint. Unchanged Δ is evidence only for the listed probes.",
         "`longLivedListenerLive` counts registrations on `window` / `document` /",
         "`document.body` / persistent shell, tile, and tab-root hosts, with `{once}` and",
-        "`AbortSignal` release. It is not a global add-minus-remove counter. Focused-runtime",
-        "graph `debug()` fields (`resizeObserverLive`, `chromeListenerCount`) describe the",
-        "*current* mount and are omitted from the leak table. Listener accumulation on",
-        "discarded route-owned nodes is outside this probe.",
+        "`AbortSignal` release. Detached tile/tab-root hosts (`!isConnected`) are dropped,",
+        "so the count is live hosts only. It is not a global add-minus-remove counter.",
+        "Focused-runtime graph `debug()` fields (`resizeObserverLive`, `chromeListenerCount`)",
+        "describe the *current* mount and are omitted from the leak table.",
         "",
         "### Folder surface (Large Batch)",
         "",
@@ -1380,8 +1410,10 @@ def write_markdown(artifact: dict, path: Path) -> None:
         "## Server diagnostics after client scenarios",
         "",
         "```json",
-        json.dumps(window if window else perf, indent=2, sort_keys=True)[:4000],
+        json.dumps(diag_summary, indent=2, sort_keys=True),
         "```",
+        "",
+        "Summarized subset (`counters`, `requests`, top 8 routes by count). Full `serverDiagnostics` is in `docs/b5-browser-baselines/browser-baselines.json`.",
         "",
         "## Follow-ups",
         "",
