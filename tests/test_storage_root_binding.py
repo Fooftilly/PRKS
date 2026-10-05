@@ -635,7 +635,7 @@ class TestWarnings(RootTestCase):
             patch.object(root_binding.shutil, "disk_usage", return_value=usage),
             self.assertLogs("prks.storage", level="INFO") as logs,
         ):
-            self.open(root)
+            self.open(root).log_binding()
         text = "\n".join(logs.output)
         self.assertIn("storage_root_uncertain_filesystem fs_type=fuse.unknownfs", text)
         self.assertIn("storage_root_low_free_space", text)
@@ -827,6 +827,9 @@ class TestProcessEntry(RootTestCase):
             main.index("open_storage(config)"),
             main.index("recover_incomplete_restore(config)"),
             main.index("bind_storage(config)"),
+            # The source report needs logging configured, or INFO is dropped.
+            main.index("setup_logging(config)"),
+            main.index("bound_root.log_binding()"),
             main.index("run_server("),
         ]
         self.assertEqual(order, sorted(order))

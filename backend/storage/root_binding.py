@@ -135,6 +135,20 @@ class BoundRoot:
         """``config`` with its root-relative paths pinned to this lease's resolved root."""
         return config.anchored_to(self.root_real)
 
+    def log_binding(self) -> None:
+        """Report which source selected this root (path-free).
+
+        The process entry calls this once logging is configured: opening the
+        root necessarily happens first, and an INFO record emitted then would
+        be dropped.
+        """
+        LOGGER.info(
+            "storage_root_bound source=%s created=%s adopted=%s",
+            self.source or "direct",
+            "true" if self.created else "false",
+            "true" if self.adopted else "false",
+        )
+
     def release(self) -> None:
         """Release the lease (tests and orderly shutdown; the kernel does it on exit)."""
         global _ACTIVE
@@ -896,12 +910,6 @@ def open_storage_root(
         raise
     if register:
         _register(bound)
-    LOGGER.info(
-        "storage_root_bound source=%s created=%s adopted=%s",
-        getattr(config, "root_source", None) or "direct",
-        "true" if bound.created else "false",
-        "true" if bound.adopted else "false",
-    )
     return bound
 
 

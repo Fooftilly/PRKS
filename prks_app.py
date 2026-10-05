@@ -93,6 +93,7 @@ if __name__ == "__main__":
     recover_incomplete_restore(config)
     config = bind_storage(config)
     setup_logging(config)
+    bound_root.log_binding()
 
     port = args.port if args.port is not None else (8070 if args.testing else PORT)
     run_server(port=port, host=args.host)
