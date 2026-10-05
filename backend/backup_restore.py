@@ -818,6 +818,15 @@ def _path_is_under(child: str, parent: str) -> bool:
         return False
 
 
+def _operational_root_paths(config: StorageConfig) -> frozenset[str]:
+    """Real paths of the root's operational entries (marker, lease file)."""
+    root_real = os.path.realpath(config.root)
+    return frozenset(
+        os.path.realpath(os.path.join(root_real, *entry.split("/")))
+        for entry in backup_storage_inventory().operational_root_entries
+    )
+
+
 def processing_is_under_storage(config: StorageConfig) -> bool:
     try:
         return _path_is_under(config.processing_dir, config.root)
@@ -1872,6 +1881,14 @@ def create_backup(
         processing_links = 0
         if processing_included:
             processing_files, processing_links = walk_regular_files(config.processing_dir)
+            # An inbox override may alias the root or .prks-maintenance/; the
+            # marker and the lease are operational, never payload (§7.1, §12).
+            operational = _operational_root_paths(config)
+            processing_files = [
+                (rel, abs_path)
+                for rel, abs_path in processing_files
+                if os.path.realpath(abs_path) not in operational
+            ]
         skipped_links = pdf_links + people_links + processing_links
         if skipped_links:
             n = skipped_links

@@ -71,6 +71,24 @@ class TestMarkerAcrossBackupAndRestore(backup_tests.BackupRestoreTestCase):
             self.assertNotIn(".prks-maintenance", name)
         self.assertNotIn(marked.storage_root_id, str(result.manifest))
 
+    def test_an_inbox_aliasing_the_root_or_maintenance_never_archives_them(self):
+        from dataclasses import replace
+
+        source = self._bind_library(processing_name="queued.pdf")
+        self._mark(source["cfg"])
+        root = source["cfg"].root
+        for inbox in (root, os.path.join(root, ".prks-maintenance")):
+            with self.subTest(inbox=os.path.relpath(inbox, root)):
+                cfg = replace(source["cfg"], processing_dir=inbox)
+                self.assertTrue(backup_restore.processing_is_under_storage(cfg))
+                result = create_backup(cfg)
+                with zipfile.ZipFile(result.archive_path) as archive:
+                    names = archive.namelist()
+                self.assertTrue(any(n.startswith("files/for_processing/") for n in names), names)
+                for name in names:
+                    self.assertFalse(name.endswith("prks-root.json"), name)
+                    self.assertFalse(name.endswith("root.lock"), name)
+
     def test_restore_keeps_the_target_roots_identity_and_lease(self):
         source = self._bind_library()
         source_id = self._mark(source["cfg"]).storage_root_id
