@@ -169,9 +169,11 @@ def list_concepts(db: PRKSDatabase) -> List[dict]:
     out = []
     for r in rows:
         item = _row(r)
+        # Key order is part of the serialized /api/concepts body: the count
+        # keeps the position it had as a selected column (before parents).
+        item["subconcept_count"] = child_counts.get(r["id"], 0)
         item["parents"] = parents.get(r["id"], [])
         item["aliases"] = aliases.get(r["id"], [])
-        item["subconcept_count"] = child_counts.get(r["id"], 0)
         out.append(item)
     return out
 

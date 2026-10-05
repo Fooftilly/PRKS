@@ -7,6 +7,7 @@ is now derived from that same parent-edge pass. These tests pin the observable
 output against a frozen copy of the old implementation and pin the query shape
 (a constant number of statements, none with a correlated scalar subquery).
 """
+import json
 import os
 import shutil
 import sqlite3
@@ -92,7 +93,10 @@ class ConceptCatalogCountTests(unittest.TestCase):
 
     def _assert_parity(self):
         new = list_concepts(self.db)
-        self.assertEqual(new, _old_list_concepts(self.db))
+        old = _old_list_concepts(self.db)
+        self.assertEqual(new, old)
+        # dict equality ignores key order, but /api/concepts serializes it.
+        self.assertEqual(json.dumps(new), json.dumps(old))
         for item in new:
             self.assertIs(type(item["subconcept_count"]), int)
 
@@ -169,6 +173,7 @@ class ConceptCatalogCountTests(unittest.TestCase):
             {c["id"]: c["parents"] for c in old},
         )
         self.assertEqual(new, old)
+        self.assertEqual(json.dumps(new), json.dumps(old))
         self.assertEqual(
             self._counts(),
             {
