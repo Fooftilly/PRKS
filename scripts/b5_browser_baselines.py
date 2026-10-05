@@ -21,16 +21,17 @@ import socket
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 REPO = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = REPO / "docs" / "b5-browser-baselines" / "browser-baselines.json"
 DEFAULT_MARKDOWN = REPO / "docs" / "b5-browser-baselines.md"
-DEFAULT_STORAGE = Path("/tmp/prks-b5-baselines-454")
+DEFAULT_STORAGE = Path(tempfile.gettempdir()) / "prks-b5-baselines-454"
 VIEWPORT = {"width": 1400, "height": 900}
 
 TITLE_ONLY = 120
@@ -291,13 +292,33 @@ def _find_port() -> int:
     return port
 
 
+def _assert_loopback_http_url(url: str) -> str:
+    """Rebuild a loopback http URL so CLI input cannot be used for SSRF."""
+    parsed = urlparse((url or "").strip())
+    host = (parsed.hostname or "").lower()
+    if (
+        parsed.scheme != "http"
+        or host != "127.0.0.1"
+        or parsed.username
+        or parsed.password
+    ):
+        raise ValueError("B5 harness only talks to http://127.0.0.1")
+    port = parsed.port
+    netloc = "127.0.0.1:%s" % port if port is not None else "127.0.0.1"
+    path = parsed.path or "/"
+    # PRKS --testing serves plain HTTP on loopback only; HTTPS is not configured.
+    return urlunparse(("http", netloc, path, "", parsed.query, ""))  # NOSONAR python:S5332
+
+
 def _http_json(method: str, url: str, payload=None, timeout: float = 60.0):
     data = None
     headers = {}
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=data, method=method, headers=headers)
+    req = urllib.request.Request(
+        _assert_loopback_http_url(url), data=data, method=method, headers=headers
+    )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as res:
             raw = res.read().decode("utf-8")
@@ -685,7 +706,9 @@ def _wait_http(base: str, timeout: float = 25.0) -> None:
     last = None
     while time.time() < deadline:
         try:
-            with urllib.request.urlopen(base + "/", timeout=2) as res:
+            with urllib.request.urlopen(
+                _assert_loopback_http_url(base + "/"), timeout=2
+            ) as res:
                 if res.status < 500:
                     return
         except Exception as exc:  # noqa: BLE001
@@ -1481,6 +1504,20 @@ def assert_b5_storage_allowed(
     return canonical
 
 
+def assert_b5_artifact_path(raw: str | os.PathLike[str]) -> Path:
+    """Refuse JSON/markdown output outside the repository (or under repo data/)."""
+    canonical = _resolve_storage_path(raw)
+    repo = _resolve_storage_path(REPO)
+    if not _is_same_or_beneath(canonical, repo):
+        raise B5StorageGuardError("Refusing artifact path outside the repository")
+    repo_data = _resolve_storage_path(repo / "data")
+    if _is_same_or_beneath(canonical, repo_data):
+        raise B5StorageGuardError(
+            "Refusing artifact path under the repository data directory"
+        )
+    return canonical
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Record B5 browser baselines (#454)")
     parser.add_argument("--storage", default=str(DEFAULT_STORAGE), help="Testing PRKS_STORAGE (temp tree)")
@@ -1493,11 +1530,19 @@ def main() -> int:
     inherited_raw = os.environ.get("PRKS_STORAGE")
     try:
         storage = assert_b5_storage_allowed(args.storage, inherited_raw=inherited_raw)
+        out_path = assert_b5_artifact_path(args.output)
+        md_path = assert_b5_artifact_path(args.markdown)
     except B5StorageGuardError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    if args.port == 0:
+        port = _find_port()
+    elif 1 <= int(args.port) <= 65535:
+        port = int(args.port)
+    else:
+        print("Refusing invalid port", file=sys.stderr)
+        return 2
     storage.mkdir(parents=True, exist_ok=True)
-    port = args.port or _find_port()
     env = os.environ.copy()
     env["PRKS_TESTING"] = "1"
     env["PRKS_STORAGE"] = str(storage)
@@ -1507,14 +1552,14 @@ def main() -> int:
 
     err_path = storage / "server-stderr.log"
     err_f = open(err_path, "wb")
-    proc = subprocess.Popen(
+    proc = subprocess.Popen(  # NOSONAR pythonsecurity:S8705 -- argv list, no shell
         [sys.executable, str(REPO / "prks_app.py"), "--testing", "--port", str(port)],
         cwd=str(REPO),
         env=env,
         stdout=subprocess.DEVNULL,
         stderr=err_f,
     )
-    base = "http://127.0.0.1:%s" % port
+    base = _assert_loopback_http_url("http://127.0.0.1:%s" % port)
     try:
         try:
             _wait_http(base)
@@ -1610,10 +1655,8 @@ def main() -> int:
             },
             **measured,
         }
-        out_path = Path(args.output)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        md_path = Path(args.markdown)
         md_path.parent.mkdir(parents=True, exist_ok=True)
         write_markdown(artifact, md_path)
         print("wrote", out_path)

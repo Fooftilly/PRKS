@@ -63,7 +63,7 @@ class TestB5StorageGuard(unittest.TestCase):
             harness.assert_b5_storage_allowed(repo_data / "subdir", inherited_raw=None)
 
     def test_allows_default_temp_when_inherited_is_unset_or_other_live_root(self):
-        default = Path("/tmp/prks-b5-baselines-454")
+        default = harness.DEFAULT_STORAGE
         self.assertEqual(
             harness.assert_b5_storage_allowed(default, inherited_raw=None),
             default.resolve(),
@@ -77,6 +77,24 @@ class TestB5StorageGuard(unittest.TestCase):
                 harness.assert_b5_storage_allowed(default, inherited_raw=live),
                 default.resolve(),
             )
+
+    def test_refuses_artifact_outside_repo_or_under_repo_data(self):
+        with tempfile.TemporaryDirectory(prefix="prks-out-") as outside:
+            with self.assertRaises(harness.B5StorageGuardError) as ctx:
+                harness.assert_b5_artifact_path(Path(outside) / "browser-baselines.json")
+            self.assertIn("outside the repository", str(ctx.exception))
+        with self.assertRaises(harness.B5StorageGuardError):
+            harness.assert_b5_artifact_path(harness.REPO / "data" / "browser-baselines.json")
+        resolved = harness.assert_b5_artifact_path(harness.DEFAULT_OUTPUT)
+        self.assertEqual(resolved, harness.DEFAULT_OUTPUT.resolve())
+
+    def test_loopback_http_url_refuses_remote_and_file(self):
+        with self.assertRaises(ValueError):
+            harness._assert_loopback_http_url("https://example.com/api/works")
+        with self.assertRaises(ValueError):
+            harness._assert_loopback_http_url("file:///etc/passwd")
+        rebuilt = harness._assert_loopback_http_url("http://127.0.0.1:9/api/works")
+        self.assertEqual(rebuilt, "http://127.0.0.1:9/api/works")
 
 
 if __name__ == "__main__":
