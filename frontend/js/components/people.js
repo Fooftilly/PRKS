@@ -138,11 +138,6 @@ window.safeHttpUrl = safeHttpUrl;
  * bind. */
 const PERSON_MUTATION_ROLE = 'person-mutation-control';
 
-/* Creating a Person is durable-first, so its controls are NEVER disabled: the
- * identity is chosen on this device and the record is complete the moment it is
- * written locally. */
-const PERSON_CREATE_ROLE = 'person-create-control';
-
 /* Editing a Person's PROFILE is durable too, so "Edit profile" is never
  * disabled: the fields are field-scoped operations that queue offline exactly
  * as they send online. Group membership became durable with the Person Group
@@ -159,10 +154,10 @@ const PERSON_EDIT_ROLE = 'person-edit-control';
  * credited on a file is refused -- and has never been about connectivity. */
 const PERSON_DELETE_ROLE = 'person-delete-control';
 
-/* Group chips keep this role for styling/test identification only: since Person
- * Groups became offline-capable they are ordinary links and are deliberately
- * absent from PERSON_CONTROL_SELECTOR. */
-const PERSON_GROUP_LINK_ROLE = 'person-group-link';
+/* Vue People routes own `data-prks-role="person-create-control"` and
+ * `person-group-link` markup. Classic people.js no longer declares those role
+ * constants. Group chips remain ordinary links and stay absent from
+ * PERSON_CONTROL_SELECTOR. */
 const PERSON_CONTROL_SELECTOR = '[data-prks-role="' + PERSON_MUTATION_ROLE + '"]';
 /* The profile editor's own inputs: disabled while offline so a draft is held
  * rather than silently discarded. Cancel is deliberately excluded so the user

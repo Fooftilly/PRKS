@@ -496,17 +496,6 @@ function prksInitLazyWorkThumbs(root) {
     });
 }
 
-/** Plain year for meta row: `year` field, else leading YYYY from ISO `published_date`. */
-function prksWorkCardYearPlain(w) {
-    if (!w) return '';
-    const y = typeof w.year === 'string' ? w.year.trim() : '';
-    if (y) return prksWorkCardsEscapeHtml(y);
-    const pd = typeof w.published_date === 'string' ? w.published_date.trim() : '';
-    if (!pd) return '';
-    const m = pd.match(/^(\d{4})/);
-    return m ? prksWorkCardsEscapeHtml(m[1]) : prksWorkCardsEscapeHtml(pd);
-}
-
 /**
  * Plain-text credit line for summaries that escape later.
  * Linked Author(s), else `author_text`, else linked Editor.

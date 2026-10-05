@@ -252,14 +252,15 @@ business completeness, so empty strings remain valid.
 A Person's "View in graph" uses the People-inclusive snapshot. A Person's Group
 chips are **ordinary PRKS links** — a
 cached Group detail opens offline, an uncached one reports "Group not available
-offline" — so `people.js` must not reintroduce the old `aria-disabled` /
-`click`+`auxclick` interception on `PERSON_GROUP_LINK_ROLE`; that role survives
-for styling and test identification only and is deliberately absent from
-`PERSON_CONTROL_SELECTOR`. Linked Work cards are ordinary PRKS links for the
-same reason, so the Work route decides for itself whether it has cached data —
-that is the main reason People is useful offline. There is no offline-specific
-router: every one of these destinations is reached through the same
-`prksNavigate` as online.
+offline" — so Vue People markup (`PeopleIndexRoute` /
+`PersonDetailRoute` `data-prks-role="person-group-link"`) must not reintroduce
+the old `aria-disabled` / `click`+`auxclick` interception on that role. The
+role string is for styling and test identification only and is deliberately
+absent from classic `PERSON_CONTROL_SELECTOR`. Linked Work cards are ordinary
+PRKS links for the same reason, so the Work route decides for itself whether it
+has cached data — that is the main reason People is useful offline. There is no
+offline-specific router: every one of these destinations is reached through the
+same `prksNavigate` as online.
 
 **Offline media policy.** Structured data only — portraits and Work thumbnails
 are never part of the disposable cache. A Person route
