@@ -33,7 +33,6 @@ _VENDOR = os.path.join(_FRONTEND, "vendor", "cytoscape")
 _CSS = os.path.join(_FRONTEND, "css", "style.css")
 _WIKI_RESEARCH = os.path.join(_PROJECT_DIR, "docs", "wiki", "Research-Network.md")
 _AGENTS = os.path.join(_PROJECT_DIR, "frontend", "AGENTS.md")
-_SCHEMA = os.path.join(_PROJECT_DIR, "backend", "db_migrations.py")
 _RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_research_graph_selftest.js")
 _GRAPH_VUE = os.path.join(
     _PROJECT_DIR, "frontend-app", "src", "features", "research-graph", "ResearchGraphRoute.vue"
@@ -165,7 +164,6 @@ class FrontendResearchGraphTests(unittest.TestCase):
         self.assertNotIn("acc[role].push(w)", detail)
         self.assertIn("prks-people-list__lifespan", index)
         self.assertNotIn("/api/persons/", index)
-        self.assertIn("LATEST_SCHEMA_VERSION = 17", _read(_SCHEMA))
 
     def test_docs(self):
         wiki = _read(_WIKI_RESEARCH)

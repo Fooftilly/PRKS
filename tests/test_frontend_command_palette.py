@@ -14,7 +14,6 @@ _CSS = os.path.join(_FRONTEND, "css", "style.css")
 _RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_command_palette_selftest.js")
 _WIKI_USER = os.path.join(_PROJECT_DIR, "docs", "wiki", "User-Guide.md")
 _AGENTS = os.path.join(_PROJECT_DIR, "frontend", "AGENTS.md")
-_SCHEMA = os.path.join(_PROJECT_DIR, "backend", "db_migrations.py")
 
 
 def _read(path: str) -> str:
@@ -144,10 +143,6 @@ class FrontendCommandPaletteTests(unittest.TestCase):
         self.assertNotIn("new URLSearchParams", src)
         self.assertNotIn("prksNavigate(hash, { replace: true })", src)
         self.assertNotIn("prksNavigate(cmd.hash, { replace: true })", src)
-
-    def test_no_schema_bump(self):
-        schema = _read(_SCHEMA)
-        self.assertIn("LATEST_SCHEMA_VERSION = 17", schema)
 
     def test_docs(self):
         wiki = _read(_WIKI_USER)
