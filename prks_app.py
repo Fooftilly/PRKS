@@ -56,7 +56,13 @@ def open_storage(config):
     if config.mode != "testing":
         # Only used to check the root does not contain it (V11); testing mode
         # never consults the bootstrap file (storage-architecture §5.3).
-        config_file = bootstrap_config_path(os.environ)
+        try:
+            config_file = bootstrap_config_path(os.environ)
+        except StorageRootError:
+            # A higher-precedence source won, so this path was never used; an
+            # unparseable value names no file that could sit inside the root.
+            # (A config_file selection already validated it in from_env.)
+            config_file = None
     try:
         return open_storage_root(config, config_file_path=config_file)
     except StorageRootError as exc:

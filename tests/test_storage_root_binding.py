@@ -831,6 +831,20 @@ class TestProcessEntry(RootTestCase):
         ]
         self.assertEqual(order, sorted(order))
 
+    def test_unused_invalid_config_file_path_does_not_block_a_higher_source(self):
+        import prks_app
+
+        root = self.path("lib")
+        config = StorageConfig.from_env(cli_root=root, environ={})
+        self.assertEqual((config.mode, config.root_source), ("production", "cli"))
+        # The real environment cannot carry the NUL that makes the path
+        # unparseable, so the resolver's refusal is injected directly.
+        unparseable = InvalidStorageRoot("root_unparseable", "PRKS_CONFIG_FILE is not a valid path.")
+        with patch.object(prks_app, "bootstrap_config_path", side_effect=unparseable):
+            bound = prks_app.open_storage(config)
+        self._bound.append(bound)
+        self.assertTrue(os.path.isfile(os.path.join(root, MARKER)))
+
     def test_refused_root_exits_cleanly_before_touching_storage(self):
         foreign = self.path("foreign")
         os.mkdir(foreign)
@@ -1087,10 +1101,13 @@ class TestWholeRootInvariants(RootTestCase):
         os.makedirs(os.path.join(root, "pdfs"), exist_ok=True)
         with open(os.path.join(root, "pdfs", "a.pdf"), "wb") as handle:
             handle.write(b"%PDF")
-        for target in (os.path.join(root, "prks_data.db"), os.path.join(root, "pdfs", "a.pdf")):
-            with self.subTest(target=os.path.basename(target)):
-                with self._file_on_other_device(target):
-                    self._refused(root, "root_spans_filesystems")
+        # The file-device rule is relaxed on overlayfs (tested below); pin a
+        # plain local type so this holds on overlay-backed runners too.
+        with patch.object(root_binding, "detect_filesystem_type", return_value="ext4"):
+            for target in (os.path.join(root, "prks_data.db"), os.path.join(root, "pdfs", "a.pdf")):
+                with self.subTest(target=os.path.basename(target)):
+                    with self._file_on_other_device(target):
+                        self._refused(root, "root_spans_filesystems")
 
     def test_overlay_root_relaxes_only_the_file_device_rule(self):
         root = self._marked()
