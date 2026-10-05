@@ -399,6 +399,24 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
             self.assertNotIn(forbidden, helpers, forbidden)
             self.assertNotIn(forbidden, vue, forbidden)
 
+    def test_thumbnail_selftest_does_not_double_vue_card_html(self):
+        """Pending-page / offline / selection paint belongs on PrksWorkCard.
+        The Node sync selftest may assert effective Work → prksWorkThumbUrl
+        identity, but must not rebuild card HTML that can drift from Vue."""
+        selftest = (ROOT / 'tests' / 'browser' / 'run_work_metadata_sync_selftest.js').read_text()
+        vitest = (ROOT / 'frontend-app' / 'src' / 'components' / 'PrksWorkCard.test.ts').read_text()
+        fn_at = selftest.index('function thumbnailResourceIdentity(')
+        fn_end = selftest.index('\nfunction authorTextComposition(', fn_at)
+        body = selftest[fn_at:fn_end]
+        self.assertIn('prksWorkThumbUrl', body)
+        self.assertIn('prksEffectiveWorkSync', body)
+        self.assertNotIn('project-card--work-card', body)
+        self.assertNotIn('work-card__thumb--empty', body)
+        self.assertNotIn('data-prks-thumb-page=', body)
+        self.assertIn('states effective PDF page identity for pending page and pending clear', vitest)
+        self.assertIn('keeps offline suppression absolute even when an effective page exists', vitest)
+        self.assertIn('exposes selection anchors without injecting a checkbox', vitest)
+
     def test_the_request_coordinator_classifies_by_pathname(self):
         """The added `?page=` must not change how a thumbnail request is
         treated; it does not, because classification uses `URL.pathname`."""
