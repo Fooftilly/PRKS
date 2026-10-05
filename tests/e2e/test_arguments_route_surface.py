@@ -230,8 +230,8 @@ class ArgumentsRouteSurfaceTests(unittest.TestCase):
                     const tile = document.querySelector('.prks-tile--main');
                     const host = tile && tile.querySelector('[data-prks-vue-route-host]');
                     window.__prksArgumentsErrorProbe = { host: host, dismisses: 0, steps: [] };
-                    const dismiss = window.prksVueDismissArguments;
-                    window.prksVueDismissArguments = function (ctx) {
+                    const dismiss = window.prksVueDismissRoute;
+                    window.prksVueDismissRoute = function (ctx) {
                         const probe = window.__prksArgumentsErrorProbe;
                         const saved = probe.host;
                         probe.dismisses += 1;

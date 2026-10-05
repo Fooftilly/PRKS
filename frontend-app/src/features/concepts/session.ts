@@ -3,6 +3,7 @@ import {
   dismissRouteSurface,
   presentRouteSurface,
   registerEarlyRoutePresenter,
+  registerRouteWindowBridge,
   resetRouteSurfaceForTests,
   type RouteSurfaceOwner,
 } from '../../route-surface/lifecycle'
@@ -43,7 +44,7 @@ function armConceptsOwnerCleanup(owner: ConceptsOwner): void {
   owner.registerCleanup(() => {
     owner[CONCEPTS_CLEANUP_ARMED_KEY] = false
     if (owner[CONCEPTS_RETAIN_SURFACE_KEY]) return
-    dismissConcepts(owner)
+    dismissRouteSurface(owner)
   })
 }
 
@@ -149,11 +150,6 @@ export function presentConceptDetail(input: ConceptDetailPresentInput): void {
   armConceptsOwnerCleanup(input.owner)
 }
 
-/** Drop the Vue Concepts tree owned by this pane. Other owners stay mounted. */
-export function dismissConcepts(owner: object | null | undefined): void {
-  dismissRouteSurface(owner)
-}
-
 export function resetConceptsSessionForTests(): void {
   resetRouteSurfaceForTests()
 }
@@ -175,9 +171,7 @@ function isConceptDetailEarlyRequest(
 }
 
 export function registerConceptsBridge(target: Window = window): void {
-  target.prksVuePresentConceptsIndex = presentConceptsIndex
-  target.prksVuePresentConceptDetail = presentConceptDetail
-  target.prksVueDismissConcepts = dismissConcepts
+  registerRouteWindowBridge(target)
   registerEarlyRoutePresenter(
     CONCEPTS_FEATURE,
     (request, host) => {

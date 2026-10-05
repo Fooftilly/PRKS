@@ -46,12 +46,6 @@ function prksPdfOwnerOrFocused(ctx) {
     return typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
 }
 
-function prksIsFocusedPdfCtx(ctx) {
-    if (!ctx) return true;
-    const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
-    return !focused || focused.tabId === ctx.tabId;
-}
-
 function prksAnnotationTypeStr(obj) {
     if (!obj || typeof obj !== 'object') return '';
     return String(obj.type || obj.subtype || obj.annotationType || '').toLowerCase();
@@ -453,127 +447,486 @@ function prksPatchAnnotationListCacheAfterCommentSave(ctx, annId, commentVal) {
     }
 }
 
-function prksShowWorkAnnotationsTab(ctx) {
-    if (ctx && typeof window.prksRightPanelOwnedBy === 'function' && !window.prksRightPanelOwnedBy(ctx)) return false;
-    const btn = document.querySelector('#right-panel .tab-btn[data-target="annotations"]');
-    if (!btn) return false;
-    if (btn.classList.contains('active')) return true;
-    btn.click();
+function prksSyncAnnotationPopup(ctx) {
+    if (typeof window.prksVueSyncWorkPdfAnnotationPopup === 'function') {
+        window.prksVueSyncWorkPdfAnnotationPopup(ctx);
+    }
+    prksSyncAnnotationDrawer(ctx);
+}
+
+/**
+ * Optional display strings already attached for #61. This drawer does not
+ * write them and does not define categories, tags, or their meaning.
+ */
+function prksAnnotationDrawerMetadataLabels(item) {
+    const custom = item && item.custom && typeof item.custom === 'object' ? item.custom : null;
+    const raw = custom && custom.metadataLabels;
+    if (!Array.isArray(raw)) return [];
+    const labels = [];
+    for (const entry of raw) {
+        if (typeof entry !== 'string') continue;
+        const text = entry.trim();
+        if (text) labels.push(text);
+    }
+    return labels;
+}
+
+function prksProjectPdfAnnotationDrawerItem(item, index) {
+    const id = item && (item.id || item.uuid || item.annotationId || item._id);
+    if (id == null || id === '') return null;
+    const text = annotationToText(item) || ('Annotation ' + (Number(index) + 1));
+    const commentRaw = prksAnnotationCommentText(item).trim();
+    const pageIndex = prksPageIndexFromAnnotationObject(item);
+    const pageLabel = Number.isFinite(pageIndex) ? ('Page ' + (pageIndex + 1)) : 'Unknown page';
+    const pageDisp = Number.isFinite(pageIndex) ? pageIndex + 1 : null;
+    const alreadyHasPage = typeof text === 'string' && /\s-\s*p\.\s*\d+/i.test(text);
+    const label = pageDisp != null && !alreadyHasPage ? (text + ' - p. ' + pageDisp) : text;
+    return {
+        id: String(id),
+        index: Number(index),
+        text: text,
+        comment: commentRaw && commentRaw !== text ? commentRaw : '',
+        pageLabel: pageLabel,
+        pageIndex: Number.isFinite(pageIndex) ? pageIndex : null,
+        wikiLink: prksBuildPdfAnnWikiLink(id, label),
+        metadataLabels: prksAnnotationDrawerMetadataLabels(item),
+    };
+}
+window.prksProjectPdfAnnotationDrawerItem = prksProjectPdfAnnotationDrawerItem;
+
+function prksSyncAnnotationDrawer(ctx) {
+    const owner = prksPdfOwnerOrFocused(ctx);
+    if (!owner) return;
+    const pdf = prksPdfRuntime(owner);
+    if (
+        pdf &&
+        pdf.viewer &&
+        pdf.annotationDrawer &&
+        typeof pdf.viewer.setAnnotationDrawerOpen === 'function'
+    ) {
+        try {
+            pdf.viewer.setAnnotationDrawerOpen(!!pdf.annotationDrawer.open);
+        } catch (_e) {}
+    }
+    if (typeof window.prksVueSyncWorkPdfAnnotationDrawer === 'function') {
+        window.prksVueSyncWorkPdfAnnotationDrawer(owner);
+    }
+}
+
+function prksAnnotationDrawerStorage() {
+    try {
+        if (typeof localStorage !== 'undefined' && localStorage) return localStorage;
+    } catch (_e) {}
+    return null;
+}
+
+function prksAnnotationDrawerMetrics(pane) {
+    let paneWidth = 0;
+    if (pane && typeof pane.getBoundingClientRect === 'function') {
+        const rect = pane.getBoundingClientRect();
+        paneWidth = rect && Number(rect.width) > 0 ? Number(rect.width) : 0;
+    }
+    let mobile = false;
+    try {
+        const root = typeof document !== 'undefined' ? document.documentElement : null;
+        if (root && root.classList && root.classList.contains('prks-force-mobile')) mobile = true;
+        else if (typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 900px)').matches) {
+            mobile = true;
+        }
+    } catch (_e) {}
+    return { paneWidth: paneWidth, mobile: mobile };
+}
+
+/**
+ * Pinned layout changes the viewer box and asks that viewer to resize.
+ * Fit Width and Fit Page then recompute from the new viewport. An explicit
+ * percentage is left alone. Pin, unpin, and width changes do not create a
+ * viewer or change viewerSetupToken.
+ */
+function prksLayoutAnnotationDrawer(ctx) {
+    const owner = prksPdfOwnerOrFocused(ctx);
+    const pdf = prksPdfRuntime(owner);
+    if (!pdf || pdf._destroyed || typeof pdf.readAnnotationDrawer !== 'function') return false;
+    const pane = owner && typeof owner.query === 'function' ? owner.query('.work-pdf-pane') : null;
+    if (pane && typeof pdf.noteAnnotationDrawerFrame === 'function') {
+        pdf.noteAnnotationDrawerFrame(prksAnnotationDrawerMetrics(pane));
+    }
+    const effect = typeof pdf.annotationDrawerLayoutEffect === 'function'
+        ? pdf.annotationDrawerLayoutEffect()
+        : { read: pdf.readAnnotationDrawer(), resized: false };
+    if (pane && typeof window.prksApplyPdfAnnotationDrawerChrome === 'function') {
+        window.prksApplyPdfAnnotationDrawerChrome(pane, effect.read);
+    }
+    if (effect.resized) {
+        const viewer = pdf.viewer;
+        const token = pdf.viewerSetupToken;
+        const zoomLayout = viewer && typeof viewer.getZoomLayout === 'function' ? viewer.getZoomLayout() : null;
+        const zoomAction = typeof window.prksPdfAnnotationDrawerZoomAction === 'function'
+            ? window.prksPdfAnnotationDrawerZoomAction(zoomLayout)
+            : 'follow-container';
+        // preserve: keep the explicit percentage. recompute / follow-container:
+        // the smaller or larger viewer box is the recompute. EmbedPDF refits
+        // Fit Width and Fit Page from that box and does not change a number.
+        if (zoomAction === 'preserve' || zoomAction === 'recompute' || zoomAction === 'follow-container') {
+            if (typeof pdf.resize === 'function') pdf.resize();
+        }
+        if (pdf.viewer !== viewer || pdf.viewerSetupToken !== token) return false;
+    }
+    prksSyncAnnotationDrawer(owner);
+    return true;
+}
+window.prksLayoutAnnotationDrawer = prksLayoutAnnotationDrawer;
+
+function prksWatchAnnotationDrawerPane(ctx, runtime, generation) {
+    if (!runtime || runtime._drawerPaneObserver) return;
+    const pane = ctx && typeof ctx.query === 'function' ? ctx.query('.work-pdf-pane') : null;
+    if (!pane || typeof ResizeObserver !== 'function') return;
+    const observer = new ResizeObserver(function () {
+        if (!runtime || runtime._destroyed) return;
+        if (typeof ctx.isCurrent === 'function' && !ctx.isCurrent(generation)) return;
+        prksLayoutAnnotationDrawer(ctx);
+    });
+    try {
+        observer.observe(pane);
+    } catch (_e) {
+        return;
+    }
+    runtime._drawerPaneObserver = observer;
+}
+
+function prksOpenAnnotationDrawer(ctx) {
+    const owner = prksPdfOwnerOrFocused(ctx);
+    const pdf = prksPdfRuntime(owner);
+    if (!pdf || pdf._destroyed || typeof pdf.openAnnotationDrawer !== 'function') return false;
+    const viewer = pdf.viewer;
+    const token = pdf.viewerSetupToken;
+    pdf.openAnnotationDrawer();
+    if (pdf.viewer !== viewer || pdf.viewerSetupToken !== token) return false;
+    prksLayoutAnnotationDrawer(owner);
+    return true;
+}
+window.prksOpenAnnotationDrawer = prksOpenAnnotationDrawer;
+
+function prksCloseAnnotationDrawer(ctx) {
+    const owner = prksPdfOwnerOrFocused(ctx);
+    const pdf = prksPdfRuntime(owner);
+    if (!pdf || pdf._destroyed || typeof pdf.closeAnnotationDrawer !== 'function') return false;
+    const viewer = pdf.viewer;
+    const token = pdf.viewerSetupToken;
+    const closed = pdf.closeAnnotationDrawer();
+    if (!closed) return false;
+    if (pdf.viewer !== viewer || pdf.viewerSetupToken !== token) return false;
+    prksLayoutAnnotationDrawer(owner);
+    return true;
+}
+window.prksCloseAnnotationDrawer = prksCloseAnnotationDrawer;
+
+function prksToggleAnnotationDrawer(ctx) {
+    const owner = prksPdfOwnerOrFocused(ctx);
+    const pdf = prksPdfRuntime(owner);
+    if (!pdf || pdf._destroyed || typeof pdf.toggleAnnotationDrawer !== 'function') return false;
+    const viewer = pdf.viewer;
+    const token = pdf.viewerSetupToken;
+    const toggled = pdf.toggleAnnotationDrawer();
+    if (pdf.viewer !== viewer || pdf.viewerSetupToken !== token) return false;
+    prksLayoutAnnotationDrawer(owner);
+    return !!toggled;
+}
+
+function prksSetAnnotationDrawerPinned(ctx, pinned) {
+    const owner = prksPdfOwnerOrFocused(ctx);
+    const pdf = prksPdfRuntime(owner);
+    if (!pdf || pdf._destroyed || typeof pdf.setAnnotationDrawerPinned !== 'function') return false;
+    const viewer = pdf.viewer;
+    const token = pdf.viewerSetupToken;
+    if (pdf.setAnnotationDrawerPinned(pinned) !== true) return false;
+    if (pdf.viewer !== viewer || pdf.viewerSetupToken !== token) return false;
+    prksLayoutAnnotationDrawer(owner);
+    return pdf.viewer === viewer && pdf.viewerSetupToken === token;
+}
+window.prksSetAnnotationDrawerPinned = prksSetAnnotationDrawerPinned;
+
+function prksSetAnnotationDrawerWidth(ctx, width, opts) {
+    const owner = prksPdfOwnerOrFocused(ctx);
+    const pdf = prksPdfRuntime(owner);
+    if (!pdf || pdf._destroyed || typeof pdf.setAnnotationDrawerWidth !== 'function') return false;
+    const viewer = pdf.viewer;
+    const token = pdf.viewerSetupToken;
+    if (pdf.setAnnotationDrawerWidth(width, opts) !== true) return false;
+    if (pdf.viewer !== viewer || pdf.viewerSetupToken !== token) return false;
+    prksLayoutAnnotationDrawer(owner);
+    return pdf.viewer === viewer && pdf.viewerSetupToken === token;
+}
+window.prksSetAnnotationDrawerWidth = prksSetAnnotationDrawerWidth;
+window.prksToggleAnnotationDrawer = prksToggleAnnotationDrawer;
+
+/**
+ * Drag preview. Sets the painted width and, when pinned, resizes the viewer.
+ * Does not write the runtime preference and does not republish the list.
+ * The gesture commits that preference once, on pointerup.
+ */
+function prksPreviewAnnotationDrawerWidth(ctx, width) {
+    const owner = prksPdfOwnerOrFocused(ctx);
+    const pdf = prksPdfRuntime(owner);
+    if (!pdf || pdf._destroyed || !Number.isFinite(Number(width))) return false;
+    const pane = owner && typeof owner.query === 'function' ? owner.query('.work-pdf-pane') : null;
+    const painted = typeof pdf.annotationDrawerLayoutWidth === 'function'
+        ? pdf.annotationDrawerLayoutWidth(width)
+        : width;
+    if (pane && pane.style && typeof pane.style.setProperty === 'function') {
+        pane.style.setProperty('--pdf-annotation-drawer-width', Math.round(painted) + 'px');
+    }
+    const read = typeof pdf.readAnnotationDrawer === 'function' ? pdf.readAnnotationDrawer() : null;
+    if (read && read.placement === 'pinned' && typeof pdf.resize === 'function') pdf.resize();
+    return true;
+}
+window.prksPreviewAnnotationDrawerWidth = prksPreviewAnnotationDrawerWidth;
+
+/** Cancelled drag. Restores the runtime's painted width without persisting. */
+function prksRestoreAnnotationDrawerWidth(ctx) {
+    const owner = prksPdfOwnerOrFocused(ctx);
+    const pdf = prksPdfRuntime(owner);
+    if (!pdf || pdf._destroyed || typeof pdf.readAnnotationDrawer !== 'function') return false;
+    const pane = owner && typeof owner.query === 'function' ? owner.query('.work-pdf-pane') : null;
+    const read = pdf.readAnnotationDrawer();
+    if (pane && typeof window.prksApplyPdfAnnotationDrawerChrome === 'function') {
+        window.prksApplyPdfAnnotationDrawerChrome(pane, read);
+    }
+    if (read && read.placement === 'pinned' && typeof pdf.resize === 'function') pdf.resize();
+    return true;
+}
+window.prksRestoreAnnotationDrawerWidth = prksRestoreAnnotationDrawerWidth;
+
+function prksDrawerAnnotationItem(pdf, annId) {
+    const items = pdf && pdf.annotationCache && Array.isArray(pdf.annotationCache.items)
+        ? pdf.annotationCache.items
+        : [];
+    const id = annId == null ? '' : String(annId);
+    if (!id) return null;
+    for (let index = 0; index < items.length; index++) {
+        const item = items[index];
+        const itemId = item && (item.id || item.uuid || item.annotationId || item._id);
+        if (itemId != null && String(itemId) === id) return { item: item, index: index };
+    }
+    return null;
+}
+
+window.jumpToPdfAnnotationFromDrawer = async function (ctx, annId) {
+    const owner = prksPdfOwnerOrFocused(ctx);
+    const pdf = prksPdfRuntime(owner);
+    const found = prksDrawerAnnotationItem(pdf, annId);
+    if (!found) return false;
+    const st = pdf && pdf.annotationEditorState;
+    if (st && String(st.annId) !== String(annId) && typeof window.closePdfAnnotationEditor === 'function') {
+        window.closePdfAnnotationEditor(owner, { annId: st.annId, reason: 'selection' });
+    }
+    const pageIndex = prksPageIndexFromAnnotationObject(found.item);
+    await window.jumpToPdfAnnotation(
+        annId,
+        Number.isFinite(pageIndex) ? pageIndex : undefined,
+        found.item,
+        owner
+    );
+    return true;
+};
+
+window.openPdfAnnotationEditorFromDrawer = function (ctx, annId) {
+    const owner = prksPdfOwnerOrFocused(ctx);
+    const pdf = prksPdfRuntime(owner);
+    const found = prksDrawerAnnotationItem(pdf, annId);
+    if (!found) return false;
+    void window.openPdfAnnotationEditorByIndex(found.index, owner);
+    return true;
+};
+
+window.copyPdfAnnotationWikiLink = async function (ctx, annId) {
+    const owner = prksPdfOwnerOrFocused(ctx);
+    const pdf = prksPdfRuntime(owner);
+    const found = prksDrawerAnnotationItem(pdf, annId);
+    if (!found) return false;
+    const projected = prksProjectPdfAnnotationDrawerItem(found.item, found.index);
+    const wikiLink = projected && projected.wikiLink;
+    if (!wikiLink) return false;
+    try {
+        await prksCopyTextToClipboard(wikiLink);
+        return true;
+    } catch (_e) {
+        return false;
+    }
+};
+
+// User path: plain delete after materialization lock. Not reconcile's programmatic delete.
+window.deletePdfAnnotationFromList = async function (ctx, annId) {
+    const owner = prksPdfOwnerOrFocused(ctx);
+    const pdf = prksPdfRuntime(owner);
+    if (!pdf || annId == null || annId === '') return false;
+    const ticket =
+        typeof pdf.captureAnnotationPopupTicket === 'function'
+            ? pdf.captureAnnotationPopupTicket({
+                  directId: annId,
+                  generation: owner && typeof owner.generation === 'number' ? owner.generation : null,
+              })
+            : null;
+    if (!ticket || ticket.deletable !== true) return false;
+    const confirmed =
+        typeof prksConfirmDeletePdfAnnotation === 'function'
+            ? await prksConfirmDeletePdfAnnotation()
+            : window.confirm('Delete this annotation from the PDF?');
+    if (!confirmed) return false;
+    if (owner && owner.destroyed) return false;
+    await prksWaitOutAnnotationMaterialization(pdf);
+    if (owner && owner.destroyed) return false;
+    if (!prksAnnotationPopupGenerationCurrent(owner, ticket)) return false;
+    if (typeof pdf.annotationPopupWriteStill === 'function' && !pdf.annotationPopupWriteStill(ticket)) {
+        return false;
+    }
+    if (!prksPdfUserMutationStillAllowed(pdf)) {
+        prksRefusePdfUserMutation(pdf);
+        return false;
+    }
+    if (pdf.annotationMutationDurable !== true &&
+        typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return false;
+    const viewer = ticket.viewer;
+    if (viewer && pdf.viewer === viewer && typeof viewer.deleteAnnotation === 'function') {
+        try {
+            await viewer.deleteAnnotation(String(annId));
+            if (typeof window.closePdfAnnotationEditor === 'function') {
+                const st = pdf && pdf.annotationEditorState;
+                if (st && String(st.annId) === String(annId)) {
+                    window.closePdfAnnotationEditor(owner, { annId: annId, reason: 'delete' });
+                }
+            }
+            return true;
+        } catch (_e) {}
+    }
+    return false;
+};
+
+function prksAnnotationPopupGenerationCurrent(owner, ticket) {
+    if (!ticket || typeof ticket.generation !== 'number') return true;
+    if (!owner || typeof owner.isCurrent !== 'function') return true;
+    return owner.isCurrent(ticket.generation);
+}
+
+function prksOpenAnnotationPopupSession(owner, annId, item, opts) {
+    const pdf = prksPdfRuntime(owner);
+    if (!pdf || pdf._destroyed || typeof pdf.openAnnotationPopup !== 'function') return false;
+    if (pdf.mode !== 'work') return false;
+    const id = annId == null ? '' : String(annId);
+    if (!id) return false;
+    const viewer = prksPdfViewer(owner);
+    let source = item || null;
+    try {
+        const live = viewer ? prksFindViewerAnnotation(viewer, id) : null;
+        if (live) source = live;
+    } catch (_e) {}
+    if (!source) return false;
+    const comment = prksAnnotationCommentText(source);
+    const pageIndex = prksPageIndexFromAnnotationObject(source);
+    const pageFromItem = source.pageIndex ?? source.page ?? source.pageNumber ?? source.page_index;
+    const resolvedPage = Number.isFinite(pageIndex)
+        ? pageIndex
+        : pageFromItem != null && pageFromItem !== '' && Number.isFinite(Number(pageFromItem))
+          ? Number(pageFromItem)
+          : null;
+    const pageDisp = resolvedPage != null ? Number(resolvedPage) + 1 : '?';
+    const type =
+        (typeof annotationTypeLabel === 'function' ? annotationTypeLabel(source) : '') || 'Annotation';
+    // List opens must land on the annotation's page before the session starts.
+    // The scroller virtualizes pages, so selecting an offscreen id does not
+    // mount its anchor. Viewer-originated requests are already on that page.
+    if (!(opts && opts.reason === 'viewer') && viewer) {
+        if (
+            Number.isFinite(Number(resolvedPage)) &&
+            Number(resolvedPage) >= 0 &&
+            typeof viewer.goToPage === 'function'
+        ) {
+            try {
+                viewer.goToPage(Number(resolvedPage) + 1);
+            } catch (_eNav) {}
+        }
+        if (typeof viewer.selectAnnotation === 'function') {
+            try {
+                viewer.selectAnnotation(id);
+            } catch (_eSel) {}
+        }
+    }
+    const opened = pdf.openAnnotationPopup({
+        annId: id,
+        pageIndex: resolvedPage,
+        comment: comment,
+        meta: 'Page ' + pageDisp + ' · ' + type,
+        custom: source.custom && typeof source.custom === 'object' ? source.custom : {},
+        docId: viewer && typeof viewer.getDocumentId === 'function' ? viewer.getDocumentId() : null,
+        generation: owner && typeof owner.generation === 'number' ? owner.generation : null,
+        deletable: opts && typeof opts.deletable === 'boolean' ? opts.deletable : undefined,
+    });
+    if (!opened) return false;
+    prksSyncAnnotationPopup(owner);
     return true;
 }
 
-window.closePdfAnnotationEditor = function (ctx) {
+window.closePdfAnnotationEditor = function (ctx, opts) {
     const owner = prksPdfOwnerOrFocused(ctx);
     const pdf = prksPdfRuntime(owner);
-    if (pdf) pdf.annotationEditorState = null;
+    if (!pdf || typeof pdf.closeAnnotationPopup !== 'function') return;
+    const options = opts && typeof opts === 'object' ? opts : null;
     if (
+        options &&
+        typeof options.generation === 'number' &&
         owner &&
-        typeof window.prksRightPanelOwnedBy === 'function' &&
-        !window.prksRightPanelOwnedBy(owner)
-    ) return;
-    const wrap = document.getElementById('pdf-annotation-editor');
-    if (wrap) wrap.classList.add('hidden');
-    const meta = document.getElementById('pdf-annotation-editor-meta');
-    const txt = document.getElementById('pdf-annotation-editor-text');
-    const hid = document.getElementById('pdf-annotation-editor-ann-id');
-    const page = document.getElementById('pdf-annotation-editor-page-index');
-    if (meta) meta.textContent = '';
-    if (txt) txt.value = '';
-    if (hid) hid.value = '';
-    if (page) page.value = '';
+        typeof owner.isCurrent === 'function' &&
+        !owner.isCurrent(options.generation)
+    ) {
+        return;
+    }
+    const annId = options && options.annId != null ? options.annId : undefined;
+    const closed = pdf.closeAnnotationPopup(annId);
+    if (!closed) return;
+    if (!options || options.reason !== 'viewer') {
+        const viewer = pdf.viewer;
+        if (viewer && typeof viewer.deselectAnnotation === 'function') {
+            try {
+                viewer.deselectAnnotation();
+            } catch (_e) {}
+        }
+    }
+    prksSyncAnnotationPopup(owner);
 };
 
 window.openPdfAnnotationEditorByIndex = async function (idx, ctx) {
     const owner = prksPdfOwnerOrFocused(ctx);
-    if (!owner || !prksShowWorkAnnotationsTab(owner)) return;
-    const wrap = document.getElementById('pdf-annotation-editor');
-    const meta = document.getElementById('pdf-annotation-editor-meta');
-    const txt = document.getElementById('pdf-annotation-editor-text');
-    const hid = document.getElementById('pdf-annotation-editor-ann-id');
-    const page = document.getElementById('pdf-annotation-editor-page-index');
-    if (!wrap || !meta || !txt || !hid || !page) return;
-
+    if (!owner) return;
     const pdf = prksPdfRuntime(owner);
     const c = pdf && pdf.annotationCache;
     if (!c || !Array.isArray(c.items) || c.items[idx] == null) return;
     const item = c.items[idx];
     const annId = item.id || item.uuid || item.annotationId || item._id;
-    const pageIndex = item.pageIndex ?? item.page ?? item.pageNumber ?? item.page_index;
     if (!annId) return;
-
-    try {
-        const viewer = prksPdfViewer(owner);
-        const annObj = prksFindViewerAnnotation(viewer, annId) || item;
-        const comment = prksAnnotationCommentText(annObj);
-        hid.value = String(annId);
-        page.value = pageIndex != null ? String(pageIndex) : '';
-        txt.value = comment;
-        const pageDisp = pageIndex != null && pageIndex !== '' ? Number(pageIndex) + 1 : '?';
-        const type = (typeof annotationTypeLabel === 'function' ? annotationTypeLabel(annObj || item) : '') || 'Annotation';
-        meta.textContent = `Page ${pageDisp} · ${type}`;
-        wrap.classList.remove('hidden');
-        const editorState = {
-            annId: String(annId),
-            pageIndex: pageIndex != null ? Number(pageIndex) : null,
-            docId: viewer && typeof viewer.getDocumentId === 'function' ? viewer.getDocumentId() : null,
-            custom: annObj && annObj.custom && typeof annObj.custom === 'object' ? annObj.custom : {},
-        };
-        if (pdf) pdf.annotationEditorState = editorState;
-    } catch (_e) {}
+    prksOpenAnnotationPopupSession(owner, annId, item, null);
 };
 
-window.openPdfAnnotationEditorById = async function (ctxOrId, maybeId) {
+window.openPdfAnnotationEditorById = async function (ctxOrId, maybeId, opts) {
     let owner = null;
     let annId = ctxOrId;
+    let options = opts;
     if (ctxOrId && typeof ctxOrId.getResource === 'function') {
         owner = ctxOrId;
         annId = maybeId;
     } else {
         owner = prksPdfOwnerOrFocused();
+        options = maybeId && typeof maybeId === 'object' ? maybeId : opts;
     }
-    if (annId == null || annId === '') return;
-    if (!owner || !prksShowWorkAnnotationsTab(owner)) return;
+    if (!owner || annId == null || annId === '') return;
     const id = String(annId);
     const pdf = prksPdfRuntime(owner);
     const c = pdf && pdf.annotationCache;
     const items = c && Array.isArray(c.items) ? c.items : [];
-    const idx = items.findIndex((item) => {
-        const itemId = item && (item.id || item.uuid || item.annotationId || item._id);
+    const item = items.find((entry) => {
+        const itemId = entry && (entry.id || entry.uuid || entry.annotationId || entry._id);
         return itemId != null && String(itemId) === id;
     });
-    if (idx >= 0 && typeof window.openPdfAnnotationEditorByIndex === 'function') {
-        await window.openPdfAnnotationEditorByIndex(idx, owner);
-        return;
-    }
-    const wrap = document.getElementById('pdf-annotation-editor');
-    const meta = document.getElementById('pdf-annotation-editor-meta');
-    const txt = document.getElementById('pdf-annotation-editor-text');
-    const hid = document.getElementById('pdf-annotation-editor-ann-id');
-    const page = document.getElementById('pdf-annotation-editor-page-index');
-    if (!wrap || !meta || !txt || !hid || !page) return;
-    try {
-        const viewer = prksPdfViewer(owner);
-        const annObj = prksFindViewerAnnotation(viewer, id);
-        if (!annObj) return;
-        const comment = prksAnnotationCommentText(annObj);
-        const pageIndex = prksPageIndexFromAnnotationObject(annObj);
-        hid.value = id;
-        page.value = Number.isFinite(pageIndex) ? String(pageIndex) : '';
-        txt.value = comment;
-        const pageDisp = Number.isFinite(pageIndex) ? pageIndex + 1 : '?';
-        const type =
-            (typeof annotationTypeLabel === 'function' ? annotationTypeLabel(annObj) : '') ||
-            'Annotation';
-        meta.textContent = `Page ${pageDisp} · ${type}`;
-        wrap.classList.remove('hidden');
-        const editorState = {
-            annId: id,
-            pageIndex: Number.isFinite(pageIndex) ? pageIndex : null,
-            docId: viewer && typeof viewer.getDocumentId === 'function' ? viewer.getDocumentId() : null,
-            custom: annObj && annObj.custom && typeof annObj.custom === 'object' ? annObj.custom : {},
-        };
-        if (pdf) pdf.annotationEditorState = editorState;
-    } catch (_e) {}
+    prksOpenAnnotationPopupSession(owner, id, item || null, options || null);
 };
 
 function prksViewerProgrammaticDelete(viewer, annId) {
@@ -711,13 +1064,13 @@ function prksRefusePdfUserMutation(pdf) {
     }
 }
 
-window.deletePdfAnnotationFromEditor = async function () {
-    const owner = prksPdfOwnerOrFocused();
+window.deletePdfAnnotationFromEditor = async function (ctx, captured) {
+    const owner = prksPdfOwnerOrFocused(ctx);
     const pdf = prksPdfRuntime(owner);
-    if (!pdf) return;
-    const st = pdf && pdf.annotationEditorState;
-    if (!st || !st.annId) return;
-    const annId = st.annId;
+    if (!pdf || typeof pdf.captureAnnotationPopupTicket !== 'function') return;
+    const ticket = pdf.captureAnnotationPopupTicket(captured);
+    if (!ticket || !ticket.annId) return;
+    if (ticket.deletable !== true) return;
     // Confirm first — do not hold the dialog behind materialization/handoff.
     // Capability is re-checked after the gate before the viewer mutation.
     const confirmed =
@@ -729,6 +1082,10 @@ window.deletePdfAnnotationFromEditor = async function () {
     try {
         await prksWaitOutAnnotationMaterialization(pdf);
         if (owner && owner.destroyed) return;
+        if (!prksAnnotationPopupGenerationCurrent(owner, ticket)) return;
+        if (typeof pdf.annotationPopupWriteStill === 'function' && !pdf.annotationPopupWriteStill(ticket)) {
+            return;
+        }
         // Capability may have changed while the gate was held — do not close
         // the editor / assume a no-op viewer mutation succeeded.
         if (!prksPdfUserMutationStillAllowed(pdf)) {
@@ -739,22 +1096,29 @@ window.deletePdfAnnotationFromEditor = async function () {
             typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) {
             return;
         }
-        const viewer = prksPdfViewer(owner);
-        if (!viewer || typeof viewer.deleteAnnotation !== 'function') return;
+        const viewer = ticket.viewer;
+        if (!viewer || pdf.viewer !== viewer || typeof viewer.deleteAnnotation !== 'function') return;
         // User path: plain delete after lock releases — never beginProgrammatic.
-        await viewer.deleteAnnotation(annId);
+        await viewer.deleteAnnotation(ticket.annId);
         if (typeof window.closePdfAnnotationEditor === 'function') {
-            window.closePdfAnnotationEditor(owner);
+            window.closePdfAnnotationEditor(owner, { annId: ticket.annId, reason: 'delete' });
         }
     } catch (_e) {}
 };
 
-window.savePdfAnnotationComment = async function () {
-    const owner = prksPdfOwnerOrFocused();
+window.savePdfAnnotationComment = async function (ctx, text, captured) {
+    const owner = prksPdfOwnerOrFocused(ctx);
     const pdf = prksPdfRuntime(owner);
-    if (!pdf) return;
+    if (!pdf || typeof pdf.captureAnnotationPopupTicket !== 'function') return;
+    const ticket = pdf.captureAnnotationPopupTicket(captured);
+    if (!ticket || !ticket.annId || ticket.direct) return;
+    const val = (text == null ? '' : String(text)).trim();
     await prksWaitOutAnnotationMaterialization(pdf);
     if (owner && owner.destroyed) return;
+    if (!prksAnnotationPopupGenerationCurrent(owner, ticket)) return;
+    if (typeof pdf.annotationPopupWriteStill === 'function' && !pdf.annotationPopupWriteStill(ticket)) {
+        return;
+    }
     if (!prksPdfUserMutationStillAllowed(pdf)) {
         prksRefusePdfUserMutation(pdf);
         return;
@@ -763,16 +1127,15 @@ window.savePdfAnnotationComment = async function () {
         typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) {
         return;
     }
-    const st = pdf && pdf.annotationEditorState;
-    const txt = document.getElementById('pdf-annotation-editor-text');
-    const pageHid = document.getElementById('pdf-annotation-editor-page-index');
-    if (!st || !txt) return;
-    const val = (txt.value || '').trim();
     try {
         await prksWaitOutAnnotationMaterialization(pdf);
         if (owner && owner.destroyed) return;
+        if (!prksAnnotationPopupGenerationCurrent(owner, ticket)) return;
+        if (typeof pdf.annotationPopupWriteStill === 'function' && !pdf.annotationPopupWriteStill(ticket)) {
+            return;
+        }
         // Re-check after the gate: connectivity/capability may have flipped.
-        // Do not patch sidebar/editor UI as though the update succeeded.
+        // Do not patch a newer popup as though this update belonged to it.
         if (!prksPdfUserMutationStillAllowed(pdf)) {
             prksRefusePdfUserMutation(pdf);
             return;
@@ -781,20 +1144,14 @@ window.savePdfAnnotationComment = async function () {
             typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) {
             return;
         }
-        const viewer = prksPdfViewer(owner);
-        if (!viewer || typeof viewer.updateAnnotation !== 'function') return;
-        const liveAnn = prksFindViewerAnnotation(viewer, st.annId);
-        let pageIdx = st.pageIndex;
+        const viewer = ticket.viewer;
+        if (!viewer || pdf.viewer !== viewer || typeof viewer.updateAnnotation !== 'function') return;
+        const liveAnn = prksFindViewerAnnotation(viewer, ticket.annId);
+        let pageIdx = ticket.pageIndex;
         if (!Number.isFinite(Number(pageIdx)) || Number(pageIdx) < 0) {
             if (liveAnn) {
                 const resolved = prksPageIndexFromAnnotationObject(liveAnn);
                 if (Number.isFinite(resolved) && resolved >= 0) pageIdx = resolved;
-            }
-        }
-        if (!Number.isFinite(Number(pageIdx)) || Number(pageIdx) < 0) {
-            if (pageHid && String(pageHid.value).trim() !== '') {
-                const n = Number(pageHid.value);
-                if (Number.isFinite(n) && n >= 0) pageIdx = n;
             }
         }
         if (!Number.isFinite(Number(pageIdx)) || Number(pageIdx) < 0) {
@@ -803,16 +1160,21 @@ window.savePdfAnnotationComment = async function () {
         const baseCustom =
             liveAnn && liveAnn.custom && typeof liveAnn.custom === 'object'
                 ? liveAnn.custom
-                : st.custom && typeof st.custom === 'object'
-                  ? st.custom
+                : ticket.custom && typeof ticket.custom === 'object'
+                  ? ticket.custom
                   : {};
         const patch = {
             custom: Object.assign({}, baseCustom, { prksComment: val }),
             contents: val,
         };
         // User path: plain update after lock — never beginProgrammatic.
-        viewer.updateAnnotation(st.annId, patch);
-        prksPatchAnnotationListCacheAfterCommentSave(owner, st.annId, val);
+        viewer.updateAnnotation(ticket.annId, patch);
+        prksPatchAnnotationListCacheAfterCommentSave(owner, ticket.annId, val);
+        if (typeof pdf.annotationPopupStill === 'function' && pdf.annotationPopupStill(ticket)) {
+            if (typeof pdf.noteAnnotationPopupComment === 'function') {
+                pdf.noteAnnotationPopupComment(ticket, val);
+            }
+        }
         if (typeof window.applyCachedAnnotationListToPanel === 'function') {
             window.applyCachedAnnotationListToPanel(owner);
         }
@@ -979,152 +1341,14 @@ function renderAnnotationFallbackList(items, docId = null, workId = null, ctx) {
         items: list,
         docId: docId != null && docId !== '' ? docId : null,
         workId: resolvedWorkId,
+        listPublished: true,
     };
     if (pdf) pdf.annotationCache = cache;
-    if (!prksIsFocusedPdfCtx(owner)) return;
-    const target = document.getElementById('annotation-fallback-list');
-    if (!target) return;
-
-    const now = new Date().toLocaleTimeString();
-    const count = list.length;
-    const info = docId ? `ID: ${docId.substring(0, 8)}...` : 'No ID';
-    const statusHtml = `<div class="annotation-list-status">Last sync: ${escapeHtml(now)} (${count} found, ${escapeHtml(info)})</div>`;
-
-    if (!list.length) {
-        target.innerHTML =
-            statusHtml + '<p class="annotations-tab__empty">No annotations loaded yet.</p>';
-        target.onclick = null;
-        return;
-    }
-    const html = list.map((item, idx) => {
-        const text = annotationToText(item) || `Annotation ${idx + 1}`;
-        const prksComment =
-            item && item.custom && typeof item.custom === 'object' && typeof item.custom.prksComment === 'string'
-                ? item.custom.prksComment.trim()
-                : '';
-        const page = item.pageIndex ?? item.page ?? item.pageNumber ?? item.page_index;
-        const pageDisplay = page !== undefined ? Number(page) + 1 : '?';
-        const pageLabel = page !== undefined ? `Page ${pageDisplay}` : 'Unknown page';
-
-        // If the main label is already the comment, don't repeat it as secondary.
-        const commentHtml =
-            prksComment && prksComment !== text ? `<div class="annotation-row__comment">${escapeHtml(prksComment)}</div>` : '';
-
-        return `<div class="annotation-row" data-ann-idx="${idx}" role="listitem" tabindex="0">
-<div class="annotation-row__header">
-<button type="button" class="annotation-row__page-jump">${escapeHtml(pageLabel)}</button>
-<button type="button" class="annotation-row__copy-link" title="Copy link to this PDF annotation for your notes">Copy link</button>
-<button type="button" class="annotation-row__edit-comment">Edit/Add comment</button>
-<button type="button" class="annotation-row__delete">Delete</button>
-</div>
-<button type="button" class="annotation-row__jump">
-<span class="annotation-row__text">${escapeHtml(text)}</span>
-</button>
-${commentHtml}
-</div>`;
-    }).join('');
-    target.innerHTML = statusHtml + html;
-
-    target.onclick = async (e) => {
-        const row = e.target.closest('.annotation-row');
-        if (!row || !target.contains(row)) return;
-        const idx = Number(row.getAttribute('data-ann-idx'));
-        if (!Number.isFinite(idx)) return;
-        e.preventDefault();
-        if (e.target && e.target.closest && e.target.closest('.annotation-row__edit-comment')) {
-            if (typeof window.openPdfAnnotationEditorByIndex === 'function') {
-                void window.openPdfAnnotationEditorByIndex(idx, owner);
-            }
-            return;
-        }
-        if (e.target && e.target.closest && e.target.closest('.annotation-row__delete')) {
-            const cache = pdf && pdf.annotationCache;
-            const rowItem = cache && Array.isArray(cache.items) ? cache.items[idx] : null;
-            const annId = rowItem && (rowItem.id || rowItem.uuid || rowItem.annotationId || rowItem._id);
-            if (!annId) return;
-            // Confirm immediately. Waiting out materialization before the dialog
-            // delayed Cancel/OK for the whole critical section and stranded the
-            // opener under load (sidebar may also repaint while waiting).
-            const confirmed =
-                typeof prksConfirmDeletePdfAnnotation === 'function'
-                    ? await prksConfirmDeletePdfAnnotation()
-                    : window.confirm('Delete this annotation from the PDF?');
-            if (!confirmed) return;
-            if (owner && owner.destroyed) return;
-            await prksWaitOutAnnotationMaterialization(pdf);
-            if (owner && owner.destroyed) return;
-            // Re-check after the gate — do not close the editor as if delete ran.
-            if (!prksPdfUserMutationStillAllowed(pdf)) {
-                prksRefusePdfUserMutation(pdf);
-                return;
-            }
-            if (pdf.annotationMutationDurable !== true &&
-                typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
-            const viewer = prksPdfViewer(owner);
-            if (viewer && typeof viewer.deleteAnnotation === 'function') {
-                try {
-                    // User path: plain delete after materialization lock.
-                    await viewer.deleteAnnotation(String(annId));
-                    if (typeof window.closePdfAnnotationEditor === 'function') {
-                        const st = pdf && pdf.annotationEditorState;
-                        if (st && String(st.annId) === String(annId)) {
-                            window.closePdfAnnotationEditor(owner);
-                        }
-                    }
-                } catch (_e) {}
-            }
-            return;
-        }
-        if (e.target && e.target.closest && e.target.closest('.annotation-row__copy-link')) {
-            const cache = pdf && pdf.annotationCache;
-            const rowItem = cache && Array.isArray(cache.items) ? cache.items[idx] : null;
-            const annId = rowItem && (rowItem.id || rowItem.uuid || rowItem.annotationId || rowItem._id);
-            if (!annId) return;
-            const base = annotationToText(rowItem) || `Annotation`;
-            const pageIndex = rowItem.pageIndex ?? rowItem.page ?? rowItem.pageNumber ?? rowItem.page_index;
-            const pageDisp = pageIndex !== undefined && pageIndex !== null ? Number(pageIndex) + 1 : null;
-            const alreadyHasPage =
-                typeof base === 'string' && /\s-\s*p\.\s*\d+/i.test(base);
-            const label =
-                pageDisp != null && Number.isFinite(pageDisp) && !alreadyHasPage
-                    ? `${base} - p. ${pageDisp}`
-                    : base;
-            const wikiLink = prksBuildPdfAnnWikiLink(annId, label);
-            const btn = e.target.closest('.annotation-row__copy-link');
-            try {
-                await prksCopyTextToClipboard(wikiLink);
-                if (typeof prksFlashButtonLabel === 'function') {
-                    prksFlashButtonLabel(btn, true, { successLabel: 'Copied', errorLabel: 'Copy failed', restoreMs: 1200 });
-                }
-            } catch (_e) {
-                if (typeof prksFlashButtonLabel === 'function') {
-                    prksFlashButtonLabel(btn, false, { successLabel: 'Copied', errorLabel: 'Copy failed', restoreMs: 1200 });
-                }
-            }
-            return;
-        }
-        if (e.target.closest('.annotation-row__jump') || e.target.closest('.annotation-row__page-jump')) {
-            const cache = pdf && pdf.annotationCache;
-            const st = pdf && pdf.annotationEditorState;
-            const rowItem = cache && Array.isArray(cache.items) ? cache.items[idx] : null;
-            const rowAnnId = rowItem && (rowItem.id || rowItem.uuid || rowItem.annotationId || rowItem._id);
-            if (st && rowAnnId != null && String(rowAnnId) !== String(st.annId)) {
-                if (typeof window.closePdfAnnotationEditor === 'function') {
-                    window.closePdfAnnotationEditor(owner);
-                }
-            }
-            void window.jumpToPdfAnnotationByIndex(idx, owner);
-        }
-    };
+    prksSyncAnnotationDrawer(owner);
 }
 
 window.applyCachedAnnotationListToPanel = function applyCachedAnnotationListToPanel(ctx) {
     const owner = prksPdfOwnerOrFocused(ctx);
-    if (
-        owner &&
-        typeof window.prksRightPanelOwnedBy === 'function' &&
-        !window.prksRightPanelOwnedBy(owner)
-    ) return;
     const pdf = prksPdfRuntime(owner);
     const c = pdf && pdf.annotationCache;
     if (!c) return;
@@ -1420,11 +1644,12 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                             return String(itemId) !== annId;
                         });
                         if (ack.present && ack.annotation) nextList = nextList.concat([ack.annotation]);
+                        const publishedDocId = runtime.annotationCache && runtime.annotationCache.docId;
                         runtime.annotationCache = {
                             allItems: nextList,
                             rawItems: nextList,
                             items: nextList,
-                            docId: runtime.annotationCache && runtime.annotationCache.docId,
+                            docId: publishedDocId,
                             workId: String(workId),
                         };
                         if (runtime.annotationState && typeof runtime.annotationState === 'object') {
@@ -1461,6 +1686,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                                 knownAbsent: prksKnownAbsentAnnotationSeed(runtime),
                             });
                         }
+                        renderAnnotationFallbackList(nextList, publishedDocId, workId, ctx);
                     }
                     await window.prksSync.store.resolveConflict(op.op_id, apply);
                     if (window.prksSync && typeof window.prksSync.changed === 'function') {
@@ -1571,9 +1797,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             runtime.materializedPdfAnnotationRevision =
                 snapBody.materialized_pdf_annotation_revision;
         }
-        if (saved.length > 0) {
-            renderAnnotationFallbackList(saved, docId || 'DB', workId, ctx);
-        }
+        renderAnnotationFallbackList(saved, docId || 'DB', workId, ctx);
         return true;
     }
 
@@ -1995,28 +2219,34 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         staging.hidden = true;
         if (targetNode.className) staging.className = targetNode.className;
         targetNode.parentNode.insertBefore(staging, targetNode.nextSibling);
+        if (runtime && typeof runtime.closeAnnotationPopup === 'function') {
+            runtime.closeAnnotationPopup();
+            prksSyncAnnotationPopup(ctx);
+        }
 
         let newViewer = null;
+        const popupViewer = { current: null };
+        const popupCallbacks = prksPdfAnnotationPopupCallbacks(ctx, runtime, ctx && typeof ctx.generation === 'number' ? ctx.generation : 0, popupViewer);
         try {
             newViewer = await createPrksPdfViewer({
                 target: staging,
                 src,
                 mode: desiredMode,
                 annotationAuthor: author,
+                ownerTabId: ctx && ctx.tabId != null ? String(ctx.tabId) : '',
+                ownerGeneration: ctx && typeof ctx.generation === 'number' ? ctx.generation : '',
                 documentTitle: work.title || 'Document',
                 documentTypeLabel: typeMeta && typeMeta.label ? typeMeta.label : '',
                 documentTypeColor: typeMeta && typeMeta.color ? typeMeta.color : undefined,
                 documentTypeBorder: typeMeta && typeMeta.border ? typeMeta.border : undefined,
                 initialPage: initialPage,
                 onPageChange: (info) => runtime.lastPage && runtime.lastPage.onPageChange(info),
-                onAnnotationCommentRequest: (info) => {
-                    if (runtime.mode !== 'work' || !info || !info.annotationId) return;
-                    if (typeof window.openPdfAnnotationEditorById === 'function') {
-                        void window.openPdfAnnotationEditorById(ctx, info.annotationId);
-                    }
-                },
+                onAnnotationCommentRequest: popupCallbacks.onAnnotationCommentRequest,
+                onAnnotationCommentDismiss: popupCallbacks.onAnnotationCommentDismiss,
+                onAnnotationDeleteRequest: popupCallbacks.onAnnotationDeleteRequest,
                 onError: (err) => console.error('PDF viewer failed', err),
             });
+            popupViewer.current = newViewer;
         } catch (_eRemount) {
             newViewer = null;
         }
@@ -2061,6 +2291,11 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         runtime.viewer = newViewer;
         runtime.viewerFilePath = managedPdfApiPath(newPath) || String(newPath || '').split('?')[0];
         runtime._cowRemountPendingPath = '';
+        const searchGeneration = ctx && typeof ctx.generation === 'number' ? ctx.generation : runtime._searchGeneration;
+        if (typeof bindPdfSurfaceSearch === 'function') {
+            bindPdfSurfaceSearch(ctx, runtime, staging, searchGeneration);
+        }
+        prksAttachPdfSearch(ctx, runtime, newViewer, searchGeneration);
         if (typeof newViewer.setMutationEnabled === 'function') {
             if (keepLocked) {
                 newViewer.setMutationEnabled(false);
@@ -2783,6 +3018,70 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         return ran;
     }
 
+    function acknowledgedPdfAnnotationBase(ackList, state, id) {
+        if (typeof window.prksAcknowledgedPdfAnnotationBase === 'function') {
+            return window.prksAcknowledgedPdfAnnotationBase(ackList, state, id);
+        }
+        return { annotation_id: id, present: false, revision: 0, annotation: null };
+    }
+
+    function rawViewerAnnotation(evt, id) {
+        let raw = evt.annotation;
+        if (!raw || typeof raw !== 'object') {
+            return prksFindViewerAnnotation(liveAnnotationViewer(), id);
+        }
+        if (raw.raw && typeof raw.raw === 'object') return raw.raw;
+        return raw;
+    }
+
+    function durableAnnotationWriteIntent(evt) {
+        const annId = evt.annotationId || (evt.annotation && (
+            evt.annotation.id || evt.annotation.uuid || evt.annotation.annotationId
+        ));
+        if (!annId && evt.kind !== 'delete') return null;
+        const id = String(annId || '');
+        const ackList = (runtime.annotationCache && runtime.annotationCache.items) || [];
+        const state = runtime.annotationState || null;
+        const observed = acknowledgedPdfAnnotationBase(ackList, state, id);
+        if (evt.kind === 'delete') {
+            observed.annotation_id = id;
+            return { ackList: ackList, desired: null, observed: observed };
+        }
+        const raw = rawViewerAnnotation(evt, id);
+        if (!raw) return null;
+        return {
+            ackList: ackList,
+            desired: { annotation_id: id, annotation: raw },
+            observed: observed,
+        };
+    }
+
+    function adoptDurableAnnotationCache(ackList) {
+        // Refresh local projection from effective overlay, including the live
+        // viewer — ACK-only materialize may have removed a pending create/update
+        // that this deferred write restored.
+        const ackOnly = Array.isArray(ackList) ? ackList : [];
+        const cacheViewer = liveAnnotationViewer();
+        runtime.annotationCache = {
+            allItems: ackOnly,
+            rawItems: ackOnly,
+            items: ackOnly,
+            docId: cacheViewer && cacheViewer.getDocumentId
+                ? cacheViewer.getDocumentId()
+                : null,
+            workId: String(workId),
+        };
+    }
+
+    async function rollbackFailedDurableAnnotation() {
+        if (!stillLive()) return;
+        syncState.lastError = 'local_save_failed';
+        renderSyncIndicator();
+        try {
+            await restoreEffectiveViewerAnnotations();
+        } catch (_e2) {}
+    }
+
     function onAnnotationEvent(evt) {
         if (worker && worker.destroyed) return;
         if (!stillLive()) return;
@@ -2805,47 +3104,16 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 // past the user-input lock; then commit durably.
                 await prksWaitOutAnnotationMaterialization(runtime);
                 if (!stillLive()) return;
-                const annId = evt.annotationId || (evt.annotation && (
-                    evt.annotation.id || evt.annotation.uuid || evt.annotation.annotationId
-                ));
-                if (!annId && evt.kind !== 'delete') return;
-                const id = String(annId || '');
-                const ackList = (runtime.annotationCache && runtime.annotationCache.items) || [];
-                const state = runtime.annotationState || null;
-                const observed =
-                    typeof window.prksAcknowledgedPdfAnnotationBase === 'function'
-                        ? window.prksAcknowledgedPdfAnnotationBase(ackList, state, id)
-                        : { annotation_id: id, present: false, revision: 0, annotation: null };
-                let desired = null;
-                if (evt.kind !== 'delete') {
-                    let raw = evt.annotation;
-                    if (!raw || typeof raw !== 'object') {
-                        raw = prksFindViewerAnnotation(liveAnnotationViewer(), id);
-                    } else if (raw.raw && typeof raw.raw === 'object') {
-                        raw = raw.raw;
-                    }
-                    if (!raw) return;
-                    desired = { annotation_id: id, annotation: raw };
-                } else {
-                    observed.annotation_id = id;
-                }
+                const intent = durableAnnotationWriteIntent(evt);
+                if (!intent) return;
                 try {
-                    await window.prksSavePdfAnnotationDurably(String(workId), desired, observed);
+                    await window.prksSavePdfAnnotationDurably(
+                        String(workId),
+                        intent.desired,
+                        intent.observed
+                    );
                     if (!stillLive()) return;
-                    // Refresh local projection from effective overlay, including
-                    // the live viewer — ACK-only materialize may have removed a
-                    // pending create/update that this deferred write restored.
-                    const ackOnly = Array.isArray(ackList) ? ackList : [];
-                    const cacheViewer = liveAnnotationViewer();
-                    runtime.annotationCache = {
-                        allItems: ackOnly,
-                        rawItems: ackOnly,
-                        items: ackOnly,
-                        docId: cacheViewer && cacheViewer.getDocumentId
-                            ? cacheViewer.getDocumentId()
-                            : null,
-                        workId: String(workId),
-                    };
+                    adoptDurableAnnotationCache(intent.ackList);
                     await restoreEffectiveViewerAnnotations();
                     syncState.localMutationSeen = true;
                     syncState.lastError = '';
@@ -2853,12 +3121,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                     // Do NOT materialize PDF bytes here. Materialization runs
                     // only after semantic ACK of an acknowledged generation.
                 } catch (_err) {
-                    if (!stillLive()) return;
-                    syncState.lastError = 'local_save_failed';
-                    renderSyncIndicator();
-                    try {
-                        await restoreEffectiveViewerAnnotations();
-                    } catch (_e2) {}
+                    await rollbackFailedDurableAnnotation();
                 }
             });
             return;
@@ -2970,37 +3233,63 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             } else {
                 void maybeCatchUpMaterialization();
             }
+            async function refreshPendingPdfAnnotationsBestEffort() {
+                if (typeof window.prksRefreshPendingPdfAnnotations !== 'function') return;
+                try {
+                    await window.prksRefreshPendingPdfAnnotations();
+                } catch (_e) { /* best-effort */ }
+            }
+
+            function pdfAnnotationAckForWork(event) {
+                const ack = event && event.acknowledged;
+                const op = event && event.op;
+                const isPdfAck = ack && op && (
+                    op.operation === 'CREATE_PDF_ANNOTATION' ||
+                    op.operation === 'SET_PDF_ANNOTATION' ||
+                    op.operation === 'DELETE_PDF_ANNOTATION'
+                ) && String(op.entity_id) === String(workId);
+                return isPdfAck ? ack : null;
+            }
+
+            function applyLivePdfAnnotationAck(ack) {
+                if (typeof window.prksApplyPdfAnnotationAckToLiveRuntimes !== 'function') return;
+                window.prksApplyPdfAnnotationAckToLiveRuntimes(ack);
+            }
+
+            async function unresolvedPdfAnnotationOps() {
+                if (typeof window.prksWorkHasUnresolvedPdfAnnotationOps !== 'function') return false;
+                try {
+                    return await window.prksWorkHasUnresolvedPdfAnnotationOps(String(workId));
+                } catch (_eDirty) {
+                    return true;
+                }
+            }
+
+            function renderEffectiveAnnotationFallback() {
+                const ackItems =
+                    (runtime.annotationCache && runtime.annotationCache.items) || [];
+                const effective =
+                    typeof window.prksEffectiveWorkAnnotations === 'function'
+                        ? window.prksEffectiveWorkAnnotations(ackItems, String(workId))
+                        : ackItems;
+                renderAnnotationFallbackList(
+                    effective,
+                    runtime.annotationCache && runtime.annotationCache.docId,
+                    workId,
+                    ctx
+                );
+            }
+
             if (window.prksSync && typeof window.prksSync.subscribe === 'function') {
                 stopSyncSubscribe = window.prksSync.subscribe(function (event) {
                     if (!stillLive()) return;
                     void (async function () {
-                        if (typeof window.prksRefreshPendingPdfAnnotations === 'function') {
-                            try {
-                                await window.prksRefreshPendingPdfAnnotations();
-                            } catch (_e) { /* best-effort */ }
-                        }
+                        await refreshPendingPdfAnnotationsBestEffort();
                         if (!stillLive()) return;
-                        const ack = event && event.acknowledged;
-                        const op = event && event.op;
-                        const isPdfAck = ack && op && (
-                            op.operation === 'CREATE_PDF_ANNOTATION' ||
-                            op.operation === 'SET_PDF_ANNOTATION' ||
-                            op.operation === 'DELETE_PDF_ANNOTATION'
-                        ) && String(op.entity_id) === String(workId);
-                            if (isPdfAck) {
-                            if (typeof window.prksApplyPdfAnnotationAckToLiveRuntimes === 'function') {
-                                window.prksApplyPdfAnnotationAckToLiveRuntimes(ack);
-                            }
-                            let dirty = false;
-                            if (typeof window.prksWorkHasUnresolvedPdfAnnotationOps === 'function') {
-                                try {
-                                    dirty = await window.prksWorkHasUnresolvedPdfAnnotationOps(
-                                        String(workId)
-                                    );
-                                } catch (_eDirty) {
-                                    dirty = true;
-                                }
-                            }
+                        const ack = pdfAnnotationAckForWork(event);
+                        if (ack) {
+                            applyLivePdfAnnotationAck(ack);
+                            const dirty = await unresolvedPdfAnnotationOps();
                             if (!stillLive()) return;
                             // Every materialization — including the normal
                             // ACK-drained path — goes through a fresh coherent
@@ -3011,18 +3300,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                             if (!dirty) {
                                 void maybeCatchUpMaterialization();
                             }
-                            const ackItems =
-                                (runtime.annotationCache && runtime.annotationCache.items) || [];
-                            const effective =
-                                typeof window.prksEffectiveWorkAnnotations === 'function'
-                                    ? window.prksEffectiveWorkAnnotations(ackItems, String(workId))
-                                    : ackItems;
-                            renderAnnotationFallbackList(
-                                effective,
-                                runtime.annotationCache && runtime.annotationCache.docId,
-                                workId,
-                                ctx
-                            );
+                            renderEffectiveAnnotationFallback();
                         } else {
                             // Non-PDF ACK may have cleared a dependency; retry catch-up.
                             void maybeCatchUpMaterialization();
@@ -3317,6 +3595,95 @@ function prksEnsureAnnotationPersistence(ctx, runtime, workId, viewer, setupToke
     void setupAnnotationPersistence(ctx, runtime, workId, viewer, setupToken);
 }
 
+/**
+ * Connects an already-mounted viewer to this runtime's search session.
+ * Does not create or replace the viewer.
+ */
+function prksAttachPdfSearch(ctx, runtime, viewer, generation) {
+    if (!runtime || !viewer || runtime.viewer !== viewer) return;
+    if (typeof viewer.setSearchDriver === 'function' && typeof prksPdfSearchStill === 'function') {
+        const boundViewer = viewer;
+        viewer.setSearchDriver({
+            onQuery: function (query) {
+                if (!prksPdfSearchStill(ctx, generation, runtime) || runtime.viewer !== boundViewer) return;
+                runtime.setSearchQuery(query);
+            },
+            onNext: function () {
+                if (!prksPdfSearchStill(ctx, generation, runtime) || runtime.viewer !== boundViewer) return;
+                runtime.searchNext();
+            },
+            onPrevious: function () {
+                if (!prksPdfSearchStill(ctx, generation, runtime) || runtime.viewer !== boundViewer) return;
+                runtime.searchPrevious();
+            },
+            onClose: function () {
+                if (!prksPdfSearchStill(ctx, generation, runtime) || runtime.viewer !== boundViewer) return;
+                runtime.closeSearch();
+            },
+            onSettled: function (result) {
+                if (!result || runtime.viewer !== boundViewer || typeof runtime.applySearchResult !== 'function') return;
+                runtime.applySearchResult({
+                    epoch: result.epoch,
+                    total: result.total,
+                    activeIndex: result.activeIndex,
+                    viewer: boundViewer,
+                    ownerGeneration: generation,
+                    ctx: ctx,
+                });
+            },
+        });
+    }
+    if (typeof runtime.attachSearchViewer === 'function') {
+        runtime.attachSearchViewer(viewer);
+    }
+}
+
+/**
+ * Selection and comment requests stay on this viewer instance. The popup
+ * session lives on the runtime; these callbacks do not create a viewer.
+ */
+function prksPdfAnnotationPopupCallbacks(ctx, runtime, generation, viewerRef) {
+    function liveViewer() {
+        return viewerRef && viewerRef.current ? viewerRef.current : null;
+    }
+    function stillThisViewer() {
+        const viewer = liveViewer();
+        if (!viewer || !runtime || runtime._destroyed) return false;
+        if (runtime.viewer !== viewer) return false;
+        if (typeof ctx.isCurrent === 'function' && !ctx.isCurrent(generation)) return false;
+        return true;
+    }
+    return {
+        onAnnotationCommentRequest: function (info) {
+            if (!stillThisViewer() || runtime.mode !== 'work' || !info || !info.annotationId) return;
+            if (typeof window.openPdfAnnotationEditorById === 'function') {
+                void window.openPdfAnnotationEditorById(ctx, info.annotationId, {
+                    reason: 'viewer',
+                    deletable: info.deletable === true,
+                });
+            }
+        },
+        onAnnotationCommentDismiss: function (info) {
+            if (!info || !info.annotationId) return;
+            const viewer = liveViewer();
+            if (runtime && runtime.viewer && viewer && runtime.viewer !== viewer) return;
+            if (typeof window.closePdfAnnotationEditor === 'function') {
+                window.closePdfAnnotationEditor(ctx, { annId: info.annotationId, reason: 'viewer' });
+            }
+        },
+        onAnnotationDeleteRequest: function (info) {
+            if (!stillThisViewer() || !info || !info.annotationId) return;
+            if (typeof window.deletePdfAnnotationFromEditor === 'function') {
+                void window.deletePdfAnnotationFromEditor(ctx, {
+                    directId: info.annotationId,
+                    pageIndex: info.pageIndex,
+                    generation: generation,
+                });
+            }
+        },
+    };
+}
+
 /** Builds + awaits one viewer instance for a Work PDF; installs annotation persistence only in 'work' mode. */
 async function prksMountPdfViewer(ctx, work, runtime, targetNode, initialPage, mode) {
     const generation = ctx.generation;
@@ -3330,29 +3697,33 @@ async function prksMountPdfViewer(ctx, work, runtime, targetNode, initialPage, m
         Date.now();
     const author = typeof getPrksAnnotationAuthor === 'function' ? getPrksAnnotationAuthor() : 'You';
     const typeMeta = typeof prksDocTypeMeta === 'function' ? prksDocTypeMeta(work.doc_type) : null;
+    const popupViewer = { current: null };
+    const popupCallbacks = prksPdfAnnotationPopupCallbacks(ctx, runtime, generation, popupViewer);
     const viewer = await createPrksPdfViewer({
         target: targetNode,
         src,
         mode: mode,
         annotationAuthor: author,
+        ownerTabId: ctx && ctx.tabId != null ? String(ctx.tabId) : '',
+        ownerGeneration: generation,
         documentTitle: work.title || 'Document',
         documentTypeLabel: typeMeta && typeMeta.label ? typeMeta.label : '',
         documentTypeColor: typeMeta && typeMeta.color ? typeMeta.color : undefined,
         documentTypeBorder: typeMeta && typeMeta.border ? typeMeta.border : undefined,
         initialPage: initialPage,
         onPageChange: (info) => runtime.lastPage && runtime.lastPage.onPageChange(info),
-        onAnnotationCommentRequest: (info) => {
-            // Live-checked against the runtime's currently reconciled mode,
-            // not the mode this mount started with -- a Work viewer that
-            // began online and was later mutation-locked offline must not
-            // still let a click open the comment editor.
-            if (runtime.mode !== 'work' || !info || !info.annotationId) return;
-            if (typeof window.openPdfAnnotationEditorById === 'function') {
-                void window.openPdfAnnotationEditorById(ctx, info.annotationId);
-            }
+        onAnnotationCommentRequest: popupCallbacks.onAnnotationCommentRequest,
+        onAnnotationCommentDismiss: popupCallbacks.onAnnotationCommentDismiss,
+        onAnnotationDeleteRequest: popupCallbacks.onAnnotationDeleteRequest,
+        onAnnotationDrawerToggle: function () {
+            if (typeof ctx.isCurrent === 'function' && !ctx.isCurrent(generation)) return;
+            if (!runtime || runtime._destroyed) return;
+            if (runtime.viewer && runtime.viewer !== viewer) return;
+            prksToggleAnnotationDrawer(ctx);
         },
         onError: (err) => console.error('PDF viewer failed', err),
     });
+    popupViewer.current = viewer;
     if (stale() || (ctx.getResource ? ctx.getResource('pdf') !== runtime : false)) {
         if (viewer && typeof viewer.destroy === 'function') {
             try { viewer.destroy(); } catch (_e) {}
@@ -3362,8 +3733,19 @@ async function prksMountPdfViewer(ctx, work, runtime, targetNode, initialPage, m
     if (runtime.lastPage && typeof runtime.lastPage.setViewer === 'function') runtime.lastPage.setViewer(viewer);
     runtime.viewer = viewer;
     runtime.viewerFilePath = prksManagedPdfApiPath(work.file_path) || String(work.file_path || '').split('?')[0];
+    if (
+        runtime.annotationDrawer &&
+        runtime.annotationDrawer.open &&
+        typeof viewer.setAnnotationDrawerOpen === 'function'
+    ) {
+        try {
+            viewer.setAnnotationDrawerOpen(true);
+        } catch (_eDrawer) {}
+    }
     runtime.viewerSetupToken = (runtime.viewerSetupToken || 0) + 1;
     const setupToken = runtime.viewerSetupToken;
+    prksSyncAnnotationDrawer(ctx);
+    prksAttachPdfSearch(ctx, runtime, viewer, generation);
     runtime.filePath = work.file_path || runtime.filePath || '';
     runtime._cowRemountPendingPath = '';
     // Resolve capability (async) then reconcile mutation lock in place — never
@@ -3396,21 +3778,29 @@ async function prksMountPdfViewer(ctx, work, runtime, targetNode, initialPage, m
 export function initPdfViewerForWork(ctx, work) {
     if (!work || !work.file_path || !ctx) return;
     const _pdfGen = ctx.generation;
+    // Capture the owner ticket before any deferred or async work. A later
+    // setResource('pdf') would mint a fresh ticket and could attach after
+    // this lifetime has ended. Registration uses this ticket only.
+    const _pdfTicket = typeof ctx.resourceTicket === 'function' ? ctx.resourceTicket(_pdfGen) : null;
     const _pdfStale = function () {
-        return typeof ctx.isCurrent === 'function' ? !ctx.isCurrent(_pdfGen) : !ctx.mounted;
+        return !_pdfTicket
+            || !ctx.resourceRegistry
+            || typeof ctx.resourceRegistry.accepts !== 'function'
+            || !ctx.resourceRegistry.accepts(_pdfTicket);
     };
     const setupTimer = setTimeout(() => {
         if (ctx && ctx.timers && ctx.timers.get('pdfDeferredSetup') === setupTimer) {
             ctx.clearTimer('pdfDeferredSetup');
         }
         if (_pdfStale()) return;
-        if (typeof ctx.clearResource === 'function') ctx.clearResource('pdf');
         const targetNode = ctx.query ? ctx.query('[data-prks-role="pdf-viewer"]') : null;
         if (!targetNode) return;
-        targetNode.innerHTML = '';
         const runtime =
             typeof createWorkPdfRuntime === 'function'
-                ? createWorkPdfRuntime({ workId: String(work.id) })
+                ? createWorkPdfRuntime({
+                      workId: String(work.id),
+                      drawerStorage: prksAnnotationDrawerStorage(),
+                  })
                 : {
                       viewer: null,
                       workId: String(work.id),
@@ -3427,9 +3817,38 @@ export function initPdfViewerForWork(ctx, work) {
         runtime.lastPage = lastPage;
         runtime.work = work;
         runtime.filePath = work.file_path || '';
-        ctx.setResource('pdf', runtime, function () {
-            runtime.destroy();
-        });
+        const attached = typeof ctx.registerResource === 'function'
+            ? ctx.registerResource(_pdfTicket, {
+                kind: 'pdf',
+                value: runtime,
+                suspendable: true,
+                dispose: function () {
+                    const pane = typeof ctx.query === 'function' ? ctx.query('.work-pdf-pane') : null;
+                    runtime.destroy();
+                    if (pane && typeof window.prksApplyPdfAnnotationDrawerChrome === 'function') {
+                        window.prksApplyPdfAnnotationDrawerChrome(pane, { placement: 'closed' });
+                    }
+                    if (typeof window.prksVueDismissWorkPdfAnnotationPopup === 'function') {
+                        window.prksVueDismissWorkPdfAnnotationPopup(ctx);
+                    }
+                    if (typeof window.prksVueDismissWorkPdfAnnotationDrawer === 'function') {
+                        window.prksVueDismissWorkPdfAnnotationDrawer(ctx);
+                    }
+                },
+            })
+            : 'rejected';
+        if (attached === 'rejected') {
+            if (typeof runtime.destroy === 'function') {
+                try { runtime.destroy(); } catch (_e) {}
+            }
+            return;
+        }
+        targetNode.innerHTML = '';
+        if (typeof bindPdfSurfaceSearch === 'function') {
+            bindPdfSurfaceSearch(ctx, runtime, targetNode, _pdfGen);
+        }
+        prksWatchAnnotationDrawerPane(ctx, runtime, _pdfGen);
+        prksLayoutAnnotationDrawer(ctx);
         // Prime the service worker's whole-file PDF cache in the background (AGENTS.md
         // "PDF offline support"). The viewer itself loads progressively via Range
         // requests, which never populate that cache -- this plain GET is what lets a

@@ -30,6 +30,7 @@ const notesEditorId = computed(() => `${props.editorRegionId}-field`)
         <div class="work-workspace" :data-work-id="workId">
           <div v-if="kind === 'pdf' && hasFile" class="work-pdf-pane">
             <div data-prks-role="pdf-viewer"></div>
+            <div data-prks-role="pdf-annotation-popup-host"></div>
           </div>
           <div v-else-if="kind === 'pdf'" class="work-pdf-pane work-pdf-pane--empty">
             <p class="work-pdf-empty">No PDF file attached.</p>

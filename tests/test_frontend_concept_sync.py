@@ -187,8 +187,10 @@ class ConceptSyncFrontendTests(unittest.TestCase):
             '!sameFolderWorkspace && !sameConceptsWorkspace && !sameFolderLibraryWorkspace && !samePositionsWorkspace && !sameArgumentsWorkspace && !samePlaylistsWorkspace',
             app,
         )
-        present = app[app.index('function prksPresentVueConcepts'):
-                      app.index('function prksRenderRouteLoading')]
+        retained = app[app.index('const PRKS_RETAINED_VUE_ROUTE_FEATURES') : app.index('function prksPresentVueRoute(')]
+        self.assertIn("'concepts',", retained)
+        self.assertIn("'concept-detail',", retained)
+        present = app[app.index('function prksPresentVueRoute(') : app.index('async function prksReloadTagsVocabulary')]
         self.assertIn(':scope > [data-prks-vue-route-host]', present)
         # Fresh mount still clears; reuse must not always wipe.
         self.assertIn("contentDiv.innerHTML = '';", present)

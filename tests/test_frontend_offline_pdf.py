@@ -42,13 +42,24 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
     def test_initial_mount_uses_desired_mode(self):
         src = _read(_WORKS_PDF)
         init_start = src.index("export function initPdfViewerForWork")
-        init_body = src[init_start : init_start + 3000]
+        init_end = len(src)
+        for marker in (
+            "\nexport function ",
+            "\nexport async function ",
+            "\nfunction ",
+            "\nasync function ",
+        ):
+            at = src.find(marker, init_start + 1)
+            if at != -1 and at < init_end:
+                init_end = at
+        init_body = src[init_start:init_end]
         # Always start EmbedPDF in preview; capability + durable bridge enable
         # mutations only after hydrate (never mutation-capable during startup).
         self.assertIn(
             "prksMountPdfViewer(ctx, work, runtime, targetNode, lastPage.initialPage, 'preview')",
             init_body,
         )
+        self.assertNotIn("init_start + 3000", init_body)
         self.assertIn("annotationDurableBridgeReady = false", src)
 
     def test_annotation_persistence_only_installed_in_work_mode(self):
@@ -177,7 +188,10 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         src = _read(_WORKS_PDF)
         self.assertIn("function prksPdfUserMutationStillAllowed(pdf)", src)
         self.assertIn("annotationMutationAllowed === false", src)
-        for fn_name in ("window.deletePdfAnnotationFromEditor = async function () {", "window.savePdfAnnotationComment = async function () {"):
+        for fn_name in (
+            "window.deletePdfAnnotationFromEditor = async function (ctx, captured) {",
+            "window.savePdfAnnotationComment = async function (ctx, text, captured) {",
+        ):
             at = src.index(fn_name)
             snippet = src[at : at + 2500]
             self.assertIn(
@@ -189,9 +203,8 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
 
     def test_sidebar_row_delete_is_guarded(self):
         src = _read(_WORKS_PDF)
-        at = src.index(".annotation-row__delete")
-        handler_at = src.index("annotation-row__delete", at + 1)
-        snippet = src[handler_at : handler_at + 2500]
+        at = src.index("window.deletePdfAnnotationFromList = async function")
+        snippet = src[at : at + 2500]
         self.assertIn("prksPdfUserMutationStillAllowed", snippet)
         self.assertIn("prksOfflineGuardMutation", snippet)
 
@@ -253,14 +266,22 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         save_check = save_body.index("prksPdfUserMutationStillAllowed", save_wait)
         self.assertLess(save_wait, save_check)
         self.assertNotIn("prksViewerProgrammaticUpdate", save_body)
-        # Sidebar row Delete: confirm first, then wait before capability refuse.
-        row_at = works.index(".annotation-row__delete")
-        row_body = works[row_at:row_at + 2400]
+        # Drawer Delete captures the viewer before confirm, then waits,
+        # then deletes only through that same viewer.
+        row_at = works.index("window.deletePdfAnnotationFromList = async function")
+        row_body = works[row_at:works.index("function prksAnnotationPopupGenerationCurrent", row_at)]
+        row_ticket = row_body.index("captureAnnotationPopupTicket")
         row_confirm = row_body.index("prksConfirmDeletePdfAnnotation")
         row_wait = row_body.index("await prksWaitOutAnnotationMaterialization")
+        row_still = row_body.index("annotationPopupWriteStill", row_wait)
         row_check = row_body.index("prksPdfUserMutationStillAllowed", row_wait)
+        self.assertLess(row_ticket, row_confirm)
         self.assertLess(row_confirm, row_wait)
-        self.assertLess(row_wait, row_check)
+        self.assertLess(row_wait, row_still)
+        self.assertLess(row_still, row_check)
+        self.assertIn("const viewer = ticket.viewer", row_body)
+        self.assertIn("pdf.viewer === viewer", row_body)
+        self.assertNotIn("prksPdfViewer(owner)", row_body)
 
     def test_set_mutation_enabled_clears_active_tool_before_preview(self):
         """setMutationEnabled(false) must synchronously return the annotation

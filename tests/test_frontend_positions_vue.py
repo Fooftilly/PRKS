@@ -17,13 +17,13 @@ class PositionsVueContracts(unittest.TestCase):
         self.assertIn("prksHydratePendingWorkMetadata()", detail)
         self.assertIn("prksEffectivePositionDetail", detail)
         self.assertIn("prksApplyPendingArgumentNames", detail)
-        self.assertIn("prksPresentVuePositions(", detail)
+        self.assertIn("prksPresentVueRoute(ctx, contentDiv, 'position-detail'", detail)
         self.assertIn("availability: 'unavailable'", detail)
         self.assertIn("availability: 'not-found'", detail)
         self.assertIn("prksOfflinePrependBanner(contentDiv, null)", detail)
         index = app[app.index("case 'positions': {") : app.index("case 'position-detail': {")]
         self.assertIn("prksEffectivePositionRows", index)
-        self.assertIn("prksPresentVuePositions(", index)
+        self.assertIn("prksPresentVueRoute(ctx, contentDiv, 'positions'", index)
         self.assertNotIn("renderPositionsIndex", app)
         self.assertNotIn("renderPositionDetail", app)
         self.assertNotIn("renderPositionNotFound", app)
@@ -32,15 +32,18 @@ class PositionsVueContracts(unittest.TestCase):
         app = (FRONTEND / "app.js").read_text()
         self.assertIn("samePositionsWorkspace", app)
         self.assertIn("__prksRetainPositionsSurface", app)
+        retained = app[app.index("const PRKS_RETAINED_VUE_ROUTE_FEATURES") : app.index("function prksPresentVueRoute(")]
+        self.assertIn("'positions',", retained)
+        self.assertIn("'position-detail',", retained)
         present = app[
-            app.index("function prksPresentVuePositions") : app.index("function prksRenderRouteLoading")
+            app.index("function prksPresentVueRoute(") : app.index("async function prksReloadTagsVocabulary")
         ]
         self.assertIn(":scope > [data-prks-vue-route-host]", present)
         self.assertIn("contentDiv.innerHTML = '';", present)
         self.assertLess(present.index("querySelector"), present.index("contentDiv.innerHTML = '';"))
-        self.assertIn("prksVueDismissPositions", app)
+        self.assertIn("samePositionsWorkspace ||", app)
         self.assertIn(
-            "samePositionsWorkspace && typeof window.prksVueDismissPositions",
+            "retainedRouteSurface && typeof window.prksVueDismissRoute",
             app,
         )
 

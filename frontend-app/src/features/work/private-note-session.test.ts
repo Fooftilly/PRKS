@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import ownerResourceSource from '../../../../frontend/js/owner-resource.js?raw'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
 import uiSource from '../../../../frontend/js/ui.js?raw'
 import { registerWorkPrivateNotesBridge, resetWorkPrivateNotesForTests } from './private-note-session'
@@ -42,6 +43,11 @@ type WorkCtx = {
     generation: number
   } | null
   beginRoute: (route?: unknown) => number
+  suspend: (host: HTMLElement) => boolean
+  resume: (host: HTMLElement) => boolean
+  unmount: (reason?: string) => void
+  timers: Map<string, unknown>
+  resourceTicket: () => unknown
 }
 
 type SaveCall = { entityId: string; kind: string; content: string }
@@ -53,6 +59,7 @@ type PanelWindow = {
   prksGetTabContext: (tabId: string) => WorkCtx
   prksDestroyAllTabContexts: () => void
   initPrksPrivateNotesEditor: (entityType: string, entityId: string, owner: WorkCtx) => void
+  prksBindPrivateNotesField: (entityType: string, entityId: string, owner: WorkCtx) => void
   prksFlushPendingPrivateNotes: (owner: WorkCtx) => void
   prksResetPrivateNoteDraftsForTest: () => void
   prksPrivateNotesTextForEntity: (entityType: string, entityId: string, serverText: string) => string
@@ -154,6 +161,7 @@ function notesField(owner: WorkCtx, workId: string) {
 }
 
 beforeAll(() => {
+  panelWindow.eval(ownerResourceSource)
   panelWindow.eval(tabContextSource)
   panelWindow.eval(uiSource)
   registerWorkPrivateNotesBridge(window)
@@ -504,3 +512,248 @@ describe('work private notes session', () => {
     expect(carried.saves).toHaveLength(1)
   })
 })
+
+describe('work private notes owner lifetime', () => {
+  function bound(serverNotes = '') {
+    installShell()
+    const pair = mountPair()
+    pair.ownerA.setEntity('work', work('work-a', serverNotes))
+    const notes = notesField(pair.ownerA, 'work-a')
+    const saves: SaveCall[] = []
+    panelWindow.prksWorkNoteObserved = () => ({ value: serverNotes, revision: 1 })
+    panelWindow.prksRefreshPendingWorkNotes = () => Promise.resolve()
+    panelWindow.prksSync = { subscribe: () => () => {} }
+    panelWindow.prksSaveWorkNoteDurably = (entityId, kind, content) => {
+      saves.push({ entityId: String(entityId), kind: String(kind), content: String(content) })
+      return Promise.resolve({ code: 'saved' })
+    }
+    panelWindow.initPrksPrivateNotesEditor('work', 'work-a', pair.ownerA)
+    return { ...pair, notes, saves }
+  }
+
+  function parking(): HTMLElement {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    return host
+  }
+
+  it('warm park disposes the Reminders editor and the rebuilt editor keeps its draft', async () => {
+    const { ownerA, notes, saves } = bound()
+    const started = ownerA.getResource('privateNotesEditor')
+    notes.value = 'Unflushed'
+    notes.dispatchEvent(new Event('input', { bubbles: true }))
+    expect(ownerA.timers.size).toBe(1)
+
+    expect(ownerA.suspend(parking())).toBe(true)
+    expect(ownerA.getResource('privateNotesEditor')).toBeUndefined()
+    expect(ownerA.timers.size).toBe(0)
+    notes.value = 'Typed into the parked field'
+    notes.dispatchEvent(new Event('input', { bubbles: true }))
+    expect(ownerA.ui.workPrivateNoteSession?.draftText).toBe('Unflushed')
+    expect(ownerA.ui.workPrivateNoteSession?.dirty).toBe(true)
+
+    expect(ownerA.resume(parking())).toBe(true)
+    const field = notesField(ownerA, 'work-a')
+    panelWindow.initPrksPrivateNotesEditor('work', 'work-a', ownerA)
+    const rebuilt = ownerA.getResource('privateNotesEditor')
+    expect(rebuilt).toBeTruthy()
+    expect(rebuilt).not.toBe(started)
+    expect(field.value).toBe('Unflushed')
+    expect(rebuilt?.dirty).toBe(true)
+    panelWindow.prksFlushPendingPrivateNotes(ownerA)
+    await flushMicrotasks()
+    expect(saves).toEqual([{ entityId: 'work-a', kind: 'work-private-note', content: 'Unflushed' }])
+  })
+
+  it('cold park disposes the Reminders editor and its debounce once', async () => {
+    const { ownerA, notes, saves } = bound()
+    notes.value = 'Gone with the route'
+    notes.dispatchEvent(new Event('input', { bubbles: true }))
+    ownerA.unmount('park')
+    expect(ownerA.getResource('privateNotesEditor')).toBeUndefined()
+    notes.dispatchEvent(new Event('blur'))
+    await flushMicrotasks()
+    expect(saves).toEqual([])
+  })
+
+  it('binds nothing for a warm-parked owner', () => {
+    installShell()
+    const { ownerA } = mountPair()
+    ownerA.setEntity('work', work('work-a', ''))
+    const field = notesField(ownerA, 'work-a')
+    expect(ownerA.suspend(parking())).toBe(true)
+    panelWindow.prksBindPrivateNotesField('work', 'work-a', ownerA)
+    expect(ownerA.getResource('privateNotesEditor')).toBeUndefined()
+    expect(field.dataset.prksNotesBound).toBeUndefined()
+  })
+
+  it('keeps Main and Secondary Reminders sessions apart across a warm park', () => {
+    const { workspace, ownerA, ownerB } = bound()
+    ownerB.setEntity('work', work('work-a', ''))
+    workspace.focusedTabId = 'tab-b'
+    notesField(ownerB, 'work-a')
+    panelWindow.initPrksPrivateNotesEditor('work', 'work-a', ownerB)
+    const sideEditor = ownerB.getResource('privateNotesEditor')
+    expect(sideEditor).toBeTruthy()
+    expect(ownerA.suspend(parking())).toBe(true)
+    expect(ownerA.getResource('privateNotesEditor')).toBeUndefined()
+    expect(ownerB.getResource('privateNotesEditor')).toBe(sideEditor)
+  })
+
+  it('does not paint a stale same-generation editor failure into the replacement', async () => {
+    const { ownerA, notes } = bound('saved')
+    let rejectSave: (reason?: unknown) => void = () => {}
+    panelWindow.prksSaveWorkNoteDurably = () => new Promise((_resolve, reject) => {
+      rejectSave = reject
+    })
+    notes.value = 'Will fail'
+    notes.dispatchEvent(new Event('input', { bubbles: true }))
+    panelWindow.prksFlushPendingPrivateNotes(ownerA)
+    await flushMicrotasks()
+    const started = ownerA.getResource('privateNotesEditor')
+    const panel = document.getElementById('panel-content') as HTMLElement
+    const status = panel.querySelector('#prks-private-notes-status-work-work-a') as HTMLElement
+    const replacementField = document.createElement('textarea')
+    replacementField.id = 'prks-private-notes-work-work-a'
+    panel.replaceChild(replacementField, notes)
+    panelWindow.initPrksPrivateNotesEditor('work', 'work-a', ownerA)
+    const replacement = ownerA.getResource('privateNotesEditor')
+    expect(replacement).not.toBe(started)
+    status.textContent = 'Replacement status'
+    rejectSave(new Error('store refused'))
+    await flushMicrotasks()
+    expect(status.textContent).toBe('Replacement status')
+    expect(ownerA.getResource('privateNotesEditor')).toBe(replacement)
+  })
+
+  it('flushes a draft left dirty after the editor was parked away', async () => {
+    const { ownerA, notes, saves } = bound('saved')
+    let release: (result: { code: string }) => void = () => {}
+    panelWindow.prksSaveWorkNoteDurably = (entityId, kind, content) => {
+      saves.push({ entityId: String(entityId), kind: String(kind), content: String(content) })
+      if (saves.length > 1) return Promise.resolve({ code: 'saved' })
+      return new Promise((resolve) => { release = resolve })
+    }
+    notes.value = 'Busy while parking'
+    notes.dispatchEvent(new Event('input', { bubbles: true }))
+    panelWindow.prksFlushPendingPrivateNotes(ownerA)
+    await flushMicrotasks()
+    expect(ownerA.suspend(parking())).toBe(true)
+    expect(ownerA.getResource('privateNotesEditor')).toBeUndefined()
+    release({ code: 'scope_busy' })
+    await flushMicrotasks()
+    expect(ownerA.ui.workPrivateNoteSession?.dirty).toBe(true)
+    panelWindow.prksFlushPendingPrivateNotes(ownerA)
+    await flushMicrotasks()
+    expect(saves).toEqual([
+      { entityId: 'work-a', kind: 'work-private-note', content: 'Busy while parking' },
+      { entityId: 'work-a', kind: 'work-private-note', content: 'Busy while parking' },
+    ])
+    expect(ownerA.ui.workPrivateNoteSession?.dirty).toBe(false)
+    expect(ownerA.ui.workPrivateNoteSession?.state).toBe('committed')
+    panelWindow.prksFlushPendingPrivateNotes(ownerA)
+    await flushMicrotasks()
+    expect(saves).toHaveLength(2)
+  })
+
+  it('retries a scope_busy Reminders save while the owner is warm-parked', async () => {
+    vi.useFakeTimers()
+    const { ownerA, notes, saves } = bound('saved')
+    let release: (result: { code: string }) => void = () => {}
+    panelWindow.prksSaveWorkNoteDurably = (entityId, kind, content) => {
+      saves.push({ entityId: String(entityId), kind: String(kind), content: String(content) })
+      if (saves.length > 1) return Promise.resolve({ code: 'saved' })
+      return new Promise((resolve) => { release = resolve })
+    }
+    notes.value = 'Retry while parked'
+    notes.dispatchEvent(new Event('input', { bubbles: true }))
+    panelWindow.prksFlushPendingPrivateNotes(ownerA)
+    await flushMicrotasks()
+    expect(ownerA.suspend(parking())).toBe(true)
+    release({ code: 'scope_busy' })
+    await flushMicrotasks()
+    expect(ownerA.ui.workPrivateNoteSession?.dirty).toBe(true)
+    await vi.advanceTimersByTimeAsync(400)
+    await flushMicrotasks()
+    expect(saves).toEqual([
+      { entityId: 'work-a', kind: 'work-private-note', content: 'Retry while parked' },
+      { entityId: 'work-a', kind: 'work-private-note', content: 'Retry while parked' },
+    ])
+    expect(ownerA.ui.workPrivateNoteSession?.dirty).toBe(false)
+    expect(ownerA.getResource('privateNotesEditor')).toBeUndefined()
+  })
+
+  function busyRetryTimers(owner: WorkCtx): string[] {
+    return [...owner.timers.keys()].filter((key) => key.startsWith('privateNotesBusyRetry:'))
+  }
+
+  function countingSync() {
+    const listeners = new Set<() => void>()
+    panelWindow.prksSync = {
+      subscribe(listener: () => void) {
+        listeners.add(listener)
+        return () => { listeners.delete(listener) }
+      },
+    }
+    return listeners
+  }
+
+  // Dirty draft, warm park disposes the editor, the session saver flushes it,
+  // and the save settles scope_busy: the retry is scheduled for no live editor.
+  async function busyRetryFromSessionSaver() {
+    const pair = bound('saved')
+    const listeners = countingSync()
+    const saves: SaveCall[] = []
+    let release: (result: { code: string }) => void = () => {}
+    panelWindow.prksSaveWorkNoteDurably = (entityId, kind, content) => {
+      saves.push({ entityId: String(entityId), kind: String(kind), content: String(content) })
+      if (saves.length > 1) return Promise.resolve({ code: 'saved' })
+      return new Promise((resolve) => { release = resolve })
+    }
+    pair.notes.value = 'Busy from the session'
+    pair.notes.dispatchEvent(new Event('input', { bubbles: true }))
+    expect(pair.ownerA.suspend(parking())).toBe(true)
+    expect(pair.ownerA.getResource('privateNotesEditor')).toBeUndefined()
+    panelWindow.prksFlushPendingPrivateNotes(pair.ownerA)
+    await flushMicrotasks()
+    expect(saves).toHaveLength(1)
+    release({ code: 'scope_busy' })
+    await flushMicrotasks()
+    expect(listeners.size).toBe(1)
+    expect(busyRetryTimers(pair.ownerA)).toHaveLength(1)
+    return { ...pair, listeners, saves }
+  }
+
+  it('stops the session-saver busy retry on cold route without a sync event', async () => {
+    vi.useFakeTimers()
+    const { ownerA, listeners, saves } = await busyRetryFromSessionSaver()
+    ownerA.unmount('park')
+    expect(listeners.size).toBe(0)
+    expect(busyRetryTimers(ownerA)).toEqual([])
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(saves).toHaveLength(1)
+  })
+
+  it('stops the session-saver busy retry when the owner is destroyed', async () => {
+    vi.useFakeTimers()
+    const { ownerA, listeners, saves } = await busyRetryFromSessionSaver()
+    panelWindow.prksDestroyAllTabContexts()
+    expect(ownerA.destroyed).toBe(true)
+    expect(listeners.size).toBe(0)
+    expect(busyRetryTimers(ownerA)).toEqual([])
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(saves).toHaveLength(1)
+  })
+
+  it('stops the busy retry listener when its timer fires', async () => {
+    vi.useFakeTimers()
+    const { ownerA, listeners, saves } = await busyRetryFromSessionSaver()
+    await vi.advanceTimersByTimeAsync(400)
+    await flushMicrotasks()
+    expect(listeners.size).toBe(0)
+    expect(busyRetryTimers(ownerA)).toEqual([])
+    expect(saves).toHaveLength(2)
+    expect(ownerA.ui.workPrivateNoteSession?.dirty).toBe(false)
+  })
+})
+

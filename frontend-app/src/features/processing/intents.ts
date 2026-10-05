@@ -1,0 +1,249 @@
+import {
+  normalizeProcessingFolders,
+  normalizeProcessingPeople,
+  normalizeProcessingTags,
+  type ProcessingFileDraft,
+  type ProcessingFolder,
+  type ProcessingPerson,
+  type ProcessingResume,
+  type ProcessingTagOption,
+} from './projection'
+import { processingRecords, type ProcessingRecords } from './records'
+
+/** Owning TabContext fields Processing intents need. Not a second route model. */
+export interface ProcessingIntentOwner {
+  tabId?: string
+  isCurrent?: (generation: number) => boolean
+  lastResolvedRoute?: { name?: string } | null
+  route?: { name?: string } | null
+  root?: HTMLElement | null
+}
+
+export type ProcessingActionOutcome =
+  | { status: 'success' }
+  | { status: 'quiet' }
+  | { status: 'error'; message: string }
+
+export type ProcessingPreviewPlacement = 'card' | 'side' | 'unavailable'
+
+export interface ProcessingPreviewFile {
+  id: string
+  filename: string
+  relPath: string
+  canPreview: boolean
+}
+
+export interface ProcessingPersonCreated {
+  ok: true
+  id: string
+  name: string
+  people: ProcessingPerson[]
+}
+
+export interface ProcessingFolderCreated {
+  ok: true
+  id: string
+  title: string
+  /** Null when the folder read failed. The painted list stays the catalogue. */
+  folders: ProcessingFolder[] | null
+  foldersFailed?: boolean
+}
+
+export interface ProcessingTagCreated {
+  ok: true
+  id: string
+  name: string
+}
+
+/** Recoverable quick-create failure. No message means stay quiet (offline refusal). */
+export interface ProcessingQuickFailure {
+  ok: false
+  message?: string
+}
+
+export interface ProcessingIntents {
+  reload(resume: ProcessingResume | null): Promise<ProcessingActionOutcome>
+  save(fileId: string, draft: ProcessingFileDraft): Promise<ProcessingActionOutcome>
+  importFile(fileId: string, draft: ProcessingFileDraft, resume: ProcessingResume | null): Promise<ProcessingActionOutcome>
+  searchTags(): Promise<ProcessingTagOption[] | null>
+  createTag(name: string): Promise<ProcessingTagCreated | ProcessingQuickFailure | null>
+  quickCreateFolder(title: string): Promise<ProcessingFolderCreated | ProcessingQuickFailure | null>
+  quickCreatePerson(name: string): Promise<ProcessingPersonCreated | ProcessingQuickFailure | null>
+  attachResources(host: HTMLElement): void
+  releaseResources(): void
+  setPreview(file: ProcessingPreviewFile): ProcessingPreviewPlacement
+}
+
+const SAVE_FAILURE = 'Save failed.'
+const IMPORT_FAILURE = 'Import failed.'
+const REFRESH_FAILURE = 'Could not refresh files for processing.'
+
+function quiet(): ProcessingActionOutcome {
+  return { status: 'quiet' }
+}
+
+function success(): ProcessingActionOutcome {
+  return { status: 'success' }
+}
+
+function failure(message: string): ProcessingActionOutcome {
+  return { status: 'error', message }
+}
+
+function actionMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message.trim()) return err.message.trim()
+  return fallback
+}
+
+export function ownsProcessing(
+  owner: ProcessingIntentOwner | null | undefined,
+  generation: number,
+): boolean {
+  if (!owner || typeof owner.isCurrent !== 'function' || !owner.isCurrent(generation)) return false
+  const route = owner.lastResolvedRoute || owner.route
+  return !!route && route.name === 'processing-files'
+}
+
+async function reloadIfCurrent(
+  owner: ProcessingIntentOwner | null,
+  generation: number,
+  resume: ProcessingResume | null,
+): Promise<ProcessingActionOutcome> {
+  if (!owner || !ownsProcessing(owner, generation)) return quiet()
+  const reload = window.prksReloadProcessingFiles
+  if (typeof reload !== 'function') return quiet()
+  try {
+    const painted = await reload(owner, generation, resume)
+    if (!ownsProcessing(owner, generation)) return quiet()
+    if (typeof painted === 'string' && painted.trim()) return failure(painted.trim())
+    if (painted !== true) return quiet()
+    return success()
+  } catch (err) {
+    if (!ownsProcessing(owner, generation)) return quiet()
+    return failure(actionMessage(err, REFRESH_FAILURE))
+  }
+}
+
+/**
+ * Save and import go through the Processing records service (typed client,
+ * TanStack mutations). There is no processing-file durable queue. Preview and
+ * the resize listener are the coordinator's: Vue asks, the coordinator owns
+ * the iframe and the listener. `generation` is this owner's generation.
+ */
+export function browserProcessingIntents(
+  owner: ProcessingIntentOwner | null,
+  generation: number,
+  records: ProcessingRecords = processingRecords(),
+): ProcessingIntents {
+  return {
+    reload(resume) {
+      return reloadIfCurrent(owner, generation, resume)
+    },
+    async save(fileId, draft) {
+      if (!ownsProcessing(owner, generation)) return quiet()
+      try {
+        await records.save(fileId, draft)
+      } catch (err) {
+        if (!ownsProcessing(owner, generation)) return quiet()
+        return failure(records.actionMessage(err, SAVE_FAILURE))
+      }
+      if (!ownsProcessing(owner, generation)) return quiet()
+      return success()
+    },
+    async importFile(fileId, draft, resume) {
+      if (!ownsProcessing(owner, generation)) return quiet()
+      try {
+        await records.save(fileId, draft)
+        if (!ownsProcessing(owner, generation)) return quiet()
+        await records.importFile(fileId)
+      } catch (err) {
+        if (!ownsProcessing(owner, generation)) return quiet()
+        return failure(records.actionMessage(err, IMPORT_FAILURE))
+      }
+      return reloadIfCurrent(owner, generation, resume)
+    },
+    async searchTags() {
+      if (!ownsProcessing(owner, generation)) return null
+      const search = window.prksProcessingSearchTags
+      if (typeof search !== 'function') return null
+      const rows = await search()
+      if (!ownsProcessing(owner, generation)) return null
+      return normalizeProcessingTags(rows)
+    },
+    async createTag(name) {
+      if (!ownsProcessing(owner, generation)) return null
+      const create = window.prksProcessingCreateTag
+      if (typeof create !== 'function') return { ok: false, message: 'Could not create tag.' }
+      try {
+        const created = await create(name)
+        if (!ownsProcessing(owner, generation)) return null
+        if (!created || !created.id) return { ok: false, message: 'Could not create tag.' }
+        return { ok: true, id: String(created.id), name: String(created.name || name) }
+      } catch (err) {
+        if (!ownsProcessing(owner, generation)) return null
+        return { ok: false, message: actionMessage(err, 'Could not create tag.') }
+      }
+    },
+    async quickCreateFolder(title) {
+      if (!ownsProcessing(owner, generation)) return null
+      const create = window.prksProcessingQuickCreateFolder
+      if (typeof create !== 'function') return { ok: false, message: 'Could not create folder.' }
+      let created
+      try {
+        created = await create(title)
+      } catch (err) {
+        if (!ownsProcessing(owner, generation)) return null
+        return { ok: false, message: actionMessage(err, 'Could not create folder.') }
+      }
+      if (!ownsProcessing(owner, generation)) return null
+      if (!created || created.ok === false || !created.id) {
+        const message = created && typeof created.message === 'string' ? created.message.trim() : ''
+        return message ? { ok: false, message } : { ok: false }
+      }
+      return {
+        ok: true,
+        id: String(created.id),
+        title: String(created.title || title),
+        folders: created.foldersFailed ? null : normalizeProcessingFolders(created.folders),
+        foldersFailed: !!created.foldersFailed,
+      }
+    },
+    async quickCreatePerson(name) {
+      if (!ownsProcessing(owner, generation)) return null
+      const create = window.prksProcessingQuickCreatePerson
+      if (typeof create !== 'function') return { ok: false, message: 'Could not create person.' }
+      let created
+      try {
+        created = await create(name)
+      } catch (err) {
+        if (!ownsProcessing(owner, generation)) return null
+        return { ok: false, message: actionMessage(err, 'Could not create person.') }
+      }
+      if (!ownsProcessing(owner, generation)) return null
+      if (!created || created.ok === false || !created.id) {
+        const message = created && typeof created.message === 'string' ? created.message.trim() : ''
+        return message ? { ok: false, message } : { ok: false }
+      }
+      return {
+        ok: true,
+        id: String(created.id),
+        name: String(created.name || name),
+        people: normalizeProcessingPeople(created.people),
+      }
+    },
+    attachResources(host) {
+      if (!owner) return
+      window.prksProcessingAttachResources?.(owner, host)
+    },
+    releaseResources() {
+      if (!owner) return
+      window.prksProcessingReleaseResources?.(owner)
+    },
+    setPreview(file) {
+      if (!ownsProcessing(owner, generation) || !owner) return 'unavailable'
+      const placement = window.prksProcessingSetPreview?.(owner, file)
+      if (placement === 'card' || placement === 'side' || placement === 'unavailable') return placement
+      return 'unavailable'
+    },
+  }
+}

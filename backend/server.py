@@ -59,6 +59,9 @@ from backend.api_contract.errors import research_error_envelope
 from backend.api_contract.openapi import (
     performance_diagnostics_openapi_document,
     positions_openapi_document,
+    processing_files_openapi_document,
+    publishers_openapi_document,
+    saved_views_openapi_document,
 )
 from backend.api_contract.performance import (
     PerformanceDiagnosticsReset,
@@ -73,6 +76,13 @@ from backend.api_contract.positions import (
     PositionSyncState,
     PositionUpdateRequest,
     parse_position_request,
+)
+from backend.api_contract.processing_files import ProcessingFile
+from backend.api_contract.publishers import (
+    PublisherAliasRequest,
+    PublisherCreateRequest,
+    PublisherDeleted,
+    PublisherInUse,
 )
 from backend.pdf_annotations import WorkAnnotationError
 from backend.research_graph import GraphTooLargeError, ResearchGraphBuilder
@@ -1050,6 +1060,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 except ValueError as e:
                     self.send_json(400, {'error': str(e)})
                     return
+                # Domain already committed; do not dump_response here (see
+                # docs/api-contract-boundary.md).
                 self.send_json(200, row)
             elif path.startswith('/api/works/') and path.endswith('/roles'):
                 parts = path.split('/')
@@ -1530,7 +1542,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self.send_json(400, {'error': 'missing alias'})
                         return
                     if db.delete_publisher_alias(publisher_id, alias):
-                        self.send_json(200, {'status': 'deleted'})
+                        self.send_json(200, dump_response(PublisherDeleted, {'status': 'deleted'}))
                     else:
                         self.send_json(404, {'error': 'alias not found'})
                 else:
@@ -1538,7 +1550,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             elif path.startswith('/api/publishers/') and len(path.split('/')) == 4:
                 p_id = path.split('/')[-1]
                 db.delete_publisher(p_id)
-                self.send_json(200, {'status': 'deleted'})
+                self.send_json(200, dump_response(PublisherDeleted, {'status': 'deleted'}))
             elif path.startswith('/api/tags/') and len(path.split('/')) == 4:
                 t_id = path.split('/')[-1]
                 try:
@@ -2315,6 +2327,12 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(200, positions_openapi_document())
             elif path == '/api/openapi/performance-diagnostics.json':
                 self.send_json(200, performance_diagnostics_openapi_document())
+            elif path == '/api/openapi/publishers.json':
+                self.send_json(200, publishers_openapi_document())
+            elif path == '/api/openapi/saved-views.json':
+                self.send_json(200, saved_views_openapi_document())
+            elif path == '/api/openapi/processing-files.json':
+                self.send_json(200, processing_files_openapi_document())
             elif path == '/api/positions':
                 rows = research_network.list_positions(db)
                 self.send_json(200, dump_response(PositionSummary, rows))
@@ -2562,7 +2580,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 used_only = query.get('used', [''])[0] in ('1', 'true', 'yes')
                 if used_only:
                     data = db.get_publishers_in_use()
-                    self.send_json(200, data)
+                    self.send_json(200, dump_response(PublisherInUse, data))
                 else:
                     self.send_json(200, [])
             elif path.startswith('/api/pdfs/'):
@@ -2590,7 +2608,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     data = db.scan_processing_files()
                 else:
                     data = db.get_processing_files(include_imported=False)
-                self.send_json(200, data)
+                self.send_json(200, dump_response(ProcessingFile, data))
             elif path.startswith('/api/processing-files/') and path.endswith('/pdf'):
                 parts = path.split('/')
                 if len(parts) == 5 and parts[4] == 'pdf':
@@ -2804,6 +2822,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                             safe_log_id(pf_id),
                             safe_error_type(e),
                         )
+                    # Domain already committed; do not dump_response here (see
+                    # docs/api-contract-boundary.md).
                     self.send_json(200, out)
                 else:
                     self.send_error(404, "API endpoint not found")
@@ -3224,8 +3244,14 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     return
                 self.send_json(200, out)
             elif path == '/api/publishers':
+                request, err = parse_request(PublisherCreateRequest, data)
+                if err is not None or request is None:
+                    self.send_json(400, err)
+                    return
                 try:
-                    out = db.add_publisher(data.get('name', ''))
+                    # Domain already committed on return; send its dict as is
+                    # (docs/api-contract-boundary.md).
+                    out = db.add_publisher(request.name)
                 except ValueError as e:
                     self.send_json(400, {'error': str(e)})
                     return
@@ -3234,10 +3260,12 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 parts = path.split('/')
                 if len(parts) == 5 and parts[4] == 'aliases':
                     publisher_id = parts[3]
+                    request, err = parse_request(PublisherAliasRequest, data)
+                    if err is not None or request is None:
+                        self.send_json(400, err)
+                        return
                     try:
-                        db.add_publisher_alias(
-                            publisher_id, (data.get('alias') or '').strip()
-                        )
+                        db.add_publisher_alias(publisher_id, request.alias.strip())
                     except ValueError as e:
                         self.send_json(400, {'error': str(e)})
                         return

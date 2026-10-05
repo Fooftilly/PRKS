@@ -1,6 +1,14 @@
 /**
  * Per-workspace-tab runtime. Cold-parked contexts are inert. Up to three PDF
  * contexts may instead be warm-suspended with their DOM/runtime preserved.
+ * Owner-registry resources that are not suspendable are released on that warm
+ * suspend. The pdf and workNotes kinds are suspendable and stay readable:
+ * both live in the parked pane DOM. Work role, Work tag, Work source, Work
+ * metadata, Folder tag, and private notes sessions are not suspendable: warm
+ * park disposes them, and the focused-panel refresh reconstructs the sessions
+ * that owner needs. Warm park does not
+ * invalidate a resource ticket. Cold park does.
+ * Role changes do not suspend, release, or replace them.
  */
 (function (root) {
     'use strict';
@@ -58,7 +66,6 @@
             workMetaEditSession: 0,
             workPrivateNoteSession: null,
             workResearchNoteSession: null,
-            currentSavedView: null,
             researchNotesHints: null,
         };
     }
@@ -80,7 +87,6 @@
         ui.workMetaDraftWorkId = null;
         /* Monotonic for this TabContext. Resetting the token to 0 would let a
          * save captured as session 1 match the next time Edit metadata opens. */
-        ui.currentSavedView = null;
         ui.researchNotesHints = null;
         /* workResearchNoteSession stays. Same-Work refresh must keep an
          * unsaved EasyMDE buffer; a different Work looks up its own key. */
@@ -207,6 +213,38 @@
             return !ctx.destroyed;
         }
 
+        const ownerToken = {};
+        ctx.ownerToken = ownerToken;
+        const resourceApi = root.prksOwnerResource;
+        if (resourceApi && typeof resourceApi.createOwnerResourceRegistry === 'function') {
+            let resourceEpoch = 0;
+            const resourceHost = {
+                ownerId: id,
+                ownerToken: ownerToken,
+                generation: function () { return ctx.generation; },
+                alive: function () {
+                    return !ctx.destroyed && (ctx.mounted || ctx.suspended);
+                },
+                epoch: function () { return resourceEpoch; },
+                advanceEpoch: function () { resourceEpoch += 1; },
+            };
+            ctx.resourceRegistry = resourceApi.createOwnerResourceRegistry(resourceHost);
+            ctx.resourceTicket = function (generation) {
+                return resourceApi.resourceTicket(resourceHost, generation);
+            };
+        } else {
+            ctx.resourceRegistry = null;
+            ctx.resourceTicket = function () { return null; };
+        }
+        ctx.registerResource = function (ticket, registration) {
+            if (!ctx.resourceRegistry) return 'rejected';
+            return ctx.resourceRegistry.register(ticket, registration);
+        };
+        ctx.readResource = function (kind) {
+            if (!ctx.resourceRegistry) return undefined;
+            return ctx.resourceRegistry.get(kind);
+        };
+
         ctx.domId = function (localName) {
             const local = String(localName == null ? '' : localName).replace(/[^a-zA-Z0-9_-]/g, '-');
             return 'prks-tab-' + sanitizeTabId(id) + '-' + (local || 'id');
@@ -299,25 +337,56 @@
             return ctx.entity.value;
         };
 
-        ctx.setResource = function (name, value, disposer) {
-            if (!assertAlive()) return value;
+        /**
+         * Registry kinds and their warm-park policy. pdf and workNotes are
+         * warm-suspendable; researchGraph and the editor sessions are not.
+         * A registry kind is owned only through
+         * registerResource(ticket, ...) with a ticket captured when its async
+         * work began, so setResource refuses these names. ctx.resources is a
+         * plain map of ordinary TabContext values (hint lists, title maps,
+         * route projections), with no teardown callbacks, cleared on unmount and destroy.
+         */
+        const registrySuspendable = {
+            researchGraph: false,
+            pdf: true,
+            workNotes: true,
+            workRoleEditor: false,
+            workTagEditor: false,
+            workSourceEditor: false,
+            workMetadataEditor: false,
+            folderTagEditor: false,
+            privateNotesEditor: false,
+        };
+
+        function isRegistryKind(key) {
+            return Object.prototype.hasOwnProperty.call(registrySuspendable, key);
+        }
+
+        ctx.setResource = function (name, value) {
             const key = String(name);
-            ctx.clearResource(key);
-            ctx.resources.set(key, { value: value, disposer: disposer });
+            if (isRegistryKind(key)) {
+                throw new TypeError('setResource cannot own registry kind ' + key + '; use registerResource');
+            }
+            if (!assertAlive()) return value;
+            ctx.resources.set(key, value);
             return value;
         };
 
         ctx.getResource = function (name) {
-            const rec = ctx.resources.get(String(name));
-            return rec ? rec.value : undefined;
+            const key = String(name);
+            if (isRegistryKind(key)) {
+                return ctx.resourceRegistry ? ctx.resourceRegistry.get(key) : undefined;
+            }
+            return ctx.resources.get(key);
         };
 
         ctx.clearResource = function (name) {
             const key = String(name);
-            const rec = ctx.resources.get(key);
-            if (!rec) return;
+            if (isRegistryKind(key)) {
+                if (ctx.resourceRegistry) ctx.resourceRegistry.dispose(key);
+                return;
+            }
             ctx.resources.delete(key);
-            safeCall(rec.disposer, key);
         };
 
         ctx.registerCleanup = function (fn) {
@@ -355,8 +424,7 @@
         }
 
         function clearAllResources() {
-            const names = Array.from(ctx.resources.keys());
-            for (let i = 0; i < names.length; i++) ctx.clearResource(names[i]);
+            ctx.resources.clear();
         }
 
         function runCleanups() {
@@ -377,6 +445,7 @@
         function teardownRuntime() {
             abortRoute();
             clearAllTimers();
+            if (ctx.resourceRegistry) ctx.resourceRegistry.releaseAll();
             clearAllResources();
             runCleanups();
             ctx.entity = null;
@@ -427,6 +496,7 @@
                 safeCall(() => root.prksReleaseWorkThumbPreview(ctx.root), 'thumbPreview');
             }
             if (!moveRoot(ctx.root, host)) return false;
+            if (ctx.resourceRegistry) ctx.resourceRegistry.warmSuspend();
             ctx.host = host;
             ctx.mounted = false;
             ctx.suspended = true;
@@ -436,6 +506,7 @@
         ctx.resume = function (host) {
             if (ctx.destroyed || !ctx.suspended || !ctx.root) return false;
             if (!moveRoot(ctx.root, host)) return false;
+            if (ctx.resourceRegistry) ctx.resourceRegistry.resume();
             removeWarmLru(id);
             ctx.host = host;
             ctx.suspended = false;
@@ -504,7 +575,10 @@
                 suspended: !!ctx.suspended,
                 generation: ctx.generation,
                 hasAbortController: !!ctx.abortController,
-                resourceNames: Array.from(ctx.resources.keys()).sort(),
+                resourceNames: Array.from(new Set([].concat(
+                    Array.from(ctx.resources.keys()),
+                    ctx.resourceRegistry ? ctx.resourceRegistry.kinds() : []
+                ))).sort(),
                 timerCount: ctx.timers.size,
                 cleanupCount: ctx.cleanupCallbacks.size,
             };
@@ -736,22 +810,6 @@
         return !!(route && names.indexOf(route.name) >= 0);
     }
 
-    function prksFocusedResource(name) {
-        const ctx = prksGetFocusedTabContext();
-        return ctx ? ctx.getResource(String(name)) : undefined;
-    }
-
-    function prksSetFocusedResource(name, value, disposer) {
-        const ctx = prksGetFocusedTabContext();
-        if (ctx) return ctx.setResource(String(name), value, disposer);
-        return value;
-    }
-
-    function prksClearFocusedResource(name) {
-        const ctx = prksGetFocusedTabContext();
-        if (ctx) ctx.clearResource(String(name));
-    }
-
     function prksFocusedTimer(name, timerId) {
         const ctx = prksGetFocusedTabContext();
         if (ctx) return ctx.setTimer(String(name), timerId);
@@ -825,9 +883,6 @@
         prksTabContextOwnsEntityRoute: prksTabContextOwnsEntityRoute,
         prksFocusedRouteGeneration: prksFocusedRouteGeneration,
         prksFocusedRouteIsCurrent: prksFocusedRouteIsCurrent,
-        prksFocusedResource: prksFocusedResource,
-        prksSetFocusedResource: prksSetFocusedResource,
-        prksClearFocusedResource: prksClearFocusedResource,
         prksFocusedTimer: prksFocusedTimer,
         prksClearFocusedTimer: prksClearFocusedTimer,
         prksFocusedRouteSidebar: prksFocusedRouteSidebar,

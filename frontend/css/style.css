@@ -1,5 +1,43 @@
 /*
- * PRKS stylesheet. Authority: DESIGN.md.
+ * PRKS stylesheet. Authority: DESIGN.md "CSS organization".
+ *
+ * Selector/consumer contract wins. Physical section comments are not a
+ * deletion boundary. B5 deletion follows proven selector consumers, never
+ * section number. Unlisted is not a license to purge; 01-15 are classified.
+ * Not every family in a section is a B4 Vue primitive. Do not copy shared
+ * rules into SFCs. Do not split this file in B4.
+ *
+ * Keep (app-wide): 01 tokens, 02 reset, 03 a11y, 04 layout primitives.
+ * 15 reduced motion is permanent global accessibility, not B5 cleanup.
+ * 14 responsive/container rules are cross-cutting: ownership follows the
+ * selectors/features they modify.
+ *
+ * Shared / retained (keep until the last Vue or classic consumer is gone).
+ * Physical placement may differ from the semantic section:
+ *   .prks-btn, .prks-icon-btn — B4 Vue primitives; canonical rules in 05;
+ *     .prks-btn--quiet-danger is physically in 12.
+ *   .prks-field — B4 Vue primitive; 06. Combobox/EasyMDE stay specialized.
+ *   .prks-tab, .prks-tabs — shared/retained; Vue Arguments + Folder Library
+ *     and classic callers. Canonical rules in 07. Not dead, not classic-only.
+ *   .prks-list-row — shared; 08. Work cards stay B5 feature CSS.
+ *   .prks-research-row — shared primitive; physically in 12.
+ *   .prks-state — shared; 09.
+ *   .prks-inline-message — shared; base rule physically in 12.
+ *   .prks-scope-line, .prks-rel-summary — shared; physically in 08.
+ *   .prks-dialog — canonical shared structural contract; 10. Classic
+ *     research picker in works.js remains; B5 retire/audit that caller.
+ *
+ * Specialized canonical control family (NOT a B4 Vue primitive):
+ *   .prks-segmented — Vue + classic; physically in 12.
+ * There is no generic .prks-disclosure family in 05. PrksDisclosureButton
+ * uses the button contract; classic graph JS still owns live expanded state.
+ * .nav-disclosure is sidebar shell (11), classic-owned.
+ *
+ * B5 feature/shell (do not delete wholesale): 11 application shell,
+ * 12 feature layouts (work cards, PDF, ribbon, folder tree, processing,
+ * graph canvas) except shared/specialized selectors that live there,
+ * 13 third-party, remaining innerHTML hosts.
+ *
  * 01 Tokens
  * 02 Reset / base
  * 03 Accessibility
@@ -3319,14 +3357,7 @@ body.prks-sidebar-open #app-container.app-container--tiled #sidebar .nav-disclos
 
 .tags-page-merge-filter {
     width: 100%;
-    box-sizing: border-box;
-    padding: 8px 10px;
     margin-bottom: 10px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--surface);
-    color: var(--text-primary);
-    font-size: var(--text-md);
 }
 
 .tags-page-merge-list {
@@ -3348,23 +3379,13 @@ body.prks-sidebar-open #app-container.app-container--tiled #sidebar .nav-disclos
 }
 
 .tags-page-merge-pick-btn {
-    display: block;
+    display: flex;
     width: 100%;
+    justify-content: flex-start;
     text-align: left;
-    margin: 0;
-    padding: var(--space-sm) var(--space-md);
-    border: 1px solid var(--border);
-    border-left: 3px solid var(--tag-accent, var(--accent));
-    border-radius: var(--radius-sm);
-    background: var(--surface-muted);
-    color: var(--text-primary);
-    font-size: var(--text-md);
-    cursor: pointer;
-}
-
-.tags-page-merge-pick-btn:hover {
-    border-color: var(--accent);
-    color: var(--accent);
+    border-left-width: 3px;
+    border-left-style: solid;
+    border-left-color: var(--tag-accent, var(--accent));
 }
 
 .tags-page-merge-confirm-text {
@@ -3462,11 +3483,25 @@ body.prks-sidebar-open #app-container.app-container--tiled #sidebar .nav-disclos
     color: var(--danger, #c44);
 }
 
+.prks-icon-btn.tags-page-alias-remove--busy {
+    width: auto;
+    min-width: var(--control-height-sm);
+    padding: 0 var(--space-sm);
+    font-size: var(--text-sm);
+}
+
 .tags-page-alias-add {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: var(--space-sm);
+}
+
+.tags-page-alias-add .prks-input {
+    flex: 1 1 12rem;
+    width: auto;
+    min-width: 12rem;
+    max-width: 24rem;
 }
 
 .tags-page-alias-input {
@@ -4161,6 +4196,18 @@ a.tag {
     overflow: hidden;
 }
 
+/* Vue route-surface host must participate in the Work detail flex chain.
+ * The PDF pane and Research Notes share this column. */
+.prks-tab-root > [data-prks-vue-route-host]:has(.work-detail) {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-self: stretch;
+}
+
 .prks-nav-back-row {
     margin: 0 0 var(--space-sm);
 }
@@ -4286,6 +4333,25 @@ a.tag {
     flex-direction: column;
     padding: var(--space-md);
     gap: var(--space-sm);
+}
+
+.project-card--work-card > .work-card__link {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: inherit;
+    align-items: inherit;
+    gap: inherit;
+    min-width: 0;
+    min-height: 0;
+    width: 100%;
+    color: inherit;
+    text-decoration: none;
+}
+
+.project-card--work-card > .work-card__link:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+    border-radius: inherit;
 }
 
 .work-browse-collection--list .project-card--work-card {
@@ -4615,43 +4681,12 @@ a.tag {
     stroke-width: 2.2;
 }
 
-.project-card:not(.project-card--work):not(.project-card--work-card) .status-badge {
+.project-card:not(.project-card--work-card) .status-badge {
     position: absolute;
     top: 16px;
     right: 16px;
 }
 
-/* Work file rows: title + meta left; status then doc type stacked on the right */
-.project-card--work {
-    display: flex;
-    flex-direction: row;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: var(--space-md);
-}
-
-.project-card--work .project-card__body {
-    flex: 1;
-    min-width: 0;
-}
-
-.project-card--work .project-card__rail {
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: var(--space-sm);
-    text-align: right;
-    max-width: 42%;
-}
-
-.project-card--work .card-title {
-    padding-right: 0;
-}
-
-.project-card--work .status-badge {
-    position: static;
-}
 .status-badge.Not.Started { background-color: var(--status-not-started); color: var(--status-not-started-text); }
 .status-badge.Planned { background-color: var(--status-planned); color: var(--status-planned-text); }
 .status-badge.In.Progress { background-color: var(--status-progress); color: var(--status-progress-text); }
@@ -4697,10 +4732,6 @@ a.tag {
     padding-right: 140px;
 }
 
-.list-view .project-card--work {
-    padding-right: 18px;
-}
-
 /* Processing inbox: no work rail — avoid global list-view right gutter */
 #prks-processing-list.list-view .project-card {
     padding-right: 14px;
@@ -4742,6 +4773,7 @@ a.tag {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
     gap: var(--space-md);
 }
 
@@ -4772,6 +4804,12 @@ a.tag {
     flex-shrink: 0;
     align-items: center;
     gap: var(--space-sm);
+}
+
+.saved-views-page__row-error {
+    flex: 1 0 100%;
+    margin: 0;
+    padding-top: 0;
 }
 
 .saved-view-detail__kicker {
@@ -6300,6 +6338,14 @@ body.prks-right-panel-open #app-container.app-container--tiled #right-panel {
     transform: translateX(0);
 }
 
+/* Tiles use isolation:isolate, so this overlay stays above the PDF toolbar.
+   While it is open, keep Annotations at the start of Secondary toolbars.
+   That control then sits in the pane strip the panel does not cover.
+   Pane width, zoom, and reading position stay unchanged. */
+body.prks-right-panel-open #app-container.app-container--tiled [data-prks-secondary-root="1"] .prks-pdf-toolbar__group:has(> button[aria-label="Annotations"]) {
+    order: -1;
+}
+
 /* Discoverable Close for the dismissible overlay panel (tiled desktop / mobile drawer).
    Escape and the Details ribbon toggle still work; this is an extra, more visible path.
    Hidden in the normal permanently-docked single-pane desktop layout, where the panel
@@ -6499,46 +6545,217 @@ body.prks-right-panel-open #app-container.app-container--tiled #right-panel {
     border-bottom: 1px solid var(--border);
 }
 
-.pdf-annotation-editor {
-    flex: 0 0 auto;
-    margin-top: 8px;
-    padding-top: 10px;
-    border-top: 1px solid var(--border);
+.document-view--work [data-prks-role="pdf-annotation-drawer-host"] {
+    position: absolute;
+    inset: 0;
+    overflow: visible;
+    pointer-events: none;
+    /* Above the PDF toolbar (--z-toolbar: 100) and below the comment popup. */
+    z-index: var(--z-overlay);
 }
 
-.pdf-annotation-editor__header {
+.pdf-annotation-drawer {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    box-sizing: border-box;
+    width: min(var(--pdf-annotation-drawer-width, 22rem), 100%);
     display: flex;
-    align-items: baseline;
-    justify-content: space-between;
+    flex-direction: column;
     gap: var(--space-sm);
-    margin-bottom: 6px;
+    padding: var(--space-sm);
+    background: var(--surface);
+    color: var(--text-primary);
+    border-left: 1px solid var(--border);
+    pointer-events: auto;
+    overflow: hidden;
 }
 
-.pdf-annotation-editor__title {
-    font-size: var(--text-sm);
-    font-weight: 700;
+/* Pinned mode is a flex sibling of the viewer, so the PDF box actually
+   narrows. Overlay and the mobile sheet stay out of that flex row. */
+.document-view--work .work-pdf-pane[data-prks-annotation-drawer="pinned"] {
+    flex-direction: row;
+    align-items: stretch;
+}
+
+.document-view--work .work-pdf-pane[data-prks-annotation-drawer="pinned"] [data-prks-role="pdf-viewer"] {
+    flex: 1 1 auto;
+    width: auto;
+    max-width: none;
+    min-width: 0;
+    height: 100%;
+}
+
+.document-view--work .work-pdf-pane[data-prks-annotation-drawer="pinned"] [data-prks-role="pdf-annotation-drawer-host"] {
+    position: relative;
+    inset: auto;
+    flex: 0 0 var(--pdf-annotation-drawer-width, 22rem);
+    width: var(--pdf-annotation-drawer-width, 22rem);
+    min-width: 0;
+    pointer-events: auto;
+    overflow: hidden;
+}
+
+.document-view--work .work-pdf-pane[data-prks-annotation-drawer="pinned"] .pdf-annotation-drawer {
+    position: relative;
+    top: auto;
+    right: auto;
+    bottom: auto;
+    width: 100%;
+    height: 100%;
+}
+
+.document-view--work .work-pdf-pane[data-prks-annotation-drawer="sheet"] .pdf-annotation-drawer {
+    width: 100%;
+    height: 100%;
+}
+
+.pdf-annotation-drawer__header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    flex-shrink: 0;
+}
+
+.pdf-annotation-drawer__resize {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 11px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: ew-resize;
+    touch-action: none;
+    z-index: 1;
+}
+
+.pdf-annotation-drawer__resize::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 1px;
+    background: transparent;
+}
+
+.pdf-annotation-drawer__resize:hover::before,
+.pdf-annotation-drawer__resize:focus-visible::before {
+    background: var(--accent);
+}
+
+.pdf-annotation-drawer__resize:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -2px;
+}
+
+.pdf-annotation-drawer__title {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    font-size: var(--text-md);
+    font-weight: var(--weight-bold);
+}
+
+.pdf-annotation-drawer__list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.pdf-annotation-drawer .annotation-list-status {
+    flex-shrink: 0;
+    font-size: 0.65rem;
+    color: var(--text-tertiary);
     margin: 0;
 }
 
-.pdf-annotation-editor__meta {
+.annotation-row__metadata {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 6px;
+}
+
+.annotation-row__metadata span {
+    font-size: 0.65rem;
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    padding: 1px 6px;
+}
+
+.annotation-row[data-selected="true"] {
+    border-color: var(--accent);
+}
+
+.document-view--work [data-prks-role="pdf-annotation-popup-host"] {
+    position: absolute;
+    inset: 0;
+    overflow: visible;
+    pointer-events: none;
+    z-index: var(--z-dropdown);
+}
+
+/* Leave the comment popup at least 160px. The offset follows the live drawer
+   width, and never grows past the pane minus that floor. A pane under 160px
+   keeps the host full-bleed because it is already smaller than the floor. */
+@container prks-pdf-pane (min-width: 160px) {
+    .document-view--work .work-pdf-pane:has([data-prks-role="pdf-annotation-drawer"]) [data-prks-role="pdf-annotation-popup-host"] {
+        right: min(var(--pdf-annotation-drawer-width, 22rem), calc(100% - 160px));
+        overflow: hidden;
+    }
+}
+
+.pdf-annotation-popup {
+    position: absolute;
+    z-index: var(--z-dropdown);
+    box-sizing: border-box;
+    width: min(20rem, 100%);
+    max-width: 100%;
+    padding: var(--space-sm);
+    background: var(--surface);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-md);
+    pointer-events: auto;
+}
+
+.pdf-annotation-popup__meta {
     font-size: var(--text-2xs);
     color: var(--text-tertiary);
-    white-space: nowrap;
+    margin-bottom: 6px;
 }
 
-.pdf-annotation-editor__form {
-    padding-right: 0;
+.pdf-annotation-popup__label {
+    display: block;
+    font-size: var(--text-sm);
+    font-weight: 700;
 }
 
-.pdf-annotation-editor__actions {
+.pdf-annotation-popup__text {
+    display: block;
+    width: 100%;
+    min-height: 4.5rem;
+    margin-top: 4px;
+    box-sizing: border-box;
+}
+
+.pdf-annotation-popup__actions {
     display: flex;
+    flex-wrap: wrap;
     gap: var(--space-sm);
     margin-top: 6px;
 }
 
-.pdf-annotation-editor__actions > button {
-    flex: 1;
+.pdf-annotation-popup__actions > button {
+    flex: 1 1 8rem;
     margin-top: 0;
+    white-space: nowrap;
 }
 
 .annotation-row {
@@ -9159,10 +9376,10 @@ textarea[data-prks-autosize="1"] {
     container-name: prks-work-main;
 }
 
-/* Video HTML from renderVideoViewerPane, and the relationship summary, stay
- * flex/header children. The slot itself is not a box. */
+/* Video HTML from renderVideoViewerPane, the relationship summary, and other
+ * injected HTML stay flex/header children. The slot itself is not a box. */
 .document-view--work .work-viewer-host,
-.page-header--work .work-html-slot {
+.work-html-slot {
     display: contents;
 }
 
@@ -9180,6 +9397,7 @@ textarea[data-prks-autosize="1"] {
 }
 
 .document-view--work .work-pdf-pane {
+    position: relative;
     flex: 1 1 auto;
     min-height: 120px;
     min-width: 0;
@@ -10637,6 +10855,26 @@ button.prks-research-row {
     gap: var(--space-sm);
 }
 
+/* Vue route-surface host must participate in the Research Graph flex chain.
+ * Without this, the canvas stays at its 420px minimum. */
+.prks-tab-root > [data-prks-vue-route-host]:has(.research-graph) {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-self: stretch;
+}
+
+.research-graph > [data-prks-role="graph-body"] {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
 .research-graph__toolbar {
     margin-bottom: 0;
 }
@@ -11512,11 +11750,6 @@ button.prks-research-row {
         padding: 7px 9px;
         gap: 0;
     }
-
-    /* Make cards and rails wrap better on narrow widths. */
-    .project-card--work .project-card__rail {
-        max-width: 48%;
-    }
 }
 
 /* Same shell as @media (max-width: 900px) when Settings → Force mobile layout is on. */
@@ -11656,10 +11889,6 @@ html.prks-force-mobile .top-ribbon__center::-webkit-scrollbar {
 html.prks-force-mobile .top-ribbon .ribbon-btn {
     padding: 7px 9px;
     gap: 0;
-}
-
-html.prks-force-mobile .project-card--work .project-card__rail {
-    max-width: 48%;
 }
 
 @media (max-width: 600px) {

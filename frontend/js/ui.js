@@ -175,6 +175,7 @@ function prksDiscardConfirmedClose() {
 let prksModalConfirmResolve = null;
 let prksModalConfirmAlertOnly = false;
 let prksModalConfirmOpener = null;
+let prksModalConfirmDrawerOwnerTabId = '';
 
 function prksIsModalConfirmOpen() {
     const root = document.getElementById('prks-modal-confirm');
@@ -192,6 +193,47 @@ function prksRestoreModalConfirmCancel() {
     prksModalConfirmAlertOnly = false;
 }
 
+function prksFocusStaysOnFocusedTile(node) {
+    if (!node || typeof node.closest !== 'function') return true;
+    const tile = node.closest('.prks-tile[data-prks-tab-id]');
+    if (!tile) return true;
+    const tileId = tile.getAttribute('data-prks-tab-id');
+    if (!tileId) return true;
+    const snap = typeof window.prksWorkspaceSnapshot === 'function' ? window.prksWorkspaceSnapshot() : null;
+    const focused = snap && snap.focusedTabId;
+    if (!focused) return true;
+    return String(tileId) === String(focused);
+}
+
+function prksRememberModalConfirmOpener(active) {
+    prksModalConfirmOpener = active && active !== document.body ? active : null;
+    prksModalConfirmDrawerOwnerTabId = '';
+    const opener = prksModalConfirmOpener;
+    if (!opener || typeof opener.closest !== 'function') return;
+    const drawer = opener.closest('[data-prks-role="pdf-annotation-drawer"]');
+    const ownerTabId = drawer && drawer.getAttribute('data-prks-owner-tab-id');
+    if (ownerTabId) prksModalConfirmDrawerOwnerTabId = String(ownerTabId);
+}
+
+function prksReplacementAnnotationDelete(opener, ownerTabId) {
+    const pane = opener && opener.isConnected && typeof opener.closest === 'function'
+        ? opener.closest('.work-pdf-pane')
+        : null;
+    if (pane && pane.isConnected) {
+        const inPane = pane.querySelector('.annotation-row__delete');
+        if (inPane) return inPane;
+    }
+    if (!ownerTabId || typeof document.querySelectorAll !== 'function') return null;
+    const drawers = document.querySelectorAll('[data-prks-role="pdf-annotation-drawer"]');
+    for (let i = 0; i < drawers.length; i += 1) {
+        const drawer = drawers[i];
+        if (!drawer || drawer.getAttribute('data-prks-owner-tab-id') !== String(ownerTabId)) continue;
+        const button = drawer.querySelector('.annotation-row__delete');
+        if (button) return button;
+    }
+    return null;
+}
+
 function prksHideModalConfirm() {
     const root = document.getElementById('prks-modal-confirm');
     if (root) {
@@ -201,23 +243,34 @@ function prksHideModalConfirm() {
     prksRestoreModalConfirmCancel();
     prksModalConfirmResolve = null;
     const opener = prksModalConfirmOpener;
+    const ownerTabId = prksModalConfirmDrawerOwnerTabId;
     prksModalConfirmOpener = null;
-    if (opener && typeof opener.focus === 'function' && document.contains(opener)) {
-        opener.focus();
+    prksModalConfirmDrawerOwnerTabId = '';
+    let target = null;
+    if (
+        opener &&
+        typeof opener.focus === 'function' &&
+        document.contains(opener) &&
+        prksFocusStaysOnFocusedTile(opener)
+    ) {
+        target = opener;
     } else if (
         opener &&
         opener.classList &&
         opener.classList.contains('annotation-row__delete')
     ) {
-        // Sidebar may have been repainted (e.g. materialization restore) while
-        // the dialog was open — focus an equivalent Delete control if present.
-        const replacement = document.querySelector(
-            '#annotation-fallback-list .annotation-row__delete'
-        );
-        if (replacement && typeof replacement.focus === 'function') {
-            replacement.focus();
+        // The list may have been repainted while the dialog was open.
+        // Focus the replacement Delete in that drawer's owning tab.
+        const replacement = prksReplacementAnnotationDelete(opener, ownerTabId);
+        if (
+            replacement &&
+            typeof replacement.focus === 'function' &&
+            prksFocusStaysOnFocusedTile(replacement)
+        ) {
+            target = replacement;
         }
     }
+    if (target) target.focus();
 }
 
 function prksFinishModalConfirm(confirmed) {
@@ -283,8 +336,7 @@ function prksConfirmDialog(options = {}) {
         }
 
         prksModalConfirmResolve = resolve;
-        const active = document.activeElement;
-        prksModalConfirmOpener = active && active !== document.body ? active : null;
+        prksRememberModalConfirmOpener(document.activeElement);
         root.classList.remove('hidden');
         root.setAttribute('aria-hidden', 'false');
         const focusEl =
@@ -568,14 +620,14 @@ function prksOnModalLifecycleKeydown(e) {
 const PRKS_STANDALONE_PAGE_MODAL_CLOSERS = {
     'tags-page-alias-modal': 'prksCloseTagsAliasModal',
     'tags-page-merge-modal': 'prksCloseTagsMergeModal',
-    'publishers-page-alias-modal': 'prksClosePublishersAliasModal',
+    'publishers-page-alias-modal': 'prksVueClosePublishersAliasModal',
 };
 
 function prksCloseStandalonePageModal(modal) {
     const name = modal && PRKS_STANDALONE_PAGE_MODAL_CLOSERS[modal.id];
     const closer = name && window[name];
     if (typeof closer !== 'function') return false;
-    closer();
+    closer(modal);
     return true;
 }
 
@@ -616,7 +668,7 @@ function requestModalClose(reason) {
 
 function prksAutosizeTextarea(el) {
     if (!el || el.tagName !== 'TEXTAREA') return;
-    if ((el.getAttribute && el.getAttribute('data-prks-role') === 'research-notes-editor') || el.id === 'research-notes-editor' || el.id === 'pdf-annotation-editor-text') return;
+    if ((el.getAttribute && el.getAttribute('data-prks-role') === 'research-notes-editor') || el.id === 'research-notes-editor' || (el.getAttribute && el.getAttribute('data-prks-role') === 'pdf-annotation-popup-text')) return;
     const cs = window.getComputedStyle(el);
     const minH = parseFloat(cs.minHeight || '0');
     el.style.height = 'auto';
@@ -632,7 +684,7 @@ function prksBindAutosizeTextareas(root = document) {
     const textareas = scope.querySelectorAll(PRKS_AUTOSIZE_TEXTAREA_SELECTOR);
     textareas.forEach((el) => {
         if (!el || el.tagName !== 'TEXTAREA') return;
-        if ((el.getAttribute && el.getAttribute('data-prks-role') === 'research-notes-editor') || el.id === 'research-notes-editor' || el.id === 'pdf-annotation-editor-text') return;
+        if ((el.getAttribute && el.getAttribute('data-prks-role') === 'research-notes-editor') || el.id === 'research-notes-editor' || (el.getAttribute && el.getAttribute('data-prks-role') === 'pdf-annotation-popup-text')) return;
         if (el.dataset.prksAutosizeBound !== '1') {
             el.dataset.prksAutosizeBound = '1';
             el.addEventListener('input', () => prksAutosizeTextarea(el));
@@ -1654,8 +1706,10 @@ function prksSplitTypedPersonName(raw) {
 }
 
 async function prksQuickCreatePersonForSearchField(typedName, searchInputRef, hiddenInputRef, aboutText, options) {
+    const localError = !!(options && options.localError);
     const trimmed = String(typedName || '').trim();
     if (!trimmed) {
+        if (localError) return { ok: false, message: 'Type a name in the Person field first.' };
         await prksAlertMessage('Type a name in the Person field first.', 'Validation');
         return;
     }
@@ -1674,6 +1728,7 @@ async function prksQuickCreatePersonForSearchField(typedName, searchInputRef, hi
         });
     } catch (e) {
         console.error(e);
+        if (localError) return { ok: false, message: 'Could not create person.' };
         await prksAlertMessage('Could not create person.', 'Error');
         return;
     }
@@ -1690,7 +1745,9 @@ async function prksQuickCreatePersonForSearchField(typedName, searchInputRef, hi
     // The form it was typed into may be gone (closed, or reopened fresh): the
     // Person exists, but it must not be written into someone else's fields.
     const stillApplies = options && options.stillApplies;
-    if (typeof stillApplies === 'function' && !stillApplies()) return;
+    if (typeof stillApplies === 'function' && !stillApplies()) {
+        return localError ? { ok: false } : undefined;
+    }
     const personSearch =
         typeof searchInputRef === 'string' ? document.getElementById(searchInputRef) : searchInputRef;
     const personHidden =
@@ -1708,6 +1765,10 @@ async function prksQuickCreatePersonForSearchField(typedName, searchInputRef, hi
         if (trimmed && canonical && trimmed.toLowerCase() !== canonical.toLowerCase()) {
             prksSetRoleCreditPickerValue(prefix, trimmed);
         }
+    }
+    if (localError) {
+        const appliedName = personSearch && personSearch.value ? String(personSearch.value) : trimmed;
+        return { ok: true, id: String(created.entity_id || ''), name: appliedName };
     }
 }
 
@@ -2796,10 +2857,17 @@ function prksPrivateNotesTextForEntity(entityType, entityId, serverText) {
     return entry.draftText;
 }
 
+/**
+ * Private notes liveness: the owner generation and entity still match, and
+ * this exact editor is the installed `privateNotesEditor` slot. A
+ * same-generation replacement fails the identity check.
+ */
 function prksPrivateNotesOwnerCurrent(editor) {
     if (!editor || !editor.ctx || !editor.ctx.isCurrent(editor.generation)) return false;
     const live = editor.ctx.getEntity ? editor.ctx.getEntity(editor.entityType) : null;
-    return !!(live && String(live.id) === editor.entityId);
+    if (!live || String(live.id) !== editor.entityId) return false;
+    return typeof editor.ctx.getResource === 'function' &&
+        editor.ctx.getResource('privateNotesEditor') === editor;
 }
 
 function prksPrivateNotesSetStatus(editor, text) {
@@ -2846,12 +2914,44 @@ function prksPrivateNotesStatusForResult(code) {
 function prksPrivateNotesRetryTarget(editor) {
     if (!editor || !editor.ctx || typeof editor.ctx.getResource !== 'function') return null;
     const live = editor.ctx.getResource('privateNotesEditor');
-    if (!live || live.ctx !== editor.ctx) return null;
+    if (!live) {
+        /* Warm park disposed the editor; the Work draft is still on the
+         * session and is retried from there while this generation holds. */
+        if (String(editor.entityType) !== 'work') return null;
+        if (String(editor.generation) !== String(editor.ctx.generation)) return null;
+        return prksWorkPrivateNoteSessionSaver(editor.ctx, editor.entityId);
+    }
+    if (live.ctx !== editor.ctx) return null;
     if (String(live.entityType) !== String(editor.entityType)) return null;
     if (String(live.entityId) !== String(editor.entityId)) return null;
     if (String(live.generation) !== String(editor.generation)) return null;
     if (!prksPrivateNotesOwnerCurrent(live)) return null;
     return live;
+}
+
+/**
+ * A paint-less save target for the owner's current Work Reminders session
+ * when no editor is installed (warm park or a focus switch disposed it).
+ * It never matches the installed slot, so its saves do not paint.
+ */
+function prksWorkPrivateNoteSessionSaver(ctx, workId) {
+    if (!ctx || ctx.destroyed || !ctx.ui || typeof ctx.isCurrent !== 'function') return null;
+    if (!ctx.isCurrent(ctx.generation)) return null;
+    const work = ctx.getEntity ? ctx.getEntity('work') : null;
+    if (!work || String(work.id) !== String(workId)) return null;
+    const session = ctx.ui.workPrivateNoteSession;
+    if (!prksWorkPrivateNoteSessionCurrent(session, ctx, work.id)) return null;
+    const id = String(work.id);
+    return {
+        key: prksPrivateNotesEditorKey('work', id, ctx),
+        entityType: 'work',
+        entityId: id,
+        ctx: ctx,
+        generation: ctx.generation,
+        textarea: null,
+        statusEl: null,
+        dirty: !!session.dirty,
+    };
 }
 
 function prksPrivateNotesRetryStillDirty(live) {
@@ -2864,10 +2964,21 @@ function prksPrivateNotesRetryStillDirty(live) {
     return true;
 }
 
+// ctx -> Map(timerKey -> stop) so a reschedule from a fresh session saver
+// still stops the previous retry listener for the same note.
+const prksPrivateNoteBusyRetryStops = new WeakMap();
+
 function prksSchedulePrivateNoteBusyRetry(editor, token) {
-    if (!editor || !editor.ctx) return;
+    if (!editor || !editor.ctx || editor.ctx.destroyed) return;
     const timerKey = 'privateNotesBusyRetry:' + editor.key;
     editor.ctx.clearTimer(timerKey);
+    let retryStops = prksPrivateNoteBusyRetryStops.get(editor.ctx);
+    if (!retryStops) {
+        retryStops = new Map();
+        prksPrivateNoteBusyRetryStops.set(editor.ctx, retryStops);
+    }
+    const previousStop = retryStops.get(timerKey);
+    if (previousStop) previousStop();
     if (editor._prksBusyRetryStop) {
         try { editor._prksBusyRetryStop(); } catch (_e) { /* ignore */ }
         editor._prksBusyRetryStop = null;
@@ -2879,25 +2990,41 @@ function prksSchedulePrivateNoteBusyRetry(editor, token) {
         if (!prksPrivateNotesRetryStillDirty(liveEditor)) return;
         void prksEnqueuePrivateNotesSave(liveEditor);
     };
+    // The retry listener is owner-scoped: the timer, the sync event, the editor
+    // disposer and cold route/destroy (registerCleanup) all stop it, whichever
+    // comes first, so a disposed or synthetic editor never leaks it.
+    let stopRetry = function () {};
     if (typeof prksSync !== 'undefined' && prksSync && typeof prksSync.subscribe === 'function') {
-        const stop = prksSync.subscribe(function () {
-            const liveEditor = prksPrivateNotesRetryTarget(editor);
-            if (!liveEditor || token !== prksPrivateNoteLatestSaveToken(liveEditor) ||
-                !prksPrivateNotesRetryStillDirty(liveEditor)) {
-                stop();
-                editor._prksBusyRetryStop = null;
-                return;
+        let stopSync = null;
+        let unregisterCleanup = null;
+        stopRetry = function () {
+            const stop = stopSync;
+            const unregister = unregisterCleanup;
+            stopSync = null;
+            unregisterCleanup = null;
+            if (editor._prksBusyRetryStop === stopRetry) editor._prksBusyRetryStop = null;
+            if (retryStops.get(timerKey) === stopRetry) retryStops.delete(timerKey);
+            if (unregister) unregister();
+            if (stop) {
+                try { stop(); } catch (_e) { /* ignore */ }
             }
-            stop();
-            editor._prksBusyRetryStop = null;
-            tryAgain();
+        };
+        stopSync = prksSync.subscribe(function () {
+            const liveEditor = prksPrivateNotesRetryTarget(editor);
+            const stillDue = !!liveEditor && token === prksPrivateNoteLatestSaveToken(liveEditor) &&
+                prksPrivateNotesRetryStillDirty(liveEditor);
+            stopRetry();
+            if (stillDue) tryAgain();
         });
-        editor._prksBusyRetryStop = stop;
+        unregisterCleanup = editor.ctx.registerCleanup(stopRetry);
+        retryStops.set(timerKey, stopRetry);
+        editor._prksBusyRetryStop = stopRetry;
     }
     const timer = window.setTimeout(function () {
         if (editor.ctx.timers && editor.ctx.timers.get(timerKey) === timer) {
             editor.ctx.clearTimer(timerKey);
         }
+        stopRetry();
         tryAgain();
     }, 400);
     editor.ctx.setTimer(timerKey, timer);
@@ -3100,9 +3227,22 @@ function prksEnqueuePrivateNotesSave(editor) {
 function prksFlushPendingPrivateNotes(ctx) {
     if (!ctx || typeof ctx.getResource !== 'function') return;
     const editor = ctx.getResource('privateNotesEditor');
-    if (!editor || !editor.dirty) return;
-    ctx.clearTimer(editor.timerKey);
-    prksEnqueuePrivateNotesSave(editor);
+    if (editor) {
+        if (!editor.dirty) return;
+        ctx.clearTimer(editor.timerKey);
+        prksEnqueuePrivateNotesSave(editor);
+        return;
+    }
+    /* The Work draft outlives its editor: warm park and a focus switch
+     * dispose the editor, and a scope_busy settlement can leave the session
+     * dirty after that. Flush it from the session so closing or leaving
+     * this owner does not drop it. The save never paints: no editor is
+     * installed for it to own. */
+    const session = ctx.ui ? ctx.ui.workPrivateNoteSession : null;
+    const work = ctx.getEntity ? ctx.getEntity('work') : null;
+    if (!work || !session || !session.dirty || session.promise) return;
+    const saver = prksWorkPrivateNoteSessionSaver(ctx, work.id);
+    if (saver) void prksEnqueueWorkPrivateNoteSave(saver);
 }
 
 /** Work and Folder private notes are durable SET_* paths. */
@@ -3126,14 +3266,24 @@ function prksPrivateNotesEditorKey(entityType, entityId, ctx) {
     return prksPrivateNoteKey(entityType, entityId);
 }
 
+/**
+ * Binds the Reminders field in the shared right panel as the owner's
+ * `privateNotesEditor` session. The session is non-suspendable: warm park
+ * disposes it (listeners, debounce, busy retry) and the focused-panel
+ * refresh binds a new one from the draft kept on the TabContext. The ticket
+ * is captured before the field is touched; a rejected registration binds
+ * nothing. The draft and durable save stay on the session and
+ * `prksEnqueuePrivateNotesSave`; flushing stays on the leave path.
+ */
 function prksBindPrivateNotesField(entityType, entityId, ownerCtx) {
     const idSuffix = `${entityType}-${entityId}`;
     const ctx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
     if (!ctx || !prksRightPanelOwnedBy(ctx)) return;
+    const ticket = typeof ctx.resourceTicket === 'function' ? ctx.resourceTicket() : null;
+    if (!ctx.resourceRegistry || !ctx.resourceRegistry.accepts(ticket)) return;
     const panel = document.getElementById('panel-content');
     const ta = panel && panel.querySelector(`#prks-private-notes-${idSuffix}`);
     if (!ta || ta.dataset.prksNotesBound === '1') return;
-    ta.dataset.prksNotesBound = '1';
     const statusEl = panel.querySelector(`#prks-private-notes-status-${idSuffix}`);
     const editorKey = prksPrivateNotesEditorKey(entityType, entityId, ctx);
     let session = null;
@@ -3193,18 +3343,25 @@ function prksBindPrivateNotesField(entityType, entityId, ownerCtx) {
         ctx.clearTimer(editor.timerKey);
         prksEnqueuePrivateNotesSave(editor);
     };
+    const attached = ctx.registerResource(ticket, {
+        kind: 'privateNotesEditor',
+        value: editor,
+        suspendable: false,
+        dispose: function () {
+            ctx.clearTimer(editor.timerKey);
+            ctx.clearTimer('privateNotesBusyRetry:' + editor.key);
+            if (editor._prksBusyRetryStop) {
+                try { editor._prksBusyRetryStop(); } catch (_e) { /* ignore */ }
+                editor._prksBusyRetryStop = null;
+            }
+            ta.removeEventListener('input', schedule);
+            ta.removeEventListener('blur', blur);
+        },
+    });
+    if (attached === 'rejected') return;
+    ta.dataset.prksNotesBound = '1';
     ta.addEventListener('input', schedule);
     ta.addEventListener('blur', blur);
-    ctx.setResource('privateNotesEditor', editor, function () {
-        ctx.clearTimer(editor.timerKey);
-        ctx.clearTimer('privateNotesBusyRetry:' + editor.key);
-        if (editor._prksBusyRetryStop) {
-            try { editor._prksBusyRetryStop(); } catch (_e) { /* ignore */ }
-            editor._prksBusyRetryStop = null;
-        }
-        ta.removeEventListener('input', schedule);
-        ta.removeEventListener('blur', blur);
-    });
     if (editor.entityType === 'work' && typeof prksRefreshPendingWorkNotes === 'function') {
         void prksRefreshPendingWorkNotes().then(function () {
             if (!ctx.isCurrent(editor.generation)) return;
@@ -3543,6 +3700,29 @@ function prksFolderRightPanelStackHtml(folder) {
     );
 }
 
+function prksOpenAnnotationDrawerForPanel(button) {
+    const panel = document.getElementById('panel-content');
+    if (!panel || typeof prksGetTabContext !== 'function') return;
+    if (button && typeof panel.contains === 'function' && !panel.contains(button)) return;
+    const ownerTabId = panel.dataset.prksOwnerTabId || '';
+    if (!ownerTabId) return;
+    const owner = prksGetTabContext(ownerTabId);
+    if (!owner || owner.destroyed || !owner.mounted) return;
+    if (String(panel.dataset.prksOwnerTabId || '') !== String(owner.tabId)) return;
+    const ownerGeneration = panel.dataset.prksOwnerGeneration || '';
+    if (ownerGeneration && String(owner.generation) !== String(ownerGeneration)) return;
+    if (
+        typeof owner.isCurrent === 'function' &&
+        typeof owner.generation === 'number' &&
+        !owner.isCurrent(owner.generation)
+    ) {
+        return;
+    }
+    if (typeof window.prksOpenAnnotationDrawer === 'function') {
+        window.prksOpenAnnotationDrawer(owner);
+    }
+}
+
 function updatePanelContent(tabId) {
     const panel = document.getElementById('panel-content');
     if (!panel) return;
@@ -3601,6 +3781,12 @@ function updatePanelContent(tabId) {
         } else if (tabId === 'annotations') {
             prksDismissWorkPanelRead();
             panel.innerHTML = renderWorkAnnotationsTab(_cw);
+            const openDrawer = panel.querySelector('[data-prks-role="open-pdf-annotation-drawer"]');
+            if (openDrawer) {
+                openDrawer.addEventListener('click', () => {
+                    prksOpenAnnotationDrawerForPanel(openDrawer);
+                });
+            }
             if (typeof window.applyCachedAnnotationListToPanel === 'function') {
                 window.applyCachedAnnotationListToPanel();
             }
@@ -4116,6 +4302,39 @@ function prksCaptureWorkMetaDraft(ownerCtx) {
     if (videoUrl) draft.source_url = videoUrl.value;
     if (typeof prksVueCaptureWorkMetaDraft === 'function') prksVueCaptureWorkMetaDraft(ownerCtx);
     ownerCtx.ui.workMetaDraft = draft;
+}
+
+/**
+ * Work metadata leave answer. Captures the open form and asks
+ * prksWorkMetaDraftIsDirty. The styled confirm stays Keep editing /
+ * Discard changes. Retires when the Vue metadata editor registers this probe.
+ */
+function prksAssessWorkMetadataLeave(ctx) {
+    const prevRoute = ctx && ctx.lastResolvedRoute;
+    if (!ctx || !ctx.ui || !prevRoute || prevRoute.name !== 'work' || ctx.ui.workDetailsMode !== 'metadata') {
+        return null;
+    }
+    const work = ctx.getEntity ? ctx.getEntity('work') : null;
+    if (!work) return null;
+    if (typeof prksCaptureWorkMetaDraft === 'function') prksCaptureWorkMetaDraft(ctx);
+    if (typeof prksWorkMetaDraftIsDirty !== 'function' || !prksWorkMetaDraftIsDirty(ctx, work)) return null;
+    if (typeof prksConfirmUnsavedRouteLeave !== 'function') {
+        return { status: 'rejected-unsaved-edit', feature: 'work-metadata' };
+    }
+    return prksConfirmUnsavedRouteLeave({
+        title: 'Discard metadata changes?',
+        message: 'Your unsaved Work metadata changes will be discarded.',
+    }).then(function (ok) {
+        return ok ? null : { status: 'rejected-unsaved-edit', feature: 'work-metadata' };
+    });
+}
+window.prksAssessWorkMetadataLeave = prksAssessWorkMetadataLeave;
+if (typeof prksTabLeave !== 'undefined' && prksTabLeave && typeof prksTabLeave.registerProbe === 'function') {
+    prksTabLeave.registerProbe({
+        id: 'work-metadata',
+        order: 30,
+        assess: prksAssessWorkMetadataLeave,
+    });
 }
 
 function prksBindWorkMetaDraftEditor(ownerCtx, work) {
@@ -5044,8 +5263,14 @@ async function prksReloadEntityTagsUI(entityType, entityId, ownerCtx, coherenceT
             return;
         }
         if (typeof ctx.setEntity === 'function') ctx.setEntity('folder', _tf);
-        if (ctx.root && ctx.mounted && typeof renderFolderDetails === 'function') {
-            renderFolderDetails(ctx, _tf, ctx.root);
+        if (ctx.root && ctx.mounted && typeof prksPresentVueRoute === 'function') {
+            prksPresentVueRoute(ctx, ctx.root, 'folder-detail', {
+                availability: 'ready',
+                folder: _tf,
+                folderId: _tf && _tf.id,
+                preserveWorkspace: false,
+                generation: ctx.generation,
+            });
         }
         if (!prksOwnerTabIsFocused(ctx)) return;
         const panel = prksPrepareRightPanelReplace(ctx);
@@ -5587,24 +5812,9 @@ function renderWorkAnnotationsTab(work) {
                     ${prksAnnotationsTabHintButton('ann-pdf', 'About PDF annotations')}
                 </div>
             </header>
-            <div id="annotation-fallback-list" class="annotation-fallback-list" role="list" aria-live="polite"></div>
-            <section id="pdf-annotation-editor" class="pdf-annotation-editor hidden" aria-live="polite">
-                <div class="pdf-annotation-editor__header">
-                    <h4 class="pdf-annotation-editor__title">Annotation comment</h4>
-                    <div class="pdf-annotation-editor__meta" id="pdf-annotation-editor-meta"></div>
-                </div>
-                <div class="form-pane pdf-annotation-editor__form">
-                    <input type="hidden" id="pdf-annotation-editor-ann-id" value="">
-                    <input type="hidden" id="pdf-annotation-editor-page-index" value="">
-                    <label for="pdf-annotation-editor-text">Comment</label>
-                    <textarea id="pdf-annotation-editor-text" class="textarea-md" placeholder="Add a note/comment for this annotation…"></textarea>
-                    <div class="pdf-annotation-editor__actions">
-                        <button type="button" class="prks-btn prks-btn--secondary" onclick="window.closePdfAnnotationEditor && window.closePdfAnnotationEditor()">Cancel</button>
-                        <button type="button" class="prks-btn prks-btn--secondary" onclick="window.deletePdfAnnotationFromEditor && window.deletePdfAnnotationFromEditor()">Delete annotation</button>
-                        <button type="button" class="prks-btn prks-btn--primary" onclick="window.savePdfAnnotationComment && window.savePdfAnnotationComment()">Save comment</button>
-                    </div>
-                </div>
-            </section>
+            <p class="annotations-tab__empty">Annotations are listed on the PDF.</p>
+            <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-prks-role="open-pdf-annotation-drawer">Show on PDF</button>
+            <div id="annotation-fallback-list" class="annotation-fallback-list" hidden></div>
         </div>
     `;
 }

@@ -82,10 +82,12 @@ Comma-separated tokens are allowed. Future viewer changes that keep, drop, or re
 | Generic annotation mode tabs | INTENTIONALLY_REMOVED | — |
 | Rotate | INTENTIONALLY_REMOVED | — |
 | Spread / two-page layout | INTENTIONALLY_REMOVED | — |
-| Ctrl+F interception | INTENTIONALLY_REMOVED | — |
+| Ctrl/Cmd+F in-document search | PRKS_REPLACEMENT | python:pdf-document-search |
 | Generic EmbedPDF zoom UI | INTENTIONALLY_REMOVED | — |
 
 Zoom presets and Fit width/page live in the first-party toolbar. `PrksPdfViewerHandle` keeps `zoomIn`, `zoomOut`, `fitWidth`, and `fitPage`. It does not expose `requestZoom`.
+
+In-document search is a PRKS find bar on the current viewer. The generic EmbedPDF search chrome stays removed. The search plugin highlights matches and moves next and previous. Opening or closing the bar does not create another viewer.
 
 ## Rotate and Spread
 

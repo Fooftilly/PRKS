@@ -1165,7 +1165,7 @@ class WorkDetailsPolishTests(_BrowserE2E):
         page.locator("#meta-doc-type-trigger").click()
         page.locator('#panel-content .prks-doc-type-menu__option[data-value="book"]').click()
         page.locator('#right-panel .tab-btn[data-target="annotations"]').click()
-        page.locator("#annotation-fallback-list").wait_for()
+        page.locator("#annotation-fallback-list").wait_for(state="attached")
         page.locator('#right-panel .tab-btn[data-target="details"]').click()
         page.locator("#meta-title").wait_for()
         self.assertEqual(page.locator("#meta-title").input_value(), "Unsaved Work Title")
@@ -2632,30 +2632,57 @@ def _open_details_drawer_if_tiled(page):
 def _open_annotations_tab(page):
     _open_details_drawer_if_tiled(page)
     page.locator(".tab-btn[data-target='annotations']").click()
-    page.wait_for_selector("#annotation-fallback-list")
+    page.wait_for_selector("#annotation-fallback-list", state="attached")
+    _open_focused_pdf_annotation_drawer(page)
+
+
+def _open_focused_pdf_annotation_drawer(page):
+    """Open the focused pane's overlay from its PDF toolbar.
+
+    The right-panel Annotations tab no longer paints rows. Persistence tests
+    read `.annotation-row` from this drawer. A work without a viewer toolbar
+    leaves the tab shell alone. Show on PDF is a separate entry point.
+    """
+    tab_id = page.evaluate(
+        """() => {
+            const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+            return ctx && ctx.tabId != null ? String(ctx.tabId) : '';
+        }"""
+    )
+    if not tab_id:
+        return
+    button = page.locator(
+        '.prks-tab-root[data-prks-tab-id="%s"] [data-prks-role="pdf-viewer"] [aria-label="Annotations"]'
+        % tab_id
+    )
+    if button.count() == 0:
+        return
+    if button.first.get_attribute("aria-pressed") != "true":
+        button.first.click()
+    page.wait_for_selector(
+        '.prks-tab-root[data-prks-tab-id="%s"] [data-prks-role="pdf-annotation-drawer"]' % tab_id
+    )
 
 
 def _wait_annotation_list_rendered(page, expected_rows):
-    """Wait until the focused PDF context has painted the shared annotation list.
+    """Wait until the focused pane's overlay has published the annotation list.
 
-    `#annotation-fallback-list` is part of the right panel's annotations-tab
-    markup, so waiting for the element only proves the tab is up -- the list
-    still holds whatever was painted into it last. Only
-    `renderAnnotationFallbackList` fills it, and that returns early unless the
-    owning context is the focused one (`prksIsFocusedPdfCtx`), so a mutation
-    made while another tab held focus is not reflected until a render runs for
-    the refocused tab. The status line is emitted on both the empty and the
-    populated path, which makes it the signal that a render actually ran rather
-    than that the markup merely exists.
+    Opening the drawer paints an empty session before
+    `renderAnnotationFallbackList` replaces the cache. `data-prks-list-published`
+    is set only after that publication, on both the empty and populated paths.
 
     Same missing-wait pattern as #10 / #64: assert after the settle signal, not
     after markup existence alone.
     """
     page.wait_for_function(
         """(expected) => {
-            const list = document.getElementById('annotation-fallback-list');
-            if (!list || !list.querySelector('.annotation-list-status')) return false;
-            return list.querySelectorAll('.annotation-row').length === expected;
+            const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+            const root = ctx && ctx.root;
+            if (!root || typeof root.querySelector !== 'function') return false;
+            const drawer = root.querySelector('[data-prks-role="pdf-annotation-drawer"]');
+            if (!drawer || drawer.getAttribute('data-prks-list-published') !== 'true') return false;
+            if (!drawer.querySelector('.annotation-list-status')) return false;
+            return drawer.querySelectorAll('.annotation-row').length === expected;
         }""",
         arg=expected_rows,
     )
@@ -2940,11 +2967,8 @@ class PdfPersistenceTests(_BrowserE2E):
             arg=ids["mainTabId"],
         )
         _open_annotations_tab(page)
-        # The delete was confirmed while Work B held focus, so the shared list
-        # could not be repainted then; only this refocused render corrects it.
-        # Rows only ever render into that one shared list in the right panel --
-        # which sits in <aside id="right-panel">, outside <main> and so outside
-        # the warm-parking host -- so the page-wide count is the same claim.
+        # The overlay belongs to Work A's pane. Work B's drawer stays closed,
+        # so the page-wide row count is the same claim as the focused drawer.
         _wait_annotation_list_rendered(page, 0)
         self.assertEqual(page.locator(".annotation-row").count(), 0)
 
@@ -3806,8 +3830,13 @@ class WorkspaceTabsTests(_BrowserE2E):
                 };
                 const coldCtx = window.prksEnsureTabContext('e2e-cold-last-page');
                 coldCtx.mount(document.createElement('div'));
-                coldCtx.setResource('pdf', {
-                    flushLastPage: function () { cold += 1; },
+                coldCtx.registerResource(coldCtx.resourceTicket(), {
+                    kind: 'pdf',
+                    value: {
+                        flushLastPage: function () { cold += 1; },
+                    },
+                    suspendable: true,
+                    dispose: function () {},
                 });
                 window.prksUnmountTabContext(coldCtx.tabId, 'cold-park');
                 window.prksFlushPdfLastPageToStorage();
@@ -4141,7 +4170,7 @@ class TabContextHostRootTests(_BrowserE2E):
         _open_work_from_home(page, WORK_A_TITLE)
         page.wait_for_selector(".work-detail")
         page.locator('#right-panel .tab-btn[data-target="annotations"]').click()
-        page.wait_for_selector("#annotation-fallback-list")
+        page.wait_for_selector("#annotation-fallback-list", state="attached")
         self.assertTrue(
             page.locator('#right-panel .tab-btn[data-target="annotations"]').evaluate(
                 "el => el.classList.contains('active')"
@@ -4169,7 +4198,7 @@ class TabContextHostRootTests(_BrowserE2E):
                 return !!(btn && btn.classList.contains('active'));
             }"""
         )
-        page.wait_for_selector("#annotation-fallback-list")
+        page.wait_for_selector("#annotation-fallback-list", state="attached")
         page.locator(".prks-workspace-tab").nth(1).locator(".prks-workspace-tab__activate").click()
         page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
         page.locator(".person-profile__summary").wait_for()
@@ -4421,7 +4450,7 @@ class TabContextHostRootTests(_BrowserE2E):
         _open_work_from_home(page, WORK_A_TITLE)
         page.wait_for_selector(".work-detail")
         page.locator('#right-panel .tab-btn[data-target="annotations"]').click()
-        page.wait_for_selector("#annotation-fallback-list")
+        page.wait_for_selector("#annotation-fallback-list", state="attached")
         result = page.evaluate(
             """async (workBId) => {
                 const focused = window.prksGetFocusedTabContext();
@@ -4434,7 +4463,7 @@ class TabContextHostRootTests(_BrowserE2E):
                 const ctxB = window.prksEnsureTabContext('prks-test-secondary');
                 ctxB.mount(host);
                 const workB = await fetchWorkDetails(workBId);
-                await renderWorkDetails(ctxB, workB, { generation: ctxB.generation });
+                await window.prksMountWorkDetail(ctxB, ctxB.root, workB, { generation: ctxB.generation, workId: workBId });
                 const afterFocused = window.prksGetFocusedTabContext();
                 const afterWork = afterFocused && afterFocused.getEntity ? afterFocused.getEntity('work') : null;
                 const annBtn = document.querySelector('#right-panel .tab-btn[data-target="annotations"]');
@@ -5640,22 +5669,19 @@ class WorkspaceTilingTests(_BrowserE2E):
             arg=ids["mainTabId"],
         )
         page.locator('#right-panel .tab-btn[data-target="annotations"]').click()
-        page.wait_for_selector("#annotation-fallback-list")
+        page.wait_for_selector("#annotation-fallback-list", state="attached")
         before = page.evaluate(
             """() => {
                 const snap = window.prksWorkspaceSnapshot();
                 const ctx = window.prksGetTabContext(snap.mainTabId);
                 const panel = document.getElementById('panel-content');
                 const marker = document.getElementById('annotation-fallback-list');
-                const editor = document.getElementById('pdf-annotation-editor');
                 window.__prksPersonSavePanelMarker = marker;
-                window.__prksPersonSaveEditorMarker = editor;
                 return {
                     focusedTabId: snap.focusedTabId,
                     panelOwnerTabId: panel && panel.dataset.prksOwnerTabId,
                     rightPanelTab: ctx && ctx.ui && ctx.ui.rightPanelTab,
                     annotationMarker: !!marker,
-                    editorMarker: !!editor,
                 };
             }"""
         )
@@ -5663,7 +5689,6 @@ class WorkspaceTilingTests(_BrowserE2E):
         self.assertEqual(before["panelOwnerTabId"], ids["mainTabId"])
         self.assertEqual(before["rightPanelTab"], "annotations")
         self.assertTrue(before["annotationMarker"])
-        self.assertTrue(before["editorMarker"])
 
         # Give any background ACK / panel refresh a window to misbehave.
         page.wait_for_timeout(400)
@@ -5673,7 +5698,6 @@ class WorkspaceTilingTests(_BrowserE2E):
                 const ctx = window.prksGetTabContext(snap.mainTabId);
                 const panel = document.getElementById('panel-content');
                 const marker = document.getElementById('annotation-fallback-list');
-                const editor = document.getElementById('pdf-annotation-editor');
                 const annBtn = document.querySelector('#right-panel .tab-btn[data-target="annotations"]');
                 return {
                     focusedTabId: snap.focusedTabId,
@@ -5681,7 +5705,6 @@ class WorkspaceTilingTests(_BrowserE2E):
                     rightPanelTab: ctx && ctx.ui && ctx.ui.rightPanelTab,
                     annotationsActive: !!(annBtn && annBtn.classList.contains('active')),
                     sameAnnotationMarker: marker === window.__prksPersonSavePanelMarker,
-                    sameEditorMarker: editor === window.__prksPersonSaveEditorMarker,
                     hasPersonPanel: !!(panel && panel.querySelector('.person-sidebar-summary, .person-panel-edit')),
                 };
             }"""
@@ -5691,7 +5714,6 @@ class WorkspaceTilingTests(_BrowserE2E):
         self.assertEqual(after["rightPanelTab"], "annotations")
         self.assertTrue(after["annotationsActive"])
         self.assertTrue(after["sameAnnotationMarker"])
-        self.assertTrue(after["sameEditorMarker"])
         self.assertFalse(after["hasPersonPanel"])
 
     def test_delayed_role_link_refresh_cannot_claim_other_focused_work_panel(self):
@@ -6144,48 +6166,60 @@ class WorkspaceTilingTests(_BrowserE2E):
             arg=ids["secondaryTabId"],
         )
         _open_annotations_tab(page)
-        page.wait_for_selector("#pdf-annotation-editor", state="attached")
+        page.wait_for_selector("#annotation-fallback-list", state="attached")
         before = page.evaluate(
             """(ids) => {
                 const a = window.prksGetTabContext(ids.a);
                 const b = window.prksGetTabContext(ids.b);
-                a.getResource('pdf').annotationEditorState = { annId: 'A-delayed' };
-                b.getResource('pdf').annotationEditorState = { annId: 'B-current' };
-                const wrap = document.getElementById('pdf-annotation-editor');
-                const text = document.getElementById('pdf-annotation-editor-text');
-                wrap.classList.remove('hidden');
-                text.value = 'B CURRENT EDITOR';
-                setTimeout(() => window.closePdfAnnotationEditor(a), 50);
+                const pdfA = a.getResource('pdf');
+                const pdfB = b.getResource('pdf');
+                pdfA.mode = 'work';
+                pdfB.mode = 'work';
+                pdfA.openAnnotationPopup({ annId: 'A-delayed', comment: 'A', pageIndex: 0, generation: a.generation });
+                pdfB.openAnnotationPopup({ annId: 'B-current', comment: 'B CURRENT', pageIndex: 1, generation: b.generation });
+                const readB = pdfB.readAnnotationPopup();
+                setTimeout(() => window.closePdfAnnotationEditor(a, { annId: 'A-delayed' }), 50);
                 return {
                     owner: document.getElementById('panel-content').dataset.prksOwnerTabId,
-                    text: text.value,
-                    hidden: wrap.classList.contains('hidden')
+                    bId: readB.annId,
+                    bComment: readB.comment,
+                    bEpoch: readB.epoch
                 };
             }""",
             arg={"a": ids["mainTabId"], "b": ids["secondaryTabId"]},
         )
-        page.wait_for_timeout(150)
+        page.wait_for_function(
+            """(ids) => {
+                const a = window.prksGetTabContext(ids.a);
+                const pdfA = a && a.getResource ? a.getResource('pdf') : null;
+                const readA = pdfA && pdfA.readAnnotationPopup ? pdfA.readAnnotationPopup() : null;
+                return !!(readA && readA.open === false);
+            }""",
+            arg={"a": ids["mainTabId"]},
+        )
         after = page.evaluate(
             """(ids) => {
                 const a = window.prksGetTabContext(ids.a);
                 const b = window.prksGetTabContext(ids.b);
-                const wrap = document.getElementById('pdf-annotation-editor');
-                const text = document.getElementById('pdf-annotation-editor-text');
+                const readA = a.getResource('pdf').readAnnotationPopup();
+                const readB = b.getResource('pdf').readAnnotationPopup();
                 return {
                     owner: document.getElementById('panel-content').dataset.prksOwnerTabId,
-                    text: text.value,
-                    hidden: wrap.classList.contains('hidden'),
-                    aCleared: a.getResource('pdf').annotationEditorState === null,
-                    bId: b.getResource('pdf').annotationEditorState.annId
+                    aOpen: readA.open,
+                    bId: readB.annId,
+                    bComment: readB.comment,
+                    bEpoch: readB.epoch
                 };
             }""",
             arg={"a": ids["mainTabId"], "b": ids["secondaryTabId"]},
         )
         self.assertEqual(after["owner"], before["owner"])
-        self.assertEqual(after["text"], before["text"])
-        self.assertEqual(after["hidden"], before["hidden"])
-        self.assertTrue(after["aCleared"])
+        self.assertEqual(after["bId"], before["bId"])
+        self.assertEqual(after["bComment"], before["bComment"])
+        self.assertEqual(after["bEpoch"], before["bEpoch"])
+        self.assertFalse(after["aOpen"])
         self.assertEqual(after["bId"], "B-current")
+        self.assertEqual(after["bComment"], "B CURRENT")
 
     def test_secondary_retry_retries_failed_owner_route_only(self):
         server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
@@ -6198,9 +6232,12 @@ class WorkspaceTilingTests(_BrowserE2E):
         main_id = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
         page.evaluate(
             """() => {
-                window.__prksOriginalPresentConceptDetail = window.prksVuePresentConceptDetail;
-                window.prksVuePresentConceptDetail = function () {
-                    throw new Error('forced secondary render failure');
+                window.__prksOriginalPresentRoute = window.prksVuePresentRoute;
+                window.prksVuePresentRoute = function (request) {
+                    if (request && request.feature === 'concept-detail') {
+                        throw new Error('forced secondary render failure');
+                    }
+                    return window.__prksOriginalPresentRoute(request);
                 };
             }"""
         )
@@ -6220,7 +6257,7 @@ class WorkspaceTilingTests(_BrowserE2E):
             secondary_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
             page.evaluate(
                 """(id) => {
-                    window.prksVuePresentConceptDetail = window.__prksOriginalPresentConceptDetail;
+                    window.prksVuePresentRoute = window.__prksOriginalPresentRoute;
                     window.prksGetTabContext(id).query('#prks-route-retry').click();
                 }""",
                 arg=secondary_id,
@@ -6240,8 +6277,8 @@ class WorkspaceTilingTests(_BrowserE2E):
         finally:
             page.evaluate(
                 """() => {
-                    if (window.__prksOriginalPresentConceptDetail) {
-                        window.prksVuePresentConceptDetail = window.__prksOriginalPresentConceptDetail;
+                    if (window.__prksOriginalPresentRoute) {
+                        window.prksVuePresentRoute = window.__prksOriginalPresentRoute;
                     }
                 }"""
             )

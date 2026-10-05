@@ -1,100 +1,320 @@
-name: Suppress noisy review bot comments
+name: Minimize noisy review bot comments
+
+# Invariant (#363): review findings stay visible. High-confidence operational
+# review-bot noise stays in GitHub history but is minimized as OFF_TOPIC.
+# Nothing is ever deleted: this workflow has no content-deletion API path, and
+# a failed minimization fails the job instead of falling back to anything else.
+# Bots edit comments in place, so an edited bot comment is reclassified from
+# its live body: noise is (re)minimized, and an OFF_TOPIC-minimized comment
+# whose live body is no longer noise is unminimized again.
 
 on:
   issue_comment:
-    types: [created]
+    types: [created, edited]
   pull_request_review_comment:
-    types: [created]
+    types: [created, edited]
   workflow_run:
     workflows: ["Review event signal"]
     types: [completed]
 
+permissions: {}
+
 concurrency:
-  group: suppress-noisy-review-bot-comments
+  # One queue per subject so a burst of different bot comments cannot cancel
+  # each other's pending runs. Both values are GitHub-generated identifiers.
+  group: minimize-noisy-review-bot-${{ github.event.comment.node_id || github.event.workflow_run.id }}
   cancel-in-progress: false
 
+env:
+  # The single classifier shared by both jobs and exercised by
+  # tests/test_review_bot_noise_workflow.py. Input: a GitHub comment or review
+  # object ({user: {login}, body}). Output: the matched rule name, or "none".
+  #
+  # Every rule requires the exact bot login AND every listed distinctive
+  # fragment (or an explicit bot marker). A rule's optional "excluded" list
+  # names substantive-review markers (matched case-insensitively) that veto
+  # the match, for bots that can put a status banner and real review content
+  # in the same comment. Never add a rule that matches only
+  # generic words such as "trial", "upgrade", "budget", "quota" or
+  # "no issues": review findings, summaries and walkthroughs must stay visible.
+  NOISE_CLASSIFIER_JQ: |
+    # Substantive CodeRabbit review output; any one vetoes a CodeRabbit rule.
+    [
+      "walkthrough",
+      "summary by coderabbit",
+      "pre-merge check",
+      "actionable comments posted",
+      "estimated code review effort",
+      "review details",
+      "sequence diagram",
+      "## changes",
+      "merge risk",
+      "architecture",
+      "auto-generated comment: review",
+      "potential issue",
+      "refactor suggestion",
+      "nitpick"
+    ] as $coderabbit_review_markers
+    | [
+      # Quota / rate-limit
+      {
+        rule: "codex-usage-limit",
+        login: "chatgpt-codex-connector[bot]",
+        fragments: ["You have reached your Codex usage limits", "code reviews"]
+      },
+      {
+        rule: "greptile-credit-limit",
+        login: "greptile-apps[bot]",
+        fragments: [
+          "has reached the 50-credit limit for trial accounts",
+          "To continue receiving code reviews"
+        ]
+      },
+      {
+        rule: "sourcery-review-budget",
+        login: "sourcery-ai[bot]",
+        fragments: ["used your own review budget", "diff characters"]
+      },
+      {
+        rule: "coderabbit-review-limit",
+        login: "coderabbitai[bot]",
+        fragments: [
+          "<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->",
+          "Review limit reached"
+        ],
+        excluded: $coderabbit_review_markers
+      },
+      # Subscription / trial / billing
+      {
+        rule: "greptile-trial-ended",
+        login: "greptile-apps[bot]",
+        fragments: ["Your trial has ended", "Reactivate Greptile"]
+      },
+      {
+        rule: "qodo-trial-expiring",
+        login: "qodo-code-review[bot]",
+        fragments: ["<!-- qodo:trial-expiring -->"]
+      },
+      # Non-review status noise
+      {
+        rule: "coderabbit-auto-review-unavailable",
+        login: "coderabbitai[bot]",
+        fragments: ["does not receive automatic reviews", "fewer than 10 stars"],
+        # CodeRabbit edits one summary comment in place; if the banner ever
+        # shares it with review output, the comment must stay visible.
+        excluded: $coderabbit_review_markers
+      },
+      # Benign no-findings messages explicitly selected as noise
+      {
+        rule: "qodo-no-findings",
+        login: "qodo-code-review[bot]",
+        fragments: [
+          "Great, no issues found!",
+          "Qodo reviewed your code and found no material issues that require review"
+        ]
+      }
+    ] as $rules
+    | (.user.login // "" | if type == "string" then . else "" end) as $login
+    | (.body // "" | if type == "string" then . else "" end) as $body
+    | first(
+        $rules[]
+        | select(.login == $login)
+        | select(all(.fragments[]; . as $fragment | $body | contains($fragment)))
+        | select(
+            all(
+              (.excluded // [])[];
+              ascii_downcase as $marker | $body | ascii_downcase | contains($marker) | not
+            )
+          )
+        | .rule
+      ) // "none"
+
+  # Reads the subject's current minimization state. A subject that is missing
+  # or not Minimizable yields null, which the jobs treat as a failure.
+  MINIMIZED_STATE_QUERY: |
+    query($subjectId: ID!) {
+      node(id: $subjectId) {
+        ... on Minimizable {
+          isMinimized
+          minimizedReason
+        }
+      }
+    }
+
+  MINIMIZE_OFF_TOPIC_MUTATION: |
+    mutation($subjectId: ID!) {
+      minimizeComment(input: {subjectId: $subjectId, classifier: OFF_TOPIC}) {
+        minimizedComment {
+          isMinimized
+        }
+      }
+    }
+
+  # Used only by the edited-comment path, and only to undo an OFF_TOPIC
+  # minimization of a bot comment whose live body no longer matches a rule.
+  UNMINIMIZE_MUTATION: |
+    mutation($subjectId: ID!) {
+      unminimizeComment(input: {subjectId: $subjectId}) {
+        unminimizedComment {
+          isMinimized
+        }
+      }
+    }
+
 jobs:
-  remove-noise-comment:
-    # Comment events can be handled directly because they run in the base
-    # repository context. The submitted-review path is intentionally handled
-    # separately through workflow_run so fork pull requests cannot downgrade the
-    # token used for suppression.
+  minimize-noise-comment:
+    name: Minimize noisy bot comment
+    # Comment events run in the base repository context. Only comments by the
+    # known review bots on pull requests start this job; the classifier then
+    # decides. Comment bodies are read by jq as data and never reach a shell
+    # command or a ${{ }} expression in run:.
     if: >-
       (
-        (
-          contains(github.event.comment.body, 'You have reached your Codex usage limits') &&
-          contains(github.event.comment.body, 'code reviews') &&
-          github.event.comment.user.login == 'chatgpt-codex-connector[bot]'
-        ) ||
-        (
-          github.event_name == 'issue_comment' &&
-          contains(github.event.comment.body, 'Great, no issues found!') &&
-          contains(
-            github.event.comment.body,
-            'Qodo reviewed your code and found no material issues that require review'
-          ) &&
-          github.event.comment.user.login == 'qodo-code-review[bot]'
-        ) ||
-        (
-          github.event_name == 'issue_comment' &&
-          contains(
-            github.event.comment.body,
-            'has reached the 50-credit limit for trial accounts'
-          ) &&
-          contains(github.event.comment.body, 'To continue receiving code reviews') &&
-          github.event.comment.user.login == 'greptile-apps[bot]'
-        )
-      ) &&
-      (
         github.event_name == 'pull_request_review_comment' ||
-        github.event.issue.pull_request
+        (github.event_name == 'issue_comment' && github.event.issue.pull_request)
+      ) &&
+      contains(
+        fromJSON('["chatgpt-codex-connector[bot]","qodo-code-review[bot]","greptile-apps[bot]","sourcery-ai[bot]","coderabbitai[bot]"]'),
+        github.event.comment.user.login
       )
 
     permissions:
-      issues: write
-      pull-requests: write
+      issues: write # read and (un)minimize a PR conversation (issue) comment
+      pull-requests: write # read and (un)minimize an inline review comment
 
     runs-on: ubuntu-24.04
     timeout-minutes: 2
 
     steps:
-      # The comment body reaches this job only through the contains() checks
-      # above, never the shell. The one comment it can delete is the comment
-      # that triggered the run.
-      - name: Delete matched bot-noise comment
+      - name: Reconcile bot comment visibility
         env:
           GH_TOKEN: ${{ github.token }}
-          EVENT_NAME: ${{ github.event_name }}
-          REPOSITORY: ${{ github.repository }}
-          COMMENT_ID: ${{ github.event.comment.id }}
         run: |
           set -euo pipefail
 
-          if [[ "${EVENT_NAME}" == "issue_comment" ]]; then
-            endpoint="repos/${REPOSITORY}/issues/comments/${COMMENT_ID}"
-          else
-            endpoint="repos/${REPOSITORY}/pulls/comments/${COMMENT_ID}"
+          action="$(jq -r '.action // empty' "${GITHUB_EVENT_PATH}")"
+          comment_id="$(jq -r '.comment.id // empty' "${GITHUB_EVENT_PATH}")"
+          event_login="$(jq -r '.comment.user.login // empty' "${GITHUB_EVENT_PATH}")"
+          if [[ ! "${action}" =~ ^(created|edited)$ || ! "${comment_id}" =~ ^[0-9]+$ ]]; then
+            echo "::error::Unexpected comment event" >&2
+            exit 1
+          fi
+          case "${GITHUB_EVENT_NAME}" in
+            issue_comment) kind="issues" ;;
+            pull_request_review_comment) kind="pulls" ;;
+            *) echo "::error::Unexpected event" >&2; exit 1 ;;
+          esac
+
+          # Classify the live comment, not the event payload: bots edit in
+          # place, and an older queued event must not act on a stale body.
+          comment_json="$(mktemp)"
+          trap 'rm -f "${comment_json}"' EXIT
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            "repos/${GITHUB_REPOSITORY}/${kind}/comments/${comment_id}" \
+            > "${comment_json}"
+
+          if [[ "$(jq -r '.user.login // empty' "${comment_json}")" != "${event_login}" ]]; then
+            echo "::error::Live comment author does not match the event" >&2
+            exit 1
           fi
 
-          gh api --method DELETE "${endpoint}"
+          rule="$(jq -r "${NOISE_CLASSIFIER_JQ}" "${comment_json}")"
+          if [[ ! "${rule}" =~ ^[a-z0-9-]+$ ]]; then
+            echo "::error::Unexpected classifier output" >&2
+            exit 1
+          fi
+          if [[ "${rule}" == "none" && "${action}" != "edited" ]]; then
+            echo "No high-confidence noise rule matched; leaving the comment visible."
+            exit 0
+          fi
 
-  suppress-greptile-quota-review:
-    # workflow_run executes from the default branch with the base repository's
-    # permissions, even when Review event signal was triggered by a fork PR.
-    # The signal workflow checks out and executes no pull-request code.
+          # GraphQL node ID: IC_ for PR conversation comments, PRRC_ for
+          # inline review comments.
+          subject_id="$(jq -r '.node_id // empty' "${comment_json}")"
+          if [[ ! "${subject_id}" =~ ^(IC|PRRC)_[A-Za-z0-9_-]+$ ]]; then
+            echo "::error::Missing or invalid comment node ID" >&2
+            exit 1
+          fi
+
+          # Prints "<isMinimized> <minimizedReason>", e.g. "true off-topic".
+          minimized_state() {
+            gh api graphql \
+              -f query="${MINIMIZED_STATE_QUERY}" \
+              -f subjectId="${subject_id}" \
+              --jq '.data.node | "\(.isMinimized) \(.minimizedReason // "" | ascii_downcase | gsub("_"; "-"))"'
+          }
+
+          read -r minimized reason <<< "$(minimized_state)"
+          if [[ ! "${minimized}" =~ ^(true|false)$ ]]; then
+            echo "::error::${subject_id} is missing or not minimizable" >&2
+            exit 1
+          fi
+
+          if [[ "${rule}" == "none" ]]; then
+            # An edited bot comment that is no longer noise: restore it only
+            # when it is minimized as off-topic (the classifier this workflow
+            # uses). Other minimization reasons are someone else's decision.
+            if [[ "${minimized}" != "true" || "${reason}" != "off-topic" ]]; then
+              echo "No high-confidence noise rule matched; leaving the comment as it is."
+              exit 0
+            fi
+            if ! gh api graphql \
+              -f query="${UNMINIMIZE_MUTATION}" \
+              -f subjectId="${subject_id}" > /dev/null
+            then
+              echo "::warning::unminimizeComment returned an error; re-checking state"
+            fi
+            read -r minimized reason <<< "$(minimized_state)"
+            if [[ "${minimized}" != "false" ]]; then
+              echo "::error::Failed to restore visibility of ${subject_id}" >&2
+              exit 1
+            fi
+            echo "Edited comment ${subject_id} is no longer noise; restored its visibility."
+            exit 0
+          fi
+
+          if [[ "${minimized}" == "true" ]]; then
+            echo "Rule ${rule}: ${subject_id} is already minimized."
+            exit 0
+          fi
+
+          if ! gh api graphql \
+            -f query="${MINIMIZE_OFF_TOPIC_MUTATION}" \
+            -f subjectId="${subject_id}" > /dev/null
+          then
+            # A concurrent duplicate may have won; the re-read below decides.
+            echo "::warning::minimizeComment returned an error; re-checking state"
+          fi
+
+          read -r minimized reason <<< "$(minimized_state)"
+          if [[ "${minimized}" != "true" ]]; then
+            echo "::error::Rule ${rule}: failed to minimize ${subject_id}" >&2
+            exit 1
+          fi
+          echo "Rule ${rule}: minimized ${subject_id} as OFF_TOPIC."
+
+  minimize-noisy-review:
+    name: Minimize noisy bot review
+    # Submitted reviews arrive through Review event signal. workflow_run always
+    # executes this file from the default branch with the base repository's
+    # token, even when the review was on a fork pull request, and nothing here
+    # checks out or executes pull-request code. The signal run's title is the
+    # only data taken from it, and it is accepted only as numeric IDs; the
+    # review itself is re-fetched from GitHub and classified here.
     if: >-
       github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'pull_request_review' &&
       github.event.workflow_run.conclusion == 'success'
 
     permissions:
-      contents: read
-      pull-requests: write
+      pull-requests: write # read the review and minimizeComment on it
 
     runs-on: ubuntu-24.04
     timeout-minutes: 2
 
     steps:
-      - name: Suppress matched Greptile quota review
+      - name: Minimize matched bot-noise review
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
@@ -105,7 +325,7 @@ jobs:
           # Review event signal encodes only GitHub numeric IDs in run-name.
           # Reject anything else rather than using untrusted text as API input.
           if [[ ! "${SIGNAL_TITLE}" =~ ^review-([0-9]+)-pr-([0-9]+)$ ]]; then
-            echo "Unexpected review signal title: ${SIGNAL_TITLE}" >&2
+            echo "::error::Unexpected review signal title" >&2
             exit 1
           fi
 
@@ -120,56 +340,53 @@ jobs:
             "repos/${REPOSITORY}/pulls/${pr_number}/reviews/${review_id}" \
             > "${review_json}"
 
-          # Re-read the review from GitHub in the trusted workflow and match
-          # both the exact bot identity and both distinctive quota fragments.
-          if ! jq -e '
-            (.user.login == "greptile-apps[bot]") and
-            ((.body // "") | contains("has reached the 50-credit limit for trial accounts")) and
-            ((.body // "") | contains("To continue receiving code reviews"))
-          ' "${review_json}" >/dev/null; then
+          rule="$(jq -r "${NOISE_CLASSIFIER_JQ}" "${review_json}")"
+          if [[ "${rule}" == "none" ]]; then
+            echo "No high-confidence noise rule matched; leaving the review visible."
             exit 0
           fi
-
-          review_node_id="$(jq -r '.node_id // empty' "${review_json}")"
-          if [[ ! "${review_node_id}" =~ ^PRR_ ]]; then
-            echo "Missing or invalid review node ID" >&2
+          if [[ ! "${rule}" =~ ^[a-z0-9-]+$ ]]; then
+            echo "::error::Unexpected classifier output" >&2
             exit 1
           fi
 
-          deleted=""
-          if deleted="$(gh api graphql \
-            -f query='
-              mutation($reviewId: ID!) {
-                deletePullRequestReview(
-                  input: {pullRequestReviewId: $reviewId}
-                ) {
-                  clientMutationId
-                }
-              }
-            ' \
-            -f reviewId="${review_node_id}" \
-            --jq '.data.deletePullRequestReview != null')" &&
-            [[ "${deleted}" == "true" ]]
+          subject_id="$(jq -r '.node_id // empty' "${review_json}")"
+          if [[ ! "${subject_id}" =~ ^PRR_[A-Za-z0-9_-]+$ ]]; then
+            echo "::error::Missing or invalid review node ID" >&2
+            exit 1
+          fi
+
+          minimized_state() {
+            gh api graphql \
+              -f query="${MINIMIZED_STATE_QUERY}" \
+              -f subjectId="${subject_id}" \
+              --jq '.data.node.isMinimized'
+          }
+
+          before="$(minimized_state)"
+          case "${before}" in
+            true)
+              echo "Rule ${rule}: ${subject_id} is already minimized."
+              exit 0
+              ;;
+            false) ;;
+            *)
+              echo "::error::${subject_id} is missing or not minimizable" >&2
+              exit 1
+              ;;
+          esac
+
+          if ! gh api graphql \
+            -f query="${MINIMIZE_OFF_TOPIC_MUTATION}" \
+            -f subjectId="${subject_id}" > /dev/null
           then
-            exit 0
+            # A concurrent duplicate may have won; the re-read below decides.
+            echo "::warning::minimizeComment returned an error; re-checking state"
           fi
 
-          minimized="$(gh api graphql \
-            -f query='
-              mutation($reviewId: ID!) {
-                minimizeComment(
-                  input: {subjectId: $reviewId, classifier: OFF_TOPIC}
-                ) {
-                  minimizedComment {
-                    isMinimized
-                  }
-                }
-              }
-            ' \
-            -f reviewId="${review_node_id}" \
-            --jq '.data.minimizeComment.minimizedComment.isMinimized')"
-
-          if [[ "${minimized}" != "true" ]]; then
-            echo "Greptile quota review was neither deleted nor minimized" >&2
+          after="$(minimized_state)"
+          if [[ "${after}" != "true" ]]; then
+            echo "::error::Rule ${rule}: failed to minimize ${subject_id}" >&2
             exit 1
           fi
+          echo "Rule ${rule}: minimized ${subject_id} as OFF_TOPIC."

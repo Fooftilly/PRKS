@@ -41,11 +41,15 @@ class PeopleVueContracts(unittest.TestCase):
         app = (FRONTEND / "app.js").read_text()
         self.assertIn("samePeopleWorkspace", app)
         self.assertIn("__prksRetainPeopleSurface", app)
-        present = app[app.index("function prksPresentVuePeople") : app.index("function prksRenderRouteLoading")]
+        retained = app[app.index("const PRKS_RETAINED_VUE_ROUTE_FEATURES") : app.index("function prksPresentVueRoute(")]
+        self.assertIn("'people',", retained)
+        self.assertIn("'person',", retained)
+        present = app[app.index("function prksPresentVueRoute(") : app.index("async function prksReloadTagsVocabulary")]
         self.assertIn(":scope > [data-prks-vue-route-host]", present)
         self.assertIn("contentDiv.innerHTML = '';", present)
         self.assertLess(present.index("querySelector"), present.index("contentDiv.innerHTML = '';"))
-        self.assertIn("samePeopleWorkspace && typeof window.prksVueDismissPeople", app)
+        self.assertIn("samePeopleWorkspace ||", app)
+        self.assertIn("retainedRouteSurface && typeof window.prksVueDismissRoute", app)
         refresh = app[
             app.index("function prksOfflineMaybeRefreshFocusedRoute") : app.index(
                 "function prksRenderConnectivityIndicator"
@@ -106,7 +110,7 @@ class PeopleVueContracts(unittest.TestCase):
         self.assertIn("function prksBindPersonProfileDraft(", people)
         self.assertIn("async function deletePerson(explicitCtx, explicitGeneration)", people)
         self.assertIn("new Event('input'", people)
-        sidebar = people[people.index("function renderPersonProfileDetailsSidebarHtml") : people.index("function renderPersonProfileEditFormHtml")]
+        sidebar = people[people.index("function renderPersonProfileDetailsSidebarHtml") : people.index("const PRKS_PERSON_PROFILE_FIELDS")]
         self.assertIn("Edit profile", sidebar)
         self.assertIn("Done", sidebar)
         self.assertIn('id="prks-person-view-graph"', sidebar)

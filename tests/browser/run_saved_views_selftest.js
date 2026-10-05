@@ -24,6 +24,17 @@ const inputs = {
     publisher: { value: '' },
 };
 
+const modalError = {
+    textContent: '',
+    classList: { add: function () {}, remove: function () {} },
+};
+const saveButton = {
+    disabled: false,
+    textContent: '',
+    listeners: {},
+    addEventListener: function (type, fn) { this.listeners[type] = fn; },
+};
+
 const radios = [
     { value: 'all', checked: false, addEventListener: function () {} },
     { value: 'advanced', checked: true, addEventListener: function () {} },
@@ -39,8 +50,8 @@ const document = {
         if (id === 'saved-view-publisher') return inputs.publisher;
         if (id === 'saved-view-modal-title') return { textContent: '' };
         if (id === 'saved-view-modal-helper') return { textContent: '' };
-        if (id === 'saved-view-modal-error') return { textContent: '', classList: { add: function () {}, remove: function () {} } };
-        if (id === 'save-saved-view-btn') return { disabled: false, textContent: '', addEventListener: function () {} };
+        if (id === 'saved-view-modal-error') return modalError;
+        if (id === 'save-saved-view-btn') return saveButton;
         if (id === 'saved-view-modal') return { id: 'saved-view-modal' };
         if (id === 'saved-view-field-q-wrap') return { hidden: false };
         if (id === 'saved-view-q-label') return { textContent: '' };
@@ -61,6 +72,23 @@ const document = {
     },
 };
 
+const records = {
+    fail: null,
+    create: function (payload) {
+        posts.push(payload);
+        if (records.fail) return Promise.reject(records.fail);
+        return Promise.resolve({ id: 'SV-NEW', name: payload.name, search: payload.search });
+    },
+    update: function (id, payload) {
+        patches.push({ id: id, payload: payload });
+        if (records.fail) return Promise.reject(records.fail);
+        return Promise.resolve({ id: id, name: payload.name, search: payload.search });
+    },
+    actionMessage: function (err, fallback) {
+        return err && err.serverText ? err.serverText : fallback;
+    },
+};
+
 const sandbox = {
     console: console,
     window: null,
@@ -71,31 +99,27 @@ const sandbox = {
     module: { exports: {} },
     exports: {},
     prksParseRoute: null,
-    prksNavigate: function (hash, opts) {
-        navCalls.push({ hash: hash, replace: !!(opts && opts.replace) });
-        sandbox.location.hash = hash;
-    },
     openModal: function (id) {
         modalCalls.push(id);
     },
-    requestModalClose: function () {},
-    createSavedView: function (payload) {
-        posts.push(payload);
-        return Promise.resolve({ id: 'SV-NEW', name: payload.name, search: payload.search });
-    },
-    updateSavedView: function (id, payload) {
-        patches.push({ id: id, payload: payload });
-        return Promise.resolve({ id: id, name: payload.name, search: payload.search });
-    },
+    closes: 0,
+    requestModalClose: function () { sandbox.closes += 1; },
+    prksSavedViewRecords: records,
 };
 
 sandbox.window = sandbox;
 sandbox.globalThis = sandbox;
 
+runScript('frontend/js/route-model.js', sandbox);
 runScript('frontend/js/navigation.js', sandbox);
+runScript('frontend/js/search-query-codec.js', sandbox);
 runScript('frontend/js/saved-views.js', sandbox);
 
 const root = sandbox;
+// navigation.js installs the real prksNavigate; record calls instead.
+root.prksNavigate = function (hash, opts) {
+    navCalls.push({ hash: hash, replace: !!(opts && opts.replace), tabId: opts && opts.tabId });
+};
 let passed = 0;
 let failed = 0;
 function assert(name, ok) {
@@ -113,61 +137,21 @@ function assertEq(name, a, b) {
     assert(name, ok);
 }
 
-const parse = root.prksParseRoute;
+function settle() {
+    return new Promise(function (resolve) { setTimeout(resolve, 0); });
+}
 
-const allRoute = parse('#/search?any=1&q=critical%20theory');
-const allDef = root.prksSearchDefinitionFromRoute(allRoute);
-assert('all savable', allDef.ok === true);
-assertEq('all mode', allDef.definition.mode, 'all');
-assertEq('all q', allDef.definition.q, 'critical theory');
+function save() {
+    saveButton.listeners.click();
+    return settle();
+}
 
-const adv = root.prksSearchDefinitionFromRoute(parse('#/search?q=culture%20industry&author=Adorno'));
-assert('advanced savable', adv.ok === true);
-assertEq('advanced mode', adv.definition.mode, 'advanced');
-assertEq('advanced author', adv.definition.author, 'Adorno');
-
-const tag = root.prksSearchDefinitionFromRoute(parse('#/search?tag=Frankfurt%20School&publisher=Verso'));
-assert('tag savable', tag.ok === true);
-assertEq('tag mode', tag.definition.mode, 'tag');
-assertEq('tag name', tag.definition.tag, 'Frankfurt School');
-assertEq('tag q empty', tag.definition.q, '');
-
-const mixed = root.prksSearchDefinitionFromRoute(parse('#/search?any=1&author=Adorno'));
-assert('mixed unsavable', mixed.ok === false && mixed.unsavable === true);
-assertEq('mixed message', mixed.message, 'This search combination cannot be saved as a view.');
-
-const allHash = root.prksSearchHashFromDefinition(allDef.definition);
-assertEq('open as search all', allHash, '#/search?' + new URLSearchParams({ any: '1', q: 'critical theory' }).toString());
-const advHash = root.prksSearchHashFromDefinition(adv.definition);
-const advParams = new URLSearchParams(advHash.slice('#/search?'.length));
-assertEq('open as search adv q', advParams.get('q'), 'culture industry');
-assertEq('open as search adv author', advParams.get('author'), 'Adorno');
-assert('open as search adv no tag', advParams.get('tag') == null);
-const tagHash = root.prksSearchHashFromDefinition(tag.definition);
-const tagParams = new URLSearchParams(tagHash.slice('#/search?'.length));
-assertEq('open as search tag', tagParams.get('tag'), 'Frankfurt School');
-assertEq('open as search tag pub', tagParams.get('publisher'), 'Verso');
-assert('open as search tag no q', tagParams.get('q') == null);
-
-assertEq(
-    'summary all',
-    root.prksSearchSummaryText(allDef.definition),
-    'All: critical theory'
+assert(
+    'codec bridge is loaded',
+    root.prksSearchQueryCodec && typeof root.prksSearchQueryCodec.definitionFromRoute === 'function'
 );
-assertEq(
-    'summary advanced',
-    root.prksSearchSummaryText(adv.definition),
-    'Keywords: culture industry · Author: Adorno'
-);
-assertEq(
-    'summary tag',
-    root.prksSearchSummaryText(tag.definition),
-    'Tag: Frankfurt School · Publisher: Verso'
-);
-
-const mapped = root.prksSearchOptionsFromDefinition(allDef.definition);
-assertEq('options all any', mapped.options.any, '1');
-assertEq('options all q', mapped.q, 'critical theory');
+root.prksInitSavedViews();
+assert('save button is bound', typeof saveButton.listeners.click === 'function');
 
 root.prksOpenSavedViewModalFromCurrentSearch();
 assertEq('modal opened', modalCalls[0], 'saved-view-modal');
@@ -175,71 +159,101 @@ assertEq('name focused', inputs.name.focused, true);
 assertEq('prefill q', inputs.q.value, 'critical theory');
 
 inputs.name.value = 'Adorno — Culture Industry';
-Promise.resolve(root.createSavedView({
-    name: inputs.name.value,
-    search: allDef.definition,
-}))
+radios.forEach(function (r) { r.checked = r.value === 'all'; });
+save()
     .then(function () {
-        assert('posted create', posts.length === 1);
+        assertEq('create goes through the records service', posts.length, 1);
         assertEq('posted name', posts[0].name, 'Adorno — Culture Industry');
         assertEq('posted mode', posts[0].search.mode, 'all');
         assertEq('posted q', posts[0].search.q, 'critical theory');
+        assertEq('create closes the modal', root.closes, 1);
+        assertEq('create opens the new view', navCalls[navCalls.length - 1].hash, '#/views/SV-NEW');
 
-        return root.updateSavedView('SV-1', {
-            name: 'Critical Theory',
-            search: adv.definition,
-        });
+        records.fail = { serverText: 'A Saved View with that name already exists.' };
+        root.prksOpenSavedViewModal({ name: 'Taken', definition: { mode: 'all', q: 'x', tag: '', author: '', publisher: '' } });
+        return save();
     })
     .then(function () {
-        assertEq('patch same id', patches[0].id, 'SV-1');
-        assertEq('patch name', patches[0].payload.name, 'Critical Theory');
-        assertEq('patch mode', patches[0].payload.search.mode, 'advanced');
+        assertEq('refused create keeps the modal open', root.closes, 1);
+        assertEq('refused create shows the server text', modalError.textContent, 'A Saved View with that name already exists.');
+        assertEq('save button is enabled again', saveButton.disabled, false);
+
+        records.fail = {};
+        root.prksOpenSavedViewModal({
+            viewId: 'SV-1',
+            name: 'Critical Theory',
+            definition: { mode: 'advanced', q: 'culture industry', tag: '', author: 'Adorno', publisher: '' },
+        });
+        return save();
+    })
+    .then(function () {
+        assertEq('failed update names the edit', modalError.textContent, 'Could not update Saved View.');
+        records.fail = null;
+        return save();
+    })
+    .then(function () {
+        assertEq('patch same id', patches[patches.length - 1].id, 'SV-1');
+        assertEq('patch name', patches[patches.length - 1].payload.name, 'Critical Theory');
+        assertEq('patch mode', patches[patches.length - 1].payload.search.mode, 'advanced');
+        assertEq('patch author', patches[patches.length - 1].payload.search.author, 'Adorno');
+        assertEq('update closes the modal', root.closes, 2);
 
         const src = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'js', 'saved-views.js'), 'utf8');
         assert('no results table', src.indexOf('saved_view_works') < 0);
-        assert('uses fetchSearch mapping', src.indexOf('prksSearchOptionsFromDefinition') >= 0);
+        assert('codec left saved-views.js', src.indexOf('function prksSearchDefinitionFromRoute') < 0);
+        assert('modal uses the codec bridge', src.indexOf('prksSearchQueryCodec') >= 0);
         assert('no eval', src.indexOf('eval(') < 0);
-        assert('index edit captures routeGen', src.indexOf('routeGen') >= 0);
-        assert('index edit captures canonicalHash', src.indexOf('canonicalHash') >= 0);
+        assert('index painters removed',
+            src.indexOf('function renderSavedViewsIndex') < 0 &&
+            src.indexOf('function bindIndexActions') < 0 &&
+            src.indexOf('function openEditById') < 0 &&
+            src.indexOf('function confirmDelete') < 0 &&
+            src.indexOf('prksOpenSavedViewIndexEdit') < 0);
+        assert('delete wrappers left saved-views.js',
+            typeof root.prksDeleteSavedViewFromIndex === 'undefined' &&
+            typeof root.prksDeleteSavedViewFromDetail === 'undefined' &&
+            src.indexOf('deleteSavedView') < 0);
+        assert('no raw Saved View HTTP', src.indexOf('/api/saved-views') < 0);
 
-        const beforeStale = modalCalls.length;
-        root.__prksRouteGen = 1;
-        root.location.hash = '#/views';
-        let resolveView;
-        const pending = new Promise(function (resolve) {
-            resolveView = resolve;
-        });
-        root.fetchSavedView = function () {
-            return pending;
-        };
-        const editPromise = root.prksOpenSavedViewIndexEdit('SV-STALE');
-        root.__prksRouteGen = 2;
+        /* Save View from the Search surface uses that owner's hash, not the URL. */
         root.location.hash = '#/folders';
-        resolveView({
-            id: 'SV-STALE',
-            name: 'Stale View',
-            search: { mode: 'all', q: 'x', tag: '', author: '', publisher: '' },
-        });
-        return editPromise.then(function () {
-            assertEq('stale index edit does not open modal', modalCalls.length, beforeStale);
+        root.prksOpenSavedViewModalFromCurrentSearch('#/search?q=owned&author=Benjamin');
+        assertEq('save view uses owner hash q', inputs.q.value, 'owned');
+        assertEq('save view uses owner hash author', inputs.author.value, 'Benjamin');
 
-            root.__prksRouteGen = 3;
-            root.location.hash = '#/views';
-            root.fetchSavedView = function () {
-                return Promise.resolve({
-                    id: 'SV-OK',
-                    name: 'Current View',
-                    search: { mode: 'all', q: 'y', tag: '', author: '', publisher: '' },
-                });
+        /* Edit this Saved View reads the Main TabContext entity. */
+        const beforeEdit = modalCalls.length;
+        root.prksGetMainTabContext = function () { return { getEntity: function () { return null; } }; };
+        root.prksOpenSavedViewModalForCurrentView();
+        assertEq('edit current view without entity is a no-op', modalCalls.length, beforeEdit);
+        root.prksGetMainTabContext = function () {
+            return {
+                getEntity: function (type) {
+                    return type === 'savedView'
+                        ? { id: 'SV-MAIN', name: 'Main View', search: { mode: 'tag', q: '', tag: 'T', author: '', publisher: '' } }
+                        : null;
+                },
             };
-            return root.prksOpenSavedViewIndexEdit('SV-OK');
-        }).then(function () {
-            assertEq('current index edit opens modal', modalCalls[modalCalls.length - 1], 'saved-view-modal');
-            assertEq('current index edit fills name', inputs.name.value, 'Current View');
+        };
+        root.prksOpenSavedViewModalForCurrentView();
+        assertEq('edit current view opens modal', modalCalls.length, beforeEdit + 1);
+        assertEq('edit current view fills name', inputs.name.value, 'Main View');
+        assertEq('edit current view fills tag', inputs.tag.value, 'T');
+        assert('detail painters removed', typeof root.renderSavedViewDetail === 'undefined' &&
+            typeof root.renderSavedViewNotFound === 'undefined' &&
+            typeof root.prksSearchResultCardsHtml === 'undefined');
+        assert('index edit export removed', typeof root.prksOpenSavedViewIndexEdit === 'undefined');
+        assert('index painter export removed', typeof root.renderSavedViewsIndex === 'undefined');
 
-            console.log(passed + ' passed, ' + failed + ' failed');
-            if (failed) process.exit(1);
-        });
+        /* The offline guard refuses to open the modal. */
+        const beforeOffline = modalCalls.length;
+        root.prksOfflineGuardMutation = function () { return true; };
+        root.prksOpenSavedViewModal({ name: 'Offline' });
+        assertEq('offline guard keeps the modal closed', modalCalls.length, beforeOffline);
+    })
+    .then(function () {
+        console.log(passed + ' passed, ' + failed + ' failed');
+        if (failed) process.exit(1);
     })
     .catch(function (err) {
         console.error(err);

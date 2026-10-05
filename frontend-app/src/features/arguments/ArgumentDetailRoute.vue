@@ -1,6 +1,11 @@
 <script setup lang="ts">
-import { computed, inject, onMounted, ref, watch } from 'vue'
+import { computed, inject, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import PrksField from '../../components/PrksField.vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
+import PrksLinkButton from '../../components/PrksLinkButton.vue'
+import PrksResearchRow from '../../components/PrksResearchRow.vue'
+import PrksResearchSectionHead from '../../components/PrksResearchSectionHead.vue'
 import { argumentIntentsKey } from './intents'
 import { useArgumentPendingAction } from './pending-action'
 import { defaultArgumentVerdict } from './match'
@@ -15,10 +20,7 @@ import type {
   ArgumentEditorForm,
   ArgumentEditorSourceRow,
   ArgumentEditorTargetRow,
-  ArgumentMentionRef,
-  ArgumentResponseRef,
   ArgumentSourceRef,
-  ArgumentTargetRef,
 } from './types'
 
 const MUTATION_ROLE = 'argument-mutation-control'
@@ -28,17 +30,6 @@ const props = defineProps<{
 }>()
 
 const intents = inject(argumentIntentsKey)
-const rootEl = ref<HTMLElement | null>(null)
-const textHeadHost = ref<HTMLElement | null>(null)
-const textHost = ref<HTMLElement | null>(null)
-const targetsHeadHost = ref<HTMLElement | null>(null)
-const targetsHost = ref<HTMLElement | null>(null)
-const sourcesHeadHost = ref<HTMLElement | null>(null)
-const sourcesHost = ref<HTMLElement | null>(null)
-const responsesHeadHost = ref<HTMLElement | null>(null)
-const responsesHost = ref<HTMLElement | null>(null)
-const mentionsHeadHost = ref<HTMLElement | null>(null)
-const mentionsHost = ref<HTMLElement | null>(null)
 
 const editing = ref(false)
 const draft = ref<ArgumentEditorForm | null>(null)
@@ -49,47 +40,10 @@ const availability = computed(() => props.projection.availability)
 const argument = computed(() => props.projection.argument)
 const ready = computed(() => availability.value === 'ready' && !!argument.value)
 const kindLabel = computed(() => (argument.value?.kind === 'stance' ? 'Stance' : 'Argument'))
-
-function escHtml(value: string): string {
-  const fn = window.prksEscapeHtml
-  if (typeof fn === 'function') return fn(value)
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-}
-
-function researchRows(rows: string): string {
-  return rows
-}
-
-function linkRow(href: string, title: string, kind: string, meta: string[]): string {
-  const rowHtml = window.prksResearchIndexRowHtml
-  const safeMeta = meta.filter(Boolean)
-  if (typeof rowHtml === 'function') {
-    return rowHtml({
-      href,
-      title: escHtml(title),
-      kind: kind ? escHtml(kind) : '',
-      meta: safeMeta.map((item) => escHtml(item)),
-    })
-  }
-  return `<a class="prks-list-row prks-research-row" href="${href}">${escHtml(title)}</a>`
-}
-
-function targetRowsHtml(rows: readonly ArgumentTargetRef[]): string {
-  return rows
-    .map((row) => {
-      const href =
-        row.type === 'position'
-          ? `#/positions/${encodeURIComponent(row.id)}`
-          : `#/arguments/${encodeURIComponent(row.id)}`
-      const kind = row.type === 'position' ? 'Position' : row.kind === 'stance' ? 'Stance' : 'Argument'
-      return linkRow(href, row.name || row.id, kind, [row.verdict_label || row.verdict_id || ''])
-    })
-    .join('')
-}
+const mainTextHtml = computed(() => {
+  const text = String(argument.value?.main_text || '')
+  return text.trim() ? researchMarkdownHtml(text) : '<p class="meta-row">No main text yet.</p>'
+})
 
 function sourceAuthorsLabel(source: ArgumentSourceRef): string {
   return source.authors
@@ -98,83 +52,15 @@ function sourceAuthorsLabel(source: ArgumentSourceRef): string {
     .join(', ')
 }
 
-function sourceRowsHtml(rows: readonly ArgumentSourceRef[]): string {
-  return rows
-    .map((row) => {
-      const pages = row.pages ? `pp. ${row.pages}` : ''
-      return linkRow(
-        `#/works/${encodeURIComponent(row.work_id)}`,
-        row.work_title || row.work_id,
-        '',
-        [sourceAuthorsLabel(row), pages].filter(Boolean),
-      )
-    })
-    .join('')
+function targetHref(row: { type: string; id: string }): string {
+  return row.type === 'position'
+    ? `#/positions/${encodeURIComponent(row.id)}`
+    : `#/arguments/${encodeURIComponent(row.id)}`
 }
 
-function responseRowsHtml(rows: readonly ArgumentResponseRef[]): string {
-  return rows
-    .map((row) => {
-      const kind = row.kind === 'stance' ? 'Stance' : 'Argument'
-      return linkRow(
-        `#/arguments/${encodeURIComponent(row.id)}`,
-        row.name || row.id,
-        kind,
-        [row.verdict_label || row.verdict_id || ''],
-      )
-    })
-    .join('')
-}
-
-function mentionRowsHtml(rows: readonly ArgumentMentionRef[]): string {
-  return rows
-    .map((row) => linkRow(`#/works/${encodeURIComponent(row.work_id)}`, row.title || row.work_id, '', []))
-    .join('')
-}
-
-function paintSectionHead(
-  host: HTMLElement | null,
-  title: string,
-  opts: { headingId?: string; count?: number; sub?: string },
-): void {
-  if (!host) return
-  const fn = window.prksResearchSectionHeadHtml
-  host.innerHTML = typeof fn === 'function' ? fn(title, opts) : ''
-}
-
-function paintRead(): void {
-  const current = argument.value
-  if (!current || editing.value) return
-  const text = String(current.main_text || '')
-  if (textHost.value) {
-    textHost.value.innerHTML = text.trim()
-      ? researchMarkdownHtml(text)
-      : '<p class="meta-row">No main text yet.</p>'
-  }
-  paintSectionHead(textHeadHost.value, 'Main text', { headingId: 'prks-arg-text-h' })
-  paintSectionHead(targetsHeadHost.value, 'Responds to', {
-    headingId: 'prks-arg-targets-h',
-    count: current.targets.length,
-  })
-  paintSectionHead(sourcesHeadHost.value, 'Sources', {
-    headingId: 'prks-arg-sources-h',
-    count: current.sources.length,
-    sub: 'Works where this was made or taken.',
-  })
-  paintSectionHead(responsesHeadHost.value, 'Responses', {
-    headingId: 'prks-arg-resp-h',
-    count: current.responses.length,
-  })
-  paintSectionHead(mentionsHeadHost.value, 'Mentioned in notes', {
-    headingId: 'prks-arg-mentions-h',
-    count: current.mentions.length,
-  })
-  if (targetsHost.value) targetsHost.value.innerHTML = researchRows(targetRowsHtml(current.targets))
-  if (sourcesHost.value) sourcesHost.value.innerHTML = researchRows(sourceRowsHtml(current.sources))
-  if (responsesHost.value) responsesHost.value.innerHTML = researchRows(responseRowsHtml(current.responses))
-  if (mentionsHost.value) mentionsHost.value.innerHTML = researchRows(mentionRowsHtml(current.mentions))
-  const root = rootEl.value
-  if (root && typeof window.prksRefreshIcons === 'function') window.prksRefreshIcons(root)
+function targetKind(row: { type: string; kind?: string }): string {
+  if (row.type === 'position') return 'Position'
+  return row.kind === 'stance' ? 'Stance' : 'Argument'
 }
 
 function leaveEdit(): void {
@@ -310,54 +196,30 @@ function repaintSource(row: ArgumentEditorSourceRow): void {
   })
 }
 
-onMounted(() => {
-  paintRead()
-})
-
 watch(
   () => props.projection.generation,
   () => {
     leaveEdit()
   },
 )
-
-watch(
-  () =>
-    [
-      props.projection.generation,
-      editing.value,
-      argument.value?.id,
-      argument.value?.name,
-      argument.value?.kind,
-      argument.value?.main_text,
-      argument.value?.targets,
-      argument.value?.sources,
-      argument.value?.responses,
-      argument.value?.mentions,
-    ] as const,
-  () => {
-    if (!editing.value) paintRead()
-  },
-  { flush: 'post' },
-)
 </script>
 
 <template>
-  <div ref="rootEl" data-prks-argument-detail-view>
+  <div data-prks-argument-detail-view>
     <template v-if="availability === 'unavailable'">
       <div class="prks-page-header page-header">
         <h2 class="prks-page-title">Argument or Stance not available offline</h2>
       </div>
-      <p class="prks-inline-message" data-prks-role="offline-unavailable">
+      <PrksInlineMessage data-prks-role="offline-unavailable">
         This item is not available offline.
-      </p>
+      </PrksInlineMessage>
     </template>
     <template v-else-if="availability === 'not-found' || !argument">
       <div class="prks-page-header page-header">
         <h2 class="prks-page-title">Argument not found.</h2>
       </div>
       <p class="meta-row">
-        <a class="prks-btn prks-btn--secondary" href="#/arguments">Back to Arguments &amp; Stances</a>
+        <PrksLinkButton href="#/arguments">Back to Arguments &amp; Stances</PrksLinkButton>
       </p>
     </template>
     <template v-else-if="ready && argument">
@@ -369,19 +231,14 @@ watch(
           </div>
           <div class="page-header__actions">
             <template v-if="editing">
-              <button type="button" class="prks-btn prks-btn--secondary" id="prks-arg-cancel" @click="onCancel">
+              <PrksButton id="prks-arg-cancel" @click="onCancel">
                 Cancel
-              </button>
+              </PrksButton>
             </template>
             <template v-else>
-              <button
-                type="button"
-                class="prks-btn prks-btn--secondary"
-                id="prks-arg-view-graph"
-                @click="onViewGraph"
-              >
+              <PrksButton id="prks-arg-view-graph" @click="onViewGraph">
                 View in graph
-              </button>
+              </PrksButton>
               <PrksButton
                 id="prks-arg-edit"
                 :data-prks-role="MUTATION_ROLE"
@@ -404,8 +261,8 @@ watch(
               </PrksButton>
               <PrksButton
                 id="prks-arg-delete"
-                variant="ghost"
-                class="prks-btn--quiet-danger prks-page-action--destructive"
+                variant="quiet-danger"
+                class="prks-page-action--destructive"
                 :data-prks-role="MUTATION_ROLE"
                 :busy="actionBusy('delete')"
                 :disabled="actionBlocked('delete')"
@@ -420,40 +277,93 @@ watch(
       </div>
       <div v-if="!editing" class="research-entity">
         <section class="research-entity__section" aria-labelledby="prks-arg-text-h">
-          <div ref="textHeadHost"></div>
-          <div ref="textHost" class="research-md"></div>
+          <PrksResearchSectionHead title="Main text" heading-id="prks-arg-text-h" />
+          <div class="research-md" v-html="mainTextHtml"></div>
         </section>
         <section class="research-entity__section" aria-labelledby="prks-arg-targets-h">
-          <div ref="targetsHeadHost"></div>
-          <div v-if="argument.targets.length" ref="targetsHost" class="list-view prks-research-index"></div>
+          <PrksResearchSectionHead
+            title="Responds to"
+            heading-id="prks-arg-targets-h"
+            :count="argument.targets.length"
+          />
+          <div v-if="argument.targets.length" class="list-view prks-research-index">
+            <PrksResearchRow
+              v-for="row in argument.targets"
+              :key="`${row.type}:${row.id}`"
+              :href="targetHref(row)"
+              :title="row.name || row.id"
+              :kind="targetKind(row)"
+              :meta="[row.verdict_label || row.verdict_id || ''].filter(Boolean)"
+            />
+          </div>
           <p v-else class="meta-row">No targets.</p>
         </section>
         <section class="research-entity__section" aria-labelledby="prks-arg-sources-h">
-          <div ref="sourcesHeadHost"></div>
-          <div v-if="argument.sources.length" ref="sourcesHost" class="list-view prks-research-index"></div>
+          <PrksResearchSectionHead
+            title="Sources"
+            heading-id="prks-arg-sources-h"
+            :count="argument.sources.length"
+            sub="Works where this was made or taken."
+          />
+          <div v-if="argument.sources.length" class="list-view prks-research-index">
+            <PrksResearchRow
+              v-for="row in argument.sources"
+              :key="row.work_id"
+              :href="`#/works/${encodeURIComponent(row.work_id)}`"
+              :title="row.work_title || row.work_id"
+              :meta="[sourceAuthorsLabel(row), row.pages ? `pp. ${row.pages}` : ''].filter(Boolean)"
+            />
+          </div>
           <p v-else class="meta-row">No sources.</p>
         </section>
         <section class="research-entity__section" aria-labelledby="prks-arg-resp-h">
-          <div ref="responsesHeadHost"></div>
-          <div v-if="argument.responses.length" ref="responsesHost" class="list-view prks-research-index"></div>
+          <PrksResearchSectionHead
+            title="Responses"
+            heading-id="prks-arg-resp-h"
+            :count="argument.responses.length"
+          />
+          <div v-if="argument.responses.length" class="list-view prks-research-index">
+            <PrksResearchRow
+              v-for="row in argument.responses"
+              :key="row.id"
+              :href="`#/arguments/${encodeURIComponent(row.id)}`"
+              :title="row.name || row.id"
+              :kind="row.kind === 'stance' ? 'Stance' : 'Argument'"
+              :meta="[row.verdict_label || row.verdict_id || ''].filter(Boolean)"
+            />
+          </div>
           <p v-else class="meta-row">No responses.</p>
         </section>
         <section class="research-entity__section" aria-labelledby="prks-arg-mentions-h">
-          <div ref="mentionsHeadHost"></div>
-          <div v-if="argument.mentions.length" ref="mentionsHost" class="list-view prks-research-index"></div>
+          <PrksResearchSectionHead
+            title="Mentioned in notes"
+            heading-id="prks-arg-mentions-h"
+            :count="argument.mentions.length"
+          />
+          <div v-if="argument.mentions.length" class="list-view prks-research-index">
+            <PrksResearchRow
+              v-for="row in argument.mentions"
+              :key="row.work_id"
+              :href="`#/works/${encodeURIComponent(row.work_id)}`"
+              :title="row.title || row.work_id"
+            />
+          </div>
           <p v-else class="meta-row">Not mentioned in research notes.</p>
         </section>
       </div>
       <form v-else-if="draft" id="prks-arg-form" class="prks-arg-form form-pane" @submit.prevent="onSave">
-        <label class="form-field-label" for="prks-arg-name">Name</label>
-        <input id="prks-arg-name" v-model="draft.name" type="text">
-        <label class="form-field-label" for="prks-arg-kind">Kind</label>
-        <select id="prks-arg-kind" v-model="draft.kind">
-          <option value="argument">Argument</option>
-          <option value="stance">Stance</option>
-        </select>
-        <label class="form-field-label" for="prks-arg-text">Main text</label>
-        <textarea id="prks-arg-text" v-model="draft.main_text" class="textarea-md" rows="8"></textarea>
+        <PrksField v-slot="{ labelledBy, describedBy }" label="Name" for-id="prks-arg-name">
+          <input id="prks-arg-name" v-model="draft.name" type="text" :aria-labelledby="labelledBy" :aria-describedby="describedBy">
+        </PrksField>
+        <PrksField v-slot="{ labelledBy, describedBy }" label="Kind" for-id="prks-arg-kind">
+          <select id="prks-arg-kind" v-model="draft.kind" :aria-labelledby="labelledBy" :aria-describedby="describedBy">
+            <option value="argument">Argument</option>
+            <option value="stance">Stance</option>
+          </select>
+        </PrksField>
+        <PrksField v-slot="{ labelledBy, describedBy }" label="Main text" for-id="prks-arg-text">
+          <textarea id="prks-arg-text" v-model="draft.main_text" class="textarea-md" rows="8" :aria-labelledby="labelledBy" :aria-describedby="describedBy"></textarea>
+        </PrksField>
         <h3>Responds to</h3>
         <div id="prks-arg-targets">
           <p v-if="!draft.targets.length" class="meta-row">None yet.</p>
@@ -480,14 +390,14 @@ watch(
                 {{ choice.label }}
               </option>
             </select>
-            <button
-              type="button"
-              class="prks-btn prks-btn--ghost prks-btn--sm"
+            <PrksButton
+              variant="ghost"
+              size="sm"
               data-remove="target"
               @click="removeTarget(row.rowKey)"
             >
               Remove
-            </button>
+            </PrksButton>
           </div>
         </div>
         <PrksButton
@@ -523,14 +433,14 @@ watch(
               maxlength="100"
               aria-label="Pages"
             >
-            <button
-              type="button"
-              class="prks-btn prks-btn--ghost prks-btn--sm"
+            <PrksButton
+              variant="ghost"
+              size="sm"
               data-remove="source"
               @click="removeSource(row.rowKey)"
             >
               Remove
-            </button>
+            </PrksButton>
           </div>
         </div>
         <PrksButton
@@ -544,7 +454,7 @@ watch(
           Add source
         </PrksButton>
         <p class="prks-arg-form__actions">
-          <PrksButton type="submit" variant="primary" class="prks-btn prks-btn--primary" :busy="actionBusy('save')" busy-label="Saving…">
+          <PrksButton type="submit" variant="primary" :busy="actionBusy('save')" busy-label="Saving…">
             Save
           </PrksButton>
         </p>

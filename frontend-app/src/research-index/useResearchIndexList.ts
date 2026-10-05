@@ -1,7 +1,7 @@
 import { computed, nextTick, onMounted, ref, watch, type ComputedRef, type Ref } from 'vue'
 
 /**
- * Local search, scope line, and header icon for a research index.
+ * Local search, header icon, and scope counts for a research index.
  * Filtering stays in the caller. This does not own route or durable state.
  */
 export function useResearchIndexList<T>(options: {
@@ -15,11 +15,10 @@ export function useResearchIndexList<T>(options: {
   scopeLabel: string | ComputedRef<string>
   rootEl: Ref<HTMLElement | null>
   titleIconHost: Ref<HTMLElement | null>
-  scopeHost: Ref<HTMLElement | null>
   searchInput: Ref<HTMLInputElement | null>
 }) {
   const searchQuery = ref('')
-  const { rootEl, titleIconHost, scopeHost, searchInput } = options
+  const { rootEl, titleIconHost, searchInput } = options
 
   const filtered = computed(() => options.filter(options.items.value, searchQuery.value))
   const normalizedQuery = computed(() => options.normalizeQuery(searchQuery.value))
@@ -36,6 +35,13 @@ export function useResearchIndexList<T>(options: {
     return typeof window.prksIcon === 'function' ? window.prksIcon(options.icon, { size: 'sm' }) : ''
   })
 
+  const scopeLine = computed(() => ({
+    shown: filtered.value.length,
+    total: options.items.value.length,
+    filter: normalizedQuery.value,
+    label: typeof options.scopeLabel === 'string' ? options.scopeLabel : options.scopeLabel.value,
+  }))
+
   function paintTitleIcon(): void {
     const host = titleIconHost.value
     if (!host) return
@@ -43,23 +49,6 @@ export function useResearchIndexList<T>(options: {
       typeof window.prksPageHeaderIconHtml === 'function'
         ? window.prksPageHeaderIconHtml(options.icon)
         : ''
-  }
-
-  function currentScopeLabel(): string {
-    return typeof options.scopeLabel === 'string' ? options.scopeLabel : options.scopeLabel.value
-  }
-
-  function paintScope(): void {
-    const host = scopeHost.value
-    if (!host || options.unavailable.value) return
-    if (typeof window.prksPaintScopeHost === 'function') {
-      window.prksPaintScopeHost(host, {
-        shown: filtered.value.length,
-        total: options.items.value.length,
-        filter: normalizedQuery.value,
-        label: currentScopeLabel(),
-      })
-    }
   }
 
   function refreshIcons(): void {
@@ -77,7 +66,6 @@ export function useResearchIndexList<T>(options: {
 
   onMounted(() => {
     paintTitleIcon()
-    paintScope()
     refreshIcons()
   })
 
@@ -88,11 +76,9 @@ export function useResearchIndexList<T>(options: {
         filtered.value.length,
         normalizedQuery.value,
         options.items.value.length,
-        currentScopeLabel(),
       ] as const,
     async () => {
       await nextTick()
-      paintScope()
       refreshIcons()
     },
   )
@@ -105,6 +91,7 @@ export function useResearchIndexList<T>(options: {
     showEmptyData,
     showSearchEmpty,
     rowIconHtml,
+    scopeLine,
     clearSearch,
   }
 }

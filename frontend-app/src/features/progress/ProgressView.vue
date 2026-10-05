@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { legacyWorkCardHtml } from './legacy-work-card'
+import PrksWorkCard from '../../components/PrksWorkCard.vue'
+import PrksScopeLine from '../../components/PrksScopeLine.vue'
+import PrksState from '../../components/PrksState.vue'
+import { useWorkCardCollection } from '../../components/use-work-card-collection'
+import { workCardCollectionFingerprint, workCardThumbOptions } from '../../components/work-card'
 import { progressCardSubtitle, progressFileCountLabel, progressPageTitle, progressVisibleRows } from './rows'
 import type { ProgressSnapshot } from './state'
 
@@ -20,16 +24,14 @@ const collectionClass = computed(() => {
   const fn = window.prksWorkBrowseCollectionClass
   return typeof fn === 'function' ? fn() : 'card-grid'
 })
-const collectionHtml = computed(() => {
-  if (!visible.value.length) return ''
-  const cached = offlineCached.value
-  return visible.value
-    .map((work) => legacyWorkCardHtml(work, cached, progressCardSubtitle(work)))
-    .join('')
-})
 
 const modeHost = ref<HTMLElement | null>(null)
 const collectionEl = ref<HTMLElement | null>(null)
+
+useWorkCardCollection(collectionEl, {
+  source: () =>
+    workCardCollectionFingerprint(visible.value, { suppressThumbnail: offlineCached.value }),
+})
 
 function paintMode(): void {
   const host = modeHost.value
@@ -39,22 +41,17 @@ function paintMode(): void {
   window.prksBindWorkBrowseMode?.(host.parentElement)
 }
 
-function paintCollection(): void {
-  const el = collectionEl.value
-  if (!el) return
-  el.innerHTML = collectionHtml.value
-  window.prksRefreshIcons?.(el)
-  window.prksInitLazyWorkThumbs?.(el)
-}
-
 onMounted(() => {
   paintMode()
-  paintCollection()
 })
 
-watch(collectionHtml, () => {
-  paintCollection()
-}, { flush: 'post' })
+watch(
+  () => props.snapshot.generation,
+  () => {
+    paintMode()
+  },
+  { flush: 'post' },
+)
 </script>
 
 <template>
@@ -64,10 +61,15 @@ watch(collectionHtml, () => {
       <!-- display:contents keeps the shared browse-mode control a title-row child. -->
       <div ref="modeHost" data-prks-progress-mode-host style="display: contents"></div>
     </div>
-    <p class="prks-scope-line" role="status">{{ countLabel }}</p>
+    <PrksScopeLine :text="countLabel" />
   </div>
-  <div v-if="visible.length" ref="collectionEl" :class="collectionClass"></div>
-  <div v-else class="prks-state prks-state--empty">
-    <p class="prks-state__heading">No files with this progress status yet.</p>
+  <div v-if="visible.length" ref="collectionEl" :class="collectionClass">
+    <PrksWorkCard
+      v-for="work in visible"
+      :key="String(work.id ?? '')"
+      :work="work"
+      :options="workCardThumbOptions(offlineCached, { subtitle: progressCardSubtitle(work) })"
+    />
   </div>
+  <PrksState v-else kind="empty" heading="No files with this progress status yet." />
 </template>

@@ -1305,6 +1305,70 @@ def build_dependency_manifest(repo_root: Path | None = None) -> dict[str, Any]:
             }
         )
 
+    search_codec_path = root / "frontend" / "js" / "search-query-codec.js"
+    if search_codec_path.is_file():
+        entries.append(
+            {
+                "name": "prks-search-query-codec",
+                "version": "1",
+                "source_category": "frontend-app:search-query-codec",
+                "runtime_files": [
+                    {
+                        "path": "/js/search-query-codec.js",
+                        "sha256": sha256_file(search_codec_path),
+                    }
+                ],
+            }
+        )
+
+    tab_leave_path = root / "frontend" / "js" / "tab-leave.js"
+    if tab_leave_path.is_file():
+        entries.append(
+            {
+                "name": "prks-tab-leave",
+                "version": "1",
+                "source_category": "frontend-app:tab-leave",
+                "runtime_files": [
+                    {
+                        "path": "/js/tab-leave.js",
+                        "sha256": sha256_file(tab_leave_path),
+                    }
+                ],
+            }
+        )
+
+    owner_resource_path = root / "frontend" / "js" / "owner-resource.js"
+    if owner_resource_path.is_file():
+        entries.append(
+            {
+                "name": "prks-owner-resource",
+                "version": "1",
+                "source_category": "frontend-app:owner-resource",
+                "runtime_files": [
+                    {
+                        "path": "/js/owner-resource.js",
+                        "sha256": sha256_file(owner_resource_path),
+                    }
+                ],
+            }
+        )
+
+    route_model_path = root / "frontend" / "js" / "route-model.js"
+    if route_model_path.is_file():
+        entries.append(
+            {
+                "name": "prks-route-model",
+                "version": "1",
+                "source_category": "frontend-app:route-model",
+                "runtime_files": [
+                    {
+                        "path": "/js/route-model.js",
+                        "sha256": sha256_file(route_model_path),
+                    }
+                ],
+            }
+        )
+
     entries.sort(key=lambda e: e["name"])
     return {
         "schema_version": 1,

@@ -98,6 +98,18 @@ describe('prksApiRequest', () => {
     await expect(prksApiRequest('/api/diagnostics/performance?q=secret')).rejects.toBeInstanceOf(TypeError)
   })
 
+  it('encodes query parameters passed separately from the path', async () => {
+    const fetchMock = vi.fn(async () => new Response('[]', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await prksApiRequest('/api/publishers/R-1/aliases', {
+      method: 'DELETE',
+      query: { alias: 'A & B/é?' },
+    })
+    await prksApiRequest('/api/publishers', { query: {} })
+    const urls = (fetchMock.mock.calls as unknown as [string][]).map((call) => call[0])
+    expect(urls).toEqual(['/api/publishers/R-1/aliases?alias=A+%26+B%2F%C3%A9%3F', '/api/publishers'])
+  })
+
   it('rejects paths that normalize outside /api/', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)

@@ -89,6 +89,38 @@ if (workRouteBuild.status !== 0) {
   process.exit(workRouteBuild.status || 1);
 }
 
+const searchCodecBuild = spawnSync(process.execPath, [join(appRoot, "scripts/build-search-codec.mjs")], {
+  cwd: appRoot,
+  stdio: "inherit",
+});
+if (searchCodecBuild.status !== 0) {
+  process.exit(searchCodecBuild.status || 1);
+}
+
+const tabLeaveBuild = spawnSync(process.execPath, [join(appRoot, "scripts/build-tab-leave.mjs")], {
+  cwd: appRoot,
+  stdio: "inherit",
+});
+if (tabLeaveBuild.status !== 0) {
+  process.exit(tabLeaveBuild.status || 1);
+}
+
+const ownerResourceBuild = spawnSync(process.execPath, [join(appRoot, "scripts/build-owner-resource.mjs")], {
+  cwd: appRoot,
+  stdio: "inherit",
+});
+if (ownerResourceBuild.status !== 0) {
+  process.exit(ownerResourceBuild.status || 1);
+}
+
+const routeModelBuild = spawnSync(process.execPath, [join(appRoot, "scripts/build-route-model.mjs")], {
+  cwd: appRoot,
+  stdio: "inherit",
+});
+if (routeModelBuild.status !== 0) {
+  process.exit(routeModelBuild.status || 1);
+}
+
 const py = resolvePython();
 const gate = spawnSync(
   py.executable,

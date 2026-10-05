@@ -191,39 +191,36 @@ class AnnotationConfirmStructureTests(unittest.TestCase):
         pdf = _read(_PDF)
         editor_delete = _extract(
             pdf,
-            "window.deletePdfAnnotationFromEditor = async function () {",
+            "window.deletePdfAnnotationFromEditor = async function (ctx, captured) {",
             "\n};",
         )
         self.assertIn("await prksConfirmDeletePdfAnnotation()", editor_delete)
 
         list_delete = _extract(
             pdf,
-            "if (e.target && e.target.closest && e.target.closest('.annotation-row__delete')) {",
-            "if (e.target && e.target.closest && e.target.closest('.annotation-row__copy-link')) {",
+            "window.deletePdfAnnotationFromList = async function (ctx, annId) {",
+            "\n};",
         )
         self.assertIn("await prksConfirmDeletePdfAnnotation()", list_delete)
 
     def test_pending_sync_leave_guard_still_uses_native_confirm(self):
+        pdf = _read(os.path.join(_ROOT, "frontend", "js", "pdf-work-runtime.js"))
+        message = "PDF annotation sync still running. Leave page before all changes save to server?"
+        self.assertEqual(pdf.count(message), 1)
+        assess = _extract(pdf, "function prksAssessPendingPdfSyncLeave(ctx, nextHash) {", "function prksInstallPdfLeaveProbe")
+        self.assertIn("window.confirm", assess)
+        self.assertIn("rejected-pending-pdf-sync", assess)
         app = _read(_APP)
-        # Both call sites of the synchronous pending-annotation-sync guard must
-        # remain window.confirm -- this is an intentional exception (see
-        # AGENTS.md / DESIGN.md), not an oversight to "fix" in a later pass.
-        self.assertEqual(
-            app.count("PDF annotation sync still running. Leave page before all changes save to server?"),
-            2,
-        )
-        guard = _extract(app, "function prksCanLeaveTabContext(ctx, nextHash) {", "\nfunction ")
-        self.assertIn("window.confirm(", guard)
+        self.assertEqual(app.count(message), 0)
+        self.assertNotIn("window.confirm(", app.split("async function prksRenderTabRoute", 1)[1].split("async function prksCommitTabRouteRender", 1)[0])
 
     def test_copy_link_uses_shared_flash_helper(self):
-        pdf = _read(_PDF)
-        copy_link = _extract(
-            pdf,
-            "if (e.target && e.target.closest && e.target.closest('.annotation-row__copy-link')) {",
-            "if (e.target.closest('.annotation-row__jump')",
+        drawer = _read(
+            os.path.join(_ROOT, "frontend-app", "src", "features", "work", "WorkPdfAnnotationDrawer.vue")
         )
-        self.assertIn("prksFlashButtonLabel", copy_link)
-        self.assertIn("errorLabel: 'Copy failed'", copy_link)
+        self.assertIn("prksFlashButtonLabel", drawer)
+        self.assertIn("errorLabel: 'Copy failed'", drawer)
+        self.assertIn("successLabel: 'Copied'", drawer)
 
 
 if __name__ == "__main__":

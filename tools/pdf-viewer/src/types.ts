@@ -16,12 +16,23 @@ export interface PrksPdfViewerOptions {
     initialZoom?: 'fit-width' | 'fit-page';
     /** 1-based page to open after the first layout is ready. */
     initialPage?: number;
+    /** Pane owner stamped on the search surface. Search does not store this. */
+    ownerTabId?: string;
+    ownerGeneration?: number | string;
     assetBaseUrl?: string;
     onReady?: (viewer: PrksPdfViewerHandle) => void;
     onPageChange?: (info: { pageNumber: number; pageCount: number }) => void;
     onAnnotationChange?: (event: PrksAnnotationEvent) => void;
     onAnnotationSelect?: (info: { annotationId: string; pageIndex: number }) => void;
-    onAnnotationCommentRequest?: (info: { annotationId: string; pageIndex: number }) => void;
+    onAnnotationCommentRequest?: (info: {
+        annotationId: string;
+        pageIndex: number;
+        deletable: boolean;
+    }) => void;
+    onAnnotationCommentDismiss?: (info: { annotationId: string }) => void;
+    onAnnotationDeleteRequest?: (info: { annotationId: string; pageIndex: number }) => void;
+    /** Toolbar control. Does not own the drawer session. */
+    onAnnotationDrawerToggle?: () => void;
     onError?: (error: Error) => void;
 }
 
@@ -83,8 +94,36 @@ export interface PrksPdfViewerHandle {
     createAnnotation(pageIndex: number, annotation: Record<string, unknown>): void;
     deleteAnnotation(annotationId: string): Promise<void>;
     selectAnnotation(annotationId: string): void;
+    deselectAnnotation(): void;
     onAnnotationEvent(callback: (event: PrksAnnotationEvent) => void): () => void;
     saveCopy(): Promise<ArrayBuffer>;
     getDocumentId(): string | null;
     isSelecting(): boolean;
+    /**
+     * In-document search on this viewer instance. These do not reload the
+     * document or create another viewer.
+     */
+    openSearch(): void;
+    closeSearch(): void;
+    commitSearch(query: string, epoch: number): void;
+    clearSearchMatches(): void;
+    searchNext(): number;
+    searchPrevious(): number;
+    setSearchDriver(driver: PrksPdfSearchDriver | null): void;
+    /** Pressed state for the toolbar control. Does not reload the document. */
+    setAnnotationDrawerOpen(open: boolean): void;
+}
+
+export interface PrksPdfSearchDriver {
+    onQuery: (query: string) => void;
+    onNext: () => void;
+    onPrevious: () => void;
+    onClose: () => void;
+    onSettled: (result: { epoch: number; total: number; activeIndex: number }) => void;
+}
+
+export interface PrksPdfSearchSettled {
+    epoch: number;
+    total: number;
+    activeIndex: number;
 }
