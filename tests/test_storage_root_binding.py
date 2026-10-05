@@ -160,6 +160,54 @@ class TestNewAndAdoptedRoots(RootTestCase):
             root_binding.UNMARKED_FOREIGN,
         )
 
+    def test_malformed_reserved_entries_are_refused_even_beside_proof(self):
+        def database_dir(root):
+            os.mkdir(os.path.join(root, "prks_data.db"))
+
+        def database_text(root):
+            with open(os.path.join(root, "prks_data.db"), "w", encoding="utf-8") as handle:
+                handle.write("not a database")
+
+        def pdfs_file(root):
+            open(os.path.join(root, "pdfs"), "w").close()
+
+        def maintenance_file(root):
+            open(os.path.join(root, MAINT), "w").close()
+
+        def database_link(root):
+            with open(self.path("elsewhere.db"), "wb") as handle:
+                handle.write(root_binding.SQLITE_HEADER)
+            os.symlink(self.path("elsewhere.db"), os.path.join(root, "prks_data.db"))
+
+        cases = {
+            "database_dir": (database_dir, "pdfs", "root_malformed"),
+            "database_text": (database_text, "pdfs", "root_malformed"),
+            "database_link": (database_link, "pdfs", "root_contains_link"),
+            "pdfs_file": (pdfs_file, "db", "root_malformed"),
+            "maintenance_file": (maintenance_file, "db", "root_malformed"),
+        }
+        for label, (plant, proof, reason) in cases.items():
+            with self.subTest(label):
+                root = self.path(label)
+                os.mkdir(root)
+                if proof == "pdfs":
+                    os.mkdir(os.path.join(root, "pdfs"))
+                else:
+                    with open(os.path.join(root, "prks_data.db"), "wb") as handle:
+                        handle.write(root_binding.SQLITE_HEADER)
+                plant(root)
+                before = sorted(os.listdir(root))
+                with self.assertRaises(StorageRootRefused) as ctx:
+                    self.open(root)
+                self.assertEqual(ctx.exception.reason, reason)
+                self.assert_untouched(root, before)
+
+    def test_empty_database_file_is_not_proof_but_not_malformed(self):
+        root = self.path("lib")
+        os.makedirs(os.path.join(root, "pdfs"))
+        open(os.path.join(root, "prks_data.db"), "wb").close()
+        self.assertTrue(self.open(root).adopted)
+
     def test_foreign_non_empty_directory_is_refused_before_any_write(self):
         root = self.path("lib")
         os.mkdir(root)

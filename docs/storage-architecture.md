@@ -1661,7 +1661,12 @@ parallel configuration system:
   `rollback/`, `restore-staging/`, `backup/`). The last case lets a root
   interrupted mid-restore, whose database and `pdfs/` may be moved away, still
   reach `recover_incomplete_restore()`. A same-named entry of the wrong type, or
-  arbitrary maintenance content, is foreign. Open question 5 stays open.
+  arbitrary maintenance content, is foreign. A reserved name of the wrong type
+  next to otherwise valid proof (say `pdfs/` plus a directory named like the
+  database) is refused as `root_malformed` (`root_contains_link` for a link)
+  before anything is written, so that directory is never marked as a library.
+  An empty database file is neither proof nor malformed. Open question 5 stays
+  open.
 - **Only a first run creates a root.** An empty or absent root becomes a new
   root for the CLI, `PRKS_STORAGE` and default sources, as V3 prescribes. A
   root selected by the **bootstrap file** must already carry a marker or be

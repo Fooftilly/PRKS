@@ -540,8 +540,15 @@ def classify_unmarked_root(root: str, *, db_filename: str) -> str:
     ``.prks-maintenance/`` (an interrupted restore may have moved the database
     and ``pdfs/`` away, and its recovery must still be able to run).
     ``empty``: nothing but OS metadata, a lock/preflight scaffold, or a
-    leftover marker-write temporary. Anything else -- including a same-named
-    entry of the wrong type -- is ``foreign``.
+    leftover marker-write temporary. Anything else is ``foreign``.
+
+    A reserved name of the wrong type -- the database as a directory, link or
+    non-SQLite file, ``pdfs`` or ``.prks-maintenance`` as anything but a plain
+    directory -- is ``foreign`` on its own, and next to otherwise valid proof
+    it is refused (``root_malformed``, or ``root_contains_link`` for a link)
+    rather than adopted, so such a directory is never marked as a library. An
+    empty database file, which SQLite itself can leave, is not proof but is
+    not malformed either.
     """
     try:
         names = os.listdir(root)
@@ -551,6 +558,7 @@ def classify_unmarked_root(root: str, *, db_filename: str) -> str:
         raise StorageRootRefused("root_unreadable", f"The storage root {root} cannot be read.") from exc
     looks_like_prks = False
     foreign = False
+    malformed: list[str] = []
     for name in names:
         path = os.path.join(root, name)
         if is_top_level_os_metadata(name):
@@ -558,6 +566,10 @@ def classify_unmarked_root(root: str, *, db_filename: str) -> str:
         if name.startswith(".prks-write-") and name.endswith(".tmp") and _is_plain_file(path):
             continue
         if name == MAINTENANCE_DIRNAME:
+            if not _is_plain_dir(path):
+                malformed.append(path)
+                foreign = True
+                continue
             if _maintenance_is_scaffold(path):
                 continue
             if _has_recoverable_maintenance_state(path):
@@ -565,16 +577,39 @@ def classify_unmarked_root(root: str, *, db_filename: str) -> str:
             else:
                 foreign = True
             continue
-        if name == db_filename and _is_sqlite_database(path):
-            looks_like_prks = True
+        if name == db_filename:
+            if _is_sqlite_database(path):
+                looks_like_prks = True
+            else:
+                if not (_is_plain_file(path) and os.path.getsize(path) == 0):
+                    malformed.append(path)
+                foreign = True
             continue
-        if name == "pdfs" and _is_plain_dir(path):
-            looks_like_prks = True
+        if name == "pdfs":
+            if _is_plain_dir(path):
+                looks_like_prks = True
+            else:
+                malformed.append(path)
+                foreign = True
             continue
         foreign = True
     if looks_like_prks:
+        for path in malformed:
+            st = _lstat(path)
+            if st is not None and is_link_or_reparse_point(st):
+                raise _link_error(path)
+            raise _malformed_entry_error(path)
         return UNMARKED_PRKS
     return UNMARKED_FOREIGN if foreign else UNMARKED_EMPTY
+
+
+def _malformed_entry_error(path: str) -> StorageRootRefused:
+    return StorageRootRefused(
+        "root_malformed",
+        f"{path} uses a name PRKS reserves in its storage root, but it is not what "
+        "PRKS would have written there. PRKS will not adopt this directory as a "
+        "library; move that entry away or choose another directory.",
+    )
 
 
 def _missing_selected_root(root: str) -> StorageRootRefused:
