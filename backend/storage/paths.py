@@ -3,6 +3,8 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from backend.storage.errors import UnsafeTestingRoot
+
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 _TEXT_INDEX_DB_NAME = "prks_text_index.db"
 _RESEARCH_INDEX_DB_NAME = "prks_research_index.db"
@@ -79,13 +81,15 @@ def assert_safe_testing_path(
     canonical = Path(path).resolve(strict=False)
     production = Path(_PRODUCTION_STORAGE).resolve(strict=False)
     if canonical == production or canonical.is_relative_to(production):
-        raise RuntimeError(
-            f"PRKS_TESTING is set: refusing to use {what} under /data"
+        raise UnsafeTestingRoot(
+            "testing_unsafe_root",
+            f"PRKS_TESTING is set: refusing to use {what} under /data",
         )
     repo_data = Path(os.path.join(_REPO_ROOT, "data")).resolve(strict=False)
     if canonical == repo_data or canonical.is_relative_to(repo_data):
-        raise RuntimeError(
-            f"PRKS_TESTING is set: refusing to use {what} under the repository data directory"
+        raise UnsafeTestingRoot(
+            "testing_unsafe_root",
+            f"PRKS_TESTING is set: refusing to use {what} under the repository data directory",
         )
 
 

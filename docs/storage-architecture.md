@@ -1711,6 +1711,10 @@ parallel configuration system:
   the marker's `filesystem_probe`, and a different `st_dev` re-probes.
 - **Diagnostics.** Each bind records `active_process` (PID, host, start time)
   in the marker for the "already open" message. It is never read as authority.
+  The process entry opens the root before logging is configured (the log file
+  lives in it), so the V9/V10 and durability warnings raised while opening are
+  held and logged, with the path-free `storage_root_bound source=…` summary,
+  once logging is set up; a refusal emits them immediately.
 - **Inbox for new sources.** A `config_file` or `platform_default` root uses
   `<root>/for_processing`. No existing deployment has those sources; the
   development default keeps `/data/for_processing` exactly (§1.2).

@@ -64,7 +64,9 @@ def open_storage(config):
             # (A config_file selection already validated it in from_env.)
             config_file = None
     try:
-        return open_storage_root(config, config_file_path=config_file)
+        # Logging is configured only after the root is open (its log file
+        # lives there), so the open's warnings wait for log_binding().
+        return open_storage_root(config, config_file_path=config_file, defer_logs=True)
     except StorageRootError as exc:
         print(f"PRKS cannot open its storage root: {exc.message}", file=sys.stderr)
         raise SystemExit(2) from None

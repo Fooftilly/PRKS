@@ -601,6 +601,73 @@ class TestPreflight(RootTestCase):
         self.assertTrue(os.path.isfile(keep))
 
 
+class _RootCapture(logging.Handler):
+    """Records as the process root logger sees them (assertLogs would hide that)."""
+
+    def __init__(self):
+        super().__init__(logging.DEBUG)
+        self.records = []
+
+    def emit(self, record):
+        self.records.append(record)
+
+    def __enter__(self):
+        root = logging.getLogger()
+        self._level = root.level
+        root.addHandler(self)
+        root.setLevel(logging.INFO)
+        return self
+
+    def __exit__(self, *exc):
+        root = logging.getLogger()
+        root.removeHandler(self)
+        root.setLevel(self._level)
+
+    def messages(self):
+        return [record.getMessage() for record in self.records]
+
+
+class TestDeferredStartupLogs(RootTestCase):
+    """The process entry opens the root before logging exists (§11.1 diagnostics)."""
+
+    def _uncertain(self):
+        return patch.object(root_binding, "detect_filesystem_type", return_value="fuse.unknownfs")
+
+    def test_open_warnings_wait_for_log_binding(self):
+        root = self.path("lib")
+        with _RootCapture() as seen, self._uncertain():
+            bound = self.open(root, defer_logs=True)
+            self.assertEqual(seen.messages(), [])
+            bound.log_binding()
+        messages = seen.messages()
+        self.assertEqual(len(messages), 2, messages)
+        self.assertIn("storage_root_uncertain_filesystem", messages[0])
+        self.assertIn("storage_root_bound source=", messages[1])
+        self.assertEqual(seen.records[0].levelno, logging.WARNING)
+        self.assertEqual(seen.records[0].name, "prks.storage")
+        self.assertTrue(root_binding.LOGGER.propagate)
+        self.assertNotIn(seen, root_binding.LOGGER.handlers)
+
+    def test_a_refusal_emits_the_deferred_warnings_at_once(self):
+        root = self.path("foreign")
+        os.mkdir(root)
+        open(os.path.join(root, "holiday.jpg"), "w").close()
+        with _RootCapture() as seen, self._uncertain():
+            with self.assertRaises(StorageRootRefused):
+                self.open(root, defer_logs=True)
+        self.assertTrue(
+            any("storage_root_uncertain_filesystem" in m for m in seen.messages()),
+            seen.messages(),
+        )
+        self.assertTrue(root_binding.LOGGER.propagate)
+
+    def test_without_deferral_warnings_go_out_while_opening(self):
+        root = self.path("lib")
+        with _RootCapture() as seen, self._uncertain():
+            self.open(root)
+        self.assertTrue(any("storage_root_uncertain_filesystem" in m for m in seen.messages()))
+
+
 class TestWarnings(RootTestCase):
     def test_network_filesystem_detection(self):
         mounts = self.path("mounts")
@@ -847,6 +914,25 @@ class TestProcessEntry(RootTestCase):
             bound = prks_app.open_storage(config)
         self._bound.append(bound)
         self.assertTrue(os.path.isfile(os.path.join(root, MARKER)))
+
+    def test_unsafe_testing_cli_root_is_a_clean_startup_error(self):
+        env = dict(os.environ, PRKS_TESTING="1")
+        env.pop("PRKS_STORAGE", None)
+        proc = subprocess.run(
+            [sys.executable, os.path.join(_PROJECT_DIR, "prks_app.py"), "--testing",
+             "--storage-root", "/data", "--port", "1"],
+            cwd=_PROJECT_DIR, env=env, capture_output=True, text=True, timeout=120,
+        )
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("PRKS cannot select its storage root", proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
+
+    def test_open_storage_defers_its_warnings(self):
+        import prks_app
+
+        with patch.object(prks_app, "open_storage_root") as opened:
+            prks_app.open_storage(StorageConfig.for_testing(self.path("lib")))
+        self.assertTrue(opened.call_args.kwargs.get("defer_logs"))
 
     def test_refused_root_exits_cleanly_before_touching_storage(self):
         foreign = self.path("foreign")

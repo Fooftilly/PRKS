@@ -29,6 +29,7 @@ Nothing here logs a path, a storage root ID, or an exception string.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import re
@@ -37,9 +38,9 @@ import socket
 import stat
 import sys
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from backend.fs_durability import fsync_directory
 from backend.storage import distribution as _distribution
@@ -162,6 +163,9 @@ class BoundRoot:
     lease: ExclusiveFileLock
     created: bool = False
     adopted: bool = False
+    # Warnings raised while opening, held back by ``defer_logs`` until
+    # ``log_binding()`` runs with logging configured.
+    deferred_records: list[logging.LogRecord] = field(default_factory=list, repr=False)
 
     @property
     def storage_root_id(self) -> str:
@@ -172,12 +176,17 @@ class BoundRoot:
         return config.anchored_to(self.root_real)
 
     def log_binding(self) -> None:
-        """Report which source selected this root (path-free).
+        """Report the startup diagnostics and which source selected this root.
 
         The process entry calls this once logging is configured: opening the
-        root necessarily happens first, and an INFO record emitted then would
-        be dropped.
+        root necessarily happens first, and records emitted then would reach
+        only ``logging.lastResort`` (warnings, bare, on stderr) or nowhere
+        (INFO). Warnings deferred by ``open_storage_root(defer_logs=True)`` are
+        replayed first, then the path-free binding summary.
         """
+        records, self.deferred_records = self.deferred_records, []
+        for record in records:
+            LOGGER.handle(record)
         LOGGER.info(
             "storage_root_bound source=%s created=%s adopted=%s",
             self.source or "direct",
@@ -886,6 +895,28 @@ def acquire_root_lease(root_real: str) -> ExclusiveFileLock:
 # --- entry point -------------------------------------------------------------------
 
 
+class _RecordBuffer(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__(logging.DEBUG)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+@contextlib.contextmanager
+def _buffered_storage_logs(buffer: _RecordBuffer) -> Iterator[None]:
+    """Hold ``prks.storage`` records in ``buffer`` instead of propagating them."""
+    propagate = LOGGER.propagate
+    LOGGER.addHandler(buffer)
+    LOGGER.propagate = False
+    try:
+        yield
+    finally:
+        LOGGER.removeHandler(buffer)
+        LOGGER.propagate = propagate
+
+
 def open_storage_root(
     config: Any,
     *,
@@ -895,13 +926,60 @@ def open_storage_root(
     home: Optional[str] = None,
     now: Optional[datetime] = None,
     register: bool = True,
+    defer_logs: bool = False,
 ) -> BoundRoot:
     """Validate, lease and mark ``config.root`` for this process.
 
     Raises a ``StorageRootError`` subclass with a stable ``reason`` on refusal,
     after releasing anything it acquired. With ``register`` (the default) the
     result becomes this process's bound root until released or exit.
+
+    The process entry must open the root before logging is configured (the
+    log file lives in it). With ``defer_logs`` the V9/V10 and durability
+    warnings raised meanwhile are kept on the result and emitted by
+    ``BoundRoot.log_binding()``; on refusal they are emitted at once.
     """
+    if not defer_logs:
+        return _open_storage_root(
+            config,
+            expected_storage_root_id=expected_storage_root_id,
+            config_file_path=config_file_path,
+            distribution=distribution,
+            home=home,
+            now=now,
+            register=register,
+        )
+    buffer = _RecordBuffer()
+    try:
+        with _buffered_storage_logs(buffer):
+            bound = _open_storage_root(
+                config,
+                expected_storage_root_id=expected_storage_root_id,
+                config_file_path=config_file_path,
+                distribution=distribution,
+                home=home,
+                now=now,
+                register=register,
+            )
+    except BaseException:
+        # A refusal goes out now, with the warnings that led up to it.
+        for record in buffer.records:
+            LOGGER.handle(record)
+        raise
+    bound.deferred_records = buffer.records
+    return bound
+
+
+def _open_storage_root(
+    config: Any,
+    *,
+    expected_storage_root_id: Optional[str],
+    config_file_path: Optional[str],
+    distribution: Optional[str],
+    home: Optional[str],
+    now: Optional[datetime],
+    register: bool,
+) -> BoundRoot:
     testing = config.mode == "testing"
     root = config.root
     dist = _distribution.DISTRIBUTION if distribution is None else distribution

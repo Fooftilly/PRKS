@@ -22,6 +22,14 @@ class InvalidStorageRoot(StorageRootError):
     """A set root source is unusable (V1/V2/V11/V12 path-level checks)."""
 
 
+class UnsafeTestingRoot(InvalidStorageRoot, RuntimeError):
+    """Testing mode refused a production tree (``/data`` or ``<repo>/data``).
+
+    Also a ``RuntimeError``, which callers of the testing-safety guard have
+    always caught.
+    """
+
+
 class StorageRootRefused(StorageRootError):
     """The root exists but must not be bound (marker state, foreign content, links)."""
 
