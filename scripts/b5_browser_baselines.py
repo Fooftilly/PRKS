@@ -1385,7 +1385,7 @@ def write_markdown(artifact: dict, path: Path) -> None:
         "",
         "## Follow-ups",
         "",
-        "- No tightly coupled migration defect is opened from this measurement pass.",
+        "- Long-lived EventTarget listener growth on persistent hosts is tracked in #459.",
         "- Known unrelated Full E2E flake: #383 (private-reminder hide→re-tile).",
         "- Broader slowness is not turned into a threshold here.",
         "",
