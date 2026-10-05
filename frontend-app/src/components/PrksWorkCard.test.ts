@@ -1,5 +1,5 @@
 import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import PrksWorkCard from './PrksWorkCard.vue'
 import {
   WORK_THUMB_PLACEHOLDER,
@@ -11,6 +11,11 @@ import {
   workCardThumbUrl,
   workCardYearPlain,
 } from './work-card'
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+})
 
 describe('Work-card helpers', () => {
   it('keeps bibliographic credit and year separate from contextual subtitle', () => {
@@ -164,5 +169,71 @@ describe('PrksWorkCard', () => {
     expect(next.getAttribute('data-prks-thumb-lazy')).toBe('1')
     expect(next.getAttribute('src')).toBe(WORK_THUMB_PLACEHOLDER)
     expect(wrapper.get('.work-card__thumb').attributes('data-prks-thumb-page')).toBe('2')
+  })
+
+  it('states effective PDF page identity for pending page and pending clear', () => {
+    const register = vi.fn()
+    vi.stubGlobal('prksRegisterWorkThumbUrl', register)
+
+    const stored = mount(PrksWorkCard, {
+      props: {
+        work: { id: 'W-P', title: 'Paper', file_path: '/api/pdfs/x.pdf', thumb_page: 5 },
+      },
+    })
+    expect(stored.get('.work-card__thumb').attributes('data-prks-thumb-page')).toBe('5')
+    expect(register).toHaveBeenCalledWith('W-P', '/api/works/W-P/thumbnail?page=5')
+
+    const pendingPage = mount(PrksWorkCard, {
+      props: {
+        // Already-effective row after pending SET thumb_page=3.
+        work: { id: 'W-P', title: 'Paper', file_path: '/api/pdfs/x.pdf', thumb_page: 3 },
+      },
+    })
+    expect(pendingPage.get('.work-card__thumb').attributes('data-prks-thumb-page')).toBe('3')
+    expect(register).toHaveBeenCalledWith('W-P', '/api/works/W-P/thumbnail?page=3')
+
+    const pendingClear = mount(PrksWorkCard, {
+      props: {
+        // Already-effective row after pending CLEAR while server still has 5.
+        work: { id: 'W-P', title: 'Paper', file_path: '/api/pdfs/x.pdf', thumb_page: null },
+      },
+    })
+    expect(pendingClear.get('.work-card__thumb').attributes('data-prks-thumb-page')).toBe('1')
+    expect(register).toHaveBeenCalledWith('W-P', '/api/works/W-P/thumbnail?page=1')
+    expect(pendingClear.html()).not.toContain('page=5')
+  })
+
+  it('keeps offline suppression absolute even when an effective page exists', () => {
+    const register = vi.fn()
+    vi.stubGlobal('prksRegisterWorkThumbUrl', register)
+    const wrapper = mount(PrksWorkCard, {
+      props: {
+        work: { id: 'W-P', title: 'Paper', file_path: '/api/pdfs/x.pdf', thumb_page: 4 },
+        options: { suppressThumbnail: true },
+      },
+    })
+    expect(wrapper.get('.work-card__thumb').classes()).toContain('work-card__thumb--empty')
+    expect(wrapper.get('.work-card__thumb').attributes('title')).toBe('Preview not available offline')
+    expect(wrapper.html()).not.toContain('/thumbnail')
+    expect(wrapper.html()).not.toContain('page=4')
+    expect(wrapper.html()).not.toContain('data-prks-thumb-page')
+    expect(register).not.toHaveBeenCalled()
+  })
+
+  it('exposes selection anchors without injecting a checkbox', () => {
+    const wrapper = mount(PrksWorkCard, {
+      props: {
+        work: { id: 'W-1', title: 'Alpha', file_path: '/api/pdfs/a.pdf' },
+      },
+    })
+    const html = wrapper.html()
+    expect(wrapper.get('.project-card--work-card').attributes('data-work-id')).toBe('W-1')
+    expect(wrapper.get('.project-card--work-card').attributes('data-prks-route')).toBe('#/works/W-1')
+    expect(wrapper.get('a.work-card__link').attributes('href')).toBe('#/works/W-1')
+    expect(wrapper.get('a.work-card__link').attributes('aria-label')).toBe('Alpha')
+    expect(html).not.toContain('role="link"')
+    expect(html).not.toContain('type="checkbox"')
+    expect(wrapper.find('.work-card__select').exists()).toBe(false)
+    expect(wrapper.find('.work-card__checkbox').exists()).toBe(false)
   })
 })

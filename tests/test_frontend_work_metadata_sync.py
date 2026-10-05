@@ -227,29 +227,34 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         self.assertIn('if (!listKey) return false;', guard)
 
     def test_recently_added_does_not_reimplement_the_overlay(self):
-        """The Folder component says "repaint"; it must not grow a second
+        """The Folder Library says "repaint"; it must not grow a second
         opinion about which fields are pending or what they mean. Two
         interpretations of operation semantics would drift the moment either
         changed."""
-        folders = (FRONTEND / 'components' / 'folders.js').read_text()
-        self.assertIn("prksEffectiveProjectionRows(acknowledged, 'recently-added')", folders)
-        self.assertIn('prksRefreshPendingWorkMetadata', folders)
+        app = ROOT / 'frontend-app' / 'src' / 'features' / 'folder-library'
+        legacy = (app / 'legacy-recently-added.ts').read_text()
+        intents = (app / 'intents.ts').read_text()
+        self.assertIn("fn(acknowledged, 'recently-added')", legacy)
+        self.assertIn('prksEffectiveProjectionRows', legacy)
+        self.assertIn('prksRefreshPendingWorkMetadata', intents)
         for forbidden in ('SET_WORK_METADATA_FIELD', 'listOperations', 'server_result',
                           'payload.field'):
-            self.assertNotIn(forbidden, folders, forbidden)
+            self.assertNotIn(forbidden, legacy, forbidden)
+            self.assertNotIn(forbidden, intents, forbidden)
 
     def test_pending_values_never_enter_the_acknowledged_recently_added_rows(self):
         """This tab already shipped a bug where its RAM copy outlived an
         IndexedDB invalidation. Baking unsynchronized values into that array
         would be the same mistake with a longer fuse."""
-        folders = (FRONTEND / 'components' / 'folders.js').read_text()
-        at = folders.index('function prksRenderFolderLibraryRecentlyAdded(')
-        body = folders[at: folders.index('async function prksLoadFolderLibraryRecentlyAdded(', at)]
-        self.assertIn('const acknowledged =', body)
-        self.assertNotIn('st.recentlyAddedWorks =', body)
-        # The memoized render is refused when the overlay moved, not only when
-        # the coherence domain did.
-        self.assertIn('recentlyAddedPendingGeneration', folders)
+        app = ROOT / 'frontend-app' / 'src' / 'features' / 'folder-library'
+        pane = (app / 'RecentlyAddedPane.vue').read_text()
+        intents = (app / 'intents.ts').read_text()
+        route = (app / 'FolderLibraryRoute.vue').read_text()
+        self.assertIn('effectiveRecentlyAddedRows([...props.works])', pane)
+        self.assertNotIn('recentlyAddedWorks.value =', pane)
+        self.assertNotIn('st.recentlyAddedWorks =', pane)
+        self.assertIn('pendingGeneration', intents)
+        self.assertIn('recentlyAddedPendingGeneration', route)
 
     def test_progress_filters_effective_rows_and_stays_ignorant_of_operations(self):
         """Status is the first synchronized field that changes which GROUP a
@@ -373,14 +378,44 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         self.assertIn('?page=', body)
         self.assertNotIn('/thumbnail`', body,
                          'a page-less thumbnail URL is reachable again')
+        helpers = (ROOT / 'frontend-app' / 'src' / 'components' / 'work-card.ts').read_text()
+        vue = (ROOT / 'frontend-app' / 'src' / 'components' / 'PrksWorkCard.vue').read_text()
+        helper_fn = helpers[helpers.index('export function workCardThumbUrl('):]
+        helper_fn = helper_fn[: helper_fn.index('\n}')]
+        self.assertIn('?page=', helper_fn)
+        self.assertNotIn('/thumbnail`', helper_fn,
+                         'a page-less thumbnail URL is reachable again')
         # Suppression decides BEFORE any URL exists, never after.
-        self.assertIn('const thumbSrc = suppressThumbnail', cards)
-        suppression = cards.index('const suppressThumbnail =')
-        self.assertLess(suppression, cards.index('const thumbSrc ='))
+        self.assertIn('if (!work || options.suppressThumbnail === true) return \'\'', helpers)
+        self.assertLess(
+            helpers.index('options.suppressThumbnail === true'),
+            helpers.index('thumbnail?page='),
+        )
+        self.assertIn('thumbSrc = computed(() => workCardThumbUrl(props.work, options.value))', vue)
         # And the card never learns what a durable operation is.
         for forbidden in ('SET_WORK_METADATA_FIELD', 'listOperations', 'prksSync',
                           'prksEffective', 'payload.field'):
             self.assertNotIn(forbidden, cards, forbidden)
+            self.assertNotIn(forbidden, helpers, forbidden)
+            self.assertNotIn(forbidden, vue, forbidden)
+
+    def test_thumbnail_selftest_does_not_double_vue_card_html(self):
+        """Pending-page / offline / selection paint belongs on PrksWorkCard.
+        The Node sync selftest may assert effective Work → prksWorkThumbUrl
+        identity, but must not rebuild card HTML that can drift from Vue."""
+        selftest = (ROOT / 'tests' / 'browser' / 'run_work_metadata_sync_selftest.js').read_text()
+        vitest = (ROOT / 'frontend-app' / 'src' / 'components' / 'PrksWorkCard.test.ts').read_text()
+        fn_at = selftest.index('function thumbnailResourceIdentity(')
+        fn_end = selftest.index('\nfunction authorTextComposition(', fn_at)
+        body = selftest[fn_at:fn_end]
+        self.assertIn('prksWorkThumbUrl', body)
+        self.assertIn('prksEffectiveWorkSync', body)
+        self.assertNotIn('project-card--work-card', body)
+        self.assertNotIn('work-card__thumb--empty', body)
+        self.assertNotIn('data-prks-thumb-page=', body)
+        self.assertIn('states effective PDF page identity for pending page and pending clear', vitest)
+        self.assertIn('keeps offline suppression absolute even when an effective page exists', vitest)
+        self.assertIn('exposes selection anchors without injecting a checkbox', vitest)
 
     def test_the_request_coordinator_classifies_by_pathname(self):
         """The added `?page=` must not change how a thumbnail request is
@@ -460,15 +495,14 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         and easy mistake: the card would show the pending Year while a search
         for it found nothing, and a search for the OLD year would still match a
         value the user had already replaced."""
-        folders = (FRONTEND / 'components' / 'folders.js').read_text()
-        at = folders.index('function prksRenderFolderLibraryRecentlyAdded(')
-        body = folders[at: folders.index('async function prksLoadFolderLibraryRecentlyAdded(', at)]
-        filter_line = [ln for ln in body.splitlines() if 'MatchesQuery(' in ln and '.filter(' in ln]
+        app = ROOT / 'frontend-app' / 'src' / 'features' / 'folder-library'
+        pane = (app / 'RecentlyAddedPane.vue').read_text()
+        filter_line = [ln for ln in pane.splitlines() if 'recentlyAddedMatchesQuery(' in ln and '.filter(' in ln]
         self.assertEqual(len(filter_line), 1, 'expected exactly one local filter over the rows')
-        self.assertIn('all.filter(', filter_line[0],
+        self.assertIn('effectiveRows.value.filter(', filter_line[0],
                       'the filter must run over the overlaid rows, not the acknowledged array')
-        self.assertNotIn('acknowledged.filter(', body)
-        # And the haystack has to include the fields that reach this projection.
+        self.assertNotIn('props.works.filter(', pane)
+        folders = (FRONTEND / 'components' / 'folders.js').read_text()
         haystack = folders[folders.index('function prksRecentlyAddedWorkMatchesQuery('):]
         haystack = haystack[: haystack.index('\n}')]
         for field in ('year', 'published_date', 'publisher'):

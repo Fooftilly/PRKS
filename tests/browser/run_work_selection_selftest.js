@@ -397,13 +397,8 @@ function assertEq(name, got, want) {
     record(name, ok, ok ? '' : 'got ' + JSON.stringify(got) + ' want ' + JSON.stringify(want));
 }
 
-const html = root.prksWorkCardHtml({ id: 'W-1', title: 'Alpha', status: 'Paused' });
-assert('card has data-work-id', html.indexOf('data-work-id="W-1"') >= 0);
-assert('card keeps hash nav', html.indexOf("#/works/W-1") >= 0);
-assert('card uses a real work href', html.indexOf('href="#/works/W-1"') >= 0);
-assert('card wraps content in work-card__link', html.indexOf('class="work-card__link"') >= 0);
-assert('card is not a synthetic role=link', html.indexOf('role="link"') < 0);
-assert('card has no checkbox by default', html.indexOf('type="checkbox"') < 0 && html.indexOf("type='checkbox'") < 0);
+/* Card markup / selection anchors are owned by PrksWorkCard (Vitest). This
+ * harness exercises selection behavior against Vue-shaped DOM via addCard(). */
 
 assert('folder-detail supported', root.prksWorkSelectionIsSupportedRoute({ name: 'folder-detail' }));
 assert('recent supported', root.prksWorkSelectionIsSupportedRoute({ name: 'recent' }));

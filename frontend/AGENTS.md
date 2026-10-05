@@ -220,10 +220,10 @@ TabContext owns route runtime:
 - other named values → `ctx.resources` / `ctx.setTimer`
 - shell → main/focused context (`prksGetMainTabContext`, `prksGetFocusedTabContext`)
 
-People-library search runtime belongs to rendered `.prks-people-library` root
-(`root.__prksPeopleLibraryState`), never a `window` singleton or tab-ID global map.
-Rerender only that root. SessionStorage preserves shared query preference; it is not
-workspace persistence or route state.
+People-library search runtime belongs to the Vue People index
+(`PeopleIndexRoute` local `query` ref plus sessionStorage
+`prks-people-library-filter`). It is not a `window` singleton, a tab-ID
+global map, or a classic HTML painter on `root.__prksPeopleLibraryState`.
 
 Group-library search and collapse live on the owning TabContext
 (`ctx.ui.personGroupIndex`). The Vue index hydrates its refs from that object

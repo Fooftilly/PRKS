@@ -8,16 +8,6 @@ function prksWorkCardsEscapeHtml(s) {
         .replace(/"/g, '&quot;');
 }
 
-/** @param {object} w */
-function prksWorkFileSizeMbHtml(w) {
-    const raw = w && w.file_size_bytes;
-    const n = raw != null && raw !== '' ? Number(raw) : NaN;
-    if (!Number.isFinite(n) || n <= 0) return '';
-    const mb = n / (1024 * 1024);
-    const s = mb >= 0.01 ? mb.toFixed(2) : mb.toFixed(3);
-    return `<span class="work-card__file-size">${prksWorkCardsEscapeHtml(s)} MB</span>`;
-}
-
 /**
  * The thumbnail resource for one PDF Work, with the page ALWAYS stated.
  *
@@ -506,17 +496,6 @@ function prksInitLazyWorkThumbs(root) {
     });
 }
 
-/** Plain year for meta row: `year` field, else leading YYYY from ISO `published_date`. */
-function prksWorkCardYearPlain(w) {
-    if (!w) return '';
-    const y = typeof w.year === 'string' ? w.year.trim() : '';
-    if (y) return prksWorkCardsEscapeHtml(y);
-    const pd = typeof w.published_date === 'string' ? w.published_date.trim() : '';
-    if (!pd) return '';
-    const m = pd.match(/^(\d{4})/);
-    return m ? prksWorkCardsEscapeHtml(m[1]) : prksWorkCardsEscapeHtml(pd);
-}
-
 /**
  * Plain-text credit line for summaries that escape later.
  * Linked Author(s), else `author_text`, else linked Editor.
@@ -546,127 +525,6 @@ function prksWorkCardCreditLine(w) {
     return prksWorkCardsEscapeHtml(plain);
 }
 
-/**
- * Work card HTML for card-grid and compact-list layouts (CSS mode via collection class).
- * Vue `PrksWorkCard` is the production renderer for migrated collections.
- * This helper remains for the classic Folder Library Recently Added painter
- * when `!st.vueOwned`. Do not add new callers.
- * @param {object} w
- * @param {object} options { subtitle?: string, thumbPage?: number, hideDocTypeBadge?: boolean,
- *   suppressThumbnail?: boolean }
- *   — subtitle = contextual line (abstract excerpt, added/opened date, Person credit)
- *   rendered below the bibliographic meta line, not merged into it.
- */
-function prksWorkCardHtml(w, options = {}) {
-    if (!w) return '';
-    const title = prksWorkCardsEscapeHtml(w.title || 'Untitled');
-    const wid = prksWorkCardsEscapeHtml(w.id || '');
-    const status = w.status ? String(w.status) : '';
-    const statusClass = status ? status.replace(/ /g, '.') : '';
-    const statusIcon =
-        typeof prksProgressStatusIconHtml === 'function'
-            ? prksProgressStatusIconHtml(status, { className: 'status-badge__icon', size: 'sm' })
-            : '';
-    const statusHtml = status
-        ? `<span class="status-badge ${prksWorkCardsEscapeHtml(statusClass)}">${statusIcon}${prksWorkCardsEscapeHtml(status)}</span>`
-        : '';
-    const typeBadge =
-        options.hideDocTypeBadge
-            ? ''
-            : typeof prksDocTypeBadgeHtml === 'function'
-              ? prksDocTypeBadgeHtml(w.doc_type)
-              : '';
-    const subtitleRaw = options.subtitle != null ? String(options.subtitle) : '';
-    const subtitle = prksWorkCardsEscapeHtml(subtitleRaw);
-
-    const filePath = w.file_path ? String(w.file_path).trim() : '';
-    const hasPdf = !!filePath && filePath.startsWith('/api/pdfs/');
-    const inferredKind = typeof prksInferWorkSourceKind === 'function' ? prksInferWorkSourceKind(w) : '';
-    // `suppressThumbnail` is for pages rendered from cached offline data: a
-    // thumbnail is a PRKS-server request that cannot succeed there, and a
-    // broken image is worse than none. Normal card appearance is untouched.
-    const suppressThumbnail = options.suppressThumbnail === true;
-    /* `w` is already the EFFECTIVE Work here -- its caller overlays pending
-     * metadata before rendering -- so a pending page reaches the URL without
-     * this file learning anything about durable operations. */
-    const thumbPage = options.thumbPage != null ? options.thumbPage : w.thumb_page;
-    const isVideoKind = !hasPdf && inferredKind === 'video';
-    const thumbKindClass = isVideoKind ? 'work-card__thumb--video' : 'work-card__thumb--pdf';
-    const thumbSrc = suppressThumbnail
-        ? ''
-        : hasPdf
-          ? prksWorkThumbUrl(w.id, thumbPage)
-          : isVideoKind && w.thumb_url
-            ? String(w.thumb_url).trim()
-            : '';
-
-    let thumbHtml;
-    if (thumbSrc) {
-        // Register allowlisted URL from Work data (not DOM) so hydrate/preview
-        // never read a URL-bearing attribute into an HTML/src sink.
-        prksRegisterWorkThumbUrl(w.id, thumbSrc);
-        const pageForAttr = hasPdf
-            ? (() => {
-                  const p = thumbPage != null && String(thumbPage).trim() !== '' ? Number(thumbPage) : null;
-                  const resolved = p && Number.isFinite(p) && p > 0 ? Math.floor(p) : 1;
-                  return String(resolved);
-              })()
-            : '';
-        const pageAttr = pageForAttr
-            ? ` data-prks-thumb-page="${prksWorkCardsEscapeHtml(pageForAttr)}"`
-            : '';
-        thumbHtml =
-            `<div class="work-card__thumb ${thumbKindClass} work-card__thumb--loading" data-prks-thumb-state="loading"` +
-            ` data-prks-thumb-preview-kind="${isVideoKind ? 'video' : 'pdf'}"${pageAttr}>` +
-            `<img loading="lazy" alt="" src="${PRKS_WORK_THUMB_PLACEHOLDER}" data-prks-thumb-lazy="1" />` +
-            `</div>`;
-    } else {
-        const emptyTitle = suppressThumbnail
-            ? 'Preview not available offline'
-            : isVideoKind
-              ? 'No video preview'
-              : 'No preview';
-        thumbHtml =
-            `<div class="work-card__thumb work-card__thumb--empty ${thumbKindClass}"` +
-            ` data-prks-thumb-state="empty" title="${prksWorkCardsEscapeHtml(emptyTitle)}"` +
-            ` aria-hidden="true"></div>`;
-    }
-
-    const fileSizeHtml = prksWorkFileSizeMbHtml(w);
-
-    // Bibliographic identity only — stable Author/Editor + year. Route-specific
-    // context (added/opened date, abstract excerpt, Person credit) is a
-    // separate, lower-emphasis line so it never competes with who-wrote-it/when.
-    const metaChunks = [];
-    const credit = prksWorkCardCreditLine(w);
-    if (credit) metaChunks.push(credit);
-    const yearPlain = prksWorkCardYearPlain(w);
-    if (yearPlain) metaChunks.push(yearPlain);
-    const metaHtml = metaChunks.length
-        ? `<div class="meta-row work-card__meta">${metaChunks.join(' · ')}</div>`
-        : '';
-    const contextHtml = subtitle ? `<div class="work-card__context">${subtitle}</div>` : '';
-
-    return `
-        <div class="project-card project-card--work-card" data-work-id="${wid}" data-prks-route="#/works/${wid}" data-prks-middleclick-nav="1">
-            <a class="work-card__link" href="#/works/${wid}" aria-label="${title}">
-            ${thumbHtml}
-            <div class="work-card__body">
-                <div class="card-title" title="${title}">${title}</div>
-                ${metaHtml}
-                ${contextHtml}
-                <div class="work-card__badges">
-                    <div class="work-card__badges-left">
-                        ${statusHtml}
-                        ${typeBadge}
-                    </div>
-                    ${fileSizeHtml ? `<div class="work-card__badges-right">${fileSizeHtml}</div>` : ''}
-                </div>
-            </div>
-            </a>
-        </div>
-    `;
-}
 
 /* ---------- Quick preview (hover / keyboard; same thumb URL, no reader) ---------- */
 

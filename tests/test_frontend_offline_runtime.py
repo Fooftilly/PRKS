@@ -969,10 +969,17 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         self.assertLess(portrait.index("offlineCached"), portrait.index("profile-image"))
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
         self.assertIn("ctx.ui.personOfflineCached = offlinePerson.source === 'cache';", app)
-        # The card option exists and only removes the source, never the layout.
-        cards = _read(os.path.join(_FRONTEND, "js", "components", "work-cards.js"))
-        self.assertIn("const suppressThumbnail = options.suppressThumbnail === true;", cards)
-        self.assertIn("const thumbSrc = suppressThumbnail", cards)
+        # Vue owns the card option: suppression returns no src, never changes layout.
+        helpers = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "components", "work-card.ts"))
+        vue = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "components", "PrksWorkCard.vue"))
+        self.assertIn("if (!work || options.suppressThumbnail === true) return ''", helpers)
+        self.assertIn("thumbSrc = computed(() => workCardThumbUrl(props.work, options.value))", vue)
+        self.assertLess(
+            helpers.index("options.suppressThumbnail === true"),
+            helpers.index("thumbnail?page="),
+        )
         # No image bytes anywhere in the offline stack.
         store = _read(_STORE)
         for forbidden in ("profile-image", "thumbnail", "image/"):
@@ -1195,14 +1202,17 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         """Recently added is cached now, so it is no longer connectivity-gated:
         it must go through the read-through rather than a raw fetch, and must
         never be recomputed from the Folder hierarchy or the stable catalog."""
-        folders = _read(os.path.join(_FRONTEND, "js", "components", "folders.js"))
-        body = _fn_body(folders, "async function prksLoadFolderLibraryRecentlyAdded(")
+        intents = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "folder-library", "intents.ts"))
+        pane = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "folder-library", "RecentlyAddedPane.vue"))
+        body = intents[intents.index("async loadRecentlyAdded"):]
+        body = body[: body.index("toggleExpand(")]
         self.assertIn("prksOfflineRecentlyAddedFetch", body)
         self.assertIn("prksResolveOfflineRecentlyAdded", body)
         self.assertNotIn("fetchRecentlyAdded", body)
-        # A missing snapshot is an explicit unavailable state, not an empty tab.
-        self.assertIn("not available offline", body)
-        # The tab must no longer be disabled while offline.
+        self.assertIn("not available offline", pane)
+        folders = _read(os.path.join(_FRONTEND, "js", "components", "folders.js"))
         self.assertNotIn("Recently added requires a connection", folders)
 
     def test_home_glance_never_warms_independent_browse_domains(self):

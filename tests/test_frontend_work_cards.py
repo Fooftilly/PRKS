@@ -171,10 +171,13 @@ class FrontendWorkCardTests(unittest.TestCase):
         self.assertIn("prksBindWorkBrowseMode", sv)
 
     def test_folder_files_and_recently_added_use_browse_collection(self):
-        src = _read(_FOLDERS)
-        self.assertIn("prksWorkBrowseCollectionClass", src)
-        self.assertIn("prksWorkBrowseModeToggleHtml", src)
-        self.assertIn("prks-work-browse-mode-recently-added", src)
+        route = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "folder-library", "FolderLibraryRoute.vue"))
+        pane = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "folder-library", "RecentlyAddedPane.vue"))
+        self.assertIn("prksWorkBrowseCollectionClass", pane)
+        self.assertIn("prksWorkBrowseModeToggleHtml", route)
+        self.assertIn("prks-work-browse-mode-recently-added", route)
         detail = _read(os.path.join(
             _PROJECT_DIR, "frontend-app", "src", "features", "folder-detail", "FolderDetailRoute.vue"))
         self.assertIn("prks-work-browse-mode-folder-files", detail)
@@ -194,10 +197,13 @@ class FrontendWorkCardTests(unittest.TestCase):
         self.assertIn("-webkit-line-clamp: 1", css[list_at : list_at + 120])
 
     def test_recently_added_uses_concise_date_helper(self):
-        src = _read(_FOLDERS)
-        self.assertIn("function prksRecentlyAddedDateLabel", src)
-        self.assertIn("Added ${dateLabel}", src)
-        self.assertNotIn("Added: ${dateStr}", src)
+        folders = _read(_FOLDERS)
+        self.assertIn("function prksRecentlyAddedDateLabel", folders)
+        pane = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "folder-library", "RecentlyAddedPane.vue"))
+        self.assertIn("Added ${dateLabel}", pane)
+        self.assertNotIn("Added: ${dateStr}", pane)
+        self.assertNotIn("Added: ${dateLabel}", pane)
 
     def test_empty_folder_library_exposes_new_folder_action(self):
         src = _read(_FOLDERS)
@@ -209,25 +215,34 @@ class FrontendWorkCardTests(unittest.TestCase):
         self.assertIn("New folder", block)
 
     def test_empty_recently_added_exposes_new_file_action(self):
-        src = _read(_FOLDERS)
-        at = src.find("function prksRenderFolderLibraryRecentlyAdded")
-        self.assertNotEqual(at, -1)
-        # Bounded by the function, not by a character count: a comment added
-        # above the branch should not be able to hide it from this check.
-        end = src.index("\nasync function prksLoadFolderLibraryRecentlyAdded(", at)
-        block = src[at:end]
-        self.assertIn("No files in the library yet.", block)
-        self.assertIn("openModal(", block)
-        self.assertIn("work-modal", block)
-        self.assertIn("No files match your search.", block)
-        # Filtered empty state (a search with no matches) is its own statement,
-        # distinct from the empty-library branch — it must not also carry the
-        # New File creation CTA.
-        filtered_line = next(
-            line for line in block.splitlines() if "No files match your search." in line
+        pane = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "folder-library", "RecentlyAddedPane.vue"))
+        self.assertIn("No files in the library yet.", pane)
+        self.assertIn("openWorkModal", pane)
+        self.assertIn("work-modal", _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "folder-library", "intents.ts")))
+        self.assertIn("No files match your search.", pane)
+        self.assertIn('data-prks-role="new-work-from-recently-added"', pane)
+        filtered = next(
+            line for line in pane.splitlines() if "No files match your search." in line
         )
-        self.assertNotIn("openModal", filtered_line)
-        self.assertNotIn("work-modal", filtered_line)
+        self.assertNotIn("openModal", filtered)
+        self.assertNotIn("work-modal", filtered)
+        self.assertNotIn("new-work-from-recently-added", filtered)
+
+    def test_vue_work_card_owns_card_markup(self):
+        vue = _read(os.path.join(_PROJECT_DIR, "frontend-app", "src", "components", "PrksWorkCard.vue"))
+        cards = _read(_WORK_CARDS)
+        self.assertNotIn("function prksWorkCardHtml", cards)
+        self.assertIn('class="work-card__link"', vue)
+        self.assertIn("data-work-id", vue)
+        self.assertIn("work-card__meta", vue)
+        self.assertIn("work-card__context", vue)
+        self.assertIn("work-card__badges", vue)
+        self.assertIn("work-card__thumb--empty", vue)
+        self.assertIn("work-card__thumb--loading", vue)
+        self.assertIn('alt=""', vue)
+        self.assertNotIn("function prksWorkCardHtml", vue)
 
 
 if __name__ == "__main__":
