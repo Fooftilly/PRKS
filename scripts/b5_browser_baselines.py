@@ -447,7 +447,10 @@ def _elapsed(page) -> float:
 def _wait_main_route(page, hash_path: str, selector: str) -> None:
     page.wait_for_function(
         """({hashPath, selector}) => {
-          if (location.hash !== hashPath) return false;
+          const hash = String(location.hash || '');
+          const wanted = String(hashPath || '');
+          const hashOk = hash === wanted || (wanted.indexOf('?') === -1 && hash.indexOf(wanted + '?') === 0);
+          if (!hashOk) return false;
           const mark = window.__prksB5Mark;
           const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
           if (!ctx || !ctx.root || !mark) return false;
@@ -617,7 +620,7 @@ def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:
 
     timed_main("routeFolderLibrary", "#/folders", "[data-prks-folder-library-view]")
     timed_main("routeRecent", "#/recent", "[data-prks-recent-view]")
-    timed_main("routeProgress", "#/progress", "[data-prks-progress-view]")
+    timed_main("routeProgress", "#/progress?status=Not%20Started", "[data-prks-progress-view]")
     timed_main("routePeople", "#/people", "[data-prks-people-index-view]")
     timed_main("routeConcepts", "#/concepts", "[data-prks-concepts-index-view]")
     timed_main("routeGraphChrome", "#/graph", "[data-prks-role='graph-body']")
