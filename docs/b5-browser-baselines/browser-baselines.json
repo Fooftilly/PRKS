@@ -17,7 +17,7 @@
       "queuedForegroundReads": 0,
       "queuedMutations": 0
     },
-    "measuredForMs": 29651,
+    "measuredForMs": 29438,
     "peaks": {
       "activeReads": 3,
       "queuedMutations": 1,
@@ -26,15 +26,15 @@
     "waits": {
       "mutationAverageMs": 0,
       "mutationMaxMs": 0,
-      "readAverageMs": 0,
-      "readMaxMs": 0
+      "readAverageMs": 0.00333889816360601,
+      "readMaxMs": 1
     }
   },
   "identity": {
-    "app": "python prks_app.py --testing --port 46569",
+    "app": "python prks_app.py --testing --port 59605",
     "chromeChannel": "chrome",
     "cpuModel": "Intel(R) Xeon(R) Processor",
-    "gitHead": "2467e1e2a2b4bff1e388cbbf8ae08af3d81dcf23",
+    "gitHead": "8988c69eb4c89d1a0fce1f9c66443565263da727",
     "os": "Linux-6.12.94+-x86_64-with-glibc2.39",
     "playwrightBrowserVersion": "148.0.7778.96",
     "python": "3.12.3",
@@ -105,7 +105,7 @@
         "domNodes": 3476,
         "easyMde": 0,
         "intersectionObserverLive": 1,
-        "longLivedListenerLive": 344,
+        "longLivedListenerLive": 206,
         "mutationObserverLive": 1,
         "pdfHosts": 0,
         "researchGraphLive": 0,
@@ -123,7 +123,7 @@
         "domNodes": 3476,
         "easyMde": 0,
         "intersectionObserverLive": 1,
-        "longLivedListenerLive": 292,
+        "longLivedListenerLive": 154,
         "mutationObserverLive": 1,
         "pdfHosts": 0,
         "researchGraphLive": 0,
@@ -162,7 +162,7 @@
         "domNodes": 1589,
         "easyMde": 0,
         "intersectionObserverLive": 1,
-        "longLivedListenerLive": 367,
+        "longLivedListenerLive": 229,
         "mutationObserverLive": 3,
         "pdfHosts": 0,
         "researchGraphLive": 1,
@@ -180,7 +180,7 @@
         "domNodes": 1589,
         "easyMde": 0,
         "intersectionObserverLive": 1,
-        "longLivedListenerLive": 315,
+        "longLivedListenerLive": 177,
         "mutationObserverLive": 3,
         "pdfHosts": 0,
         "researchGraphLive": 1,
@@ -193,7 +193,7 @@
         "timerCount": 0
       }
     },
-    "leakProbes": "Global live Resize/Intersection/MutationObserver counts; long-lived EventTarget listeners on window/document/body/shell/tile/tab-root only (WeakRef map; once/abort release); __prksResearchGraphLiveCount; lazy-thumb tracked targets. Focused-runtime graph debug fields are not leak evidence. Listener accumulation on discarded route nodes is not counted.",
+    "leakProbes": "Global live Resize/Intersection/MutationObserver counts; long-lived EventTarget listeners on window/document/body/shell/tile/tab-root only (WeakRef map; once/abort release; disconnected tile/tab-root hosts are dropped). __prksResearchGraphLiveCount; lazy-thumb tracked targets. Focused-runtime graph debug fields are not leak evidence.",
     "sequence": "Large Batch folder \u2192 Work A \u2192 Graph \u2192 Recent; Pre/Post taken on folder then graph after a generation-bumped paint"
   },
   "privacy": "synthetic titles/ids only; request paths classified without query or filenames",
@@ -201,59 +201,101 @@
     "initialLoad": {
       "method": "Navigation Timing on /",
       "result": {
-        "domContentLoadedMs": 206.60000000009313,
-        "durationMs": 210.3000000002794,
-        "fcpMs": 56,
-        "fpMs": 56,
+        "domContentLoadedMs": 201.70000000018626,
+        "durationMs": 205.10000000009313,
+        "fcpMs": 108,
+        "fpMs": 108,
         "transferSize": 95728
       }
     },
     "largeFolderCollection": {
       "cardCount": 0,
       "hash": "#/folders/FOLDER_BATCH",
-      "medianMs": 79.7,
+      "medianMs": 74.4,
       "method": "leave to #/tags, prksNavigate, wait generation bump + route root",
       "samplesMs": [
-        88.2,
-        68.0,
-        69.3,
-        79.7,
-        80.4
+        74.4,
+        68.4,
+        72.0,
+        75.1,
+        88.1
       ],
       "settle": "generation > mark AND [data-prks-folder-detail-view]",
       "warmupDropped": 1
     },
     "pdfClose": {
-      "medianMs": 29.8,
+      "medianMs": 30.9,
       "method": "navigate away to folders (cold unmount of current route)",
       "samplesMs": [
-        31.1,
-        28.9,
-        29.8
+        27.2,
+        32.4,
+        30.9
       ],
       "warmupDropped": 1
     },
     "pdfColdReopenAfterFolders": {
       "label": "cold reopen",
-      "medianMs": 436.5,
+      "medianMs": 432.7,
       "method": "reopen Work A after folders \u2014 cold route replacement, not warm resume",
       "samplesMs": [
-        436.5,
-        438.4,
-        425.5
+        432.7,
+        454.8,
+        423.2
       ],
       "warmupDropped": 0
     },
     "pdfOpenCold": {
-      "medianMs": 475.4,
+      "medianMs": 460.4,
       "method": "first prksNavigate(Work A) until focused ctx work/pdf.workId match and a page under ctx.root",
       "samplesMs": [
-        475.4
+        460.4
       ],
       "warmup": "none (cold open)"
     },
     "pdfWarmResume": {
       "identity": [
+        {
+          "ctxSuspendedAfterPark": true,
+          "pdfRequestDelta": 0,
+          "requestDelta": {
+            "byKind": {
+              "api-other": 0,
+              "folder": 0,
+              "other": 1,
+              "pdf": 0,
+              "research-graph": 0,
+              "search": 0,
+              "work-annotations-snapshot": 0,
+              "work-detail-get": 0,
+              "work-other": 1,
+              "work-thumbnail": 0
+            },
+            "events": [
+              {
+                "i": 843,
+                "kind": "other",
+                "method": "GET",
+                "path": "/favicon.svg"
+              },
+              {
+                "i": 844,
+                "kind": "work-other",
+                "method": "GET",
+                "path": "/api/works/:workId/people-state"
+              }
+            ],
+            "total": 2
+          },
+          "resumeMs": 24.0,
+          "samePdfRuntime": true,
+          "samePdfViewer": true,
+          "sameTabContext": true,
+          "viewerSetupTokenPost": 1,
+          "viewerSetupTokenPre": 1,
+          "viewerSetupTokenUnchanged": true,
+          "warmup": true,
+          "workDetailGetDelta": 0
+        },
         {
           "ctxSuspendedAfterPark": true,
           "pdfRequestDelta": 0,
@@ -272,19 +314,19 @@
             },
             "events": [
               {
-                "i": 838,
+                "i": 868,
                 "kind": "other",
                 "method": "GET",
-                "path": "http://127.0.0.1:46569/a3bb642c-120e-4fbd-b9f0-e9eb0bdf94c7"
+                "path": "http://127.0.0.1:59605/c5655a05-2ffe-4dee-a14b-c93671cc01ae"
               },
               {
-                "i": 839,
+                "i": 869,
                 "kind": "other",
                 "method": "GET",
                 "path": "/favicon.svg"
               },
               {
-                "i": 840,
+                "i": 870,
                 "kind": "work-other",
                 "method": "GET",
                 "path": "/api/works/:workId/people-state"
@@ -292,102 +334,7 @@
             ],
             "total": 3
           },
-          "resumeMs": 23.1,
-          "samePdfRuntime": true,
-          "samePdfViewer": true,
-          "sameTabContext": true,
-          "viewerSetupTokenPost": 1,
-          "viewerSetupTokenPre": 1,
-          "viewerSetupTokenUnchanged": true,
-          "warmup": true,
-          "workDetailGetDelta": 0
-        },
-        {
-          "ctxSuspendedAfterPark": true,
-          "pdfRequestDelta": 0,
-          "requestDelta": {
-            "byKind": {
-              "api-other": 0,
-              "folder": 0,
-              "other": 1,
-              "pdf": 0,
-              "research-graph": 0,
-              "search": 0,
-              "work-annotations-snapshot": 0,
-              "work-detail-get": 0,
-              "work-other": 1,
-              "work-thumbnail": 0
-            },
-            "events": [
-              {
-                "i": 865,
-                "kind": "other",
-                "method": "GET",
-                "path": "/favicon.svg"
-              },
-              {
-                "i": 866,
-                "kind": "work-other",
-                "method": "GET",
-                "path": "/api/works/:workId/people-state"
-              }
-            ],
-            "total": 2
-          },
-          "resumeMs": 25.9,
-          "samePdfRuntime": true,
-          "samePdfViewer": true,
-          "sameTabContext": true,
-          "viewerSetupTokenPost": 1,
-          "viewerSetupTokenPre": 1,
-          "viewerSetupTokenUnchanged": true,
-          "workDetailGetDelta": 0
-        },
-        {
-          "ctxSuspendedAfterPark": true,
-          "pdfRequestDelta": 0,
-          "requestDelta": {
-            "byKind": {
-              "api-other": 0,
-              "folder": 0,
-              "other": 3,
-              "pdf": 0,
-              "research-graph": 0,
-              "search": 0,
-              "work-annotations-snapshot": 0,
-              "work-detail-get": 0,
-              "work-other": 1,
-              "work-thumbnail": 0
-            },
-            "events": [
-              {
-                "i": 889,
-                "kind": "other",
-                "method": "GET",
-                "path": "http://127.0.0.1:46569/21279ba5-cdce-4539-9555-2a9db6d76ad3"
-              },
-              {
-                "i": 890,
-                "kind": "other",
-                "method": "GET",
-                "path": "http://127.0.0.1:46569/8d7faff4-95c8-4dbe-8ae0-cebf8af797b5"
-              },
-              {
-                "i": 891,
-                "kind": "other",
-                "method": "GET",
-                "path": "/favicon.svg"
-              },
-              {
-                "i": 892,
-                "kind": "work-other",
-                "method": "GET",
-                "path": "/api/works/:workId/people-state"
-              }
-            ],
-            "total": 4
-          },
-          "resumeMs": 23.0,
+          "resumeMs": 22.5,
           "samePdfRuntime": true,
           "samePdfViewer": true,
           "sameTabContext": true,
@@ -414,13 +361,13 @@
             },
             "events": [
               {
-                "i": 917,
+                "i": 895,
                 "kind": "other",
                 "method": "GET",
                 "path": "/favicon.svg"
               },
               {
-                "i": 918,
+                "i": 896,
                 "kind": "work-other",
                 "method": "GET",
                 "path": "/api/works/:workId/people-state"
@@ -455,19 +402,72 @@
             },
             "events": [
               {
-                "i": 943,
+                "i": 921,
                 "kind": "other",
                 "method": "GET",
                 "path": "/favicon.svg"
               },
               {
-                "i": 944,
+                "i": 922,
                 "kind": "work-other",
                 "method": "GET",
                 "path": "/api/works/:workId/people-state"
               }
             ],
             "total": 2
+          },
+          "resumeMs": 23.3,
+          "samePdfRuntime": true,
+          "samePdfViewer": true,
+          "sameTabContext": true,
+          "viewerSetupTokenPost": 1,
+          "viewerSetupTokenPre": 1,
+          "viewerSetupTokenUnchanged": true,
+          "workDetailGetDelta": 0
+        },
+        {
+          "ctxSuspendedAfterPark": true,
+          "pdfRequestDelta": 0,
+          "requestDelta": {
+            "byKind": {
+              "api-other": 0,
+              "folder": 0,
+              "other": 3,
+              "pdf": 0,
+              "research-graph": 0,
+              "search": 0,
+              "work-annotations-snapshot": 0,
+              "work-detail-get": 0,
+              "work-other": 1,
+              "work-thumbnail": 0
+            },
+            "events": [
+              {
+                "i": 945,
+                "kind": "other",
+                "method": "GET",
+                "path": "http://127.0.0.1:59605/81d085f4-7d52-474f-b1c7-b6e704f5063f"
+              },
+              {
+                "i": 946,
+                "kind": "other",
+                "method": "GET",
+                "path": "http://127.0.0.1:59605/453c28b6-a902-4a13-a7c0-d22707020280"
+              },
+              {
+                "i": 947,
+                "kind": "other",
+                "method": "GET",
+                "path": "/favicon.svg"
+              },
+              {
+                "i": 948,
+                "kind": "work-other",
+                "method": "GET",
+                "path": "/api/works/:workId/people-state"
+              }
+            ],
+            "total": 4
           },
           "resumeMs": 22.8,
           "samePdfRuntime": true,
@@ -496,19 +496,19 @@
             },
             "events": [
               {
-                "i": 968,
+                "i": 972,
                 "kind": "other",
                 "method": "GET",
-                "path": "http://127.0.0.1:46569/7bd88d4b-a2b5-4ef3-acc5-3114d883f490"
+                "path": "http://127.0.0.1:59605/be673906-d34b-4b07-b330-8a7bb615f21f"
               },
               {
-                "i": 969,
+                "i": 973,
                 "kind": "other",
                 "method": "GET",
                 "path": "/favicon.svg"
               },
               {
-                "i": 970,
+                "i": 974,
                 "kind": "work-other",
                 "method": "GET",
                 "path": "/api/works/:workId/people-state"
@@ -516,7 +516,7 @@
             ],
             "total": 3
           },
-          "resumeMs": 28.6,
+          "resumeMs": 24.5,
           "samePdfRuntime": true,
           "samePdfViewer": true,
           "sameTabContext": true,
@@ -534,192 +534,192 @@
         "viewerSetupTokenUnchanged": true,
         "workDetailGetDeltaZero": true
       },
-      "medianMs": 24.0,
+      "medianMs": 23.3,
       "method": "warm-park via activateTab(folders) then prksResumeWarmTabContext via activateTab(Work A)",
       "samplesMs": [
-        25.9,
-        23.0,
+        22.5,
         24.0,
+        23.3,
         22.8,
-        28.6
+        24.5
       ],
       "warmupDropped": 1
     },
     "researchGraphMount": {
       "hash": "#/graph",
-      "medianMs": 23.8,
+      "medianMs": 23.6,
       "method": "leave to #/tags, prksNavigate, wait generation bump + route root",
       "samplesMs": [
-        23.8,
-        26.1,
-        46.2,
-        23.6,
-        23.0
+        23.0,
+        40.5,
+        25.3,
+        22.6,
+        23.6
       ],
       "settle": "generation > mark AND [data-prks-role='graph-body']",
       "warmupDropped": 1
     },
     "researchNotesMount": {
-      "medianMs": 445.0,
+      "medianMs": 430.2,
       "method": "leave tags, open Work A until notes/EasyMDE settle",
       "samplesMs": [
-        445.0,
-        427.9,
-        446.7
+        433.1,
+        430.2,
+        427.1
       ],
       "warmupDropped": 1
     },
     "routeConcepts": {
       "hash": "#/concepts",
-      "medianMs": 15.5,
+      "medianMs": 16.6,
       "method": "leave to #/tags, prksNavigate, wait generation bump + route root",
       "samplesMs": [
+        16.2,
+        16.6,
+        17.0,
         17.4,
-        15.9,
-        15.5,
-        15.5,
-        15.4
+        14.9
       ],
       "settle": "generation > mark AND [data-prks-concepts-index-view]",
       "warmupDropped": 1
     },
     "routeFolderDetail": {
       "hash": "#/folders/FOLDER_LIB",
-      "medianMs": 30.2,
+      "medianMs": 29.9,
       "method": "leave to #/tags, prksNavigate, wait generation bump + route root",
       "samplesMs": [
-        29.4,
-        49.2,
+        31.6,
         28.3,
-        30.2,
-        30.4
+        30.0,
+        29.9,
+        28.3
       ],
       "settle": "generation > mark AND [data-prks-folder-detail-view]",
       "warmupDropped": 1
     },
     "routeFolderLibrary": {
       "hash": "#/folders",
-      "medianMs": 27.4,
+      "medianMs": 25.9,
       "method": "leave to #/tags, prksNavigate, wait generation bump + route root",
       "samplesMs": [
-        41.8,
-        27.0,
-        27.4,
-        26.3,
-        27.7
+        40.1,
+        26.8,
+        25.9,
+        20.3,
+        24.5
       ],
       "settle": "generation > mark AND [data-prks-folder-library-view]",
       "warmupDropped": 1
     },
     "routeGraphChrome": {
       "hash": "#/graph",
-      "medianMs": 46.3,
+      "medianMs": 45.7,
       "method": "leave to #/tags, prksNavigate, wait generation bump + route root",
       "samplesMs": [
-        49.5,
-        53.7,
+        48.6,
         23.2,
-        22.6,
-        46.3
+        21.6,
+        51.2,
+        45.7
       ],
       "settle": "generation > mark AND [data-prks-role='graph-body']",
       "warmupDropped": 1
     },
     "routePeople": {
       "hash": "#/people",
-      "medianMs": 15.2,
+      "medianMs": 15.0,
       "method": "leave to #/tags, prksNavigate, wait generation bump + route root",
       "samplesMs": [
-        16.2,
-        15.2,
-        22.8,
-        13.4,
-        14.8
+        19.0,
+        15.0,
+        14.3,
+        17.5,
+        14.6
       ],
       "settle": "generation > mark AND [data-prks-people-index-view]",
       "warmupDropped": 1
     },
     "routeProgress": {
       "hash": "#/progress?status=Not%20Started",
-      "medianMs": 46.1,
+      "medianMs": 44.1,
       "method": "leave to #/tags, prksNavigate, wait generation bump + route root",
       "samplesMs": [
-        46.1,
-        50.0,
-        45.9,
-        47.8,
-        46.0
+        44.1,
+        46.4,
+        50.1,
+        43.7,
+        42.1
       ],
       "settle": "generation > mark AND [data-prks-progress-view]",
       "warmupDropped": 1
     },
     "routeRecent": {
       "hash": "#/recent",
-      "medianMs": 18.2,
+      "medianMs": 17.9,
       "method": "leave to #/tags, prksNavigate, wait generation bump + route root",
       "samplesMs": [
-        18.4,
-        18.2,
-        17.6,
-        28.0,
-        16.7
+        20.1,
+        17.0,
+        17.8,
+        17.9,
+        33.8
       ],
       "settle": "generation > mark AND [data-prks-recent-view]",
       "warmupDropped": 1
     },
     "searchBatch": {
       "hash": "#/search?q=Batch",
-      "medianMs": 53.3,
+      "medianMs": 51.1,
       "method": "leave to #/tags, prksNavigate, wait generation bump + route root",
       "samplesMs": [
-        53.3,
+        51.0,
         50.4,
-        54.6,
-        65.1,
-        51.8
+        52.2,
+        51.1,
+        58.4
       ],
       "settle": "generation > mark AND [data-prks-search-view]",
       "warmupDropped": 1
     },
     "secondaryNavWhileSplit": {
-      "medianMs": 23.2,
+      "medianMs": 22.3,
       "method": "in-place prksNavigate(person-detail|concept-detail, {tabId: secondary}); people/concepts indexes are not tile-capable. Settle on Secondary lastResolvedRoute + view root",
       "samplesMs": [
-        25.9,
-        20.1,
-        23.2
+        22.4,
+        19.5,
+        22.3
       ],
       "warmupDropped": 1
     },
     "splitOpen": {
-      "medianMs": 50.0,
+      "medianMs": 47.8,
       "method": "prksNavigate(folder-detail, {target:'tile'}); settle on Secondary lastResolvedRoute folder-detail + view root",
       "samplesMs": [
-        50.0
+        47.8
       ]
     },
     "tabSwitch": {
-      "medianMs": 18.85,
+      "medianMs": 18.25,
       "method": "activateTab between parked Folders and Recent; settle on destination view root",
       "samplesMs": [
-        29.8,
-        28.1,
-        16.2,
-        18.6,
-        17.2,
-        19.1
+        17.0,
+        18.8,
+        17.6,
+        18.8,
+        17.7,
+        18.9
       ],
       "warmupDropped": 1
     },
     "workAToB": {
-      "medianMs": 432.15,
+      "medianMs": 432.35,
       "method": "hash A\u2194B until focused ctx work id + pdf.workId match dest and a page exists under ctx.root",
       "samplesMs": [
-        433.0,
-        432.2,
-        432.0,
-        432.1,
-        432.5,
+        433.2,
+        448.3,
+        447.3,
+        429.6,
+        431.3,
         431.5
       ],
       "warmupDropped": 0
@@ -740,60 +740,43 @@
       "thumbnail_cache_misses": 0
     },
     "measured_for_seconds": 30,
-    "process_started_at": 1791181458.2537045,
+    "process_started_at": 1791182128.7697275,
     "requests": {
-      "response_bytes": 1001131,
+      "response_bytes": 1001059,
       "slow": 0,
       "total": 729
     },
     "routes": [
       {
-        "avg_db_ms": 1.7,
-        "avg_ms": 6.2,
+        "avg_db_ms": 2.1,
+        "avg_ms": 9.5,
         "avg_response_bytes": null,
         "count": 17,
         "db_calls": 17,
         "db_calls_avg": 1.0,
-        "max_ms": 20.1,
-        "measured_db_share_percent": 26.8,
+        "max_ms": 21.2,
+        "measured_db_share_percent": 22.4,
         "method": "GET",
-        "p50_ms": 4.8,
-        "p95_ms": 20.1,
+        "p50_ms": 9.7,
+        "p95_ms": 21.2,
         "route": "/api/works/:id/thumbnail",
         "slow_count": 0,
         "status_4xx": 0,
         "status_5xx": 0
       },
       {
-        "avg_db_ms": 12.1,
-        "avg_ms": 13.7,
+        "avg_db_ms": 11.9,
+        "avg_ms": 13.5,
         "avg_response_bytes": 8361,
         "count": 6,
         "db_calls": 30,
         "db_calls_avg": 5.0,
-        "max_ms": 14.8,
-        "measured_db_share_percent": 88.7,
+        "max_ms": 14.1,
+        "measured_db_share_percent": 88.2,
         "method": "GET",
-        "p50_ms": 13.5,
-        "p95_ms": 14.8,
+        "p50_ms": 13.3,
+        "p95_ms": 14.1,
         "route": "/api/search",
-        "slow_count": 0,
-        "status_4xx": 0,
-        "status_5xx": 0
-      },
-      {
-        "avg_db_ms": 0.0,
-        "avg_ms": 9.2,
-        "avg_response_bytes": 850,
-        "count": 36,
-        "db_calls": 0,
-        "db_calls_avg": 0.0,
-        "max_ms": 13.8,
-        "measured_db_share_percent": 0.0,
-        "method": "POST",
-        "p50_ms": 8.7,
-        "p95_ms": 12.9,
-        "route": "/api/:unknown",
         "slow_count": 0,
         "status_4xx": 0,
         "status_5xx": 0
@@ -805,79 +788,79 @@
         "count": 36,
         "db_calls": 312,
         "db_calls_avg": 8.7,
-        "max_ms": 12.9,
-        "measured_db_share_percent": 92.7,
+        "max_ms": 12.8,
+        "measured_db_share_percent": 92.9,
         "method": "GET",
         "p50_ms": 11.4,
-        "p95_ms": 12.0,
+        "p95_ms": 12.3,
         "route": "/api/works/:id",
         "slow_count": 0,
         "status_4xx": 0,
         "status_5xx": 0
       },
       {
-        "avg_db_ms": 6.2,
-        "avg_ms": 7.2,
-        "avg_response_bytes": 6161,
-        "count": 26,
-        "db_calls": 52,
-        "db_calls_avg": 2.0,
-        "max_ms": 9.3,
-        "measured_db_share_percent": 86.4,
-        "method": "GET",
-        "p50_ms": 8.6,
-        "p95_ms": 9.2,
-        "route": "/api/folders/:id",
+        "avg_db_ms": 0.0,
+        "avg_ms": 8.6,
+        "avg_response_bytes": 850,
+        "count": 36,
+        "db_calls": 0,
+        "db_calls_avg": 0.0,
+        "max_ms": 11.1,
+        "measured_db_share_percent": 0.0,
+        "method": "POST",
+        "p50_ms": 8.5,
+        "p95_ms": 10.7,
+        "route": "/api/:unknown",
         "slow_count": 0,
         "status_4xx": 0,
         "status_5xx": 0
       },
       {
         "avg_db_ms": 6.8,
-        "avg_ms": 8.8,
+        "avg_ms": 8.9,
         "avg_response_bytes": 11491,
         "count": 43,
         "db_calls": 43,
         "db_calls_avg": 1.0,
-        "max_ms": 17.8,
-        "measured_db_share_percent": 77.0,
+        "max_ms": 18.0,
+        "measured_db_share_percent": 76.9,
         "method": "GET",
         "p50_ms": 8.7,
-        "p95_ms": 9.0,
+        "p95_ms": 10.1,
         "route": "/api/works",
         "slow_count": 0,
         "status_4xx": 0,
         "status_5xx": 0
       },
       {
-        "avg_db_ms": 4.9,
-        "avg_ms": 5.2,
-        "avg_response_bytes": 352,
-        "count": 2,
-        "db_calls": 2,
-        "db_calls_avg": 1.0,
-        "max_ms": 8.9,
-        "measured_db_share_percent": 93.2,
+        "avg_db_ms": 6.2,
+        "avg_ms": 7.1,
+        "avg_response_bytes": 6160,
+        "count": 26,
+        "db_calls": 52,
+        "db_calls_avg": 2.0,
+        "max_ms": 9.7,
+        "measured_db_share_percent": 86.6,
         "method": "GET",
-        "p50_ms": 1.6,
-        "p95_ms": 8.9,
-        "route": "/api/settings",
+        "p50_ms": 8.6,
+        "p95_ms": 9.1,
+        "route": "/api/folders/:id",
         "slow_count": 0,
         "status_4xx": 0,
         "status_5xx": 0
       },
       {
-        "avg_db_ms": 3.7,
-        "avg_ms": 4.0,
+        "avg_db_ms": 3.9,
+        "avg_ms": 4.1,
         "avg_response_bytes": 2,
         "count": 42,
         "db_calls": 84,
         "db_calls_avg": 2.0,
-        "max_ms": 6.4,
-        "measured_db_share_percent": 94.2,
+        "max_ms": 5.8,
+        "measured_db_share_percent": 94.8,
         "method": "GET",
         "p50_ms": 4.0,
-        "p95_ms": 5.4,
+        "p95_ms": 5.7,
         "route": "/api/tags",
         "slow_count": 0,
         "status_4xx": 0,
@@ -885,64 +868,47 @@
       },
       {
         "avg_db_ms": 0.0,
-        "avg_ms": 3.6,
+        "avg_ms": 3.9,
         "avg_response_bytes": 87,
         "count": 27,
         "db_calls": 0,
         "db_calls_avg": 0.0,
-        "max_ms": 6.5,
+        "max_ms": 4.5,
         "measured_db_share_percent": 0.0,
         "method": "GET",
-        "p50_ms": 4.1,
-        "p95_ms": 5.2,
+        "p50_ms": 4.2,
+        "p95_ms": 4.5,
         "route": "/api/:unknown",
         "slow_count": 0,
         "status_4xx": 0,
         "status_5xx": 0
       },
       {
-        "avg_db_ms": 2.2,
-        "avg_ms": 2.5,
+        "avg_db_ms": 2.1,
+        "avg_ms": 2.4,
         "avg_response_bytes": 528,
         "count": 20,
         "db_calls": 20,
         "db_calls_avg": 1.0,
-        "max_ms": 5.8,
-        "measured_db_share_percent": 87.7,
+        "max_ms": 3.5,
+        "measured_db_share_percent": 86.9,
         "method": "GET",
         "p50_ms": 2.2,
-        "p95_ms": 3.8,
+        "p95_ms": 3.3,
         "route": "/api/recent",
         "slow_count": 0,
         "status_4xx": 0,
         "status_5xx": 0
       },
       {
-        "avg_db_ms": 1.4,
-        "avg_ms": 1.7,
-        "avg_response_bytes": 516,
-        "count": 27,
-        "db_calls": 27,
-        "db_calls_avg": 1.0,
-        "max_ms": 5.2,
-        "measured_db_share_percent": 80.2,
-        "method": "GET",
-        "p50_ms": 1.5,
-        "p95_ms": 3.6,
-        "route": "/api/folders",
-        "slow_count": 0,
-        "status_4xx": 0,
-        "status_5xx": 0
-      },
-      {
-        "avg_db_ms": 1.2,
+        "avg_db_ms": 1.1,
         "avg_ms": 3.0,
         "avg_response_bytes": 445,
         "count": 2,
         "db_calls": 2,
         "db_calls_avg": 1.0,
         "max_ms": 3.0,
-        "measured_db_share_percent": 38.2,
+        "measured_db_share_percent": 37.4,
         "method": "GET",
         "p50_ms": 3.0,
         "p95_ms": 3.0,
@@ -958,12 +924,29 @@
         "count": 2,
         "db_calls": 4,
         "db_calls_avg": 2.0,
-        "max_ms": 2.9,
-        "measured_db_share_percent": 92.5,
+        "max_ms": 2.8,
+        "measured_db_share_percent": 91.6,
         "method": "GET",
         "p50_ms": 2.8,
-        "p95_ms": 2.9,
+        "p95_ms": 2.8,
         "route": "/api/persons/:id",
+        "slow_count": 0,
+        "status_4xx": 0,
+        "status_5xx": 0
+      },
+      {
+        "avg_db_ms": 1.6,
+        "avg_ms": 2.1,
+        "avg_response_bytes": 352,
+        "count": 2,
+        "db_calls": 2,
+        "db_calls_avg": 1.0,
+        "max_ms": 2.6,
+        "measured_db_share_percent": 78.7,
+        "method": "GET",
+        "p50_ms": 1.6,
+        "p95_ms": 2.6,
+        "route": "/api/settings",
         "slow_count": 0,
         "status_4xx": 0,
         "status_5xx": 0
@@ -975,11 +958,11 @@
         "count": 72,
         "db_calls": 0,
         "db_calls_avg": 0.0,
-        "max_ms": 5.2,
+        "max_ms": 3.1,
         "measured_db_share_percent": 0.0,
         "method": "GET",
         "p50_ms": 1.5,
-        "p95_ms": 2.3,
+        "p95_ms": 2.4,
         "route": "/api/works/:id/annotations-snapshot",
         "slow_count": 0,
         "status_4xx": 0,
@@ -992,7 +975,7 @@
         "count": 36,
         "db_calls": 0,
         "db_calls_avg": 0.0,
-        "max_ms": 2.9,
+        "max_ms": 3.2,
         "measured_db_share_percent": 0.0,
         "method": "POST",
         "p50_ms": 1.4,
@@ -1020,35 +1003,35 @@
         "status_5xx": 0
       },
       {
+        "avg_db_ms": 1.3,
+        "avg_ms": 1.5,
+        "avg_response_bytes": 516,
+        "count": 27,
+        "db_calls": 27,
+        "db_calls_avg": 1.0,
+        "max_ms": 2.2,
+        "measured_db_share_percent": 84.7,
+        "method": "GET",
+        "p50_ms": 1.5,
+        "p95_ms": 1.9,
+        "route": "/api/folders",
+        "slow_count": 0,
+        "status_4xx": 0,
+        "status_5xx": 0
+      },
+      {
         "avg_db_ms": 0.0,
         "avg_ms": 1.7,
         "avg_response_bytes": 490,
         "count": 45,
         "db_calls": 0,
         "db_calls_avg": 0.0,
-        "max_ms": 2.0,
+        "max_ms": 2.1,
         "measured_db_share_percent": 0.0,
         "method": "GET",
         "p50_ms": 1.7,
-        "p95_ms": 1.7,
+        "p95_ms": 1.8,
         "route": "/api/concepts",
-        "slow_count": 0,
-        "status_4xx": 0,
-        "status_5xx": 0
-      },
-      {
-        "avg_db_ms": 1.2,
-        "avg_ms": 1.5,
-        "avg_response_bytes": 750,
-        "count": 7,
-        "db_calls": 7,
-        "db_calls_avg": 1.0,
-        "max_ms": 1.7,
-        "measured_db_share_percent": 83.1,
-        "method": "GET",
-        "p50_ms": 1.5,
-        "p95_ms": 1.7,
-        "route": "/api/persons",
         "slow_count": 0,
         "status_4xx": 0,
         "status_5xx": 0
@@ -1077,7 +1060,7 @@
         "count": 42,
         "db_calls": 0,
         "db_calls_avg": 0.0,
-        "max_ms": 1.8,
+        "max_ms": 1.6,
         "measured_db_share_percent": 0.0,
         "method": "GET",
         "p50_ms": 1.4,
@@ -1089,17 +1072,17 @@
       },
       {
         "avg_db_ms": 1.2,
-        "avg_ms": 1.4,
-        "avg_response_bytes": 2,
-        "count": 36,
-        "db_calls": 36,
+        "avg_ms": 1.5,
+        "avg_response_bytes": 750,
+        "count": 7,
+        "db_calls": 7,
         "db_calls_avg": 1.0,
-        "max_ms": 1.6,
-        "measured_db_share_percent": 85.9,
+        "max_ms": 1.5,
+        "measured_db_share_percent": 82.8,
         "method": "GET",
         "p50_ms": 1.4,
         "p95_ms": 1.5,
-        "route": "/api/works/:id/related_folders",
+        "route": "/api/persons",
         "slow_count": 0,
         "status_4xx": 0,
         "status_5xx": 0
@@ -1122,34 +1105,51 @@
         "status_5xx": 0
       },
       {
+        "avg_db_ms": 1.2,
+        "avg_ms": 1.4,
+        "avg_response_bytes": 2,
+        "count": 36,
+        "db_calls": 36,
+        "db_calls_avg": 1.0,
+        "max_ms": 1.5,
+        "measured_db_share_percent": 86.8,
+        "method": "GET",
+        "p50_ms": 1.4,
+        "p95_ms": 1.4,
+        "route": "/api/works/:id/related_folders",
+        "slow_count": 0,
+        "status_4xx": 0,
+        "status_5xx": 0
+      },
+      {
         "avg_db_ms": 0.0,
-        "avg_ms": 0.3,
+        "avg_ms": 0.4,
         "avg_response_bytes": 1978,
         "count": 72,
         "db_calls": 0,
         "db_calls_avg": 0.0,
-        "max_ms": 2.0,
+        "max_ms": 2.1,
         "measured_db_share_percent": 0.0,
         "method": "GET",
         "p50_ms": 0.3,
-        "p95_ms": 0.7,
+        "p95_ms": 0.9,
         "route": "/api/pdfs/:pdf",
         "slow_count": 0,
         "status_4xx": 0,
         "status_5xx": 0
       },
       {
-        "avg_db_ms": 4.6,
-        "avg_ms": 4.8,
+        "avg_db_ms": 9.3,
+        "avg_ms": 9.6,
         "avg_response_bytes": 2,
         "count": 1,
         "db_calls": 3,
         "db_calls_avg": 3.0,
-        "max_ms": 4.8,
-        "measured_db_share_percent": 96.0,
+        "max_ms": 9.6,
+        "measured_db_share_percent": 97.7,
         "method": "GET",
-        "p50_ms": 4.8,
-        "p95_ms": 4.8,
+        "p50_ms": 9.6,
+        "p95_ms": 9.6,
         "route": "/api/processing-files",
         "slow_count": 0,
         "status_4xx": 0,
@@ -1161,14 +1161,14 @@
       "db": {
         "avg_ms": 1.9,
         "count": 644,
-        "max_ms": 15.8,
+        "max_ms": 15.9,
         "p50_ms": 1.2,
-        "p95_ms": 6.7
+        "p95_ms": 6.6
       },
       "gzip": {
         "avg_ms": 0.3,
         "count": 154,
-        "max_ms": 1.2,
+        "max_ms": 0.8,
         "p50_ms": 0.1,
         "p95_ms": 0.7
       },
@@ -1182,30 +1182,30 @@
       "pdf_file_stats": {
         "avg_ms": 0.6,
         "count": 167,
-        "max_ms": 1.3,
+        "max_ms": 1.7,
         "p50_ms": 0.1,
-        "p95_ms": 1.2
+        "p95_ms": 1.3
       },
       "research_graph_build": {
         "avg_ms": 1.7,
         "count": 24,
-        "max_ms": 1.9,
+        "max_ms": 1.8,
         "p50_ms": 1.7,
         "p95_ms": 1.8
       },
       "text_index_load_state": {
-        "avg_ms": 0.4,
+        "avg_ms": 0.3,
         "count": 1,
-        "max_ms": 0.4,
-        "p50_ms": 0.4,
-        "p95_ms": 0.4
+        "max_ms": 0.3,
+        "p50_ms": 0.3,
+        "p95_ms": 0.3
       },
       "text_index_reconcile": {
-        "avg_ms": 2.8,
+        "avg_ms": 2.9,
         "count": 1,
-        "max_ms": 2.8,
-        "p50_ms": 2.8,
-        "p95_ms": 2.8
+        "max_ms": 2.9,
+        "p50_ms": 2.9,
+        "p95_ms": 2.9
       },
       "text_index_source_scan": {
         "avg_ms": 2.5,
