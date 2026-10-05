@@ -20,14 +20,8 @@ const PRKS_API_ERROR_SOURCES = {
     'work-details': 'works.details',
     'person-details': 'persons.details',
     'person-groups': 'person-groups.fetch',
-    'person-group-details': 'person-groups.details',
-    recent: 'recent.fetch',
-    'recently-added': 'recently-added.fetch',
     search: 'search.fetch',
-    publishers: 'publishers.fetch',
     tags: 'tags.fetch',
-    'processing-files': 'processing-files.fetch',
-    'saved-views': 'saved-views.fetch',
     'works-bulk': 'works.bulk',
     concepts: 'concepts.fetch',
     positions: 'positions.fetch',
@@ -231,21 +225,10 @@ async function fetchWorks(options = {}) {
  */
 async function fetchFolders(options = {}) {
     const errorOwner = prksApiErrorOwner(options);
-    if (typeof prksEffectiveFolderCatalogue === 'function') {
-        try {
-            const rows = await prksEffectiveFolderCatalogue();
-            return Array.isArray(rows) ? rows : [];
-        } catch (e) {
-            if (prksAbortFallback(e)) return [];
-            prksSetApiError('folders', 'Could not load folders.', '', errorOwner);
-            prksReportApiClientError('folders');
-            return [];
-        }
-    }
+    if (typeof prksEffectiveFolderCatalogue !== 'function') return [];
     try {
-        const res = await prksRequest('/api/folders', { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
-        const data = await prksParseJsonResponse(res, [], 'folders', errorOwner);
-        return Array.isArray(data) ? data : [];
+        const rows = await prksEffectiveFolderCatalogue();
+        return Array.isArray(rows) ? rows : [];
     } catch (e) {
         if (prksAbortFallback(e)) return [];
         prksSetApiError('folders', 'Could not load folders.', '', errorOwner);
@@ -315,44 +298,6 @@ async function fetchPersonGroups(options = {}) {
         return [];
     }
 }
-async function fetchPersonGroupDetails(id, options = {}) {
-    const errorOwner = prksApiErrorOwner(options);
-    try {
-        const res = await prksRequest('/api/person-groups/' + encodeURIComponent(id), { signal: prksApiSignal(options) });
-        return await prksParseJsonResponse(res, null, 'person-group-details', errorOwner);
-    } catch (e) {
-        if (prksAbortFallback(e)) return null;
-        prksSetApiError('person-group-details', 'Could not load group details.', '', errorOwner);
-        prksReportApiClientError('person-group-details');
-        return null;
-    }
-}
-async function fetchRecent(options = {}) {
-    const errorOwner = prksApiErrorOwner(options);
-    try {
-        const res = await prksRequest('/api/recent', { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
-        const data = await prksParseJsonResponse(res, [], 'recent', errorOwner);
-        return Array.isArray(data) ? data : [];
-    } catch (e) {
-        if (prksAbortFallback(e)) return [];
-        prksSetApiError('recent', 'Could not load recent files.', '', errorOwner);
-        prksReportApiClientError('recent');
-        return [];
-    }
-}
-async function fetchRecentlyAdded(options = {}) {
-    const errorOwner = prksApiErrorOwner(options);
-    try {
-        const res = await prksRequest('/api/recently-added', { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
-        const data = await prksParseJsonResponse(res, [], 'recently-added', errorOwner);
-        return Array.isArray(data) ? data : [];
-    } catch (e) {
-        if (prksAbortFallback(e)) return [];
-        prksSetApiError('recently-added', 'Could not load recently added files.', '', errorOwner);
-        prksReportApiClientError('recently-added');
-        return [];
-    }
-}
 async function fetchSearch(query, tagName, options = {}) {
     const author = options.author != null ? String(options.author).trim() : '';
     const publisher =
@@ -400,20 +345,6 @@ async function fetchSearch(query, tagName, options = {}) {
         return [];
     }
 }
-async function fetchPublishersInUse(options = {}) {
-    const errorOwner = prksApiErrorOwner(options);
-    try {
-        const res = await prksRequest('/api/publishers?used=1', { signal: prksApiSignal(options) });
-        const data = await prksParseJsonResponse(res, [], 'publishers', errorOwner);
-        return Array.isArray(data) ? data : [];
-    } catch (e) {
-        if (prksAbortFallback(e)) return [];
-        prksSetApiError('publishers', 'Could not load publishers.', '', errorOwner);
-        prksReportApiClientError('publishers');
-        return [];
-    }
-}
-
 async function fetchTags(options = {}) {
     if (!options.used && typeof prksReadTagsIndex === 'function') {
         try { const result = await prksReadTagsIndex(options); return result.value || []; }
@@ -437,55 +368,15 @@ async function fetchTags(options = {}) {
     }
 }
 
-async function fetchProcessingFiles(options = {}) {
-    const errorOwner = prksApiErrorOwner(options);
-    const params = new URLSearchParams();
-    if (options && options.rescan) {
-        params.set('rescan', '1');
-    }
-    const q = params.toString() ? '?' + params.toString() : '';
-    const policy = options && options.rescan
-        ? { dedupe: false, retry: false, freshForMs: 0 }
-        : {};
-    try {
-        const res = await prksRequest('/api/processing-files' + q, { signal: prksApiSignal(options) }, policy);
-        const data = await prksParseJsonResponse(res, [], 'processing-files', errorOwner);
-        return Array.isArray(data) ? data : [];
-    } catch (_e) {
-        if (prksAbortFallback(_e)) return [];
-        prksSetApiError('processing-files', 'Could not load files for processing.', '', errorOwner);
-        prksReportApiClientError('processing-files');
-        return [];
-    }
-}
-
-async function patchProcessingFile(processingFileId, fields) {
-    const res = await prksRequest('/api/processing-files/' + encodeURIComponent(processingFileId), {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(fields || {}),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-        throw new Error(data.error || 'Could not update processing file metadata.');
-    }
-    return data;
-}
-
-async function importProcessingFile(processingFileId) {
-    const res = await prksRequest('/api/processing-files/' + encodeURIComponent(processingFileId) + '/import', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-        throw new Error(data.error || 'Could not import file.');
-    }
-    // Importing commits a brand-new canonical Work in one request: it is always
-    // filed into a folder (the requested one, else "Uncategorized") and can
-    // carry staged Author/Editor roles, so this boundary owes the same
-    // coherence the /api/works create path publishes.
+/**
+ * Coherence for a Files for Processing import, called by the Vue Processing
+ * records after every import that was sent. Importing commits a brand-new
+ * canonical Work in one request: it is always filed into a folder (the
+ * requested one, else "Uncategorized") and can carry staged Author/Editor
+ * roles, so this boundary owes the same coherence the /api/works create path
+ * publishes.
+ */
+function prksMarkProcessingImportChanged() {
     prksMarkFoldersDomainChanged();
     prksMarkPeopleDomainChanged();
     prksMarkPersonGroupsDomainChanged();
@@ -493,7 +384,6 @@ async function importProcessingFile(processingFileId) {
     // NOT Recent -- its last_opened_at is still NULL.
     prksMarkWorksBrowseChanged();
     prksMarkRecentlyAddedChanged();
-    return data;
 }
 
 /** Legacy device-only key; migrated once to server via prksLoadAppSettings. */
@@ -938,83 +828,6 @@ async function bulkUpdateWorks(payload) {
     return data;
 }
 
-async function fetchSavedViews(options = {}) {
-    const errorOwner = prksApiErrorOwner(options);
-    try {
-        const res = await prksRequest('/api/saved-views', { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
-        const data = await prksParseJsonResponse(res, [], 'saved-views', errorOwner);
-        return Array.isArray(data) ? data : [];
-    } catch (e) {
-        if (prksAbortFallback(e)) return [];
-        prksSetApiError('saved-views', 'Could not load Saved Views.', '', errorOwner);
-        prksReportApiClientError('saved-views');
-        return [];
-    }
-}
-
-async function fetchSavedView(id, options = {}) {
-    const errorOwner = prksApiErrorOwner(options);
-    try {
-        const res = await prksRequest('/api/saved-views/' + encodeURIComponent(id), { signal: prksApiSignal(options) });
-        if (res.status === 404) return null;
-        const data = await prksParseJsonResponse(res, null, 'saved-views', errorOwner);
-        return data && data.id ? data : null;
-    } catch (e) {
-        if (prksAbortFallback(e)) return null;
-        prksSetApiError('saved-views', 'Could not load Saved View.', '', errorOwner);
-        prksReportApiClientError('saved-views');
-        return null;
-    }
-}
-
-function prksGuardSavedViewMutation(message) {
-    if (typeof prksOfflineGuardMutation !== 'function') return;
-    if (!prksOfflineGuardMutation(
-        message || 'Saved Views require a connection to PRKS.')) return;
-    const err = new Error('Requires a connection to PRKS.');
-    err.prksOfflineRefused = true;
-    throw err;
-}
-
-async function createSavedView(payload) {
-    prksGuardSavedViewMutation('Saving a view requires a connection to PRKS.');
-    const res = await prksRequest('/api/saved-views', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload || {}),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-        throw new Error((data && data.error) || 'Could not save view.');
-    }
-    return data;
-}
-
-async function updateSavedView(id, payload) {
-    prksGuardSavedViewMutation('Editing a Saved View requires a connection to PRKS.');
-    const res = await prksRequest('/api/saved-views/' + encodeURIComponent(id), {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload || {}),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-        throw new Error((data && data.error) || 'Could not update Saved View.');
-    }
-    return data;
-}
-
-async function deleteSavedView(id) {
-    prksGuardSavedViewMutation('Deleting a Saved View requires a connection to PRKS.');
-    const res = await prksRequest('/api/saved-views/' + encodeURIComponent(id), {
-        method: 'DELETE',
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-        throw new Error((data && data.error) || 'Could not delete Saved View.');
-    }
-}
-
 async function prksResearchJson(res, fallbackMessage, source) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -1032,37 +845,10 @@ async function prksResearchJson(res, fallbackMessage, source) {
  * unsynchronized intent applied. A Concept created here is real, so it is
  * pickable as a parent before any server has heard of it.
  */
-async function fetchConcepts(options = {}) {
-    if (typeof prksEffectiveConceptCatalogue === 'function') {
-        try { return await prksEffectiveConceptCatalogue() || []; }
-        catch (_e) { return []; }
-    }
-    const errorOwner = prksApiErrorOwner(options);
-    try {
-        const res = await prksRequest('/api/concepts', { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
-        const data = await prksParseJsonResponse(res, [], 'concepts.fetch', errorOwner);
-        return Array.isArray(data) ? data : [];
-    } catch (e) {
-        if (prksAbortFallback(e)) return [];
-        prksSetApiError('concepts', 'Could not load Concepts.', '', errorOwner);
-        prksReportApiClientError('concepts.fetch');
-        return [];
-    }
-}
-
-async function fetchConcept(id, options = {}) {
-    const errorOwner = prksApiErrorOwner(options);
-    try {
-        const res = await prksRequest('/api/concepts/' + encodeURIComponent(id), { signal: prksApiSignal(options) });
-        if (res.status === 404) return null;
-        const data = await prksParseJsonResponse(res, null, 'concepts.fetch', errorOwner);
-        return data && data.id ? data : null;
-    } catch (e) {
-        if (prksAbortFallback(e)) return null;
-        prksSetApiError('concepts', 'Could not load Concept.', '', errorOwner);
-        prksReportApiClientError('concepts.fetch');
-        return null;
-    }
+async function fetchConcepts() {
+    if (typeof prksEffectiveConceptCatalogue !== 'function') return [];
+    try { return await prksEffectiveConceptCatalogue() || []; }
+    catch (_e) { return []; }
 }
 
 /**
@@ -1447,37 +1233,10 @@ async function putConceptAliases(id, aliases) {
  * unsynchronized intent applied. A Position created here is real, so it is
  * pickable as an Argument target before any server has heard of it.
  */
-async function fetchPositions(options = {}) {
-    if (typeof prksEffectivePositionCatalogue === 'function') {
-        try { return await prksEffectivePositionCatalogue() || []; }
-        catch (_e) { return []; }
-    }
-    const errorOwner = prksApiErrorOwner(options);
-    try {
-        const res = await prksRequest('/api/positions', { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
-        const data = await prksParseJsonResponse(res, [], 'positions.fetch', errorOwner);
-        return Array.isArray(data) ? data : [];
-    } catch (e) {
-        if (prksAbortFallback(e)) return [];
-        prksSetApiError('positions', 'Could not load Positions.', '', errorOwner);
-        prksReportApiClientError('positions.fetch');
-        return [];
-    }
-}
-
-async function fetchPosition(id, options = {}) {
-    const errorOwner = prksApiErrorOwner(options);
-    try {
-        const res = await prksRequest('/api/positions/' + encodeURIComponent(id), { signal: prksApiSignal(options) });
-        if (res.status === 404) return null;
-        const data = await prksParseJsonResponse(res, null, 'positions.fetch', errorOwner);
-        return data && data.id ? data : null;
-    } catch (e) {
-        if (prksAbortFallback(e)) return null;
-        prksSetApiError('positions', 'Could not load Position.', '', errorOwner);
-        prksReportApiClientError('positions.fetch');
-        return null;
-    }
+async function fetchPositions() {
+    if (typeof prksEffectivePositionCatalogue !== 'function') return [];
+    try { return await prksEffectivePositionCatalogue() || []; }
+    catch (_e) { return []; }
 }
 
 /* --- Durable Position mutations -------------------------------------------
@@ -1571,53 +1330,13 @@ async function deletePosition(id) {
     return { status: 'deleted' };
 }
 
-async function fetchArguments(kind, options = {}) {
-    if (typeof prksEffectiveArgumentCatalogue === 'function') {
-        try {
-            const rows = await prksEffectiveArgumentCatalogue();
-            return typeof prksFilterArgumentsByKind === 'function'
-                ? prksFilterArgumentsByKind(rows || [], kind || '') : (rows || []);
-        } catch (_e) { return []; }
-    }
-    const errorOwner = prksApiErrorOwner(options);
+async function fetchArguments(kind) {
+    if (typeof prksEffectiveArgumentCatalogue !== 'function') return [];
     try {
-        const q = kind ? '?kind=' + encodeURIComponent(kind) : '';
-        const res = await prksRequest('/api/arguments' + q, { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
-        const data = await prksParseJsonResponse(res, [], 'arguments.fetch', errorOwner);
-        return Array.isArray(data) ? data : [];
-    } catch (e) {
-        if (prksAbortFallback(e)) return [];
-        prksSetApiError('arguments', 'Could not load Arguments.', '', errorOwner);
-        prksReportApiClientError('arguments.fetch');
-        return [];
-    }
-}
-
-async function fetchArgument(id, options = {}) {
-    const errorOwner = prksApiErrorOwner(options);
-    try {
-        const res = await prksRequest('/api/arguments/' + encodeURIComponent(id), { signal: prksApiSignal(options) });
-        if (res.status === 404) return null;
-        const data = await prksParseJsonResponse(res, null, 'arguments.fetch', errorOwner);
-        return data && data.id ? data : null;
-    } catch (e) {
-        if (prksAbortFallback(e)) return null;
-        prksSetApiError('arguments', 'Could not load Argument.', '', errorOwner);
-        prksReportApiClientError('arguments.fetch');
-        return null;
-    }
-}
-
-async function fetchArgumentVerdicts(options = {}) {
-    const errorOwner = prksApiErrorOwner(options);
-    try {
-        const res = await prksRequest('/api/argument-verdicts', { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
-        const data = await prksParseJsonResponse(res, [], 'arguments.fetch', errorOwner);
-        return Array.isArray(data) ? data : [];
-    } catch (e) {
-        if (prksAbortFallback(e)) return [];
-        return [];
-    }
+        const rows = await prksEffectiveArgumentCatalogue();
+        return typeof prksFilterArgumentsByKind === 'function'
+            ? prksFilterArgumentsByKind(rows || [], kind || '') : (rows || []);
+    } catch (_e) { return []; }
 }
 
 /* --- Durable Argument mutations ------------------------------------------
@@ -1774,15 +1493,11 @@ async function fetchResearchGraph(opts) {
 
 window.fetchFolders = fetchFolders;
 window.fetchTags = fetchTags;
-window.fetchSavedViews = fetchSavedViews;
-window.fetchSavedView = fetchSavedView;
-window.createSavedView = createSavedView;
-window.updateSavedView = updateSavedView;
-window.deleteSavedView = deleteSavedView;
 window.prksMarkResearchGraphCoreChanged = prksMarkResearchGraphCoreChanged;
 window.prksMarkResearchGraphPeopleChanged = prksMarkResearchGraphPeopleChanged;
 window.prksMarkConceptsDomainChanged = prksMarkConceptsDomainChanged;
 window.prksMarkWorkTitleChanged = prksMarkWorkTitleChanged;
+window.prksMarkProcessingImportChanged = prksMarkProcessingImportChanged;
 window.prksMarkPositionsDomainChanged = prksMarkPositionsDomainChanged;
 window.prksMarkArgumentsDomainChanged = prksMarkArgumentsDomainChanged;
 window.prksArgumentSaveMessage = prksArgumentSaveMessage;
@@ -1805,20 +1520,16 @@ window.prksMarkWorkRoleChanged = prksMarkWorkRoleChanged;
 window.prksMarkWorkRoleDependenciesChanged = prksMarkWorkRoleDependenciesChanged;
 window.prksMarkWorkAuthorDisplayChanged = prksMarkWorkAuthorDisplayChanged;
 window.fetchConcepts = fetchConcepts;
-window.fetchConcept = fetchConcept;
 window.createConcept = createConcept;
 window.updateConcept = updateConcept;
 window.deleteConcept = deleteConcept;
 window.putConceptParents = putConceptParents;
 window.putConceptAliases = putConceptAliases;
 window.fetchPositions = fetchPositions;
-window.fetchPosition = fetchPosition;
 window.createPosition = createPosition;
 window.updatePosition = updatePosition;
 window.deletePosition = deletePosition;
 window.fetchArguments = fetchArguments;
-window.fetchArgument = fetchArgument;
-window.fetchArgumentVerdicts = fetchArgumentVerdicts;
 window.createArgument = createArgument;
 window.updateArgument = updateArgument;
 window.deleteArgument = deleteArgument;

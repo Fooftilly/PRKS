@@ -1,56 +1,92 @@
-"""Publishers page: the coordinator loads publishers in use and Vue paints them."""
+"""Publishers page: Vue reads and writes through the typed client and TanStack Query."""
 import os
+import re
 import unittest
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _APP = os.path.join(_PROJECT_DIR, "frontend", "js", "app.js")
-_PUBLISHERS = os.path.join(_PROJECT_DIR, "frontend", "js", "components", "publishers.js")
+_FEATURE = os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "publishers")
 
 
-def _read(path: str) -> str:
-    with open(path, encoding="utf-8") as fh:
+def _read(*parts: str) -> str:
+    with open(os.path.join(*parts), encoding="utf-8") as fh:
         return fh.read()
 
 
 class FrontendPublishersPageTests(unittest.TestCase):
-    def test_route_stays_online_only_and_paints_vue(self):
+    def test_route_keeps_the_offline_gate_and_does_not_fetch(self):
         app = _read(_APP)
-        publishers_at = app.index("case 'publishers':")
-        types_at = app.index("case 'types':")
-        processing_at = app.index("case 'processing-files':")
-        search_at = app.index("case 'search':")
-        body = app[publishers_at:types_at]
+        body = app[app.index("case 'publishers':"):app.index("case 'types':")]
         self.assertIn("Publishers require a connection", body)
-        self.assertIn("fetchPublishersInUse({ signal: routeSignal })", body)
-        self.assertIn("prksPresentVuePublishers", body)
-        self.assertNotIn("renderPublishersPage", body)
-        self.assertIn("async function prksReloadPublishersPage(", app)
-        self.assertIn("prksVueDismissPublishers", app)
-        processing = app[processing_at:search_at]
-        self.assertIn("prksLoadProcessingInbox(routeSignal)", processing)
-        self.assertIn("prksPresentVueProcessing", processing)
-        self.assertNotIn("prksRenderProcessingFilesPageWithFetch", processing)
+        self.assertLess(
+            body.index("prksOfflineRenderUnavailable"),
+            body.index("prksPresentVueRoute(ctx, contentDiv, 'publishers'"),
+        )
+        self.assertNotIn("await ", body)
+        self.assertNotIn("publishers:", body)
+        self.assertIn("window.prksVueDismissRoute(ctx)", app)
 
-    def test_reload_keeps_the_list_when_the_publisher_read_fails(self):
-        app = _read(_APP)
-        start = app.index("async function prksReloadPublishersPage(")
-        end = app.index("window.prksReloadPublishersPage = prksReloadPublishersPage;")
-        reload = app[start:end]
-        self.assertIn("errorOwner: errorOwner", reload)
-        self.assertIn("prksConsumeApiError(errorOwner)", reload)
-        self.assertIn("prksVueReportPublishersRefreshFailure", reload)
-        self.assertNotIn("prksAlertMessage", reload)
-        self.assertLess(reload.index("if (failure)"), reload.index("prksPresentVuePublishers"))
+    def test_classic_publishers_plumbing_is_gone(self):
+        self.assertFalse(
+            os.path.exists(os.path.join(_PROJECT_DIR, "frontend", "js", "components", "publishers.js"))
+        )
+        gone = (
+            "fetchPublishersInUse",
+            "prksReloadPublishersPage",
+            "prksVueReportPublishersRefreshFailure",
+            "prksPublishersCreate",
+            "prksPublishersAddAlias",
+            "prksPublishersRemoveAlias",
+            "prksPublishersDelete",
+            "prksClosePublishersAliasModal",
+            "components/publishers.js",
+        )
+        sources = {
+            "app.js": _read(_PROJECT_DIR, "frontend", "js", "app.js"),
+            "api.js": _read(_PROJECT_DIR, "frontend", "js", "api.js"),
+            "ui.js": _read(_PROJECT_DIR, "frontend", "js", "ui.js"),
+            "index.html": _read(_PROJECT_DIR, "frontend", "index.html"),
+            "sw.js": _read(_PROJECT_DIR, "frontend", "sw.js"),
+            "env.d.ts": _read(_PROJECT_DIR, "frontend-app", "env.d.ts"),
+        }
+        for name in os.listdir(_FEATURE):
+            sources[name] = _read(_FEATURE, name)
+        for source, text in sources.items():
+            for token in gone:
+                self.assertNotIn(token, text, f"{token} in {source}")
+        self.assertIn(
+            "'publishers-page-alias-modal': 'prksVueClosePublishersAliasModal'",
+            sources["ui.js"],
+        )
+
+    def test_reads_and_writes_go_through_the_typed_client_and_one_query_key(self):
+        catalog = _read(_FEATURE, "usePublishersCatalog.ts")
+        intents = _read(_FEATURE, "intents.ts")
+        self.assertIn("prksQueryKeys.publishers.inUse()", catalog)
+        self.assertIn("listPublishersInUse(signal)", catalog)
+        self.assertIn("refetchOnMount: 'always'", catalog)
+        self.assertIn("prksQueryKeys.publishers.all()", intents)
+        self.assertIn("new MutationObserver(queryClient", intents)
+        self.assertIn("prksOfflineGuardMutation", intents)
+        for name in os.listdir(_FEATURE):
+            text = _read(_FEATURE, name)
+            self.assertNotRegex(text, r"\bfetch\(", name)
+            self.assertNotIn("prksRequest", text, name)
+            self.assertIsNone(re.search(r"queryKey: \[", text), name)
 
     def test_publishers_actions_stay_local_and_map_to_the_publishers_e2e(self):
-        vue = _read(os.path.join(
-            _PROJECT_DIR, "frontend-app", "src", "features", "publishers", "PublishersRoute.vue"))
+        vue = _read(_FEATURE, "PublishersRoute.vue")
         self.assertNotIn("prksAlertMessage", vue)
-        self.assertIn("data-publishers-refresh-error", vue)
-        self.assertIn("data-publishers-create-error", vue)
-        self.assertIn("data-publishers-alias-add-error", vue)
-        self.assertIn("data-publishers-alias-remove-error", vue)
-        self.assertIn("data-publishers-delete-error", vue)
+        for marker in (
+            "data-publishers-loading",
+            "data-publishers-load-error",
+            "data-publishers-refresh-error",
+            "data-publishers-create-error",
+            "data-publishers-alias-add-error",
+            "data-publishers-alias-remove-error",
+            "data-publishers-delete-error",
+        ):
+            self.assertIn(marker, vue)
         self.assertIn('busy-label="Adding…"', vue)
         self.assertIn('busy-label="Deleting…"', vue)
         self.assertIn("Removing…", vue)
@@ -61,21 +97,11 @@ class FrontendPublishersPageTests(unittest.TestCase):
         self.assertIn('data-prks-middleclick-nav="1"', name)
         card = vue[vue.index('class="project-card publishers-page__list-item"'):vue.index('class="publishers-page__list-main"')]
         self.assertNotIn("data-prks-route", card)
-        policy = _read(os.path.join(_PROJECT_DIR, "tests", "e2e", "policy.py"))
+        policy = _read(_PROJECT_DIR, "tests", "e2e", "policy.py")
         rule = policy[policy.index('"name": "publishers-vue"'):policy.index('"name": "processing-vue"')]
         self.assertIn('"features": ("publishers",)', rule)
         self.assertIn("test_publishers_route_surface", rule)
         self.assertNotIn('"features": ("browse",)', rule)
-
-    def test_legacy_module_keeps_online_writes_only(self):
-        publishers = _read(_PUBLISHERS)
-        self.assertNotIn("renderPublishersPage", publishers)
-        self.assertNotIn("prksPublishersPageCtx", publishers)
-        self.assertIn("prksOfflineGuardMutation", publishers)
-        self.assertIn("'/api/publishers'", publishers)
-        self.assertIn("window.prksClosePublishersAliasModal", publishers)
-        self.assertNotIn("prksDeleteTagDurably", publishers)
-        self.assertNotIn("prksMergeTagDurably", publishers)
 
 
 if __name__ == "__main__":

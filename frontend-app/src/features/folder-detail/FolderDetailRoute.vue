@@ -1,7 +1,11 @@
 <script setup lang="ts">
-import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, inject, onMounted, ref, watch } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
+import PrksWorkCard from '../../components/PrksWorkCard.vue'
+import { useWorkCardCollection } from '../../components/use-work-card-collection'
+import { workCardCollectionFingerprint, workCardThumbOptions, type PrksWorkCardWork } from '../../components/work-card'
 import { folderDetailIntentsKey } from './intents'
-import { folderDetailWorksHtml } from './legacy-work-card'
 import type { FolderDetailProjection } from './projection'
 
 const props = defineProps<{
@@ -12,7 +16,6 @@ const intents = inject(folderDetailIntentsKey)
 const rootEl = ref<HTMLElement | null>(null)
 const mainEl = ref<HTMLElement | null>(null)
 const modeHost = ref<HTMLElement | null>(null)
-const collectionEl = ref<HTMLElement | null>(null)
 
 const ready = computed(() => props.projection.availability === 'ready' && !!props.projection.folder)
 const unavailable = computed(() => props.projection.availability === 'unavailable')
@@ -55,9 +58,7 @@ const collectionClass = computed(() => {
   return typeof fn === 'function' ? fn() : 'card-grid'
 })
 
-const collectionHtml = computed(() =>
-  folderDetailWorksHtml(props.projection.effectiveWorks, props.projection.offlineCached),
-)
+const works = computed(() => props.projection.effectiveWorks as readonly PrksWorkCardWork[])
 
 function paintMode(): void {
   const host = modeHost.value
@@ -66,32 +67,14 @@ function paintMode(): void {
   window.prksBindWorkBrowseMode?.(rootEl.value)
 }
 
-function releaseOwnedThumbResources(root: ParentNode | null): void {
-  if (!root) return
-  // Scoped only. Another pane may own the preview or its own lazy thumbs.
-  if (typeof window.prksReleaseWorkThumbPreview === 'function') {
-    window.prksReleaseWorkThumbPreview(root)
-  }
-  if (typeof window.prksReleaseLazyWorkThumbs === 'function') {
-    window.prksReleaseLazyWorkThumbs(root)
-  }
-}
+useWorkCardCollection(mainEl, {
+  initWhen: () => !props.projection.offlineCached,
+  source: () =>
+    workCardCollectionFingerprint(works.value, {
+      suppressThumbnail: props.projection.offlineCached,
+    }),
+})
 
-function paintCollection(): void {
-  const main = mainEl.value
-  // Folder→Folder keeps this shell and rewrites the cards. Release while the
-  // previous thumbs are still inside main; scoped release leaves another pane alone.
-  releaseOwnedThumbResources(main)
-  const el = collectionEl.value
-  if (!el) return
-  el.innerHTML = collectionHtml.value
-  const offlineCached = props.projection.offlineCached
-  if (!offlineCached && typeof window.prksInitLazyWorkThumbs === 'function') {
-    window.prksInitLazyWorkThumbs(el)
-  }
-  window.prksBindWorkBrowseMode?.(rootEl.value)
-  window.prksRefreshIcons?.(rootEl.value)
-}
 
 function rebindHierarchyNav(): void {
   const root = rootEl.value
@@ -125,14 +108,7 @@ function onNewFolder(): void {
 
 onMounted(() => {
   paintMode()
-  paintCollection()
   commitSurface()
-})
-
-onBeforeUnmount(() => {
-  // beginRoute dismisses this tree before app.js calls prksReleaseWorkThumbPreview
-  // and prksReleaseLazyWorkThumbs(contentDiv). Both only see thumbs still under this root.
-  releaseOwnedThumbResources(rootEl.value || mainEl.value)
 })
 
 watch(
@@ -150,10 +126,6 @@ watch(
   },
   { flush: 'post' },
 )
-
-watch(collectionHtml, () => {
-  paintCollection()
-}, { flush: 'post' })
 </script>
 
 <template>
@@ -161,9 +133,9 @@ watch(collectionHtml, () => {
     <div class="prks-page-header page-header">
       <h2 class="prks-page-title">Folder not available offline</h2>
     </div>
-    <p class="prks-inline-message" data-prks-role="offline-unavailable">This item is not available offline.</p>
+    <PrksInlineMessage data-prks-role="offline-unavailable">This item is not available offline.</PrksInlineMessage>
   </template>
-  <p v-else-if="!ready" class="prks-inline-message prks-inline-message--error">Folder not found.</p>
+  <PrksInlineMessage v-else-if="!ready" tone="error">Folder not found.</PrksInlineMessage>
   <div
     v-else
     ref="rootEl"
@@ -191,7 +163,7 @@ watch(collectionHtml, () => {
         data-prks-folder-tree-host
         data-prks-folder-detail-tree-host
       >
-        <p class="prks-inline-message prks-folder-tree__empty">Loading folders…</p>
+        <PrksInlineMessage class="prks-folder-tree__empty">Loading folders…</PrksInlineMessage>
       </div>
     </aside>
     <div ref="mainEl" class="prks-folder-detail__main">
@@ -201,16 +173,15 @@ watch(collectionHtml, () => {
             <span style="display: contents" v-html="headerIcon"></span>
             {{ title }}
           </h2>
-          <button
+          <PrksButton
             v-if="canDelete"
-            type="button"
-            class="prks-btn prks-btn--danger"
+            variant="danger"
             :data-delete-folder-id="encodedId"
             @click="onDelete"
           >
             <span style="display: contents" v-html="trashIcon"></span>
             Delete Folder
-          </button>
+          </PrksButton>
         </div>
         <span style="display: contents" v-html="summaryHtml"></span>
       </div>
@@ -223,7 +194,14 @@ watch(collectionHtml, () => {
           <div ref="modeHost" data-prks-folder-detail-mode-host style="display: contents"></div>
         </div>
       </div>
-      <div ref="collectionEl" :class="collectionClass"></div>
+      <div :class="collectionClass">
+        <PrksWorkCard
+          v-for="work in works"
+          :key="String(work.id ?? '')"
+          :work="work"
+          :options="workCardThumbOptions(projection.offlineCached)"
+        />
+      </div>
     </div>
   </div>
 </template>

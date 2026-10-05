@@ -2,6 +2,12 @@
  * Typed Position shapes for Vue route projections.
  * Already-effective rows/detail from the legacy coordinator — not a second
  * catalogue or durable-operation store.
+ *
+ * These are not aliases of `src/api/generated/positions.ts`. That module is
+ * the compile-time HTTP contract (`PositionSummary`, wire `PositionDetail`,
+ * sync state, create/update bodies). The projection below drops timestamps,
+ * coerces description to text, and carries Argument rows the coordinator has
+ * already overlaid. Domain validation stays on the research-network backend.
  */
 
 /** One Argument/Stance row already overlaid onto a Position detail. */

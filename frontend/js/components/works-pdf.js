@@ -3778,18 +3778,23 @@ async function prksMountPdfViewer(ctx, work, runtime, targetNode, initialPage, m
 export function initPdfViewerForWork(ctx, work) {
     if (!work || !work.file_path || !ctx) return;
     const _pdfGen = ctx.generation;
+    // Capture the owner ticket before any deferred or async work. A later
+    // setResource('pdf') would mint a fresh ticket and could attach after
+    // this lifetime has ended. Registration uses this ticket only.
+    const _pdfTicket = typeof ctx.resourceTicket === 'function' ? ctx.resourceTicket(_pdfGen) : null;
     const _pdfStale = function () {
-        return typeof ctx.isCurrent === 'function' ? !ctx.isCurrent(_pdfGen) : !ctx.mounted;
+        return !_pdfTicket
+            || !ctx.resourceRegistry
+            || typeof ctx.resourceRegistry.accepts !== 'function'
+            || !ctx.resourceRegistry.accepts(_pdfTicket);
     };
     const setupTimer = setTimeout(() => {
         if (ctx && ctx.timers && ctx.timers.get('pdfDeferredSetup') === setupTimer) {
             ctx.clearTimer('pdfDeferredSetup');
         }
         if (_pdfStale()) return;
-        if (typeof ctx.clearResource === 'function') ctx.clearResource('pdf');
         const targetNode = ctx.query ? ctx.query('[data-prks-role="pdf-viewer"]') : null;
         if (!targetNode) return;
-        targetNode.innerHTML = '';
         const runtime =
             typeof createWorkPdfRuntime === 'function'
                 ? createWorkPdfRuntime({
@@ -3812,19 +3817,33 @@ export function initPdfViewerForWork(ctx, work) {
         runtime.lastPage = lastPage;
         runtime.work = work;
         runtime.filePath = work.file_path || '';
-        ctx.setResource('pdf', runtime, function () {
-            const pane = typeof ctx.query === 'function' ? ctx.query('.work-pdf-pane') : null;
-            runtime.destroy();
-            if (pane && typeof window.prksApplyPdfAnnotationDrawerChrome === 'function') {
-                window.prksApplyPdfAnnotationDrawerChrome(pane, { placement: 'closed' });
+        const attached = typeof ctx.registerResource === 'function'
+            ? ctx.registerResource(_pdfTicket, {
+                kind: 'pdf',
+                value: runtime,
+                suspendable: true,
+                dispose: function () {
+                    const pane = typeof ctx.query === 'function' ? ctx.query('.work-pdf-pane') : null;
+                    runtime.destroy();
+                    if (pane && typeof window.prksApplyPdfAnnotationDrawerChrome === 'function') {
+                        window.prksApplyPdfAnnotationDrawerChrome(pane, { placement: 'closed' });
+                    }
+                    if (typeof window.prksVueDismissWorkPdfAnnotationPopup === 'function') {
+                        window.prksVueDismissWorkPdfAnnotationPopup(ctx);
+                    }
+                    if (typeof window.prksVueDismissWorkPdfAnnotationDrawer === 'function') {
+                        window.prksVueDismissWorkPdfAnnotationDrawer(ctx);
+                    }
+                },
+            })
+            : 'rejected';
+        if (attached === 'rejected') {
+            if (typeof runtime.destroy === 'function') {
+                try { runtime.destroy(); } catch (_e) {}
             }
-            if (typeof window.prksVueDismissWorkPdfAnnotationPopup === 'function') {
-                window.prksVueDismissWorkPdfAnnotationPopup(ctx);
-            }
-            if (typeof window.prksVueDismissWorkPdfAnnotationDrawer === 'function') {
-                window.prksVueDismissWorkPdfAnnotationDrawer(ctx);
-            }
-        });
+            return;
+        }
+        targetNode.innerHTML = '';
         if (typeof bindPdfSurfaceSearch === 'function') {
             bindPdfSurfaceSearch(ctx, runtime, targetNode, _pdfGen);
         }

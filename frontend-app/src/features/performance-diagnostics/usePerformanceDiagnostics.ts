@@ -6,11 +6,9 @@ import {
   resetPerformanceDiagnostics,
 } from '../../api/performance-diagnostics'
 import { isAbortError } from '../../api/http'
+import { prksQueryKeys } from '../../query/keys'
 import { performanceDiagnosticsEnabled } from './activation'
 import { readClientRequestSnapshot, resetClientRequestCoordinator, type ClientRequestSnapshot } from './client-snapshot'
-
-/** Domain query key. Not a URL. */
-export const performanceDiagnosticsQueryKey = ['performance-diagnostics'] as const
 
 const LOAD_ERROR = 'Could not load performance diagnostics.'
 const RESET_ERROR = 'Could not reset measurements.'
@@ -29,7 +27,7 @@ export function usePerformanceDiagnostics() {
   const enabled = performanceDiagnosticsEnabled()
 
   const query = useQuery({
-    queryKey: performanceDiagnosticsQueryKey,
+    queryKey: prksQueryKeys.performanceDiagnostics.snapshot(),
     enabled,
     staleTime: Number.POSITIVE_INFINITY,
     gcTime: 30 * 60 * 1000,
@@ -49,7 +47,7 @@ export function usePerformanceDiagnostics() {
   })
 
   async function reloadFromServer(): Promise<void> {
-    await queryClient.invalidateQueries({ queryKey: performanceDiagnosticsQueryKey })
+    await queryClient.invalidateQueries({ queryKey: prksQueryKeys.performanceDiagnostics.all() })
   }
 
   const resetMutation = useMutation({

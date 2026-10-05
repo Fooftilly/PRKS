@@ -1,8 +1,8 @@
 import { createVNode } from 'vue'
 import {
-  dismissRouteSurface,
   presentRouteSurface,
   registerEarlyRoutePresenter,
+  registerRouteWindowBridge,
   resetRouteSurfaceForTests,
   type RouteSurfaceOwner,
 } from '../../route-surface/lifecycle'
@@ -14,7 +14,7 @@ import type { SearchRouteInstance } from './route'
 export interface SearchPresentInput {
   owner: RouteSurfaceOwner & SearchIntentOwner
   host: HTMLElement
-  /** Route params as parsed by `prksParseRoute`. */
+  /** Route params as parsed by the route model's `parseRoute`. */
   request: unknown
   canonicalHash?: string
   /** Already-effective rows from `prksEffectiveSearchResults`. */
@@ -63,17 +63,12 @@ export function presentSearch(input: SearchPresentInput): void {
   })
 }
 
-export function dismissSearch(owner: object | null | undefined): void {
-  dismissRouteSurface(owner)
-}
-
 export function resetSearchSessionForTests(): void {
   resetRouteSurfaceForTests()
 }
 
 export function registerSearchBridge(target: Window = window): void {
-  target.prksVuePresentSearch = presentSearch
-  target.prksVueDismissSearch = dismissSearch
+  registerRouteWindowBridge(target)
   registerEarlyRoutePresenter(
     SEARCH_FEATURE,
     (request, host) => {

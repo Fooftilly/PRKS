@@ -1,8 +1,7 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readRouteSurface, type RouteSurfaceOwner } from '../../route-surface/lifecycle'
+import { dismissRouteSurface, readRouteSurface, type RouteSurfaceOwner } from '../../route-surface/lifecycle'
 import {
-  dismissResearchGraph,
   presentResearchGraph,
   registerResearchGraphBridge,
   resetResearchGraphSessionForTests,
@@ -11,8 +10,8 @@ import {
 afterEach(() => {
   resetResearchGraphSessionForTests()
   document.body.innerHTML = ''
-  delete window.prksVuePresentResearchGraph
-  delete window.prksVueDismissResearchGraph
+  delete window.prksVuePresentRoute
+  delete window.prksVueDismissRoute
   delete window.renderResearchGraph
   delete window.prksReleaseResearchGraph
   delete window.prksIcon
@@ -128,7 +127,7 @@ describe('Research Graph route bridge', () => {
     const secondaryHost = host()
     presentResearchGraph({ owner: main, host: mainHost, generation: 1, attach: {} })
     presentResearchGraph({ owner: secondary, host: secondaryHost, generation: 1, shell: false, attach: {} })
-    dismissResearchGraph(main)
+    dismissRouteSurface(main)
     await nextTick()
     expect(released).toEqual([main])
     expect(mainHost.querySelector('[data-prks-research-graph]')).toBeNull()
@@ -153,7 +152,7 @@ describe('Research Graph route bridge', () => {
       attach: {},
     }
     registerResearchGraphBridge(window)
-    expect(window.prksVuePresentResearchGraph).toBeTypeOf('function')
+    expect(window.prksVuePresentRoute).toBeTypeOf('function')
     expect((el as HTMLElement & { __prksVueRouteRequest?: unknown }).__prksVueRouteRequest).toBeUndefined()
     expect(el.querySelector('[data-prks-research-graph]')).not.toBeNull()
     expect(decoy.querySelector('[data-prks-research-graph]')).toBeNull()

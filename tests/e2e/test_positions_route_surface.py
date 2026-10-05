@@ -230,8 +230,8 @@ class PositionsRouteSurfaceTests(unittest.TestCase):
                     const tile = document.querySelector('.prks-tile--main');
                     const host = tile && tile.querySelector('[data-prks-vue-route-host]');
                     window.__prksPositionsErrorProbe = { host: host, dismisses: 0, steps: [] };
-                    const dismiss = window.prksVueDismissPositions;
-                    window.prksVueDismissPositions = function (ctx) {
+                    const dismiss = window.prksVueDismissRoute;
+                    window.prksVueDismissRoute = function (ctx) {
                         const probe = window.__prksPositionsErrorProbe;
                         const saved = probe.host;
                         probe.dismisses += 1;

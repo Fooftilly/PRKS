@@ -5,6 +5,7 @@ import { createPrksQueryClient } from './client'
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  delete window.prksReportClientError
 })
 
 describe('createPrksQueryClient', () => {
@@ -188,5 +189,35 @@ describe('createPrksQueryClient', () => {
     })
     await expect(observer.mutate()).rejects.toBeInstanceOf(PrksApiError)
     expect(calls).toBe(1)
+  })
+
+  it('reports a read\'s final failure once by its meta source, and never an abort or an unlabeled read', async () => {
+    const report = vi.fn()
+    window.prksReportClientError = report
+    const client = createPrksQueryClient()
+    let attempts = 0
+    const failing = () => {
+      attempts += 1
+      throw new PrksApiError('unavailable', 503, null)
+    }
+    await Promise.allSettled([
+      client.fetchQuery({ queryKey: ['labeled'], retryDelay: 0, queryFn: failing, meta: { clientErrorSource: 'saved-views.fetch' } }),
+      client.fetchQuery({ queryKey: ['labeled'], retryDelay: 0, queryFn: failing, meta: { clientErrorSource: 'saved-views.fetch' } }),
+    ])
+    expect(attempts).toBe(3)
+    expect(report).toHaveBeenCalledTimes(1)
+    expect(report).toHaveBeenCalledWith({ kind: 'api_client_error', source: 'saved-views.fetch' })
+
+    await client
+      .fetchQuery({ queryKey: ['unlabeled'], queryFn: () => Promise.reject(new PrksApiError('bad', 400)) })
+      .catch(() => {})
+    await client
+      .fetchQuery({
+        queryKey: ['aborted'],
+        queryFn: () => Promise.reject(new DOMException('aborted', 'AbortError')),
+        meta: { clientErrorSource: 'saved-views.fetch' },
+      })
+      .catch(() => {})
+    expect(report).toHaveBeenCalledTimes(1)
   })
 })

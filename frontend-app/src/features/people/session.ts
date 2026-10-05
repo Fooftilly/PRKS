@@ -3,6 +3,7 @@ import {
   dismissRouteSurface,
   presentRouteSurface,
   registerEarlyRoutePresenter,
+  registerRouteWindowBridge,
   resetRouteSurfaceForTests,
   type RouteSurfaceOwner,
 } from '../../route-surface/lifecycle'
@@ -47,7 +48,7 @@ function armPeopleOwnerCleanup(owner: PeopleOwner): void {
       armPeopleOwnerCleanup(owner)
       return
     }
-    dismissPeople(owner)
+    dismissRouteSurface(owner)
   })
 }
 
@@ -173,10 +174,6 @@ export function presentPersonDetail(input: PersonDetailPresentInput): void {
   armPeopleOwnerCleanup(input.owner)
 }
 
-export function dismissPeople(owner: object | null | undefined): void {
-  dismissRouteSurface(owner)
-}
-
 export function resetPeopleSessionForTests(): void {
   resetRouteSurfaceForTests()
 }
@@ -198,9 +195,7 @@ function isDetailEarlyRequest(
 }
 
 export function registerPeopleBridge(target: Window = window): void {
-  target.prksVuePresentPeopleIndex = presentPeopleIndex
-  target.prksVuePresentPersonDetail = presentPersonDetail
-  target.prksVueDismissPeople = dismissPeople
+  registerRouteWindowBridge(target)
   registerEarlyRoutePresenter(
     PEOPLE_FEATURE,
     (request, host) => {

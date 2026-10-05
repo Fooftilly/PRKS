@@ -36,6 +36,7 @@ function routeName(route: PrksRouteInstance): PrksRouteInstance['name'] {
     case 'people-groups':
     case 'person-group-detail':
     case 'research-graph':
+    case 'work':
       return route.name
     default: {
       const unreachable: never = route

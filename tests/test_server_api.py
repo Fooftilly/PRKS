@@ -3688,52 +3688,105 @@ class TestServerAPI(unittest.TestCase):
             data = json.loads(sr.read().decode())
         self.assertTrue(any(x.get("id") == w_id for x in data))
 
+    def _publishers_call(self, method, path, payload=None, *, schema_valid=True):
+        """Send one Publishers request and check it against the OpenAPI slice.
+
+        ``schema_valid=False`` sends a body the schema refuses; only the
+        response is checked then.
+        """
+        from openapi_core import OpenAPI
+        from openapi_core.testing import MockRequest, MockResponse
+
+        from backend.api_contract.openapi import publishers_openapi_document
+
+        data = json.dumps(payload).encode() if payload is not None else None
+        req = urllib.request.Request(f"{self._base_url}{path}", data=data, method=method)
+        if data is not None:
+            req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req) as res:
+                status, raw = res.status, res.read()
+        except urllib.error.HTTPError as err:
+            status, raw = err.code, err.read()
+        parsed = urllib.parse.urlsplit(path)
+        api = OpenAPI.from_dict(publishers_openapi_document())
+        request = MockRequest(
+            host_url="http://127.0.0.1",
+            method=method.lower(),
+            path=parsed.path,
+            args=dict(urllib.parse.parse_qsl(parsed.query)),
+            data=data,
+        )
+        if schema_valid:
+            api.validate_request(request)
+        api.validate_response(
+            request,
+            MockResponse(data=raw, status_code=status, content_type="application/json"),
+        )
+        return status, json.loads(raw.decode())
+
     def test_publishers_api_list_create_alias_delete(self):
-        req_list = urllib.request.Request(f"{self._base_url}/api/publishers?used=1")
-        with urllib.request.urlopen(req_list) as rl:
-            before = json.loads(rl.read().decode())
+        status, before = self._publishers_call("GET", "/api/publishers?used=1")
+        self.assertEqual(status, 200)
         self.assertIsInstance(before, list)
 
-        req_p = urllib.request.Request(
-            f"{self._base_url}/api/publishers",
-            data=json.dumps({"name": "ApiCanonPublisher"}).encode(),
-            method="POST",
+        status, body = self._publishers_call(
+            "POST", "/api/publishers", {"name": "ApiCanonPublisher"}
         )
-        req_p.add_header("Content-Type", "application/json")
-        with urllib.request.urlopen(req_p) as rp:
-            body = json.loads(rp.read().decode())
-        self.assertIn("id", body)
+        self.assertEqual(status, 200)
+        self.assertEqual(body["name"], "ApiCanonPublisher")
+        self.assertIs(body["existed"], False)
         pid = body["id"]
-
-        req_a = urllib.request.Request(
-            f"{self._base_url}/api/publishers/{urllib.parse.quote(pid)}/aliases",
-            data=json.dumps({"alias": "ACP Alias"}).encode(),
-            method="POST",
+        status, again = self._publishers_call(
+            "POST", "/api/publishers", {"name": "apicanonpublisher"}
         )
-        req_a.add_header("Content-Type", "application/json")
-        with urllib.request.urlopen(req_a) as ra:
-            self.assertEqual(ra.status, 200)
+        self.assertEqual((status, again["id"], again["existed"]), (200, pid, True))
 
-        req_list2 = urllib.request.Request(f"{self._base_url}/api/publishers?used=1")
-        with urllib.request.urlopen(req_list2) as rl2:
-            after = json.loads(rl2.read().decode())
+        quoted = urllib.parse.quote(pid)
+        status, added = self._publishers_call(
+            "POST", f"/api/publishers/{quoted}/aliases", {"alias": "ACP Alias"}
+        )
+        self.assertEqual((status, added), (200, {"status": "added"}))
+
+        status, after = self._publishers_call("GET", "/api/publishers?used=1")
         row = next(x for x in after if x.get("id") == pid)
-        self.assertIn("ACP Alias", row.get("aliases", []))
+        self.assertEqual(row, {"id": pid, "name": "ApiCanonPublisher", "aliases": ["ACP Alias"], "work_count": 0})
 
         alias_enc = urllib.parse.quote("ACP Alias")
-        req_da = urllib.request.Request(
-            f"{self._base_url}/api/publishers/{urllib.parse.quote(pid)}/aliases?alias={alias_enc}",
-            method="DELETE",
+        status, removed = self._publishers_call(
+            "DELETE", f"/api/publishers/{quoted}/aliases?alias={alias_enc}"
         )
-        with urllib.request.urlopen(req_da) as rda:
-            self.assertEqual(rda.status, 200)
+        self.assertEqual((status, removed), (200, {"status": "deleted"}))
+        status, missing = self._publishers_call(
+            "DELETE", f"/api/publishers/{quoted}/aliases?alias={alias_enc}"
+        )
+        self.assertEqual((status, missing["error"]), (404, "alias not found"))
 
-        req_dp = urllib.request.Request(
-            f"{self._base_url}/api/publishers/{urllib.parse.quote(pid)}",
-            method="DELETE",
+        status, deleted = self._publishers_call("DELETE", f"/api/publishers/{quoted}")
+        self.assertEqual((status, deleted), (200, {"status": "deleted"}))
+
+    def test_publishers_api_refuses_wrong_types_and_keeps_domain_messages(self):
+        status, body = self._publishers_call("POST", "/api/publishers", {"name": 7}, schema_valid=False)
+        self.assertEqual((status, body["code"]), (400, "invalid_request"))
+        status, body = self._publishers_call("POST", "/api/publishers", {}, schema_valid=False)
+        self.assertEqual((status, body["code"]), (400, "invalid_request"))
+        status, body = self._publishers_call("POST", "/api/publishers", {"name": "   "})
+        self.assertEqual((status, body), (400, {"error": "publisher name is empty"}))
+
+        _status, created = self._publishers_call(
+            "POST", "/api/publishers", {"name": "TypedAliasPublisher"}
         )
-        with urllib.request.urlopen(req_dp) as rdp:
-            self.assertEqual(rdp.status, 200)
+        quoted = urllib.parse.quote(created["id"])
+        status, body = self._publishers_call(
+            "POST", f"/api/publishers/{quoted}/aliases", {"alias": ["x"]}, schema_valid=False
+        )
+        self.assertEqual((status, body["code"]), (400, "invalid_request"))
+        status, body = self._publishers_call(
+            "POST", f"/api/publishers/{quoted}/aliases", {"alias": "typedaliaspublisher"}
+        )
+        self.assertEqual(
+            (status, body), (400, {"error": "alias matches canonical publisher name"})
+        )
 
     def test_processing_files_api_scan_patch_and_import(self):
         processing_root = server_module.processing_dir
@@ -4802,8 +4855,43 @@ class TestServerAPI(unittest.TestCase):
                 parsed = {"raw": raw}
             return exc.code, parsed
 
+    def _saved_views_call(self, method, path, payload=None, *, schema_valid=True):
+        """Send one Saved Views request and check it against the OpenAPI slice.
+
+        ``schema_valid=False`` sends a body the schema refuses; only the
+        response is checked then.
+        """
+        from openapi_core import OpenAPI
+        from openapi_core.testing import MockRequest, MockResponse
+
+        from backend.api_contract.openapi import saved_views_openapi_document
+
+        data = None if payload is None else json.dumps(payload).encode()
+        req = urllib.request.Request(f"{self._base_url}{path}", data=data, method=method)
+        if payload is not None:
+            req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req) as res:
+                status, raw = res.status, res.read()
+        except urllib.error.HTTPError as exc:
+            status, raw = exc.code, exc.read()
+        api = OpenAPI.from_dict(saved_views_openapi_document())
+        request = MockRequest(
+            host_url="http://127.0.0.1",
+            method=method.lower(),
+            path=urllib.parse.urlsplit(path).path,
+            data=data,
+        )
+        if schema_valid:
+            api.validate_request(request)
+        api.validate_response(
+            request,
+            MockResponse(data=raw, status_code=status, content_type="application/json"),
+        )
+        return status, json.loads(raw.decode())
+
     def test_saved_views_crud_and_duplicate_name(self):
-        status, created = self._sv_json(
+        status, created = self._saved_views_call(
             "POST",
             "/api/saved-views",
             {
@@ -4822,13 +4910,13 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(created["search"]["author"], "Adorno")
         self.assertNotIn("search_q", created)
         vid = created["id"]
-        status, listed = self._sv_json("GET", "/api/saved-views")
+        status, listed = self._saved_views_call("GET", "/api/saved-views")
         self.assertEqual(status, 200)
         self.assertTrue(any(v["id"] == vid for v in listed))
-        status, one = self._sv_json("GET", f"/api/saved-views/{vid}")
+        status, one = self._saved_views_call("GET", f"/api/saved-views/{vid}")
         self.assertEqual(status, 200)
         self.assertEqual(one["name"], "Adorno — culture industry")
-        status, dup = self._sv_json(
+        status, dup = self._saved_views_call(
             "POST",
             "/api/saved-views",
             {
@@ -4838,7 +4926,7 @@ class TestServerAPI(unittest.TestCase):
         )
         self.assertEqual(status, 409)
         self.assertEqual(dup["error"], "A Saved View with that name already exists.")
-        status, patched = self._sv_json(
+        status, patched = self._saved_views_call(
             "PATCH",
             f"/api/saved-views/{vid}",
             {"name": "Critical Theory"},
@@ -4846,21 +4934,22 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(patched["id"], vid)
         self.assertEqual(patched["name"], "Critical Theory")
-        status, missing = self._sv_json("GET", "/api/saved-views/SV-missing")
+        status, missing = self._saved_views_call("GET", "/api/saved-views/SV-missing")
         self.assertEqual(status, 404)
-        status, deleted = self._sv_json("DELETE", f"/api/saved-views/{vid}")
+        status, deleted = self._saved_views_call("DELETE", f"/api/saved-views/{vid}")
         self.assertEqual(status, 200)
-        status, gone = self._sv_json("GET", f"/api/saved-views/{vid}")
+        status, gone = self._saved_views_call("GET", f"/api/saved-views/{vid}")
         self.assertEqual(status, 404)
 
     def test_saved_views_reject_invalid_and_partial_search(self):
-        status, body = self._sv_json(
+        status, body = self._saved_views_call(
             "POST",
             "/api/saved-views",
             {"name": "Bad", "search": {"mode": "advanced", "author": "Adorno"}},
+            schema_valid=False,
         )
-        self.assertEqual(status, 400)
-        created = self._sv_json(
+        self.assertEqual((status, body), (400, {"error": "Search definition is incomplete."}))
+        created = self._saved_views_call(
             "POST",
             "/api/saved-views",
             {
@@ -4874,16 +4963,370 @@ class TestServerAPI(unittest.TestCase):
                 },
             },
         )[1]
-        status, partial = self._sv_json(
+        status, partial = self._saved_views_call(
             "PATCH",
             f"/api/saved-views/{created['id']}",
             {"search": {"author": "Adorno"}},
+            schema_valid=False,
         )
-        self.assertEqual(status, 400)
+        self.assertEqual((status, partial), (400, {"error": "Search definition is incomplete."}))
         self.assertEqual(
-            self._sv_json("GET", f"/api/saved-views/{created['id']}")[1]["search"]["q"],
+            self._saved_views_call("GET", f"/api/saved-views/{created['id']}")[1]["search"]["q"],
             "critical theory",
         )
+
+    def test_saved_views_wrong_types_keep_domain_messages(self):
+        search = {"mode": "all", "q": "typed", "tag": "", "author": "", "publisher": ""}
+        cases = (
+            ({"name": 7, "search": search}, "Name must be a string."),
+            ({"name": "Typed", "search": "all"}, "Search definition is required."),
+            ({"name": "Typed", "search": {**search, "q": 1}}, "Search fields must be strings."),
+            ({"name": "Typed", "search": {**search, "mode": "regex"}}, "Invalid search mode."),
+        )
+        for payload, message in cases:
+            with self.subTest(message=message):
+                status, body = self._saved_views_call(
+                    "POST", "/api/saved-views", payload, schema_valid=False
+                )
+                self.assertEqual((status, body), (400, {"error": message}))
+        _status, created = self._saved_views_call(
+            "POST", "/api/saved-views", {"name": "Typed", "search": search}
+        )
+        status, body = self._saved_views_call(
+            "PATCH", f"/api/saved-views/{created['id']}", {"name": 7}, schema_valid=False
+        )
+        self.assertEqual((status, body), (400, {"error": "Name must be a string."}))
+        status, body = self._saved_views_call(
+            "PATCH", f"/api/saved-views/{created['id']}", {}
+        )
+        self.assertEqual((status, body), (400, {"error": "Nothing to update."}))
+        status, body = self._saved_views_call("DELETE", "/api/saved-views/SV-missing")
+        self.assertEqual((status, body), (404, {"error": "Saved View not found."}))
+
+    def test_saved_views_request_schema_matches_the_live_endpoint(self):
+        """Inputs the schema accepts, the server accepts, and the reverse."""
+        search = {"mode": "all", "q": "parity", "tag": "", "author": "", "publisher": ""}
+        # Extra keys, top-level and nested, are ignored by both.
+        status, created = self._saved_views_call(
+            "POST",
+            "/api/saved-views",
+            {"name": "Parity", "search": {**search, "extra": 1}, "unused": True},
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(created["search"], search)
+        # The domain trims the mode; the schema types it as a string.
+        status, trimmed = self._saved_views_call(
+            "POST", "/api/saved-views", {"name": "Trimmed", "search": {**search, "mode": " all "}}
+        )
+        self.assertEqual((status, trimmed["search"]["mode"]), (201, "all"))
+        # A mode outside the three is a domain refusal of a schema-valid body.
+        status, body = self._saved_views_call(
+            "POST", "/api/saved-views", {"name": "Regex", "search": {**search, "mode": "regex"}}
+        )
+        self.assertEqual((status, body), (400, {"error": "Invalid search mode."}))
+        # PATCH null means "leave unchanged" in both.
+        vid = created["id"]
+        status, body = self._saved_views_call(
+            "PATCH", f"/api/saved-views/{vid}", {"name": None, "search": None}
+        )
+        self.assertEqual((status, body), (400, {"error": "Nothing to update."}))
+        status, renamed = self._saved_views_call(
+            "PATCH", f"/api/saved-views/{vid}", {"name": "Parity 2", "search": None}
+        )
+        self.assertEqual((status, renamed["name"], renamed["search"]), (200, "Parity 2", search))
+        # A missing search key is refused by both.
+        status, body = self._saved_views_call(
+            "POST",
+            "/api/saved-views",
+            {"name": "Short", "search": {"mode": "all", "q": "x"}},
+            schema_valid=False,
+        )
+        self.assertEqual((status, body), (400, {"error": "Search definition is incomplete."}))
+        from openapi_core import OpenAPI
+        from openapi_core.testing import MockRequest
+
+        from backend.api_contract.openapi import saved_views_openapi_document
+
+        api = OpenAPI.from_dict(saved_views_openapi_document())
+        with self.assertRaises(Exception):
+            api.validate_request(
+                MockRequest(
+                    host_url="http://127.0.0.1",
+                    method="post",
+                    path="/api/saved-views",
+                    data=json.dumps({"name": "Short", "search": {"mode": "all", "q": "x"}}).encode(),
+                )
+            )
+
+    def _processing_call(
+        self, method, path, payload=None, *, schema_valid=True, raw=None, content_type=None
+    ):
+        """Send one Files for Processing request and check it against its OpenAPI slice.
+
+        ``schema_valid=False`` sends a body the schema refuses; only the
+        response is checked then. ``raw`` sends those bytes as the body
+        instead of ``payload``; ``content_type`` overrides the JSON header
+        (an empty string sends none).
+        """
+        from openapi_core import OpenAPI
+        from openapi_core.testing import MockRequest, MockResponse
+
+        from backend.api_contract.openapi import processing_files_openapi_document
+
+        data = raw if raw is not None else (None if payload is None else json.dumps(payload).encode())
+        req = urllib.request.Request(f"{self._base_url}{path}", data=data, method=method)
+        if content_type is None and (payload is not None or raw is not None):
+            content_type = "application/json"
+        if content_type:
+            req.add_header("Content-Type", content_type)
+        try:
+            with urllib.request.urlopen(req) as res:
+                status, body = res.status, res.read()
+        except urllib.error.HTTPError as exc:
+            status, body = exc.code, exc.read()
+        api = OpenAPI.from_dict(processing_files_openapi_document())
+        split = urllib.parse.urlsplit(path)
+        request = MockRequest(
+            host_url="http://127.0.0.1",
+            method=method.lower(),
+            path=split.path,
+            args=dict(urllib.parse.parse_qsl(split.query)),
+            data=data,
+        )
+        if schema_valid:
+            api.validate_request(request)
+        api.validate_response(
+            request,
+            MockResponse(data=body, status_code=status, content_type="application/json"),
+        )
+        return status, json.loads(body.decode())
+
+    def _fresh_processing_inbox(self, *names):
+        """Empty the inbox folder, drop one PDF per name into it, and rescan."""
+        processing_root = server_module.processing_dir
+        for dirpath, _dirnames, filenames in os.walk(processing_root, topdown=False):
+            for name in filenames:
+                os.remove(os.path.join(dirpath, name))
+            if dirpath != processing_root:
+                try:
+                    os.rmdir(dirpath)
+                except OSError:
+                    pass
+
+        def _empty():
+            for name in names:
+                try:
+                    os.remove(os.path.join(processing_root, name))
+                except FileNotFoundError:
+                    pass
+            server_module.db.scan_processing_files()
+
+        self.addCleanup(_empty)
+        for name in names:
+            with open(os.path.join(processing_root, name), "wb") as handle:
+                handle.write(_pdf_with_text_bytes(f"contract {name}"))
+        status, rows = self._processing_call("GET", "/api/processing-files?rescan=1")
+        self.assertEqual(status, 200)
+        return {row["filename"]: row for row in rows}
+
+    def test_processing_files_contract_round_trip(self):
+        db = server_module.db
+        rows = self._fresh_processing_inbox("contract_a.pdf")
+        file_id = rows["contract_a.pdf"]["id"]
+        person_id = db.add_person("Contract", "Author")
+        tag_id = db.add_tag("processing-contract-tag")["id"]
+        folder_id = db.add_folder("Processing Contract Folder")
+        status, listed = self._processing_call("GET", "/api/processing-files")
+        self.assertEqual((status, [row["id"] for row in listed]), (200, [file_id]))
+        status, patched = self._processing_call(
+            "PATCH",
+            f"/api/processing-files/{file_id}",
+            {
+                "title": "Contract Title",
+                "status_draft": "Planned",
+                "published_date": "2026-10-03",
+                "thumb_page": "2",
+                "target_folder_id": folder_id,
+                "roles": [{"person_id": person_id, "role_type": "Editor"}],
+                "tags": [{"id": tag_id}],
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            (patched["title"], patched["status_draft"], patched["thumb_page"]),
+            ("Contract Title", "Planned", 2),
+        )
+        self.assertEqual(
+            patched["roles"],
+            [
+                {
+                    "person_id": person_id,
+                    "person_name": "Contract Author",
+                    "role_type": "Editor",
+                    "order_index": 0,
+                }
+            ],
+        )
+        self.assertEqual([tag["id"] for tag in patched["tags"]], [tag_id])
+        status, listed = self._processing_call("GET", "/api/processing-files")
+        self.assertEqual(listed, [patched])
+        # The import body is ignored: any JSON value.
+        status, imported = self._processing_call(
+            "POST", f"/api/processing-files/{file_id}/import", []
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(imported["processing_file_id"], file_id)
+        self.assertTrue(imported["work_id"])
+        # Importing again returns the same Work.
+        for body in (b"{}", b'"x"'):
+            with self.subTest(body=body):
+                status, again = self._processing_call(
+                    "POST", f"/api/processing-files/{file_id}/import", raw=body
+                )
+                self.assertEqual((status, again), (200, imported))
+        # The contract requires a body; the boundary still tolerates an empty
+        # one sent with the JSON Content-Type.
+        status, again = self._processing_call(
+            "POST", f"/api/processing-files/{file_id}/import", schema_valid=False, raw=b""
+        )
+        self.assertEqual((status, again), (200, imported))
+        status, listed = self._processing_call("GET", "/api/processing-files?rescan=1")
+        self.assertEqual((status, listed), (200, []))
+
+    def test_processing_files_refusals_keep_domain_messages(self):
+        rows = self._fresh_processing_inbox("contract_refuse.pdf")
+        file_id = rows["contract_refuse.pdf"]["id"]
+        cases = (
+            ({"status_draft": "Done"}, "Invalid status_draft value."),
+            ({"target_folder_id": "F-missing"}, "Unknown folder."),
+            ({"roles": [{"person_id": "P-missing", "role_type": "Author"}]}, "Unknown person id: P-missing"),
+            ({"tags": [{"id": "T-missing"}]}, "Unknown tag id: T-missing"),
+        )
+        for payload, message in cases:
+            with self.subTest(message=message):
+                status, body = self._processing_call(
+                    "PATCH", f"/api/processing-files/{file_id}", payload
+                )
+                self.assertEqual((status, body), (400, {"error": message}))
+        status, body = self._processing_call(
+            "PATCH", "/api/processing-files/PF-missing", {"title": "x"}
+        )
+        self.assertEqual((status, body), (400, {"error": "Processing file not found."}))
+        status, body = self._processing_call(
+            "POST", "/api/processing-files/PF-missing/import", {}
+        )
+        self.assertEqual((status, body), (400, {"error": "Processing file not found."}))
+        # Both writes need the JSON Content-Type (the contract makes clients
+        # send a JSON body, so they always send it) and refuse malformed JSON.
+        for method, path in (
+            ("POST", "/api/processing-files/PF-missing/import"),
+            ("PATCH", f"/api/processing-files/{file_id}"),
+        ):
+            with self.subTest(method=method):
+                status, body = self._processing_call(
+                    method, path, schema_valid=False, raw=b"", content_type=""
+                )
+                self.assertEqual(status, 415)
+                status, body = self._processing_call(
+                    method, path, schema_valid=False, raw=b"{"
+                )
+                self.assertEqual((status, body), (400, {"error": "invalid_json"}))
+        # An empty PATCH object changes nothing. The boundary also tolerates an
+        # empty body with the JSON Content-Type, which the contract does not offer.
+        status, row = self._processing_call("PATCH", f"/api/processing-files/{file_id}", {})
+        self.assertEqual((status, row["id"]), (200, file_id))
+        status, row = self._processing_call(
+            "PATCH", f"/api/processing-files/{file_id}", schema_valid=False, raw=b""
+        )
+        self.assertEqual((status, row["id"]), (200, file_id))
+
+    def test_processing_files_request_schema_matches_the_live_endpoint(self):
+        """Inputs the schema accepts, the server accepts, and the reverse."""
+        from openapi_core import OpenAPI
+        from openapi_core.testing import MockRequest
+
+        from backend.api_contract.openapi import processing_files_openapi_document
+
+        db = server_module.db
+        rows = self._fresh_processing_inbox("contract_parity.pdf")
+        file_id = rows["contract_parity.pdf"]["id"]
+        path = f"/api/processing-files/{file_id}"
+        person_id = db.add_person("Parity", "Person")
+        # Extra keys, top-level and nested, are ignored by both; scalars are
+        # stringified and trimmed.
+        status, patched = self._processing_call(
+            "PATCH",
+            path,
+            {
+                "title": "  Parity  ",
+                "year": 1999,
+                "abs_path": "/elsewhere.pdf",
+                "roles": [{"person_id": person_id, "role_type": "Author", "extra": 1}],
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual((patched["title"], patched["year"]), ("Parity", "1999"))
+        # Arrays and objects in draft fields are stringified too.
+        status, patched = self._processing_call("PATCH", path, {"publisher": ["x"]})
+        self.assertEqual((status, patched["publisher"]), (200, "['x']"))
+        self.assertEqual(patched["rel_path"], "contract_parity.pdf")
+        # null roles and tags leave them unchanged; a role without a person is skipped.
+        status, patched = self._processing_call("PATCH", path, {"roles": None, "tags": None})
+        self.assertEqual([role["person_id"] for role in patched["roles"]], [person_id])
+        status, patched = self._processing_call(
+            "PATCH", path, {"roles": [{"role_type": "Author"}]}
+        )
+        self.assertEqual((status, patched["roles"]), (200, []))
+        # Entries that are not objects are skipped by both.
+        status, patched = self._processing_call(
+            "PATCH",
+            path,
+            {
+                "roles": [None, "Author", [1], {"person_id": person_id, "role_type": "Author"}],
+                "tags": [None, 7],
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual([role["person_id"] for role in patched["roles"]], [person_id])
+        self.assertEqual(patched["tags"], [])
+        # `status` is the legacy spelling of `status_draft`.
+        status, patched = self._processing_call("PATCH", path, {"status": "Paused"})
+        self.assertEqual((status, patched["status_draft"]), (200, "Paused"))
+        # A page number below 1 clears the thumbnail page.
+        status, patched = self._processing_call("PATCH", path, {"thumb_page": 0})
+        self.assertEqual((status, patched["thumb_page"]), (200, None))
+        # Roles that are not an array, and a body that is not an object, are
+        # refused by both.
+        status, body = self._processing_call(
+            "PATCH", path, {"roles": "Author"}, schema_valid=False
+        )
+        self.assertEqual((status, body), (400, {"error": "roles must be an array."}))
+        status, body = self._processing_call("PATCH", path, ["title"], schema_valid=False)
+        self.assertEqual((status, body), (400, {"error": "JSON object body required"}))
+        api = OpenAPI.from_dict(processing_files_openapi_document())
+        # No schema-valid write omits the body, so none can omit the JSON
+        # Content-Type the boundary refuses with 415.
+        for method, write_path in (("patch", path), ("post", f"{path}/import")):
+            for data in (None, b""):
+                with self.subTest(method=method, data=data), self.assertRaises(Exception):
+                    api.validate_request(
+                        MockRequest(
+                            host_url="http://127.0.0.1",
+                            method=method,
+                            path=write_path,
+                            data=data,
+                        )
+                    )
+        for payload in ({"roles": "Author"}, ["title"]):
+            with self.subTest(payload=payload), self.assertRaises(Exception):
+                api.validate_request(
+                    MockRequest(
+                        host_url="http://127.0.0.1",
+                        method="patch",
+                        path=path,
+                        data=json.dumps(payload).encode(),
+                    )
+                )
 
     def test_saved_views_live_results_match_search(self):
         db = self.__class__.test_db

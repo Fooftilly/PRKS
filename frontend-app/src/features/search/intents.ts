@@ -1,3 +1,4 @@
+import { hashFromDefinition } from './codec'
 import type { SearchFormDraft } from './types'
 
 /** Owning TabContext fields Search intents need. Not a second route model. */
@@ -34,10 +35,10 @@ function definitionOf(draft: SearchFormDraft): Record<string, string> | null {
 }
 
 /**
- * Search hashes come from the canonical query codec in `saved-views.js`
- * (`prksSearchHashFromDefinition`). Navigation targets the owning TabContext.
- * Save View passes this owner's canonical hash to the shared modal instead of
- * reading `location.hash`. A stale owner does neither.
+ * Search hashes come from the canonical query codec (`hashFromDefinition`).
+ * Navigation targets the owning TabContext. Save View passes this owner's
+ * canonical hash to the shared modal instead of reading `location.hash`.
+ * A stale owner does neither.
  */
 export function browserSearchIntents(
   owner: SearchIntentOwner | null,
@@ -49,10 +50,9 @@ export function browserSearchIntents(
       if (!ownsSearch(owner, generation)) return false
       const definition = definitionOf(draft)
       if (!definition) return false
-      const toHash = window.prksSearchHashFromDefinition
       const navigate = window.prksNavigate
-      if (typeof toHash !== 'function' || typeof navigate !== 'function') return false
-      navigate(toHash(definition), { tabId: owner.tabId })
+      if (typeof navigate !== 'function') return false
+      navigate(hashFromDefinition(definition), { tabId: owner.tabId })
       return true
     },
     saveView() {

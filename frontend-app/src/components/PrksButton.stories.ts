@@ -9,10 +9,45 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 
+export const Primary: Story = {
+  render: () => ({
+    components: { PrksButton },
+    template: '<PrksButton variant="primary">New Person</PrksButton>',
+  }),
+}
+
 export const Refresh: Story = {
   render: () => ({
     components: { PrksButton },
     template: '<PrksButton>Refresh</PrksButton>',
+  }),
+}
+
+export const Danger: Story = {
+  render: () => ({
+    components: { PrksButton },
+    template: '<PrksButton variant="danger">Delete annotation</PrksButton>',
+  }),
+}
+
+export const Ghost: Story = {
+  render: () => ({
+    components: { PrksButton },
+    template: '<PrksButton variant="ghost">Clear search</PrksButton>',
+  }),
+}
+
+export const QuietDanger: Story = {
+  render: () => ({
+    components: { PrksButton },
+    template: '<PrksButton variant="quiet-danger">Delete</PrksButton>',
+  }),
+}
+
+export const Small: Story = {
+  render: () => ({
+    components: { PrksButton },
+    template: '<PrksButton size="sm">Aliases</PrksButton>',
   }),
 }
 

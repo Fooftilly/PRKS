@@ -4,7 +4,8 @@
     const unavailable = 'Tag editing not available offline for this Folder yet. Connect once and open the Tags panel to prepare it.';
     function live(ctx, state) {
         return ctx && !ctx.destroyed && ctx.generation === state.generation &&
-            ctx.getEntity('folder') && ctx.getEntity('folder').id === state.folderId;
+            ctx.getEntity('folder') && ctx.getEntity('folder').id === state.folderId &&
+            ctx.getResource('folderTagEditor') === state;
     }
     function owns(ctx, state) { return live(ctx, state) && root.prksRightPanelOwnedBy(ctx) && root.prksOwnerTabIsFocused(ctx); }
     function statusText(ops) {
@@ -18,6 +19,7 @@
         return state.operations.some(o => o.payload.tag_id === tagId && (o.status !== 'pending' || o.attempt_count > 0));
     }
     async function paint(ctx, state) {
+        if (!live(ctx, state)) return;
         const paintVersion = state.paintVersion = (state.paintVersion || 0) + 1;
         const rows = await root.prksSync.store.listOperations();
         if (!live(ctx, state) || paintVersion !== state.paintVersion) return;
@@ -64,6 +66,7 @@
                 const button = document.createElement('button'); button.type = 'button';
                 button.className = 'prks-btn prks-btn--secondary prks-btn--sm'; button.textContent = label;
                 button.onclick = async () => {
+                    if (!live(ctx, state)) return;
                     button.disabled = true;
                     try {
                         if (!apply && result.code === 'REVISION_CONFLICT') {
@@ -71,8 +74,10 @@
                                 present: result.current_state, server_revision: result.current_revision,
                                 tag: op.local_context.tag };
                             if (!await root.prksOfflineReconcileFolderTag(ack)) throw new Error();
+                            if (!live(ctx, state)) return;
                             acceptAck(ctx, state, ack);
                         } else if (!apply) {
+                            if (!live(ctx, state)) return;
                             // Explicitly discard the intent and stale relationship.
                             // Catalog/lifecycle conflicts do not fabricate a target.
                             const work = ctx.getEntity('folder');
@@ -81,9 +86,14 @@
                             ctx.setEntity('folder', { ...work, tags: work.tags.filter(t => t.id !== op.payload.tag_id) });
                             state.options = null;
                         }
+                        if (!live(ctx, state)) return;
                         await root.prksSync.store.resolveConflict(op.op_id, apply);
+                        if (!live(ctx, state)) return;
                         state.error = null; root.prksSync.changed();
-                    } catch (_) { state.error = 'Could not save the resolution locally. Please retry.'; }
+                    } catch (_) {
+                        if (!live(ctx, state)) return;
+                        state.error = 'Could not save the resolution locally. Please retry.';
+                    }
                     await paint(ctx, state);
                 };
                 item.appendChild(button);
@@ -123,7 +133,10 @@
             state.options = options.status === 'fulfilled' ? options.value.value : null;
             state.catalog = catalog.status === 'fulfilled' ? catalog.value.value : null;
             state.catalogGeneration = root.prksOfflineDomainGeneration('tags');
-        } catch (_) { state.error = unavailable; }
+        } catch (_) {
+            if (!live(ctx, state)) return;
+            state.error = unavailable;
+        }
         await paint(ctx, state);
     }
     /** Every unsynchronized operation, or an empty list. */
@@ -191,25 +204,39 @@
         if (!ctx || !root.prksSync) return;
         let state = ctx.getResource('folderTagEditor');
         if (!state || state.folderId !== folderId || state.generation !== ctx.generation) {
-            state = { folderId, generation: ctx.generation, operations: [], options: null, catalog: null, error: null };
-            const unsubscribe = root.prksSync.subscribe(event => {
+            /* Capture the ticket before subscriptions or async prepare.
+             * setResource would mint a later ticket. A rejected registration
+             * does not subscribe, paint, prepare, or mutate this owner. */
+            const ticket = typeof ctx.resourceTicket === 'function' ? ctx.resourceTicket() : null;
+            const next = { folderId, generation: ctx.generation, operations: [], options: null, catalog: null, error: null };
+            const stops = { sync: null };
+            const attached = typeof ctx.registerResource === 'function'
+                ? ctx.registerResource(ticket, {
+                    kind: 'folderTagEditor',
+                    value: next,
+                    suspendable: false,
+                    dispose: function () {
+                        if (stops.sync) stops.sync();
+                    },
+                })
+                : 'rejected';
+            if (attached === 'rejected') return;
+            stops.sync = root.prksSync.subscribe(event => {
                 /* Only THIS family's acknowledgements. The durable queue is
                  * shared, and another family's ACK carries no tag_id -- feeding
                  * it to acceptAck() bumps readVersion, which silently cancels
                  * an in-flight prepare() and leaves the picker disabled with no
                  * catalog and nothing to retry it. */
                 if (event.acknowledged && ['ADD_FOLDER_TAG', 'REMOVE_FOLDER_TAG'].includes(event.operation)) {
-                    acceptAck(ctx, state, event.acknowledged);
+                    acceptAck(ctx, next, event.acknowledged);
                 }
-                void paint(ctx, state).catch(() => {});
+                void paint(ctx, next).catch(() => {});
             });
-            ctx.setResource('folderTagEditor', state, unsubscribe);
+            state = next;
         }
         void paint(ctx, state).catch(() => {});
-        if (true) {
-            bindPicker(ctx, state);
-            state.preparing = prepare(ctx, state);
-        }
+        bindPicker(ctx, state);
+        state.preparing = prepare(ctx, state);
     }
     /**
      * `knownTag` is a Tag this device has just CREATED and not yet sent.
@@ -238,6 +265,7 @@
                 state.catalog = state.catalog.concat([knownTag]);
             }
             const base = root.prksFolderTagBase(state.options, tagId);
+            if (!live(ctx, state)) return;
             await root.prksSync.store.coalesceFolderTag(state.folderId, tagId, present, base.present, base.revision, tag);
             if (!live(ctx, state)) { root.prksSync.changed(); return; }
             state.error = null;
@@ -250,6 +278,7 @@
             await paint(ctx, state); // committed before optimistic paint
             root.prksSync.changed();
         } catch (_) {
+            if (!live(ctx, state)) return;
             state.error = 'Could not save this Tag change locally. Please retry.';
             await paint(ctx, state);
         }

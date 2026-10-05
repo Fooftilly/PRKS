@@ -1,8 +1,7 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readRouteSurface } from '../../route-surface/lifecycle'
+import { dismissRouteSurface, readRouteSurface } from '../../route-surface/lifecycle'
 import {
-  dismissFolderDetail,
   presentFolderDetail,
   registerFolderDetailBridge,
   resetFolderDetailSessionForTests,
@@ -12,9 +11,8 @@ afterEach(() => {
   resetFolderDetailSessionForTests()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
-  delete window.prksVuePresentFolderDetail
-  delete window.prksVueDismissFolderDetail
-  delete window.prksWorkCardHtml
+  delete window.prksVuePresentRoute
+  delete window.prksVueDismissRoute
   delete window.prksEffectiveFolderDetailWorks
   delete window.prksCommitFolderDetailSurface
   delete window.prksDeleteFolderFromDetail
@@ -64,7 +62,6 @@ describe('Folder detail route bridge', () => {
         preserve: options?.preserveFolderWorkspace === true,
       })
     }
-    window.prksWorkCardHtml = (work) => `<div data-work-id="${String(work.id)}"></div>`
     window.prksEffectiveFolderDetailWorks = () => [{ id: 'overlay' }]
     const main = owner()
     const secondary = owner()
@@ -111,7 +108,6 @@ describe('Folder detail route bridge', () => {
   it('keeps a retained hierarchy shell and drops a stale generation', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
-    window.prksWorkCardHtml = () => ''
     const released: ParentNode[] = []
     window.prksReleaseWorkThumbPreview = (root) => {
       if (root) released.push(root)
@@ -125,7 +121,9 @@ describe('Folder detail route bridge', () => {
       generation: 2,
     })
     expect(el.querySelector('[data-delete-folder-id="f1"]')).not.toBeNull()
-    expect(released.length).toBeGreaterThan(0)
+    // First Vue mount has nothing previous to release. Leave/rewrite coverage
+    // is the next test: "releases preview and lazy thumbs before leave unmount".
+    expect(released.length).toBe(0)
     pane.__prksRetainFolderDetailSurface = true
     pane.runCleanup()
     expect(el.querySelector('[data-prks-role="folder-detail"]')).not.toBeNull()
@@ -156,8 +154,6 @@ describe('Folder detail route bridge', () => {
   })
 
   it('releases preview and lazy thumbs before leave unmount detaches them', () => {
-    window.prksWorkCardHtml = () =>
-      '<div class="project-card--work-card" data-work-id="w1"><img class="work-card__thumb" data-prks-thumb-preview-kind="pdf" data-prks-thumb-lazy></div>'
     const preview = window as Window & { __prksWorkThumbPreviewSource?: Element | null }
     window.prksReleaseWorkThumbPreview = (root) => {
       const src = preview.__prksWorkThumbPreviewSource
@@ -173,7 +169,7 @@ describe('Folder detail route bridge', () => {
     presentFolderDetail({
       owner: pane,
       host: el,
-      folder: { id: 'f1', title: 'First', works: [{ id: 'w1' }], children: [] },
+      folder: { id: 'f1', title: 'First', works: [{ id: 'w1', file_path: '/api/pdfs/w1.pdf' }], children: [] },
       generation: 1,
     })
     const thumb = el.querySelector('.work-card__thumb')
@@ -186,6 +182,149 @@ describe('Folder detail route bridge', () => {
     expect(el.querySelector('img[data-prks-thumb-lazy]')).toBeNull()
   })
 
+  it('dismisses preview when a retained shell paints another folder', async () => {
+    const preview = window as Window & { __prksWorkThumbPreviewSource?: Element | null }
+    const releases: Array<{
+      root: ParentNode | null | undefined
+      connected: boolean
+      workId: string | null
+    }> = []
+    window.prksReleaseWorkThumbPreview = (root) => {
+      const src = preview.__prksWorkThumbPreviewSource
+      const workEl = src instanceof Element ? src.closest('[data-work-id]') : null
+      releases.push({
+        root,
+        connected: !!(src instanceof Node && src.isConnected),
+        workId: workEl?.getAttribute('data-work-id') ?? null,
+      })
+      if (!src) return
+      if (root && typeof root.contains === 'function' && root.contains(src)) {
+        preview.__prksWorkThumbPreviewSource = null
+      }
+    }
+    window.prksHideWorkThumbPreview = () => {
+      preview.__prksWorkThumbPreviewSource = null
+    }
+    window.prksReleaseLazyWorkThumbs = () => {}
+    const pane = owner()
+    const el = host()
+    presentFolderDetail({
+      owner: pane,
+      host: el,
+      folder: { id: 'f1', title: 'First', works: [{ id: 'w1', file_path: '/api/pdfs/w1.pdf' }], children: [] },
+      generation: 1,
+    })
+    const thumb = el.querySelector('.work-card__thumb')
+    expect(thumb).not.toBeNull()
+    preview.__prksWorkThumbPreviewSource = thumb
+    presentFolderDetail({
+      owner: pane,
+      host: el,
+      folder: { id: 'f2', title: 'Second', works: [{ id: 'w2', file_path: '/api/pdfs/w2.pdf' }], children: [] },
+      preserveWorkspace: true,
+      generation: 2,
+    })
+    expect(releases[0]).toEqual({ root: el, connected: true, workId: 'w1' })
+    expect(preview.__prksWorkThumbPreviewSource).toBeNull()
+    await nextTick()
+    expect(el.querySelector('[data-work-id="w2"]')).not.toBeNull()
+    expect(el.querySelector('[data-work-id="w1"]')).toBeNull()
+
+    const afterFolderChange = releases.length
+    const later = el.querySelector('.work-card__thumb')
+    preview.__prksWorkThumbPreviewSource = later
+    presentFolderDetail({
+      owner: pane,
+      host: el,
+      folder: { id: 'f2', title: 'Second', works: [{ id: 'w2', file_path: '/api/pdfs/w2.pdf' }], children: [] },
+      preserveWorkspace: true,
+      generation: 3,
+    })
+    expect(releases).toHaveLength(afterFolderChange)
+    expect(preview.__prksWorkThumbPreviewSource).toBe(later)
+  })
+
+  it('leaves the current Folder DOM and preview when a stale different-folder generation arrives', () => {
+    const preview = window as Window & { __prksWorkThumbPreviewSource?: Element | null }
+    const released: ParentNode[] = []
+    window.prksReleaseWorkThumbPreview = (root) => {
+      if (root) released.push(root)
+      const src = preview.__prksWorkThumbPreviewSource
+      if (!src || !root || typeof root.contains !== 'function' || !root.contains(src)) return
+      preview.__prksWorkThumbPreviewSource = null
+    }
+    window.prksReleaseLazyWorkThumbs = () => {}
+    const pane = owner()
+    const el = host()
+    presentFolderDetail({
+      owner: pane,
+      host: el,
+      folder: { id: 'f-b', title: 'Folder B', works: [{ id: 'w-b', file_path: '/api/pdfs/wb.pdf' }], children: [] },
+      generation: 6,
+    })
+    const thumb = el.querySelector('.work-card__thumb')
+    expect(thumb).not.toBeNull()
+    preview.__prksWorkThumbPreviewSource = thumb
+    presentFolderDetail({
+      owner: pane,
+      host: el,
+      folder: { id: 'f-a', title: 'Folder A', works: [{ id: 'w-a', file_path: '/api/pdfs/wa.pdf' }], children: [] },
+      preserveWorkspace: true,
+      generation: 5,
+    })
+    expect(released).toEqual([])
+    expect(preview.__prksWorkThumbPreviewSource).toBe(thumb)
+    expect(el.querySelector('[data-work-id="w-b"]')).not.toBeNull()
+    expect(el.querySelector('[data-work-id="w-a"]')).toBeNull()
+    expect(el.querySelector('.prks-page-title')?.textContent).toContain('Folder B')
+    expect(readRouteSurface(pane)).toMatchObject({
+      name: 'folder-detail',
+      canonicalHash: '#/folders/f-b',
+      generation: 6,
+      mounted: true,
+    })
+  })
+
+  it('does not release another pane preview when this host paints another folder', () => {
+    const preview = window as Window & { __prksWorkThumbPreviewSource?: Element | null }
+    window.prksReleaseWorkThumbPreview = (root) => {
+      const src = preview.__prksWorkThumbPreviewSource
+      if (!src || !root || typeof root.contains !== 'function' || !root.contains(src)) return
+      preview.__prksWorkThumbPreviewSource = null
+    }
+    window.prksReleaseLazyWorkThumbs = () => {}
+    const main = owner()
+    const side = owner()
+    const mainHost = host()
+    const sideHost = host()
+    presentFolderDetail({
+      owner: main,
+      host: mainHost,
+      folder: { id: 'f1', title: 'Main', works: [{ id: 'w1', file_path: '/api/pdfs/w1.pdf' }], children: [] },
+      generation: 1,
+    })
+    const thumb = mainHost.querySelector('.work-card__thumb')
+    expect(thumb).not.toBeNull()
+    preview.__prksWorkThumbPreviewSource = thumb
+    presentFolderDetail({
+      owner: side,
+      host: sideHost,
+      folder: { id: 'side-a', title: 'Side A', works: [], children: [] },
+      generation: 1,
+      shell: false,
+    })
+    expect(preview.__prksWorkThumbPreviewSource).toBe(thumb)
+    presentFolderDetail({
+      owner: side,
+      host: sideHost,
+      folder: { id: 'side-b', title: 'Side B', works: [], children: [] },
+      preserveWorkspace: true,
+      generation: 2,
+      shell: false,
+    })
+    expect(preview.__prksWorkThumbPreviewSource).toBe(thumb)
+  })
+
   it('sends delete and new-folder through the canonical wrappers', async () => {
     const deleted: string[] = []
     const opened: unknown[] = []
@@ -195,7 +334,6 @@ describe('Folder detail route bridge', () => {
     window.prksOpenNewFolderFromDetail = (folder) => {
       opened.push(folder.title)
     }
-    window.prksWorkCardHtml = () => ''
     const pane = owner()
     pane.getEntity = () => ({ id: 'f1' })
     const el = host()
@@ -224,7 +362,6 @@ describe('Folder detail route bridge', () => {
     window.prksMountFolderHierarchyNav = (_ctx, _folder, container) => {
       mounts.push(container?.querySelector?.('[data-prks-role="folder-hierarchy-nav"]')?.textContent || '')
     }
-    window.prksWorkCardHtml = () => ''
     const pane = owner()
     const el = host()
     presentFolderDetail({
@@ -292,36 +429,36 @@ describe('Folder detail route bridge', () => {
       generation: 1,
       shell: true,
     }
-    window.prksWorkCardHtml = () => ''
     registerFolderDetailBridge(window)
-    expect(window.prksVuePresentFolderDetail).toBeTypeOf('function')
+    expect(window.prksVuePresentRoute).toBeTypeOf('function')
     expect((el as HTMLElement & { __prksVueRouteRequest?: unknown }).__prksVueRouteRequest).toBeUndefined()
     expect(el.querySelector('.prks-page-title')?.textContent).toContain('Early')
     expect(decoy.querySelector('[data-prks-folder-detail-view]')).toBeNull()
   })
 
   it('dismisses one owner and leaves the other mounted', () => {
-    window.prksWorkCardHtml = () => ''
     registerFolderDetailBridge(window)
     const main = owner()
     const secondary = owner()
     const mainHost = host()
     const secondaryHost = host()
-    window.prksVuePresentFolderDetail?.({
+    window.prksVuePresentRoute?.({
+      feature: 'folder-detail',
       owner: main,
       host: mainHost,
       folder: { id: 'main', title: 'Main', works: [], children: [] },
       generation: 2,
       shell: true,
     })
-    window.prksVuePresentFolderDetail?.({
+    window.prksVuePresentRoute?.({
+      feature: 'folder-detail',
       owner: secondary,
       host: secondaryHost,
       folder: { id: 'side', title: 'Side', works: [], children: [] },
       generation: 1,
       shell: false,
     })
-    dismissFolderDetail(main)
+    dismissRouteSurface(main)
     expect(mainHost.querySelector('[data-prks-folder-detail-view]')).toBeNull()
     expect(secondaryHost.querySelector('.prks-page-title')?.textContent).toContain('Side')
   })
