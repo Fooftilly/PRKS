@@ -142,38 +142,6 @@ export function replaceWorkRoutePlacement(
   )
 }
 
-/**
- * After the legacy painter publishes its Work, keep this owner’s projection
- * on that same object. A stale owner does not adopt it.
- */
-export function adoptPaintedWorkRoute(
-  ctx: WorkRouteOwnerContext,
-  generation: number,
-  workId: string,
-): WorkRouteProjection | null {
-  if (!ctx || ctx.destroyed || !ctx.isCurrent(generation)) return null
-  const current = ctx.getResource(RESOURCE) as WorkRouteProjection | null
-  if (!current || !sameOwner(ctx, current, generation)) return null
-  if (current.workId !== String(workId) || current.availability !== 'ready') return null
-  const painted = ctx.getEntity('work') as EffectiveWork | null
-  if (!painted || String(painted.id ?? '') !== current.workId) return null
-  if (current.work === painted) return current
-  const effectiveFollowsWork = current.effectiveWork === current.work
-  const stored = freezeProjection({
-    workId: current.workId,
-    availability: current.availability,
-    lifecycle: current.lifecycle,
-    provenance: current.provenance,
-    ownerTabId: current.ownerTabId,
-    ownerGeneration: current.ownerGeneration,
-    work: painted,
-    effectiveWork: effectiveFollowsWork ? painted : current.effectiveWork,
-    recordOpen: current.recordOpen,
-  })
-  ctx.setResource(RESOURCE, stored)
-  return stored
-}
-
 /** Genuine foreground open only. internalRefresh must not record another open. */
 export function workOpenShouldRecord(internalRefresh: boolean, workValue: unknown): boolean {
   return !internalRefresh && !!workValue

@@ -244,8 +244,20 @@ class TestWorkPageLocalIdsGone(unittest.TestCase):
             'id="work-header-doc-type-slot"',
         ):
             self.assertNotIn(forbidden, src, forbidden + " still globally fixed")
-        self.assertIn('data-prks-role="pdf-viewer"', src)
-        self.assertIn('data-prks-role="research-notes-editor"', src)
+        shell_path = os.path.join(
+            ROOT, "frontend-app", "src", "features", "work", "WorkMainSurface.vue"
+        )
+        with open(shell_path, encoding="utf-8") as fh:
+            shell = fh.read()
+        for forbidden in (
+            'id="pdf-viewer"',
+            'id="research-notes-editor"',
+            'id="work-notes-editor-region"',
+            'id="work-header-doc-type-slot"',
+        ):
+            self.assertNotIn(forbidden, shell, forbidden + " still globally fixed")
+        self.assertIn('data-prks-role="pdf-viewer"', shell)
+        self.assertIn('data-prks-role="research-notes-editor"', shell)
         self.assertIn("ctx.query('[data-prks-role=\"research-notes-editor\"]')", src)
 
     def test_pdf_init_takes_ctx(self):
@@ -297,12 +309,14 @@ class TestEntityMigrationIntegration(unittest.TestCase):
     """Integration: ctx.setEntity/getEntity used for entity ownership."""
 
     def test_works_uses_ctx_set_entity(self):
-        w_path = os.path.join(FRONTEND_JS, "components", "works.js")
-        with open(w_path, encoding="utf-8") as fh:
+        lifecycle_path = os.path.join(
+            ROOT, "frontend-app", "src", "features", "work", "detail-lifecycle.ts"
+        )
+        with open(lifecycle_path, encoding="utf-8") as fh:
             src = fh.read()
         self.assertIn(
             "ctx.setEntity('work'", src,
-            "works.js must use ctx.setEntity for work ownership"
+            "the Work mount must use ctx.setEntity for work ownership"
         )
 
     def test_folders_uses_ctx_set_entity(self):
@@ -459,10 +473,12 @@ class TestRightPanelTabContextOwned(unittest.TestCase):
             ui = fh.read()
         self.assertRegex(ui, _RIGHT_PANEL_TAB_WRITE_RE, "rightPanelTab never written in ui.js")
         self.assertIn("focusedCtx.ui.rightPanelTab", ui, "getActiveRightPanelTab must read focusedCtx.ui.rightPanelTab")
-        works_path = os.path.join(FRONTEND_JS, "components", "works.js")
-        with open(works_path, encoding="utf-8") as fh:
-            works = fh.read()
-        self.assertIn("ctx.ui.rightPanelTab", works)
+        lifecycle_path = os.path.join(
+            ROOT, "frontend-app", "src", "features", "work", "detail-lifecycle.ts"
+        )
+        with open(lifecycle_path, encoding="utf-8") as fh:
+            mount = fh.read()
+        self.assertIn("ctx.ui.rightPanelTab", mount)
 
 
 def _js_function_source(src, name):
@@ -492,12 +508,15 @@ class TestWorkRefreshHelpersUseOwnedEntity(unittest.TestCase):
         self.assertNotIn("prksSettleWorkMetaEditAfterSave", ui)
 
     def test_work_render_and_route_right_panel_require_focus(self):
-        works_path = os.path.join(FRONTEND_JS, "components", "works.js")
-        with open(works_path, encoding="utf-8") as fh:
-            works = fh.read()
-        render = _js_function_source(works, "renderWorkDetails")
-        self.assertIn("prksTabContextIsFocused", render)
-        self.assertLess(render.find("prksTabContextIsFocused"), render.find("updatePanelContent"))
+        lifecycle_path = os.path.join(
+            ROOT, "frontend-app", "src", "features", "work", "detail-lifecycle.ts"
+        )
+        with open(lifecycle_path, encoding="utf-8") as fh:
+            mount = fh.read()
+        attach_at = mount.index("const attach = () =>")
+        attach = mount[attach_at:mount.index("presentWork(ctx, contentDiv,", attach_at)]
+        self.assertIn("prksTabContextIsFocused", attach)
+        self.assertLess(attach.find("prksTabContextIsFocused"), attach.find("updatePanelContent"))
         app_path = os.path.join(FRONTEND_JS, "app.js")
         with open(app_path, encoding="utf-8") as fh:
             app = fh.read()

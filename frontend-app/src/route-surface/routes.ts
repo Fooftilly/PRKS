@@ -4,8 +4,8 @@
  * Feature modules own their params. This union imports those types. It does
  * not parse hashes and it is not a second router: `parseRoute` in
  * `../routing/route-model` is the only hash parser, and every member's `name` is one
- * of its registry names. Work/PDF and unrecognized hashes stay on the classic
- * runtime and are not members here.
+ * of its registry names. Unrecognized hashes stay on the classic runtime
+ * and are not members here. Work detail is a member; the PDF runtime is not.
  *
  * `app.js` route dispatch is still coordinator-owned. The search query codec
  * is `features/search/codec.ts`, not this type. Per-feature dismiss globals
@@ -28,6 +28,7 @@ import type { SavedViewDetailRouteInstance, SavedViewsIndexRouteInstance } from 
 import type { SearchRouteInstance } from '../features/search/route'
 import type { TagsRouteInstance } from '../features/tags/route'
 import type { TypeDetailRouteInstance, TypesIndexRouteInstance } from '../features/types/route'
+import type { WorkDetailRouteInstance } from '../features/work/route'
 
 export type PrksRouteInstance =
   | FolderLibraryRouteInstance
@@ -55,6 +56,7 @@ export type PrksRouteInstance =
   | PersonGroupsIndexRouteInstance
   | PersonGroupDetailRouteInstance
   | ResearchGraphRouteInstance
+  | WorkDetailRouteInstance
 
 /**
  * Present input for one union member. `Omit` is not distributive, so this

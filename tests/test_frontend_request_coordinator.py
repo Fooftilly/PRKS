@@ -11,7 +11,9 @@ _INDEX = os.path.join(_FRONTEND, "index.html")
 _COORD = os.path.join(_FRONTEND, "js", "request-coordinator.js")
 _API = os.path.join(_FRONTEND, "js", "api.js")
 _APP = os.path.join(_FRONTEND, "js", "app.js")
-_WORKS = os.path.join(_FRONTEND, "js", "components", "works.js")
+_WORK_LIFECYCLE = os.path.join(
+    _PROJECT_DIR, "frontend-app", "src", "features", "work", "detail-lifecycle.ts"
+)
 _TAB_CONTEXT = os.path.join(_FRONTEND, "js", "tab-context.js")
 _RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_request_coordinator_selftest.js")
 
@@ -89,20 +91,28 @@ class FrontendRequestCoordinatorTests(unittest.TestCase):
         self.assertIn("ctx.abortController.abort()", tab_ctx)
 
     def test_work_hint_publish_checks_stale_after_await(self):
-        works = _read(_WORKS)
-        concept_await = works.find("const concepts = await fetchConcepts({ signal: routeSignal });")
+        lifecycle = _read(_WORK_LIFECYCLE)
+        concept_await = lifecycle.find(
+            "const concepts = await fetchConcepts({ signal: routeSignal } as never)"
+        )
         self.assertNotEqual(concept_await, -1)
-        concept_stale = works.find("if (!isCurrent()) return;", concept_await)
-        concept_pub = works.find("ctx.setResource('conceptHintList', concepts)", concept_await)
+        concept_stale = lifecycle.find("if (!isCurrent()) return", concept_await)
+        concept_pub = lifecycle.find(
+            "ctx.setResource('conceptHintList', concepts)", concept_await
+        )
         self.assertNotEqual(concept_stale, -1)
         self.assertNotEqual(concept_pub, -1)
         self.assertLess(concept_await, concept_stale)
         self.assertLess(concept_stale, concept_pub)
 
-        arg_await = works.find("const argumentsList = await fetchArguments(undefined, { signal: routeSignal });")
+        arg_await = lifecycle.find(
+            "const argumentsList = await fetchArguments(undefined as never, { signal: routeSignal } as never)"
+        )
         self.assertNotEqual(arg_await, -1)
-        arg_stale = works.find("if (!isCurrent()) return;", arg_await)
-        arg_pub = works.find("ctx.setResource('argumentHintList', argumentsList)", arg_await)
+        arg_stale = lifecycle.find("if (!isCurrent()) return", arg_await)
+        arg_pub = lifecycle.find(
+            "ctx.setResource('argumentHintList', argumentsList)", arg_await
+        )
         self.assertNotEqual(arg_stale, -1)
         self.assertNotEqual(arg_pub, -1)
         self.assertLess(arg_await, arg_stale)
