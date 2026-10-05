@@ -320,7 +320,7 @@ def _http_json(method: str, url: str, payload=None, timeout: float = 60.0):
         _assert_loopback_http_url(url), data=data, method=method, headers=headers
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as res:
+        with urllib.request.urlopen(req, timeout=timeout) as res:  # nosec B310
             raw = res.read().decode("utf-8")
             if not raw:
                 return None
@@ -371,7 +371,7 @@ def _named(items, key: str, value: str):
     return None
 
 
-def seed_library(base: str) -> dict:
+def seed_library(base: str) -> dict:  # noqa: C901
     folders = _http_json("GET", base + "/api/folders") or []
     works = _http_json("GET", base + "/api/works") or []
     persons = _http_json("GET", base + "/api/persons") or []
@@ -473,7 +473,7 @@ def _median(samples: list[float]) -> float | None:
     return float(statistics.median(samples))
 
 
-def _classify_path(method: str, path: str) -> str:
+def _classify_path(method: str, path: str) -> str:  # noqa: C901
     m = method.upper()
     if path.startswith("/api/works/") and path.endswith("/thumbnail"):
         return "work-thumbnail"
@@ -706,7 +706,7 @@ def _wait_http(base: str, timeout: float = 25.0) -> None:
     last = None
     while time.time() < deadline:
         try:
-            with urllib.request.urlopen(
+            with urllib.request.urlopen(  # nosec B310
                 _assert_loopback_http_url(base + "/"), timeout=2
             ) as res:
                 if res.status < 500:
@@ -717,7 +717,7 @@ def _wait_http(base: str, timeout: float = 25.0) -> None:
     raise RuntimeError("server did not become ready: %s" % last)
 
 
-def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:
+def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:  # noqa: C901
     aliases = {
         seed["work_a"]: "WORK_A",
         seed["work_b"]: "WORK_B",
@@ -1281,7 +1281,7 @@ def _summarize_server_diagnostics(perf: dict, top_n: int = 8) -> dict:
     }
 
 
-def write_markdown(artifact: dict, path: Path) -> None:
+def write_markdown(artifact: dict, path: Path) -> None:  # noqa: C901
     ident = artifact.get("identity") or {}
     shape = artifact.get("libraryShape") or {}
     scenarios = artifact.get("scenarios") or {}
@@ -1518,7 +1518,7 @@ def assert_b5_artifact_path(raw: str | os.PathLike[str]) -> Path:
     return canonical
 
 
-def main() -> int:
+def main() -> int:  # noqa: C901
     parser = argparse.ArgumentParser(description="Record B5 browser baselines (#454)")
     parser.add_argument("--storage", default=str(DEFAULT_STORAGE), help="Testing PRKS_STORAGE (temp tree)")
     parser.add_argument("--port", type=int, default=0, help="Port (0 = ephemeral)")
