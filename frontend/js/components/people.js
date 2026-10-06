@@ -272,17 +272,12 @@ function prksBindPersonOfflineState(ctx, container) {
 function renderPeopleListUnavailable(container, ctx) {
     if (!container) return;
     const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
-    if (owner && typeof prksPresentVueRoute === 'function') {
-        prksPresentVueRoute(owner, container, 'people', {
-            availability: 'unavailable',
-            items: [],
-            generation: owner.generation,
-        });
-        return;
-    }
-    container.innerHTML =
-        '<div class="prks-page-header page-header"><h2 class="prks-page-title">People not available offline</h2></div>' +
-        '<p class="prks-inline-message" data-prks-role="offline-unavailable">This list has not been cached on this device.</p>';
+    if (!owner) return;
+    prksPresentVueRoute(owner, container, 'people', {
+        availability: 'unavailable',
+        items: [],
+        generation: owner.generation,
+    });
 }
 
 function personProfileImageSrc(person) {
@@ -614,15 +609,13 @@ window.prksPersonViewInGraph = prksPersonViewInGraph;
 function renderPeopleList(ctx, persons, container, options = {}) {
     if (!container) return;
     const roleFilter = options.roleFilter || '';
-    if (typeof prksPresentVueRoute === 'function') {
-        prksPresentVueRoute(ctx, container, 'people', {
-            availability: 'ready',
-            items: Array.isArray(persons) ? persons : [],
-            roleFilter: roleFilter,
-            unknownRole: options.unknownRole === true,
-            generation: ctx && ctx.generation,
-        });
-    }
+    prksPresentVueRoute(ctx, container, 'people', {
+        availability: 'ready',
+        items: Array.isArray(persons) ? persons : [],
+        roleFilter: roleFilter,
+        unknownRole: options.unknownRole === true,
+        generation: ctx && ctx.generation,
+    });
     prksBindPersonOfflineState(ctx, container);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
@@ -1658,19 +1651,15 @@ function renderPersonDetails(ctx, person, container) {
     const route = ctx && (ctx.lastResolvedRoute || ctx.route);
     const personId = (person && person.id) || (route && route.params && route.params.personId) || '';
     const view = person ? prksPersonViewRecord(ctx, person) : null;
-    if (typeof prksPresentVueRoute === 'function') {
-        prksPresentVueRoute(ctx, container, 'person', {
-            availability: person ? 'ready' : 'not-found',
-            person: view,
-            personId: personId ? String(personId) : '',
-            editing: !!(person && ctx && ctx.ui && ctx.ui.personDetailEditing),
-            worksEditing: !!(person && ctx && ctx.ui && ctx.ui.personWorksEditing),
-            offlineCached: !!(ctx && ctx.ui && ctx.ui.personOfflineCached),
-            generation: ctx && ctx.generation,
-        });
-    } else if (!person) {
-        container.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Person not found</h2></div>';
-    }
+    prksPresentVueRoute(ctx, container, 'person', {
+        availability: person ? 'ready' : 'not-found',
+        person: view,
+        personId: personId ? String(personId) : '',
+        editing: !!(person && ctx && ctx.ui && ctx.ui.personDetailEditing),
+        worksEditing: !!(person && ctx && ctx.ui && ctx.ui.personWorksEditing),
+        offlineCached: !!(ctx && ctx.ui && ctx.ui.personOfflineCached),
+        generation: ctx && ctx.generation,
+    });
     if (typeof window.prksInitLazyWorkThumbs === 'function') {
         window.prksInitLazyWorkThumbs(container);
     }

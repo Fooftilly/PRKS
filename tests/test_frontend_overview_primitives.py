@@ -63,15 +63,12 @@ class OverviewPrimitivesTests(unittest.TestCase):
         self.assertIn("prks-page-summary", gallery)
         self.assertIn("overview-primitives.js", _read(_INDEX))
 
-    def test_scope_line_matching_and_totals(self):
-        _run_js(
-            r"""
-            const html = context.prksScopeLineHtml({ shown: 12, total: 48, filter: 'x', label: 'Concepts' });
-            if (!html.includes('12 of 48 matching')) throw new Error('expected matching scope, got ' + html);
-            const totalOnly = context.prksScopeLineHtml({ total: 3, label: 'People' });
-            if (!totalOnly.includes('3 People')) throw new Error('expected total label, got ' + totalOnly);
-            """
-        )
+    def test_vue_owned_summary_painters_are_retired(self):
+        """Scope lines and relationship strips are Vue `PrksScopeLine` /
+        `PrksRelSummary`; the classic HTML painters have no consumer."""
+        source = _read(_PRIM)
+        for retired in ("prksScopeLineHtml", "prksRelSummaryHtml", "prksPaintScopeHost"):
+            self.assertNotIn(retired, source, retired)
 
     def test_unknown_parts_omitted_never_zero(self):
         _run_js(
@@ -90,15 +87,15 @@ class OverviewPrimitivesTests(unittest.TestCase):
             """
         )
 
-    def test_rel_summary_supports_safe_internal_links(self):
+    def test_page_summary_supports_safe_internal_links(self):
         _run_js(
             r"""
-            const html = context.prksRelSummaryHtml({
+            const html = context.prksPageSummaryHtml({
                 parts: [{ text: 'Inbox', href: '#/folders/abc' }, '2 people'],
             });
             if (!html.includes('href="#/folders/abc"')) throw new Error('expected folder link');
             if (!html.includes('2 people')) throw new Error('expected people part');
-            const bad = context.prksRelSummaryHtml({
+            const bad = context.prksPageSummaryHtml({
                 parts: [{ text: 'x', href: 'javascript:alert(1)' }],
             });
             if (bad.includes('javascript:')) throw new Error('must not emit unsafe href');

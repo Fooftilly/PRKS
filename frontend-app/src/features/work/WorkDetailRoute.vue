@@ -18,7 +18,7 @@ defineProps<{
     :show-header="surface.showHeader"
     :title="surface.title"
     :doc-type-html="surface.docTypeHtml"
-    :rel-summary-html="surface.relSummaryHtml"
+    :rel-summary-parts="surface.relSummaryParts"
     :work-id="surface.workId"
     :kind="surface.kind"
     :has-file="surface.hasFile"

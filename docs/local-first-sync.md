@@ -609,11 +609,12 @@ what the user sees. That is not a defect to design around; it is the existing
 composition, and synchronization must not quietly take it over.
 
 **The overlay produces the field; the existing credit helper decides the
-rest.** `prksWorkCardCreditLine()` is unchanged and remains the single place
-that rule lives. The ordering is the whole design:
+rest.** `workCardCreditText()` in `frontend-app/src/components/work-card.ts`
+is the single place that rule lives; `PrksWorkCard` renders its text. The ordering is the
+whole design:
 
 ```
-acknowledged row -> apply pending fields -> effective row -> credit helper -> HTML
+acknowledged row -> apply pending fields -> effective row -> credit helper -> card
 ```
 
 Never the reverse. Composing the credit first and patching `author_text` onto

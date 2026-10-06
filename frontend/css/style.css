@@ -9376,8 +9376,8 @@ textarea[data-prks-autosize="1"] {
     container-name: prks-work-main;
 }
 
-/* Video HTML from renderVideoViewerPane, the relationship summary, and other
- * injected HTML stay flex/header children. The slot itself is not a box. */
+/* Video HTML from renderVideoViewerPane and other injected HTML stay
+ * flex/header children. The slot itself is not a box. */
 .document-view--work .work-viewer-host,
 .work-html-slot {
     display: contents;

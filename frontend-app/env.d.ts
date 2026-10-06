@@ -83,11 +83,6 @@ interface Window {
   prksResolveWorkMetadataFieldConflict?: (opId: string, apply: boolean, group: string) => void
   prksResolveWorkSourceConflict?: (opId: string, apply: boolean) => void
   prksVueAcceptWorkMetadataField?: (ctx: object, field: string, value: unknown) => boolean
-  prksVuePresentWorkResearchNotes?: (
-    ctx: object,
-    work: { id?: unknown },
-    initialText: string,
-  ) => boolean
   prksVuePresentRoute?: (request: unknown) => boolean
   prksVueDismissRoute?: (owner: object) => void
   prksVueCloseTagsAliasModal?: (modal?: Element | null) => void
@@ -207,7 +202,6 @@ interface Window {
   /** Saved View records for classic callers (coordinator, modal, palette). Owned by frontend-app. */
   prksSavedViewRecords?: import('./src/features/saved-views/records').SavedViewRecords
   prksOpenCommandPalette?: () => void
-  prksScopeLineHtml?: (options: { total?: number; label?: string }) => string
   prksEffectiveFolderDetailWorks?: (folder: unknown) => unknown[]
   prksFolderDetailSummaryHtml?: (folder: unknown) => string
   prksFolderDetailNavHtml?: (ctx: unknown, folder: unknown) => string
@@ -397,16 +391,6 @@ interface Window {
     name: string,
     options?: { size?: string | number; className?: string },
   ) => string
-  prksPaintScopeHost?: (
-    rootEl: ParentNode | HTMLElement | null,
-    options: {
-      shown?: number
-      total?: number
-      filter?: string
-      label?: string
-    },
-  ) => void
-  prksRelSummaryHtml?: (options: { parts?: Array<string | null | undefined> }) => string
   prksPromptTextDialog?: (opts: PrksPromptTextOptions) => Promise<string | null>
   prksConfirmDestructive?: (opts: PrksConfirmDestructiveOptions) => Promise<boolean>
   prksAlertDialog?: (opts: PrksAlertOptions) => Promise<void>

@@ -82,17 +82,14 @@ export function presentWorkResearchNotes(
   return true
 }
 
+/**
+ * Classic works.js drops the pane when it tears down EasyMDE. Presentation is
+ * imported directly by the Work-detail mount sequence.
+ */
 export function registerWorkResearchNotesBridge(root: Window & typeof globalThis): void {
   const target = root as Window & {
-    prksVuePresentWorkResearchNotes?: (
-      ctx: WorkResearchNoteOwner,
-      work: { id?: unknown },
-      initialText: string,
-    ) => boolean
     prksVueDismissWorkResearchNotes?: (ctx?: { tabId?: unknown }) => void
   }
-  target.prksVuePresentWorkResearchNotes = (ctx, work, initialText) =>
-    presentWorkResearchNotes(ctx, work, initialText)
   target.prksVueDismissWorkResearchNotes = (ctx) => dismissWorkResearchNotes(ctx)
 }
 

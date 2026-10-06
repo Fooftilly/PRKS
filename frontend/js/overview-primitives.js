@@ -1,9 +1,10 @@
 /**
  * Shared visual-overview / context summary primitives.
  *
- * Dense, flat, information-first strips for page headers, identity, Details,
- * collections, and nav attention. Never invent counts: omit unknown parts;
- * unknown is not zero.
+ * Dense, flat, information-first strips for classic page headers, Details,
+ * and nav attention. Vue route surfaces use `PrksScopeLine` and
+ * `PrksRelSummary` for collection scope and relationship strips. Never
+ * invent counts: omit unknown parts; unknown is not zero.
  *
  * Parts are typed plain text (and narrowly validated internal links only).
  * No raw HTML hatch — callers must not pass prebuilt markup.
@@ -109,52 +110,6 @@
         return wrapSummary('prks-page-summary', inner, opts);
     }
 
-    /**
-     * Collection filter / result scope: "12 of 48 matching" / "48 Concepts".
-     * When total is unknown, omit rather than inventing 0.
-     */
-    function prksScopeLineHtml(options) {
-        const opts = options || {};
-        const parts = [];
-        const label = opts.label != null ? String(opts.label).trim() : '';
-        const totalKnown = opts.total != null && Number.isFinite(Number(opts.total));
-        const shownKnown = opts.shown != null && Number.isFinite(Number(opts.shown));
-        const filterOn = !!(opts.filter && String(opts.filter).trim());
-
-        if (shownKnown && totalKnown && filterOn) {
-            const shown = Number(opts.shown);
-            const total = Number(opts.total);
-            parts.push(shown + ' of ' + total + ' matching');
-        } else if (totalKnown) {
-            const total = Number(opts.total);
-            if (label) parts.push(total + ' ' + label);
-            else parts.push(String(total));
-        } else if (shownKnown && filterOn) {
-            parts.push(Number(opts.shown) + ' matching');
-        } else if (opts.unavailable) {
-            parts.push(opts.unavailableText || 'Not available offline');
-        }
-
-        if (opts.extra) {
-            const extras = Array.isArray(opts.extra) ? opts.extra : [opts.extra];
-            for (let i = 0; i < extras.length; i += 1) parts.push(extras[i]);
-        }
-
-        const inner = joinSummaryParts(parts);
-        return wrapSummary('prks-scope-line', inner, {
-            className: opts.className,
-            role: 'status',
-            ariaLabel: opts.ariaLabel,
-        });
-    }
-
-    /** Relationship strip near entity identity (folder · people · tags). */
-    function prksRelSummaryHtml(options) {
-        const opts = options || {};
-        const inner = joinSummaryParts(opts.parts);
-        return wrapSummary('prks-rel-summary', inner, opts);
-    }
-
     /** Compact state summary for Details / right panel (status · type · counts). */
     function prksStateSummaryHtml(options) {
         const opts = options || {};
@@ -189,25 +144,11 @@
         );
     }
 
-    /** Paint a stable `[data-prks-role="index-scope-host"]` with a scope line. */
-    function prksPaintScopeHost(rootEl, options) {
-        if (!rootEl || !rootEl.querySelector) return;
-        const host =
-            rootEl.getAttribute && rootEl.getAttribute('data-prks-role') === 'index-scope-host'
-                ? rootEl
-                : rootEl.querySelector('[data-prks-role="index-scope-host"]');
-        if (!host) return;
-        host.innerHTML = prksScopeLineHtml(options);
-    }
-
     const api = {
         prksJoinSummaryParts: joinSummaryParts,
         prksPageSummaryHtml: prksPageSummaryHtml,
-        prksScopeLineHtml: prksScopeLineHtml,
-        prksRelSummaryHtml: prksRelSummaryHtml,
         prksStateSummaryHtml: prksStateSummaryHtml,
         prksNavAttentionBadgeHtml: prksNavAttentionBadgeHtml,
-        prksPaintScopeHost: prksPaintScopeHost,
     };
 
     Object.keys(api).forEach(function (k) {

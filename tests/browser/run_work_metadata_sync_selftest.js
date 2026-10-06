@@ -12,15 +12,16 @@ require('../../frontend/js/work-tag-state.js');
 require('../../frontend/js/work-metadata-state.js');
 require('../../frontend/js/sync-runtime.js');
 
-/* The REAL credit helper, not a restatement of it. `work-cards.js` is browser
- * script code rather than a module, so it is evaluated in the global scope the
- * way a <script> tag would; its top-level function declarations then become
- * globals. Re-implementing the precedence rule here would prove only that the
- * test and the test agree. */
+/* The REAL credit helper, not a restatement of it: the shipped `PrksWorkCard`
+ * module, loaded through Node's TypeScript stripping. Re-implementing the
+ * precedence rule here would prove only that the test and the test agree. */
+const { workCardCreditText: creditLine } = require('../../frontend-app/src/components/work-card.ts');
+
+/* The shipped thumbnail URL helper. `work-cards.js` is browser script code,
+ * so it is evaluated in the global scope the way a <script> tag would. */
 globalThis.window = globalThis;   // the file ends by exporting onto `window`
 (0, eval)(require('fs').readFileSync(
     require('path').join(__dirname, '../../frontend/js/components/work-cards.js'), 'utf8'));
-const creditLine = globalThis.prksWorkCardCreditLine;
 
 /* The REAL browse-row shape validators. `thumb_page` is the first synchronized
  * field whose read models are TYPE-checked, so "does a pending value keep the

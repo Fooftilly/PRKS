@@ -1,3 +1,5 @@
+import type { RelSummaryPart } from '../../components/relSummary'
+
 /**
  * Work tile shell model. The route session paints `WorkMainSurface`.
  * Video HTML comes from renderVideoViewerPane. The PDF host is filled by
@@ -14,7 +16,7 @@ export interface WorkMainSurfaceModel {
   showHeader: boolean
   title: string
   docTypeHtml: string
-  relSummaryHtml: string
+  relSummaryParts: RelSummaryPart[]
   viewerHtml: string
   editorRegionId: string
 }

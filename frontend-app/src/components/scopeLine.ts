@@ -7,7 +7,7 @@ export type ScopeLineOptions = {
   unavailableText?: string
 }
 
-/** Same wording as `prksScopeLineHtml` in `frontend/js/overview-primitives.js`. */
+/** Collection scope wording ("12 of 48 matching", "128 People"). */
 export function scopeLineParts(options: ScopeLineOptions): string[] {
   const parts: string[] = []
   const label = options.label != null ? String(options.label).trim() : ''

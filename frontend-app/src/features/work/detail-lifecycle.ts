@@ -4,8 +4,11 @@
  * notes ticket, viewer modules, shell, then PDF / Research Notes / panel.
  * It is not a second Work store and does not write annotations.
  */
+import type { RelSummaryPart } from '../../components/relSummary'
+import { workCardCreditText } from '../../components/work-card'
 import { describeWorkDetail } from './detail-model'
 import type { WorkMainSurfaceModel } from './main-surface'
+import { presentWorkResearchNotes } from './research-note-session'
 
 export interface WorkDetailMountRequest {
   generation?: number
@@ -46,30 +49,25 @@ async function loadViewerModule(url: string): Promise<Record<string, unknown>> {
   return imported as Record<string, unknown>
 }
 
-function relSummaryHtml(
+function relSummaryParts(
   work: Record<string, unknown>,
   described: ReturnType<typeof describeWorkDetail>,
-): string {
-  if (described.pdfViewerActive) return ''
-  const rel = classic('prksRelSummaryHtml')
-  if (!rel) return ''
-  const creditFn = classic('prksWorkCardCreditText')
-  const credit = creditFn ? String(creditFn(work as never) || '') : ''
-  const folderPart = described.folderTitle
+): RelSummaryPart[] {
+  if (described.pdfViewerActive) return []
+  const credit = workCardCreditText(work)
+  const folderPart: RelSummaryPart = described.folderTitle
     ? described.folderId
       ? { text: described.folderTitle, href: '#/folders/' + encodeURIComponent(described.folderId) }
       : described.folderTitle
     : null
   const peopleN = described.peopleCount
   const tagsN = described.tagCount
-  return String(rel({
-    parts: [
-      folderPart,
-      credit || null,
-      peopleN != null && peopleN > 0 ? peopleN + (peopleN === 1 ? ' person' : ' people') : null,
-      tagsN != null && tagsN > 0 ? tagsN + (tagsN === 1 ? ' tag' : ' tags') : null,
-    ],
-  } as never) || '')
+  return [
+    folderPart,
+    credit || null,
+    peopleN != null && peopleN > 0 ? peopleN + (peopleN === 1 ? ' person' : ' people') : null,
+    tagsN != null && tagsN > 0 ? tagsN + (tagsN === 1 ? ' tag' : ' tags') : null,
+  ]
 }
 
 function presentWork(
@@ -184,7 +182,7 @@ export async function mountWorkDetail(
     showHeader: described.showHeader,
     title: described.title,
     docTypeHtml: badge ? String(badge(current.doc_type as never) || '') : '',
-    relSummaryHtml: relSummaryHtml(current, described),
+    relSummaryParts: relSummaryParts(current, described),
     viewerHtml,
     editorRegionId: typeof ctx.domId === 'function' ? ctx.domId('work-notes-editor-region') : 'work-notes-editor-region',
   }
@@ -286,8 +284,7 @@ export async function mountWorkDetail(
         const notesText = readNotes
           ? String(readNotes(current.id as never, current.text_content as never, ctx as never) || '')
           : ''
-        const presentNotes = classic('prksVuePresentWorkResearchNotes')
-        const vueNotes = presentNotes ? presentNotes(ctx as never, current as never, notesText as never) === true : false
+        const vueNotes = presentWorkResearchNotes(ctx, current, notesText)
         if (!vueNotes) {
           const notesTaLive = ctx.query ? ctx.query('[data-prks-role="research-notes-editor"]') : null
           if (

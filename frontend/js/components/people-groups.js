@@ -338,7 +338,6 @@ function prksRefreshPersonGroupMain(ctx) {
     const groupId = route.params && route.params.groupId ? String(route.params.groupId) : '';
     const group = owner.getEntity && owner.getEntity('personGroup');
     if (!group || String(group.id) !== groupId) return;
-    if (typeof prksPresentVueRoute !== 'function') return;
     prksPresentVueRoute(owner, owner.root, 'person-group-detail', {
         availability: 'ready',
         group: group,
