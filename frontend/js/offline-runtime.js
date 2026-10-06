@@ -3142,9 +3142,6 @@
     function prksOfflineMarkEntityChanged(kind, id) {
         return production.markEntityChanged(kind, id);
     }
-    function prksOfflineMarkDomainChanged(domain, spec) {
-        return production.markDomainChanged(domain, spec);
-    }
     function prksOfflineDomainGeneration(domain) {
         return production.currentDomainGeneration(domain);
     }
@@ -3202,9 +3199,6 @@
             entityKinds: ['person'],
             listKeys: [PEOPLE_LIST_KEY],
         });
-    }
-    function prksOfflineIsMutationBlocked() {
-        return production.isMutationBlocked();
     }
     function prksOfflineMarkPersonGroupsChanged() {
         return production.markDomainChanged(DOMAIN_PERSON_GROUPS, {
@@ -3358,7 +3352,6 @@
         prksOfflineInvalidateEntity: prksOfflineInvalidateEntity,
         prksOfflineInvalidateList: prksOfflineInvalidateList,
         prksOfflineMarkEntityChanged: prksOfflineMarkEntityChanged,
-        prksOfflineMarkDomainChanged: prksOfflineMarkDomainChanged,
         prksOfflineDomainGeneration: prksOfflineDomainGeneration,
         prksOfflineIsDomainBlocked: prksOfflineIsDomainBlocked,
         prksOfflineMarkConceptsChanged: prksOfflineMarkConceptsChanged,
@@ -3368,7 +3361,6 @@
         prksOfflineMarkPersonGroupsChanged: prksOfflineMarkPersonGroupsChanged,
         prksOfflineMarkPlaylistsChanged: prksOfflineMarkPlaylistsChanged,
         prksOfflineMarkPlaylistsIndexChanged: prksOfflineMarkPlaylistsIndexChanged,
-        prksOfflineIsMutationBlocked: prksOfflineIsMutationBlocked,
         prksOfflineGuardMutation: prksOfflineGuardMutation,
         prksOfflineDiagnostics: prksOfflineDiagnostics,
         prksOfflineClearCache: prksOfflineClearCache,

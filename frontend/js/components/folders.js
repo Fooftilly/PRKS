@@ -112,15 +112,6 @@ function prksUpdateFolderLibraryExpandToggleBtn() {
     btn.setAttribute('title', label);
 }
 
-function prksFolderTreeHost() {
-    const st = window.__prksFolderDashboardState;
-    if (st && st.container) {
-        const host = st.container.querySelector('[data-prks-folder-tree-host]');
-        if (host) return host;
-    }
-    return document.querySelector('[data-prks-folder-detail-tree-host]');
-}
-
 function prksFolderTreeHosts() {
     const hosts = [];
     const seen = new Set();
@@ -559,8 +550,6 @@ function renderFolderTreeRoots(folders, options = {}) {
 
     return roots.map((r) => renderNode(r, 0)).join('');
 }
-
-const PRKS_FOLDER_LIBRARY_FILTER_KEY = 'prks-folder-library-filter';
 
 function prksRecentlyAddedWorkMatchesQuery(work, query, foldersById) {
     const q = String(query || '').trim().toLowerCase();

@@ -403,26 +403,11 @@ function prksFlashInlineCopyButton(btn, ok = true) {
     _prksInlineCopyFlashTimers.set(btn, t);
 }
 
-function prksIsDuplicateRoleLinkError(msg) {
-    return typeof msg === 'string' && /already linked/i.test(msg);
-}
-
 function prksShowDuplicateRoleLinkAlert(roleType) {
     const rt = String(roleType || 'Linked').trim() || 'Linked';
     return prksAlertDialog({
         title: 'Already linked',
         message: `This person is already linked as ${rt}.`,
-    });
-}
-
-async function prksNotifyRoleLinkFailure(errorMsg, roleType) {
-    if (prksIsDuplicateRoleLinkError(errorMsg)) {
-        await prksShowDuplicateRoleLinkAlert(roleType);
-        return;
-    }
-    await prksAlertDialog({
-        title: 'Could not link',
-        message: errorMsg || 'Could not create link.',
     });
 }
 
@@ -1273,23 +1258,6 @@ function syncPersonAliasesFromNames() {
     aliases.value = buildPersonAliasSuggestions(fname.value, lname.value);
 }
 
-async function populateFolderDropdown() {
-    const folders = await fetchFolders();
-    const select = document.getElementById('work-folder-id');
-    if (!select) return;
-    const existingVal = select.value;
-    select.innerHTML = `<option value="">(No Folder)</option>` +
-        folders.map(f => `<option value="${f.id}">${f.title}</option>`).join('');
-
-    if (existingVal && folders.find(f => f.id === existingVal)) {
-        select.value = existingVal;
-    } else if (typeof prksParseRoute === 'function' && prksParseRoute(window.location.hash).name === 'folder-detail') {
-        select.value = prksParseRoute(window.location.hash).params.folderId || '';
-    } else if (window.location.hash.startsWith('#/folders/')) {
-        select.value = window.location.hash.split('/')[2];
-    }
-}
-
 function closeModals() {
     prksHideModalUnsavedConfirm({ restoreFocus: false });
     const playlistModal = document.getElementById('playlist-modal');
@@ -1330,8 +1298,6 @@ window.initModalCloseUi = initModalCloseUi;
 window.prksConfirmDialog = prksConfirmDialog;
 window.prksAlertDialog = prksAlertDialog;
 window.prksShowDuplicateRoleLinkAlert = prksShowDuplicateRoleLinkAlert;
-window.prksIsDuplicateRoleLinkError = prksIsDuplicateRoleLinkError;
-window.prksNotifyRoleLinkFailure = prksNotifyRoleLinkFailure;
 window.prksAlertMessage = prksAlertMessage;
 window.prksConfirmDestructive = prksConfirmDestructive;
 window.prksConfirmUnsavedRouteLeave = prksConfirmUnsavedRouteLeave;
@@ -1361,25 +1327,6 @@ function prksRoleDisplayName(role) {
     const credit = role && role.credit_name != null ? String(role.credit_name).trim() : '';
     if (credit) return credit;
     return personDisplayName(role);
-}
-
-function prksRoleCreditPickerHtml(prefix) {
-    const p = String(prefix || 'role');
-    return `
-        <div class="prks-role-credit-picker" id="${p}-credit-wrap" hidden>
-            <label class="prks-role-credit-picker__heading" for="${p}-credit-input">Name on this file</label>
-            <p id="${p}-credit-profile" class="prks-role-credit-picker__profile meta-row meta-row--hint"></p>
-            <div id="${p}-credit-shell" class="tag-add-shell tag-add-shell--flush prks-role-credit-picker__shell prks-role-credit-picker__shell--off">
-                <div class="tag-add-shell__field prks-role-credit-picker__field">
-                    <label class="prks-role-credit-picker__check" for="${p}-credit-enable" title="Use a different name on this file">
-                        <input type="checkbox" id="${p}-credit-enable" class="prks-role-credit-picker__enable-input" aria-label="Use a different name on this file">
-                    </label>
-                    <input type="text" id="${p}-credit-input" class="tag-add-shell__input prks-role-credit-picker__input" disabled placeholder="Uses profile name" autocomplete="off" aria-label="Name shown on this file">
-                </div>
-            </div>
-            <div id="${p}-credit-aliases" class="prks-role-credit-picker__aliases" hidden role="group" aria-label="Known aliases"></div>
-            <p class="meta-row meta-row--hint meta-row--compact">Check the box to override; pick an alias or type a name.</p>
-        </div>`;
 }
 
 function prksSyncRoleCreditPickerEnabled(prefix) {
@@ -1780,33 +1727,6 @@ async function prksQuickCreatePersonForRoleLink(typedName) {
         'role-person-id',
         'Quick-created from Link Person to Work'
     );
-}
-
-async function initWorkMetaRoleLinker(workId) {
-    if (!workId) return;
-    if (!Array.isArray(allPersons) || allPersons.length === 0) {
-        allPersons = await fetchPersons();
-        window.allPersons = allPersons;
-    }
-    initSearchableCombobox('meta-role-person-search', 'meta-role-person-results', 'meta-role-person-id', 'person', {
-        onQuickCreate: (typedName) => {
-            void prksQuickCreatePersonForSearchField(
-                typedName,
-                'meta-role-person-search',
-                'meta-role-person-id',
-                'Quick-created from Edit Metadata'
-            );
-        },
-        onPersonPick: (person) => prksRefreshRoleCreditPicker('meta-role', person),
-    });
-    prksBindRoleCreditPicker('meta-role');
-    const workHidden = document.getElementById('meta-role-work-id');
-    if (workHidden) workHidden.value = String(workId);
-    const roleHidden = document.getElementById('meta-role-type');
-    const roleSel = roleHidden && roleHidden.value ? roleHidden.value : 'Author';
-    if (typeof prksMountMetaRoleSegmented === 'function') {
-        prksMountMetaRoleSegmented(roleSel);
-    }
 }
 
 async function addRoleToWorkFromMetaEditor(workId) {
@@ -3928,226 +3848,6 @@ function renderPlaylistSummarySidebarHtml(pl, editing) {
     `;
 }
 
-function renderPlaylistEditSidebarHtml(pl) {
-    if (!pl) return '<p class="meta-row">Playlist not found.</p>';
-    const title = escapeHtml(pl.title || '');
-    const desc = escapeHtml(pl.description || '');
-    const originalUrl = escapeHtml(pl.original_url || '');
-    return `
-        <div class="right-panel-stack">
-            <div class="doc-meta-card form-pane doc-meta-card--editing">
-                <div class="card-heading-row">
-                    <h3 class="doc-meta-card__accent-title">Edit playlist</h3>
-                    <button type="button" class="prks-icon-btn close-btn" id="prks-playlist-edit-close" aria-label="Close">&times;</button>
-                </div>
-                <label for="prks-playlist-edit-title">Title</label>
-                <input type="text" id="prks-playlist-edit-title" value="${title}" autocomplete="off">
-                <label for="prks-playlist-edit-desc">Description</label>
-                <textarea id="prks-playlist-edit-desc" class="textarea-sm">${desc}</textarea>
-                <label for="prks-playlist-edit-original-url">Original playlist URL</label>
-                <input type="url" id="prks-playlist-edit-original-url" value="${originalUrl}" placeholder="https://..." autocomplete="off">
-                <div class="prks-form-actions prks-form-actions--split form-actions">
-                    <button type="button" class="prks-btn prks-btn--secondary" id="prks-playlist-edit-cancel">Cancel</button>
-                    <button type="button" class="prks-btn prks-btn--primary" id="prks-playlist-edit-save">Save</button>
-                </div>
-                <p class="meta-row meta-row--spaced" id="prks-playlist-edit-status" aria-live="polite"></p>
-            </div>
-
-            <div class="doc-meta-card">
-                <h3>Add video</h3>
-                <p class="meta-row meta-row--compact">Search for a video and click Add.</p>
-                <div class="tag-add-shell combobox-container tag-add-shell--flush">
-                    <div class="tag-add-shell__field">
-                        ${typeof prksTagPlusIconHtml === 'function' ? prksTagPlusIconHtml() : '<span class="tag-add-shell__icon"></span>'}
-                        <input type="text" id="prks-playlist-add-search" class="tag-add-shell__input" placeholder="Search videos…" maxlength="300" autocomplete="off" aria-label="Search videos to add">
-                    </div>
-                    <div id="prks-playlist-add-results" class="combobox-results combobox-results--tag-panel hidden"></div>
-                </div>
-                <p class="meta-row meta-row--spaced" id="prks-playlist-add-status" aria-live="polite"></p>
-            </div>
-        </div>
-    `;
-}
-
-async function mountPlaylistEditSidebar(pl, ownerCtx) {
-    if (!pl || !pl.id) return;
-    const ctx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
-    const generation = ctx && ctx.generation;
-    const panel = document.getElementById('panel-content');
-    const ownsPlaylistPanel = function (node) {
-        return !!(
-            typeof prksTabContextOwnsEntityRoute === 'function' &&
-            prksTabContextOwnsEntityRoute(ctx, generation, 'playlist', pl.id, 'playlist-detail') &&
-            typeof prksRightPanelOwnedBy === 'function' &&
-            prksRightPanelOwnedBy(ctx, node || panel)
-        );
-    };
-    if (!panel || !ownsPlaylistPanel(panel)) return;
-    prksBindAutosizeTextareas(panel);
-    if (typeof prksApplyPlaylistPanelOfflineState === 'function') prksApplyPlaylistPanelOfflineState(ctx);
-    const editBtn = panel.querySelector('#prks-playlist-edit-btn');
-    if (editBtn && editBtn.dataset.bound !== '1') {
-        editBtn.dataset.bound = '1';
-        editBtn.onclick = () => {
-            const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : ctx;
-            if (focused && focused.ui) focused.ui.playlistEditing = true;
-            updatePanelContent('details');
-            if (typeof prksRefreshPlaylistDetailMain === 'function') prksRefreshPlaylistDetailMain(focused);
-        };
-    }
-    const close = () => {
-        if (ctx && ctx.ui) ctx.ui.playlistEditing = false;
-        if (typeof prksClearPlaylistRenameState === 'function') prksClearPlaylistRenameState(ctx);
-        updatePanelContent('details');
-        if (typeof prksRefreshPlaylistDetailMain === 'function') prksRefreshPlaylistDetailMain(ctx);
-    };
-
-    panel.querySelector('#prks-playlist-edit-close')?.addEventListener('click', close);
-    panel.querySelector('#prks-playlist-edit-cancel')?.addEventListener('click', close);
-
-    const saveBtn = panel.querySelector('#prks-playlist-edit-save');
-    const statusEl = panel.querySelector('#prks-playlist-edit-status');
-    if (saveBtn && saveBtn.dataset.bound !== '1') {
-        saveBtn.dataset.bound = '1';
-        saveBtn.onclick = async () => {
-            const title = String(panel.querySelector('#prks-playlist-edit-title')?.value || '').trim();
-            const description = String(panel.querySelector('#prks-playlist-edit-desc')?.value || '').trim();
-            const originalUrl = String(panel.querySelector('#prks-playlist-edit-original-url')?.value || '').trim();
-            if (!title) {
-                if (statusEl) statusEl.textContent = 'Title is required.';
-                return;
-            }
-            try {
-                // Canonical success controls coherence, so the wrapper runs
-                // before any panel-ownership test. Renaming a Playlist stales
-                // the cached Work entity of every current member, because
-                // get_work() embeds playlist_title -- the wrapper diffs the
-                // title itself so this call site cannot forget.
-                await updatePlaylist(
-                    pl.id,
-                    { title, description, original_url: originalUrl },
-                    {
-                        previousTitle: pl.title || '',
-                        memberWorkIds: (Array.isArray(pl.items) ? pl.items : [])
-                            .map((w) => w && w.id)
-                            .filter(Boolean),
-                    }
-                );
-                if (!ownsPlaylistPanel(panel)) return;
-                const fresh =
-                    typeof fetchPlaylistDetails === 'function'
-                        ? await fetchPlaylistDetails(pl.id, {
-                              signal: ctx && ctx.abortController && ctx.abortController.signal,
-                          })
-                        : null;
-                if (!ownsPlaylistPanel(panel)) return;
-                if (fresh) {
-                    if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('playlist', fresh);
-                    if (ctx) ctx.routeSidebar = { playlistTitle: fresh.title || 'Playlist', itemCount: Array.isArray(fresh.items) ? fresh.items.length : 0 };
-                }
-                if (ctx && ctx.ui) ctx.ui.playlistEditing = false;
-                if (typeof prksClearPlaylistRenameState === 'function') prksClearPlaylistRenameState(ctx);
-                updatePanelContent('details');
-                if (typeof prksRefreshPlaylistDetailMain === 'function') prksRefreshPlaylistDetailMain(ctx);
-            } catch (_e) {
-                if (statusEl && ownsPlaylistPanel(statusEl)) {
-                    statusEl.textContent = String((_e && _e.message) || 'Could not save.');
-                }
-            }
-        };
-    }
-
-    const input = panel.querySelector('#prks-playlist-add-search');
-    const results = panel.querySelector('#prks-playlist-add-results');
-    const addStatus = panel.querySelector('#prks-playlist-add-status');
-    if (!input || !results) return;
-
-    const present = new Set((Array.isArray(pl.items) ? pl.items : []).map((w) => String(w.id || '')).filter(Boolean));
-    const works =
-        typeof fetchWorks === 'function'
-            ? await fetchWorks({ signal: ctx && ctx.abortController && ctx.abortController.signal })
-            : [];
-    if (!ownsPlaylistPanel(panel)) return;
-    if (typeof prksApplyPlaylistPanelOfflineState === 'function') prksApplyPlaylistPanelOfflineState(ctx);
-    const isVideo = (w) => {
-        if (!w) return false;
-        return typeof prksInferWorkSourceKind === 'function' && prksInferWorkSourceKind(w) === 'video';
-    };
-    const choices = (Array.isArray(works) ? works : [])
-        .filter(isVideo)
-        .filter((w) => !present.has(String(w.id)))
-        .sort((a, b) => String(a.title || '').localeCompare(String(b.title || ''), undefined, { sensitivity: 'base' }));
-
-    function renderDropdown() {
-        const q = String(input.value || '').trim().toLowerCase();
-        const filtered = !q ? choices.slice(0, 30) : choices.filter((w) => String(w.title || '').toLowerCase().includes(q)).slice(0, 30);
-        results.innerHTML = '';
-        if (filtered.length === 0) {
-            results.innerHTML = `<div class="result-item no-results">No videos found</div>`;
-        } else {
-            for (const w of filtered) {
-                const row = document.createElement('div');
-                row.className = 'result-item';
-                row.style.display = 'flex';
-                row.style.alignItems = 'center';
-                row.style.justifyContent = 'space-between';
-                row.style.gap = '10px';
-
-                const label = document.createElement('div');
-                label.style.flex = '1 1 auto';
-                label.style.minWidth = '0';
-                label.textContent = w.title || 'Untitled';
-                row.appendChild(label);
-
-                const btn = document.createElement('button');
-                btn.type = 'button';
-                btn.className = 'prks-btn prks-btn--secondary prks-btn--sm';
-                btn.textContent = 'Add';
-                btn.style.flex = '0 0 auto';
-                btn.onmousedown = (ev) => ev.preventDefault();
-                btn.onclick = async (ev) => {
-                    ev.preventDefault();
-                    try {
-                        if (typeof addWorkToPlaylist !== 'function') throw new Error('no api');
-                        await addWorkToPlaylist(pl.id, w.id);
-                        if (!ownsPlaylistPanel(addStatus)) return;
-                        if (addStatus) addStatus.textContent = 'Added.';
-                        const fresh =
-                            typeof fetchPlaylistDetails === 'function'
-                                ? await fetchPlaylistDetails(pl.id, {
-                                      signal: ctx && ctx.abortController && ctx.abortController.signal,
-                                  })
-                                : null;
-                        if (fresh && ownsPlaylistPanel(panel)) {
-                            if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('playlist', fresh);
-                            if (ctx) ctx.routeSidebar = {
-                                playlistTitle: fresh.title || 'Playlist',
-                                itemCount: Array.isArray(fresh.items) ? fresh.items.length : 0,
-                            };
-                            if (ctx && ctx.root && typeof renderPlaylistDetail === 'function') {
-                                renderPlaylistDetail(ctx, fresh, ctx.root);
-                            }
-                            if (ctx && ctx.ui) ctx.ui.playlistEditing = true;
-                            updatePanelContent('details');
-                        }
-                    } catch (_e) {
-                        if (addStatus && ownsPlaylistPanel(addStatus)) {
-                            addStatus.textContent = String((_e && _e.message) || 'Could not add.');
-                        }
-                    }
-                };
-                row.appendChild(btn);
-                results.appendChild(row);
-            }
-        }
-        prksShowInlineComboboxResults(input, results);
-    }
-
-    input.onfocus = () => renderDropdown();
-    input.oninput = () => renderDropdown();
-    input.onblur = () => setTimeout(() => prksHideInlineComboboxResults(results), 200);
-}
-
 function prksWorkMetaDraftFromWork(rawWork) {
     /* EFFECTIVE, not acknowledged. A synchronized field with a pending durable
      * edit is already saved as far as the user is concerned, so comparing
@@ -5080,7 +4780,6 @@ function renderFolderTagsChipsHtml(folder) {
 
 window.renderFolderTagsChipsHtml = renderFolderTagsChipsHtml;
 
-const PRKS_WORK_STATUS_LABELS = ['Not Started', 'Planned', 'In Progress', 'Completed', 'Paused'];
 /* Full Work-role vocabulary including Mentioned — Link Person modal only.
  * Upload / meta bibliographic pickers use PRKS_PEOPLE_ROLES via prksUploadRoleLabels(). */
 const PRKS_LINK_ROLE_LABELS = ['Author', 'Editor', 'Reviewer', 'Mentioned', 'Translator', 'Introduction', 'Foreword', 'Afterword'];
@@ -5135,12 +4834,7 @@ function prksMountLinkRoleSegmented(selectedValue) {
     );
 }
 
-function prksMountMetaRoleSegmented(selectedValue) {
-    prksMountRoleSegmented('meta-role-seg-mount', 'meta-role-type', selectedValue);
-}
-
 window.prksMountLinkRoleSegmented = prksMountLinkRoleSegmented;
-window.prksMountMetaRoleSegmented = prksMountMetaRoleSegmented;
 
 function prksSegmentedControlHtml(hiddenId, ariaLabel, labels, selectedValue, variant, options) {
     const opts = options && typeof options === 'object' ? options : {};
@@ -5419,81 +5113,6 @@ async function prksSubmitNewTag(entityType, entityId, name, ownerCtx, triggerInp
         }
         await prksAlertMessage(prksTagVocabularyMessage(e, 'create this tag'), 'Could not save');
     }
-}
-
-function initTagComboboxForEntity(entityType, entityId, inputId, resultsId, ownerCtx) {
-    const input = document.getElementById(inputId);
-    const results = document.getElementById(resultsId);
-    if (!input || !results) return;
-    const generation = ownerCtx && typeof ownerCtx.generation === 'number' ? ownerCtx.generation : undefined;
-
-    function liveWorkInput() {
-        return entityType !== 'work' || prksWorkTagOwnerLive(ownerCtx, generation, entityId, input);
-    }
-
-    function getAttachedIds() {
-        if (entityType === 'work' && ownerCtx && ownerCtx.getEntity) {
-            const work = ownerCtx.getEntity('work');
-            if (!work || String(work.id) !== String(entityId)) return new Set();
-            return new Set((work.tags || []).map((t) => t.id));
-        }
-        const ent = typeof prksFocusedEntity === 'function'
-            ? prksFocusedEntity(entityType === 'work' ? 'work' : 'folder')
-            : null;
-        if (!ent || ent.id !== entityId) return new Set();
-        return new Set((ent.tags || []).map((t) => t.id));
-    }
-
-    async function renderDropdown() {
-        if (!liveWorkInput()) return;
-        const all = await fetchTags({ used: false });
-        if (!liveWorkInput()) return;
-
-        const val = input.value.trim();
-        const valLower = val.toLowerCase();
-        const attached = getAttachedIds();
-        const available = all.filter((t) => !attached.has(t.id));
-        const filtered = !val
-            ? available.slice(0, 40)
-            : available.filter((t) => prksTagMatchesQuery(t, valLower)).slice(0, 40);
-        const exactMatch = available.some((t) => prksTagExactMatch(t, valLower));
-
-        results.innerHTML = '';
-        if (val && !exactMatch) {
-            const c = document.createElement('div');
-            c.className = 'result-item result-item--create';
-            c.textContent = 'Create tag "' + val + '"';
-            c.onmousedown = (ev) => {
-                ev.preventDefault();
-                if (input.disabled) return;
-                prksSubmitNewTag(entityType, entityId, val, ownerCtx, input);
-            };
-            results.appendChild(c);
-        }
-        filtered.forEach((tag) => {
-            const div = document.createElement('div');
-            div.className = 'result-item';
-            div.textContent = prksTagComboboxLabel(tag, valLower);
-            div.onmousedown = (ev) => {
-                ev.preventDefault();
-                if (input.disabled) return;
-                prksAttachExistingTag(entityType, entityId, tag.id, ownerCtx, input);
-            };
-            results.appendChild(div);
-        });
-        if (results.childElementCount === 0) {
-            prksHideInlineComboboxResults(results);
-        } else {
-            prksShowInlineComboboxResults(input, results);
-        }
-    }
-
-    input.onfocus = () => void renderDropdown();
-    input.oninput = () => void renderDropdown();
-    input.onblur = () =>
-        setTimeout(() => {
-            prksHideInlineComboboxResults(results);
-        }, 200);
 }
 
 function initWorkTagCombobox(workId, ownerCtx) {

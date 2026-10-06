@@ -1,14 +1,3 @@
-function escapeHtmlPerson(s) {
-    if (typeof window.prksEscapeHtml === 'function') return window.prksEscapeHtml(s);
-    if (s == null) return '';
-    return String(s)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-}
-
 const PERSON_YEAR_MIN = -99999;
 const PERSON_YEAR_MAX = 99999;
 
@@ -280,13 +269,6 @@ function renderPeopleListUnavailable(container, ctx) {
     });
 }
 
-function personProfileImageSrc(person) {
-    if (!person || !person.id) return null;
-    const raw = (person.image_url || '').trim();
-    if (!raw) return null;
-    return '/api/persons/' + encodeURIComponent(String(person.id)) + '/profile-image';
-}
-
 function parsePersonOtherLinkLine(line) {
     const trimmed = (line || '').trim();
     if (!trimmed) return null;
@@ -524,50 +506,6 @@ async function applyPersonProfileTemplateFromModal() {
         return;
     }
     if (typeof closeModals === 'function') closeModals();
-}
-
-function renderPersonExternalLinksList(person) {
-    const items = [];
-    const wiki = safeHttpUrl(person.link_wikipedia);
-    if (wiki) {
-        items.push({ label: 'Wikipedia', href: wiki });
-    }
-    const sep = safeHttpUrl(person.link_stanford_encyclopedia);
-    if (sep) {
-        items.push({ label: 'Stanford Encyclopedia of Philosophy', href: sep });
-    }
-    const iep = safeHttpUrl(person.link_iep);
-    if (iep) {
-        items.push({ label: 'Internet Encyclopedia of Philosophy', href: iep });
-    }
-    const other = (person.links_other || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-    other.forEach((line, i) => {
-        const mdLink = parsePersonOtherLinkLine(line);
-        if (mdLink) {
-            items.push(mdLink);
-            return;
-        }
-        const href = safeHttpUrl(line);
-        if (href) {
-            items.push({ label: href.replace(/^https?:\/\//i, '').split('/')[0] || `Link ${i + 1}`, href });
-        } else {
-            items.push({ label: line, href: null });
-        }
-    });
-    if (!items.length) return '';
-    const lis = items
-        .map(it => {
-            if (it.href) {
-                return `<li><a href="${escapeHtmlPerson(it.href)}" target="_blank" rel="noopener noreferrer"><span>${escapeHtmlPerson(it.label)}</span><span aria-hidden="true">↗</span></a></li>`;
-            }
-            return `<li>${escapeHtmlPerson(it.label)}</li>`;
-        })
-        .join('');
-    return `
-        <div class="person-external-links">
-            <h4>References</h4>
-            <ul class="person-link-list">${lis}</ul>
-        </div>`;
 }
 
 function truncatePersonPreviewText(text, maxLen) {
@@ -1472,15 +1410,6 @@ async function savePersonProfile(personId) {
             prksSetButtonBusy(btn, false);
         }
     }
-}
-
-function personRoleBlockHtml(heading, count, cardsHtml) {
-    return (
-        `<section class="person-profile__role-block">` +
-        `<h3 class="person-profile__role-heading"><span>${escapeHtmlPerson(heading)}</span><span class="person-profile__role-count">${count}</span></h3>` +
-        `<div class="card-grid">${cardsHtml}</div>` +
-        `</section>`
-    );
 }
 
 const PRKS_PERSON_WORK_CARD_KEYS = [

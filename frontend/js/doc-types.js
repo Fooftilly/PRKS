@@ -54,18 +54,6 @@ function prksDocTypeBadgeHtml(docType) {
     );
 }
 
-/** vis-network `groups` option: node.group should match doc_type value */
-function prksDocTypeVisGroups() {
-    const out = {};
-    for (const d of PRKS_DOC_TYPES) {
-        out[d.value] = {
-            color: { background: d.color, border: d.border, highlight: { background: d.color, border: d.border } },
-            /* Do not set group font color: it applies to file title labels on the canvas; white on light surface hid them. */
-        };
-    }
-    return out;
-}
-
 /**
  * Markup for custom doc-type menu (hidden value + trigger + empty listbox panel).
  * @param {string} prefix - element id prefix, e.g. "work-doc-type" → work-doc-type-trigger, work-doc-type-listbox

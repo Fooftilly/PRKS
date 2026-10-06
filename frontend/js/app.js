@@ -333,10 +333,6 @@ function prksSetPdfRememberLastPageEnabled(enabled) {
 
 window.prksGetPdfRememberLastPageEnabled = prksGetPdfRememberLastPageEnabled;
 
-function prksPdfLastPageStorageKey(workId) {
-    return 'prks.pdf.lastPage.' + workId;
-}
-
 function prksExtractWorkIdFromHash(h) {
     if (typeof prksParseRoute === 'function') {
         const route = prksParseRoute(h);

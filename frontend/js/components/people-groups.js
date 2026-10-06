@@ -101,35 +101,6 @@ function prksPersonGroupSaveMessage(error, action) {
 }
 
 /**
- * Save a Group's editable fields durably, sending only what changed.
- *
- * Returns true when the editor may close. The three concepts stay apart: the
- * draft is what was typed, the base is what the server last confirmed, and the
- * difference is measured against what the form was SHOWING.
- */
-async function prksSavePersonGroupDraft(groupId, draft) {
-    const ops = typeof prksDurableOperationsOrNone === 'function'
-        ? await prksDurableOperationsOrNone() : [];
-    const base = await prksAcknowledgedPersonGroupBase(groupId, ops);
-    if (!base) {
-        await prksAlertMessage(
-            'This group cannot be edited offline yet. Open it once while connected to PRKS '
-            + 'so its synchronization state is prepared.', 'Unavailable');
-        return false;
-    }
-    const changes = prksDirtyPersonGroupFields(groupId, draft, base, ops);
-    if (!Object.keys(changes).length) return true;
-    try {
-        await prksSavePersonGroupFieldsDurably(groupId, changes, base);
-    } catch (error) {
-        await prksAlertMessage(prksPersonGroupSaveMessage(error, 'save this group'),
-            'Could not save');
-        return false;
-    }
-    return true;
-}
-
-/**
  * Add or remove one membership durably. Returns true when it was recorded.
  *
  * `quiet` suppresses the message: a caller changing SEVERAL pairs at once --
