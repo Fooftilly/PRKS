@@ -174,23 +174,6 @@ interface Window {
     roleType: string,
   ) => boolean
   prksTagPlusIconHtml?: () => string
-  /** Classic-script bridge for `frontend-app/src/features/search/codec.ts`. Vue imports that module. */
-  prksSearchQueryCodec?: {
-    definitionFromRoute: (route: unknown) => {
-      ok: boolean
-      empty?: boolean
-      unsavable?: boolean
-      message?: string
-      definition?: { mode: string; q: string; tag: string; author: string; publisher: string }
-    }
-    hashFromDefinition: (definition: unknown) => string
-    optionsFromDefinition: (definition: unknown) => {
-      q: string
-      tag: string | null
-      options: { any?: string; author?: string; publisher?: string }
-    }
-    summaryText: (definition: unknown) => string
-  }
   prksOpenSavedViewModalFromCurrentSearch?: (hash?: string) => void
   prksOpenSavedViewModal?: (options: {
     viewId?: string

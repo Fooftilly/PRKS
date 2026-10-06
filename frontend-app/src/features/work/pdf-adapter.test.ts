@@ -6,7 +6,6 @@ import runtimeSource from '../../../../frontend/js/pdf-work-runtime.js?raw'
 import {
   intentCloseWorkPdfAnnotationPopup,
   intentCloseWorkPdfSearch,
-  intentDeleteWorkPdfAnnotationPopup,
   intentDeleteWorkPdfAnnotation,
   intentJumpWorkPdfAnnotation,
   intentResizeWorkPdfAnnotationDrawer,
@@ -23,7 +22,6 @@ import {
   readWorkPdfAnnotationDrawer,
   readWorkPdfAnnotationPopup,
   readWorkPdfSearch,
-  registerWorkPdfAdapterBridge,
   workPdfLeaveNeedsConfirm,
   type WorkPdfOwner,
   type WorkPdfRuntime,
@@ -294,42 +292,6 @@ describe('work PDF adapter', () => {
     runtime.syncState.pendingChanges = true
     expect(workPdfLeaveNeedsConfirm(ctx)).toBe(true)
     expect(pdfWindow.prksHasPendingWorkAnnotationSync(ctx)).toBe(true)
-  })
-
-  it('registers the same functions on the window bridge', () => {
-    registerWorkPdfAdapterBridge(window)
-    const bridge = window as unknown as {
-      prksReadWorkPdf: typeof readWorkPdf
-      prksIntentMountWorkPdf: typeof intentMountWorkPdf
-      prksIntentFlushWorkPdf: typeof intentFlushWorkPdf
-      prksIntentResizeWorkPdf: typeof intentResizeWorkPdf
-      prksWorkPdfLeaveNeedsConfirm: typeof workPdfLeaveNeedsConfirm
-      prksReadWorkPdfSearch: typeof readWorkPdfSearch
-      prksIntentOpenWorkPdfSearch: typeof intentOpenWorkPdfSearch
-      prksIntentCloseWorkPdfSearch: typeof intentCloseWorkPdfSearch
-      prksIntentSetWorkPdfSearchQuery: typeof intentSetWorkPdfSearchQuery
-      prksIntentWorkPdfSearchNext: typeof intentWorkPdfSearchNext
-      prksIntentWorkPdfSearchPrevious: typeof intentWorkPdfSearchPrevious
-      prksReadWorkPdfAnnotationPopup: typeof readWorkPdfAnnotationPopup
-      prksIntentSaveWorkPdfAnnotationComment: typeof intentSaveWorkPdfAnnotationComment
-      prksIntentCloseWorkPdfAnnotationPopup: typeof intentCloseWorkPdfAnnotationPopup
-      prksIntentDeleteWorkPdfAnnotationPopup: typeof intentDeleteWorkPdfAnnotationPopup
-    }
-    expect(bridge.prksReadWorkPdf).toBe(readWorkPdf)
-    expect(bridge.prksIntentMountWorkPdf).toBe(intentMountWorkPdf)
-    expect(bridge.prksIntentFlushWorkPdf).toBe(intentFlushWorkPdf)
-    expect(bridge.prksIntentResizeWorkPdf).toBe(intentResizeWorkPdf)
-    expect(bridge.prksWorkPdfLeaveNeedsConfirm).toBe(workPdfLeaveNeedsConfirm)
-    expect(bridge.prksReadWorkPdfSearch).toBe(readWorkPdfSearch)
-    expect(bridge.prksIntentOpenWorkPdfSearch).toBe(intentOpenWorkPdfSearch)
-    expect(bridge.prksIntentCloseWorkPdfSearch).toBe(intentCloseWorkPdfSearch)
-    expect(bridge.prksIntentSetWorkPdfSearchQuery).toBe(intentSetWorkPdfSearchQuery)
-    expect(bridge.prksIntentWorkPdfSearchNext).toBe(intentWorkPdfSearchNext)
-    expect(bridge.prksIntentWorkPdfSearchPrevious).toBe(intentWorkPdfSearchPrevious)
-    expect(bridge.prksReadWorkPdfAnnotationPopup).toBe(readWorkPdfAnnotationPopup)
-    expect(bridge.prksIntentSaveWorkPdfAnnotationComment).toBe(intentSaveWorkPdfAnnotationComment)
-    expect(bridge.prksIntentCloseWorkPdfAnnotationPopup).toBe(intentCloseWorkPdfAnnotationPopup)
-    expect(bridge.prksIntentDeleteWorkPdfAnnotationPopup).toBe(intentDeleteWorkPdfAnnotationPopup)
   })
 
   it('forwards search to the runtime and drops a stale generation', () => {

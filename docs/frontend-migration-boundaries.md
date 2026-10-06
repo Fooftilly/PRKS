@@ -1,6 +1,6 @@
 # Frontend migration boundaries (B5 closeout)
 
-Final bridge audit for #303 / #230. This records every crossing that remains
+Final bridge inventory for #303 / #230. This records every crossing that remains
 between the classic runtime (`frontend/js/`) and the Vue bundle
 (`frontend/vue/prks-vue.js`, built from `frontend-app/`), who owns each side,
 and why it is not migration debt. It also lists what the audit retired.
@@ -11,15 +11,19 @@ its last consumer has crossed.
 
 ## Status
 
-- B1 to B4 are complete. B5 visible cutover (#451, #452), dead-painter purge
-  (#453), and browser/resource baselines (#455) are on `master`.
-- #459 (long-lived listener growth) is closed. #469 merged as `ae5a7b5`; the
-  B5 baseline in `docs/b5-browser-baselines.md` now shows a zero
-  `longLivedListenerLive` delta. The listener-growth follow-up is resolved.
-- There is no further route or component migration wave.
-- After the final bridge-audit PR, the only remaining work is the #303 / #230
-  completion verification. Do not close either issue from an implementation
-  PR.
+- B1 to B4 are complete.
+- B5 implementation is complete: shared Work card (#451), Work-detail cutover
+  (#452), dead-painter purge and bridge inventory (#453), browser/resource
+  baselines (#455), long-lived listener growth (#459, resolved by #469 at
+  `ae5a7b5`; `docs/b5-browser-baselines.md` shows a zero
+  `longLivedListenerLive` delta), and the production-tree bridge audit (#470
+  at `24956a4`).
+- Final verification after #470 found one more dead bridge (the PDF adapter
+  `window` registration) and gaps in this inventory. The follow-up PR retires
+  that bridge and completes the tables below, using the alias-aware audit
+  described in "How the inventory is checked".
+- There is no further route or component migration wave. Controller
+  verification and closure of #303 / #230 follow that PR.
 
 ## Why the window boundary exists
 
@@ -32,6 +36,33 @@ each side. Vue reads classic services through typed declarations in
 Classic files end with an explicit `window.X = X` export list. For top-level
 classic functions that list documents the file's public surface; it is not a
 bridge by itself.
+
+## How the inventory is checked
+
+A crossing is any name one world publishes and the other reads. The audit
+covers every publication mechanism, not only `window.X =`:
+
+- Vue `register*Bridge(target)` functions called from `src/main.ts`, and any
+  assignment through an alias of `window`, `globalThis`, or `root`
+  (`target.prksX =`, `bridge.prksX =`, `root.prksX =`), plus
+  `Object.assign` / `defineProperty` on those objects;
+- generated classic modules (`scripts/build-*.mjs` IIFE names and their
+  entries);
+- Vue reads through `window.X`, typed aliases (including multi-line
+  `(window as … & { prksX?: … }).prksX` casts), and string lookups such as
+  `classic('prksX')`;
+- properties one world sets on a shared host, TabContext, or error object and
+  the other reads (see "Host and object markers");
+- every `env.d.ts` global declaration against its readers. A declaration kept
+  only so a Vitest can assert Vue does *not* call a classic global
+  (`prksHideWorkThumbPreview`, `prksDeleteArgumentDurably`,
+  `__prksProcessingPeople`) is a test contract, not a crossing.
+
+A Vue publication with no classic reader is dead and is removed. The
+classic-owned table names families with representative globals: every name
+Vue reads from classic code belongs to a row whose classic owner file is
+listed and whose reason covers it. A new crossing gets a row here with its
+owner on each side, or it is migration debt.
 
 ## Classic to Vue (Vue registers, classic calls)
 
@@ -47,6 +78,10 @@ bridge by itself.
 | `prksVueCloseTagsAliasModal`, `prksVueCloseTagsMergeModal`, `prksVueClosePublishersAliasModal` | `src/features/tags/session.ts`, `src/features/publishers/session.ts` | `ui.js` modal lifecycle, `tags.js` | The shared modal system (Escape, overlay, focus restore) is classic. Vue owns those modal bodies. |
 | `prksVueReportTagsRefreshFailure` | `src/features/tags/session.ts` | `app.js` | The coordinator loads the tag vocabulary; Vue shows the failure. |
 | `prksVueActivatePerformanceDiagnostics`, `__prksPerformanceDiagnosticsRequested` | `src/features/performance-diagnostics/activation.ts` | `app.js` settings | Settings navigation is classic. The flag covers activation before the module loads. |
+| `prksSavedViewRecords` | `src/features/saved-views/session.ts` (records service in `records.ts`) | `app.js` Saved View detail case, `saved-views.js` shared modal, `command-palette.js` | Saved View reads and writes are owned by the typed client and TanStack Query in Vue. The classic route coordinator, the shared modal, and the palette use that one service rather than a second client. |
+| `prksProcessingRecords` | `src/features/processing/session.ts` (records service in `records.ts`) | `app.js` Processing case | Processing inbox reads and writes are owned by the typed client in Vue, which also owns file save and import. The coordinator loads the inbox through this service rather than a second client. The classic quick-create helpers in `processing-files.js` call their own durable APIs and do not use it. |
+| `prksWorkMetadataGroupFields`, `prksWorkPanelReadOwns` | `src/features/work/metadata-session.ts`, `src/features/work/panel-session.ts` | `work-metadata-editor.js` | The metadata field grouping and the panel-read ownership check are Vue rules. The classic durable metadata editor asks Vue instead of keeping a copy. |
+| `prksWorkspaceInitDrag`, `prksWorkspaceCancelActiveDrag` | `src/workspace-shell/WorkspaceShell.vue`, `src/workspace-dnd/adapter.ts` | `workspace-tabs.js` (init), `workspace-tiling.js` (cancel) | `workspace-tabs.js` is the live workspace effect coordinator. The Vue shell owns presentation and Pragmatic DnD sensors; the coordinator starts and cancels drags through these hooks. `workspace-drag.js` only publishes idle no-op defaults that the Vue shell replaces, so pre-Vue callers stay safe. `__prksWorkspaceShellOwned` is set by `workspace-tabs.js` before bootstrap and again by the Vue shell on mount; only `workspace-tabs.js` reads it, to take the presentation path instead of the legacy tile reconciler. |
 
 ## Vue to classic runtime services (classic owns, Vue calls)
 
@@ -57,18 +92,49 @@ for a migrated surface.
 | --- | --- | --- | --- |
 | Route coordinator | `app.js`, `tab-context.js`, `navigation.js` | `prksPresentVueRoute`, `prksTabContextOwnsEntityRoute`, `prksNavigate` | Owns the host and request envelope for every route feature, and the TabContext generation checks. |
 | People, Person Group, Playlist route families | `people.js`, `people-groups.js`, `playlists.js` | `renderPeopleList`, `renderPersonDetails`, `renderPlaylistDetail`, `prksRefreshPersonGroupMain`, `prksReloadPlaylistDetail` | They resolve the effective/offline/durable record and hand it to `prksPresentVueRoute`, then bind offline state. They paint no HTML. |
-| Durable and offline operations | `api.js`, `local-store.js`, `offline-runtime.js`, feature `*-state.js` | `savePersonProfileDraft`, `updatePlaylist`, `prksTagsMerge`, `prksSaveWorkMetadataFields`, `prksOfflineRuntimeState` | One durable queue and one effective-state model. Vue never mirrors them. |
-| Modals and dialogs | `ui.js`, feature modal openers | `prksConfirmDestructive`, `prksPromptTextDialog`, `prksOpenNewPersonModalFromPeoplePage` | The modal system is out of migration scope. |
+| Durable and offline operations | `api.js`, `local-store.js`, `offline-runtime.js`, `sync-runtime.js`, `tags.js`, feature `*-state.js`, `work-metadata-editor.js`, `work-source-editor.js` | `savePersonProfileDraft`, `updatePlaylist`, `prksTagsMerge`, `prksTagsDelete`, `prksSaveWorkMetadataFields`, `prksSaveWorkSource`, `prksResolveWorkMetadataFieldConflict`, `prksOfflineRuntimeState`, `prksOfflineGuardMutation`, `prksSync` | One durable queue and one effective-state model. Vue never mirrors them. |
+| Modals and dialogs | `ui.js`, `saved-views.js`, `concepts.js`, feature modal openers | `prksConfirmDestructive`, `prksPromptTextDialog`, `prksAlertDialog`, `prksAlertMessage`, `prksOpenNewPersonModalFromPeoplePage`, `prksOpenSavedViewModal`, `prksCreateConceptFlow` | The shared modal system (Escape, overlay, focus restore) is classic and out of migration scope. The Saved View modal saves through `prksSavedViewRecords`. |
 | Folder tree and hierarchy | `folders.js`, `folder-hierarchy-nav.js` | `prksFolderLibraryTreeInnerHtml`, `prksToggleFolderNodeInHost`, `prksPaintFolderLibraryGlance`, `prksPublishFolderDashboardState`, `__prksFolderDashboardState`, `__prksFolderLibraryBrandHomeReset` | The folder tree markup, expand/collapse persistence, glance, and hierarchy navigation are the product owner. Vue routes host them. |
 | Folder detail host writer | `folders.js` | `prksCommitFolderDetailSurface`, `prksFolderDetailSummaryHtml`, `prksFolderDetailNavHtml`, `prksFolderDetailSubfoldersHtml`, `prksEffectiveFolderDetailWorks` | After the Vue paint, the writer commits the hierarchy nav and subfolder rows (folder-tree rows) into the Vue host and fills the detail tree. Same owner as the folder tree. |
 | Work-card infrastructure | `work-cards.js` | `prksInitLazyWorkThumbs`, `prksRegisterWorkThumbUrl`, `prksShowWorkThumbPreview`, `prksWorkBrowseModeToggleHtml` | Thumbnail lifetime, preview, and browse mode stay classic. `PrksWorkCard` owns card markup and the credit text. |
-| PDF, video, Research Notes, private notes | `works-pdf.js`, `works-video.js`, `works.js`, `ui.js` | `initPdfViewerForWork`, `renderVideoViewerPane`, `initEasyMDE`, `prksResearchNotesTextForWork`, `prksPrivateNotesTextForEntity` | Runtime owners kept out of migration scope. |
-| Research Graph, Processing, command palette, workspace tabs | `research-graph.js`, `processing-files.js`, `command-palette.js`, `workspace-*.js` | `prksReleaseResearchGraph`, `prksProcessingAttachResources`, `prksOpenCommandPalette`, `prksWorkspaceSubscribe` | Runtime owners kept out of migration scope. `workspace-tabs.js` is the live effect coordinator behind the Vue shell's detached projection. |
+| PDF, video, Research Notes, private notes | `works-pdf.js`, `pdf-work-runtime.js`, `works-video.js`, `works.js`, `ui.js` | `initPdfViewerForWork`, `prksLayoutAnnotationDrawer`, `prksHasPendingWorkAnnotationSync`, `renderVideoViewerPane`, `initEasyMDE`, `prksResearchNotesTextForWork`, `prksPrivateNotesTextForEntity`, `prksBindPrivateNotesField` | Runtime owners kept out of migration scope. |
+| Research Graph, Processing, command palette, workspace tabs | `research-graph.js`, `processing-files.js`, `command-palette.js`, `workspace-*.js` | `prksReleaseResearchGraph`, `prksProcessingAttachResources`, `prksOpenCommandPalette`, `prksWorkspaceSubscribe`, `prksWorkspaceOnShellCommit`, `prksWorkspacePlaceContentHost`, `prksWorkspaceWatchCanvas`, `prksWorkspaceOpenTabMenu` | Runtime owners kept out of migration scope. `workspace-tabs.js` is the live effect coordinator behind the Vue shell's detached projection. |
 | Classic summary primitives | `overview-primitives.js` | `prksPageSummaryHtml`, `prksStateSummaryHtml`, `prksNavAttentionBadgeHtml` | Remaining callers are classic: folder glance, workspace overview, Details state strip, nav badges. |
 | Generated typed modules | built from `frontend-app/` by `npm run build` | `route-model.js`, `search-query-codec.js`, `workspace-model.js`, `work-route-projection.js`, `tab-leave.js`, `owner-resource.js` | Canonical typed sources compiled for classic callers. Never hand-edited. |
+| Icons | `icons.js` | `prksIcon`, `prksRefreshIcons`, `prksPageHeaderIconHtml`, `prksTagSearchIconHtml`, `prksTagPlusIconHtml`, `prksProgressStatusIconHtml` | One icon registry for both worlds (classic modals, palette, folder tree, panels, and Vue routes, `PrksWorkCard`, the workspace drag adapter). A second Vue registry would duplicate it. `prksPageHeaderIconHtml` is read only by Vue route headers today; it stays with the registry it belongs to. |
+| Document types | `doc-types.js` | `prksDocTypeBadgeHtml`, `prksDocTypeMenuShellHtml` | The document-type vocabulary and its badge/menu markup have one owner, shared by classic Details and new-file flows and by Vue `PrksWorkCard`, Types, Work detail, and the Processing card. |
+| Help and markup | `ui.js`, `api.js`, `concepts.js` | `prksHintBtnHtml`, `prksEscapeHtml`, `prksResearchMarkdownHtml` | The hint-button markup, HTML escaping, and the research Markdown renderer (wiki links, sanitizing) are single rules used by classic panels and by Vue (`research-index/markdown.ts`, Person Group detail). |
+| Dates | `date-format.js` | `prksIsoToDdMmYyyy`, `prksParsePublishedDateInput` | One parser and formatter for published dates, shared by classic metadata editing and the Vue Processing card and records. |
+| Tag matching and inline comboboxes | `ui.js` | `prksTagMatchesQuery`, `prksTagExactMatch`, `prksTagComboboxLabel`, `prksTagVocabularyMessage`, `prksShowInlineComboboxResults`, `prksHideInlineComboboxResults` | Tag alias matching and the inline combobox behaviour are the same for classic tag pickers and the Vue Processing card and Tags intents. |
+| Shared control helpers | `ui.js` | `prksSetButtonBusy`, `prksFlashButtonLabel`, `prksSegmentedControlHtml`, `prksBindSegmentedHidden`, `prksBindAutosizeTextareas`, `prksIsSmallScreen` | Busy/flash button feedback, segmented controls, textarea autosize, and the small-screen breakpoint follow `DESIGN.md` once for both worlds. `prksFlashButtonLabel` is read only by the Vue annotation drawer today. |
+| Separators and resize | `workspace-split.js` | `prksBindDrawerWidthSeparator`, `prksWorkspaceSyncSplitSeparator`, `prksWorkspaceSyncNestedSeparator`, `prksWorkspaceReleaseRootSeparator`, `prksWorkspaceReleaseNestedSeparator` | One separator implementation owns pointer drag, keyboard resize, and separator ARIA for the Main/Secondary divider, nested Secondary splits, and the PDF annotation drawer width handle (its width mode). Vue renders the separator elements: the workspace canvas and tree, and the PDF annotation drawer, which forwards the resize ticket captured at gesture start and calls the binding's `refresh` when the painted width or min/max changes. A second implementation in Vue would split drag and ARIA behaviour. |
+| Request and error reporting | `request-coordinator.js`, `api.js` | `prksRequest`, `prksIsAbortError`, `prksConsumeApiError`, `prksReportClientError`, `prksRequestCoordinatorSnapshot`, `prksResetRequestCoordinatorDiagnostics` | One request coordinator (dedupe, abort, diagnostics) and one client-error reporter. Vue Work detail, Playlist intents, the Query cache, and performance diagnostics use them. |
+
+## Host and object markers
+
+Some crossings are properties on a shared object rather than `window` globals.
+Each has one writer and one reader.
+
+| Marker | Written by | Read by | Purpose |
+| --- | --- | --- | --- |
+| `host.__prksVueRouteRequest` | `app.js` (`prksDeliverVueRoute`) | `src/route-surface/lifecycle.ts` | Early host-local route request for a route that paints before the Vue module registers. |
+| `panel.__prksWorkPanelReadRequest` | `ui.js` | `src/features/work/panel-session.ts` | Same early-request handoff for the Work view-mode panel. |
+| `panel.dataset.prksOwnerTabId`, `panel.dataset.prksOwnerGeneration` | `ui.js` | Work panel, metadata, and private-note sessions | TabContext ownership of the right panel; Vue drops stale presents. |
+| `ctx.__prksRetain*Surface` (People, Person Groups, Playlists, Arguments, Positions, Concepts, Folder Library, Folder detail) | `app.js` | the matching `src/features/*/session.ts` cleanup | Same-route refresh in one TabContext keeps the Vue host instead of disposing it. |
+| `contentRoot.__prksFolderOfflineDispose` | `folders.js` | `src/features/folder-library/intents.ts` | Folder offline-state binding teardown owned by the folder tree. |
+| `textarea.dataset.prksNotesBound` | `ui.js` | `src/features/work/detail-lifecycle.ts` | Marks the private-notes field as bound so mount does not bind twice. |
+| `err.prksOfflineRefused` | `api.js` offline guard, and the Saved View records error in `src/features/saved-views/records.ts` | `prksOfflineWasGuardRefusal` in `api.js` | One offline-refusal flag, so classic callers skip a duplicate alert for a refusal from either client. |
 
 ## Retired by the final audit
 
+- The PDF adapter `window` bridge (`registerWorkPdfAdapterBridge`): 23
+  globals (`prksReadWorkPdf*`, `prksIntent*WorkPdf*`,
+  `prksWorkPdfLeaveNeedsConfirm`) that no production code read. Vue imports
+  `src/features/work/pdf-adapter.ts` directly; classic PDF code reaches Vue
+  only through the `prksVue*WorkPdfAnnotation*` entries above.
+- The `env.d.ts` declaration of `prksSearchQueryCodec`: Vue imports
+  `src/features/search/codec.ts`; only classic callers read the generated
+  global.
 - `prksRelSummaryHtml`: the Work header relationship strip is Vue
   `PrksRelSummary`, which now links same-app routes.
 - `prksScopeLineHtml`, `prksPaintScopeHost`: Vue `PrksScopeLine` and

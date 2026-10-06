@@ -52,9 +52,10 @@ class WorkPdfSearchTests(unittest.TestCase):
         self.assertNotIn("store.savePdfAnnotation", ADAPTER)
         self.assertNotIn("savePdfAnnotation(", ADAPTER)
         self.assertNotIn("createPrksPdfViewer", ADAPTER)
-        self.assertIn("registerWorkPdfAdapterBridge", MAIN)
-        self.assertIn("prksReadWorkPdfSearch", BUNDLE)
-        self.assertIn("prksIntentSetWorkPdfSearchQuery", BUNDLE)
+        # The search adapter is imported by Vue, not published on `window`.
+        self.assertNotIn("registerWorkPdfAdapterBridge", MAIN)
+        self.assertNotIn("prksReadWorkPdfSearch", BUNDLE)
+        self.assertNotIn("prksIntentSetWorkPdfSearchQuery", BUNDLE)
         self.assertIn("data-prks-role=\"pdf-search\"", BAR)
         self.assertIn("data-prks-owner-tab-id", BAR)
         self.assertIn("Find in document", BAR)
