@@ -1,10 +1,15 @@
 <script setup lang="ts">
 import { computed, inject, onUpdated, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import PrksField from '../../components/PrksField.vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
+import PrksWorkCard from '../../components/PrksWorkCard.vue'
+import { useWorkCardCollection } from '../../components/use-work-card-collection'
+import { workCardCollectionFingerprint, workCardThumbOptions, type PrksWorkCardWork } from '../../components/work-card'
 import { peopleIntentsKey } from './intents'
 import { usePeoplePendingAction } from './pending-action'
 import type { PersonDetailProjection } from './projection'
-import type { PersonFieldDraft, PersonGroupChip } from './types'
+import type { PersonFieldDraft, PersonGroupChip, PersonWorkItem } from './types'
 
 const FIELD_KEYS = [
   'first_name',
@@ -28,6 +33,7 @@ const intents = inject(peopleIntentsKey)
 const { actionBusy, actionBlocked, resetPending, withBusy } = usePeoplePendingAction()
 const rootEl = ref<HTMLElement | null>(null)
 const editorEl = ref<HTMLElement | null>(null)
+const worksHost = ref<HTMLElement | null>(null)
 const draft = ref<PersonFieldDraft>(emptyFields())
 const fieldBaseline = ref<PersonFieldDraft>(emptyFields())
 const groupBaseline = ref<string[]>([])
@@ -197,56 +203,36 @@ async function onUnlink(workId: string, roleType: string, orderIndex: string, ti
   })
 }
 
-function workCard(work: {
-  id: string
-  title: string
-  subtitle: string
-  filePath: string
-  thumbUrl: string
-  thumbPage: number | null
-  status: string
-  docType: string
-  year: string
-  publishedDate: string
-  sizeBytes: number | null
-  linkedAuthors: string
-  authorText: string
-  primaryAuthor: string
-  primaryEditor: string
-  sourceKind: string
-  sourceUrl: string
-  provider: string
-  providerId: string
-}): string {
-  const html = window.prksWorkCardHtml
-  if (typeof html !== 'function') return ''
-  return html(
-    {
-      id: work.id,
-      title: work.title,
-      file_path: work.filePath,
-      thumb_url: work.thumbUrl,
-      thumb_page: work.thumbPage,
-      status: work.status,
-      doc_type: work.docType,
-      year: work.year,
-      published_date: work.publishedDate,
-      file_size_bytes: work.sizeBytes,
-      linked_authors: work.linkedAuthors,
-      author_text: work.authorText,
-      primary_author: work.primaryAuthor,
-      primary_editor: work.primaryEditor,
-      source_kind: work.sourceKind,
-      source_url: work.sourceUrl,
-      provider: work.provider,
-      provider_id: work.providerId,
-    },
-    {
-      subtitle: work.subtitle || undefined,
-      suppressThumbnail: props.projection.offlineCached,
-    },
-  )
+function personWorkAsCard(work: PersonWorkItem): PrksWorkCardWork {
+  return {
+    id: work.id,
+    title: work.title,
+    file_path: work.filePath,
+    thumb_url: work.thumbUrl,
+    thumb_page: work.thumbPage,
+    status: work.status,
+    doc_type: work.docType,
+    year: work.year,
+    published_date: work.publishedDate,
+    file_size_bytes: work.sizeBytes,
+    linked_authors: work.linkedAuthors,
+    author_text: work.authorText,
+    primary_author: work.primaryAuthor,
+    primary_editor: work.primaryEditor,
+    source_kind: work.sourceKind,
+    source_url: work.sourceUrl,
+    provider: work.provider,
+    provider_id: work.providerId,
+  }
 }
+
+useWorkCardCollection(worksHost, {
+  initWhen: () => !props.projection.offlineCached,
+  source: () =>
+    workCardCollectionFingerprint(person.value?.works, {
+      suppressThumbnail: props.projection.offlineCached,
+    }),
+})
 </script>
 
 <template>
@@ -255,7 +241,7 @@ function workCard(work: {
       <div class="prks-page-header page-header">
         <h2 class="prks-page-title">Person not available offline</h2>
       </div>
-      <p class="prks-inline-message" data-prks-role="offline-unavailable">This item is not available offline.</p>
+      <PrksInlineMessage data-prks-role="offline-unavailable">This item is not available offline.</PrksInlineMessage>
     </template>
     <template v-else-if="notFound">
       <div class="prks-page-header page-header">
@@ -273,46 +259,53 @@ function workCard(work: {
         <div class="form-pane person-edit-form">
           <section class="person-edit-section" aria-labelledby="person-edit-identity-heading">
             <h4 id="person-edit-identity-heading">Identity</h4>
-            <label for="pd-first-name">First name</label>
-            <input id="pd-first-name" v-model="draft.first_name" type="text" />
-            <label for="pd-last-name">Last name</label>
-            <input id="pd-last-name" v-model="draft.last_name" type="text" />
-            <label for="pd-aliases">Aliases</label>
-            <input id="pd-aliases" v-model="draft.aliases" type="text" />
+            <PrksField v-slot="{ labelledBy, describedBy }" label="First name" for-id="pd-first-name">
+              <input id="pd-first-name" v-model="draft.first_name" type="text"  :aria-labelledby="labelledBy" :aria-describedby="describedBy" />
+            </PrksField>
+            <PrksField v-slot="{ labelledBy, describedBy }" label="Last name" for-id="pd-last-name">
+              <input id="pd-last-name" v-model="draft.last_name" type="text"  :aria-labelledby="labelledBy" :aria-describedby="describedBy" />
+            </PrksField>
+            <PrksField v-slot="{ labelledBy, describedBy }" label="Aliases" for-id="pd-aliases">
+              <input id="pd-aliases" v-model="draft.aliases" type="text"  :aria-labelledby="labelledBy" :aria-describedby="describedBy" />
+            </PrksField>
           </section>
           <section class="person-edit-section" aria-labelledby="person-edit-biography-heading">
             <h4 id="person-edit-biography-heading">Biography</h4>
-            <label for="pd-about">About / expertise</label>
-            <textarea id="pd-about" v-model="draft.about" class="textarea-sm"></textarea>
+            <PrksField v-slot="{ labelledBy, describedBy }" label="About / expertise" for-id="pd-about">
+              <textarea id="pd-about" v-model="draft.about" class="textarea-sm" :aria-labelledby="labelledBy" :aria-describedby="describedBy"></textarea>
+            </PrksField>
           </section>
           <section class="person-edit-section" aria-labelledby="person-edit-dates-heading">
             <h4 id="person-edit-dates-heading">Dates</h4>
             <div class="form-grid-2 form-grid-2--compact">
-              <div>
-                <label for="pd-birth-date">Birth date</label>
-                <input id="pd-birth-date" v-model="draft.birth_date" type="text" placeholder="dd/mm/yyyy or yyyy" autocomplete="off" />
-              </div>
-              <div>
-                <label for="pd-death-date">Date of death</label>
-                <input id="pd-death-date" v-model="draft.death_date" type="text" placeholder="dd/mm/yyyy or yyyy" autocomplete="off" />
-              </div>
+              <PrksField v-slot="{ labelledBy, describedBy }" label="Birth date" for-id="pd-birth-date">
+                <input id="pd-birth-date" v-model="draft.birth_date" type="text" placeholder="dd/mm/yyyy or yyyy" autocomplete="off"  :aria-labelledby="labelledBy" :aria-describedby="describedBy" />
+              </PrksField>
+              <PrksField v-slot="{ labelledBy, describedBy }" label="Date of death" for-id="pd-death-date">
+                <input id="pd-death-date" v-model="draft.death_date" type="text" placeholder="dd/mm/yyyy or yyyy" autocomplete="off"  :aria-labelledby="labelledBy" :aria-describedby="describedBy" />
+              </PrksField>
             </div>
           </section>
           <section class="person-edit-section" aria-labelledby="person-edit-portrait-heading">
             <h4 id="person-edit-portrait-heading">Portrait</h4>
-            <label for="pd-image-url">Portrait image URL</label>
-            <input id="pd-image-url" v-model="draft.image_url" type="url" />
+            <PrksField v-slot="{ labelledBy, describedBy }" label="Portrait image URL" for-id="pd-image-url">
+              <input id="pd-image-url" v-model="draft.image_url" type="url"  :aria-labelledby="labelledBy" :aria-describedby="describedBy" />
+            </PrksField>
           </section>
           <section class="person-edit-section" aria-labelledby="person-edit-references-heading">
             <h4 id="person-edit-references-heading">References</h4>
-            <label for="pd-link-wikipedia">Wikipedia</label>
-            <input id="pd-link-wikipedia" v-model="draft.link_wikipedia" type="url" />
-            <label for="pd-link-stanford">Stanford Encyclopedia of Philosophy</label>
-            <input id="pd-link-stanford" v-model="draft.link_stanford_encyclopedia" type="url" />
-            <label for="pd-link-iep">Internet Encyclopedia of Philosophy</label>
-            <input id="pd-link-iep" v-model="draft.link_iep" type="url" />
-            <label for="pd-links-other">Other links</label>
-            <textarea id="pd-links-other" v-model="draft.links_other" class="textarea-sm" placeholder="One URL per line, or [Title](https://...)"></textarea>
+            <PrksField v-slot="{ labelledBy, describedBy }" label="Wikipedia" for-id="pd-link-wikipedia">
+              <input id="pd-link-wikipedia" v-model="draft.link_wikipedia" type="url"  :aria-labelledby="labelledBy" :aria-describedby="describedBy" />
+            </PrksField>
+            <PrksField v-slot="{ labelledBy, describedBy }" label="Stanford Encyclopedia of Philosophy" for-id="pd-link-stanford">
+              <input id="pd-link-stanford" v-model="draft.link_stanford_encyclopedia" type="url"  :aria-labelledby="labelledBy" :aria-describedby="describedBy" />
+            </PrksField>
+            <PrksField v-slot="{ labelledBy, describedBy }" label="Internet Encyclopedia of Philosophy" for-id="pd-link-iep">
+              <input id="pd-link-iep" v-model="draft.link_iep" type="url"  :aria-labelledby="labelledBy" :aria-describedby="describedBy" />
+            </PrksField>
+            <PrksField v-slot="{ labelledBy, describedBy }" label="Other links" for-id="pd-links-other">
+              <textarea id="pd-links-other" v-model="draft.links_other" class="textarea-sm" placeholder="One URL per line, or [Title](https://...)" :aria-labelledby="labelledBy" :aria-describedby="describedBy"></textarea>
+            </PrksField>
           </section>
           <section class="person-edit-section" aria-labelledby="person-edit-groups-heading">
             <h4 id="person-edit-groups-heading">Groups</h4>
@@ -331,15 +324,15 @@ function workCard(work: {
                 <input id="pd-group-pick-id" type="hidden" value="" />
                 <div id="pd-group-results" class="combobox-results combobox-results--tag-panel hidden"></div>
               </div>
-              <button id="pd-group-add-btn" type="button" class="prks-btn prks-btn--primary person-groups-fieldset__action">
+              <PrksButton id="pd-group-add-btn" variant="primary" class="person-groups-fieldset__action">
                 Add group
-              </button>
+              </PrksButton>
             </fieldset>
           </section>
         </div>
-        <p v-if="status" class="prks-inline-message prks-inline-message--error" data-prks-role="person-save-status">{{ status }}</p>
+        <PrksInlineMessage v-if="status" tone="error" data-prks-role="person-save-status">{{ status }}</PrksInlineMessage>
         <div class="form-actions prks-form-actions--split person-edit-footer">
-          <button type="button" class="prks-btn prks-btn--secondary" data-prks-person-cancel @click="onCancel">Cancel</button>
+          <PrksButton data-prks-person-cancel @click="onCancel">Cancel</PrksButton>
           <PrksButton
             id="pd-save-btn"
             variant="primary"
@@ -404,34 +397,46 @@ function workCard(work: {
             <div class="person-profile__works-head">
               <h2 id="person-profile-works-heading" class="person-profile__works-title">Linked files</h2>
               <span class="person-profile__works-count">{{ person.works.length }}</span>
-              <button
+              <PrksButton
                 v-if="person.works.length || projection.worksEditing"
-                type="button"
-                class="prks-btn prks-btn--secondary prks-btn--sm person-profile__works-action"
+                size="sm"
+                class="person-profile__works-action"
                 :data-prks-role="projection.worksEditing ? undefined : 'person-mutation-control'"
                 @click="onToggleWorks"
               >
                 {{ projection.worksEditing ? 'Done' : 'Edit relationships' }}
-              </button>
-            </div>
-            <p v-if="!person.works.length" class="prks-inline-message">This person is not linked to any files.</p>
-            <div v-for="work in person.works" :key="`${work.id}:${work.roleType}:${work.orderIndex}`" class="person-profile__work-card-wrap">
-              <div v-if="workCard(work)" v-html="workCard(work)"></div>
-              <p v-else class="meta-row">{{ work.title }} <span v-if="work.roleType">· {{ work.roleType }}</span></p>
-              <PrksButton
-                v-if="projection.worksEditing"
-                variant="ghost"
-                size="sm"
-                class="person-profile__card-unlink"
-                data-prks-role="person-mutation-control"
-                :aria-label="`Remove link to ${work.title} (${work.roleType})`"
-                :busy="actionBusy(`unlink:${work.id}:${work.roleType}`)"
-                :disabled="actionBlocked(`unlink:${work.id}:${work.roleType}`)"
-                busy-label="Removing…"
-                @click="onUnlink(work.id, work.roleType, work.orderIndex, work.title)"
-              >
-                ×
               </PrksButton>
+            </div>
+            <PrksInlineMessage v-if="!person.works.length">This person is not linked to any files.</PrksInlineMessage>
+            <div
+              v-if="person.works.length"
+              ref="worksHost"
+              class="person-profile__works-list"
+            >
+              <div
+                v-for="work in person.works"
+                :key="`${work.id}:${work.roleType}:${work.orderIndex}`"
+                class="person-profile__work-card-wrap"
+              >
+                <PrksWorkCard
+                  :work="personWorkAsCard(work)"
+                  :options="workCardThumbOptions(projection.offlineCached, { subtitle: work.subtitle || undefined })"
+                />
+                <PrksButton
+                  v-if="projection.worksEditing"
+                  variant="ghost"
+                  size="sm"
+                  class="person-profile__card-unlink"
+                  data-prks-role="person-mutation-control"
+                  :aria-label="`Remove link to ${work.title} (${work.roleType})`"
+                  :busy="actionBusy(`unlink:${work.id}:${work.roleType}`)"
+                  :disabled="actionBlocked(`unlink:${work.id}:${work.roleType}`)"
+                  busy-label="Removing…"
+                  @click="onUnlink(work.id, work.roleType, work.orderIndex, work.title)"
+                >
+                  ×
+                </PrksButton>
+              </div>
             </div>
           </section>
         </div>

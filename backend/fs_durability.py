@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import errno
 import os
+import tempfile
 
 try:
     import fcntl
@@ -145,6 +146,40 @@ def fsync_open_file(fd: int) -> None:
     not treat the file as replaceable-from after that.
     """
     _sync_descriptor(fd)
+
+
+def replace_file_atomically(path: str, data: bytes) -> bool:
+    """Durably replace ``path`` with ``data`` under this module's convention.
+
+    Sibling temporary (``.prks-write-*.tmp``, created owner-only by
+    ``mkstemp``), content fsync, ``os.replace``, then a best-effort sync of the
+    parent directory. A crash leaves either the previous file or the whole new
+    one, never a name pointing at unflushed bytes.
+
+    Raises ``OSError`` when the contents could not be made durable; nothing has
+    been replaced then and the temporary is removed. Returns the directory
+    durability answer exactly as ``fsync_directory`` does, so a caller for which
+    this write is a persistence boundary can refuse to advance on False.
+
+    Callers pass a path whose parent they already trust -- a verified storage
+    root or the platform configuration directory -- never one built from user
+    or database input.
+    """
+    parent = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(prefix=".prks-write-", suffix=".tmp", dir=parent)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            fsync_open_file(handle.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+    return fsync_directory(parent)
 
 
 def fsync_directories(*paths: str) -> bool:

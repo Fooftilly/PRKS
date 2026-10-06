@@ -10,7 +10,16 @@ Positions is the first HTTP family with Pydantic request/response models at the
 adapter boundary only. See [docs/api-contract-boundary.md](https://github.com/Fooftilly/PRKS/blob/master/docs/api-contract-boundary.md)
 for the migration pattern, error envelope, and openapi-core / Schemathesis notes.
 Live fragment: `GET /api/openapi.json`. Checked-in artifact:
-`docs/api/openapi-positions.json`.
+`docs/api/openapi-positions.json`. Publishers, Saved Views, Files for
+Processing, and performance diagnostics follow the same pattern
+(`GET /api/openapi/publishers.json`, `docs/api/openapi-publishers.json`;
+`GET /api/openapi/saved-views.json`, `docs/api/openapi-saved-views.json`;
+`GET /api/openapi/processing-files.json`, `docs/api/openapi-processing-files.json`;
+`GET /api/openapi/performance-diagnostics.json`,
+`docs/api/openapi-performance-diagnostics.json`). `npm run openapi:types`
+reads those checked-in artifacts and writes compile-time modules under
+`frontend-app/src/api/generated/`. It does not read a live server and does
+not build the combined `/api/openapi.json` document.
 
 ## UI design
 
@@ -160,9 +169,12 @@ Rebuild vendored assets after changing a pin:
 
 # Vue application bundle (Node >=24.15.0 <25; writes frontend/vue/ and refreshes the dependency manifest)
 (cd frontend-app && npm ci --ignore-scripts && npm run build)
+
+# OpenAPI transport types (compile-time only; not part of the Vue bundle)
+(cd frontend-app && npm run openapi:types)
 ```
 
-Each build refreshes `frontend/vendor/DEPENDENCY-MANIFEST.json` and `frontend/sw.js`'s `DEPENDENCY_REVISION` so service-worker static/shell caches retire when vendor bytes, the Vue bundle, or `frontend/js/workspace-model.js` change. The workspace model is built before that manifest is written. Inter is intentionally raw-managed (npm would alter the CSS/woff2 contract); update its `VERSION` + assets, then `python scripts/dependency_gate.py --write-manifest`.
+`npm run openapi:types` writes `frontend-app/src/api/generated/` only. It does not change the Vue bundle or `DEPENDENCY_REVISION`. Each Vue or vendor build refreshes `frontend/vendor/DEPENDENCY-MANIFEST.json` and `frontend/sw.js`'s `DEPENDENCY_REVISION` so service-worker static/shell caches retire when vendor bytes, the Vue bundle, `frontend/js/workspace-model.js`, `frontend/js/work-route-projection.js`, `frontend/js/search-query-codec.js`, `frontend/js/tab-leave.js`, `frontend/js/owner-resource.js`, or `frontend/js/route-model.js` change. Those classic scripts are built before that manifest is written. Inter is intentionally raw-managed (npm would alter the CSS/woff2 contract); update its `VERSION` + assets, then `python scripts/dependency_gate.py --write-manifest`.
 
 ## See also
 

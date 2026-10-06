@@ -9,6 +9,7 @@ const model = require(path.join(rootDir, 'frontend/js/workspace-model.js'));
 const tree = require(path.join(rootDir, 'frontend/js/workspace-tree.js'));
 const persist = require(path.join(rootDir, 'frontend/js/workspace-persistence.js'));
 const wsApi = require(path.join(rootDir, 'frontend/js/workspace-tabs.js'));
+globalThis.prksTabLeave = require(path.join(rootDir, 'frontend/js/tab-leave.js'));
 
 const { createPrksWorkspaceTabs, prksWorkspaceNavigationIntent } = wsApi;
 
@@ -38,6 +39,49 @@ function assertPersistable(name, snap) {
     const serialized = persist.prksSerializeWorkspaceSnapshot(snap);
     const valid = serialized && persist.prksValidateWorkspaceSnapshot(JSON.parse(JSON.stringify(serialized)));
     assert(name, !!valid);
+}
+
+function labeledId(id, labels) {
+    const keys = Object.keys(labels);
+    for (let i = 0; i < keys.length; i++) {
+        if (labels[keys[i]] === id) return keys[i];
+    }
+    return id == null ? null : String(id);
+}
+
+function labeledTree(node, labels) {
+    if (!node) return null;
+    if (node.type === 'split') {
+        return {
+            type: 'split',
+            first: labeledTree(node.first, labels),
+            second: labeledTree(node.second, labels),
+        };
+    }
+    return { tabId: labeledId(node.tabId, labels) };
+}
+
+function closeOutcome(h, labels) {
+    const snap = h.ws.snapshot();
+    const mounted = {};
+    const keys = Object.keys(labels);
+    for (let i = 0; i < keys.length; i++) mounted[keys[i]] = h.isMounted(labels[keys[i]]);
+    return JSON.stringify({
+        main: labeledId(snap.mainTabId, labels),
+        focus: labeledId(snap.focusedTabId, labels),
+        mode: snap.mode,
+        tree: labeledTree(snap.secondaryTree, labels),
+        url: h.hist.getHash(),
+        tabs: snap.tabs.map(function (tab) { return labeledId(tab.id, labels); }),
+        mounted: mounted,
+        destroyed: h.life.destroy.map(function (id) { return labeledId(id, labels); }),
+    });
+}
+
+function closeShellSlice(h, labels, from) {
+    return JSON.stringify(h.published.slice(from).map(function (entry) {
+        return { tabId: labeledId(entry.tabId, labels), title: entry.title || '' };
+    }));
 }
 
 function assertSecondaryLeavesTileable(name, snap) {
@@ -156,20 +200,23 @@ function makeHarness(opts) {
         homeHash: '#/folders',
         historyAdapter: hist,
         supportsTile: nav.prksRouteSupportsTile,
-        canLeave: function (tabId, nextHash) {
-            canLeaveCalls += 1;
-            lastLeaveTabId = tabId || null;
-            lastLeaveHash = nextHash || null;
-            leaveCallLog.push({ tabId: lastLeaveTabId, hash: lastLeaveHash });
-            if (canLeaveFn) return canLeaveFn(tabId, nextHash);
-            return canLeave;
-        },
+        canLeave: opts.productionLeave
+            ? undefined
+            : function (tabId, nextHash) {
+                  canLeaveCalls += 1;
+                  lastLeaveTabId = tabId || null;
+                  lastLeaveHash = nextHash || null;
+                  leaveCallLog.push({ tabId: lastLeaveTabId, hash: lastLeaveHash });
+                  if (canLeaveFn) return canLeaveFn(tabId, nextHash);
+                  return canLeave;
+              },
         isRouteGenCurrent: function (g) {
             if (titleGenOk == null) return true;
             return g === titleGenOk;
         },
         renderRoute: function (options) {
             renders.push(options || {});
+            if (typeof opts.onRender === 'function') return opts.onRender(options);
         },
         announce: function (title, kind) {
             announcements.push({ title: title == null ? '' : String(title), kind: kind || '' });
@@ -821,6 +868,479 @@ async function run() {
     assertEq('close main focused B', snapCloseMain.focusedTabId, promoteB);
     assertPersistable('close main persistable', snapCloseMain);
     assertSecondaryLeavesTileable('close main leaves tileable', snapCloseMain);
+
+    {
+        /* Tile-capable Make Main is not a leave and does not change generation, so it
+         * can swap roles while a close confirmation is open. Approval must replan. */
+        async function tilePair() {
+            const h = makeHarness({ hash: '#/works/WA' });
+            await h.ws.navigate('#/works/WB', { target: 'tile' });
+            return {
+                h: h,
+                A: h.ws.snapshot().mainTabId,
+                B: h.ws.snapshot().secondaryTree.tabId,
+            };
+        }
+
+        const promotedControl = await tilePair();
+        const promotedLabels = { A: promotedControl.A, B: promotedControl.B };
+        await promotedControl.h.ws.makeMain(promotedControl.B);
+        const promotedShellAt = promotedControl.h.published.length;
+        const promotedClosed = await promotedControl.h.ws.closeTab(promotedControl.B);
+        assert('control close of promoted main', promotedClosed === true);
+        const promotedExpect = closeOutcome(promotedControl.h, promotedLabels);
+        const promotedShell = closeShellSlice(promotedControl.h, promotedLabels, promotedShellAt);
+
+        const promoted = await tilePair();
+        const promotedRaceLabels = { A: promoted.A, B: promoted.B };
+        let releasePromoted = null;
+        promoted.h.setCanLeaveFn(function () {
+            return new Promise(function (resolve) { releasePromoted = resolve; });
+        });
+        let promotedThrew = false;
+        const pendingPromoted = promoted.h.ws.closeTab(promoted.B).then(
+            function (value) { return value; },
+            function () {
+                promotedThrew = true;
+                return false;
+            }
+        );
+        await Promise.resolve();
+        assert('secondary close waits on discard', typeof releasePromoted === 'function');
+        const promotedMade = await promoted.h.ws.makeMain(promoted.B);
+        assert('make main during secondary close', promotedMade === true);
+        assertEq('closed secondary is now main', promoted.h.ws.snapshot().mainTabId, promoted.B);
+        assertEq('former main is now secondary', promoted.h.ws.snapshot().secondaryTree.tabId, promoted.A);
+        const promotedShellBefore = promoted.h.published.length;
+        releasePromoted(true);
+        const promotedApproved = await pendingPromoted;
+        assert('promoted secondary close does not throw', promotedThrew === false);
+        assert('promoted secondary close commits', promotedApproved === true);
+        assertEq(
+            'promoted secondary close matches final close',
+            closeOutcome(promoted.h, promotedRaceLabels),
+            promotedExpect
+        );
+        assertEq(
+            'promoted secondary close shell matches',
+            closeShellSlice(promoted.h, promotedRaceLabels, promotedShellBefore),
+            promotedShell
+        );
+
+        const demotedControl = await tilePair();
+        const demotedLabels = { A: demotedControl.A, B: demotedControl.B };
+        await demotedControl.h.ws.makeMain(demotedControl.B);
+        const demotedShellAt = demotedControl.h.published.length;
+        const demotedClosed = await demotedControl.h.ws.closeTab(demotedControl.A);
+        assert('control close of demoted main', demotedClosed === true);
+        const demotedExpect = closeOutcome(demotedControl.h, demotedLabels);
+        const demotedShell = closeShellSlice(demotedControl.h, demotedLabels, demotedShellAt);
+
+        const demoted = await tilePair();
+        const demotedRaceLabels = { A: demoted.A, B: demoted.B };
+        let releaseDemoted = null;
+        demoted.h.setCanLeaveFn(function () {
+            return new Promise(function (resolve) { releaseDemoted = resolve; });
+        });
+        let demotedThrew = false;
+        const pendingDemoted = demoted.h.ws.closeTab(demoted.A).then(
+            function (value) { return value; },
+            function () {
+                demotedThrew = true;
+                return false;
+            }
+        );
+        await Promise.resolve();
+        assert('main close waits on discard', typeof releaseDemoted === 'function');
+        const demotedMade = await demoted.h.ws.makeMain(demoted.B);
+        assert('make main during main close', demotedMade === true);
+        assertEq('closed main is now secondary', demoted.h.ws.snapshot().secondaryTree.tabId, demoted.A);
+        assertEq('former secondary is now main', demoted.h.ws.snapshot().mainTabId, demoted.B);
+        const demotedShellBefore = demoted.h.published.length;
+        releaseDemoted(true);
+        const demotedApproved = await pendingDemoted;
+        assert('demoted main close does not throw', demotedThrew === false);
+        assert('demoted main close commits', demotedApproved === true);
+        assertEq(
+            'demoted main close matches final close',
+            closeOutcome(demoted.h, demotedRaceLabels),
+            demotedExpect
+        );
+        assertEq(
+            'demoted main close shell matches',
+            closeShellSlice(demoted.h, demotedRaceLabels, demotedShellBefore),
+            demotedShell
+        );
+    }
+
+    {
+        /* These commits used to park whoever was Main at approval. Make Main can
+         * change that role without a leave, so approving A must not park B. */
+        async function scene() {
+            const h = makeHarness({ hash: '#/works/WA' });
+            const parked = await h.ws.openTab('#/works/WP', { activate: false });
+            await h.ws.navigate('#/works/WB', { target: 'tile' });
+            const snap = h.ws.snapshot();
+            return { h: h, A: snap.mainTabId, B: snap.secondaryTree.tabId, P: parked.id };
+        }
+
+        function roleView(h) {
+            const snap = h.ws.snapshot();
+            return JSON.stringify({
+                main: snap.mainTabId,
+                focus: snap.focusedTabId,
+                mode: snap.mode,
+                tree: snap.secondaryTree,
+                tabs: snap.tabs.map(function (tab) { return tab.id + ':' + tab.route; }),
+                url: h.hist.getHash(),
+                mounted: snap.tabs.filter(function (tab) { return h.isMounted(tab.id); }).map(function (tab) { return tab.id; }),
+                parked: h.life.park.slice(),
+                warmParked: h.life.warmPark.slice(),
+                destroyed: h.life.destroy.slice(),
+            });
+        }
+
+        async function raceRole(name, start) {
+            const s = await scene();
+            const asked = [];
+            let release = null;
+            s.h.setCanLeaveFn(function (tabId) {
+                asked.push(tabId);
+                if (asked.length > 1) return false;
+                return new Promise(function (resolve) { release = resolve; });
+            });
+            let threw = false;
+            const pending = Promise.resolve(start(s)).then(
+                function (value) { return value; },
+                function () {
+                    threw = true;
+                    return false;
+                }
+            );
+            await Promise.resolve();
+            assert(name + ' waits on main leave', typeof release === 'function');
+            assertEq(name + ' preflighted A', asked[0], s.A);
+            const made = await s.h.ws.makeMain(s.B);
+            assert(name + ' make main skipped leave', made === true);
+            assertEq(name + ' make main did not ask B', asked.indexOf(s.B), -1);
+            assert('A stays mounted as secondary', s.h.isMounted(s.A));
+            assert('B stays mounted as main', s.h.isMounted(s.B));
+            const afterSwap = roleView(s.h);
+            release(true);
+            const result = await pending;
+            assert(name + ' does not throw', threw === false);
+            assertEq(name + ' does not apply after the role swap', result, false);
+            assertEq(name + ' keeps the post-swap workspace', roleView(s.h), afterSwap);
+            assert('B stays mounted', s.h.isMounted(s.B));
+            assertEq(name + ' did not park B', s.h.life.park.indexOf(s.B), -1);
+            assertEq(name + ' did not warm-park B', s.h.life.warmPark.indexOf(s.B), -1);
+            assertEq(name + ' did not destroy B', s.h.life.destroy.indexOf(s.B), -1);
+            assertEq(name + ' did not approve B', asked.indexOf(s.B), -1);
+        }
+
+        await raceRole('activated new tab', function (s) {
+            return s.h.ws.openTab('#/works/WN', { activate: true });
+        });
+        await raceRole('parked activation', function (s) {
+            return s.h.ws.activateTab(s.P);
+        });
+        await raceRole('parked history', function (s) {
+            s.h.hist.setLocation('#/works/WP', {
+                prksWorkspace: { v: 1, tabId: s.P, route: '#/works/WP', historyIndex: 0 },
+            });
+            return s.h.ws.handlePopState(s.h.hist.getState());
+        });
+    }
+
+    {
+        /* A parked id in a batch close can mount while the first prompt is open.
+         * Approving that prompt must not destroy it unless the new owner approved.
+         * Rejecting the new owner leaves the batch uncommitted. */
+        function batchView(h) {
+            const snap = h.ws.snapshot();
+            return JSON.stringify({
+                main: snap.mainTabId,
+                focus: snap.focusedTabId,
+                mode: snap.mode,
+                tree: snap.secondaryTree,
+                tabs: snap.tabs.map(function (tab) { return tab.id + ':' + tab.route; }),
+                url: h.hist.getHash(),
+                mounted: snap.tabs.filter(function (tab) { return h.isMounted(tab.id); }).map(function (tab) { return tab.id; }),
+            });
+        }
+
+        async function otherScene() {
+            const h = makeHarness({ hash: '#/works/WA' });
+            await h.ws.navigate('#/works/WM', { target: 'tile' });
+            const parked = await h.ws.openTab('#/works/WP', { activate: false });
+            const snap = h.ws.snapshot();
+            return {
+                h: h,
+                main: snap.mainTabId,
+                mounted: snap.secondaryTree.tabId,
+                parked: parked.id,
+                keep: snap.mainTabId,
+                start: function () { return h.ws.closeOtherTabs(snap.mainTabId); },
+            };
+        }
+
+        async function rightScene() {
+            const h = makeHarness({ hash: '#/works/WA' });
+            const anchor = await h.ws.openTab('#/works/WL', { activate: false });
+            await h.ws.navigate('#/works/WM', { target: 'tile' });
+            const parked = await h.ws.openTab('#/works/WP', { activate: false });
+            const snap = h.ws.snapshot();
+            return {
+                h: h,
+                main: snap.mainTabId,
+                mounted: snap.secondaryTree.tabId,
+                parked: parked.id,
+                keep: anchor.id,
+                start: function () { return h.ws.closeTabsToTheRight(anchor.id); },
+            };
+        }
+
+        async function raceBatch(name, scene, approveNew) {
+            const s = await scene();
+            const gates = Object.create(null);
+            const asked = [];
+            s.h.setCanLeaveFn(function (tabId) {
+                asked.push(tabId);
+                if (tabId === s.main) return true;
+                return new Promise(function (resolve) { gates[tabId] = resolve; });
+            });
+            let settled = false;
+            let threw = false;
+            const pending = Promise.resolve(s.start()).then(
+                function (value) {
+                    settled = true;
+                    return value;
+                },
+                function () {
+                    threw = true;
+                    settled = true;
+                    return false;
+                }
+            );
+            await Promise.resolve();
+            assert(name + ' waits on the mounted tab', typeof gates[s.mounted] === 'function');
+            assertEq(name + ' has not asked the parked tab', asked.indexOf(s.parked), -1);
+            const activated = await s.h.ws.activateTab(s.parked);
+            assert(name + ' activation mounted the parked tab', activated === true);
+            assert(name + ' parked tab is mounted', s.h.isMounted(s.parked));
+            assert(name + ' original tab still mounted', s.h.isMounted(s.mounted));
+            const afterActivate = batchView(s.h);
+            const destroyedAfterActivate = s.h.life.destroy.slice();
+            gates[s.mounted](true);
+            await Promise.resolve();
+            await Promise.resolve();
+            assert(name + ' close still waiting on the new owner', settled === false);
+            assert(name + ' preflights the newly mounted tab', typeof gates[s.parked] === 'function');
+            assertEq(name + ' approval does not destroy early', batchView(s.h), afterActivate);
+            assertEq(
+                name + ' approval destroys nobody yet',
+                s.h.life.destroy.join(','),
+                destroyedAfterActivate.join(',')
+            );
+            gates[s.parked](approveNew);
+            const result = await pending;
+            assert(name + ' does not throw', threw === false);
+            if (!approveNew) {
+                assertEq(name + ' rejection does not commit', result, false);
+                assertEq(name + ' rejection leaves the workspace', batchView(s.h), afterActivate);
+                assert(name + ' rejection keeps the new owner mounted', s.h.isMounted(s.parked));
+                assert(name + ' rejection keeps the original owner mounted', s.h.isMounted(s.mounted));
+                return;
+            }
+            assert(name + ' commits after the new owner approves', result === true);
+            const snap = s.h.ws.snapshot();
+            assert('kept tab remains', snap.tabs.some(function (tab) { return tab.id === s.keep; }));
+            assert('originally mounted tab is gone', snap.tabs.every(function (tab) { return tab.id !== s.mounted; }));
+            assert('newly mounted tab is gone', snap.tabs.every(function (tab) { return tab.id !== s.parked; }));
+            assert('newly mounted tab is not still mounted', !s.h.isMounted(s.parked));
+        }
+
+        await raceBatch('close other tabs', otherScene, false);
+        await raceBatch('close tabs to the right', rightScene, false);
+        await raceBatch('close other tabs approved', otherScene, true);
+        await raceBatch('close tabs to the right approved', rightScene, true);
+    }
+
+    {
+        /* Production leave (no injected canLeave) so note flush actually runs.
+         * Wave 1 must not flush before the mounted set is stable. A wave 2
+         * reject flushes nothing and destroys nothing. A wave 2 approval
+         * flushes each still-mounted close id once, including edits made
+         * while wave 2 was open, and only then destroys. */
+        const prevGetTabContext = globalThis.prksGetTabContext;
+        const contexts = Object.create(null);
+        try {
+            globalThis.prksGetTabContext = function (tabId) {
+                if (!contexts[tabId]) {
+                    contexts[tabId] = {
+                        id: tabId,
+                        tabId: tabId,
+                        generation: 1,
+                        destroyed: false,
+                        mounted: false,
+                        notes: 1,
+                    };
+                }
+                return contexts[tabId];
+            };
+
+            function flushView(h) {
+                const snap = h.ws.snapshot();
+                return JSON.stringify({
+                    main: snap.mainTabId,
+                    tabs: snap.tabs.map(function (tab) { return tab.id; }),
+                    mounted: snap.tabs.filter(function (tab) { return h.isMounted(tab.id); }).map(function (tab) { return tab.id; }),
+                    url: h.hist.getHash(),
+                });
+            }
+
+            async function productionScene(kind) {
+                const h = makeHarness({ hash: '#/works/WA', productionLeave: true });
+                if (kind === 'right') {
+                    const anchor = await h.ws.openTab('#/works/WL', { activate: false });
+                    await h.ws.navigate('#/works/WM', { target: 'tile' });
+                    const parked = await h.ws.openTab('#/works/WP', { activate: false });
+                    const snap = h.ws.snapshot();
+                    return {
+                        h: h,
+                        main: snap.mainTabId,
+                        mounted: snap.secondaryTree.tabId,
+                        parked: parked.id,
+                        keep: anchor.id,
+                        start: function () { return h.ws.closeTabsToTheRight(anchor.id); },
+                    };
+                }
+                await h.ws.navigate('#/works/WM', { target: 'tile' });
+                const parked = await h.ws.openTab('#/works/WP', { activate: false });
+                const snap = h.ws.snapshot();
+                return {
+                    h: h,
+                    main: snap.mainTabId,
+                    mounted: snap.secondaryTree.tabId,
+                    parked: parked.id,
+                    keep: snap.mainTabId,
+                    start: function () { return h.ws.closeOtherTabs(snap.mainTabId); },
+                };
+            }
+
+            async function untilGate(gates, tabId) {
+                for (let i = 0; i < 40; i++) {
+                    if (typeof gates[tabId] === 'function') return true;
+                    await Promise.resolve();
+                }
+                return false;
+            }
+
+            async function raceFlush(name, kind, approveNew) {
+                globalThis.prksTabLeave.registerProbe({
+                    id: 'selftest-close-flush',
+                    order: 1,
+                    assess: function () {
+                        return null;
+                    },
+                });
+                globalThis.prksTabLeave.registerFlush(function () {});
+                const s = await productionScene(kind);
+                if (contexts[s.mounted]) contexts[s.mounted].notes = 1;
+                if (contexts[s.parked]) contexts[s.parked].notes = 1;
+                const gates = Object.create(null);
+                const closeFlushes = [];
+                const destroyLenAtFlush = [];
+                globalThis.prksTabLeave.registerProbe({
+                    id: 'selftest-close-flush',
+                    order: 1,
+                    assess: function (ctx) {
+                        const tabId = ctx && (ctx.tabId || ctx.id);
+                        if (tabId === s.main) return true;
+                        return new Promise(function (resolve) {
+                            gates[tabId] = resolve;
+                        });
+                    },
+                });
+                globalThis.prksTabLeave.registerFlush(function (ctx) {
+                    if (!ctx || (ctx.tabId !== s.mounted && ctx.tabId !== s.parked)) return;
+                    closeFlushes.push({ id: ctx.tabId, notes: ctx.notes });
+                    destroyLenAtFlush.push(s.h.life.destroy.length);
+                });
+                let settled = false;
+                let threw = false;
+                const pending = Promise.resolve(s.start()).then(
+                    function (value) {
+                        settled = true;
+                        return value;
+                    },
+                    function () {
+                        threw = true;
+                        settled = true;
+                        return false;
+                    }
+                );
+                assert(name + ' waits on the mounted tab', await untilGate(gates, s.mounted));
+                const activated = await s.h.ws.activateTab(s.parked);
+                assert(name + ' activation mounted the parked tab', activated === true);
+                assert(name + ' parked tab is mounted', s.h.isMounted(s.parked));
+                const held = flushView(s.h);
+                const destroyBefore = s.h.life.destroy.length;
+                gates[s.mounted](true);
+                assert(name + ' preflights the newly mounted tab', await untilGate(gates, s.parked));
+                assert(name + ' close still waiting on the new owner', settled === false);
+                assertEq(name + ' wave 1 did not flush', closeFlushes.length, 0);
+                contexts[s.mounted].notes = 4;
+                assertEq(name + ' open wave 2 still has not flushed', closeFlushes.length, 0);
+                assertEq(name + ' workspace held while wave 2 is open', flushView(s.h), held);
+                gates[s.parked](approveNew);
+                const result = await pending;
+                assert(name + ' does not throw', threw === false);
+                if (!approveNew) {
+                    assertEq(name + ' rejection does not commit', result, false);
+                    assertEq(name + ' rejection flushed nothing', closeFlushes.length, 0);
+                    assertEq(name + ' rejection destroyed nothing', s.h.life.destroy.length, destroyBefore);
+                    assertEq(name + ' rejection leaves the workspace', flushView(s.h), held);
+                    assert(name + ' rejection keeps the new owner mounted', s.h.isMounted(s.parked));
+                    assert(name + ' rejection keeps the original owner mounted', s.h.isMounted(s.mounted));
+                    return;
+                }
+                assert(name + ' commits after the new owner approves', result === true);
+                assertEq(name + ' flushes the close set once', closeFlushes.length, 2);
+                const mountedFlush = closeFlushes.filter(function (row) { return row.id === s.mounted; });
+                const parkedFlush = closeFlushes.filter(function (row) { return row.id === s.parked; });
+                assertEq(name + ' flushes the original owner once', mountedFlush.length, 1);
+                assertEq(name + ' flushes the later edit', mountedFlush[0] && mountedFlush[0].notes, 4);
+                assertEq(name + ' flushes the new owner once', parkedFlush.length, 1);
+                assert(
+                    name + ' flushes before any destroy',
+                    destroyLenAtFlush.length === 2 &&
+                        destroyLenAtFlush.every(function (len) { return len === destroyBefore; })
+                );
+                const snap = s.h.ws.snapshot();
+                assert('kept tab remains', snap.tabs.some(function (tab) { return tab.id === s.keep; }));
+                assert('originally mounted tab is gone', snap.tabs.every(function (tab) { return tab.id !== s.mounted; }));
+                assert('newly mounted tab is gone', snap.tabs.every(function (tab) { return tab.id !== s.parked; }));
+                assertEq(name + ' destroys both close ids', s.h.life.destroy.length, destroyBefore + 2);
+            }
+
+            await raceFlush('flush close other tabs', 'other', false);
+            await raceFlush('flush close tabs to the right', 'right', false);
+            await raceFlush('flush close other tabs approved', 'other', true);
+            await raceFlush('flush close tabs to the right approved', 'right', true);
+        } finally {
+            if (prevGetTabContext) globalThis.prksGetTabContext = prevGetTabContext;
+            else delete globalThis.prksGetTabContext;
+            globalThis.prksTabLeave.registerProbe({
+                id: 'selftest-close-flush',
+                order: 1,
+                assess: function () {
+                    return null;
+                },
+            });
+            globalThis.prksTabLeave.registerFlush(function () {});
+        }
+    }
 
     const unsup = makeHarness({ hash: '#/works/WA' });
     await unsup.ws.navigate('#/people/P1', { target: 'tile' });
@@ -1542,22 +2062,34 @@ async function run() {
         const raced = makeHarness({ hash: '#/works/WA' });
         await raced.ws.navigate('#/works/WB', { target: 'tile' });
         const racedLeaf = raced.ws.snapshot().secondaryTree.tabId;
+        const racedBefore = jsonClone(raced.ws.snapshot());
         let releaseRaced = null;
         raced.setCanLeaveFn(function () {
             return new Promise(function (resolve) { releaseRaced = resolve; });
         });
         const pendingRaced = raced.ws.setMode('stacked');
         await Promise.resolve();
+        const promptsDuringHide = raced.canLeaveCalls();
+        let closeSettled = false;
+        const closePromise = raced.ws.closeTab(racedLeaf).then(function (value) {
+            closeSettled = true;
+            return value;
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        assert('close waits while hide is unresolved', closeSettled === false);
+        assertEq('close does not open a second prompt', raced.canLeaveCalls(), promptsDuringHide);
+        assertEq('close during hide leaves the mode', raced.ws.snapshot().mode, racedBefore.mode);
+        assert('close during hide leaves the leaf', raced.ws.snapshot().tabs.some(function (t) { return t.id === racedLeaf; }));
         raced.setCanLeave(true);
-        const closedDuringHide = await raced.ws.closeTab(racedLeaf);
-        assert('close during hide approval', closedDuringHide === true);
-        releaseRaced(true);
+        releaseRaced(false);
         const hideAfterClose = await pendingRaced;
-        assertEq('hide does not commit stale plan', hideAfterClose, false);
+        assertEq('rejected hide does not commit', hideAfterClose, false);
+        const closedAfter = await closePromise;
+        assert('close proceeds after hide rejects', closedAfter === true);
         snap = raced.ws.snapshot();
         assert('closed leaf stayed gone', snap.tabs.every(function (t) { return t.id !== racedLeaf; }));
-        assertEq('close during hide left no tree', snap.secondaryTree, null);
-        assertEq('close during hide mode', snap.mode, 'stacked');
+        assertEq('close after rejected hide left no tree', snap.secondaryTree, null);
     }
 
     {
@@ -1941,6 +2473,442 @@ async function run() {
             globalThis.document = prevDoc;
             globalThis.setTimeout = prevSet;
             globalThis.clearTimeout = prevClear;
+        }
+    }
+
+    {
+        const h = makeHarness({ hash: '#/works/WA' });
+        await h.ws.navigate('#/works/WB', { target: 'tile' });
+        const secondary = h.ws.snapshot().secondaryTree.tabId;
+        const main = h.ws.snapshot().mainTabId;
+        const calls = h.canLeaveCalls();
+        assert('focus secondary does not leave', h.ws.focusTab(secondary) === true);
+        assert('focus main does not leave', h.ws.focusTab(main) === true);
+        assertEq('focus between panes does not prompt', h.canLeaveCalls(), calls);
+    }
+
+    {
+        const h = makeHarness({ hash: '#/works/WA' });
+        await h.ws.navigate('#/works/WB', { target: 'tile' });
+        const leaf = h.ws.snapshot().secondaryTree.tabId;
+        await h.ws.splitLeaf(leaf, 'top-bottom', { hash: '#/works/WC' });
+        const before = jsonClone(h.ws.snapshot());
+        const resolvers = [];
+        h.setCanLeaveFn(function () {
+            return new Promise(function (resolve) { resolvers.push(resolve); });
+        });
+        const pending = h.ws.setMode('stacked');
+        await Promise.resolve();
+        assertEq('batch asks the first leaf first', resolvers.length, 1);
+        resolvers[0](true);
+        await Promise.resolve();
+        assertEq('batch asks the second leaf before mutation', resolvers.length, 2);
+        assertEq('batch stays tiled until every leave settles', h.ws.snapshot().mode, 'tiled');
+        resolvers[1](false);
+        const rejected = await pending;
+        assertEq('batch reject result', rejected, false);
+        assertEq('batch reject keeps mode', h.ws.snapshot().mode, before.mode);
+        assertEq('batch reject keeps tree', JSON.stringify(h.ws.snapshot().secondaryTree), JSON.stringify(before.secondaryTree));
+
+        const both = makeHarness({ hash: '#/works/WA' });
+        await both.ws.navigate('#/works/WB', { target: 'tile' });
+        const bothLeaf = both.ws.snapshot().secondaryTree.tabId;
+        await both.ws.splitLeaf(bothLeaf, 'top-bottom', { hash: '#/works/WC' });
+        const bothResolvers = [];
+        let mutated = false;
+        both.setCanLeaveFn(function () {
+            return new Promise(function (resolve) { bothResolvers.push(resolve); });
+        });
+        const bothPending = both.ws.setMode('stacked');
+        await Promise.resolve();
+        bothResolvers[0](true);
+        await Promise.resolve();
+        assertEq('both-accept still tiled after the first', both.ws.snapshot().mode, 'tiled');
+        assert('both-accept has not mutated', mutated === false);
+        bothResolvers[1](true);
+        const bothResult = await bothPending;
+        mutated = bothResult === true;
+        assert('both-accept hides only after the second', mutated);
+        assertEq('both-accept stacked', both.ws.snapshot().mode, 'stacked');
+    }
+
+    {
+        const h = makeHarness({ hash: '#/folders' });
+        const resolvers = [];
+        h.setCanLeaveFn(function () {
+            return new Promise(function (resolve) { resolvers.push(resolve); });
+        });
+        const first = h.ws.navigate('#/works/W1');
+        await Promise.resolve();
+        assertEq('first navigation prompts once', resolvers.length, 1);
+        const second = h.ws.navigate('#/works/W2');
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq('second navigation does not prompt yet', resolvers.length, 1);
+        assertEq('unresolved navigation keeps the route', h.ws.snapshot().tabs[0].route, '#/folders');
+        resolvers[0](true);
+        await first;
+        await Promise.resolve();
+        assertEq('accepted navigation prompts the waiter next', resolvers.length, 2);
+        assertEq('only the accepted navigation replaced the route', h.ws.snapshot().tabs[0].route, '#/works/W1');
+        resolvers[1](false);
+        const secondResult = await second;
+        assertEq('rejected waiter result', secondResult, false);
+        assertEq('rejected waiter leaves the accepted route', h.ws.snapshot().tabs[0].route, '#/works/W1');
+    }
+
+    {
+        /* Popstate claims the history route inside the leave commit and waits
+         * for the detail render only after that lock is released. A later
+         * navigation on the same owner can start while the request is open. */
+        async function tickUntil(pred) {
+            for (let i = 0; i < 30; i++) {
+                if (pred()) return true;
+                await Promise.resolve();
+            }
+            return false;
+        }
+
+        const releases = [];
+        let holdRender = false;
+        const h = makeHarness({
+            hash: '#/folders',
+            onRender: function () {
+                if (!holdRender) return undefined;
+                return new Promise(function (resolve) {
+                    releases.push(resolve);
+                });
+            },
+        });
+        await h.ws.navigate('#/works/W1');
+        await h.ws.navigate('#/works/W2');
+        const rendersBefore = h.renders.length;
+        const leavesBefore = h.canLeaveCalls();
+        holdRender = true;
+        assert('popstate history back', h.hist.back() === true);
+        let popSettled = false;
+        const popPromise = Promise.resolve(h.ws.handlePopState(h.hist.getState())).then(function (value) {
+            popSettled = true;
+            return value;
+        });
+        assert(
+            'popstate render started while its request is open',
+            await tickUntil(function () {
+                return h.renders.length === rendersBefore + 1 && h.canLeaveCalls() === leavesBefore + 1;
+            })
+        );
+        const claimed = h.ws.snapshot().tabs.find(function (tab) {
+            return tab.id === h.ws.snapshot().mainTabId;
+        });
+        assertEq('popstate claimed the history route before the request finished', claimed.route, '#/works/W1');
+        await Promise.resolve();
+        assert('popstate render is still pending', popSettled === false);
+        const second = h.ws.navigate('#/people/P9');
+        assert(
+            'second navigation begins while the popstate request is pending',
+            await tickUntil(function () {
+                return h.canLeaveCalls() === leavesBefore + 2;
+            })
+        );
+        assert('popstate request still pending after the second navigation starts', popSettled === false);
+        releases.forEach(function (release) {
+            release();
+        });
+        assert('popstate finishes after its request', (await popPromise) === true);
+        assert('second navigation is not rejected while the popstate request was open', (await second) !== false);
+        assertEq(
+            'second navigation replaced the route',
+            h.ws.snapshot().tabs.find(function (tab) {
+                return tab.id === h.ws.snapshot().mainTabId;
+            }).route,
+            '#/people/P9'
+        );
+
+        const secReleases = [];
+        let holdSec = false;
+        const sec = makeHarness({
+            hash: '#/works/WA',
+            onRender: function () {
+                if (!holdSec) return undefined;
+                return new Promise(function (resolve) {
+                    secReleases.push(resolve);
+                });
+            },
+        });
+        await sec.ws.navigate('#/works/WB', { target: 'tile' });
+        const secondaryId = sec.ws.snapshot().secondaryTree.tabId;
+        await sec.ws.navigate('#/works/WB2', { tabId: secondaryId });
+        const secRendersBefore = sec.renders.length;
+        const secLeavesBefore = sec.canLeaveCalls();
+        holdSec = true;
+        let secPopSettled = false;
+        const secPop = Promise.resolve(
+            sec.ws.handlePopState({
+                prksWorkspace: { v: 1, tabId: secondaryId, route: '#/works/WB', historyIndex: 0 },
+            })
+        ).then(function (value) {
+            secPopSettled = true;
+            return value;
+        });
+        assert(
+            'secondary popstate render started while its request is open',
+            await tickUntil(function () {
+                return sec.renders.length === secRendersBefore + 1 && sec.canLeaveCalls() === secLeavesBefore + 1;
+            })
+        );
+        const secTab = sec.ws.snapshot().tabs.find(function (tab) {
+            return tab.id === secondaryId;
+        });
+        assertEq('secondary popstate claimed the history route', secTab.route, '#/works/WB');
+        await Promise.resolve();
+        assert('secondary popstate render is still pending', secPopSettled === false);
+        const secNext = sec.ws.navigate('#/works/WB3', { tabId: secondaryId });
+        assert(
+            'second secondary navigation begins while the popstate request is pending',
+            await tickUntil(function () {
+                return sec.canLeaveCalls() === secLeavesBefore + 2;
+            })
+        );
+        assert('secondary popstate request still pending after the next navigation starts', secPopSettled === false);
+        secReleases.forEach(function (release) {
+            release();
+        });
+        assert('secondary popstate finishes after its request', (await secPop) === true);
+        assert('second secondary navigation is not rejected', (await secNext) !== false);
+        assertEq(
+            'second secondary navigation replaced the route',
+            sec.ws.snapshot().tabs.find(function (tab) {
+                return tab.id === secondaryId;
+            }).route,
+            '#/works/WB3'
+        );
+    }
+
+    {
+        const h = makeHarness({ hash: '#/folders' });
+        const mainId = h.ws.snapshot().mainTabId;
+        let current = { tabId: mainId, generation: 1, destroyed: false };
+        globalThis.prksGetTabContext = function (id) {
+            if (id === mainId) return current;
+            return { tabId: id, generation: 1, destroyed: false };
+        };
+        try {
+            let release = null;
+            h.setCanLeaveFn(function () {
+                return new Promise(function (resolve) { release = resolve; });
+            });
+            const pending = h.ws.navigate('#/works/WSTALE');
+            await Promise.resolve();
+            current = { tabId: mainId, generation: 1, destroyed: false };
+            release(true);
+            const result = await pending;
+            assertEq('stale confirmation does not navigate', result, false);
+            assertEq('stale confirmation keeps the route', h.ws.snapshot().tabs[0].route, '#/folders');
+
+            current = { tabId: mainId, generation: 2, destroyed: false };
+            let releaseDestroyed = null;
+            h.setCanLeaveFn(function () {
+                return new Promise(function (resolve) { releaseDestroyed = resolve; });
+            });
+            const pendingDestroyed = h.ws.navigate('#/works/WGONE');
+            await Promise.resolve();
+            current.destroyed = true;
+            releaseDestroyed(true);
+            const destroyedResult = await pendingDestroyed;
+            assertEq('destroyed confirmation does not navigate', destroyedResult, false);
+            assertEq('destroyed confirmation keeps the route', h.ws.snapshot().tabs[0].route, '#/folders');
+        } finally {
+            delete globalThis.prksGetTabContext;
+        }
+    }
+
+    {
+        const vm = require('vm');
+        const fs = require('fs');
+        function extractFunction(source, name) {
+            const marker = 'function ' + name + '(';
+            const start = source.indexOf(marker);
+            if (start < 0) throw new Error('missing ' + name);
+            let i = source.indexOf('{', start);
+            let depth = 0;
+            let quote = '';
+            for (; i < source.length; i++) {
+                const ch = source[i];
+                if (quote) {
+                    if (ch === '\\') { i += 1; continue; }
+                    if (ch === quote) quote = '';
+                    continue;
+                }
+                if (ch === '"' || ch === "'" || ch === '`') { quote = ch; continue; }
+                if (ch === '{') depth += 1;
+                else if (ch === '}') {
+                    depth -= 1;
+                    if (depth === 0) return source.slice(start, i + 1);
+                }
+            }
+            throw new Error('unclosed ' + name);
+        }
+        function installProbe(file, name, id, order) {
+            const source = fs.readFileSync(path.join(rootDir, file), 'utf8');
+            const sandbox = { document: { getElementById: function () { return null; } } };
+            vm.createContext(sandbox);
+            vm.runInContext(extractFunction(source, name) + '\nthis.assess = ' + name + ';', sandbox);
+            globalThis.prksTabLeave.registerProbe({ id: id, order: order, assess: sandbox.assess });
+            return sandbox;
+        }
+        const person = installProbe('frontend/js/components/people.js', 'prksAssessPersonProfileLeave', 'person-profile', 20);
+        const work = installProbe('frontend/js/ui.js', 'prksAssessWorkMetadataLeave', 'work-metadata', 30);
+        person.prksPersonProfileDraftIsDirty = function () { return true; };
+        person.prksRightPanelOwnedBy = function () { return false; };
+        let personKept = 0;
+        person.prksConfirmUnsavedRouteLeave = function (options) {
+            personKept += 1;
+            person.lastTitle = options.title;
+            return Promise.resolve(false);
+        };
+        work.prksCaptureWorkMetaDraft = function () {};
+        work.prksWorkMetaDraftIsDirty = function () { return true; };
+        let workKept = 0;
+        work.prksConfirmUnsavedRouteLeave = function (options) {
+            workKept += 1;
+            work.lastTitle = options.title;
+            return Promise.resolve(false);
+        };
+        const owner = { id: 'draft-owner', generation: 1, destroyed: false, route: '#/people/P1' };
+        function draftAttempt(ctx, destination) {
+            return globalThis.prksTabLeave.run({
+                ownerId: owner.id,
+                destination: destination,
+                transition: 'route-replace',
+                capture: function () {
+                    return { ownerId: owner.id, generation: owner.generation, token: owner };
+                },
+                still: function (snap) {
+                    return snap.token === owner && !owner.destroyed && owner.generation === snap.generation;
+                },
+                assess: function () {
+                    return globalThis.prksTabLeave.assessOwner(ctx, destination);
+                },
+                commit: function () {
+                    owner.route = destination;
+                    return true;
+                },
+            });
+        }
+        const personCtx = {
+            ui: { personDetailEditing: true, personProfileDraft: { personId: 'P1' } },
+            lastResolvedRoute: { name: 'person', canonicalHash: '#/people/P1' },
+            getEntity: function () { return { id: 'P1' }; },
+            generation: 1,
+        };
+        const personDenied = await draftAttempt(personCtx, '#/folders');
+        assertEq('dirty person profile rejects', personDenied.status, 'rejected-unsaved-edit');
+        assertEq('dirty person profile keeps the route', owner.route, '#/people/P1');
+        assertEq('dirty person profile uses the styled confirm', person.lastTitle, 'Discard profile changes?');
+        assertEq('dirty person profile asked once', personKept, 1);
+
+        person.prksConfirmUnsavedRouteLeave = function () { return Promise.resolve(true); };
+        const personAccepted = await draftAttempt(personCtx, '#/folders');
+        assertEq('discarded person profile is approved', personAccepted.status, 'approved');
+        assertEq('discarded person profile replaces once', owner.route, '#/folders');
+
+        owner.route = '#/works/W1';
+        const workCtx = {
+            ui: { workDetailsMode: 'metadata' },
+            lastResolvedRoute: { name: 'work', canonicalHash: '#/works/W1' },
+            getEntity: function () { return { id: 'W1' }; },
+        };
+        const workDenied = await draftAttempt(workCtx, '#/folders');
+        assertEq('dirty work metadata rejects', workDenied.status, 'rejected-unsaved-edit');
+        assertEq('dirty work metadata keeps the route', owner.route, '#/works/W1');
+        assertEq('dirty work metadata uses the styled confirm', work.lastTitle, 'Discard metadata changes?');
+        assertEq('dirty work metadata asked once', workKept, 1);
+        assertEq('person probe does not run for a work draft', personKept, 1);
+    }
+
+    {
+        const h = makeHarness({ hash: '#/folders' });
+        const calls = h.canLeaveCalls();
+        await h.ws.navigate('#/works/WONCE');
+        assertEq('clean navigation asks once', h.canLeaveCalls(), calls + 1);
+        const last = h.renders[h.renders.length - 1];
+        assert('approved navigation renders with leave already decided', !!(last && last.leaveApproved === true));
+    }
+
+    {
+        /* Production has no second leave implementation. Without the injected
+         * seam, a missing or partial prksTabLeave rejects navigation, parking,
+         * and destruction. deps.canLeave remains the only test seam. */
+        const savedEngine = globalThis.prksTabLeave;
+        const savedGet = globalThis.prksGetTabContext;
+        const contexts = Object.create(null);
+        try {
+            globalThis.prksGetTabContext = function (tabId) {
+                if (!contexts[tabId]) {
+                    contexts[tabId] = {
+                        id: tabId,
+                        tabId: tabId,
+                        generation: 1,
+                        destroyed: false,
+                        mounted: false,
+                    };
+                }
+                return contexts[tabId];
+            };
+            const h = makeHarness({ hash: '#/folders', productionLeave: true });
+            const opened = await h.ws.navigate('#/works/W-ENGINE');
+            assert('complete leave engine still approves production navigation', opened !== false);
+            assertEq('complete leave engine applies the route', h.ws.snapshot().tabs[0].route, '#/works/W-ENGINE');
+            await h.ws.navigate('#/works/WB', { target: 'tile' });
+            const snapReady = h.ws.snapshot();
+            const mainId = snapReady.mainTabId;
+            const secondaryId = snapReady.secondaryTree && snapReady.secondaryTree.tabId;
+            assert('complete leave engine tiled a secondary', !!secondaryId);
+            const rendersBefore = h.renders.length;
+            const parkedBefore = h.life.park.length;
+            const destroyedBefore = h.life.destroy.length;
+
+            delete globalThis.prksTabLeave;
+            const missed = await h.ws.navigate('#/works/W-MISSING');
+            assertEq('missing leave engine rejects navigation', missed, false);
+            assertEq('missing leave engine keeps the route', h.ws.snapshot().tabs[0].route, '#/works/W-ENGINE');
+            assertEq('missing leave engine does not render', h.renders.length, rendersBefore);
+            const activated = await h.ws.openTab('#/works/W-ACT', { activate: true });
+            assertEq('missing leave engine rejects activated open', activated, false);
+            assertEq('missing leave engine does not park Main', h.life.park.length, parkedBefore);
+            assertEq('missing leave engine keeps Main', h.ws.snapshot().mainTabId, mainId);
+            const closed = await h.ws.closeTab(mainId);
+            assertEq('missing leave engine rejects Main close', closed, false);
+            assert('missing leave engine does not destroy Main', h.ws.snapshot().tabs.some(function (tab) {
+                return tab.id === mainId;
+            }));
+            assertEq('missing leave engine destroy count unchanged', h.life.destroy.length, destroyedBefore);
+            const hidden = await h.ws.setMode('stacked');
+            assertEq('missing leave engine rejects hide split', hidden, false);
+            assertEq('missing leave engine stays tiled', h.ws.snapshot().mode, 'tiled');
+            assert('missing leave engine keeps the secondary mounted', h.isMounted(secondaryId));
+
+            let engineCalled = false;
+            globalThis.prksTabLeave = {
+                run: function () {
+                    engineCalled = true;
+                    return Promise.resolve({ status: 'approved', value: true });
+                },
+            };
+            const partial = await h.ws.navigate('#/works/W-PARTIAL');
+            assertEq('partial leave engine rejects navigation', partial, false);
+            assert('partial leave engine is not asked to commit', engineCalled === false);
+            assertEq('partial leave engine keeps the route', h.ws.snapshot().tabs[0].route, '#/works/W-ENGINE');
+
+            delete globalThis.prksTabLeave;
+            const seam = makeHarness({ hash: '#/folders' });
+            const seamNav = await seam.ws.navigate('#/works/W-SEAM');
+            assert('injected canLeave still approves without the engine', seamNav !== false);
+            assertEq('injected canLeave applies the route', seam.ws.snapshot().tabs[0].route, '#/works/W-SEAM');
+        } finally {
+            globalThis.prksTabLeave = savedEngine;
+            if (savedGet) globalThis.prksGetTabContext = savedGet;
+            else delete globalThis.prksGetTabContext;
         }
     }
 

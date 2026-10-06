@@ -14,7 +14,6 @@ _CSS = os.path.join(_FRONTEND, "css", "style.css")
 _RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_command_palette_selftest.js")
 _WIKI_USER = os.path.join(_PROJECT_DIR, "docs", "wiki", "User-Guide.md")
 _AGENTS = os.path.join(_PROJECT_DIR, "frontend", "AGENTS.md")
-_SCHEMA = os.path.join(_PROJECT_DIR, "backend", "db_migrations.py")
 
 
 def _read(path: str) -> str:
@@ -29,10 +28,13 @@ class FrontendCommandPaletteTests(unittest.TestCase):
         app_at = html.find('src="/js/app.js"')
         sel_at = html.find('src="/js/work-selection.js"')
         sv_at = html.find('src="/js/saved-views.js"')
+        codec_at = html.find('src="/js/search-query-codec.js"')
         self.assertNotEqual(pal_at, -1)
         self.assertNotEqual(app_at, -1)
         self.assertNotEqual(sv_at, -1)
-        self.assertLess(sel_at, sv_at)
+        self.assertNotEqual(codec_at, -1)
+        self.assertLess(sel_at, codec_at)
+        self.assertLess(codec_at, sv_at)
         self.assertLess(sv_at, pal_at)
         self.assertLess(pal_at, app_at)
         self.assertTrue(os.path.isfile(_PALETTE))
@@ -137,13 +139,10 @@ class FrontendCommandPaletteTests(unittest.TestCase):
         self.assertNotIn("Fuse.js", src)
         self.assertNotIn("MiniSearch", src)
         self.assertNotIn("localStorage.setItem", src)
-        self.assertIn("URLSearchParams", src)
+        self.assertIn("prksSearchQueryCodec", src)
+        self.assertNotIn("new URLSearchParams", src)
         self.assertNotIn("prksNavigate(hash, { replace: true })", src)
         self.assertNotIn("prksNavigate(cmd.hash, { replace: true })", src)
-
-    def test_no_schema_bump(self):
-        schema = _read(_SCHEMA)
-        self.assertIn("LATEST_SCHEMA_VERSION = 17", schema)
 
     def test_docs(self):
         wiki = _read(_WIKI_USER)

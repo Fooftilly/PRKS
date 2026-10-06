@@ -94,6 +94,17 @@
       "version": "1.47.0"
     },
     {
+      "name": "prks-owner-resource",
+      "runtime_files": [
+        {
+          "path": "/js/owner-resource.js",
+          "sha256": "868d3d61f53bb8ee32ac510f1a2ad27a20039f47c26086c1846a6f7d0c111dc6"
+        }
+      ],
+      "source_category": "frontend-app:owner-resource",
+      "version": "1"
+    },
+    {
       "name": "prks-pdf-viewer",
       "runtime_files": [
         {
@@ -113,11 +124,44 @@
       "version": "2.15.1"
     },
     {
+      "name": "prks-route-model",
+      "runtime_files": [
+        {
+          "path": "/js/route-model.js",
+          "sha256": "e30d91e66981b83df668e343da3582104923ee01250741f292e3e3dabb3147ad"
+        }
+      ],
+      "source_category": "frontend-app:route-model",
+      "version": "1"
+    },
+    {
+      "name": "prks-search-query-codec",
+      "runtime_files": [
+        {
+          "path": "/js/search-query-codec.js",
+          "sha256": "bcc416c86b13e94f9e1affef46e6149dd90cca180390d045636ae9968f5d5001"
+        }
+      ],
+      "source_category": "frontend-app:search-query-codec",
+      "version": "1"
+    },
+    {
+      "name": "prks-tab-leave",
+      "runtime_files": [
+        {
+          "path": "/js/tab-leave.js",
+          "sha256": "5d0ca336c3daa69fb4dfb5ba9d6e460a932c038687dec9f6421e4456867bb62a"
+        }
+      ],
+      "source_category": "frontend-app:tab-leave",
+      "version": "1"
+    },
+    {
       "name": "prks-vue",
       "runtime_files": [
         {
           "path": "/vue/prks-vue.js",
-          "sha256": "075d022184b4bf87d92359cefe54f375f266ba345a67811544e246e70e568587"
+          "sha256": "7e8a566ef627141b3328fd7433ef6510d665f7b27f77bf2b84c06d1c6b7c69c9"
         }
       ],
       "source_category": "npm:frontend-app",
@@ -128,7 +172,7 @@
       "runtime_files": [
         {
           "path": "/js/work-route-projection.js",
-          "sha256": "1cbe084094d7eeaefaf3111fab39ad6eb968a6b1a7479d111ff8b71ba497993c"
+          "sha256": "0169350c039649544ac986eafa7e04bd3e3e7dc3a9422b4e968856d789d0f5dd"
         }
       ],
       "source_category": "frontend-app:work-route-projection",

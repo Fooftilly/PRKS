@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, onUpdated, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import PrksField from '../../components/PrksField.vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import { personGroupIntentsKey } from './intents'
 import { usePersonGroupPendingAction } from './pending-action'
 import type { PersonGroupDetailProjection } from './projection'
@@ -150,7 +152,7 @@ onUpdated(stampEditor)
       <div class="prks-page-header page-header">
         <h2 class="prks-page-title">Group not available offline</h2>
       </div>
-      <p class="prks-inline-message" data-prks-role="offline-unavailable">This item is not available offline.</p>
+      <PrksInlineMessage data-prks-role="offline-unavailable">This item is not available offline.</PrksInlineMessage>
     </template>
     <template v-else-if="notFound">
       <div class="prks-page-header page-header">
@@ -182,8 +184,9 @@ onUpdated(stampEditor)
             <div class="form-pane group-sidebar-form">
               <section class="group-sidebar-form__section">
                 <h4>Identity</h4>
-                <label for="gd-name">Name</label>
-                <input id="gd-name" type="text" />
+                <PrksField v-slot="{ labelledBy, describedBy }" label="Name" for-id="gd-name">
+                  <input id="gd-name" type="text"  :aria-labelledby="labelledBy" :aria-describedby="describedBy" />
+                </PrksField>
               </section>
               <section class="group-sidebar-form__section">
                 <h4>Hierarchy</h4>
@@ -216,8 +219,8 @@ onUpdated(stampEditor)
               </section>
             </div>
             <div class="form-actions prks-form-actions--split group-sidebar__sticky-actions">
-              <button type="button" class="prks-btn prks-btn--secondary" data-prks-group-edit-cancel @click="onCancel">Cancel</button>
-              <button id="gd-save-btn" type="button" class="prks-btn prks-btn--primary">Save changes</button>
+              <PrksButton data-prks-group-edit-cancel @click="onCancel">Cancel</PrksButton>
+              <PrksButton id="gd-save-btn" variant="primary">Save changes</PrksButton>
             </div>
             <details class="group-sidebar__advanced">
               <summary>Advanced</summary>
@@ -259,15 +262,14 @@ onUpdated(stampEditor)
             <div class="group-detail__section-head">
               <h3 id="group-members-heading">Members</h3>
               <span class="group-detail__count">{{ group.members.length }}</span>
-              <button
-                type="button"
-                class="prks-btn prks-btn--secondary prks-btn--sm"
+              <PrksButton
+                size="sm"
                 data-prks-group-members-toggle
                 :data-prks-role="membersEditing ? undefined : 'group-mutation-control'"
                 @click="onToggleMembers"
               >
                 {{ membersEditing ? 'Done' : 'Manage members' }}
-              </button>
+              </PrksButton>
             </div>
             <div v-if="membersEditing" class="group-detail__member-add">
               <p class="tag-add-field__caption">Add a person</p>
@@ -286,7 +288,7 @@ onUpdated(stampEditor)
                 </div>
                 <div id="group-add-member-results" class="combobox-results combobox-results--tag-panel hidden"></div>
               </div>
-              <button id="group-add-member-btn" type="button" class="prks-btn prks-btn--primary">Add to group</button>
+              <PrksButton id="group-add-member-btn" variant="primary">Add to group</PrksButton>
             </div>
             <div
               v-if="group.members.length"

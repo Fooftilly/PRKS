@@ -8,7 +8,9 @@ import unittest
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _CARDS = os.path.join(_ROOT, "frontend", "js", "components", "work-cards.js")
-_WORKS = os.path.join(_ROOT, "frontend", "js", "components", "works.js")
+_WORK_LIFECYCLE = os.path.join(
+    _ROOT, "frontend-app", "src", "features", "work", "detail-lifecycle.ts"
+)
 
 
 def _read(path: str) -> str:
@@ -18,13 +20,13 @@ def _read(path: str) -> str:
 
 class WorkCardCreditTextTests(unittest.TestCase):
     def test_works_rel_summary_uses_plain_credit_text(self):
-        works = _read(_WORKS)
-        self.assertIn("prksWorkCardCreditText", works)
+        lifecycle = _read(_WORK_LIFECYCLE)
+        self.assertIn("prksWorkCardCreditText", lifecycle)
         # Must not feed the HTML-escaped credit line into escaping summary parts.
-        idx = works.index("prksRelSummaryHtml")
-        window = works[max(0, idx - 400) : idx + 500]
+        idx = lifecycle.index("prksRelSummaryHtml")
+        window = lifecycle[max(0, idx - 400) : idx + 800]
         self.assertIn("prksWorkCardCreditText", window)
-        self.assertNotIn("prksWorkCardCreditLine(work)", window)
+        self.assertNotIn("prksWorkCardCreditLine", window)
 
     def test_plain_text_preserves_ampersand_and_angles(self):
         cards = _read(_CARDS)

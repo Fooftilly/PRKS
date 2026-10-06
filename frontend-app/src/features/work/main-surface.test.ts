@@ -1,12 +1,10 @@
 import { nextTick } from 'vue'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import ownerResourceSource from '../../../../frontend/js/owner-resource.js?raw'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
 import videoSource from '../../../../frontend/js/components/works-video.js?raw'
-import {
-  presentWorkMainSurface,
-  resetWorkMainSurfaceForTests,
-  type WorkMainSurfaceModel,
-} from './main-surface'
+import type { WorkMainSurfaceModel } from './main-surface'
+import { presentWorkDetail, resetWorkDetailSessionForTests } from './session'
 import {
   dismissWorkResearchNotes,
   presentWorkResearchNotes,
@@ -24,7 +22,11 @@ type WorkCtx = {
   getEntity: (type: string) => { id: string } | null
   isCurrent: (generation: number) => boolean
   getResource: (name: string) => unknown
-  setResource: (name: string, value: unknown, disposer?: () => void) => unknown
+  resourceTicket: () => unknown
+  registerResource: (
+    ticket: unknown,
+    registration: { kind: string; value: unknown; suspendable: boolean; dispose: () => void },
+  ) => string
   beginRoute: (route: { name: string; params: { workId: string } }) => number
 }
 
@@ -62,13 +64,27 @@ function surface(ctx: WorkCtx, over: Partial<WorkMainSurfaceModel> = {}): WorkMa
   }
 }
 
+function paintSurface(ctx: WorkCtx, model: WorkMainSurfaceModel, attach?: () => void) {
+  return presentWorkDetail({
+    owner: ctx,
+    host: ctx.root,
+    availability: 'ready',
+    workId: model.workId,
+    generation: typeof model.generation === 'number' ? model.generation : ctx.generation,
+    shell: true,
+    surface: model,
+    attach,
+  })
+}
+
 beforeAll(() => {
+  surfaceWindow.eval(ownerResourceSource)
   surfaceWindow.eval(tabContextSource)
   surfaceWindow.eval(videoSource)
 })
 
 afterEach(() => {
-  resetWorkMainSurfaceForTests()
+  resetWorkDetailSessionForTests()
   resetWorkResearchNotesForTests()
   surfaceWindow.prksDestroyAllTabContexts()
   document.body.innerHTML = ''
@@ -83,7 +99,7 @@ describe('work main surface', () => {
       provider: 'youtube',
       provider_id: 'abcdefghijk',
     })
-    expect(presentWorkMainSurface(ctx, surface(ctx, {
+    expect(paintSurface(ctx, surface(ctx, {
       kind: 'video',
       title: 'A & B',
       viewerHtml,
@@ -107,7 +123,7 @@ describe('work main surface', () => {
       '<div class="prks-route-loading" role="status"><p class="meta-row">Loading view...</p></div>',
     ].join('')
     ctx.root.setAttribute('aria-busy', 'true')
-    expect(presentWorkMainSurface(ctx, surface(ctx, {
+    expect(paintSurface(ctx, surface(ctx, {
       kind: 'pdf',
       hasFile: true,
       showHeader: false,
@@ -116,7 +132,7 @@ describe('work main surface', () => {
     expect(ctx.root.getAttribute('aria-busy')).toBeNull()
     const host = ctx.root.querySelector('[data-prks-role="pdf-viewer"]')
     expect(host).toBeInstanceOf(HTMLElement)
-    expect(presentWorkMainSurface(ctx, surface(ctx, {
+    expect(paintSurface(ctx, surface(ctx, {
       kind: 'pdf',
       hasFile: true,
       showHeader: false,
@@ -128,7 +144,7 @@ describe('work main surface', () => {
   it('exposes an empty PDF host and omits the page header', () => {
     const ctx = mount('main')
     ctx.setEntity('work', { id: 'work-a' })
-    expect(presentWorkMainSurface(ctx, surface(ctx, {
+    expect(paintSurface(ctx, surface(ctx, {
       kind: 'pdf',
       hasFile: true,
       showHeader: false,
@@ -143,13 +159,13 @@ describe('work main surface', () => {
   it('names a PDF with no file and a Work with no source', () => {
     const pdf = mount('pdf')
     pdf.setEntity('work', { id: 'work-a' })
-    presentWorkMainSurface(pdf, surface(pdf, { kind: 'pdf', hasFile: false, showHeader: true }))
+    paintSurface(pdf, surface(pdf, { kind: 'pdf', hasFile: false, showHeader: true }))
     expect(pdf.root.querySelector('[data-prks-role="pdf-viewer"]')).toBeNull()
     expect(pdf.root.querySelector('.work-pdf-empty')?.textContent).toBe('No PDF file attached.')
 
     const empty = mount('empty')
     empty.setEntity('work', { id: 'work-a' })
-    presentWorkMainSurface(empty, surface(empty, { kind: 'empty', title: 'Loose note' }))
+    paintSurface(empty, surface(empty, { kind: 'empty', title: 'Loose note' }))
     expect(empty.root.querySelector('.work-pdf-empty')?.textContent).toBe('No file attached.')
     expect(empty.root.querySelector('.page-header--work-title')?.textContent).toBe('Loose note')
   })
@@ -165,8 +181,8 @@ describe('work main surface', () => {
       source_url: '',
     })
     const sideHtml = '<div class="work-pdf-pane work-pdf-pane--empty"><p class="work-pdf-empty">No file attached.</p></div>'
-    expect(presentWorkMainSurface(main, surface(main, { kind: 'video', viewerHtml: mainHtml, title: 'Main' }))).toBe(true)
-    expect(presentWorkMainSurface(side, surface(side, {
+    expect(paintSurface(main, surface(main, { kind: 'video', viewerHtml: mainHtml, title: 'Main' }))).toBe(true)
+    expect(paintSurface(side, surface(side, {
       workId: 'work-b',
       kind: 'empty',
       title: 'Side',
@@ -186,11 +202,11 @@ describe('work main surface', () => {
       provider_id: 'keptvideo01',
       source_url: '',
     })
-    expect(presentWorkMainSurface(ctx, surface(ctx, { kind: 'video', viewerHtml: html }))).toBe(true)
+    expect(paintSurface(ctx, surface(ctx, { kind: 'video', viewerHtml: html }))).toBe(true)
     const opened = ctx.generation
     ctx.beginRoute({ name: 'work', params: { workId: 'work-b' } })
     ctx.setEntity('work', { id: 'work-b' })
-    expect(presentWorkMainSurface(ctx, surface(ctx, {
+    expect(paintSurface(ctx, surface(ctx, {
       workId: 'work-b',
       generation: opened,
       kind: 'empty',
@@ -200,17 +216,44 @@ describe('work main surface', () => {
     expect(ctx.root.querySelector('iframe')).toBeNull()
   })
 
+  it('runs attach only after the shell is in the host', () => {
+    const ctx = mount('main')
+    ctx.setEntity('work', { id: 'work-a' })
+    let sawShell = false
+    expect(paintSurface(ctx, surface(ctx), () => {
+      sawShell = ctx.root.querySelector('.work-detail') instanceof HTMLElement
+    })).toBe(true)
+    expect(sawShell).toBe(true)
+  })
+
+  it('paints File not found without a shell or attach', () => {
+    const ctx = mount('main')
+    let attached = false
+    expect(presentWorkDetail({
+      owner: ctx,
+      host: ctx.root,
+      availability: 'not-found',
+      workId: 'missing',
+      generation: ctx.generation,
+      surface: null,
+      attach: () => { attached = true },
+    })).toBe(true)
+    expect(attached).toBe(false)
+    expect(ctx.root.querySelector('.prks-inline-message')?.textContent).toBe('File not found.')
+    expect(ctx.root.querySelector('.work-detail')).toBeNull()
+  })
+
   it('does not paint for a different Work than the one installed', () => {
     const ctx = mount('main')
     ctx.setEntity('work', { id: 'work-a' })
-    expect(presentWorkMainSurface(ctx, surface(ctx, { workId: 'work-b' }))).toBe(false)
+    expect(paintSurface(ctx, surface(ctx, { workId: 'work-b' }))).toBe(false)
     expect(ctx.root.querySelector('.work-workspace')).toBeNull()
   })
 
   it('leaves a Research Notes anchor the notes pane can take over', async () => {
     const ctx = mount('main')
     ctx.setEntity('work', { id: 'work-a' })
-    expect(presentWorkMainSurface(ctx, surface(ctx, { kind: 'empty' }))).toBe(true)
+    expect(paintSurface(ctx, surface(ctx, { kind: 'empty' }))).toBe(true)
     const handle = ctx.root.querySelector('.work-split-handle')
     expect(handle?.getAttribute('role')).toBe('separator')
     expect(handle?.getAttribute('tabindex')).toBe('0')
@@ -237,7 +280,7 @@ describe('work main surface', () => {
       main.setEntity('work', { id: 'work-a' })
       side.setEntity('work', { id: 'work-b' })
       const paint = (ctx: WorkCtx, workId: string) => {
-        expect(presentWorkMainSurface(ctx, surface(ctx, {
+        expect(paintSurface(ctx, surface(ctx, {
           workId,
           kind: 'pdf',
           hasFile: true,
@@ -259,19 +302,24 @@ describe('work main surface', () => {
           log.push(host.isConnected ? 'pdf-connected' : 'pdf-detached')
         },
       }
-      ctx.setResource('pdf', runtime, () => runtime.destroy())
+      ctx.registerResource(ctx.resourceTicket(), { kind: 'pdf', value: runtime, suspendable: true, dispose: () => runtime.destroy() })
       const notes = {
         destroy() {
           log.push('easymde')
         },
       }
-      ctx.setResource('workNotes', notes, () => {
-        log.push(anchor.isConnected ? 'notes-connected' : 'notes-detached')
-        notes.destroy()
-        dismissWorkResearchNotes(ctx)
-        log.push(anchor.querySelector('.work-notes-pane') ? 'notes-vue-mounted' : 'notes-vue-unmounted')
-        log.push(ctx.root.querySelector('.work-workspace') ? 'shell-present' : 'shell-gone')
-        log.push(host.isConnected ? 'pdf-host-connected' : 'pdf-host-detached')
+      ctx.registerResource(ctx.resourceTicket(), {
+        kind: 'workNotes',
+        value: notes,
+        suspendable: true,
+        dispose: () => {
+          log.push(anchor.isConnected ? 'notes-connected' : 'notes-detached')
+          notes.destroy()
+          dismissWorkResearchNotes(ctx)
+          log.push(anchor.querySelector('.work-notes-pane') ? 'notes-vue-mounted' : 'notes-vue-unmounted')
+          log.push(ctx.root.querySelector('.work-workspace') ? 'shell-present' : 'shell-gone')
+          log.push(host.isConnected ? 'pdf-host-connected' : 'pdf-host-detached')
+        },
       })
       return { host }
     }

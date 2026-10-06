@@ -99,8 +99,15 @@ Use that override only on a network you already trust, or behind an access layer
 | `PRKS_PERF_SLOW_MS` | API request duration in milliseconds counted as slow. Default `250`. Clamped to 10–60000. Does not timeout requests. |
 | `PRKS_PERF_LOG_SLOW` | When truthy (`1`, `true`, `yes`, `on`), emit a privacy-safe `slow_request` INFO log for slow API requests. Default off. |
 | `PRKS_BACKUP_MAX_UPLOAD_BYTES` | Maximum size of an uploaded `.prks-backup` restore archive. Default 64 GiB. A valid `Content-Length` is required. |
+| `PRKS_CONFIG_FILE` | Override path of the bootstrap configuration file (default: `~/.config/prks/config.json` on Linux, `~/Library/Application Support/PRKS/config.json` on macOS, `%LOCALAPPDATA%\PRKS\config.json` on Windows). Ignored in testing mode. |
 
 If `PRKS_STORAGE` is **unset**, non-testing runs use the project’s **`data/`** directory: `data/prks_data.db`, `data/pdfs/`, `data/thumbs/`, and person portrait cache `data/people/` (lossy WebP, max 512px edge, keyed by person id + `image_url` hash).
+
+The storage root is chosen by the first of these that is set, and a set but invalid choice is a startup error rather than a fall-through: `python prks_app.py --storage-root PATH` (this run only), `PRKS_STORAGE`, `storage.local_root` in the bootstrap configuration file (nothing in PRKS writes that file yet), then the default above. Testing mode never reads the bootstrap file. A relative or `~` path is made absolute once at startup.
+
+Every storage root carries a small `prks-root.json` marker with a stable `storage_root_id`. PRKS writes it the first time it opens a root: a new empty directory, or an existing library (one that has `prks_data.db` or `pdfs/`). PRKS refuses to open a non-empty directory that does not look like a PRKS library, a root whose marker is unreadable or from a newer PRKS, a root a storage move left retired or unfinished, and a root selected by the bootstrap file that is missing or empty (for example an unmounted disk). It also refuses links inside the root (the root itself may be a link), components on another filesystem, and roots on NFS/SMB and other network filesystems. The marker is not part of backups; a restore keeps the target root's marker.
+
+Exactly one PRKS server process may use a storage root at a time. The running process holds an operating-system lock on `.prks-maintenance/root.lock` until it exits, and a second process pointed at the same root stops with a "storage root is already open" error.
 
 Person profile images (`GET /api/persons/{id}/profile-image`) are optional. `image_url` must be a direct public HTTP/HTTPS URL (HTTPS preferred) that itself returns HTTP 200. PRKS does not follow redirects, and private/local/link-local targets are refused. Only static JPEG/PNG/WebP/GIF rasters are accepted. The download is size- and time-bounded; the image is decoded and transcoded (max 512px edge, usually WebP) before anything is cached. Original remote bytes are not kept. Local portrait upload is not part of this feature. Updating a valid `image_url` clears that person’s cached portraits.
 

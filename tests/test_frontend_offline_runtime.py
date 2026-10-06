@@ -222,7 +222,7 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         self.assertIn("PRKS_POSITIONS_LIST_KEY", index_body)
         self.assertIn("domain: PRKS_POSITIONS_DOMAIN", index_body)
         self.assertIn("validate: prksIsPositionIndexShape", index_body)
-        self.assertIn("prksPresentVuePositions(", index_body)
+        self.assertIn("prksPresentVueRoute(ctx, contentDiv, 'positions'", index_body)
         self.assertIn("availability: 'unavailable'", index_body)
         self.assertIn("prksOfflinePrependBanner(", index_body)
         # The plain online-only fetch helper is no longer the route's read path.
@@ -694,7 +694,7 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         self.assertIn("PRKS_ARGUMENTS_LIST_KEY", index_body)
         self.assertIn("domain: PRKS_ARGUMENTS_DOMAIN", index_body)
         self.assertIn("validate: prksIsArgumentIndexShape", index_body)
-        self.assertIn("prksPresentVueArguments(", index_body)
+        self.assertIn("prksPresentVueRoute(ctx, contentDiv, 'arguments'", index_body)
         self.assertIn("availability: 'unavailable'", index_body)
         self.assertIn("prksOfflinePrependBanner(", index_body)
         # The COMPLETE collection is fetched and cached under one key; ?kind= is
@@ -963,16 +963,23 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         # the Vue detail, which skips the portrait URL and the thumbnail request.
         self.assertIn("offlineCached: !!(ctx && ctx.ui && ctx.ui.personOfflineCached)", people)
         self.assertIn("props.projection.offlineCached", detail)
-        self.assertIn("suppressThumbnail: props.projection.offlineCached", detail)
+        self.assertIn("workCardThumbOptions(projection.offlineCached", detail)
         self.assertIn("/profile-image", detail)
         portrait = detail[detail.index("const portraitSrc"): detail.index("function emptyFields")]
         self.assertLess(portrait.index("offlineCached"), portrait.index("profile-image"))
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
         self.assertIn("ctx.ui.personOfflineCached = offlinePerson.source === 'cache';", app)
-        # The card option exists and only removes the source, never the layout.
-        cards = _read(os.path.join(_FRONTEND, "js", "components", "work-cards.js"))
-        self.assertIn("const suppressThumbnail = options.suppressThumbnail === true;", cards)
-        self.assertIn("const thumbSrc = suppressThumbnail", cards)
+        # Vue owns the card option: suppression returns no src, never changes layout.
+        helpers = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "components", "work-card.ts"))
+        vue = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "components", "PrksWorkCard.vue"))
+        self.assertIn("if (!work || options.suppressThumbnail === true) return ''", helpers)
+        self.assertIn("thumbSrc = computed(() => workCardThumbUrl(props.work, options.value))", vue)
+        self.assertLess(
+            helpers.index("options.suppressThumbnail === true"),
+            helpers.index("thumbnail?page="),
+        )
         # No image bytes anywhere in the offline stack.
         store = _read(_STORE)
         for forbidden in ("profile-image", "thumbnail", "image/"):
@@ -1041,7 +1048,7 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         nxt = app.find("case 'playlists':", folders_at)
         body = app[folders_at: nxt if nxt > folders_at else folders_at + 8000]
         # Vue present paints the host; chrome title still uses titleOpts.
-        self.assertIn("prksPresentVueFolderLibrary(", body)
+        self.assertIn("prksPresentVueRoute(ctx, contentDiv, 'folder-library'", body)
         self.assertIn("availability: 'unavailable'", body)
         self.assertIn(
             "titleOpts = { notFound: true, notFoundTitle: 'Folders not available offline' }",
@@ -1178,26 +1185,34 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         self.assertIn("role === 'Author' || role === 'Editor'", role_body)
 
     def test_cached_folder_detail_suppresses_thumbnails(self):
-        cards = _read(os.path.join(
-            _PROJECT_DIR, "frontend-app", "src", "features", "folder-detail", "legacy-work-card.ts"))
+        helpers = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "components", "work-card.ts"))
         detail = _read(os.path.join(
             _PROJECT_DIR, "frontend-app", "src", "features", "folder-detail", "FolderDetailRoute.vue"))
-        self.assertIn("suppressThumbnail: true", cards)
+        lifetime = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "components", "use-work-card-collection.ts"))
+        self.assertIn("suppressThumbnail: true", helpers)
+        self.assertIn("workCardThumbOptions(projection.offlineCached)", detail)
         # Lazy hydration must be skipped too, not just the src.
-        self.assertIn("if (!offlineCached && typeof window.prksInitLazyWorkThumbs", detail)
+        self.assertIn("initWhen: () => !props.projection.offlineCached", detail)
+        self.assertIn("workCardCollectionFingerprint", detail)
+        self.assertIn("if (shouldInit()) window.prksInitLazyWorkThumbs?.(el)", lifetime)
 
     def test_recently_added_reads_through_its_own_offline_snapshot(self):
         """Recently added is cached now, so it is no longer connectivity-gated:
         it must go through the read-through rather than a raw fetch, and must
         never be recomputed from the Folder hierarchy or the stable catalog."""
-        folders = _read(os.path.join(_FRONTEND, "js", "components", "folders.js"))
-        body = _fn_body(folders, "async function prksLoadFolderLibraryRecentlyAdded(")
+        intents = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "folder-library", "intents.ts"))
+        pane = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "folder-library", "RecentlyAddedPane.vue"))
+        body = intents[intents.index("async loadRecentlyAdded"):]
+        body = body[: body.index("toggleExpand(")]
         self.assertIn("prksOfflineRecentlyAddedFetch", body)
         self.assertIn("prksResolveOfflineRecentlyAdded", body)
         self.assertNotIn("fetchRecentlyAdded", body)
-        # A missing snapshot is an explicit unavailable state, not an empty tab.
-        self.assertIn("not available offline", body)
-        # The tab must no longer be disabled while offline.
+        self.assertIn("not available offline", pane)
+        folders = _read(os.path.join(_FRONTEND, "js", "components", "folders.js"))
         self.assertNotIn("Recently added requires a connection", folders)
 
     def test_home_glance_never_warms_independent_browse_domains(self):
@@ -1452,22 +1467,23 @@ class FrontendBrowseProjectionTests(unittest.TestCase):
         self.assertIn("hasOwnProperty.call(row, 'folder_id')", folder_id)
 
     def test_cached_browse_renders_suppress_thumbnails(self):
+        helpers = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "components", "work-card.ts"))
+        self.assertIn("offlineCached", helpers)
+        self.assertIn("suppressThumbnail", helpers)
         progress = _read(os.path.join(
-            _PROJECT_DIR, "frontend-app", "src", "features", "progress", "legacy-work-card.ts"))
-        with self.subTest(module="features/progress/legacy-work-card.ts"):
-            self.assertIn("offlineCached", progress)
-            self.assertIn("suppressThumbnail", progress)
+            _PROJECT_DIR, "frontend-app", "src", "features", "progress", "ProgressView.vue"))
+        with self.subTest(module="features/progress/ProgressView.vue"):
+            self.assertIn("workCardThumbOptions(offlineCached", progress)
         recent = _read(os.path.join(
-            _PROJECT_DIR, "frontend-app", "src", "features", "recent", "legacy-work-card.ts"))
-        with self.subTest(module="features/recent/legacy-work-card.ts"):
-            self.assertIn("offlineCached", recent)
-            self.assertIn("suppressThumbnail", recent)
-        types_card = _read(os.path.join(
-            _PROJECT_DIR, "frontend-app", "src", "features", "types", "legacy-work-card.ts"))
-        with self.subTest(module="features/types/legacy-work-card.ts"):
-            self.assertIn("offlineCached", types_card)
-            self.assertIn("suppressThumbnail", types_card)
-            self.assertIn("hideDocTypeBadge", types_card)
+            _PROJECT_DIR, "frontend-app", "src", "features", "recent", "RecentRoute.vue"))
+        with self.subTest(module="features/recent/RecentRoute.vue"):
+            self.assertIn("workCardThumbOptions(offlineCached", recent)
+        types_detail = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "types", "TypeDetailRoute.vue"))
+        with self.subTest(module="features/types/TypeDetailRoute.vue"):
+            self.assertIn("workCardThumbOptions(offlineCached", types_detail)
+            self.assertIn("hideDocTypeBadge: true", types_detail)
         types_js = _read(os.path.join(_FRONTEND, "js", "components", "types.js"))
         self.assertNotIn("function renderWorksByDocType(", types_js)
         self.assertNotIn("function renderTypesIndex(", types_js)
