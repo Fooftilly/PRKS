@@ -140,6 +140,32 @@ class PublisherCatalogQueryTests(unittest.TestCase):
         self.assertEqual(rows, legacy_get_publishers_in_use(self.db))
         self.assertEqual(rows[0]["work_count"], 3)
 
+    def test_alias_order_survives_interleaving_across_publishers(self):
+        # One global ORDER BY LOWER(alias) must give each Publisher the order the
+        # per-Publisher query gave it, even when aliases interleave and mix case.
+        self.publisher("PUB-A", "Alpha Press", "bravo", "Delta", "foxtrot")
+        self.publisher("PUB-B", "Beta Press", "Alpha", "charlie", "Echo")
+        self.works("bravo", "ECHO", "alpha press", "Alpha")
+        rows = self.db.get_publishers_in_use()
+        self.assertEqual(rows, legacy_get_publishers_in_use(self.db))
+        by_id = {row["id"]: row for row in rows}
+        self.assertEqual(by_id["PUB-A"]["aliases"], ["bravo", "Delta", "foxtrot"])
+        self.assertEqual(by_id["PUB-B"]["aliases"], ["Alpha", "charlie", "Echo"])
+
+    def test_tab_and_blank_catalog_labels_match_legacy(self):
+        # Catalog labels use Python strip() (tabs included); works.publisher uses
+        # SQLite TRIM (spaces only). A blank name contributes no label.
+        self.publisher("PUB-TAB", "\tTab Press\t", "\tTab Alias\t", "\t")
+        self.publisher("PUB-BLANK", "   ", "Blank Alias")
+        self.works("Tab Press", "\tTab Press", "Tab Alias", "Blank Alias", "   ")
+        rows = self.db.get_publishers_in_use()
+        self.assertEqual(rows, legacy_get_publishers_in_use(self.db))
+        by_id = {row["id"]: row for row in rows}
+        self.assertEqual(by_id["PUB-TAB"]["name"], "Tab Press")
+        self.assertEqual(by_id["PUB-TAB"]["work_count"], 2)
+        self.assertEqual(by_id["PUB-BLANK"]["name"], "")
+        self.assertEqual(by_id["PUB-BLANK"]["work_count"], 1)
+
     def test_empty_catalog_issues_one_statement(self):
         rows, selects = self.selects(self.db.get_publishers_in_use)
         self.assertEqual(rows, [])
