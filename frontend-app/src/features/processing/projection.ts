@@ -1,8 +1,6 @@
 /** Inbox page size. The coordinator does not slice the scan; Vue does. */
 export const PROCESSING_PAGE_SIZE = 25
 
-export const PROCESSING_STATUS_LABELS = ['Not Started', 'Planned', 'In Progress', 'Completed', 'Paused'] as const
-
 export interface ProcessingRoleLink {
   person_id: string
   person_name: string

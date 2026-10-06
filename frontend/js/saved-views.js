@@ -3,132 +3,20 @@
  * Results are never stored. Opening a view re-runs fetchSearch() through the
  * coordinator's prksEffectiveSearchResults, the same read Search uses.
  *
- * This file owns the canonical search query codec (definition <-> route
- * params <-> hash <-> fetchSearch options) until the typed route model in
- * #303 B1, and the shared Saved View modal until #303 B4. Search, Saved View
- * detail, and the Saved Views index are painted by frontend-app.
+ * Saved View records belong to frontend-app (typed client, shared query
+ * cache, write invalidation). This modal saves through that one owner,
+ * window.prksSavedViewRecords. Index and detail deletes are Vue intents.
+ *
+ * The search query codec lives in frontend-app/src/features/search/codec.ts.
+ * This file does not own it. The shared Saved View modal reads a parsed route
+ * through the one classic bridge, prksSearchQueryCodec, and stays here until
+ * #303 B4. Search, Saved View detail, and the Saved Views index are painted
+ * by frontend-app.
  */
 (function (root) {
     'use strict';
 
     const UNSAVABLE_MSG = 'This search combination cannot be saved as a view.';
-
-    function truthyAny(raw) {
-        const anyRaw = raw == null ? '' : raw;
-        return (
-            anyRaw === '1' ||
-            String(anyRaw).trim().toLowerCase() === 'true' ||
-            String(anyRaw).trim().toLowerCase() === 'yes'
-        );
-    }
-
-    function paramsFromRoute(route) {
-        if (route && route.params) return route.params;
-        return route || {};
-    }
-
-    function prksSearchDefinitionFromRoute(route) {
-        const params = paramsFromRoute(route);
-        const q = String(params.q || '').trim();
-        const tag = String(params.tag || '').trim();
-        const author = String(params.author || '').trim();
-        const publisher = String(params.publisher || '').trim();
-        const any = truthyAny(params.any);
-        if (!q && !tag && !author && !publisher) {
-            return { ok: false, empty: true, unsavable: true, message: UNSAVABLE_MSG };
-        }
-        if (any && (tag || author || publisher)) {
-            return { ok: false, unsavable: true, message: UNSAVABLE_MSG };
-        }
-        if (tag && q) {
-            return { ok: false, unsavable: true, message: UNSAVABLE_MSG };
-        }
-        if (any) {
-            if (!q) return { ok: false, unsavable: true, message: UNSAVABLE_MSG };
-            return {
-                ok: true,
-                definition: { mode: 'all', q: q, tag: '', author: '', publisher: '' },
-            };
-        }
-        if (tag) {
-            return {
-                ok: true,
-                definition: {
-                    mode: 'tag',
-                    q: '',
-                    tag: tag,
-                    author: author,
-                    publisher: publisher,
-                },
-            };
-        }
-        return {
-            ok: true,
-            definition: {
-                mode: 'advanced',
-                q: q,
-                tag: '',
-                author: author,
-                publisher: publisher,
-            },
-        };
-    }
-
-    function prksSearchHashFromDefinition(definition) {
-        const d = definition || {};
-        const p = new URLSearchParams();
-        const mode = String(d.mode || '');
-        const q = String(d.q || '').trim();
-        const tag = String(d.tag || '').trim();
-        const author = String(d.author || '').trim();
-        const publisher = String(d.publisher || '').trim();
-        if (mode === 'all') {
-            p.set('any', '1');
-            if (q) p.set('q', q);
-        } else if (mode === 'tag') {
-            if (tag) p.set('tag', tag);
-            if (author) p.set('author', author);
-            if (publisher) p.set('publisher', publisher);
-        } else {
-            if (q) p.set('q', q);
-            if (author) p.set('author', author);
-            if (publisher) p.set('publisher', publisher);
-        }
-        return '#/search?' + p.toString();
-    }
-
-    function prksSearchOptionsFromDefinition(definition) {
-        const d = definition || {};
-        const q = String(d.q || '').trim();
-        const tag = String(d.tag || '').trim();
-        const author = String(d.author || '').trim();
-        const publisher = String(d.publisher || '').trim();
-        if (d.mode === 'all') {
-            return { q: q, tag: null, options: { any: '1' } };
-        }
-        if (d.mode === 'tag') {
-            return { q: '', tag: tag, options: { author: author, publisher: publisher } };
-        }
-        return { q: q, tag: null, options: { author: author, publisher: publisher } };
-    }
-
-    function prksSearchSummaryText(definition) {
-        const d = definition || {};
-        const parts = [];
-        if (d.mode === 'all') {
-            return 'All: ' + String(d.q || '');
-        }
-        if (d.mode === 'tag') {
-            parts.push('Tag: ' + String(d.tag || ''));
-            if (d.author) parts.push('Author: ' + d.author);
-            if (d.publisher) parts.push('Publisher: ' + d.publisher);
-            return parts.join(' · ');
-        }
-        if (d.q) parts.push('Keywords: ' + d.q);
-        if (d.author) parts.push('Author: ' + d.author);
-        if (d.publisher) parts.push('Publisher: ' + d.publisher);
-        return parts.join(' · ');
-    }
 
     const modalState = {
         mode: 'create',
@@ -241,14 +129,15 @@
         modalState.saving = true;
         if (els.save) els.save.disabled = true;
         setModalError('');
+        const records = root.prksSavedViewRecords;
         try {
             if (modalState.mode === 'edit') {
-                await root.updateSavedView(modalState.viewId, { name: name, search: search });
+                await records.update(modalState.viewId, { name: name, search: search });
                 if (typeof root.requestModalClose === 'function') root.requestModalClose('save');
                 else if (typeof root.closeModal === 'function') root.closeModal();
                 navigateRefresh();
             } else {
-                const created = await root.createSavedView({ name: name, search: search });
+                const created = await records.create({ name: name, search: search });
                 if (typeof root.requestModalClose === 'function') root.requestModalClose('save');
                 else if (typeof root.closeModal === 'function') root.closeModal();
                 if (created && created.id && typeof root.prksNavigate === 'function') {
@@ -258,7 +147,10 @@
                 }
             }
         } catch (err) {
-            setModalError((err && err.message) || 'Could not save view.');
+            const fallback = modalState.mode === 'edit' ? 'Could not update Saved View.' : 'Could not save view.';
+            setModalError(records && typeof records.actionMessage === 'function'
+                ? records.actionMessage(err, fallback)
+                : fallback);
         } finally {
             modalState.saving = false;
             if (els.save) els.save.disabled = false;
@@ -305,7 +197,11 @@
             ? searchHash
             : (root.location ? root.location.hash : '');
         const route = typeof root.prksParseRoute === 'function' ? root.prksParseRoute(hash) : null;
-        const parsed = prksSearchDefinitionFromRoute(route);
+        const codec = root.prksSearchQueryCodec;
+        const parsed =
+            codec && typeof codec.definitionFromRoute === 'function'
+                ? codec.definitionFromRoute(route)
+                : { ok: false, unsavable: true, message: UNSAVABLE_MSG };
         if (!parsed || !parsed.ok) {
             const msg = (parsed && parsed.message) || UNSAVABLE_MSG;
             if (typeof root.prksAlertDialog === 'function') {
@@ -355,82 +251,14 @@
         }
     }
 
-    function savedViewActionMessage(err, fallback) {
-        const message = err && err.message != null ? String(err.message).trim() : '';
-        return message || fallback;
-    }
-
-    /**
-     * Confirm, recheck `still`, then delete. Success, cancel, a stale owner,
-     * and a failed delete stay distinct so the index can show only the failure.
-     */
-    async function confirmAndDelete(id, still) {
-        const ok =
-            typeof root.prksConfirmDestructive === 'function'
-                ? await root.prksConfirmDestructive({
-                      title: 'Delete Saved View?',
-                      message: 'Deleting this Saved View will not delete any files.',
-                      confirmLabel: 'Delete Saved View',
-                  })
-                : true;
-        if (!ok) return { ok: false, reason: 'cancelled' };
-        if (typeof still === 'function' && !still()) return { ok: false, reason: 'stale' };
-        try {
-            await root.deleteSavedView(id);
-        } catch (err) {
-            if (typeof still === 'function' && !still()) return { ok: false, reason: 'stale' };
-            return {
-                ok: false,
-                reason: 'failed',
-                message: savedViewActionMessage(err, 'Could not delete Saved View.'),
-            };
-        }
-        return { ok: true, reason: 'success' };
-    }
-
-    /**
-     * Index delete. Confirms, rechecks `still`, deletes, rechecks `still`,
-     * then navigates this tab to `#/views` so the index refetches. The
-     * refresh is the index hash on `tabId`. The focused location stays put.
-     * Cancel and a stale owner stay quiet. A failed delete returns its message.
-     */
-    async function prksDeleteSavedViewFromIndex(id, still, tabId) {
-        const outcome = await confirmAndDelete(id, still);
-        if (typeof still === 'function' && !still()) return { ok: false, reason: 'stale' };
-        if (!outcome.ok) return outcome;
-        if (typeof root.prksNavigate !== 'function') return { ok: false, reason: 'stale' };
-        root.prksNavigate('#/views', tabId ? { replace: true, tabId: tabId } : { replace: true });
-        return outcome;
-    }
-
-    /**
-     * Saved View detail delete. `still` is the owning surface's fence: a
-     * replaced owner does not delete after confirm, and a delete that already
-     * started does not navigate a pane that moved on.
-     */
-    async function prksDeleteSavedViewFromDetail(id, still, tabId) {
-        const outcome = await confirmAndDelete(id, still);
-        if (!outcome.ok) return;
-        if (typeof still === 'function' && !still()) return;
-        if (typeof root.prksNavigate === 'function') {
-            root.prksNavigate('#/views', tabId ? { replace: true, tabId: tabId } : { replace: true });
-        }
-    }
-
     function init() {
         bindModal();
     }
 
     const api = {
-        prksSearchDefinitionFromRoute: prksSearchDefinitionFromRoute,
-        prksSearchHashFromDefinition: prksSearchHashFromDefinition,
-        prksSearchOptionsFromDefinition: prksSearchOptionsFromDefinition,
-        prksSearchSummaryText: prksSearchSummaryText,
         prksOpenSavedViewModalFromCurrentSearch: prksOpenSavedViewModalFromCurrentSearch,
         prksOpenSavedViewModalForCurrentView: prksOpenSavedViewModalForCurrentView,
         prksOpenSavedViewModal: openModalWith,
-        prksDeleteSavedViewFromDetail: prksDeleteSavedViewFromDetail,
-        prksDeleteSavedViewFromIndex: prksDeleteSavedViewFromIndex,
         prksInitSavedViews: init,
     };
     Object.keys(api).forEach(function (k) {

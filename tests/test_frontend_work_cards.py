@@ -66,6 +66,8 @@ class FrontendWorkCardTests(unittest.TestCase):
         self.assertIn("function prksWorkBrowseModeToggleHtml", src)
         self.assertIn("function prksBindWorkBrowseMode", src)
         self.assertIn("function prksShowWorkThumbPreview", src)
+        self.assertIn("function prksWorkThumbFromHoverTarget", src)
+        self.assertIn("function prksWorkCardFromEventTarget", src)
         self.assertIn("prksForgetPreviewImgSrc", src)
         self.assertIn("function prksReleaseWorkThumbPreview", src)
         self.assertIn("function prksReleaseLazyWorkThumbs", src)
@@ -90,30 +92,76 @@ class FrontendWorkCardTests(unittest.TestCase):
         self.assertGreater(at, 0)
         window = app[max(0, at - 280) : at]
         self.assertNotIn("!sameFolderWorkspace && typeof window.prksReleaseWorkThumbPreview", window)
-        # Preserve path releases the preview on the main element before the card rewrite.
+        # Folder→Folder keeps the shell. Collection lifetime still follows the
+        # work/thumb fingerprint; Folder A→B preview dismiss is owned by the
+        # presentation boundary while the previous thumb is still connected.
         detail = _read(os.path.join(
             _PROJECT_DIR, "frontend-app", "src", "features", "folder-detail", "FolderDetailRoute.vue"))
-        release = detail.find("releaseOwnedThumbResources(main)")
-        rewrite = detail.find("el.innerHTML = collectionHtml.value")
-        self.assertGreater(release, 0)
-        self.assertGreater(rewrite, release)
-        self.assertIn("prksReleaseWorkThumbPreview", detail)
-        self.assertIn("prksReleaseLazyWorkThumbs", detail)
-        unmount = detail.find("onBeforeUnmount(() => {")
-        self.assertGreater(unmount, 0)
-        self.assertIn("releaseOwnedThumbResources", detail[unmount : unmount + 500])
+        self.assertIn("useWorkCardCollection(mainEl", detail)
+        self.assertIn("workCardCollectionFingerprint", detail)
+        self.assertIn("PrksWorkCard", detail)
+        self.assertNotIn("prksReleaseWorkThumbPreview", detail)
+        session = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "folder-detail", "session.ts"))
+        read_at = session.find("readRouteSurface(input.owner)")
+        present_at = session.find("presentRouteSurface({")
+        self.assertGreater(read_at, 0)
+        self.assertGreater(present_at, read_at)
+        self.assertIn("prksReleaseWorkThumbPreview", session[read_at:present_at])
+        self.assertIn("previous.params.folderId", session[read_at:present_at])
+        self.assertIn("previous.mounted", session[read_at:present_at])
+        self.assertIn("previous.generation", session[read_at:present_at])
+        self.assertIn("input.host.isConnected", session[read_at:present_at])
+        self.assertIn("input.host", session[read_at:present_at])
+        lifetime = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "components", "use-work-card-collection.ts"))
+        self.assertIn("flush: 'pre'", lifetime)
+        self.assertIn("flush: 'post'", lifetime)
+        self.assertNotIn("onBeforeUpdate", lifetime)
+        self.assertNotIn("onUpdated", lifetime)
+        self.assertIn("prksReleaseWorkThumbPreview", lifetime)
+        self.assertIn("function prksWorkThumbPreviewSourceConnected", src)
+        hover_fn = src.find("function prksWorkThumbFromHoverTarget")
+        hover_end = src.find("function prksWorkThumbPointerStillInside")
+        self.assertGreater(hover_fn, 0)
+        self.assertGreater(hover_end, hover_fn)
+        self.assertIn(
+            "t.closest('.work-card__thumb[data-prks-thumb-preview-kind]')",
+            src[hover_fn:hover_end],
+        )
+        self.assertNotIn("prksWorkThumbFromCard", src[hover_fn:hover_end])
+        self.assertNotIn("prksWorkThumbPreviewHoverArmed", src)
+        self.assertNotIn("function prksWorkCardPointerStillInside", src)
+        pointerout_at = src.find("'pointerout'")
+        pointerout_end = src.find("'focusout'", pointerout_at)
+        self.assertGreater(pointerout_at, 0)
+        self.assertGreater(pointerout_end, pointerout_at)
+        pointerout = src[pointerout_at:pointerout_end]
+        self.assertIn("prksWorkThumbFromHoverTarget", pointerout)
+        self.assertIn("prksWorkThumbPointerStillInside", pointerout)
+        self.assertNotIn("prksWorkCardFromNode", pointerout)
+        self.assertNotIn("prksWorkThumbFromCard", pointerout)
+        self.assertIn("prksReleaseLazyWorkThumbs", lifetime)
+        unmount = detail.find("onBeforeUnmount")
+        self.assertEqual(unmount, -1)
         recent = _read(os.path.join(
             _PROJECT_DIR, "frontend-app", "src", "features", "recent", "RecentRoute.vue"))
-        recent_release = recent.find("releaseOwnedThumbResources(root || collectionEl.value)")
-        recent_rewrite = recent.find("el.innerHTML = collectionHtml.value")
-        self.assertGreater(recent_release, 0)
-        self.assertGreater(recent_rewrite, recent_release)
-        self.assertIn("prksReleaseWorkThumbPreview", recent)
-        self.assertIn("prksReleaseLazyWorkThumbs", recent)
-        self.assertIn("if (!offlineCached && typeof window.prksInitLazyWorkThumbs", recent)
-        recent_unmount = recent.find("onBeforeUnmount(() => {")
-        self.assertGreater(recent_unmount, 0)
-        self.assertIn("releaseOwnedThumbResources", recent[recent_unmount : recent_unmount + 500])
+        self.assertIn("useWorkCardCollection(rootEl", recent)
+        self.assertIn("workCardCollectionFingerprint", recent)
+        self.assertIn("PrksWorkCard", recent)
+        self.assertIn("initWhen: () => !offlineCached.value", recent)
+        consumers = [
+            os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "search", "SearchResultsCollection.vue"),
+            os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "progress", "ProgressView.vue"),
+            os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "types", "TypeDetailRoute.vue"),
+            os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "people", "PersonDetailRoute.vue"),
+            os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "folder-library", "RecentlyAddedPane.vue"),
+        ]
+        for path in consumers:
+            src = _read(path)
+            self.assertIn("useWorkCardCollection", src, path)
+            self.assertIn("workCardCollectionFingerprint", src, path)
+            self.assertIn("source:", src, path)
 
     def test_saved_view_detail_exposes_browse_mode_toggle(self):
         sv = _read(os.path.join(
@@ -123,10 +171,13 @@ class FrontendWorkCardTests(unittest.TestCase):
         self.assertIn("prksBindWorkBrowseMode", sv)
 
     def test_folder_files_and_recently_added_use_browse_collection(self):
-        src = _read(_FOLDERS)
-        self.assertIn("prksWorkBrowseCollectionClass", src)
-        self.assertIn("prksWorkBrowseModeToggleHtml", src)
-        self.assertIn("prks-work-browse-mode-recently-added", src)
+        route = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "folder-library", "FolderLibraryRoute.vue"))
+        pane = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "folder-library", "RecentlyAddedPane.vue"))
+        self.assertIn("prksWorkBrowseCollectionClass", pane)
+        self.assertIn("prksWorkBrowseModeToggleHtml", route)
+        self.assertIn("prks-work-browse-mode-recently-added", route)
         detail = _read(os.path.join(
             _PROJECT_DIR, "frontend-app", "src", "features", "folder-detail", "FolderDetailRoute.vue"))
         self.assertIn("prks-work-browse-mode-folder-files", detail)
@@ -146,10 +197,13 @@ class FrontendWorkCardTests(unittest.TestCase):
         self.assertIn("-webkit-line-clamp: 1", css[list_at : list_at + 120])
 
     def test_recently_added_uses_concise_date_helper(self):
-        src = _read(_FOLDERS)
-        self.assertIn("function prksRecentlyAddedDateLabel", src)
-        self.assertIn("Added ${dateLabel}", src)
-        self.assertNotIn("Added: ${dateStr}", src)
+        folders = _read(_FOLDERS)
+        self.assertIn("function prksRecentlyAddedDateLabel", folders)
+        pane = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "folder-library", "RecentlyAddedPane.vue"))
+        self.assertIn("Added ${dateLabel}", pane)
+        self.assertNotIn("Added: ${dateStr}", pane)
+        self.assertNotIn("Added: ${dateLabel}", pane)
 
     def test_empty_folder_library_exposes_new_folder_action(self):
         src = _read(_FOLDERS)
@@ -161,25 +215,34 @@ class FrontendWorkCardTests(unittest.TestCase):
         self.assertIn("New folder", block)
 
     def test_empty_recently_added_exposes_new_file_action(self):
-        src = _read(_FOLDERS)
-        at = src.find("function prksRenderFolderLibraryRecentlyAdded")
-        self.assertNotEqual(at, -1)
-        # Bounded by the function, not by a character count: a comment added
-        # above the branch should not be able to hide it from this check.
-        end = src.index("\nasync function prksLoadFolderLibraryRecentlyAdded(", at)
-        block = src[at:end]
-        self.assertIn("No files in the library yet.", block)
-        self.assertIn("openModal(", block)
-        self.assertIn("work-modal", block)
-        self.assertIn("No files match your search.", block)
-        # Filtered empty state (a search with no matches) is its own statement,
-        # distinct from the empty-library branch — it must not also carry the
-        # New File creation CTA.
-        filtered_line = next(
-            line for line in block.splitlines() if "No files match your search." in line
+        pane = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "folder-library", "RecentlyAddedPane.vue"))
+        self.assertIn("No files in the library yet.", pane)
+        self.assertIn("openWorkModal", pane)
+        self.assertIn("work-modal", _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "folder-library", "intents.ts")))
+        self.assertIn("No files match your search.", pane)
+        self.assertIn('data-prks-role="new-work-from-recently-added"', pane)
+        filtered = next(
+            line for line in pane.splitlines() if "No files match your search." in line
         )
-        self.assertNotIn("openModal", filtered_line)
-        self.assertNotIn("work-modal", filtered_line)
+        self.assertNotIn("openModal", filtered)
+        self.assertNotIn("work-modal", filtered)
+        self.assertNotIn("new-work-from-recently-added", filtered)
+
+    def test_vue_work_card_owns_card_markup(self):
+        vue = _read(os.path.join(_PROJECT_DIR, "frontend-app", "src", "components", "PrksWorkCard.vue"))
+        cards = _read(_WORK_CARDS)
+        self.assertNotIn("function prksWorkCardHtml", cards)
+        self.assertIn('class="work-card__link"', vue)
+        self.assertIn("data-work-id", vue)
+        self.assertIn("work-card__meta", vue)
+        self.assertIn("work-card__context", vue)
+        self.assertIn("work-card__badges", vue)
+        self.assertIn("work-card__thumb--empty", vue)
+        self.assertIn("work-card__thumb--loading", vue)
+        self.assertIn('alt=""', vue)
+        self.assertNotIn("function prksWorkCardHtml", vue)
 
 
 if __name__ == "__main__":

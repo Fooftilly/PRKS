@@ -1,8 +1,7 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readRouteSurface } from '../../route-surface/lifecycle'
+import { dismissRouteSurface, readRouteSurface } from '../../route-surface/lifecycle'
 import {
-  dismissPositions,
   POSITIONS_RETAIN_SURFACE_KEY,
   presentPositionDetail,
   presentPositionsIndex,
@@ -14,16 +13,12 @@ afterEach(() => {
   resetPositionsSessionForTests()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
-  delete window.prksVuePresentPositionsIndex
-  delete window.prksVuePresentPositionDetail
-  delete window.prksVueDismissPositions
+  delete window.prksVuePresentRoute
+  delete window.prksVueDismissRoute
   delete window.prksPageHeaderIconHtml
   delete window.prksIcon
   delete window.prksPaintScopeHost
   delete window.prksRefreshIcons
-  delete window.prksRelSummaryHtml
-  delete window.prksResearchSectionHeadHtml
-  delete window.prksResearchIndexRowHtml
   delete window.prksResearchMarkdownHtml
   delete window.prksEscapeHtml
 })
@@ -49,15 +44,6 @@ function paintHelpers(): void {
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
   window.prksResearchMarkdownHtml = (text) => `<p>${text || ''}</p>`
-  window.prksRelSummaryHtml = ({ parts }) =>
-    `<p class="prks-rel-summary">${(parts || []).filter(Boolean).join(' · ')}</p>`
-  window.prksResearchSectionHeadHtml = (title, opts) => {
-    const count =
-      opts?.count != null ? `<span class="research-entity__section-count">${opts.count}</span>` : ''
-    return `<div class="research-entity__section-head"><h3 id="${opts?.headingId || ''}">${title}</h3>${count}</div>`
-  }
-  window.prksResearchIndexRowHtml = (opts) =>
-    `<a class="prks-list-row prks-research-row" href="${opts.href}"><span class="prks-research-row__title">${opts.title}</span></a>`
 }
 
 describe('Positions route bridge', () => {
@@ -131,7 +117,7 @@ describe('Positions route bridge', () => {
       items: [{ id: 'a', name: 'A', description: '' }],
       generation: 2,
     })
-    dismissPositions(pane)
+    dismissRouteSurface(pane)
     expect(el.querySelector('[data-prks-positions-index-view]')).toBeNull()
     presentPositionsIndex({
       owner: pane,
@@ -352,7 +338,7 @@ describe('Positions route bridge', () => {
     expect(cleanups.size).toBe(1)
     expect(routeHost.textContent).toContain('Kept')
 
-    dismissPositions(pane)
+    dismissRouteSurface(pane)
     expect(routeHost.querySelector('[data-prks-positions-index-view]')).toBeNull()
     expect(readRouteSurface(pane)?.mounted).toBe(false)
     contentDiv.innerHTML = '<p><button type="button" id="prks-route-retry">Retry</button></p>'
@@ -382,8 +368,7 @@ describe('Positions route bridge', () => {
       shell: true,
     }
     registerPositionsBridge(window)
-    expect(window.prksVuePresentPositionsIndex).toBeTypeOf('function')
-    expect(window.prksVuePresentPositionDetail).toBeTypeOf('function')
+    expect(window.prksVuePresentRoute).toBeTypeOf('function')
     expect(el.textContent).toContain('Early')
     expect(decoy.textContent).not.toContain('Early')
     expect(readRouteSurface(pane)?.canonicalHash).toBe('#/positions')
@@ -407,7 +392,7 @@ describe('Positions route bridge', () => {
       items: [{ id: '2', name: 'Beta', description: '' }],
       generation: 1,
     })
-    dismissPositions(a)
+    dismissRouteSurface(a)
     expect(aHost.querySelector('[data-prks-positions-index-view]')).toBeNull()
     expect(bHost.textContent).toContain('Beta')
   })

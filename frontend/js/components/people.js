@@ -138,11 +138,6 @@ window.safeHttpUrl = safeHttpUrl;
  * bind. */
 const PERSON_MUTATION_ROLE = 'person-mutation-control';
 
-/* Creating a Person is durable-first, so its controls are NEVER disabled: the
- * identity is chosen on this device and the record is complete the moment it is
- * written locally. */
-const PERSON_CREATE_ROLE = 'person-create-control';
-
 /* Editing a Person's PROFILE is durable too, so "Edit profile" is never
  * disabled: the fields are field-scoped operations that queue offline exactly
  * as they send online. Group membership became durable with the Person Group
@@ -159,10 +154,10 @@ const PERSON_EDIT_ROLE = 'person-edit-control';
  * credited on a file is refused -- and has never been about connectivity. */
 const PERSON_DELETE_ROLE = 'person-delete-control';
 
-/* Group chips keep this role for styling/test identification only: since Person
- * Groups became offline-capable they are ordinary links and are deliberately
- * absent from PERSON_CONTROL_SELECTOR. */
-const PERSON_GROUP_LINK_ROLE = 'person-group-link';
+/* Vue People routes own `data-prks-role="person-create-control"` and
+ * `person-group-link` markup. Classic people.js no longer declares those role
+ * constants. Group chips remain ordinary links and stay absent from
+ * PERSON_CONTROL_SELECTOR. */
 const PERSON_CONTROL_SELECTOR = '[data-prks-role="' + PERSON_MUTATION_ROLE + '"]';
 /* The profile editor's own inputs: disabled while offline so a draft is held
  * rather than silently discarded. Cancel is deliberately excluded so the user
@@ -277,9 +272,8 @@ function prksBindPersonOfflineState(ctx, container) {
 function renderPeopleListUnavailable(container, ctx) {
     if (!container) return;
     const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
-    if (owner && typeof prksPresentVuePeople === 'function') {
-        prksPresentVuePeople(owner, container, {
-            feature: 'people',
+    if (owner && typeof prksPresentVueRoute === 'function') {
+        prksPresentVueRoute(owner, container, 'people', {
             availability: 'unavailable',
             items: [],
             generation: owner.generation,
@@ -601,86 +595,6 @@ function personReferenceCount(person) {
     return n;
 }
 
-/** Metadata block for person list rows (no title). */
-function buildPersonListDetailsHtml(p, options = {}) {
-    const showGroups = options.showGroups !== false;
-    const roleFilter = options.roleFilter || null;
-    const aboutPreview = truncatePersonPreviewText(p.about || '', 180);
-
-    let body = '';
-    if (aboutPreview) {
-        body += `<p class="meta-row person-card-about">${escapeHtmlPerson(aboutPreview)}</p>`;
-    }
-    const metaBits = [];
-    if (showGroups && Array.isArray(p.groups) && p.groups.length > 0) {
-        const tags = p.groups
-            .map(
-                (g) =>
-                    `<a class="tag" data-prks-role="${PERSON_GROUP_LINK_ROLE}" href="#/people/groups/${encodeURIComponent(String(g.id || ''))}">${escapeHtmlPerson(g.name)}</a>`
-            )
-            .join(' ');
-        metaBits.push(`<span class="prks-people-list__groups">${tags}</span>`);
-    }
-    const assignedRoles = Array.isArray(p.assigned_roles) ? p.assigned_roles : [];
-    const visibleRoles = roleFilter
-        ? assignedRoles.filter((role) => role !== roleFilter)
-        : assignedRoles;
-    if (visibleRoles.length) {
-        metaBits.push(`<span class="prks-people-list__roles">${visibleRoles.map(escapeHtmlPerson).join(' · ')}</span>`);
-    }
-    if (metaBits.length) {
-        body += `<p class="meta-row prks-people-list__meta-line">${metaBits.join('')}</p>`;
-    }
-    return body;
-}
-
-/** Inner HTML for a person list card (legacy card layout). */
-function buildPersonListCardContentHtml(p) {
-    const name = `${p.first_name || ''} ${p.last_name || ''}`.trim();
-    return `<div class="card-title">${escapeHtmlPerson(name)}</div>${buildPersonListDetailsHtml(p, { showGroups: true })}`;
-}
-
-function buildPersonListRowHtml(p, options = {}) {
-    const showGroups = options.showGroups !== false;
-    const removeButton = options.removeButton === true;
-    const name = `${p.first_name || ''} ${p.last_name || ''}`.trim() || 'Person';
-    const pidEnc = encodeURIComponent(String(p.id || ''));
-    const hash = `#/people/${pidEnc}`;
-    const idAttr = escapeHtmlPerson(String(p.id || ''));
-    const removableClass = removeButton ? ' prks-people-list__row--removable' : '';
-    const removeHtml = removeButton
-        ? `<button type="button" class="prks-people-list__remove" data-remove-member="${escapeHtmlPerson(p.id)}" aria-label="Remove from group" title="Remove from group">&times;</button>`
-        : '';
-    const details = buildPersonListDetailsHtml(p, { showGroups, roleFilter: options.roleFilter });
-    const detailsBlock = details
-        ? `<div class="prks-people-list__details">${details}</div>`
-        : '';
-    const lifespan = personLifespanDisplay(p);
-    const lifespanHtml = lifespan
-        ? `<span class="prks-people-list__lifespan">${escapeHtmlPerson(lifespan)}</span>`
-        : '';
-
-    return `
-        <div class="prks-people-list__row${removableClass}" role="listitem" data-person-id="${idAttr}">
-            ${removeHtml}
-            <span class="prks-people-list__toggle-spacer" aria-hidden="true"></span>
-            <div class="prks-people-list__body">
-                <a class="prks-people-list__link" href="${hash}">
-                    <span class="prks-people-list__icon">${typeof prksIcon === 'function' ? prksIcon('user', { size: 16 }) : ''}</span>
-                    <span class="prks-people-list__title-row">
-                    <span class="prks-people-list__title">${escapeHtmlPerson(name)}</span>
-                    ${lifespanHtml}
-                    </span>
-                </a>
-                ${detailsBlock}
-            </div>
-        </div>`;
-}
-
-window.buildPersonListRowHtml = buildPersonListRowHtml;
-window.buildPersonListCardContentHtml = buildPersonListCardContentHtml;
-window.buildPersonListDetailsHtml = buildPersonListDetailsHtml;
-
 function prksPersonViewInGraph() {
     const p = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('person') : null;
     if (!p || !p.id) return;
@@ -692,148 +606,6 @@ function prksPersonViewInGraph() {
 }
 window.prksPersonViewInGraph = prksPersonViewInGraph;
 
-const PEOPLE_LIST_ROLE_LABELS = {
-    Author: 'Authors',
-    Editor: 'Editors',
-    Reviewer: 'Reviewers',
-    Translator: 'Translators',
-    Introduction: 'Introduction writers',
-    Foreword: 'Foreword writers',
-    Afterword: 'Afterword writers'
-};
-
-function filterPersonsByAssignedRole(persons, roleType) {
-    if (!roleType) return persons || [];
-    return (persons || []).filter(
-        p => Array.isArray(p.assigned_roles) && p.assigned_roles.includes(roleType)
-    );
-}
-
-const PRKS_PEOPLE_LIBRARY_FILTER_KEY = 'prks-people-library-filter';
-
-function prksPeopleLibraryFilterFromStorage() {
-    try {
-        return sessionStorage.getItem(PRKS_PEOPLE_LIBRARY_FILTER_KEY) || '';
-    } catch (_e) {
-        return '';
-    }
-}
-
-function prksPeopleListMatchesQuery(p, query) {
-    const q = String(query || '').trim().toLowerCase();
-    if (!q || !p) return true;
-    const name = `${p.first_name || ''} ${p.last_name || ''}`.trim().toLowerCase();
-    const hay = [
-        name,
-        p.aliases,
-        p.about,
-        ...(Array.isArray(p.assigned_roles) ? p.assigned_roles : []),
-        ...(Array.isArray(p.groups) ? p.groups.map((g) => g && g.name) : []),
-    ];
-    return hay.some((v) => v != null && String(v).toLowerCase().includes(q));
-}
-
-function prksPeopleListEmptyHtml(persons, filterQuery, roleFilter) {
-    const q = String(filterQuery || '').trim();
-    const all = Array.isArray(persons) ? persons : [];
-    const roleFiltered = filterPersonsByAssignedRole(all, roleFilter);
-    if (roleFilter && roleFiltered.length === 0) {
-        return `<p class="prks-inline-message prks-people-list__empty">No people with the <strong>${escapeHtmlPerson(roleFilter)}</strong> role yet. Use <strong>Link Person to Work</strong> in the ribbon to assign roles.</p>`;
-    }
-    if (q) {
-        return '<p class="prks-inline-message prks-people-list__empty">No people match your search.</p>';
-    }
-    return '<div class="prks-people-list__empty-state"><p class="prks-inline-message prks-people-list__empty">No people yet.</p><button type="button" class="prks-btn prks-btn--primary" data-prks-role="' + PERSON_CREATE_ROLE + '" onclick="openModal(\'person-modal\')">New Person</button></div>';
-}
-
-function prksPeopleListInnerHtml(persons, filterQuery, roleFilter) {
-    const all = Array.isArray(persons) ? persons : [];
-    let list = filterPersonsByAssignedRole(all, roleFilter);
-    const q = String(filterQuery || '').trim();
-    if (q) {
-        list = list.filter((p) => prksPeopleListMatchesQuery(p, q));
-    }
-    if (!list.length) {
-        return prksPeopleListEmptyHtml(all, filterQuery, roleFilter);
-    }
-    return `<div class="prks-people-list" role="list">${list.map((p) => buildPersonListRowHtml(p, { roleFilter })).join('')}</div>`;
-}
-
-function prksRerenderPeopleListOnly(root) {
-    const st = root && root.__prksPeopleLibraryState;
-    if (!st) return;
-    const host = root.querySelector('[data-prks-people-list-host]');
-    if (host) {
-        host.innerHTML = prksPeopleListInnerHtml(st.persons, st.filterQuery, st.roleFilter);
-        // Rerendered rows carry fresh Group chips, so re-apply connectivity
-        // state to them.
-        prksApplyPersonOfflineState(host);
-        if (typeof prksRefreshIcons === 'function') prksRefreshIcons(host);
-    }
-    const roleFiltered = filterPersonsByAssignedRole(st.persons, st.roleFilter);
-    const filterQ = String(st.filterQuery || '').trim();
-    let shownCount = roleFiltered.length;
-    if (filterQ) {
-        shownCount = roleFiltered.filter((p) => prksPeopleListMatchesQuery(p, filterQ)).length;
-    }
-    if (typeof prksPaintScopeHost === 'function') {
-        prksPaintScopeHost(root, {
-            shown: shownCount,
-            total: roleFiltered.length,
-            filter: filterQ,
-            label: st.roleFilter ? String(st.roleFilter) : 'People',
-        });
-    }
-}
-
-function prksSyncPeopleLibrarySearchClear(input, clearBtn) {
-    if (!clearBtn) return;
-    const hasValue = Boolean(String((input && input.value) || '').trim());
-    clearBtn.hidden = !hasValue;
-    clearBtn.disabled = !hasValue;
-}
-
-function prksApplyPeopleLibrarySearchFilter(input) {
-    const root = input && input.closest('.prks-people-library');
-    const st = root && root.__prksPeopleLibraryState;
-    if (!st || !input) return;
-    const q = String(input.value || '');
-    st.filterQuery = q;
-    try {
-        sessionStorage.setItem(PRKS_PEOPLE_LIBRARY_FILTER_KEY, q);
-    } catch (_e) {
-        /* ignore */
-    }
-    prksRerenderPeopleListOnly(root);
-}
-
-function prksBindPeopleLibrarySearch(root) {
-    if (!root) return;
-    const input = root.querySelector('#prks-people-library-search');
-    const clearBtn = root.querySelector('#prks-people-library-search-clear');
-    if (!input || input.dataset.bound === '1') return;
-    input.dataset.bound = '1';
-    let debounceTimer;
-    const scheduleFilter = () => {
-        window.clearTimeout(debounceTimer);
-        debounceTimer = window.setTimeout(() => prksApplyPeopleLibrarySearchFilter(input), 150);
-    };
-    input.addEventListener('input', () => {
-        prksSyncPeopleLibrarySearchClear(input, clearBtn);
-        scheduleFilter();
-    });
-    if (clearBtn && clearBtn.dataset.bound !== '1') {
-        clearBtn.dataset.bound = '1';
-        clearBtn.addEventListener('click', () => {
-            input.value = '';
-            prksSyncPeopleLibrarySearchClear(input, clearBtn);
-            input.focus();
-            prksApplyPeopleLibrarySearchFilter(input);
-        });
-    }
-    prksSyncPeopleLibrarySearchClear(input, clearBtn);
-}
-
 /**
  * `ctx` is the owning TabContext: the list subscribes to connectivity so its
  * creation control and Group chips follow live state, and that subscription is
@@ -842,9 +614,8 @@ function prksBindPeopleLibrarySearch(root) {
 function renderPeopleList(ctx, persons, container, options = {}) {
     if (!container) return;
     const roleFilter = options.roleFilter || '';
-    if (typeof prksPresentVuePeople === 'function') {
-        prksPresentVuePeople(ctx, container, {
-            feature: 'people',
+    if (typeof prksPresentVueRoute === 'function') {
+        prksPresentVueRoute(ctx, container, 'people', {
             availability: 'ready',
             items: Array.isArray(persons) ? persons : [],
             roleFilter: roleFilter,
@@ -1032,6 +803,42 @@ const PRKS_PERSON_DRAFT_FIELDS = {
     'pd-links-other': 'links_other',
 };
 
+/**
+ * Person profile leave answer. Captures the open editor and asks
+ * prksPersonProfileDraftIsDirty. The styled confirm stays Keep editing /
+ * Discard changes. Retires when the Vue Person surface registers this probe.
+ */
+function prksAssessPersonProfileLeave(ctx) {
+    const prevRoute = ctx && ctx.lastResolvedRoute;
+    if (!ctx || !ctx.ui || !prevRoute || prevRoute.name !== 'person' || !ctx.ui.personDetailEditing) {
+        return null;
+    }
+    const person = ctx.getEntity ? ctx.getEntity('person') : null;
+    const draft = ctx.ui.personProfileDraft;
+    if (!(person && draft && String(draft.personId) === String(person.id))) return null;
+    if (
+        typeof prksRightPanelOwnedBy === 'function' &&
+        prksRightPanelOwnedBy(ctx) &&
+        typeof prksSyncPersonProfileDraftFromEditor === 'function'
+    ) {
+        const panel = document.getElementById('panel-content');
+        const editor = panel && panel.querySelector('.person-panel-edit');
+        if (editor) prksSyncPersonProfileDraftFromEditor(ctx, editor, person.id, ctx.generation);
+    }
+    if (typeof prksPersonProfileDraftIsDirty !== 'function' || !prksPersonProfileDraftIsDirty(ctx, person)) {
+        return null;
+    }
+    if (typeof prksConfirmUnsavedRouteLeave !== 'function') {
+        return { status: 'rejected-unsaved-edit', feature: 'person-profile' };
+    }
+    return prksConfirmUnsavedRouteLeave({
+        title: 'Discard profile changes?',
+        message: 'Your unsaved Person profile changes will be discarded.',
+    }).then(function (ok) {
+        return ok ? null : { status: 'rejected-unsaved-edit', feature: 'person-profile' };
+    });
+}
+
 function prksSyncPersonProfileDraftFromEditor(ctx, editor, personId, generation) {
     const draft = ctx && ctx.ui && ctx.ui.personProfileDraft;
     if (!prksPersonProfileEditorCurrent(ctx, generation, personId, draft, editor)) return false;
@@ -1101,6 +908,14 @@ window.prksPersonProfileDraftIsDirty = prksPersonProfileDraftIsDirty;
 window.prksPersonProfileEditSessionCurrent = prksPersonProfileEditSessionCurrent;
 window.prksPersonProfileEditorCurrent = prksPersonProfileEditorCurrent;
 window.prksSyncPersonProfileDraftFromEditor = prksSyncPersonProfileDraftFromEditor;
+window.prksAssessPersonProfileLeave = prksAssessPersonProfileLeave;
+if (typeof prksTabLeave !== 'undefined' && prksTabLeave && typeof prksTabLeave.registerProbe === 'function') {
+    prksTabLeave.registerProbe({
+        id: 'person-profile',
+        order: 20,
+        assess: prksAssessPersonProfileLeave,
+    });
+}
 
 async function deletePerson(explicitCtx, explicitGeneration) {
     const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
@@ -1253,69 +1068,6 @@ function renderPersonProfileDetailsSidebarHtml(person) {
                 </div>
             </details>
             <p class="route-sidebar__action"><a href="#/people" class="route-sidebar__link">All people</a></p>
-        </div>`;
-}
-
-function renderPersonProfileEditFormHtml(person, draft) {
-    if (!person) return '';
-    const id = escapeHtmlPerson(person.id);
-    const state = draft && String(draft.personId) === String(person.id) ? draft : prksPersonDraftFromEntity(person);
-    return `
-        <div class="doc-meta-card person-panel-edit" data-person-edit-id="${id}">
-            <div class="card-heading-row card-heading-row--wrap">
-                <h3>Edit profile</h3>
-            </div>
-            <div class="form-pane person-edit-form person-edit-form--panel">
-                <section class="person-edit-section" aria-labelledby="person-edit-identity-heading">
-                    <h4 id="person-edit-identity-heading">Identity</h4>
-                    <label for="pd-first-name">First name</label>
-                    <input type="text" id="pd-first-name" value="${escapeHtmlPerson(state.first_name)}">
-                    <label for="pd-last-name">Last name</label>
-                    <input type="text" id="pd-last-name" value="${escapeHtmlPerson(state.last_name)}">
-                    <label for="pd-aliases">Aliases</label>
-                    <input type="text" id="pd-aliases" value="${escapeHtmlPerson(state.aliases)}">
-                </section>
-                <section class="person-edit-section" aria-labelledby="person-edit-biography-heading">
-                    <h4 id="person-edit-biography-heading">Biography</h4>
-                    <label for="pd-about">About / expertise</label>
-                    <textarea id="pd-about" class="textarea-sm">${escapeHtmlPerson(state.about)}</textarea>
-                </section>
-                <section class="person-edit-section" aria-labelledby="person-edit-dates-heading">
-                    <h4 id="person-edit-dates-heading">Dates</h4>
-                    <div class="form-grid-2 form-grid-2--compact">
-                        <div><label for="pd-birth-date">Birth date</label><input type="text" id="pd-birth-date" placeholder="dd/mm/yyyy or yyyy" autocomplete="off" value="${escapeHtmlPerson(state.birth_date)}"></div>
-                        <div><label for="pd-death-date">Date of death</label><input type="text" id="pd-death-date" placeholder="dd/mm/yyyy or yyyy" autocomplete="off" value="${escapeHtmlPerson(state.death_date)}"></div>
-                    </div>
-                </section>
-                <section class="person-edit-section" aria-labelledby="person-edit-portrait-heading">
-                    <h4 id="person-edit-portrait-heading">Portrait</h4>
-                    <label for="pd-image-url">Portrait image URL</label>
-                    <input type="url" id="pd-image-url" value="${escapeHtmlPerson(state.image_url)}">
-                </section>
-                <section class="person-edit-section" aria-labelledby="person-edit-references-heading">
-                    <h4 id="person-edit-references-heading">References</h4>
-                    <label for="pd-link-wikipedia">Wikipedia</label>
-                    <input type="url" id="pd-link-wikipedia" value="${escapeHtmlPerson(state.link_wikipedia)}">
-                    <label for="pd-link-stanford">Stanford Encyclopedia of Philosophy</label>
-                    <input type="url" id="pd-link-stanford" value="${escapeHtmlPerson(state.link_stanford_encyclopedia)}">
-                    <label for="pd-link-iep">Internet Encyclopedia of Philosophy</label>
-                    <input type="url" id="pd-link-iep" value="${escapeHtmlPerson(state.link_iep)}">
-                    <label for="pd-links-other">Other links</label>
-                    <textarea id="pd-links-other" placeholder="One URL per line, or [Title](https://...)" class="textarea-sm">${escapeHtmlPerson(state.links_other)}</textarea>
-                </section>
-                <section class="person-edit-section" aria-labelledby="person-edit-groups-heading">
-                    <h4 id="person-edit-groups-heading">Groups</h4>
-                    <fieldset class="person-groups-fieldset">
-                        <legend class="sr-only">Groups</legend>
-                        <p class="meta-row">Search for a group, pick from the list, or type a new name and <strong>Add</strong> to create a top-level group. Names are unique. <a href="#/people/groups">Browse groups</a>.</p>
-                        <div id="pd-group-chips" class="tag-cloud person-groups-fieldset__chips"></div>
-                        <label for="pd-group-search">Add group</label>
-                        <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell"><div class="tag-add-shell__field">${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}<input type="text" id="pd-group-search" class="tag-add-shell__input" placeholder="Search or type new group name…" autocomplete="off" aria-label="Search group to add"></div><input type="hidden" id="pd-group-pick-id" value=""><div id="pd-group-results" class="combobox-results combobox-results--tag-panel hidden"></div></div>
-                        <button type="button" class="prks-btn prks-btn--primary person-groups-fieldset__action" id="pd-group-add-btn">Add group</button>
-                    </fieldset>
-                </section>
-            </div>
-            <div class="form-actions prks-form-actions--split person-edit-footer"><button type="button" data-prks-person-cancel onclick="closePersonProfileEdit()" class="prks-btn prks-btn--secondary">Cancel</button><button type="button" id="pd-save-btn" class="prks-btn prks-btn--primary" onclick="savePersonProfile('${id}')">Save profile</button></div>
         </div>`;
 }
 
@@ -1906,9 +1658,8 @@ function renderPersonDetails(ctx, person, container) {
     const route = ctx && (ctx.lastResolvedRoute || ctx.route);
     const personId = (person && person.id) || (route && route.params && route.params.personId) || '';
     const view = person ? prksPersonViewRecord(ctx, person) : null;
-    if (typeof prksPresentVuePeople === 'function') {
-        prksPresentVuePeople(ctx, container, {
-            feature: 'person',
+    if (typeof prksPresentVueRoute === 'function') {
+        prksPresentVueRoute(ctx, container, 'person', {
             availability: person ? 'ready' : 'not-found',
             person: view,
             personId: personId ? String(personId) : '',

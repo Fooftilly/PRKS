@@ -104,16 +104,6 @@
       "output_alias": "folder_count",
       "aggregate": "COUNT",
       "fingerprint": "8425f27eb26a"
-    },
-    {
-      "issue": 141,
-      "function": "list_concepts",
-      "path": "backend/research_network.py",
-      "outer": "concepts c",
-      "inner": "concept_parents",
-      "output_alias": "subconcept_count",
-      "aggregate": "COUNT",
-      "fingerprint": "5f6f1d5ff4da"
     }
   ]
 }

@@ -1132,6 +1132,48 @@
         return runtime;
     }
 
+    /**
+     * PDF pending-sync leave answer. Reports the existing runtime flag and,
+     * only when this owner is actually leaving its Work route, asks with the
+     * one native confirm. Draft probes are separate and run after this one.
+     * Retires when the Vue PDF adapter registers this probe itself.
+     */
+    function prksAssessPendingPdfSyncLeave(ctx, nextHash) {
+        const prevRoute = ctx && ctx.lastResolvedRoute;
+        const parse = typeof root.prksParseRoute === 'function' ? root.prksParseRoute : null;
+        const route = parse ? parse(nextHash || '#/folders') : null;
+        const leavingWorkPage = !!(
+            prevRoute &&
+            prevRoute.name === 'work' &&
+            route &&
+            route.canonicalHash !== prevRoute.canonicalHash
+        );
+        const pendingFn =
+            typeof root.prksHasPendingWorkAnnotationSync === 'function'
+                ? root.prksHasPendingWorkAnnotationSync
+                : prksHasPendingWorkAnnotationSync;
+        if (!leavingWorkPage || !pendingFn(ctx)) return null;
+        const ask = typeof window !== 'undefined' && window.confirm ? window.confirm : root.confirm;
+        if (typeof ask !== 'function') {
+            return { status: 'rejected-pending-pdf-sync', feature: 'pdf-sync' };
+        }
+        const ok = ask(
+            'PDF annotation sync still running. Leave page before all changes save to server?'
+        );
+        if (!ok) return { status: 'rejected-pending-pdf-sync', feature: 'pdf-sync' };
+        return null;
+    }
+
+    function prksInstallPdfLeaveProbe(api) {
+        const target = api || root.prksTabLeave;
+        if (!target || typeof target.registerProbe !== 'function') return;
+        target.registerProbe({
+            id: 'pdf-sync',
+            order: 10,
+            assess: prksAssessPendingPdfSyncLeave,
+        });
+    }
+
     function prksHasPendingWorkAnnotationSync(ctx) {
         if (ctx && typeof ctx.getResource === 'function') {
             const pdf = ctx.getResource('pdf');
@@ -1156,6 +1198,8 @@
         prksPdfPersistenceSetupEligible: prksPdfPersistenceSetupEligible,
         prksInstallPdfAnnotationPersistenceIfCurrent: prksInstallPdfAnnotationPersistenceIfCurrent,
         prksHasPendingWorkAnnotationSync: prksHasPendingWorkAnnotationSync,
+        prksAssessPendingPdfSyncLeave: prksAssessPendingPdfSyncLeave,
+        prksInstallPdfLeaveProbe: prksInstallPdfLeaveProbe,
         prksEmptyPdfAnnotationCache: emptyAnnotationCache,
         prksPdfSearchStill: prksPdfSearchStill,
         bindPdfSurfaceSearch: bindPdfSurfaceSearch,
@@ -1172,4 +1216,5 @@
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = api;
     }
+    prksInstallPdfLeaveProbe();
 })(typeof window !== 'undefined' ? window : globalThis);

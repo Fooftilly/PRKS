@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
+import PrksLinkButton from '../../components/PrksLinkButton.vue'
 import { usePendingAction } from '../../route-surface/pending-action'
 import SearchResultsCollection from '../search/SearchResultsCollection.vue'
 import type { SavedViewIntents } from './intents'
@@ -14,6 +16,7 @@ const props = defineProps<{
 const { actionBusy, withBusy } = usePendingAction()
 const rootEl = ref<HTMLElement | null>(null)
 const modeHost = ref<HTMLElement | null>(null)
+const deleteError = ref('')
 const view = computed(() => props.projection.view)
 
 function edit(): void {
@@ -24,11 +27,9 @@ function remove(): void {
   const current = view.value
   if (!current) return
   void withBusy('delete', async () => {
-    try {
-      await props.intents.remove(current.id)
-    } catch {
-      /* Busy clears in finally. The delete wrapper keeps its own error. */
-    }
+    const outcome = await props.intents.remove(current.id)
+    if (outcome.status === 'error') deleteError.value = outcome.message
+    else if (outcome.status === 'success') deleteError.value = ''
   })
 }
 
@@ -54,8 +55,8 @@ watch(() => props.projection.generation, paintMode, { flush: 'post' })
         </div>
         <div class="page-header__actions">
           <div ref="modeHost" class="work-html-slot" data-prks-saved-view-mode-host></div>
-          <a class="prks-btn prks-btn--secondary" :href="projection.searchHash">Open as Search</a>
-          <button id="prks-saved-view-edit" type="button" class="prks-btn prks-btn--secondary" @click="edit">Edit</button>
+          <PrksLinkButton :href="projection.searchHash">Open as Search</PrksLinkButton>
+          <PrksButton id="prks-saved-view-edit" @click="edit">Edit</PrksButton>
           <PrksButton
             id="prks-saved-view-delete"
             variant="danger"
@@ -69,12 +70,21 @@ watch(() => props.projection.generation, paintMode, { flush: 'post' })
         </div>
       </div>
     </div>
+    <PrksInlineMessage v-if="deleteError" tone="error" status data-sv-delete-error>
+      {{ deleteError }}
+    </PrksInlineMessage>
     <SearchResultsCollection :projection="projection.results" />
+  </div>
+  <div v-else-if="projection.availability === 'error'" data-prks-saved-view-load-error>
+    <div class="prks-page-header page-header">
+      <h2 class="prks-page-title">Could not load Saved View.</h2>
+    </div>
+    <p class="meta-row"><PrksLinkButton href="#/views">Back to Saved Views</PrksLinkButton></p>
   </div>
   <div v-else data-prks-saved-view-not-found>
     <div class="prks-page-header page-header">
       <h2 class="prks-page-title">Saved View not found.</h2>
     </div>
-    <p class="meta-row"><a class="prks-btn prks-btn--secondary" href="#/views">Back to Saved Views</a></p>
+    <p class="meta-row"><PrksLinkButton href="#/views">Back to Saved Views</PrksLinkButton></p>
   </div>
 </template>

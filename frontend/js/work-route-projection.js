@@ -30,7 +30,7 @@ var prksWorkRoute = (function(exports) {
 	function projectWorkRoute(input) {
 		const workId = String(input.workId);
 		let availability = input.availability;
-		let lifecycle = input.lifecycle;
+		const lifecycle = input.lifecycle;
 		let provenance = input.provenance;
 		let work = input.work;
 		let effectiveWork = input.effectiveWork ?? null;
@@ -107,33 +107,6 @@ var prksWorkRoute = (function(exports) {
 			recordOpen: false
 		}));
 	}
-	/**
-	* After the legacy painter publishes its Work, keep this owner’s projection
-	* on that same object. A stale owner does not adopt it.
-	*/
-	function adoptPaintedWorkRoute(ctx, generation, workId) {
-		if (!ctx || ctx.destroyed || !ctx.isCurrent(generation)) return null;
-		const current = ctx.getResource(RESOURCE);
-		if (!current || !sameOwner(ctx, current, generation)) return null;
-		if (current.workId !== String(workId) || current.availability !== "ready") return null;
-		const painted = ctx.getEntity("work");
-		if (!painted || String(painted.id ?? "") !== current.workId) return null;
-		if (current.work === painted) return current;
-		const effectiveFollowsWork = current.effectiveWork === current.work;
-		const stored = freezeProjection({
-			workId: current.workId,
-			availability: current.availability,
-			lifecycle: current.lifecycle,
-			provenance: current.provenance,
-			ownerTabId: current.ownerTabId,
-			ownerGeneration: current.ownerGeneration,
-			work: painted,
-			effectiveWork: effectiveFollowsWork ? painted : current.effectiveWork,
-			recordOpen: current.recordOpen
-		});
-		ctx.setResource(RESOURCE, stored);
-		return stored;
-	}
 	/** Genuine foreground open only. internalRefresh must not record another open. */
 	function workOpenShouldRecord(internalRefresh, workValue) {
 		return !internalRefresh && !!workValue;
@@ -148,10 +121,8 @@ var prksWorkRoute = (function(exports) {
 	root.prksProjectWorkRoute = projectWorkRoute;
 	root.prksPublishWorkRouteProjection = publishWorkRouteProjection;
 	root.prksReplaceWorkRoutePlacement = replaceWorkRoutePlacement;
-	root.prksAdoptPaintedWorkRoute = adoptPaintedWorkRoute;
 	root.prksWorkOpenShouldRecord = workOpenShouldRecord;
 	//#endregion
-	exports.adoptPaintedWorkRoute = adoptPaintedWorkRoute;
 	exports.projectWorkRoute = projectWorkRoute;
 	exports.publishWorkRouteProjection = publishWorkRouteProjection;
 	exports.replaceWorkRoutePlacement = replaceWorkRoutePlacement;

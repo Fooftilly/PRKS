@@ -4,6 +4,7 @@
 const path = require('path');
 
 const rootDir = path.resolve(__dirname, '../..');
+globalThis.prksOwnerResource = require(path.join(rootDir, 'frontend/js/owner-resource.js'));
 const tc = require(path.join(rootDir, 'frontend/js/tab-context.js'));
 
 const {
@@ -83,7 +84,7 @@ for (let i = 0; i < 4; i++) {
     const runtime = {
         resize: function () { warmResizeCounts[i] += 1; },
     };
-    ctx.setResource('pdf', runtime, function () { warmDisposeCounts[i] += 1; });
+    ctx.registerResource(ctx.resourceTicket(), { kind: 'pdf', value: runtime, suspendable: true, dispose: function () { warmDisposeCounts[i] += 1; } });
     warmContexts.push(ctx);
     warmRoots.push(ctx.root);
     warmRuntimes.push(runtime);
@@ -116,7 +117,7 @@ const iteratorC = prksEnsureTabContext('iterator-c');
 const iteratorD = prksEnsureTabContext('iterator-d');
 iteratorA.mount(makeHost());
 iteratorB.mount(makeHost());
-iteratorB.setResource('pdf', {}, function () {});
+iteratorB.registerResource(iteratorB.resourceTicket(), { kind: 'pdf', value: {}, suspendable: true, dispose: function () {} });
 assert('iterator B warm-suspends', prksWarmParkTabContext(iteratorB.tabId, iteratorParking));
 iteratorC.mount(makeHost());
 iteratorC.unmount('cold-park');
@@ -201,20 +202,22 @@ assert('B abort isolated', !sigB.aborted);
 
 let disposedA = 0;
 let disposedB = 0;
-a.setResource(
-    'pdf',
-    { id: 'pdf-a' },
-    function () {
-        disposedA += 1;
-    }
-);
-b.setResource(
-    'pdf',
-    { id: 'pdf-b' },
-    function () {
-        disposedB += 1;
-    }
-);
+a.registerResource(a.resourceTicket(), {
+    kind: 'pdf',
+    value: { id: 'pdf-a' },
+    suspendable: true,
+    dispose: function () {
+            disposedA += 1;
+        },
+});
+b.registerResource(b.resourceTicket(), {
+    kind: 'pdf',
+    value: { id: 'pdf-b' },
+    suspendable: true,
+    dispose: function () {
+            disposedB += 1;
+        },
+});
 assertEq('get A pdf', a.getResource('pdf').id, 'pdf-a');
 assertEq('get B pdf', b.getResource('pdf').id, 'pdf-b');
 a.clearResource('pdf');
@@ -241,17 +244,20 @@ assert('A not mounted', a.mounted === false);
 assert('A entity cleared', a.entity === null);
 
 let disposedGraph = 0;
-b.setResource(
-    'graph',
-    { id: 'g' },
-    function () {
+b.registerResource(b.resourceTicket(), {
+    kind: 'researchGraph',
+    value: { id: 'g' },
+    suspendable: false,
+    dispose: function () {
         disposedGraph += 1;
-    }
-);
+    },
+});
+b.setResource('wikiTitleMap', { alpha: 'a' });
 b.destroy();
 b.destroy();
 assertEq('destroy B pdf disposer once', disposedB, 1);
 assertEq('destroy B graph disposer once', disposedGraph, 1);
+assertEq('destroy B clears ordinary values', b.resources.size, 0);
 assert('B destroyed flag', b.destroyed);
 
 const reg = prksEnsureTabContext('tab-reg');
@@ -330,7 +336,7 @@ prksDestroyAllTabContexts();
 
     const warmCtx = prksEnsureTabContext('preview-warm');
     warmCtx.mount(visible);
-    warmCtx.setResource('pdf', {}, function () {});
+    warmCtx.registerResource(warmCtx.resourceTicket(), { kind: 'pdf', value: {}, suspendable: true, dispose: function () {} });
     const thumb = { parentNode: null, isConnected: true };
     warmCtx.root.appendChild(thumb);
     globalThis.__prksWorkThumbPreviewSource = thumb;
@@ -351,7 +357,7 @@ prksDestroyAllTabContexts();
     /* Warm-parking the already-suspended context is a no-op; park a fresh PDF instead. */
     const warm2 = prksEnsureTabContext('preview-warm-2');
     warm2.mount(makeHost());
-    warm2.setResource('pdf', {}, function () {});
+    warm2.registerResource(warm2.resourceTicket(), { kind: 'pdf', value: {}, suspendable: true, dispose: function () {} });
     assert('warm park second PDF', prksWarmParkTabContext(warm2.tabId, parkHost));
     assert('second park release did not clear other tile source', globalThis.__prksWorkThumbPreviewSource === otherThumb);
 
@@ -362,15 +368,353 @@ prksDestroyAllTabContexts();
 
 let boom = 0;
 const c = createPrksTabContext('tab-boom');
-c.setResource('bad', {}, function () {
+c.registerCleanup(function () {
     boom += 1;
     throw new Error('cleanup boom');
 });
-c.setResource('ok', {}, function () {
+c.registerCleanup(function () {
     boom += 10;
 });
 c.destroy();
 assertEq('cleanup continues after throw', boom, 11);
+
+{
+    const main = prksEnsureTabContext('resource-main');
+    const side = prksEnsureTabContext('resource-side');
+    main.mount(makeHost());
+    side.mount(makeHost());
+    main.beginRoute({ name: 'research-graph', hash: '#/graph' });
+    side.beginRoute({ name: 'research-graph', hash: '#/graph' });
+    let mainDisposes = 0;
+    let sideDisposes = 0;
+    const mainGraph = { id: 'main' };
+    const sideGraph = { id: 'side' };
+    main.registerResource(main.resourceTicket(), {
+        kind: 'researchGraph',
+        value: mainGraph,
+        suspendable: false,
+        dispose: function () { mainDisposes += 1; },
+    });
+    side.registerResource(side.resourceTicket(), {
+        kind: 'researchGraph',
+        value: sideGraph,
+        suspendable: false,
+        dispose: function () { sideDisposes += 1; },
+    });
+    assert('role swap keeps main graph', main.readResource('researchGraph') === mainGraph && mainDisposes === 0);
+    assert('role swap keeps secondary graph', side.readResource('researchGraph') === sideGraph && sideDisposes === 0);
+    assert('role swap leaves both mounted', main.mounted && side.mounted);
+
+    const replaced = main.registerResource(main.resourceTicket(), {
+        kind: 'researchGraph',
+        value: { id: 'main-2' },
+        dispose: function () { mainDisposes += 1; },
+    });
+    assertEq('same owner replace result', replaced, 'replaced');
+    assertEq('same owner replace disposes once', mainDisposes, 1);
+    assert('secondary untouched by main replace', side.readResource('researchGraph') === sideGraph && sideDisposes === 0);
+
+    prksDestroyTabContext('resource-main');
+    prksDestroyTabContext('resource-main');
+    assertEq('destroying main disposes its graph once', mainDisposes, 2);
+    assertEq('destroying main leaves the secondary graph', sideDisposes, 0);
+    assert('secondary graph remains', side.readResource('researchGraph') === sideGraph);
+
+    const warm = prksEnsureTabContext('resource-warm');
+    warm.mount(makeHost());
+    warm.beginRoute({ name: 'work', hash: '#/works/warm' });
+    let warmGraphDisposes = 0;
+    let warmPdfDisposes = 0;
+    const pdf = { id: 'pdf' };
+    const warmTicket = warm.resourceTicket();
+    warm.registerResource(warmTicket, {
+        kind: 'researchGraph',
+        value: { id: 'warm-graph' },
+        suspendable: false,
+        dispose: function () { warmGraphDisposes += 1; },
+    });
+    warm.registerResource(warm.resourceTicket(), { kind: 'pdf', value: pdf, suspendable: true, dispose: function () { warmPdfDisposes += 1; } });
+    assert('warm suspend parks the pdf owner', warm.suspend(makeHost()));
+    assertEq('warm suspend releases the graph once', warmGraphDisposes, 1);
+    assertEq('warm suspend keeps the pdf resource', warm.getResource('pdf'), pdf);
+    assertEq('warm suspend does not dispose pdf', warmPdfDisposes, 0);
+    const lateGraph = warm.registerResource(warm.resourceTicket(), {
+        kind: 'researchGraph',
+        value: { id: 'late-graph' },
+        suspendable: false,
+        dispose: function () { warmGraphDisposes += 1; },
+    });
+    assertEq('parked owner rejects a later graph', lateGraph, 'rejected');
+    assertEq('parked owner does not attach the later graph', warm.getResource('researchGraph'), undefined);
+    assert('warm park leaves the captured ticket current', warm.resourceRegistry.accepts(warmTicket));
+    let latePdfSuspends = 0;
+    let latePdfResumes = 0;
+    let latePdfDisposes = 0;
+    const latePdf = { id: 'late-pdf' };
+    const latePdfResult = warm.registerResource(warm.resourceTicket(), {
+        kind: 'pdf',
+        value: latePdf,
+        suspendable: true,
+        dispose: function () { latePdfDisposes += 1; },
+        suspend: function () { latePdfSuspends += 1; },
+        resume: function () { latePdfResumes += 1; },
+    });
+    assertEq('parked owner replaces the pdf slot with a later suspendable pdf', latePdfResult, 'replaced');
+    assertEq('later pdf is readable while parked', warm.getResource('pdf'), latePdf);
+    assertEq('later pdf is the same registry read', warm.readResource('pdf'), latePdf);
+    assertEq('later pdf suspend hook ran once', latePdfSuspends, 1);
+    assertEq('replacing the parked pdf disposes the previous once', warmPdfDisposes, 1);
+    assert('warm resume reuses the context', warm.resume(makeHost()));
+    assertEq('resume runs the later pdf hook once', latePdfResumes, 1);
+    assertEq('resume does not dispose the later pdf', latePdfDisposes, 0);
+    assertEq('warm resume does not recreate the graph', warm.getResource('researchGraph'), undefined);
+    assertEq('warm resume does not dispose the replaced pdf again', warmPdfDisposes, 1);
+    warm.unmount('cold');
+    assertEq('cold unmount does not dispose the replaced pdf again', warmPdfDisposes, 1);
+    assertEq('cold unmount disposes the later pdf once', latePdfDisposes, 1);
+    assertEq('cold unmount does not dispose the graph again', warmGraphDisposes, 1);
+
+    const cold = prksEnsureTabContext('resource-cold');
+    cold.mount(makeHost());
+    cold.beginRoute({ name: 'research-graph', hash: '#/graph' });
+    let coldDisposes = 0;
+    cold.registerResource(cold.resourceTicket(), {
+        kind: 'researchGraph',
+        value: { id: 'cold' },
+        dispose: function () { coldDisposes += 1; },
+    });
+    cold.unmount('cold-park');
+    cold.unmount('cold-park');
+    assertEq('cold park disposes the graph once', coldDisposes, 1);
+
+    const routed = prksEnsureTabContext('resource-route');
+    routed.mount(makeHost());
+    const generationA = routed.beginRoute({ name: 'research-graph', hash: '#/graph' });
+    const ticketA = routed.resourceTicket(generationA);
+    let routeDisposes = 0;
+    routed.registerResource(ticketA, {
+        kind: 'researchGraph',
+        value: { id: 'A' },
+        dispose: function () { routeDisposes += 1; },
+    });
+    const generationB = routed.beginRoute({ name: 'research-graph', hash: '#/graph?focus=concept:C-1' });
+    assertEq('route replacement disposes the previous graph', routeDisposes, 1);
+    const staleAttach = routed.registerResource(ticketA, {
+        kind: 'researchGraph',
+        value: { id: 'stale' },
+        dispose: function () { routeDisposes += 1; },
+    });
+    routed.registerResource(routed.resourceTicket(generationB), {
+        kind: 'researchGraph',
+        value: { id: 'B' },
+        dispose: function () { routeDisposes += 1; },
+    });
+    assertEq('stale generation cannot attach', staleAttach, 'rejected');
+    assertEq('current route owns the replacement graph', routed.readResource('researchGraph').id, 'B');
+
+    prksDestroyTabContext('same-tab');
+    const previous = prksEnsureTabContext('same-tab');
+    previous.mount(makeHost());
+    previous.beginRoute({ name: 'research-graph', hash: '#/graph' });
+    const previousTicket = previous.resourceTicket();
+    prksDestroyTabContext('same-tab');
+    const replacement = prksEnsureTabContext('same-tab');
+    replacement.mount(makeHost());
+    replacement.beginRoute({ name: 'research-graph', hash: '#/graph' });
+    let foreignDisposes = 0;
+    const foreign = replacement.registerResource(previousTicket, {
+        kind: 'researchGraph',
+        value: { id: 'foreign' },
+        dispose: function () { foreignDisposes += 1; },
+    });
+    assertEq('replacement context rejects the old owner ticket', foreign, 'rejected');
+    assertEq('old ticket does not dispose a graph it never owned', foreignDisposes, 0);
+    assertEq('replacement context has no planted graph', replacement.getResource('researchGraph'), undefined);
+
+    const parked = prksEnsureTabContext('resource-cold-ticket');
+    parked.mount(makeHost());
+    const parkedGeneration = parked.beginRoute({ name: 'research-graph', hash: '#/graph' });
+    const parkedTicket = parked.resourceTicket();
+    let parkedDisposes = 0;
+    parked.registerResource(parkedTicket, {
+        kind: 'researchGraph',
+        value: { id: 'before-park' },
+        dispose: function () { parkedDisposes += 1; },
+    });
+    prksUnmountTabContext('resource-cold-ticket', 'park');
+    assert('cold park leaves the context alive', !parked.destroyed);
+    assertEq('cold park does not change the route generation', parked.generation, parkedGeneration);
+    let lateDisposes = 0;
+    const late = parked.registerResource(parkedTicket, {
+        kind: 'researchGraph',
+        value: { id: 'late' },
+        dispose: function () { lateDisposes += 1; },
+    });
+    assertEq('cold park rejects a ticket captured while mounted', late, 'rejected');
+    assertEq('cold park does not attach the late graph', parked.getResource('researchGraph'), undefined);
+    assertEq('rejected late registration keeps its disposer', lateDisposes, 0);
+    assertEq('cold park disposed the mounted graph once', parkedDisposes, 1);
+    assert('cold park does not leave the captured ticket current', !parked.resourceRegistry.accepts(parkedTicket));
+
+    parked.mount(makeHost());
+    assert('remount does not revive the pre-park ticket', !parked.resourceRegistry.accepts(parkedTicket));
+    const remountLate = parked.registerResource(parkedTicket, {
+        kind: 'researchGraph',
+        value: { id: 'remount-old' },
+        dispose: function () { lateDisposes += 1; },
+    });
+    assertEq('remount rejects the pre-park ticket', remountLate, 'rejected');
+    assertEq('remount does not attach the pre-park graph', parked.getResource('researchGraph'), undefined);
+    assertEq('remount does not run the rejected disposer', lateDisposes, 0);
+    assertEq('remount keeps the route generation', parked.generation, parkedGeneration);
+    const afterRemount = parked.registerResource(parked.resourceTicket(), {
+        kind: 'researchGraph',
+        value: { id: 'after-remount' },
+        dispose: function () { lateDisposes += 1; },
+    });
+    assertEq('a ticket taken after remount attaches', afterRemount, 'attached');
+    assertEq('remounted owner reads the new graph', parked.getResource('researchGraph').id, 'after-remount');
+
+    const beforeRoute = parked.resourceTicket();
+    const nextGeneration = parked.beginRoute({ name: 'research-graph', hash: '#/graph?next=1' });
+    assert('beginRoute stays mounted', parked.mounted);
+    assertEq('beginRoute advances generation', nextGeneration, parkedGeneration + 1);
+    let routeDisposer = 0;
+    const routeAttach = parked.registerResource(parked.resourceTicket(), {
+        kind: 'researchGraph',
+        value: { id: 'after-route' },
+        dispose: function () { routeDisposer += 1; },
+    });
+    assertEq('beginRoute accepts the new generation', routeAttach, 'attached');
+    assertEq('beginRoute graph is readable', parked.getResource('researchGraph').id, 'after-route');
+    const staleRoute = parked.registerResource(beforeRoute, {
+        kind: 'researchGraph',
+        value: { id: 'stale-route' },
+        dispose: function () { routeDisposer += 1; },
+    });
+    assertEq('beginRoute rejects the previous ticket', staleRoute, 'rejected');
+    assertEq('beginRoute keeps the new graph', parked.getResource('researchGraph').id, 'after-route');
+    assertEq('rejected beginRoute registration keeps its disposer', routeDisposer, 0);
+
+    const pdfSlot = prksEnsureTabContext('resource-pdf-slot');
+    pdfSlot.mount(makeHost());
+    pdfSlot.beginRoute({ name: 'work', hash: '#/works/pdf-slot' });
+    let pdfSlotDisposes = 0;
+    const pdfSlotValue = { id: 'slot' };
+    const pdfSlotResult = pdfSlot.registerResource(pdfSlot.resourceTicket(), {
+        kind: 'pdf',
+        value: pdfSlotValue,
+        suspendable: true,
+        dispose: function () { pdfSlotDisposes += 1; },
+    });
+    assertEq('registerResource pdf attaches', pdfSlotResult, 'attached');
+    assert('getResource pdf reads the registry slot', pdfSlot.getResource('pdf') === pdfSlotValue);
+    assert('readResource pdf reads the same slot', pdfSlot.readResource('pdf') === pdfSlotValue);
+    assert('registered pdf skips the legacy map', !pdfSlot.resources.has('pdf'));
+    pdfSlot.clearResource('pdf');
+    assertEq('clearResource pdf disposes the registry slot once', pdfSlotDisposes, 1);
+    assertEq('clearResource pdf clears getResource', pdfSlot.getResource('pdf'), undefined);
+    assertEq('clearResource pdf clears the registry read', pdfSlot.readResource('pdf'), undefined);
+    assert('clearResource pdf leaves no legacy entry', !pdfSlot.resources.has('pdf'));
+
+    let refusedPdf = null;
+    try {
+        pdfSlot.setResource('pdf', { id: 'via-set-pdf' });
+    } catch (err) {
+        refusedPdf = err;
+    }
+    assert('setResource refuses the pdf registry kind', refusedPdf instanceof TypeError);
+    assertEq('refused setResource pdf installs nothing', pdfSlot.getResource('pdf'), undefined);
+    assert('refused setResource pdf leaves no map entry', !pdfSlot.resources.has('pdf'));
+    let replacedDisposes = 0;
+    pdfSlot.registerResource(pdfSlot.resourceTicket(), {
+        kind: 'pdf',
+        value: { id: 'first' },
+        suspendable: true,
+        dispose: function () { replacedDisposes += 1; },
+    });
+    let nextDisposes = 0;
+    pdfSlot.registerResource(pdfSlot.resourceTicket(), {
+        kind: 'pdf',
+        value: { id: 'via-register' },
+        suspendable: true,
+        dispose: function () { nextDisposes += 1; },
+    });
+    assertEq('registerResource replaces the pdf once', replacedDisposes, 1);
+    assertEq('replacement disposer has not run', nextDisposes, 0);
+    assertEq('getResource follows the replacement', pdfSlot.getResource('pdf').id, 'via-register');
+    const staleTicket = pdfSlot.resourceTicket();
+    pdfSlot.unmount('park');
+    let rejectedPdfDisposes = 0;
+    const rejected = pdfSlot.registerResource(staleTicket, {
+        kind: 'pdf',
+        value: { id: 'after-park' },
+        suspendable: true,
+        dispose: function () { rejectedPdfDisposes += 1; },
+    });
+    assertEq('a pre-park ticket is rejected after cold park', rejected, 'rejected');
+    assertEq('rejected pdf does not attach', pdfSlot.getResource('pdf'), undefined);
+    assertEq('rejected pdf does not run its disposer', rejectedPdfDisposes, 0);
+    assertEq('cold park disposes the registered pdf once', nextDisposes, 1);
+
+    const warmPdf = prksEnsureTabContext('resource-pdf-warm-register');
+    warmPdf.mount(makeHost());
+    warmPdf.beginRoute({ name: 'work', hash: '#/works/warm-register' });
+    assert('empty pdf owner can warm-suspend', warmPdf.suspend(makeHost()));
+    let bareDisposes = 0;
+    const barePdf = { id: 'already-suspended' };
+    const bareResult = warmPdf.registerResource(warmPdf.resourceTicket(), {
+        kind: 'pdf',
+        value: barePdf,
+        suspendable: true,
+        dispose: function () { bareDisposes += 1; },
+    });
+    assertEq('warm-suspended pdf registration attaches', bareResult, 'attached');
+    assert('warm-suspended pdf is readable', warmPdf.getResource('pdf') === barePdf);
+    assertEq('warm-suspended pdf without a hook does not dispose', bareDisposes, 0);
+    const hookedOwner = prksEnsureTabContext('resource-pdf-warm-hook');
+    hookedOwner.mount(makeHost());
+    hookedOwner.beginRoute({ name: 'work', hash: '#/works/warm-hook' });
+    assert('hook owner warm-suspends', hookedOwner.suspend(makeHost()));
+    let hookedSuspends = 0;
+    let hookedResumes = 0;
+    const hookedPdf = { id: 'hooked' };
+    const hooked = hookedOwner.registerResource(hookedOwner.resourceTicket(), {
+        kind: 'pdf',
+        value: hookedPdf,
+        suspendable: true,
+        dispose: function () {},
+        suspend: function () { hookedSuspends += 1; },
+        resume: function () { hookedResumes += 1; },
+    });
+    assertEq('warm-suspended pdf with a hook attaches', hooked, 'attached');
+    assertEq('warm-suspended pdf invokes suspend once when a hook exists', hookedSuspends, 1);
+    assert('hooked pdf is readable while parked', hookedOwner.getResource('pdf') === hookedPdf);
+    assert('hooked owner resumes', hookedOwner.resume(makeHost()));
+    assertEq('resume invokes the pdf hook once', hookedResumes, 1);
+
+    const stored = prksEnsureTabContext('resource-set');
+    stored.mount(makeHost());
+    stored.beginRoute({ name: 'research-graph', hash: '#/graph' });
+    let refusedGraph = null;
+    try {
+        stored.setResource('researchGraph', { id: 'via-set' });
+    } catch (err) {
+        refusedGraph = err;
+    }
+    assert('setResource refuses the researchGraph registry kind', refusedGraph instanceof TypeError);
+    assertEq('refused setResource researchGraph installs nothing', stored.getResource('researchGraph'), undefined);
+    const hints = [{ id: 'c1' }];
+    assert('setResource returns an ordinary value', stored.setResource('conceptHintList', hints) === hints);
+    assert('ordinary values are stored as plain values', stored.resources.get('conceptHintList') === hints);
+    stored.clearResource('conceptHintList');
+    assert('clearResource drops an ordinary value', !stored.resources.has('conceptHintList'));
+    stored.setResource('wikiWorkList', []);
+    stored.unmount('park');
+    assertEq('cold park clears ordinary values', stored.resources.size, 0);
+
+    prksDestroyAllTabContexts();
+}
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
 process.exit(failed ? 1 : 0);

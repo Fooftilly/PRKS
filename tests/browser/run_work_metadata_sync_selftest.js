@@ -1178,73 +1178,61 @@ function metadataStateWireValidation() {
  * an edit is pending: with page 5 stored and a clear pending, the effective
  * value is null -- page 1 -- but a page-less URL still renders page 5 until
  * the server hears about it. So the page is always stated.
+ *
+ * Card paint lives on PrksWorkCard (Vitest mounts the Vue card). This Node
+ * harness only pins sync → effective thumb_page → prksWorkThumbUrl identity.
+ * Do not rebuild card HTML here; a local double can drift from the shipped card.
  */
 function thumbnailResourceIdentity() {
     const pending = value => globalThis.prksSetPendingWorkMetadata([{
         operation: 'SET_WORK_METADATA_FIELD', entity_type: 'work', entity_id: 'W-P',
         status: 'pending', payload: { field: 'thumb_page', value } }]);
-    const card = (work, options) => globalThis.prksWorkCardHtml(
-        globalThis.prksEffectiveWorkSync(work), options || {});
     const pdf = { id: 'W-P', title: 'Paper', file_path: '/api/pdfs/x.pdf', thumb_page: 5 };
-    const srcOf = html => {
-        // Thumb URLs are no longer mirrored into DOM attributes (CodeQL).
-        // Card build registers an allowlisted URL by work id; PDF also exposes
-        // a digit-only page attr that rebuilds the same resource identity.
-        const idM = /data-work-id="([^"]+)"/.exec(html);
-        if (!idM) return '';
-        // PDF identity comes from the rendered page attr (runtime resolve path).
-        const pageM = /data-prks-thumb-page="(\d+)"/.exec(html);
-        if (pageM) {
-            return '/api/works/' + encodeURIComponent(idM[1]) + '/thumbnail?page=' + pageM[1];
-        }
-        // Video: no page attr — allowlisted URL registered at card-build.
-        if (
-            /data-prks-thumb-preview-kind="video"/.test(html) &&
-            typeof globalThis.prksLookupRegisteredWorkThumbUrl === 'function'
-        ) {
-            return globalThis.prksLookupRegisteredWorkThumbUrl(idM[1]) || '';
-        }
-        return '';
+    const effective = work => globalThis.prksEffectiveWorkSync(work);
+    const urlOf = work => {
+        const w = effective(work);
+        assert.equal(typeof globalThis.prksWorkThumbUrl, 'function',
+            'shared thumb URL helper must be loaded with work-cards.js');
+        return globalThis.prksWorkThumbUrl(w.id, w.thumb_page);
     };
 
     // Acknowledged: the stored page, stated.
     globalThis.prksSetPendingWorkMetadata([]);
-    assert.equal(srcOf(card(pdf)), '/api/works/W-P/thumbnail?page=5');
+    assert.equal(effective(pdf).thumb_page, 5);
+    assert.equal(urlOf(pdf), '/api/works/W-P/thumbnail?page=5');
     // Acknowledged null is page 1 EXPLICITLY, not an absent page.
-    assert.equal(srcOf(card({ id: 'W-P', file_path: '/api/pdfs/x.pdf', thumb_page: null })),
-        '/api/works/W-P/thumbnail?page=1');
+    const nullPage = { id: 'W-P', file_path: '/api/pdfs/x.pdf', thumb_page: null };
+    assert.equal(effective(nullPage).thumb_page, null);
+    assert.equal(urlOf(nullPage), '/api/works/W-P/thumbnail?page=1');
 
     // Pending page: the new page, before the server knows anything.
     pending('3');
-    assert.equal(srcOf(card(pdf)), '/api/works/W-P/thumbnail?page=3');
+    assert.equal(effective(pdf).thumb_page, 3);
+    assert.equal(urlOf(pdf), '/api/works/W-P/thumbnail?page=3');
 
     /* THE REGRESSION: a pending CLEAR while the server still stores page 5.
      * A page-less URL would render 5; the effective value is null, so the
      * resource is page 1 -- the same page the server will choose once the
      * clear is acknowledged. */
     pending('');
-    assert.equal(srcOf(card(pdf)), '/api/works/W-P/thumbnail?page=1',
+    assert.equal(effective(pdf).thumb_page, null,
+        'pending clear makes the effective page null');
+    assert.equal(urlOf(pdf), '/api/works/W-P/thumbnail?page=1',
         'a pending clear requests page 1, not the page still stored');
 
-    /* OFFLINE SUPPRESSION IS ABSOLUTE and happens BEFORE any URL exists. A
-     * cached card must not ask PRKS for bytes it cannot obtain, and a pending
-     * metadata edit is not a reason to start. */
+    /* Offline suppression and video registration are PrksWorkCard paint
+     * contracts (Vitest). Pending metadata must not change the URL helper's
+     * page-stated identity once the effective page is known. */
     pending('4');
-    const suppressed = card(pdf, { suppressThumbnail: true });
-    assert.equal(suppressed.indexOf('thumbnail'), -1,
-        'no thumbnail URL at all is emitted for a cached card');
-    assert.equal(suppressed.indexOf('page=4'), -1);
-    pending('');
-    const clearedOffline = card(pdf, { suppressThumbnail: true });
-    assert.equal(clearedOffline.indexOf('page=1'), -1,
-        'and a pending clear does not emit one either');
-    assert.equal(clearedOffline.indexOf('work-card__thumb--empty') !== -1, true,
-        'the layout is unchanged -- only the source is removed');
+    assert.equal(effective(pdf).thumb_page, 4);
+    assert.equal(urlOf(pdf), '/api/works/W-P/thumbnail?page=4');
 
-    // A non-PDF Work has no page resource at all.
+    // A non-PDF Work has no page resource; effective overlay still applies.
     globalThis.prksSetPendingWorkMetadata([]);
-    assert.equal(srcOf(card({ id: 'W-V', source_kind: 'video', source_url: 'https://x/v',
-        thumb_url: 'https://img/1.jpg' })), 'https://img/1.jpg');
+    const video = { id: 'W-V', source_kind: 'video', source_url: 'https://x/v',
+        thumb_url: 'https://img/1.jpg', thumb_page: 9 };
+    assert.equal(effective(video).thumb_url, 'https://img/1.jpg');
+    assert.equal(effective(video).source_kind, 'video');
 
     /* The request coordinator classifies by PATHNAME, so the added query
      * cannot change how a thumbnail request is treated. */

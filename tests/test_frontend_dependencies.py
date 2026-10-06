@@ -128,6 +128,10 @@ class FrontendDependencyTests(unittest.TestCase):
             "prks-vue",
             "prks-workspace-model",
             "prks-work-route-projection",
+            "prks-search-query-codec",
+            "prks-tab-leave",
+            "prks-owner-resource",
+            "prks-route-model",
         ):
             self.assertIn(name, names)
 

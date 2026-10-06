@@ -58,6 +58,7 @@ global.prksWorkspaceSnapshot = function () {
     return { focusedTabId: focusedId, mainTabId: 'main' };
 };
 
+global.prksOwnerResource = require(path.join(rootDir, 'frontend/js/owner-resource.js'));
 require(path.join(rootDir, 'frontend/js/tab-context.js'));
 require(path.join(rootDir, 'frontend/js/work-role-state.js'));
 (0, eval)(fs.readFileSync(path.join(rootDir, 'frontend/js/ui.js'), 'utf8'));
@@ -358,13 +359,18 @@ async function mountedSaveRefusesReplacedOwner() {
     showWork(main, 'work-a');
     ownPanel(main);
     let release;
-    main.setResource('workRoleEditor', {
-        workId: 'work-a',
-        generation: main.generation,
-        observed: { work_id: 'work-a', scopes: [] },
-        preparing: new Promise(function (resolve) { release = resolve; }),
-        editable: true,
-        operations: [],
+    main.registerResource(main.resourceTicket(), {
+        kind: 'workRoleEditor',
+        value: {
+            workId: 'work-a',
+            generation: main.generation,
+            observed: { work_id: 'work-a', scopes: [] },
+            preparing: new Promise(function (resolve) { release = resolve; }),
+            editable: true,
+            operations: [],
+        },
+        suspendable: false,
+        dispose: function () {},
     });
     const pending = prksSaveWorkPersonRoleDurably('work-a', 'person-1', 'Author', '', null, null);
     main.beginRoute({ name: 'work', params: { workId: 'work-b' } });
@@ -379,13 +385,18 @@ async function mountedSaveRefusesReplacedOwner() {
     showWork(main, 'work-a');
     ownPanel(main);
     let releasePanel;
-    main.setResource('workRoleEditor', {
-        workId: 'work-a',
-        generation: main.generation,
-        observed: { work_id: 'work-a', scopes: [] },
-        preparing: new Promise(function (resolve) { releasePanel = resolve; }),
-        editable: true,
-        operations: [],
+    main.registerResource(main.resourceTicket(), {
+        kind: 'workRoleEditor',
+        value: {
+            workId: 'work-a',
+            generation: main.generation,
+            observed: { work_id: 'work-a', scopes: [] },
+            preparing: new Promise(function (resolve) { releasePanel = resolve; }),
+            editable: true,
+            operations: [],
+        },
+        suspendable: false,
+        dispose: function () {},
     });
     const pendingPanel = prksSaveWorkPersonRoleDurably('work-a', 'person-1', 'Author', '', null, null);
     panel().dataset.prksOwnerTabId = 'side';

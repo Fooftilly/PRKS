@@ -1,21 +1,19 @@
 import { describe, expect, it } from 'vitest'
+import { WORK_STATUSES } from '../../domain/work-status'
 import {
-  PROGRESS_STATUSES,
   canonicalProgressStatus,
   normalizeProgressStatusParam,
   progressCanonicalHash,
-  progressStatusFromHash,
 } from './status'
 
 describe('Progress status', () => {
   it('keeps the five canonical statuses', () => {
-    expect(PROGRESS_STATUSES).toEqual(['Not Started', 'Planned', 'In Progress', 'Completed', 'Paused'])
+    expect(WORK_STATUSES).toEqual(['Not Started', 'Planned', 'In Progress', 'Completed', 'Paused'])
   })
 
   it('normalizes each canonical status and rejects invalid or missing values', () => {
-    for (const status of PROGRESS_STATUSES) {
+    for (const status of WORK_STATUSES) {
       expect(normalizeProgressStatusParam(status)).toBe(status)
-      expect(progressStatusFromHash(`#/progress?status=${encodeURIComponent(status)}`)).toBe(status)
     }
     expect(normalizeProgressStatusParam(null)).toBeNull()
     expect(normalizeProgressStatusParam(undefined)).toBeNull()
@@ -23,11 +21,6 @@ describe('Progress status', () => {
     expect(normalizeProgressStatusParam('   ')).toBeNull()
     expect(normalizeProgressStatusParam('Finished')).toBeNull()
     expect(normalizeProgressStatusParam('completed')).toBeNull()
-    expect(progressStatusFromHash('#/progress')).toBeNull()
-    expect(progressStatusFromHash('#/progress?status=')).toBeNull()
-    expect(progressStatusFromHash('#/progress?status=Finished')).toBeNull()
-    expect(progressStatusFromHash('#/recent')).toBeNull()
-    expect(progressStatusFromHash('')).toBeNull()
   })
 
   it('canonicalizes invalid and missing status to Not Started', () => {

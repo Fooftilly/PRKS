@@ -1006,13 +1006,17 @@ class AppServer:
 
     def __init__(self, seed_fn=None, extra_env=None):
         self._tmpdir = tempfile.TemporaryDirectory(prefix="prks-e2e-")
-        self.storage_root = self._tmpdir.name
+        # The storage root is a fresh, empty child directory so PRKS treats it
+        # as a new root (storage-architecture §7.1); server output lives beside
+        # it, never inside it, because a root holding unrelated files is refused.
+        self.storage_root = os.path.join(self._tmpdir.name, "storage")
+        os.mkdir(self.storage_root)
         self.port = find_free_port()
         self.origin = "http://%s:%s" % (HOST, self.port)
         self.ids = {}
         self.proc = None
-        self._stdout_path = os.path.join(self.storage_root, "server.stdout")
-        self._stderr_path = os.path.join(self.storage_root, "server.stderr")
+        self._stdout_path = os.path.join(self._tmpdir.name, "server.stdout")
+        self._stderr_path = os.path.join(self._tmpdir.name, "server.stderr")
         self._stdout = None
         self._stderr = None
         self._seed_fn = seed_fn
@@ -1045,7 +1049,7 @@ class AppServer:
                 return self
             except Exception:
                 # Read the captured output *before* teardown: the log files live
-                # inside storage_root, which cleanup deletes.
+                # in the server's temporary directory, which cleanup deletes.
                 out = _read_file(self._stdout_path)
                 err = _read_file(self._stderr_path)
                 self._release_process()

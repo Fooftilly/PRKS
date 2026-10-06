@@ -1,15 +1,16 @@
 import { createVNode } from 'vue'
 import {
-  dismissRouteSurface,
   presentRouteSurface,
   registerEarlyRoutePresenter,
+  registerRouteWindowBridge,
   resetRouteSurfaceForTests,
   type RouteSurfaceOwner,
 } from '../../route-surface/lifecycle'
 import SavedViewDetailRoute from './SavedViewDetailRoute.vue'
 import SavedViewsIndexRoute from './SavedViewsIndexRoute.vue'
 import { browserSavedViewIntents, type SavedViewIntentOwner } from './intents'
-import { buildSavedViewDetailProjection, buildSavedViewIndexProjection } from './projection'
+import { buildSavedViewDetailProjection } from './projection'
+import { savedViewRecords } from './records'
 import type { SavedViewDetailRouteInstance, SavedViewsIndexRouteInstance } from './route'
 import type { SavedViewDetailAvailability } from './types'
 
@@ -29,7 +30,6 @@ export interface SavedViewDetailPresentInput {
 export interface SavedViewsIndexPresentInput {
   owner: RouteSurfaceOwner & SavedViewIntentOwner
   host: HTMLElement
-  views?: unknown
   generation?: number
   shell?: boolean
 }
@@ -42,17 +42,18 @@ function isSavedViewsIndexEarlyRequest(
 ): value is Omit<SavedViewsIndexPresentInput, 'host'> & { feature: typeof SAVED_VIEWS_INDEX_FEATURE } {
   if (!value || typeof value !== 'object') return false
   const record = value as Partial<SavedViewsIndexPresentInput> & { feature?: unknown }
-  return record.feature === SAVED_VIEWS_INDEX_FEATURE && !!record.owner && 'views' in record
+  return record.feature === SAVED_VIEWS_INDEX_FEATURE && !!record.owner
 }
 
 /**
- * Paint one owner's Saved Views index. The coordinator has already loaded the
- * list. Vue does not fetch it. Summaries come from `prksSearchSummaryText`.
+ * Paint one owner's Saved Views index. The page reads and writes Saved Views
+ * through the records service and the shared QueryClient; the coordinator only
+ * keeps the offline gate in front of it. Summaries come from the search query
+ * codec.
  */
 export function presentSavedViewsIndex(input: SavedViewsIndexPresentInput): void {
   if (!input || !input.owner || typeof input.owner !== 'object') return
   const owner = input.owner
-  const views = input.views
   const route: Omit<SavedViewsIndexRouteInstance, 'generation'> & { generation?: number } = {
     name: 'saved-views',
     canonicalHash: '#/views',
@@ -66,7 +67,6 @@ export function presentSavedViewsIndex(input: SavedViewsIndexPresentInput): void
     route,
     render: (generation) =>
       createVNode(SavedViewsIndexRoute, {
-        projection: buildSavedViewIndexProjection({ views, generation }),
         intents: browserSavedViewIntents(owner, generation),
       }),
   })
@@ -81,9 +81,10 @@ function isSavedViewDetailEarlyRequest(
 }
 
 /**
- * Paint one owner's Saved View detail. The coordinator loads the record,
- * maps its definition through the query codec, and runs the same
- * `prksEffectiveSearchResults` read as Search. Results are never stored.
+ * Paint one owner's Saved View detail. The coordinator reads the record
+ * through `prksSavedViewRecords`, maps its definition through the query codec,
+ * and runs the same `prksEffectiveSearchResults` read as Search. Results are
+ * never stored.
  */
 export function presentSavedViewDetail(input: SavedViewDetailPresentInput): void {
   if (!input || !input.owner || typeof input.owner !== 'object') return
@@ -109,24 +110,19 @@ export function presentSavedViewDetail(input: SavedViewDetailPresentInput): void
   })
 }
 
-export function dismissSavedViews(owner: object | null | undefined): void {
-  dismissRouteSurface(owner)
-}
-
 export function resetSavedViewsSessionForTests(): void {
   resetRouteSurfaceForTests()
 }
 
 export function registerSavedViewsBridge(target: Window = window): void {
-  target.prksVuePresentSavedViewsIndex = presentSavedViewsIndex
-  target.prksVuePresentSavedViewDetail = presentSavedViewDetail
-  target.prksVueDismissSavedViews = dismissSavedViews
+  registerRouteWindowBridge(target)
+  target.prksSavedViewRecords = savedViewRecords()
   registerEarlyRoutePresenter(
     SAVED_VIEWS_INDEX_FEATURE,
     (request, host) => {
       if (!isSavedViewsIndexEarlyRequest(request)) return false
-      const { owner, views, generation, shell } = request
-      presentSavedViewsIndex({ owner, host, views, generation, shell })
+      const { owner, generation, shell } = request
+      presentSavedViewsIndex({ owner, host, generation, shell })
       return true
     },
     target,

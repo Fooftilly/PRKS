@@ -1,22 +1,20 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readRouteSurface } from '../../route-surface/lifecycle'
-import { dismissSearch, presentSearch, registerSearchBridge, resetSearchSessionForTests } from './session'
+import { dismissRouteSurface, readRouteSurface } from '../../route-surface/lifecycle'
+import { presentSearch, registerSearchBridge, resetSearchSessionForTests } from './session'
 
 afterEach(() => {
   resetSearchSessionForTests()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
-  delete window.prksVuePresentSearch
-  delete window.prksVueDismissSearch
-  delete window.prksWorkCardHtml
+  delete window.prksVuePresentRoute
+  delete window.prksVueDismissRoute
   delete window.prksAbstractExcerpt
   delete window.prksReleaseWorkThumbPreview
   delete window.prksReleaseLazyWorkThumbs
   delete window.prksInitLazyWorkThumbs
   delete window.prksScopeLineHtml
   delete window.prksNavigate
-  delete window.prksSearchHashFromDefinition
   delete window.prksOpenSavedViewModalFromCurrentSearch
 })
 
@@ -38,10 +36,7 @@ function owner(tabId: string) {
   }
 }
 
-function cards(): void {
-  window.prksWorkCardHtml = (work, options) =>
-    `<div class="work-card" data-work-id="${String(work.id)}" data-sub="${options.subtitle || ''}"></div>`
-}
+function cards(): void {}
 
 describe('Search route bridge', () => {
   it('paints already-effective rows per owner without fetching or publishing shell state', () => {
@@ -75,7 +70,7 @@ describe('Search route bridge', () => {
       shell: false,
     })
     expect(mainHost.querySelector('.prks-page-title')?.textContent).toBe('Search results for “adorno”')
-    expect(mainHost.querySelector('[data-work-id="w1"]')?.getAttribute('data-sub')).toBe('abc…')
+    expect(mainHost.querySelector('[data-work-id="w1"] .work-card__context')?.textContent).toBe('abc…')
     expect(mainHost.querySelector('.prks-scope-line')?.textContent).toBe('1 result')
     expect((mainHost.querySelector('#search-q-input') as HTMLInputElement).value).toBe('adorno')
     expect(mainHost.querySelector('#prks-save-view-btn')).not.toBeNull()
@@ -92,7 +87,6 @@ describe('Search route bridge', () => {
     cards()
     const navigate = vi.fn()
     window.prksNavigate = navigate
-    window.prksSearchHashFromDefinition = (d) => `#/search?any=1&q=${d.q}`
     const pane = owner('main')
     pane.state.generation = 2
     const el = host()
@@ -111,7 +105,6 @@ describe('Search route bridge', () => {
     cards()
     const navigate = vi.fn()
     window.prksNavigate = navigate
-    window.prksSearchHashFromDefinition = () => '#/search?q=late'
     const pane = owner('main')
     pane.state.generation = 3
     const el = host()
@@ -128,7 +121,9 @@ describe('Search route bridge', () => {
   it('releases scoped thumb resources before a rewrite and on dismiss', async () => {
     const released: string[] = []
     window.prksReleaseLazyWorkThumbs = (root) => {
-      released.push((root as HTMLElement).querySelector('.work-card')?.getAttribute('data-work-id') || 'empty')
+      released.push(
+        (root as HTMLElement).querySelector('[data-work-id]')?.getAttribute('data-work-id') || 'empty',
+      )
     }
     cards()
     const pane = owner('main')
@@ -137,9 +132,10 @@ describe('Search route bridge', () => {
     presentSearch({ owner: pane, host: el, request: { q: 'a' }, rows: [{ id: 'a' }], generation: 1 })
     presentSearch({ owner: pane, host: el, request: { q: 'a' }, rows: [{ id: 'b' }], generation: 2 })
     await nextTick()
-    expect(released).toEqual(['empty', 'a'])
-    dismissSearch(pane)
-    expect(released).toEqual(['empty', 'a', 'b'])
+    // First mount has nothing to release. The rewrite must still see card `a`.
+    expect(released).toEqual(['a'])
+    dismissRouteSurface(pane)
+    expect(released).toEqual(['a', 'b'])
     expect(el.querySelector('[data-prks-search-view]')).toBeNull()
   })
 
@@ -159,7 +155,7 @@ describe('Search route bridge', () => {
       generation: 1,
     }
     registerSearchBridge(window)
-    expect(window.prksVuePresentSearch).toBeTypeOf('function')
+    expect(window.prksVuePresentRoute).toBeTypeOf('function')
     expect(el.querySelector('[data-work-id="early"]')).not.toBeNull()
     expect(decoy.querySelector('[data-work-id="early"]')).toBeNull()
   })

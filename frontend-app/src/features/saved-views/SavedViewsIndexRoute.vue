@@ -1,21 +1,25 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
+import PrksLinkButton from '../../components/PrksLinkButton.vue'
+import PrksState from '../../components/PrksState.vue'
 import { usePendingAction } from '../../route-surface/pending-action'
 import type { SavedViewIntents } from './intents'
-import { SAVED_VIEWS_EMPTY, SAVED_VIEWS_EMPTY_HINT, type SavedViewIndexProjection } from './projection'
+import { SAVED_VIEWS_EMPTY, SAVED_VIEWS_EMPTY_HINT } from './projection'
+import { useSavedViewsList } from './useSavedViewsList'
 
 const props = defineProps<{
-  projection: SavedViewIndexProjection
   intents: SavedViewIntents
 }>()
+
+const { rows, loaded, loading, loadError, refreshError, retry } = useSavedViewsList()
 
 const { actionBusy, actionBlocked, withBusy } = usePendingAction()
 const rootEl = ref<HTMLElement | null>(null)
 const rowErrors = ref<Record<string, string>>({})
 const headerIcon = computed(() => window.prksPageHeaderIconHtml?.('bookmark') ?? '')
 const bookmarkIcon = computed(() => window.prksIcon?.('bookmark', { size: 'sm' }) ?? '')
-const rows = computed(() => props.projection.rows)
 
 function deleteKey(viewId: string): string {
   return `delete:${viewId}`
@@ -60,9 +64,14 @@ function remove(viewId: string): void {
   })
 }
 
-onMounted(() => {
+function refreshIcons(): void {
   window.prksRefreshIcons?.(rootEl.value)
-})
+}
+
+// The header icon paints on mount, whatever the first read does; row icons
+// follow the rows after each read and write.
+onMounted(refreshIcons)
+watch(rows, refreshIcons, { flush: 'post' })
 </script>
 
 <template>
@@ -73,7 +82,14 @@ onMounted(() => {
         Saved Views
       </h2>
     </div>
-    <div class="list-view saved-views-page__list">
+    <PrksInlineMessage v-if="refreshError" tone="error" status data-saved-views-refresh-error>
+      {{ refreshError }}
+    </PrksInlineMessage>
+    <PrksState v-if="loading" kind="loading" message="Loading Saved Views…" data-saved-views-loading />
+    <PrksState v-else-if="loadError" kind="error" :message="loadError" data-saved-views-load-error>
+      <PrksButton variant="secondary" size="sm" @click="retry">Try again</PrksButton>
+    </PrksState>
+    <div v-if="loaded" class="list-view saved-views-page__list">
       <template v-if="rows.length">
         <div v-for="row in rows" :key="row.id" class="project-card saved-views-page__list-item">
           <a class="saved-views-page__list-main" :href="row.href">
@@ -84,7 +100,7 @@ onMounted(() => {
             <p class="meta-row saved-views-page__summary">{{ row.summary }}</p>
           </a>
           <div class="saved-views-page__row-actions">
-            <a class="prks-btn prks-btn--secondary prks-btn--sm" :href="row.href">Open</a>
+            <PrksLinkButton :href="row.href" size="sm">Open</PrksLinkButton>
             <PrksButton
               variant="secondary"
               size="sm"
@@ -108,28 +124,24 @@ onMounted(() => {
               Delete
             </PrksButton>
           </div>
-          <p
+          <PrksInlineMessage
             v-if="rowErrors[row.id]"
-            class="prks-inline-message prks-inline-message--error saved-views-page__row-error"
-            role="status"
+            tone="error"
+            status
+            class="saved-views-page__row-error"
             :data-sv-index-error="row.id"
           >
             {{ rowErrors[row.id] }}
-          </p>
+          </PrksInlineMessage>
         </div>
       </template>
-      <template v-else>
+      <template v-else-if="!refreshError">
         <p class="meta-row saved-views-page__empty">{{ SAVED_VIEWS_EMPTY }}</p>
         <p class="meta-row">{{ SAVED_VIEWS_EMPTY_HINT }}</p>
         <p>
-          <button
-            id="prks-saved-views-empty-search"
-            type="button"
-            class="prks-btn prks-btn--secondary"
-            @click="intents.openSearch()"
-          >
+          <PrksButton id="prks-saved-views-empty-search" @click="intents.openSearch()">
             Search or jump
-          </button>
+          </PrksButton>
         </p>
       </template>
     </div>

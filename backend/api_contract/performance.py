@@ -6,7 +6,7 @@ durable or offline protocol.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -95,4 +95,4 @@ class PerformanceDiagnosticsReset(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    status: str = Field(..., pattern=r"^reset$")
+    status: Literal["reset"]
