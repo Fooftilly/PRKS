@@ -1518,6 +1518,15 @@ def assert_b5_artifact_path(raw: str | os.PathLike[str]) -> Path:
     return canonical
 
 
+def server_stderr_path(storage: Path) -> Path:
+    """Server stderr goes beside the storage root, never inside it.
+
+    The file exists before the server starts, and PRKS refuses a fresh root
+    that already holds unrelated files (storage-architecture §7.1).
+    """
+    return storage.parent / (storage.name + ".server-stderr.log")
+
+
 def main() -> int:  # noqa: C901
     parser = argparse.ArgumentParser(description="Record B5 browser baselines (#454)")
     parser.add_argument("--storage", default=str(DEFAULT_STORAGE), help="Testing PRKS_STORAGE (temp tree)")
@@ -1550,7 +1559,7 @@ def main() -> int:  # noqa: C901
     log_file = storage / "prks-testing.log"
     env["PRKS_LOG_FILE"] = str(log_file)
 
-    err_path = storage / "server-stderr.log"
+    err_path = server_stderr_path(storage)
     err_f = open(err_path, "wb")
     proc = subprocess.Popen(  # NOSONAR pythonsecurity:S8705 -- argv list, no shell
         [sys.executable, str(REPO / "prks_app.py"), "--testing", "--port", str(port)],

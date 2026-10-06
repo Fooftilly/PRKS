@@ -90,6 +90,7 @@ from backend.pdf_linearize import maybe_linearize_pdf_in_place, is_pdf_linearize
 from backend.derived_cache_publish import publish_derived_cache_bytes
 from backend.storage import paths
 from backend.storage.config import StorageConfig
+from backend.storage.root_binding import assert_config_matches_bound_root
 from backend.log_safety import (
     client_error_log_fields,
     format_client_error_log,
@@ -387,13 +388,19 @@ def _validate_listen_port(port: int) -> None:
 
 
 def bind_storage(config: StorageConfig) -> StorageConfig:
+    # Publishing a binding for a root this process does not hold the
+    # single-process lease on would defeat that lease (storage-architecture
+    # §12). Only enforced once the process entry opened a root.
+    assert_config_matches_bound_root(config.root)
     processing_local = config.processing_dir
     try:
         os.makedirs(processing_local, exist_ok=True)
     except OSError:
         if not config.processing_fallback_allowed:
             raise
-        processing_local = paths.processing_prod_fallback()
+        # Fallback is only allowed for the development-default root, so derive
+        # it from the bound root: anchored, it stays beneath the leased target.
+        processing_local = paths.processing_prod_fallback(config.root)
         os.makedirs(processing_local, exist_ok=True)
     if processing_local != config.processing_dir:
         config = replace(

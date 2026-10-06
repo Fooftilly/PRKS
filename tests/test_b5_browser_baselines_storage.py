@@ -96,6 +96,21 @@ class TestB5StorageGuard(unittest.TestCase):
         rebuilt = harness._assert_loopback_http_url("http://127.0.0.1:9/api/works")
         self.assertEqual(rebuilt, "http://127.0.0.1:9/api/works")
 
+    def test_server_stderr_stays_outside_a_fresh_storage_root(self):
+        from backend.storage import root_binding
+        from backend.storage.config import StorageConfig
+
+        with tempfile.TemporaryDirectory(prefix="prks-b5-") as tmp:
+            storage = Path(tmp).resolve() / "b5-run"
+            storage.mkdir()
+            err_path = harness.server_stderr_path(storage)
+            self.assertFalse(err_path.resolve().is_relative_to(storage))
+            err_path.write_bytes(b"")
+            bound = root_binding.open_storage_root(
+                StorageConfig.for_testing(str(storage)), register=False
+            )
+            bound.release()
+
 
 if __name__ == "__main__":
     unittest.main()

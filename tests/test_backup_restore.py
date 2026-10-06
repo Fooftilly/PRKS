@@ -1611,7 +1611,7 @@ class TestBackupInventory(BackupRestoreTestCase):
     def test_non_path_fields_are_explicit(self):
         names = {f.name for f in fields(StorageConfig)}
         leftover = names - classified_storage_field_names()
-        self.assertEqual(leftover, {"mode", "processing_fallback_allowed"})
+        self.assertEqual(leftover, {"mode", "processing_fallback_allowed", "root_source"})
 
 
 class TestRestorePendingPdfCleanup(BackupRestoreTestCase):

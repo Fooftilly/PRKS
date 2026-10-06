@@ -81,6 +81,13 @@ OS_REPLACE_ALLOWLIST = {
     "backend/fs_durability.py",
     "backend/pdf_linearize.py",
     "backend/services/work_pdf_replace.py",
+    # The StorageBackend's local publication boundary (storage-architecture
+    # §10.3): put_new/replace are fs_durability's fsync-before/sync-after
+    # contract, the same one work_pdf_replace implements today.
+    "backend/storage/objects.py",
+    # The V6 capability probe must exercise os.replace itself; it renames only
+    # its own probe files inside .prks-maintenance/preflight/.
+    "backend/storage/preflight.py",
 }
 # Bare os.fsync belongs only in fs_durability. Managed-PDF code must use
 # fsync_open_file / fsync_directory — work_pdf_replace is not an fsync island.
