@@ -55,7 +55,7 @@ from backend.db_manager import PRKS_SCHEMA_VERSION
 from backend.fs_durability import fsync_directories, fsync_open_file
 from backend.log_safety import safe_error_type
 from backend.performance import clock_ns, record_span, span as perf_span
-from backend.storage import paths
+from backend.storage import paths, root_binding, root_marker
 from backend.storage.config import StorageConfig
 
 LOGGER = logging.getLogger("prks.backup")
@@ -63,7 +63,7 @@ LOGGER = logging.getLogger("prks.backup")
 FORMAT_ID = "prks-backup"
 FORMAT_VERSION = 1
 BACKUP_EXTENSION = ".prks-backup"
-MAINTENANCE_DIRNAME = ".prks-maintenance"
+MAINTENANCE_DIRNAME = root_binding.MAINTENANCE_DIRNAME
 JOURNAL_FILENAME = "restore-journal.json"
 ARCHIVE_DB_PATH = "data/prks_data.db"
 MANIFEST_NAME = "manifest.json"
@@ -112,7 +112,7 @@ _REQUIRED_TABLES = (
     "annotations",
     "app_settings",
 )
-_NON_PATH_STORAGE_FIELDS = frozenset({"mode", "processing_fallback_allowed"})
+_NON_PATH_STORAGE_FIELDS = frozenset({"mode", "processing_fallback_allowed", "root_source"})
 _ALLOWED_PAYLOAD_PREFIXES = (
     "files/pdfs/",
     "files/people/",
@@ -131,11 +131,26 @@ RebindFn = Callable[[StorageConfig], StorageConfig]
 
 @dataclass(frozen=True)
 class BackupStorageInventory:
+    """Classification of every persistent storage component (backend/AGENTS.md).
+
+    The first five tuples name ``StorageConfig`` path fields. The last two name
+    durable operational state that is not a ``StorageConfig`` field
+    (storage-architecture §4.1): it identifies, locates or guards a root, is
+    machine- and root-specific, and is **never** backup payload.
+    """
+
     canonical: tuple[str, ...]
     derived: tuple[str, ...]
     operational: tuple[str, ...]
     conditional: tuple[str, ...]
     container: tuple[str, ...]
+    # Root-relative (POSIX spelling) operational entries inside the data root:
+    # the root marker (a restore keeps the target root's identity, §7.1) and the
+    # single-process lease file (§12).
+    operational_root_entries: tuple[str, ...] = ()
+    # Operational state kept outside every data root: the bootstrap
+    # configuration file (§5.1) and its lock.
+    external_operational: tuple[str, ...] = ()
 
 
 def backup_storage_inventory() -> BackupStorageInventory:
@@ -145,6 +160,11 @@ def backup_storage_inventory() -> BackupStorageInventory:
         operational=("log_file",),
         conditional=("processing_dir",),
         container=("root", "configured_root"),
+        operational_root_entries=(
+            root_marker.MARKER_FILENAME,
+            f"{MAINTENANCE_DIRNAME}/{root_binding.ROOT_LOCK_NAME}",
+        ),
+        external_operational=("bootstrap_config", "bootstrap_config_lock"),
     )
 
 
@@ -796,6 +816,15 @@ def _path_is_under(child: str, parent: str) -> bool:
         return os.path.commonpath((parent_real, child_real)) == parent_real
     except (OSError, ValueError):
         return False
+
+
+def _operational_root_paths(config: StorageConfig) -> frozenset[str]:
+    """Real paths of the root's operational entries (marker, lease file)."""
+    root_real = os.path.realpath(config.root)
+    return frozenset(
+        os.path.realpath(os.path.join(root_real, *entry.split("/")))
+        for entry in backup_storage_inventory().operational_root_entries
+    )
 
 
 def processing_is_under_storage(config: StorageConfig) -> bool:
@@ -1852,6 +1881,14 @@ def create_backup(
         processing_links = 0
         if processing_included:
             processing_files, processing_links = walk_regular_files(config.processing_dir)
+            # An inbox override may alias the root or .prks-maintenance/; the
+            # marker and the lease are operational, never payload (§7.1, §12).
+            operational = _operational_root_paths(config)
+            processing_files = [
+                (rel, abs_path)
+                for rel, abs_path in processing_files
+                if os.path.realpath(abs_path) not in operational
+            ]
         skipped_links = pdf_links + people_links + processing_links
         if skipped_links:
             n = skipped_links

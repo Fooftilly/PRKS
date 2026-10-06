@@ -1,5 +1,43 @@
 /*
- * PRKS stylesheet. Authority: DESIGN.md.
+ * PRKS stylesheet. Authority: DESIGN.md "CSS organization".
+ *
+ * Selector/consumer contract wins. Physical section comments are not a
+ * deletion boundary. B5 deletion follows proven selector consumers, never
+ * section number. Unlisted is not a license to purge; 01-15 are classified.
+ * Not every family in a section is a B4 Vue primitive. Do not copy shared
+ * rules into SFCs. Do not split this file in B4.
+ *
+ * Keep (app-wide): 01 tokens, 02 reset, 03 a11y, 04 layout primitives.
+ * 15 reduced motion is permanent global accessibility, not B5 cleanup.
+ * 14 responsive/container rules are cross-cutting: ownership follows the
+ * selectors/features they modify.
+ *
+ * Shared / retained (keep until the last Vue or classic consumer is gone).
+ * Physical placement may differ from the semantic section:
+ *   .prks-btn, .prks-icon-btn — B4 Vue primitives; canonical rules in 05;
+ *     .prks-btn--quiet-danger is physically in 12.
+ *   .prks-field — B4 Vue primitive; 06. Combobox/EasyMDE stay specialized.
+ *   .prks-tab, .prks-tabs — shared/retained; Vue Arguments + Folder Library
+ *     and classic callers. Canonical rules in 07. Not dead, not classic-only.
+ *   .prks-list-row — shared; 08. Work cards stay B5 feature CSS.
+ *   .prks-research-row — shared primitive; physically in 12.
+ *   .prks-state — shared; 09.
+ *   .prks-inline-message — shared; base rule physically in 12.
+ *   .prks-scope-line, .prks-rel-summary — shared; physically in 08.
+ *   .prks-dialog — canonical shared structural contract; 10. Classic
+ *     research picker in works.js remains; B5 retire/audit that caller.
+ *
+ * Specialized canonical control family (NOT a B4 Vue primitive):
+ *   .prks-segmented — Vue + classic; physically in 12.
+ * There is no generic .prks-disclosure family in 05. PrksDisclosureButton
+ * uses the button contract; classic graph JS still owns live expanded state.
+ * .nav-disclosure is sidebar shell (11), classic-owned.
+ *
+ * B5 feature/shell (do not delete wholesale): 11 application shell,
+ * 12 feature layouts (work cards, PDF, ribbon, folder tree, processing,
+ * graph canvas) except shared/specialized selectors that live there,
+ * 13 third-party, remaining innerHTML hosts.
+ *
  * 01 Tokens
  * 02 Reset / base
  * 03 Accessibility
@@ -4158,6 +4196,18 @@ a.tag {
     overflow: hidden;
 }
 
+/* Vue route-surface host must participate in the Work detail flex chain.
+ * The PDF pane and Research Notes share this column. */
+.prks-tab-root > [data-prks-vue-route-host]:has(.work-detail) {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-self: stretch;
+}
+
 .prks-nav-back-row {
     margin: 0 0 var(--space-sm);
 }
@@ -4283,6 +4333,25 @@ a.tag {
     flex-direction: column;
     padding: var(--space-md);
     gap: var(--space-sm);
+}
+
+.project-card--work-card > .work-card__link {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: inherit;
+    align-items: inherit;
+    gap: inherit;
+    min-width: 0;
+    min-height: 0;
+    width: 100%;
+    color: inherit;
+    text-decoration: none;
+}
+
+.project-card--work-card > .work-card__link:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+    border-radius: inherit;
 }
 
 .work-browse-collection--list .project-card--work-card {
@@ -4612,43 +4681,12 @@ a.tag {
     stroke-width: 2.2;
 }
 
-.project-card:not(.project-card--work):not(.project-card--work-card) .status-badge {
+.project-card:not(.project-card--work-card) .status-badge {
     position: absolute;
     top: 16px;
     right: 16px;
 }
 
-/* Work file rows: title + meta left; status then doc type stacked on the right */
-.project-card--work {
-    display: flex;
-    flex-direction: row;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: var(--space-md);
-}
-
-.project-card--work .project-card__body {
-    flex: 1;
-    min-width: 0;
-}
-
-.project-card--work .project-card__rail {
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: var(--space-sm);
-    text-align: right;
-    max-width: 42%;
-}
-
-.project-card--work .card-title {
-    padding-right: 0;
-}
-
-.project-card--work .status-badge {
-    position: static;
-}
 .status-badge.Not.Started { background-color: var(--status-not-started); color: var(--status-not-started-text); }
 .status-badge.Planned { background-color: var(--status-planned); color: var(--status-planned-text); }
 .status-badge.In.Progress { background-color: var(--status-progress); color: var(--status-progress-text); }
@@ -4692,10 +4730,6 @@ a.tag {
 
 .list-view .project-card {
     padding-right: 140px;
-}
-
-.list-view .project-card--work {
-    padding-right: 18px;
 }
 
 /* Processing inbox: no work rail — avoid global list-view right gutter */
@@ -10821,6 +10855,26 @@ button.prks-research-row {
     gap: var(--space-sm);
 }
 
+/* Vue route-surface host must participate in the Research Graph flex chain.
+ * Without this, the canvas stays at its 420px minimum. */
+.prks-tab-root > [data-prks-vue-route-host]:has(.research-graph) {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-self: stretch;
+}
+
+.research-graph > [data-prks-role="graph-body"] {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
 .research-graph__toolbar {
     margin-bottom: 0;
 }
@@ -11696,11 +11750,6 @@ button.prks-research-row {
         padding: 7px 9px;
         gap: 0;
     }
-
-    /* Make cards and rails wrap better on narrow widths. */
-    .project-card--work .project-card__rail {
-        max-width: 48%;
-    }
 }
 
 /* Same shell as @media (max-width: 900px) when Settings → Force mobile layout is on. */
@@ -11840,10 +11889,6 @@ html.prks-force-mobile .top-ribbon__center::-webkit-scrollbar {
 html.prks-force-mobile .top-ribbon .ribbon-btn {
     padding: 7px 9px;
     gap: 0;
-}
-
-html.prks-force-mobile .project-card--work .project-card__rail {
-    max-width: 48%;
 }
 
 @media (max-width: 600px) {

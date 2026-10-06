@@ -198,8 +198,15 @@
         const selected = state.ids.has(id);
         card.classList.toggle('is-selected', selected);
         card.setAttribute('aria-selected', selected ? 'true' : 'false');
-        /* While selecting, the card is not a navigable link: checkbox is the
-         * keyboard control, and Enter/Space on the card toggles selection. */
+        /* While selecting, the inner Work href is not a tab stop: checkbox is
+         * the keyboard control, and Enter/Space on the card/link toggles. */
+        const link = card.querySelector('a.work-card__link');
+        if (link && !link.hasAttribute('data-prks-bulk-nav-tabindex')) {
+            const prevLinkTab = link.getAttribute('tabindex');
+            if (prevLinkTab != null) link.setAttribute('data-prks-bulk-nav-tabindex', prevLinkTab);
+            else link.setAttribute('data-prks-bulk-nav-tabindex', '');
+        }
+        if (link) link.setAttribute('tabindex', '-1');
         if (!card.hasAttribute('data-prks-bulk-nav-role')) {
             const prevRole = card.getAttribute('role');
             if (prevRole != null) card.setAttribute('data-prks-bulk-nav-role', prevRole);
@@ -245,6 +252,13 @@
             if (prevTab !== '') card.setAttribute('tabindex', prevTab);
             else card.removeAttribute('tabindex');
             card.removeAttribute('data-prks-bulk-nav-tabindex');
+        }
+        const link = card.querySelector && card.querySelector('a.work-card__link');
+        if (link && link.hasAttribute('data-prks-bulk-nav-tabindex')) {
+            const prevLinkTab = link.getAttribute('data-prks-bulk-nav-tabindex');
+            if (prevLinkTab !== '') link.setAttribute('tabindex', prevLinkTab);
+            else link.removeAttribute('tabindex');
+            link.removeAttribute('data-prks-bulk-nav-tabindex');
         }
         const box = card.querySelector && card.querySelector('.work-card__select');
         if (box) box.remove();
@@ -446,7 +460,13 @@
         if (state.submitting) return;
         const target = e.target;
         if (!target || !target.closest) return;
-        if (target.closest('input, button, a, textarea, select, [contenteditable="true"]')) return;
+        const blocking = target.closest('input, button, a, textarea, select, [contenteditable="true"]');
+        if (blocking) {
+            const workLink = blocking.classList && blocking.classList.contains('work-card__link')
+                ? blocking
+                : target.closest('a.work-card__link');
+            if (!workLink) return;
+        }
         const card = target.closest('.project-card--work-card[data-work-id]');
         if (!card) return;
         const host = pageContent();

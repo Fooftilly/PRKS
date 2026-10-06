@@ -1,15 +1,14 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readRouteSurface } from '../../route-surface/lifecycle'
-import { dismissRecent, presentRecent, registerRecentBridge, resetRecentSessionForTests } from './session'
+import { dismissRouteSurface, readRouteSurface } from '../../route-surface/lifecycle'
+import { presentRecent, registerRecentBridge, resetRecentSessionForTests } from './session'
 
 afterEach(() => {
   resetRecentSessionForTests()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
-  delete window.prksVuePresentRecent
-  delete window.prksVueDismissRecent
-  delete window.prksWorkCardHtml
+  delete window.prksVuePresentRoute
+  delete window.prksVueDismissRoute
   delete window.prksWorkBrowseModeToggleHtml
   delete window.prksPageHeaderIconHtml
   delete window.prksReleaseWorkThumbPreview
@@ -35,8 +34,6 @@ describe('Recent route bridge', () => {
     ;(window as Window & { prksSyncSidebarActive?: () => void }).prksSyncSidebarActive = () => {
       calls.push('sidebar')
     }
-    window.prksWorkCardHtml = (work, options) =>
-      `<div data-work-id="${String(work.id)}" data-sub="${options.subtitle || ''}" data-thumb="${options.suppressThumbnail ? 'off' : 'on'}"></div>`
     const main = owner()
     const secondary = owner()
     const mainHost = host()
@@ -58,10 +55,10 @@ describe('Recent route bridge', () => {
       shell: false,
     })
     expect(mainHost.querySelector('.prks-page-title')?.textContent).toContain('Recently Opened')
-    expect(mainHost.querySelector('[data-work-id="main"]')?.getAttribute('data-thumb')).toBe('off')
-    expect(mainHost.querySelector('[data-work-id="main"]')?.getAttribute('data-sub')).toContain('Last opened: ')
-    expect(secondaryHost.querySelector('[data-work-id="side"]')?.getAttribute('data-thumb')).toBe('on')
-    expect(secondaryHost.querySelector('[data-work-id="side"]')?.getAttribute('data-sub')).toBe('Last opened: Unknown')
+    expect(mainHost.querySelector('[data-work-id="main"] .work-card__thumb--empty')).not.toBeNull()
+    expect(mainHost.querySelector('[data-work-id="main"] .work-card__context')?.textContent).toContain('Last opened: ')
+    expect(secondaryHost.querySelector('[data-work-id="side"] .work-card__thumb--empty')).not.toBeNull()
+    expect(secondaryHost.querySelector('[data-work-id="side"] .work-card__context')?.textContent).toBe('Last opened: Unknown')
     expect(mainHost.querySelector('[data-work-id="side"]')).toBeNull()
     expect(readRouteSurface(main)).toMatchObject({
       name: 'recent',
@@ -75,17 +72,16 @@ describe('Recent route bridge', () => {
   it('paints the empty collection and ignores a stale generation', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
-    window.prksWorkCardHtml = (work) => `<div data-work-id="${String(work.id)}"></div>`
     const pane = owner()
     const el = host()
     presentRecent({ owner: pane, host: el, rows: [], generation: 2 })
     expect(el.querySelector('.prks-inline-message')?.textContent).toBe('No recently opened documents found.')
     expect(fetchMock).not.toHaveBeenCalled()
-    dismissRecent(pane)
+    dismissRouteSurface(pane)
     presentRecent({
       owner: pane,
       host: el,
-      rows: [{ id: 'b' }],
+      rows: [{ id: 'b', file_path: '/api/pdfs/b.pdf' }],
       generation: 2,
     })
     await nextTick()
@@ -93,7 +89,7 @@ describe('Recent route bridge', () => {
     presentRecent({
       owner: pane,
       host: el,
-      rows: [{ id: 'b' }],
+      rows: [{ id: 'b', file_path: '/api/pdfs/b.pdf' }],
       generation: 3,
     })
     expect(el.querySelector('[data-work-id="b"]')).not.toBeNull()
@@ -115,10 +111,9 @@ describe('Recent route bridge', () => {
       generation: 1,
       shell: true,
     }
-    window.prksWorkCardHtml = (work) => `<div data-work-id="${String(work.id)}"></div>`
     registerRecentBridge(window)
-    expect(window.prksVuePresentRecent).toBeTypeOf('function')
-    expect(window.prksVueDismissRecent).toBeTypeOf('function')
+    expect(window.prksVuePresentRoute).toBeTypeOf('function')
+    expect(window.prksVueDismissRoute).toBeTypeOf('function')
     expect((el as HTMLElement & { __prksVueRouteRequest?: unknown }).__prksVueRouteRequest).toBeUndefined()
     expect(el.querySelector('[data-work-id="early"]')).not.toBeNull()
     expect(decoy.querySelector('[data-prks-recent-view]')).toBeNull()
@@ -126,38 +121,33 @@ describe('Recent route bridge', () => {
   })
 
   it('dismisses one owner and leaves the other mounted', () => {
-    window.prksWorkCardHtml = (work) => `<div data-work-id="${String(work.id)}"></div>`
     registerRecentBridge(window)
     const main = owner()
     const secondary = owner()
     const mainHost = host()
     const secondaryHost = host()
-    window.prksVuePresentRecent?.({
+    window.prksVuePresentRoute?.({
+      feature: 'recent',
       owner: main,
       host: mainHost,
       rows: [{ id: 'main' }],
       generation: 2,
       shell: true,
     })
-    window.prksVuePresentRecent?.({
+    window.prksVuePresentRoute?.({
+      feature: 'recent',
       owner: secondary,
       host: secondaryHost,
       rows: [{ id: 'side' }],
       generation: 1,
       shell: false,
     })
-    window.prksVueDismissRecent?.(main)
+    window.prksVueDismissRoute?.(main)
     expect(mainHost.querySelector('[data-prks-recent-view]')).toBeNull()
     expect(secondaryHost.querySelector('[data-work-id="side"]')).not.toBeNull()
   })
 
   it('releases preview and lazy thumbs while they are still under the Recent root', async () => {
-    window.prksWorkCardHtml = (work, options) => {
-      const thumb = options?.suppressThumbnail
-        ? ''
-        : `<img data-prks-thumb-lazy data-for="${String(work.id)}">`
-      return `<div data-work-id="${String(work.id)}">${thumb}</div>`
-    }
     const preview = window as Window & { __prksWorkThumbPreviewSource?: Element | null }
     const releaseLog: Array<{ id: string | null; connected: boolean; underRecent: boolean }> = []
     window.prksReleaseWorkThumbPreview = (root) => {
@@ -169,7 +159,7 @@ describe('Recent route bridge', () => {
       const img = root?.querySelector?.('img[data-prks-thumb-lazy]') ?? null
       if (!img || !root || typeof root.contains !== 'function' || !root.contains(img)) return
       releaseLog.push({
-        id: img.getAttribute('data-for'),
+        id: img.closest('[data-work-id]')?.getAttribute('data-work-id') ?? img.getAttribute('data-for'),
         connected: img.isConnected,
         underRecent: !!img.closest('[data-prks-recent-view]'),
       })
@@ -183,18 +173,18 @@ describe('Recent route bridge', () => {
     presentRecent({
       owner: pane,
       host: el,
-      rows: [{ id: 'a' }],
+      rows: [{ id: 'a', file_path: '/api/pdfs/a.pdf' }],
       offlineCached: false,
       generation: 1,
     })
     const first = el.querySelector('img[data-prks-thumb-lazy]')
-    expect(first?.getAttribute('data-for')).toBe('a')
+    expect(first?.closest('[data-work-id]')?.getAttribute('data-work-id')).toBe('a')
     expect(inits).toEqual(['a'])
     preview.__prksWorkThumbPreviewSource = first
     presentRecent({
       owner: pane,
       host: el,
-      rows: [{ id: 'b' }],
+      rows: [{ id: 'b', file_path: '/api/pdfs/b.pdf' }],
       offlineCached: false,
       generation: 1,
     })
@@ -206,14 +196,14 @@ describe('Recent route bridge', () => {
     expect(inits).toEqual(['a', 'b'])
     const live = el.querySelector('img[data-prks-thumb-lazy]')
     preview.__prksWorkThumbPreviewSource = live
-    dismissRecent(pane)
+    dismissRouteSurface(pane)
     expect(releaseLog).toContainEqual({ id: 'b', connected: true, underRecent: true })
     expect(preview.__prksWorkThumbPreviewSource).toBeNull()
     expect(el.querySelector('[data-prks-recent-view]')).toBeNull()
     presentRecent({
       owner: pane,
       host: el,
-      rows: [{ id: 'c' }],
+      rows: [{ id: 'c', file_path: '/api/pdfs/c.pdf' }],
       offlineCached: true,
       generation: 2,
     })

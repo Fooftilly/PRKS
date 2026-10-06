@@ -6,6 +6,7 @@ const path = require('path');
 const vm = require('vm');
 
 const rootDir = path.resolve(__dirname, '../..');
+globalThis.prksOwnerResource = require(path.join(rootDir, 'frontend/js/owner-resource.js'));
 const tc = require(path.join(rootDir, 'frontend/js/tab-context.js'));
 const tilingApi = require(path.join(rootDir, 'frontend/js/workspace-tiling.js'));
 const worksSrc = fs.readFileSync(path.join(rootDir, 'frontend/js/components/works.js'), 'utf8');
@@ -143,19 +144,29 @@ ctxB.query = function (sel) {
 
 let refreshA = 0;
 let refreshB = 0;
-ctxA.setResource('workNotes', {
-    codemirror: {
-        refresh: function () {
-            refreshA += 1;
+ctxA.registerResource(ctxA.resourceTicket(), {
+    kind: 'workNotes',
+    value: {
+        codemirror: {
+            refresh: function () {
+                refreshA += 1;
+            },
         },
     },
+    suspendable: true,
+    dispose: function () {},
 });
-ctxB.setResource('workNotes', {
-    codemirror: {
-        refresh: function () {
-            refreshB += 1;
+ctxB.registerResource(ctxB.resourceTicket(), {
+    kind: 'workNotes',
+    value: {
+        codemirror: {
+            refresh: function () {
+                refreshB += 1;
+            },
         },
     },
+    suspendable: true,
+    dispose: function () {},
 });
 
 const documentListeners = Object.create(null);
@@ -196,9 +207,6 @@ const sandbox = {
     },
     prksGetFocusedTabContext: function () {
         throw new Error('must not depend on focusedTabId');
-    },
-    prksFocusedResource: function () {
-        throw new Error('must not use focused resource fallback');
     },
     prksForEachLiveTabContext: prksForEachLiveTabContext,
     prksForEachMountedTabContext: prksForEachMountedTabContext,
@@ -369,7 +377,7 @@ async function runSaveGenerationRace() {
         saveError: false,
         pendingSave: false,
     };
-    ctxS.setResource('workNotes', notes);
+    ctxS.registerResource(ctxS.resourceTicket(), { kind: 'workNotes', value: notes, suspendable: true, dispose: function () {} });
 
     sandbox.prksWorkNotesMarkEdit(notes);
     sandbox.prksEnqueueWorkResearchNotesSave(ctxS, 'W-save');
@@ -427,7 +435,7 @@ async function runSaveGenerationRace() {
         saveError: false,
         pendingSave: false,
     };
-    ctxS.setResource('workNotes', dup);
+    ctxS.registerResource(ctxS.resourceTicket(), { kind: 'workNotes', value: dup, suspendable: true, dispose: function () {} });
     statusEl.innerText = '';
     sandbox.prksEnqueueWorkResearchNotesSave(ctxS, 'W-save');
     const tokenA = dup.latestSaveToken;
@@ -461,7 +469,7 @@ async function runSaveGenerationRace() {
         pendingSave: false,
     };
     ctxS.setEntity('work', { id: 'W-newer-draft' });
-    ctxS.setResource('workNotes', newerDraft);
+    ctxS.registerResource(ctxS.resourceTicket(), { kind: 'workNotes', value: newerDraft, suspendable: true, dispose: function () {} });
     sandbox.prksWorkNotesMarkEdit(newerDraft, 'W-newer-draft', newestText, ctxS);
     sandbox.prksEnqueueWorkResearchNotesSave(ctxS, 'W-newer-draft');
     newestText = 'newest';
@@ -514,7 +522,7 @@ async function runWarmSaveSettlement() {
         saveError: false,
         pendingSave: false,
     };
-    ctxWarm.setResource('workNotes', notes);
+    ctxWarm.registerResource(ctxWarm.resourceTicket(), { kind: 'workNotes', value: notes, suspendable: true, dispose: function () {} });
 
     sandbox.prksWorkNotesMarkEdit(notes, 'W-warm-a', 'warm note', ctxWarm);
     sandbox.prksEnqueueWorkResearchNotesSave(ctxWarm, 'W-warm-a');
@@ -576,7 +584,7 @@ async function runWarmSaveErrorSettlement() {
         saveError: false,
         pendingSave: false,
     };
-    ctxWarmErr.setResource('workNotes', notes);
+    ctxWarmErr.registerResource(ctxWarmErr.resourceTicket(), { kind: 'workNotes', value: notes, suspendable: true, dispose: function () {} });
 
     sandbox.prksWorkNotesMarkEdit(notes, 'W-warm-err', 'warm error note', ctxWarmErr);
     sandbox.prksEnqueueWorkResearchNotesSave(ctxWarmErr, 'W-warm-err');
@@ -647,7 +655,7 @@ function runDebounceBookkeeping() {
         saveError: false,
         pendingSave: false,
     };
-    ctxD.setResource('workNotes', notes);
+    ctxD.registerResource(ctxD.resourceTicket(), { kind: 'workNotes', value: notes, suspendable: true, dispose: function () {} });
 
     sandbox.prksWorkNotesMarkEdit(notes);
     sandbox.prksScheduleWorkResearchNotesSave(ctxD, 'W-debounce');
@@ -700,9 +708,13 @@ function runNotesAnchorIsNotABox() {
     assert('notes anchor rule exists', anchorAt !== -1);
     const block = css.slice(anchorAt, css.indexOf('}', anchorAt));
     assert('notes anchor is display contents', /display:\s*contents/.test(block));
-    const shellAt = worksSrc.indexOf('data-prks-role="work-research-notes-anchor"');
+    const shellSrc = fs.readFileSync(
+        path.join(rootDir, 'frontend-app/src/features/work/WorkMainSurface.vue'),
+        'utf8',
+    );
+    const shellAt = shellSrc.indexOf('data-prks-role="work-research-notes-anchor"');
     assert('shell wraps the notes pane in the anchor', shellAt !== -1);
-    const shell = worksSrc.slice(shellAt, shellAt + 180);
+    const shell = shellSrc.slice(shellAt, shellAt + 180);
     assert('notes pane is inside the anchor', shell.indexOf('class="work-notes-pane"') !== -1);
 }
 

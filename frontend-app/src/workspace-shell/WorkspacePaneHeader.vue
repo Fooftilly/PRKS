@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, inject } from 'vue'
+import PrksIconButton from '../components/PrksIconButton.vue'
 import WorkspaceIcon from './WorkspaceIcon.vue'
 import { workspaceIntentsKey } from './intents'
 import { workspaceProjectionKey } from './projection'
@@ -52,26 +53,26 @@ function onClose(event: MouseEvent): void {
       <WorkspaceIcon class="prks-tile-header__icon" :name="icon" svg-class="prks-tile-header__icon-svg" />
       <span class="prks-tile-header__title">{{ title }}</span>
       <span v-if="!isMain" class="prks-tile-header__actions">
-        <button
-          type="button"
-          class="prks-icon-btn prks-icon-btn--ghost prks-tile-header__menu"
-          aria-label="Pane actions"
+        <PrksIconButton
+          variant="ghost"
+          class="prks-tile-header__menu"
+          label="Pane actions"
           title="Pane actions"
           aria-haspopup="menu"
           aria-expanded="false"
           @click="onMenu"
         >
           <WorkspaceIcon name="ellipsis" svg-class="prks-tile-header__icon-svg" />
-        </button>
-        <button
-          type="button"
-          class="prks-icon-btn prks-icon-btn--ghost prks-tile-header__close"
-          aria-label="Close"
+        </PrksIconButton>
+        <PrksIconButton
+          variant="ghost"
+          class="prks-tile-header__close"
+          label="Close"
           title="Close"
           @click="onClose"
         >
           <WorkspaceIcon name="x" svg-class="prks-tile-header__icon-svg" />
-        </button>
+        </PrksIconButton>
       </span>
     </template>
   </header>

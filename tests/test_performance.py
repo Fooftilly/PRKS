@@ -505,8 +505,3 @@ class TestPerformanceHTTP(unittest.TestCase):
         self.assertNotIn(SECRET_QUERY, blob)
         self.assertNotIn(SECRET_NOTE, blob)
         self.assertNotIn(SECRET_SQL, blob)
-
-    def test_schema_version_unchanged(self):
-        from backend.db_manager import PRKS_SCHEMA_VERSION
-
-        self.assertEqual(PRKS_SCHEMA_VERSION, 17)

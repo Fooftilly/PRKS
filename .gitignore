@@ -26,6 +26,8 @@ frontend-app/node_modules/
 frontend-app/storybook-static/
 frontend-app/.workspace-model-build/
 frontend-app/.work-route-build/
+frontend-app/.search-codec-build/
+frontend-app/.route-model-build/
 frontend-app/debug-storybook.log
 frontend/vendor/prks-pdf-viewer/esbuild-meta.json
 

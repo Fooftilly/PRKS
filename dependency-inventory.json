@@ -400,6 +400,24 @@
       "dependabot_monitored": true
     },
     {
+      "name": "openapi-typescript",
+      "scope": "build",
+      "authoritative_source": "frontend-app/package.json -> devDependencies.openapi-typescript",
+      "manifest": "frontend-app/package.json",
+      "lockfile": "frontend-app/package-lock.json",
+      "generated_assets": [
+        "frontend-app/src/api/generated/publishers.ts",
+        "frontend-app/src/api/generated/saved-views.ts",
+        "frontend-app/src/api/generated/processing-files.ts",
+        "frontend-app/src/api/generated/performance-diagnostics.ts",
+        "frontend-app/src/api/generated/positions.ts"
+      ],
+      "version_metadata": null,
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true,
+      "notes": "#246 types-only OpenAPI to TypeScript. Compile-time transport types from checked-in family artifacts (publishers, saved views, processing files, performance diagnostics, positions). Does not generate clients, Query hooks, mutations, or runtime validators, and is not bundled into prks-vue.js."
+    },
+    {
       "name": "storybook",
       "scope": "build",
       "authoritative_source": "frontend-app/package.json -> devDependencies.storybook",
@@ -431,6 +449,54 @@
       "version_metadata": null,
       "exact_installed_version_check": false,
       "dependabot_monitored": true
+    },
+    {
+      "name": "eslint",
+      "scope": "build",
+      "authoritative_source": "frontend-app/package.json -> devDependencies.eslint",
+      "manifest": "frontend-app/package.json",
+      "lockfile": "frontend-app/package-lock.json",
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true,
+      "notes": "Vue/TS ESLint 10 for frontend-app. Maintainer lint only; not bundled into prks-vue.js."
+    },
+    {
+      "name": "eslint-plugin-vue",
+      "scope": "build",
+      "authoritative_source": "frontend-app/package.json -> devDependencies.eslint-plugin-vue",
+      "manifest": "frontend-app/package.json",
+      "lockfile": "frontend-app/package-lock.json",
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true,
+      "notes": "Vue SFC rules for frontend-app ESLint. Maintainer lint only; not bundled into prks-vue.js."
+    },
+    {
+      "name": "typescript-eslint",
+      "scope": "build",
+      "authoritative_source": "frontend-app/package.json -> devDependencies.typescript-eslint",
+      "manifest": "frontend-app/package.json",
+      "lockfile": "frontend-app/package-lock.json",
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true,
+      "notes": "typed lint for frontend-app TypeScript. Maintainer lint only; not bundled into prks-vue.js."
+    },
+    {
+      "name": "vue-eslint-parser",
+      "scope": "build",
+      "authoritative_source": "frontend-app/package.json -> devDependencies.vue-eslint-parser",
+      "manifest": "frontend-app/package.json",
+      "lockfile": "frontend-app/package-lock.json",
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true,
+      "notes": "Vue SFC parser for frontend-app ESLint. Maintainer lint only; not bundled into prks-vue.js."
     },
     {
       "name": "inter",

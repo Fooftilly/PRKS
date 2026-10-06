@@ -58,6 +58,19 @@ once with `GROUP BY` in a CTE or joined derived table. `scripts/check_correlated
 its owning issue in `scripts/correlated_catalog_counts_allowlist.json` and may
 only shrink. See the script docstring for codes and the reviewed escape hatch.
 
+## Storage root (storage-architecture Phase A)
+
+`docs/storage-architecture.md` is the design authority. Root selection lives only
+in `storage/resolver.py`; never read `PRKS_STORAGE` or the bootstrap file
+elsewhere, and never let testing mode consult the bootstrap file or a platform
+default. Every bootstrap-config write goes through `BootstrapConfigStore`
+(config lock, re-read, expected-state check, atomic replace). Only the holder of
+a root's `root.lock` lease writes its `prks-root.json`; lease diagnostics in the
+marker are never lock authority. The marker, the lease file and the bootstrap
+config are operational and never backup payload. Production operations are not
+yet routed through `storage/objects.py` (Phase B); do not route them
+incidentally.
+
 ## Backup and restore
 
 Backup/restore code must never operate on production storage during tests.

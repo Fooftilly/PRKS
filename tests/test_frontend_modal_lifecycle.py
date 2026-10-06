@@ -34,7 +34,7 @@ class ModalLifecycleContractTests(unittest.TestCase):
         self.assertIn("prksCloseStandalonePageModal(activeModal)", keydown)
         self.assertIn("prksCloseTagsAliasModal", self.ui)
         self.assertIn("prksCloseTagsMergeModal", self.ui)
-        self.assertIn("prksClosePublishersAliasModal", self.ui)
+        self.assertIn("prksVueClosePublishersAliasModal", self.ui)
         schedule = _between(
             self.ui,
             "function prksScheduleModalBaselineCapture(modalId)",

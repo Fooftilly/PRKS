@@ -3,6 +3,7 @@ import {
   dismissRouteSurface,
   presentRouteSurface,
   registerEarlyRoutePresenter,
+  registerRouteWindowBridge,
   resetRouteSurfaceForTests,
   type RouteSurfaceOwner,
 } from '../../route-surface/lifecycle'
@@ -40,7 +41,7 @@ function armFolderLibraryOwnerCleanup(owner: FolderLibraryOwner): void {
       armFolderLibraryOwnerCleanup(owner)
       return
     }
-    dismissFolderLibrary(owner)
+    dismissRouteSurface(owner)
   })
 }
 
@@ -94,10 +95,6 @@ export function presentFolderLibrary(input: FolderLibraryPresentInput): void {
   armFolderLibraryOwnerCleanup(input.owner)
 }
 
-export function dismissFolderLibrary(owner: object | null | undefined): void {
-  dismissRouteSurface(owner)
-}
-
 export function resetFolderLibrarySessionForTests(): void {
   resetRouteSurfaceForTests()
 }
@@ -111,8 +108,7 @@ function isFolderLibraryEarlyRequest(
 }
 
 export function registerFolderLibraryBridge(target: Window = window): void {
-  target.prksVuePresentFolderLibrary = presentFolderLibrary
-  target.prksVueDismissFolderLibrary = dismissFolderLibrary
+  registerRouteWindowBridge(target)
   registerEarlyRoutePresenter(
     FOLDER_LIBRARY_FEATURE,
     (request, host) => {

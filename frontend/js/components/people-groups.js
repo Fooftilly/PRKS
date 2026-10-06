@@ -338,9 +338,8 @@ function prksRefreshPersonGroupMain(ctx) {
     const groupId = route.params && route.params.groupId ? String(route.params.groupId) : '';
     const group = owner.getEntity && owner.getEntity('personGroup');
     if (!group || String(group.id) !== groupId) return;
-    if (typeof prksPresentVuePersonGroups !== 'function') return;
-    prksPresentVuePersonGroups(owner, owner.root, {
-        feature: 'person-group-detail',
+    if (typeof prksPresentVueRoute !== 'function') return;
+    prksPresentVueRoute(owner, owner.root, 'person-group-detail', {
         availability: 'ready',
         group: group,
         groupId: groupId,
@@ -748,23 +747,6 @@ async function mountPersonGroupAddMemberControls(g, ownerCtx) {
         };
     }
 }
-
-function renderPersonGroupAddMemberPanelHtml() {
-    return `
-        <div class="group-detail__member-add">
-            <p class="tag-add-field__caption">Add a person</p>
-            <div class="tag-add-shell combobox-container">
-                <input type="hidden" id="group-add-member-id" value="">
-                <div class="tag-add-shell__field">
-                    ${typeof prksTagPlusIconHtml === 'function' ? prksTagPlusIconHtml() : ''}
-                    <input type="text" id="group-add-member-search" class="tag-add-shell__input" placeholder="Search by name, alias, group, or role…" maxlength="200" autocomplete="off" aria-label="Search person to add to group">
-                </div>
-                <div id="group-add-member-results" class="combobox-results combobox-results--tag-panel hidden"></div>
-            </div>
-            <button type="button" class="prks-btn prks-btn--primary" id="group-add-member-btn">Add to group</button>
-        </div>`;
-}
-
 
 function prksPersonEditFindGroupByNameInsensitive(name, list) {
     const t = (name || '').trim().toLowerCase();

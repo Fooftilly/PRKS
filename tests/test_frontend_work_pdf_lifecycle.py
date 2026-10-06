@@ -42,7 +42,9 @@ class WorkPdfLifecycleTests(unittest.TestCase):
         self.assertNotIn("savePdfAnnotation", SURFACE + VIEW)
         self.assertNotIn("works-pdf.js", SURFACE + VIEW)
         self.assertIn("`/api/works/${workId}/annotations`", PDF)
-        self.assertIn("ctx.setResource('pdf', runtime, function () {", PDF)
+        self.assertIn("ctx.registerResource(_pdfTicket", PDF)
+        self.assertIn("kind: 'pdf'", PDF)
+        self.assertNotIn("ctx.setResource('pdf'", PDF)
 
 
 if __name__ == "__main__":

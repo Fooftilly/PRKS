@@ -204,7 +204,6 @@ class AffectedMappingTests(unittest.TestCase):
             "frontend-app/src/features/progress/ProgressView.vue",
             "frontend-app/src/features/progress/session.ts",
             "frontend-app/src/features/progress/rows.ts",
-            "frontend-app/src/features/progress/legacy-work-card.ts",
             "frontend-app/src/features/progress/status.ts",
             "frontend-app/src/features/progress/ProgressView.test.ts",
         )
