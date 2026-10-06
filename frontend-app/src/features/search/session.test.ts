@@ -13,7 +13,6 @@ afterEach(() => {
   delete window.prksReleaseWorkThumbPreview
   delete window.prksReleaseLazyWorkThumbs
   delete window.prksInitLazyWorkThumbs
-  delete window.prksScopeLineHtml
   delete window.prksNavigate
   delete window.prksOpenSavedViewModalFromCurrentSearch
 })
@@ -44,7 +43,6 @@ describe('Search route bridge', () => {
     vi.stubGlobal('fetch', fetchMock)
     cards()
     window.prksAbstractExcerpt = (value) => String(value).slice(0, 3)
-    window.prksScopeLineHtml = (o) => `<p class="prks-scope-line">${o.total} ${o.label}</p>`
     const main = owner('main')
     const other = owner('other')
     main.state.generation = 5

@@ -112,15 +112,6 @@ function prksUpdateFolderLibraryExpandToggleBtn() {
     btn.setAttribute('title', label);
 }
 
-function prksFolderTreeHost() {
-    const st = window.__prksFolderDashboardState;
-    if (st && st.container) {
-        const host = st.container.querySelector('[data-prks-folder-tree-host]');
-        if (host) return host;
-    }
-    return document.querySelector('[data-prks-folder-detail-tree-host]');
-}
-
 function prksFolderTreeHosts() {
     const hosts = [];
     const seen = new Set();
@@ -558,38 +549,6 @@ function renderFolderTreeRoots(folders, options = {}) {
         .sort((a, b) => String(a.title || '').localeCompare(String(b.title || ''), undefined, { sensitivity: 'base' }));
 
     return roots.map((r) => renderNode(r, 0)).join('');
-}
-
-const PRKS_FOLDER_LIBRARY_FILTER_KEY = 'prks-folder-library-filter';
-
-function prksRecentlyAddedWorkMatchesQuery(work, query, foldersById) {
-    const q = String(query || '').trim().toLowerCase();
-    if (!q || !work) return true;
-    const hay = [
-        work.title,
-        work.author_text,
-        work.linked_authors,
-        work.primary_author,
-        work.primary_editor,
-        work.year,
-        work.published_date,
-        work.publisher,
-        work.status,
-        work.doc_type,
-    ];
-    const fid = work.folder_id != null ? String(work.folder_id).trim() : '';
-    if (fid && foldersById && foldersById.has(fid)) {
-        hay.push(foldersById.get(fid).title);
-    }
-    return hay.some((v) => v != null && String(v).toLowerCase().includes(q));
-}
-
-/** Concise scan-friendly date for Recently Added cards, e.g. "Sep 5, 2026" — no exact time. */
-function prksRecentlyAddedDateLabel(createdAt) {
-    if (!createdAt) return '';
-    const d = new Date(createdAt);
-    if (Number.isNaN(d.getTime())) return '';
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 function prksSwitchFolderLibraryTab(tab) {
@@ -1518,8 +1477,6 @@ window.prksFolderLibraryExpandToggleLabel = prksFolderLibraryExpandToggleLabel;
 window.prksFolderLibraryExpandToggleInnerHtml = prksFolderLibraryExpandToggleInnerHtml;
 window.prksFolderTreeHasCollapsibleNodes = prksFolderTreeHasCollapsibleNodes;
 window.prksFolderTreeAllCollapsed = prksFolderTreeAllCollapsed;
-window.prksRecentlyAddedDateLabel = prksRecentlyAddedDateLabel;
-window.prksRecentlyAddedWorkMatchesQuery = prksRecentlyAddedWorkMatchesQuery;
 window.prksBindFolderOfflineState = prksBindFolderOfflineState;
 window.prksEffectiveFolderDetailWorks = prksEffectiveFolderDetailWorks;
 window.prksFolderDetailSummaryHtml = prksFolderDetailSummaryHtml;

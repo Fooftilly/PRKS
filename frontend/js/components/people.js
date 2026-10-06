@@ -1,14 +1,3 @@
-function escapeHtmlPerson(s) {
-    if (typeof window.prksEscapeHtml === 'function') return window.prksEscapeHtml(s);
-    if (s == null) return '';
-    return String(s)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-}
-
 const PERSON_YEAR_MIN = -99999;
 const PERSON_YEAR_MAX = 99999;
 
@@ -272,24 +261,12 @@ function prksBindPersonOfflineState(ctx, container) {
 function renderPeopleListUnavailable(container, ctx) {
     if (!container) return;
     const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
-    if (owner && typeof prksPresentVueRoute === 'function') {
-        prksPresentVueRoute(owner, container, 'people', {
-            availability: 'unavailable',
-            items: [],
-            generation: owner.generation,
-        });
-        return;
-    }
-    container.innerHTML =
-        '<div class="prks-page-header page-header"><h2 class="prks-page-title">People not available offline</h2></div>' +
-        '<p class="prks-inline-message" data-prks-role="offline-unavailable">This list has not been cached on this device.</p>';
-}
-
-function personProfileImageSrc(person) {
-    if (!person || !person.id) return null;
-    const raw = (person.image_url || '').trim();
-    if (!raw) return null;
-    return '/api/persons/' + encodeURIComponent(String(person.id)) + '/profile-image';
+    if (!owner) return;
+    prksPresentVueRoute(owner, container, 'people', {
+        availability: 'unavailable',
+        items: [],
+        generation: owner.generation,
+    });
 }
 
 function parsePersonOtherLinkLine(line) {
@@ -531,50 +508,6 @@ async function applyPersonProfileTemplateFromModal() {
     if (typeof closeModals === 'function') closeModals();
 }
 
-function renderPersonExternalLinksList(person) {
-    const items = [];
-    const wiki = safeHttpUrl(person.link_wikipedia);
-    if (wiki) {
-        items.push({ label: 'Wikipedia', href: wiki });
-    }
-    const sep = safeHttpUrl(person.link_stanford_encyclopedia);
-    if (sep) {
-        items.push({ label: 'Stanford Encyclopedia of Philosophy', href: sep });
-    }
-    const iep = safeHttpUrl(person.link_iep);
-    if (iep) {
-        items.push({ label: 'Internet Encyclopedia of Philosophy', href: iep });
-    }
-    const other = (person.links_other || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-    other.forEach((line, i) => {
-        const mdLink = parsePersonOtherLinkLine(line);
-        if (mdLink) {
-            items.push(mdLink);
-            return;
-        }
-        const href = safeHttpUrl(line);
-        if (href) {
-            items.push({ label: href.replace(/^https?:\/\//i, '').split('/')[0] || `Link ${i + 1}`, href });
-        } else {
-            items.push({ label: line, href: null });
-        }
-    });
-    if (!items.length) return '';
-    const lis = items
-        .map(it => {
-            if (it.href) {
-                return `<li><a href="${escapeHtmlPerson(it.href)}" target="_blank" rel="noopener noreferrer"><span>${escapeHtmlPerson(it.label)}</span><span aria-hidden="true">↗</span></a></li>`;
-            }
-            return `<li>${escapeHtmlPerson(it.label)}</li>`;
-        })
-        .join('');
-    return `
-        <div class="person-external-links">
-            <h4>References</h4>
-            <ul class="person-link-list">${lis}</ul>
-        </div>`;
-}
-
 function truncatePersonPreviewText(text, maxLen) {
     if (!text || typeof text !== 'string') return '';
     const oneLine = text.replace(/\s+/g, ' ').trim();
@@ -614,15 +547,13 @@ window.prksPersonViewInGraph = prksPersonViewInGraph;
 function renderPeopleList(ctx, persons, container, options = {}) {
     if (!container) return;
     const roleFilter = options.roleFilter || '';
-    if (typeof prksPresentVueRoute === 'function') {
-        prksPresentVueRoute(ctx, container, 'people', {
-            availability: 'ready',
-            items: Array.isArray(persons) ? persons : [],
-            roleFilter: roleFilter,
-            unknownRole: options.unknownRole === true,
-            generation: ctx && ctx.generation,
-        });
-    }
+    prksPresentVueRoute(ctx, container, 'people', {
+        availability: 'ready',
+        items: Array.isArray(persons) ? persons : [],
+        roleFilter: roleFilter,
+        unknownRole: options.unknownRole === true,
+        generation: ctx && ctx.generation,
+    });
     prksBindPersonOfflineState(ctx, container);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
@@ -1481,15 +1412,6 @@ async function savePersonProfile(personId) {
     }
 }
 
-function personRoleBlockHtml(heading, count, cardsHtml) {
-    return (
-        `<section class="person-profile__role-block">` +
-        `<h3 class="person-profile__role-heading"><span>${escapeHtmlPerson(heading)}</span><span class="person-profile__role-count">${count}</span></h3>` +
-        `<div class="card-grid">${cardsHtml}</div>` +
-        `</section>`
-    );
-}
-
 const PRKS_PERSON_WORK_CARD_KEYS = [
     'file_path',
     'thumb_url',
@@ -1658,19 +1580,15 @@ function renderPersonDetails(ctx, person, container) {
     const route = ctx && (ctx.lastResolvedRoute || ctx.route);
     const personId = (person && person.id) || (route && route.params && route.params.personId) || '';
     const view = person ? prksPersonViewRecord(ctx, person) : null;
-    if (typeof prksPresentVueRoute === 'function') {
-        prksPresentVueRoute(ctx, container, 'person', {
-            availability: person ? 'ready' : 'not-found',
-            person: view,
-            personId: personId ? String(personId) : '',
-            editing: !!(person && ctx && ctx.ui && ctx.ui.personDetailEditing),
-            worksEditing: !!(person && ctx && ctx.ui && ctx.ui.personWorksEditing),
-            offlineCached: !!(ctx && ctx.ui && ctx.ui.personOfflineCached),
-            generation: ctx && ctx.generation,
-        });
-    } else if (!person) {
-        container.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Person not found</h2></div>';
-    }
+    prksPresentVueRoute(ctx, container, 'person', {
+        availability: person ? 'ready' : 'not-found',
+        person: view,
+        personId: personId ? String(personId) : '',
+        editing: !!(person && ctx && ctx.ui && ctx.ui.personDetailEditing),
+        worksEditing: !!(person && ctx && ctx.ui && ctx.ui.personWorksEditing),
+        offlineCached: !!(ctx && ctx.ui && ctx.ui.personOfflineCached),
+        generation: ctx && ctx.generation,
+    });
     if (typeof window.prksInitLazyWorkThumbs === 'function') {
         window.prksInitLazyWorkThumbs(container);
     }

@@ -225,13 +225,6 @@
         return btn;
     }
 
-    function addSep(host) {
-        const sep = doc().createElement('div');
-        sep.className = 'prks-workspace-menu__sep';
-        sep.setAttribute('role', 'separator');
-        host.appendChild(sep);
-    }
-
     /** Keyboard/non-drag alternative to tab-strip drag reordering (spec #43): same canonical
      * `prksWorkspaceMoveTabStep` ordering API drag-drop uses. Any tab -- Main, Secondary, or
      * parked -- can be reordered; role/mounted state never changes. Disabled at either end of

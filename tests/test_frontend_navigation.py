@@ -73,7 +73,12 @@ class FrontendNavigationTests(unittest.TestCase):
         folders = _read(_FOLDERS)
         self.assertIn("prks-people-library-filter", people_vue)
         self.assertNotIn("PRKS_PEOPLE_LIBRARY_FILTER_KEY", _read(_PEOPLE))
-        self.assertIn("PRKS_FOLDER_LIBRARY_FILTER_KEY", folders)
+        # The Folder Library filter key is owned by the Vue route.
+        self.assertNotIn("PRKS_FOLDER_LIBRARY_FILTER_KEY", folders)
+        folder_types = _read(
+            os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "folder-library", "types.ts")
+        )
+        self.assertIn("FOLDER_LIBRARY_FILTER_KEY = 'prks-folder-library-filter'", folder_types)
         self.assertNotIn("PRKS_PEOPLE_LIBRARY_FILTER_KEY", _read(_NAV))
 
     def test_sidebar_removes_duplicate_disclosure_headings(self):

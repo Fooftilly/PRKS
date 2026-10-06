@@ -57,7 +57,7 @@ function surface(ctx: WorkCtx, over: Partial<WorkMainSurfaceModel> = {}): WorkMa
     showHeader: true,
     title: 'Lecture',
     docTypeHtml: '<span class="doc-type-badge">Video</span>',
-    relSummaryHtml: '<p class="prks-rel-summary">Folder</p>',
+    relSummaryParts: ['Folder'],
     viewerHtml: '',
     editorRegionId: ctx.domId('work-notes-editor-region'),
     ...over,

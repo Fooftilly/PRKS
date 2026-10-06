@@ -739,11 +739,6 @@
         let resizeObserver = null;
         const unbinders = [];
 
-        function chromeId(local) {
-            if (ctx && typeof ctx.domId === 'function') return ctx.domId(local);
-            return '';
-        }
-
         function queryRole(role) {
             const fromLive = queryGraphRole(liveDom, role);
             if (fromLive) return fromLive;
@@ -1223,11 +1218,6 @@
             setAuxPanelOpen('filters', false);
             setAuxPanelOpen('legend', false);
             if (!isOpen) setAuxPanelOpen(which, true);
-        }
-
-        function closeAuxPanels() {
-            setAuxPanelOpen('filters', false);
-            setAuxPanelOpen('legend', false);
         }
 
         function bindShell(host) {

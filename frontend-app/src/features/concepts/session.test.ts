@@ -19,9 +19,7 @@ afterEach(() => {
   delete window.prksResearchMarkdownHtml
   delete window.prksPageHeaderIconHtml
   delete window.prksIcon
-  delete window.prksPaintScopeHost
   delete window.prksRefreshIcons
-  delete window.prksRelSummaryHtml
 })
 
 function host(): HTMLElement {
@@ -38,7 +36,6 @@ describe('Concepts route bridge', () => {
   it('renders independent Main and Secondary index owners', () => {
     window.prksPageHeaderIconHtml = () => ''
     window.prksIcon = () => ''
-    window.prksPaintScopeHost = () => {}
     window.prksRefreshIcons = () => {}
     const main = owner('main')
     const secondary = owner('side')
@@ -75,7 +72,6 @@ describe('Concepts route bridge', () => {
     vi.stubGlobal('fetch', fetchMock)
     window.prksPageHeaderIconHtml = () => ''
     window.prksIcon = () => ''
-    window.prksPaintScopeHost = () => {}
     window.prksRefreshIcons = () => {}
     const pane = owner()
     const el = host()
@@ -153,7 +149,6 @@ describe('Concepts route bridge', () => {
   it('registers bridges and applies host-local early requests', () => {
     window.prksPageHeaderIconHtml = () => ''
     window.prksIcon = () => ''
-    window.prksPaintScopeHost = () => {}
     window.prksRefreshIcons = () => {}
     const el = host()
     const decoy = host()
@@ -219,7 +214,6 @@ describe('Concepts route bridge', () => {
   it('keeps index searchQuery across same-generation in-place projection updates', async () => {
     window.prksPageHeaderIconHtml = () => ''
     window.prksIcon = () => ''
-    window.prksPaintScopeHost = () => {}
     window.prksRefreshIcons = () => {}
     const pane = owner('stable')
     const el = host()
@@ -261,7 +255,6 @@ describe('Concepts route bridge', () => {
     // generation — without wiping contentDiv / minting a replacement host.
     window.prksPageHeaderIconHtml = () => ''
     window.prksIcon = () => ''
-    window.prksPaintScopeHost = () => {}
     window.prksRefreshIcons = () => {}
     const cleanups = new Set<() => void>()
     const pane: {
@@ -340,7 +333,6 @@ describe('Concepts route bridge', () => {
     // not-found (see coordinator E2E). Vue present must not wipe contentDiv.
     window.prksPageHeaderIconHtml = () => ''
     window.prksIcon = () => ''
-    window.prksPaintScopeHost = () => {}
     window.prksRefreshIcons = () => {}
     const pane = owner('banner-sibling')
     const contentDiv = document.createElement('div')
@@ -367,7 +359,6 @@ describe('Concepts route bridge', () => {
   it('unmounts on dismiss without affecting another owner', () => {
     window.prksPageHeaderIconHtml = () => ''
     window.prksIcon = () => ''
-    window.prksPaintScopeHost = () => {}
     window.prksRefreshIcons = () => {}
     const a = owner('a')
     const b = owner('b')

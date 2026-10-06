@@ -633,32 +633,6 @@ function prksToggleAnnotationDrawer(ctx) {
     return !!toggled;
 }
 
-function prksSetAnnotationDrawerPinned(ctx, pinned) {
-    const owner = prksPdfOwnerOrFocused(ctx);
-    const pdf = prksPdfRuntime(owner);
-    if (!pdf || pdf._destroyed || typeof pdf.setAnnotationDrawerPinned !== 'function') return false;
-    const viewer = pdf.viewer;
-    const token = pdf.viewerSetupToken;
-    if (pdf.setAnnotationDrawerPinned(pinned) !== true) return false;
-    if (pdf.viewer !== viewer || pdf.viewerSetupToken !== token) return false;
-    prksLayoutAnnotationDrawer(owner);
-    return pdf.viewer === viewer && pdf.viewerSetupToken === token;
-}
-window.prksSetAnnotationDrawerPinned = prksSetAnnotationDrawerPinned;
-
-function prksSetAnnotationDrawerWidth(ctx, width, opts) {
-    const owner = prksPdfOwnerOrFocused(ctx);
-    const pdf = prksPdfRuntime(owner);
-    if (!pdf || pdf._destroyed || typeof pdf.setAnnotationDrawerWidth !== 'function') return false;
-    const viewer = pdf.viewer;
-    const token = pdf.viewerSetupToken;
-    if (pdf.setAnnotationDrawerWidth(width, opts) !== true) return false;
-    if (pdf.viewer !== viewer || pdf.viewerSetupToken !== token) return false;
-    prksLayoutAnnotationDrawer(owner);
-    return pdf.viewer === viewer && pdf.viewerSetupToken === token;
-}
-window.prksSetAnnotationDrawerWidth = prksSetAnnotationDrawerWidth;
-window.prksToggleAnnotationDrawer = prksToggleAnnotationDrawer;
 
 /**
  * Drag preview. Sets the painted width and, when pinned, resizes the viewer.
@@ -1183,51 +1157,6 @@ window.savePdfAnnotationComment = async function (ctx, text, captured) {
         }
     } catch (_e) {}
 };
-
-/** PDF page point for scrollToPage (EmbedPDF `Rect`: origin + size). */
-function annotationScrollPagePoint(ann) {
-    if (!ann || typeof ann !== 'object') return null;
-    const pickPoint = (rect) => {
-        if (!rect || !rect.origin || !rect.size) return null;
-        const w = Number(rect.size.width);
-        const h = Number(rect.size.height);
-        const ox = Number(rect.origin.x);
-        const oy = Number(rect.origin.y);
-        if (!Number.isFinite(w) || !Number.isFinite(h) || !Number.isFinite(ox) || !Number.isFinite(oy)) return null;
-        return {
-            x: ox + w / 2,
-            y: oy + Math.min(h * 0.28, 48),
-        };
-    };
-    const fromRect = pickPoint(ann.rect);
-    if (fromRect) return fromRect;
-    const segs = ann.segmentRects;
-    if (Array.isArray(segs) && segs.length > 0) {
-        let minX = Infinity;
-        let minY = Infinity;
-        let maxX = -Infinity;
-        let maxY = -Infinity;
-        for (const r of segs) {
-            if (!r || !r.origin || !r.size) continue;
-            const ox = Number(r.origin.x);
-            const oy = Number(r.origin.y);
-            const w = Number(r.size.width);
-            const h = Number(r.size.height);
-            if (!Number.isFinite(ox) || !Number.isFinite(oy) || !Number.isFinite(w) || !Number.isFinite(h)) continue;
-            minX = Math.min(minX, ox);
-            minY = Math.min(minY, oy);
-            maxX = Math.max(maxX, ox + w);
-            maxY = Math.max(maxY, oy + h);
-        }
-        if (Number.isFinite(minX) && Number.isFinite(minY) && maxX > minX && maxY > minY) {
-            return {
-                x: (minX + maxX) / 2,
-                y: minY + (maxY - minY) * 0.28,
-            };
-        }
-    }
-    return null;
-}
 
 function prksPageIndexFromAnnotationObject(obj) {
     if (!obj || typeof obj !== 'object') return NaN;
@@ -3467,12 +3396,6 @@ function createPdfLastPageController(work, runtime) {
         },
         detach,
     };
-}
-
-function prksDestroyWorkPdfViewer(ctx) {
-    const owner = ctx || prksResolvePdfCtx();
-    if (owner && typeof owner.clearTimer === 'function') owner.clearTimer('annotationSyncInterval');
-    if (owner && typeof owner.clearResource === 'function') owner.clearResource('pdf');
 }
 
 /**

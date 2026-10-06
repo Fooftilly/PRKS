@@ -305,7 +305,11 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         self.assertIn("'person',", detail_body)
         self.assertIn("domain: PRKS_PEOPLE_DOMAIN", detail_body)
         self.assertIn("prksIsPersonShape(value, personId)", detail_body)
-        self.assertIn("prksOfflineRenderUnavailable(contentDiv, 'Person not available offline')", detail_body)
+        # Unavailable Person detail is the Vue `person` surface; the classic
+        # fallback painter is gone.
+        self.assertIn("availability: 'unavailable'", detail_body)
+        self.assertIn("notFoundTitle: 'Person not available offline'", detail_body)
+        self.assertNotIn("prksOfflineRenderUnavailable(contentDiv, 'Person not available offline')", detail_body)
         self.assertNotIn("fetchPersonDetails(", detail_body)
 
     def test_person_mutations_invalidate_people(self):

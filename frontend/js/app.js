@@ -333,10 +333,6 @@ function prksSetPdfRememberLastPageEnabled(enabled) {
 
 window.prksGetPdfRememberLastPageEnabled = prksGetPdfRememberLastPageEnabled;
 
-function prksPdfLastPageStorageKey(workId) {
-    return 'prks.pdf.lastPage.' + workId;
-}
-
 function prksExtractWorkIdFromHash(h) {
     if (typeof prksParseRoute === 'function') {
         const route = prksParseRoute(h);
@@ -3838,8 +3834,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                 if (stale()) return;
                 const persons = prksResolveOfflinePeopleIndex(offlinePeople);
                 if (!persons) {
-                    if (typeof renderPeopleListUnavailable === 'function') renderPeopleListUnavailable(contentDiv, ctx);
-                    else prksOfflineRenderUnavailable(contentDiv, 'People not available offline');
+                    renderPeopleListUnavailable(contentDiv, ctx);
                     prksOfflinePrependBanner(contentDiv, null);
                     titleOpts = {
                         notFound: true,
@@ -3862,23 +3857,17 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                 const rolePersons = prksResolveOfflinePeopleIndex(offlineRolePeople);
                 publishSidebar({ role: roleFilter || route.params.role || 'Unknown role' });
                 if (!roleFilter) {
-                    if (typeof prksPresentVueRoute === 'function') {
-                        prksPresentVueRoute(ctx, contentDiv, 'people', {
-                            unknownRole: true,
-                            items: Array.isArray(rolePersons) ? rolePersons : [],
-                            roleFilter: route.params.role || '',
-                            generation: generation,
-                        });
-                    } else {
-                        contentDiv.innerHTML =
-                            '<div class="prks-page-header page-header"><h2 class="prks-page-title">People</h2></div><p class="prks-inline-message">Unknown role filter.</p>';
-                    }
+                    prksPresentVueRoute(ctx, contentDiv, 'people', {
+                        unknownRole: true,
+                        items: Array.isArray(rolePersons) ? rolePersons : [],
+                        roleFilter: route.params.role || '',
+                        generation: generation,
+                    });
                     titleOpts = { skipPageEnter: samePeopleWorkspace };
                     break;
                 }
                 if (!rolePersons) {
-                    if (typeof renderPeopleListUnavailable === 'function') renderPeopleListUnavailable(contentDiv, ctx);
-                    else prksOfflineRenderUnavailable(contentDiv, 'People not available offline');
+                    renderPeopleListUnavailable(contentDiv, ctx);
                     prksOfflinePrependBanner(contentDiv, null);
                     titleOpts = {
                         notFound: true,
@@ -3909,15 +3898,11 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     : await prksEffectivePersonGroupRows(cachedGroups, ops);
                 if (stale()) return;
                 if (!groups) {
-                    if (typeof prksPresentVueRoute === 'function') {
-                        prksPresentVueRoute(ctx, contentDiv, 'person-groups', {
-                            availability: 'unavailable',
-                            items: [],
-                            generation: generation,
-                        });
-                    } else {
-                        prksOfflineRenderUnavailable(contentDiv, 'Person Groups not available offline');
-                    }
+                    prksPresentVueRoute(ctx, contentDiv, 'person-groups', {
+                        availability: 'unavailable',
+                        items: [],
+                        generation: generation,
+                    });
                     prksOfflinePrependBanner(contentDiv, null);
                     titleOpts = {
                         notFound: true,
@@ -3927,13 +3912,11 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     break;
                 }
                 publishSidebar({ groupCount: Array.isArray(groups) ? groups.length : 0 });
-                if (typeof prksPresentVueRoute === 'function') {
-                    prksPresentVueRoute(ctx, contentDiv, 'person-groups', {
-                        availability: 'ready',
-                        items: groups,
-                        generation: generation,
-                    });
-                }
+                prksPresentVueRoute(ctx, contentDiv, 'person-groups', {
+                    availability: 'ready',
+                    items: groups,
+                    generation: generation,
+                });
                 prksOfflinePrependBanner(contentDiv, offlineGroups);
                 titleOpts = { skipPageEnter: samePersonGroupsWorkspace };
                 break;
@@ -3975,16 +3958,12 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                         ctx.ui.personGroupMembersEditing = false;
                         ctx.ui.personGroupFieldBaseline = null;
                     }
-                    if (typeof prksPresentVueRoute === 'function') {
-                        prksPresentVueRoute(ctx, contentDiv, 'person-group-detail', {
-                            availability: 'unavailable',
-                            group: null,
-                            groupId: groupId,
-                            generation: generation,
-                        });
-                    } else {
-                        prksOfflineRenderUnavailable(contentDiv, 'Group not available offline');
-                    }
+                    prksPresentVueRoute(ctx, contentDiv, 'person-group-detail', {
+                        availability: 'unavailable',
+                        group: null,
+                        groupId: groupId,
+                        generation: generation,
+                    });
                     prksOfflinePrependBanner(contentDiv, null);
                     titleOpts = {
                         notFound: true,
@@ -3997,17 +3976,12 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                 if (stale()) return;
                 if (!group) {
                     ctx.setEntity('personGroup', null);
-                    if (typeof prksPresentVueRoute === 'function') {
-                        prksPresentVueRoute(ctx, contentDiv, 'person-group-detail', {
-                            availability: 'not-found',
-                            group: null,
-                            groupId: groupId,
-                            generation: generation,
-                        });
-                    } else {
-                        contentDiv.innerHTML =
-                            '<div class="prks-page-header page-header"><h2 class="prks-page-title">Group not found</h2></div><p class="meta-row"><a href="#/people/groups" class="route-sidebar__link">Back to groups</a></p>';
-                    }
+                    prksPresentVueRoute(ctx, contentDiv, 'person-group-detail', {
+                        availability: 'not-found',
+                        group: null,
+                        groupId: groupId,
+                        generation: generation,
+                    });
                     prksOfflinePrependBanner(contentDiv, null);
                     titleOpts = {
                         notFound: true,
@@ -4040,16 +4014,14 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                         memberCount: Array.isArray(group.members) ? group.members.length : 0,
                         subgroupCount: Array.isArray(group.children) ? group.children.length : 0,
                     });
-                    if (typeof prksPresentVueRoute === 'function') {
-                        prksPresentVueRoute(ctx, contentDiv, 'person-group-detail', {
-                            availability: 'ready',
-                            group: group,
-                            groupId: group.id,
-                            editing: !!(ctx.ui && ctx.ui.personGroupEditing),
-                            membersEditing: !!(ctx.ui && ctx.ui.personGroupMembersEditing),
-                            generation: generation,
-                        });
-                    }
+                    prksPresentVueRoute(ctx, contentDiv, 'person-group-detail', {
+                        availability: 'ready',
+                        group: group,
+                        groupId: group.id,
+                        editing: !!(ctx.ui && ctx.ui.personGroupEditing),
+                        membersEditing: !!(ctx.ui && ctx.ui.personGroupMembersEditing),
+                        generation: generation,
+                    });
                     prksOfflinePrependBanner(contentDiv, offlineGroup);
                     titleOpts = {
                         entityTitle: group.name || 'Group',
@@ -5232,16 +5204,12 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     ctx.ui.personDetailEditing = false;
                     ctx.ui.personProfileDraft = null;
                     ctx.ui.personWorksEditing = false;
-                    if (typeof prksPresentVueRoute === 'function') {
-                        prksPresentVueRoute(ctx, contentDiv, 'person', {
-                            availability: 'unavailable',
-                            person: null,
-                            personId: personId,
-                            generation: generation,
-                        });
-                    } else {
-                        prksOfflineRenderUnavailable(contentDiv, 'Person not available offline');
-                    }
+                    prksPresentVueRoute(ctx, contentDiv, 'person', {
+                        availability: 'unavailable',
+                        person: null,
+                        personId: personId,
+                        generation: generation,
+                    });
                     prksOfflinePrependBanner(contentDiv, null);
                     titleOpts = {
                         notFound: true,

@@ -25,7 +25,6 @@ afterEach(() => {
   delete window.prksBindPersonProfileDraft
   delete window.prksTabContextIsFocused
   delete window.prksIcon
-  delete window.prksPaintScopeHost
   delete window.prksOpenNewPersonModalFromPeoplePage
   sessionStorage.removeItem('prks-people-library-filter')
 })

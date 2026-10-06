@@ -657,12 +657,6 @@
         return true;
     }
 
-    function prksAssignRouteEntity(key, value, routeGen) {
-        if (!prksIsRouteGenCurrent(routeGen)) return false;
-        root[key] = value;
-        return true;
-    }
-
     function prksNavigate(hash, options) {
         if (typeof root.prksWorkspaceNavigate === 'function' && root.__prksWorkspaceReady) {
             return root.prksWorkspaceNavigate(hash, options);
@@ -800,7 +794,6 @@
         prksRouteSupportsTile: prksRouteSupportsTile,
         prksPublishMainShell: prksPublishMainShell,
         prksPublishRouteSidebar: prksPublishRouteSidebar,
-        prksAssignRouteEntity: prksAssignRouteEntity,
         prksIsRouteGenCurrent: prksIsRouteGenCurrent,
         prksFinishRouteRender: prksFinishRouteRender,
         prksRenderRouteError: prksRenderRouteError,

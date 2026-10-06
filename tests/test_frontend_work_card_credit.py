@@ -1,4 +1,4 @@
-"""Work card credit plain-text helper — no double-escaping into summaries."""
+"""Work credit text: one plain-text rule, owned by the Vue card module."""
 from __future__ import annotations
 
 import json
@@ -8,6 +8,7 @@ import unittest
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _CARDS = os.path.join(_ROOT, "frontend", "js", "components", "work-cards.js")
+_CARD_TS = os.path.join(_ROOT, "frontend-app", "src", "components", "work-card.ts")
 _WORK_LIFECYCLE = os.path.join(
     _ROOT, "frontend-app", "src", "features", "work", "detail-lifecycle.ts"
 )
@@ -21,35 +22,23 @@ def _read(path: str) -> str:
 class WorkCardCreditTextTests(unittest.TestCase):
     def test_works_rel_summary_uses_plain_credit_text(self):
         lifecycle = _read(_WORK_LIFECYCLE)
-        self.assertIn("prksWorkCardCreditText", lifecycle)
-        # Must not feed the HTML-escaped credit line into escaping summary parts.
-        idx = lifecycle.index("prksRelSummaryHtml")
-        window = lifecycle[max(0, idx - 400) : idx + 800]
-        self.assertIn("prksWorkCardCreditText", window)
-        self.assertNotIn("prksWorkCardCreditLine", window)
+        idx = lifecycle.index("function relSummaryParts(")
+        window = lifecycle[idx : idx + 800]
+        self.assertIn("workCardCreditText(work)", window)
+        self.assertNotIn("prksWorkCardCredit", lifecycle)
+
+    def test_classic_credit_helpers_are_retired(self):
+        cards = _read(_CARDS)
+        self.assertNotIn("prksWorkCardCreditText", cards)
+        self.assertNotIn("prksWorkCardCreditLine", cards)
 
     def test_plain_text_preserves_ampersand_and_angles(self):
-        cards = _read(_CARDS)
         script = r"""
-const vm = require('vm');
-const src = %s;
-const context = { console, window: {}, document: undefined };
-context.window = context;
-vm.createContext(context);
-vm.runInContext(src, context);
-const plain = context.prksWorkCardCreditText({
-    author_text: 'A & B <C>',
-});
+const { workCardCreditText } = require(%s);
+const plain = workCardCreditText({ author_text: 'A & B <C>' });
 if (plain !== 'Author: A & B <C>') throw new Error('plain must not escape: ' + plain);
-const html = context.prksWorkCardCreditLine({
-    author_text: 'A & B <C>',
-});
-if (!html.includes('&amp;') || !html.includes('&lt;')) {
-    throw new Error('HTML helper must escape: ' + html);
-}
-if (html.includes('A & B <C>')) throw new Error('HTML helper leaked raw: ' + html);
 """ % (
-            json.dumps(cards),
+            json.dumps(_CARD_TS),
         )
         proc = subprocess.run(["node", "-e", script], capture_output=True, text=True)
         if proc.returncode != 0:

@@ -232,7 +232,7 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         interpretations of operation semantics would drift the moment either
         changed."""
         app = ROOT / 'frontend-app' / 'src' / 'features' / 'folder-library'
-        legacy = (app / 'legacy-recently-added.ts').read_text()
+        legacy = (app / 'recently-added.ts').read_text()
         intents = (app / 'intents.ts').read_text()
         self.assertIn("fn(acknowledged, 'recently-added')", legacy)
         self.assertIn('prksEffectiveProjectionRows', legacy)
@@ -359,13 +359,14 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         for forbidden in ('SET_WORK_METADATA_FIELD', 'listOperations', 'prksSync',
                           'prksEffective', 'payload.field'):
             self.assertNotIn(forbidden, cards, forbidden)
-        # And the precedence itself still lives there, in one place.
-        credit_fn = cards[cards.index('function prksWorkCardCreditText('):]
+        # And the precedence itself lives in one place: the Vue card module.
+        self.assertNotIn('prksWorkCardCreditLine', cards)
+        self.assertNotIn('prksWorkCardCreditText', cards)
+        card_ts = (ROOT / 'frontend-app' / 'src' / 'components' / 'work-card.ts').read_text()
+        credit_fn = card_ts[card_ts.index('export function workCardCreditText('):]
         credit_fn = credit_fn[: credit_fn.index('\n}')]
         self.assertLess(credit_fn.index('linked_authors'), credit_fn.index('author_text'))
         self.assertLess(credit_fn.index('author_text'), credit_fn.index('primary_editor'))
-        self.assertIn('function prksWorkCardCreditLine(', cards)
-        self.assertIn('prksWorkCardCreditText(w)', cards)
 
     def test_the_thumbnail_url_always_states_its_page(self):
         """A URL with no page means "whatever the server currently stores",
@@ -502,11 +503,13 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         self.assertIn('effectiveRows.value.filter(', filter_line[0],
                       'the filter must run over the overlaid rows, not the acknowledged array')
         self.assertNotIn('props.works.filter(', pane)
-        folders = (FRONTEND / 'components' / 'folders.js').read_text()
-        haystack = folders[folders.index('function prksRecentlyAddedWorkMatchesQuery('):]
+        helper = (app / 'recently-added.ts').read_text()
+        haystack = helper[helper.index('export function recentlyAddedMatchesQuery('):]
         haystack = haystack[: haystack.index('\n}')]
         for field in ('year', 'published_date', 'publisher'):
             self.assertIn('work.%s' % field, haystack, field)
+        folders = (FRONTEND / 'components' / 'folders.js').read_text()
+        self.assertNotIn('prksRecentlyAddedWorkMatchesQuery', folders)
 
     def test_embedded_summary_routes_hydrate_the_overlay_before_rendering(self):
         """`prksEffectiveWorkSummaries()` reads a map hydrated from the durable

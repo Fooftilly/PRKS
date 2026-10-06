@@ -528,13 +528,11 @@ function prksBindPlaylistsIndexCreateBtn() {
 
 function renderPlaylistsIndex(playlists, container, ctx) {
     if (!container) return;
-    if (typeof prksPresentVueRoute === 'function') {
-        prksPresentVueRoute(ctx, container, 'playlists', {
-            availability: 'ready',
-            items: Array.isArray(playlists) ? playlists : [],
-            generation: ctx && ctx.generation,
-        });
-    }
+    prksPresentVueRoute(ctx, container, 'playlists', {
+        availability: 'ready',
+        items: Array.isArray(playlists) ? playlists : [],
+        generation: ctx && ctx.generation,
+    });
     prksBindPlaylistOfflineState(ctx, container);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
@@ -595,16 +593,14 @@ function renderPlaylistDetail(ctx, pl, container) {
     }
     const route = ctx && (ctx.route || ctx.lastResolvedRoute);
     const playlistId = (pl && pl.id) || (route && route.params && route.params.playlistId) || '';
-    if (typeof prksPresentVueRoute === 'function') {
-        prksPresentVueRoute(ctx, container, 'playlist-detail', {
-            availability: pl ? 'ready' : 'not-found',
-            playlist: view,
-            playlistId: playlistId ? String(playlistId) : '',
-            editing: !!(ctx && ctx.ui && ctx.ui.playlistEditing),
-            renaming: ctx && ctx.ui ? ctx.ui.playlistRename : null,
-            generation: ctx && ctx.generation,
-        });
-    }
+    prksPresentVueRoute(ctx, container, 'playlist-detail', {
+        availability: pl ? 'ready' : 'not-found',
+        playlist: view,
+        playlistId: playlistId ? String(playlistId) : '',
+        editing: !!(ctx && ctx.ui && ctx.ui.playlistEditing),
+        renaming: ctx && ctx.ui ? ctx.ui.playlistRename : null,
+        generation: ctx && ctx.generation,
+    });
     prksBindPlaylistOfflineState(ctx, container);
     if (typeof prksBindAutosizeTextareas === 'function') prksBindAutosizeTextareas(container);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);

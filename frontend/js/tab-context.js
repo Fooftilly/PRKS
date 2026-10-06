@@ -831,12 +831,6 @@
         return ctx ? ctx.generation : 0;
     }
 
-    function prksFocusedRouteIsCurrent(routeGen) {
-        const ctx = prksGetFocusedTabContext();
-        if (ctx && typeof ctx.isCurrent === 'function') return ctx.isCurrent(routeGen);
-        return typeof routeGen !== 'number';
-    }
-
     /**
      * Whether a Folder-detail hierarchy refill may commit DOM after its await.
      * Route AbortSignal covers A→B→C remounts; refreshToken covers same-route
@@ -882,7 +876,6 @@
         prksApplyOwnedWorkEntity: prksApplyOwnedWorkEntity,
         prksTabContextOwnsEntityRoute: prksTabContextOwnsEntityRoute,
         prksFocusedRouteGeneration: prksFocusedRouteGeneration,
-        prksFocusedRouteIsCurrent: prksFocusedRouteIsCurrent,
         prksFocusedTimer: prksFocusedTimer,
         prksClearFocusedTimer: prksClearFocusedTimer,
         prksFocusedRouteSidebar: prksFocusedRouteSidebar,

@@ -198,7 +198,10 @@ class FrontendWorkCardTests(unittest.TestCase):
 
     def test_recently_added_uses_concise_date_helper(self):
         folders = _read(_FOLDERS)
-        self.assertIn("function prksRecentlyAddedDateLabel", folders)
+        self.assertNotIn("prksRecentlyAddedDateLabel", folders)
+        helper = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "folder-library", "recently-added.ts"))
+        self.assertIn("export function recentlyAddedDateLabel", helper)
         pane = _read(os.path.join(
             _PROJECT_DIR, "frontend-app", "src", "features", "folder-library", "RecentlyAddedPane.vue"))
         self.assertIn("Added ${dateLabel}", pane)

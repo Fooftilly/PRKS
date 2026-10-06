@@ -984,16 +984,6 @@
             });
         }
 
-        function readMetadata(key) {
-            return runTransaction(STORE_METADATA, 'readonly', function (request, setResult) {
-                return request(STORE_METADATA, function (store) {
-                    return store.get(key);
-                }).then(function (row) {
-                    setResult(row ? row.value : null);
-                });
-            });
-        }
-
         /**
          * Stable per-device identity, created once and persisted durably.
          *

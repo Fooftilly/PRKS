@@ -496,36 +496,6 @@ function prksInitLazyWorkThumbs(root) {
     });
 }
 
-/**
- * Plain-text credit line for summaries that escape later.
- * Linked Author(s), else `author_text`, else linked Editor.
- * @returns {string} unescaped text e.g. `Author: …` or '', never HTML
- */
-function prksWorkCardCreditText(w) {
-    if (!w) return '';
-    let name = w.linked_authors != null ? String(w.linked_authors).trim() : '';
-    if (!name && w.primary_author != null) name = String(w.primary_author).trim();
-    if (name) return 'Author: ' + name;
-    if (w.author_text != null) {
-        const at = String(w.author_text).trim();
-        if (at) return 'Author: ' + at;
-    }
-    name = w.primary_editor != null ? String(w.primary_editor).trim() : '';
-    if (name) return 'Editor: ' + name;
-    return '';
-}
-
-/**
- * Credit line: linked Author(s), else `author_text`, else linked Editor.
- * @returns {string} escaped HTML fragment e.g. `Author: …` or `Editor: …`, or ''
- */
-function prksWorkCardCreditLine(w) {
-    const plain = prksWorkCardCreditText(w);
-    if (!plain) return '';
-    return prksWorkCardsEscapeHtml(plain);
-}
-
-
 /* ---------- Quick preview (hover / keyboard; same thumb URL, no reader) ---------- */
 
 function prksWorkThumbPreviewEl() {
@@ -813,8 +783,6 @@ if (typeof document !== 'undefined' && !window.__prksWorkCardKeyNavBound) {
 
 window.prksInitLazyWorkThumbs = prksInitLazyWorkThumbs;
 window.prksReleaseLazyWorkThumbs = prksReleaseLazyWorkThumbs;
-window.prksWorkCardCreditText = prksWorkCardCreditText;
-window.prksWorkCardCreditLine = prksWorkCardCreditLine;
 window.prksSafeWorkThumbSrc = prksSafeWorkThumbSrc;
 window.prksRegisterWorkThumbUrl = prksRegisterWorkThumbUrl;
 window.prksLookupRegisteredWorkThumbUrl = prksLookupRegisteredWorkThumbUrl;

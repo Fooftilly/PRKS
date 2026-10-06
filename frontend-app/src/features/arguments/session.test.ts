@@ -17,7 +17,6 @@ afterEach(() => {
   delete window.prksVueDismissRoute
   delete window.prksPageHeaderIconHtml
   delete window.prksIcon
-  delete window.prksPaintScopeHost
   delete window.prksRefreshIcons
   delete window.prksResearchMarkdownHtml
   delete window.prksEscapeHtml
@@ -53,7 +52,6 @@ function owner(tabId = 'tab') {
 function paintHelpers(): void {
   window.prksPageHeaderIconHtml = () => ''
   window.prksIcon = () => '<svg data-icon="messages-square"></svg>'
-  window.prksPaintScopeHost = () => {}
   window.prksRefreshIcons = () => {}
   window.prksEscapeHtml = (value) =>
     String(value ?? '')
