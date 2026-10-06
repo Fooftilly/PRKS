@@ -22,7 +22,8 @@ from typing import Any, Callable, Iterable, Sequence
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # #69 Pyright typed slice: genuine basic type checking for the protected
-# scopes below (backend/storage first, then small backend utility modules).
+# scopes below (backend/storage first, then small backend utility modules:
+# entity_ids, concurrency, research_markup, pdf_linearize, derived_cache_publish).
 # Kept next to the AST invariants so Fast Static Analysis fails if the typed
 # slice silently reverts to effectively-off mode or loses a protected scope.
 PYRIGHT_DATAFLOW_CONFIG = "pyrightconfig.json"
@@ -35,6 +36,9 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/storage",
     "backend/entity_ids.py",
     "backend/concurrency.py",
+    "backend/research_markup.py",
+    "backend/pdf_linearize.py",
+    "backend/derived_cache_publish.py",
 )
 PYRIGHT_TYPED_SLICE_INCLUDE = PYRIGHT_TYPED_SLICE_SCOPES
 PYRIGHT_TYPED_SLICE_MODES = frozenset({"basic", "standard", "strict"})

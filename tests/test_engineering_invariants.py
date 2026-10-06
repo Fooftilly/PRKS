@@ -1274,8 +1274,9 @@ class EngineeringInvariantTests(unittest.TestCase):
 
     def _write_valid_pyright_tree(self, root: Path) -> None:
         (root / "backend" / "storage").mkdir(parents=True)
-        (root / "backend" / "entity_ids.py").write_text("", encoding="utf-8")
-        (root / "backend" / "concurrency.py").write_text("", encoding="utf-8")
+        for scope in checker.PYRIGHT_TYPED_SLICE_SCOPES:
+            if scope.endswith(".py"):
+                (root / scope).write_text("", encoding="utf-8")
         (root / ".github" / "workflows").mkdir(parents=True)
         (root / "pyrightconfig.json").write_text(
             json.dumps(
@@ -1292,11 +1293,7 @@ class EngineeringInvariantTests(unittest.TestCase):
         (root / "pyrightconfig.typed-slice.json").write_text(
             json.dumps(
                 {
-                    "include": [
-                        "backend/storage",
-                        "backend/entity_ids.py",
-                        "backend/concurrency.py",
-                    ],
+                    "include": list(checker.PYRIGHT_TYPED_SLICE_SCOPES),
                     "exclude": ["**/__pycache__"],
                     "typeCheckingMode": "basic",
                     "reportUndefinedVariable": "error",
@@ -1326,7 +1323,14 @@ class EngineeringInvariantTests(unittest.TestCase):
     def test_pyright_typed_slice_scopes_are_pinned(self):
         self.assertEqual(
             checker.PYRIGHT_TYPED_SLICE_SCOPES,
-            ("backend/storage", "backend/entity_ids.py", "backend/concurrency.py"),
+            (
+                "backend/storage",
+                "backend/entity_ids.py",
+                "backend/concurrency.py",
+                "backend/research_markup.py",
+                "backend/pdf_linearize.py",
+                "backend/derived_cache_publish.py",
+            ),
         )
 
     def test_pyright_typed_slice_include_order_is_irrelevant(self):
@@ -1334,7 +1338,10 @@ class EngineeringInvariantTests(unittest.TestCase):
             root = Path(tmp)
             self._write_valid_pyright_tree(root)
             typed = json.loads((root / "pyrightconfig.typed-slice.json").read_text())
-            typed["include"] = ["backend/concurrency.py", "backend/storage/", "backend/entity_ids.py"]
+            typed["include"] = [
+                scope if scope.endswith(".py") else scope + "/"
+                for scope in reversed(checker.PYRIGHT_TYPED_SLICE_SCOPES)
+            ]
             (root / "pyrightconfig.typed-slice.json").write_text(
                 json.dumps(typed), encoding="utf-8"
             )
@@ -1369,6 +1376,29 @@ class EngineeringInvariantTests(unittest.TestCase):
             self.assertIn("backend/entity_ids.py", findings[0].message)
             self.assertIn("backend/concurrency.py", findings[0].message)
 
+    def test_pyright_typed_slice_rejects_second_slice_include(self):
+        """Reverting to the second-slice include loses the third-slice scopes."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_valid_pyright_tree(root)
+            typed = json.loads((root / "pyrightconfig.typed-slice.json").read_text())
+            typed["include"] = [
+                "backend/storage",
+                "backend/entity_ids.py",
+                "backend/concurrency.py",
+            ]
+            (root / "pyrightconfig.typed-slice.json").write_text(
+                json.dumps(typed), encoding="utf-8"
+            )
+            findings = checker.check_pyright_configs(root)
+            self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-002"])
+            for scope in (
+                "backend/research_markup.py",
+                "backend/pdf_linearize.py",
+                "backend/derived_cache_publish.py",
+            ):
+                self.assertIn(f"{scope!r}", findings[0].message.split("missing", 1)[1])
+
     def test_pyright_typed_slice_rejects_unreviewed_extra_scope(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1383,7 +1413,13 @@ class EngineeringInvariantTests(unittest.TestCase):
 
     def test_pyright_typed_slice_rejects_missing_scope_on_disk(self):
         """Pyright exits 0 for a missing include path, so the checker must not."""
-        for rel in ("backend/entity_ids.py", "backend/concurrency.py"):
+        for rel in (
+            "backend/entity_ids.py",
+            "backend/concurrency.py",
+            "backend/research_markup.py",
+            "backend/pdf_linearize.py",
+            "backend/derived_cache_publish.py",
+        ):
             with self.subTest(rel=rel), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 self._write_valid_pyright_tree(root)
@@ -1394,8 +1430,25 @@ class EngineeringInvariantTests(unittest.TestCase):
 
     def test_pyright_typed_slice_rejects_suppression_of_new_scopes(self):
         cases = {
-            "ignore": ["backend/entity_ids.py", "backend/concurrency.py", "backend/*.py", "**/concurrency.py"],
-            "exclude": ["backend/entity_ids.py", "./backend/concurrency.py", "backend/*_ids.py"],
+            "ignore": [
+                "backend/entity_ids.py",
+                "backend/concurrency.py",
+                "backend/*.py",
+                "**/concurrency.py",
+                "backend/research_markup.py",
+                "backend/pdf_linearize.py",
+                "**/derived_cache_publish.py",
+                "backend/research_*.py",
+            ],
+            "exclude": [
+                "backend/entity_ids.py",
+                "./backend/concurrency.py",
+                "backend/*_ids.py",
+                "backend/research_markup.py",
+                "./backend/pdf_linearize.py",
+                "backend/derived_cache_*.py",
+                "backend/pdf_*.py",
+            ],
         }
         for key, patterns in cases.items():
             for pattern in patterns:
