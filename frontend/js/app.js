@@ -3086,6 +3086,21 @@ function prksRenderRouteLoading(contentDiv, hash) {
     `;
 }
 
+/**
+ * One pending page-enter run per route host. The host (a persistent tab root)
+ * outlives every route paint, so the run's listeners must end with the run:
+ * on its own animationend/animationcancel, when a newer paint restarts it, or
+ * at once when the host has no enter animation to wait for (#459).
+ */
+const prksPageEnterAnimationRuns = new WeakMap();
+
+function prksStopPageEnterAnimation(contentDiv) {
+    const run = prksPageEnterAnimationRuns.get(contentDiv);
+    if (!run) return;
+    prksPageEnterAnimationRuns.delete(contentDiv);
+    run.abort();
+}
+
 function prksPlayPageEnterAnimation(contentDiv) {
     if (!contentDiv) return;
     if (contentDiv.closest && contentDiv.closest('.prks-workspace-canvas--tiled')) return;
@@ -3096,15 +3111,44 @@ function prksPlayPageEnterAnimation(contentDiv) {
         return;
     }
     if (contentDiv.querySelector('.prks-route-loading')) return;
+    prksStopPageEnterAnimation(contentDiv);
     contentDiv.classList.remove('prks-page-enter');
     void contentDiv.offsetWidth;
     contentDiv.classList.add('prks-page-enter');
+    const animationName =
+        typeof window.getComputedStyle === 'function'
+            ? window.getComputedStyle(contentDiv).animationName
+            : '';
+    if (!animationName || animationName === 'none') {
+        contentDiv.classList.remove('prks-page-enter');
+        return;
+    }
+    const run = new AbortController();
+    const finish = () => {
+        contentDiv.classList.remove('prks-page-enter');
+        if (prksPageEnterAnimationRuns.get(contentDiv) === run) {
+            prksPageEnterAnimationRuns.delete(contentDiv);
+        }
+        run.abort();
+    };
     const onEnd = (e) => {
         if (e.target !== contentDiv) return;
-        contentDiv.classList.remove('prks-page-enter');
-        contentDiv.removeEventListener('animationend', onEnd);
+        finish();
     };
-    contentDiv.addEventListener('animationend', onEnd);
+    const onCancel = (e) => {
+        if (e.target !== contentDiv) return;
+        /* The restart above cancels the previous run; that late event must not end this one. */
+        if (
+            typeof contentDiv.getAnimations === 'function' &&
+            contentDiv.getAnimations().some((a) => a.animationName === e.animationName)
+        ) {
+            return;
+        }
+        finish();
+    };
+    contentDiv.addEventListener('animationend', onEnd, { signal: run.signal });
+    contentDiv.addEventListener('animationcancel', onCancel, { signal: run.signal });
+    prksPageEnterAnimationRuns.set(contentDiv, run);
 }
 
 function prksResolveWorkspaceMainTab() {

@@ -1049,6 +1049,10 @@ function initEasyMDE(ctx, work, ticket) {
             try {
                 if (typeof easyMDE.toTextArea === 'function') easyMDE.toTextArea();
             } catch (_e) {}
+            try {
+                /* toTextArea() keeps EasyMDE's document keydown; cleanup() is its pair (#459). */
+                if (typeof easyMDE.cleanup === 'function') easyMDE.cleanup();
+            } catch (_e) {}
         },
     };
     if (transient) prksSyncResearchNotesState(workNotes, transient);
