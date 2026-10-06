@@ -76,26 +76,6 @@
       "fingerprint": "f7b876760d1f"
     },
     {
-      "issue": 153,
-      "function": "get_all_person_groups",
-      "path": "backend/db_manager.py",
-      "outer": "person_groups g",
-      "inner": "person_group_members",
-      "output_alias": "member_count",
-      "aggregate": "COUNT",
-      "fingerprint": "ddb9d9a858ed"
-    },
-    {
-      "issue": 153,
-      "function": "get_all_person_groups",
-      "path": "backend/db_manager.py",
-      "outer": "person_groups g",
-      "inner": "person_groups",
-      "output_alias": "child_count",
-      "aggregate": "COUNT",
-      "fingerprint": "4d597b2c04e6"
-    },
-    {
       "issue": 278,
       "function": "get_person_group",
       "path": "backend/db_manager.py",

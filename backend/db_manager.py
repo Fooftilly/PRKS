@@ -4448,11 +4448,25 @@ class PRKSDatabase:
                 raise ValueError("Group not found.")
 
     def get_all_person_groups(self) -> List[dict]:
+        # Each relationship is aggregated once and joined, rather than
+        # counted again for every group: neither `group_id` nor `parent_id`
+        # leads an index, so per-row counts rescanned both tables (#153).
         q = """
         SELECT g.*,
-            (SELECT COUNT(*) FROM person_group_members m WHERE m.group_id = g.id) AS member_count,
-            (SELECT COUNT(*) FROM person_groups c WHERE c.parent_id = g.id) AS child_count
+            COALESCE(members.member_count, 0) AS member_count,
+            COALESCE(children.child_count, 0) AS child_count
         FROM person_groups g
+        LEFT JOIN (
+            SELECT group_id, COUNT(*) AS member_count
+            FROM person_group_members
+            GROUP BY group_id
+        ) members ON members.group_id = g.id
+        LEFT JOIN (
+            SELECT parent_id, COUNT(*) AS child_count
+            FROM person_groups
+            WHERE parent_id IS NOT NULL
+            GROUP BY parent_id
+        ) children ON children.parent_id = g.id
         ORDER BY g.name COLLATE NOCASE, g.id ASC
         """
         return list(self.execute_query(q, ()))
