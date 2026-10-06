@@ -523,8 +523,8 @@ Orientation belongs in the main column when it matters — not only in the right
 | Class / helper | Role |
 | --- | --- |
 | `.prks-page-summary` / `prksPageSummaryHtml` | Optional page-header summary under the title (library glance, entity counts). |
-| `.prks-scope-line` / Vue `PrksScopeLine` (classic `prksScopeLineHtml` remains for unmigrated hosts) | Collection filter/result scope (“12 of 48 matching”, “128 People”). |
-| `.prks-rel-summary` / Vue `PrksRelSummary` on research details (classic `prksRelSummaryHtml` remains for Work cards) | Relationship strip near entity identity (folder · people · tags · parents). |
+| `.prks-scope-line` / Vue `PrksScopeLine` | Collection filter/result scope (“12 of 48 matching”, “128 People”). |
+| `.prks-rel-summary` / Vue `PrksRelSummary` on research details and the Work header (same-app links only) | Relationship strip near entity identity (folder · people · tags · parents). |
 | `.prks-state-summary` / `prksStateSummaryHtml` | Compact Details/state strip (status · type · N tags) before card stacks. |
 | `.prks-nav-attention` / `prksNavAttentionBadgeHtml` | Restrained nav attention count (Processing inbox, queued sync). Icon or label context + count; color alone is never enough. |
 
@@ -1126,7 +1126,7 @@ B4/B5 CSS ownership (Vue class application for primitives lives in `frontend-app
 | 07 | `.prks-tab`, `.prks-tabs` | Shared/retained. Used by current Vue routes (Arguments, Folder Library) **and** classic callers. Not dead. Not classic-only. No B4 Vue tab primitive. | Canonical tab rules in §07 |
 | 08 | `.prks-list-row` | B4 shared list-row contract. Work cards stay B5 feature CSS. | `.prks-list-row` in §08. `.prks-research-row` is a shared primitive but physically in §12. `.prks-scope-line` / `.prks-rel-summary` are physically in §08; semantically they belong with status/summary. |
 | 09 | `.prks-state`, `.prks-inline-message` | B4 Vue primitives (`PrksState`, `PrksInlineMessage`) plus remaining classic callers. Classic Work-card summaries stay. | `.prks-state` in §09. Base `.prks-inline-message` (and `--empty` / duplicate `--error`) are physically in §12; a `--error` color rule also sits in §09. |
-| 10 | `.prks-dialog` | Canonical shared structural contract (header/body/actions). Not a B4 Vue dialog primitive. Remaining classic caller: research picker in `frontend/js/components/works.js`. B5 retires/audits that caller; do not delete the family while it has consumers. | Canonical rules in §10 |
+| 10 | `.prks-dialog` | Canonical shared structural contract (header/body/actions). Not a B4 Vue dialog primitive. Remaining classic caller: research picker in `frontend/js/components/works.js`, kept with the Research Notes product owner by the B5 audit; do not delete the family while it has consumers. | Canonical rules in §10 |
 | 11 | application shell, sidebar `.nav-disclosure` | B5 shell/feature. `.nav-disclosure` is sidebar navigation, not `PrksDisclosureButton`. | Canonical section |
 | 12 | feature layouts (work cards, PDF, ribbon, folder tree, processing, graph canvas) | B5 feature CSS **except** any shared/specialized selector that currently lives here. Deleting “all of §12” is forbidden. | Shared/specialized selectors physically here include `.prks-research-row`, base `.prks-inline-message`, `.prks-segmented*`, `.prks-btn--quiet-danger` |
 | 13 | third-party integrations | B5. Keep while those integrations exist. | Canonical section |

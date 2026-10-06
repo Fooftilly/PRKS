@@ -4015,7 +4015,7 @@ class TabContextHostRootTests(_BrowserE2E):
             1,
         )
         page.locator(".person-profile__works-action", has_text="Edit relationships").click()
-        page.wait_for_selector(".person-profile__work-card-wrap, .person-profile__role-block")
+        page.wait_for_selector(".person-profile__work-card-wrap")
         self._assert_single_mounted_root(page, root_id)
         self.assertGreaterEqual(
             page.locator(".prks-tab-root .person-profile").count(),
