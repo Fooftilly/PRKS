@@ -1,4 +1,4 @@
-import type { ProgressBrowseRow } from './legacy-work-card'
+import type { ProgressBrowseRow } from './rows'
 import type { ProgressStatus } from './status'
 
 /**

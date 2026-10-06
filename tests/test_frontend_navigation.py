@@ -11,6 +11,9 @@ _NAV = os.path.join(_FRONTEND, "js", "navigation.js")
 _APP = os.path.join(_FRONTEND, "js", "app.js")
 _SELFTEST = os.path.join(_PROJECT_DIR, "tests", "browser", "navigation_selftest.js")
 _RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_navigation_selftest.js")
+_MISSING_LEAVE_RUNNER = os.path.join(
+    _PROJECT_DIR, "tests", "browser", "run_missing_tab_leave_selftest.js"
+)
 _FIXTURE = os.path.join(_PROJECT_DIR, "tests", "browser", "navigation.html")
 _PEOPLE = os.path.join(_FRONTEND, "js", "components", "people.js")
 _FOLDERS = os.path.join(_FRONTEND, "js", "components", "folders.js")
@@ -31,7 +34,7 @@ class FrontendNavigationTests(unittest.TestCase):
         self.assertLess(nav_at, app_at)
         self.assertTrue(os.path.isfile(_NAV))
         src = _read(_NAV)
-        self.assertIn("function prksParseRoute", src)
+        self.assertIn("const prksParseRoute = prksRouteModel.parseRoute;", src)
         self.assertIn("function prksNavigate", src)
         self.assertIn("function prksSyncSidebarActive", src)
         self.assertIn("prks.routeStates.v1", src)
@@ -40,7 +43,9 @@ class FrontendNavigationTests(unittest.TestCase):
         app = _read(_APP)
         self.assertIn("prksParseRoute(", app)
         self.assertIn("switch (route.name)", app)
-        self.assertIn("prksHasPendingWorkAnnotationSync", app)
+        self.assertIn("function prksReadTabLeave()", app)
+        self.assertIn("leaveApi.run", app)
+        self.assertNotIn("prksHasPendingWorkAnnotationSync", app)
         self.assertIn("prksMaybeFlushPdfLastPageOnRouteChange", app)
         self.assertIn("prksCaptureCurrentRouteState", app)
         self.assertIn("prksFinishRouteRender", app)
@@ -53,16 +58,21 @@ class FrontendNavigationTests(unittest.TestCase):
         self.assertIn("Back to ", nav)
         self.assertNotIn("history.back()", nav)
         app = _read(_APP)
-        self.assertIn("prksHasPendingWorkAnnotationSync", app)
-        pending_at = app.find("prksHasPendingWorkAnnotationSync")
+        run_at = app.find("leaveApi.run")
+        commit_at = app.find("async function prksCommitTabRouteRender")
         finish_at = app.find("prksFinishRouteRender")
-        self.assertNotEqual(pending_at, -1)
-        self.assertLess(pending_at, finish_at)
+        self.assertNotEqual(run_at, -1)
+        self.assertLess(run_at, commit_at)
+        self.assertLess(commit_at, finish_at)
+        self.assertNotIn("prksHasPendingWorkAnnotationSync", app)
 
     def test_component_filter_keys_remain(self):
-        people = _read(_PEOPLE)
+        people_vue = _read(
+            os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "people", "PeopleIndexRoute.vue")
+        )
         folders = _read(_FOLDERS)
-        self.assertIn("PRKS_PEOPLE_LIBRARY_FILTER_KEY", people)
+        self.assertIn("prks-people-library-filter", people_vue)
+        self.assertNotIn("PRKS_PEOPLE_LIBRARY_FILTER_KEY", _read(_PEOPLE))
         self.assertIn("PRKS_FOLDER_LIBRARY_FILTER_KEY", folders)
         self.assertNotIn("PRKS_PEOPLE_LIBRARY_FILTER_KEY", _read(_NAV))
 
@@ -111,6 +121,21 @@ class FrontendNavigationTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stdout + "\n" + proc.stderr)
         self.assertIn("passed", proc.stdout)
+        self.assertIn(", 0 failed", proc.stdout)
+        self.assertNotIn("FAIL  ", proc.stdout)
+
+    def test_missing_tab_leave_script_cancels_direct_route(self):
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "node is required for the missing leave-script test")
+        proc = subprocess.run(
+            [node, _MISSING_LEAVE_RUNNER],
+            cwd=_PROJECT_DIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + "\n" + proc.stderr)
         self.assertIn(", 0 failed", proc.stdout)
         self.assertNotIn("FAIL  ", proc.stdout)
 

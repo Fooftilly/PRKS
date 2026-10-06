@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, inject, ref } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
+import PrksScopeLine from '../../components/PrksScopeLine.vue'
 import { useResearchIndexList } from '../../research-index/useResearchIndexList'
 import { argumentIntentsKey } from './intents'
 import { useArgumentPendingAction } from './pending-action'
@@ -20,7 +22,6 @@ const unavailable = computed(() => props.projection.availability === 'unavailabl
 const kindUi = computed(() => argumentKindUi(props.projection.kind))
 const rootEl = ref<HTMLElement | null>(null)
 const titleIconHost = ref<HTMLElement | null>(null)
-const scopeHost = ref<HTMLElement | null>(null)
 const searchInput = ref<HTMLInputElement | null>(null)
 const {
   searchQuery,
@@ -30,6 +31,7 @@ const {
   showEmptyData,
   showSearchEmpty,
   rowIconHtml,
+  scopeLine,
   clearSearch,
 } = useResearchIndexList({
   icon: 'messages-square',
@@ -41,7 +43,6 @@ const {
   generation: computed(() => props.projection.generation),
   rootEl,
   titleIconHost,
-  scopeHost,
   searchInput,
 })
 
@@ -74,9 +75,9 @@ function onCreate(kind: ArgumentKind): void {
       <div class="prks-page-header page-header">
         <h2 class="prks-page-title">Arguments &amp; Stances not available offline</h2>
       </div>
-      <p class="prks-inline-message" data-prks-role="offline-unavailable">
+      <PrksInlineMessage data-prks-role="offline-unavailable">
         This list has not been cached on this device.
-      </p>
+      </PrksInlineMessage>
     </template>
     <template v-else>
       <div class="prks-page-header page-header">
@@ -108,7 +109,7 @@ function onCreate(kind: ArgumentKind): void {
             </PrksButton>
           </div>
         </div>
-        <div ref="scopeHost" data-prks-role="index-scope-host"></div>
+        <PrksScopeLine v-bind="scopeLine" />
       </div>
       <div class="prks-tabs" role="tablist" aria-label="Argument kind">
         <button
@@ -193,14 +194,9 @@ function onCreate(kind: ArgumentKind): void {
         <div v-else-if="showSearchEmpty" class="prks-research-index__empty">
           <p class="meta-row">No {{ scopeLabel }} match “{{ normalizedQuery }}”.</p>
           <p>
-            <button
-              type="button"
-              class="prks-btn prks-btn--ghost prks-btn--sm"
-              data-research-search-clear
-              @click="clearSearch"
-            >
+            <PrksButton variant="ghost" size="sm" data-research-search-clear @click="clearSearch">
               Clear search
-            </button>
+            </PrksButton>
           </p>
         </div>
       </div>

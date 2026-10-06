@@ -3,7 +3,10 @@
 Cohesive CRUD for ``/api/saved-views`` and ``/api/saved-views/:id``.
 
 Parse path/body shape, invoke ``PRKSDatabase`` Saved View methods, map
-``SavedViewError`` to HTTP status/JSON. Name/search normalization and SQL stay
+``SavedViewError`` to HTTP status/JSON. The wire shape is
+``backend/api_contract/saved_views.py``: reads go through ``dump_response``;
+writes send the committed domain row without a post-commit dump (see
+docs/api-contract-boundary.md). Request field types stay domain refusals. Name/search normalization and SQL stay
 in ``db_manager`` — this module does not open transactions or touch SQLite.
 
 ``server.py`` calls these handlers after host/origin, JSON body size, and
@@ -18,6 +21,8 @@ import logging
 from typing import Any, Optional
 from urllib.parse import unquote
 
+from backend.api_contract.boundary import dump_response
+from backend.api_contract.saved_views import SavedView, SavedViewDeleted
 from backend.db_manager import SavedViewError
 from backend.log_safety import safe_log_id, safe_log_label
 
@@ -46,14 +51,14 @@ def _send_saved_view_error(handler, exc: SavedViewError) -> None:
 
 def handle_get(handler, db, path: str) -> bool:
     if path == COLLECTION:
-        handler.send_json(200, db.get_saved_views())
+        handler.send_json(200, dump_response(SavedView, db.get_saved_views()))
         return True
     vid = item_id(path)
     if vid is None:
         return False
     data = db.get_saved_view(vid)
     if data:
-        handler.send_json(200, data)
+        handler.send_json(200, dump_response(SavedView, data))
     else:
         handler.send_json(404, {"error": "Saved View not found."})
     return True
@@ -122,5 +127,5 @@ def handle_delete(handler, db, path: str) -> bool:
     # user-controlled even after safe_log_id, and privacy policy forbids
     # logging raw library identifiers from the request path.
     LOGGER.info("saved_view_deleted")
-    handler.send_json(200, {"status": "deleted"})
+    handler.send_json(200, dump_response(SavedViewDeleted, {"status": "deleted"}))
     return True

@@ -1,5 +1,7 @@
 <script setup lang="ts">
-type Variant = 'primary' | 'secondary' | 'ghost' | 'danger'
+import { ref } from 'vue'
+
+type Variant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'quiet-danger'
 type Size = 'sm' | 'md' | 'lg'
 
 const props = withDefaults(
@@ -23,6 +25,12 @@ const emit = defineEmits<{
   click: [event: MouseEvent]
 }>()
 
+const root = ref<HTMLButtonElement | null>(null)
+
+function focus(): void {
+  root.value?.focus()
+}
+
 function onClick(event: MouseEvent): void {
   if (props.disabled || props.busy) {
     event.preventDefault()
@@ -30,10 +38,13 @@ function onClick(event: MouseEvent): void {
   }
   emit('click', event)
 }
+
+defineExpose({ focus })
 </script>
 
 <template>
   <button
+    ref="root"
     :type="type"
     class="prks-btn"
     :class="{
@@ -41,6 +52,7 @@ function onClick(event: MouseEvent): void {
       'prks-btn--secondary': variant === 'secondary',
       'prks-btn--ghost': variant === 'ghost',
       'prks-btn--danger': variant === 'danger',
+      'prks-btn--quiet-danger': variant === 'quiet-danger',
       'prks-btn--sm': size === 'sm',
       'prks-btn--md': size === 'md',
       'prks-btn--lg': size === 'lg',

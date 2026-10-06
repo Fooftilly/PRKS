@@ -20,7 +20,7 @@
         mentions: true,
     };
 
-    // activeRuntime singleton removed; use ctx.getResource('researchGraph') exclusively.
+    // One Cytoscape runtime per owner, stored on that owner's resource registry.
 
     function esc(s) {
         if (typeof root.prksEscapeHtml === 'function') return root.prksEscapeHtml(s);
@@ -695,13 +695,29 @@
         return null;
     }
 
-    function resolveActiveRuntime() {
-        const ctx = typeof root.prksGetFocusedTabContext === 'function' ? root.prksGetFocusedTabContext() : null;
-        return ctx && typeof ctx.getResource === 'function' ? ctx.getResource('researchGraph') : null;
+    function readGraphRuntime(ctx) {
+        if (!ctx) return null;
+        if (ctx.resourceRegistry && typeof ctx.resourceRegistry.get === 'function') {
+            const owned = ctx.resourceRegistry.get('researchGraph');
+            if (owned) return owned;
+        }
+        if (typeof ctx.getResource === 'function') {
+            const owned = ctx.getResource('researchGraph');
+            if (owned) return owned;
+        }
+        return null;
     }
 
-    function createResearchGraphRuntime(ctx, container, options) {
+    function resolveActiveRuntime() {
+        const ctx = typeof root.prksGetFocusedTabContext === 'function' ? root.prksGetFocusedTabContext() : null;
+        return readGraphRuntime(ctx);
+    }
+
+    function createResearchGraphRuntime(ctx, container, options, binding) {
         options = options || {};
+        binding = binding || {};
+        const registry = binding.registry || null;
+        const ticket = binding.ticket || null;
         let liveCy = null;
         let liveDom = null;
         let snapshot = null;
@@ -719,6 +735,8 @@
         let reloadGeneration = 0;
         let graphRouteSignal = options.signal || null;
         let destroyed = false;
+        let resizeFrame = 0;
+        let resizeObserver = null;
         const unbinders = [];
 
         function chromeId(local) {
@@ -760,14 +778,70 @@
             return destroyed || gen !== reloadGeneration || liveDom !== originDom;
         }
 
+        function retainLiveGraph() {
+            root.__prksResearchGraphLiveCount = (Number(root.__prksResearchGraphLiveCount) || 0) + 1;
+        }
+
+        function releaseLiveGraph() {
+            const next = (Number(root.__prksResearchGraphLiveCount) || 0) - 1;
+            root.__prksResearchGraphLiveCount = next > 0 ? next : 0;
+        }
+
+        function cancelScheduledResize() {
+            if (!resizeFrame) return;
+            if (typeof root.cancelAnimationFrame === 'function') {
+                try {
+                    root.cancelAnimationFrame(resizeFrame);
+                } catch (_e) {}
+            }
+            resizeFrame = 0;
+        }
+
+        function disconnectResizeObserver() {
+            if (!resizeObserver) return;
+            try {
+                resizeObserver.disconnect();
+            } catch (_e) {}
+            resizeObserver = null;
+        }
+
+        function scheduleCyResize(cy) {
+            if (!cy || typeof cy.resize !== 'function') return;
+            cancelScheduledResize();
+            if (typeof root.requestAnimationFrame === 'function') {
+                resizeFrame = root.requestAnimationFrame(function () {
+                    resizeFrame = 0;
+                    if (!destroyed && liveCy === cy && typeof cy.resize === 'function') cy.resize();
+                }) || 0;
+                return;
+            }
+            cy.resize();
+        }
+
+        function observeCanvas(canvas) {
+            disconnectResizeObserver();
+            if (!canvas || typeof root.ResizeObserver !== 'function') return;
+            try {
+                resizeObserver = new root.ResizeObserver(function () {
+                    if (destroyed || !liveCy) return;
+                    scheduleCyResize(liveCy);
+                });
+                resizeObserver.observe(canvas);
+            } catch (_e) {
+                resizeObserver = null;
+            }
+        }
+
         function teardownCy() {
+            cancelScheduledResize();
+            disconnectResizeObserver();
             if (liveCy) {
                 try {
                     liveCy.destroy();
                 } catch (_e) {}
                 liveCy = null;
+                releaseLiveGraph();
             }
-            root.__prksResearchGraphLiveCount = 0;
         }
 
         function destroy() {
@@ -780,13 +854,31 @@
             if (container && container.__prksGraphRuntime === runtime) {
                 container.__prksGraphRuntime = null;
             }
-            if (ctx && typeof ctx.getResource === 'function' && ctx.getResource('researchGraph') === runtime) {
-                if (typeof ctx.clearResource === 'function') ctx.clearResource('researchGraph');
+            if (registry && typeof registry.get === 'function' && registry.get('researchGraph') === runtime) {
+                registry.dispose('researchGraph');
             }
         }
 
+        function ownerStillMounts() {
+            if (destroyed) return false;
+            if (options.stale && options.stale()) return false;
+            if (!registry || !ticket || typeof registry.accepts !== 'function' || !registry.accepts(ticket)) return false;
+            return registry.get('researchGraph') === runtime;
+        }
+
+        function claimMount() {
+            if (ownerStillMounts()) return true;
+            destroy();
+            return false;
+        }
+
         function debug() {
-            return { cy: liveCy, liveCount: liveCy ? 1 : 0 };
+            return {
+                cy: liveCy,
+                liveCount: liveCy ? 1 : 0,
+                resizeObserverLive: !!resizeObserver,
+                chromeListenerCount: unbinders.length,
+            };
         }
 
         function updateEdgeLabels(cy) {
@@ -933,7 +1025,13 @@
             });
         }
 
+        function ownsFocusedInspector() {
+            if (typeof root.prksGetFocusedTabContext !== 'function') return true;
+            return root.prksGetFocusedTabContext() === ctx;
+        }
+
         function paintInspector(html) {
+            if (!ownsFocusedInspector()) return;
             const el = inspectorEl(liveDom);
             if (!el) return;
             el.innerHTML = html;
@@ -953,18 +1051,11 @@
         }
 
         function syncInspectorVisibility() {
-            if (typeof root.prksRefreshFocusedRightPanelVisibility === 'function') {
+            if (ownsFocusedInspector() && typeof root.prksRefreshFocusedRightPanelVisibility === 'function') {
                 root.prksRefreshFocusedRightPanelVisibility();
             }
             const cy = liveCy;
-            if (!cy || typeof cy.resize !== 'function') return;
-            if (typeof root.requestAnimationFrame === 'function') {
-                root.requestAnimationFrame(function () {
-                    if (!destroyed && liveCy === cy) cy.resize();
-                });
-            } else {
-                cy.resize();
-            }
+            scheduleCyResize(cy);
         }
 
         function renderInspector() {
@@ -1262,146 +1353,64 @@
             });
         }
 
-        function shellHtml(opts) {
-            const derivedOff = opts && opts.derivedOff;
-            const tooLarge = opts && opts.tooLarge;
-            const loadError = opts && opts.loadError;
-            function chk(key, label, on) {
-                return (
-                    '<label class="prks-filter-toggle"><input type="checkbox" data-graph-filter="' +
-                    key +
-                    '"' +
-                    (on ? ' checked' : '') +
-                    '> <span>' +
-                    esc(label) +
-                    '</span></label>'
-                );
-            }
-            let body = '';
-            if (tooLarge) {
-                body =
-                    '<p class="prks-inline-message" role="status">This graph is too large to render as a single snapshot.</p>';
-            } else if (opts && opts.offlineUnavailable) {
-                body = '<div class="prks-inline-message" data-prks-role="offline-unavailable" role="status">' +
-                    '<p>' + (includePeople ? 'Research Graph variant unavailable offline' : 'Research Graph not available offline') + '</p>' +
-                    '<p>Open the Research Graph while connected to cache this snapshot.</p></div>';
-            } else if (loadError) {
-                body = '<p class="prks-inline-message" role="status">Could not load Research Graph.</p>';
-            } else {
-                body =
-                    '<div class="research-graph__stage">' +
-                    '<div class="prks-panel research-graph__canvas-wrap"><div class="research-graph__canvas" data-prks-role="graph-canvas" role="img" aria-label="Research relationship graph"></div></div>' +
-                    '</div>' +
-                    (derivedOff
-                        ? '<p class="meta-row" role="status">Note-mention edges unavailable. Canonical relationships still shown.</p>'
-                        : '');
-            }
-            function legendIcon(name, kind) {
-                const icon = typeof root.prksIcon === 'function' ? root.prksIcon(name, { size: 'sm' }) : '';
-                return (
-                    '<span class="research-graph__legend-icon research-graph__legend-icon--' +
-                    kind +
-                    '" aria-hidden="true">' +
-                    icon +
-                    '</span>'
-                );
-            }
-            const findId = chromeId('graph-find');
-            const resultsId = chromeId('graph-find-results');
-            const filtersPanelId = chromeId('graph-filters-panel');
-            const legendPanelId = chromeId('graph-legend-panel');
-            const filtersHtml =
-                '<div class="research-graph__filters">' +
-                '<span class="research-graph__filter-group">Nodes</span>' +
-                chk('concepts', 'Concepts', filters.concepts) +
-                chk('positions', 'Positions', filters.positions) +
-                chk('arguments', 'Arguments', filters.arguments) +
-                chk('works', 'Works', filters.works) +
-                chk('people', 'People', includePeople) +
-                '</div>' +
-                '<div class="research-graph__filters">' +
-                '<span class="research-graph__filter-group">Relations</span>' +
-                chk('hierarchy', 'Hierarchy', filters.hierarchy) +
-                chk('responds', 'Responses', filters.responds) +
-                chk('sources', 'Sources', filters.sources) +
-                chk('mentions', 'Note mentions', filters.mentions) +
-                '</div>';
-            const legendHtml =
-                '<div class="research-graph__legend-group"><span class="research-graph__filter-group">Nodes</span>' +
-                '<ul>' +
-                '<li>' +
-                legendIcon('network', 'concept') +
-                ' Concept</li>' +
-                '<li>' +
-                legendIcon('flag', 'position') +
-                ' Position</li>' +
-                '<li>' +
-                legendIcon('messages-square', 'argument') +
-                ' Argument</li>' +
-                '<li>' +
-                legendIcon('messages-square', 'stance') +
-                ' Stance</li>' +
-                '<li>' +
-                legendIcon('file-text', 'work') +
-                ' Work</li>' +
-                '<li>' +
-                legendIcon('user', 'person') +
-                ' Person</li>' +
-                '</ul></div>' +
-                '<div class="research-graph__legend-group"><span class="research-graph__filter-group">Relations</span>' +
-                '<ul>' +
-                '<li><span class="research-graph__line research-graph__line--hierarchy"></span> Hierarchy</li>' +
-                '<li><span class="research-graph__line research-graph__line--responds"></span> Response</li>' +
-                '<li><span class="research-graph__line research-graph__line--source"></span> Source</li>' +
-                '<li><span class="research-graph__line research-graph__line--mentions"></span> Note mention</li>' +
-                '<li><span class="research-graph__line research-graph__line--author"></span> Author</li>' +
-                '</ul></div>';
+        function graphStageMarkup() {
             return (
-                '<div class="research-graph">' +
-                '<div class="prks-page-header page-header"><div class="page-header__title-row"><h2 class="prks-page-title">' +
-                (typeof root.prksPageHeaderIconHtml === 'function'
-                    ? root.prksPageHeaderIconHtml('share-2')
-                    : '') +
-                ' Research Graph</h2></div></div>' +
-                '<div class="prks-toolbar research-graph__toolbar">' +
-                '<label class="research-graph__find-label"' +
-                (findId ? ' for="' + esc(findId) + '"' : '') +
-                '>Find node</label>' +
-                '<input' +
-                (findId ? ' id="' + esc(findId) + '"' : '') +
-                ' class="prks-input" type="search" autocomplete="off" placeholder="Find node…" data-prks-role="graph-find"' +
-                (resultsId ? ' aria-controls="' + esc(resultsId) + '"' : '') +
-                '>' +
-                '<button type="button" class="prks-btn prks-btn--secondary" data-prks-role="graph-fit">Fit</button>' +
-                '<button type="button" class="prks-btn prks-btn--secondary" data-prks-role="graph-reset">Reset layout</button>' +
-                '<button type="button" class="prks-btn prks-btn--secondary" data-prks-role="graph-filters-toggle" aria-expanded="false"' +
-                (filtersPanelId ? ' aria-controls="' + esc(filtersPanelId) + '"' : '') +
-                '>Filters</button>' +
-                '<button type="button" class="prks-btn prks-btn--secondary" data-prks-role="graph-legend-toggle" aria-expanded="false"' +
-                (legendPanelId ? ' aria-controls="' + esc(legendPanelId) + '"' : '') +
-                '>Legend</button>' +
-                '</div>' +
-                '<div' +
-                (resultsId ? ' id="' + esc(resultsId) + '"' : '') +
-                ' class="research-graph__find-results" role="listbox" hidden data-prks-role="graph-find-results"></div>' +
-                '<div class="research-graph__status prks-inline-message" role="status" data-prks-role="graph-status"' +
-                (statusMessage ? '' : ' hidden') +
-                '>' +
-                esc(statusMessage) +
-                '</div>' +
-                '<div' +
-                (filtersPanelId ? ' id="' + esc(filtersPanelId) + '"' : '') +
-                ' class="research-graph__aux-panel research-graph__filters-panel" data-prks-role="graph-filters-panel" hidden>' +
-                filtersHtml +
-                '</div>' +
-                '<div' +
-                (legendPanelId ? ' id="' + esc(legendPanelId) + '"' : '') +
-                ' class="research-graph__aux-panel research-graph__legend" data-prks-role="graph-legend-panel" aria-label="Graph legend" hidden>' +
-                legendHtml +
-                '</div>' +
-                body +
+                '<div class="research-graph__stage" data-prks-role="graph-stage">' +
+                '<div class="prks-panel research-graph__canvas-wrap"><div class="research-graph__canvas" data-prks-role="graph-canvas" role="img" aria-label="Research relationship graph"></div></div>' +
                 '</div>'
             );
+        }
+
+        function graphDerivedMarkup() {
+            return '<p class="meta-row" role="status" data-prks-role="graph-derived-off">Note-mention edges unavailable. Canonical relationships still shown.</p>';
+        }
+
+        function graphFailureMarkup(opts) {
+            if (opts && opts.tooLarge) {
+                return '<p class="prks-inline-message" role="status">This graph is too large to render as a single snapshot.</p>';
+            }
+            if (opts && opts.offlineUnavailable) {
+                return (
+                    '<div class="prks-inline-message" data-prks-role="offline-unavailable" role="status">' +
+                    '<p>' +
+                    (includePeople ? 'Research Graph variant unavailable offline' : 'Research Graph not available offline') +
+                    '</p>' +
+                    '<p>Open the Research Graph while connected to cache this snapshot.</p></div>'
+                );
+            }
+            return '<p class="prks-inline-message" role="status">Could not load Research Graph.</p>';
+        }
+
+        function usesAdoptedShell(host) {
+            const scope = host || container;
+            if (!scope || typeof scope.querySelector !== 'function') return false;
+            if (scope.getAttribute && scope.hasAttribute && scope.hasAttribute('data-prks-research-graph')) return true;
+            return !!scope.querySelector('[data-prks-research-graph]');
+        }
+
+        function graphBodyEl(host) {
+            return queryGraphRole(host, 'graph-body') || (liveDom && queryGraphRole(liveDom, 'graph-body'));
+        }
+
+        function setDerivedNote(host, on) {
+            const note = queryGraphRole(host, 'graph-derived-off') || (liveDom && queryGraphRole(liveDom, 'graph-derived-off'));
+            if (!note) return;
+            note.hidden = !on;
+        }
+
+        function paintAdoptedBody(host, htmlOpts) {
+            const body = graphBodyEl(host);
+            if (!body) return false;
+            const failed = htmlOpts && (htmlOpts.tooLarge || htmlOpts.offlineUnavailable || htmlOpts.loadError);
+            if (failed) {
+                body.innerHTML = graphFailureMarkup(htmlOpts);
+                return true;
+            }
+            if (!queryGraphRole(host, 'graph-canvas') && !(liveDom && queryGraphRole(liveDom, 'graph-canvas'))) {
+                body.innerHTML = graphStageMarkup() + (htmlOpts && htmlOpts.derivedOff ? graphDerivedMarkup() : '');
+            }
+            setDerivedNote(host, !!(htmlOpts && htmlOpts.derivedOff));
+            return true;
         }
 
         function applyFocusAfterLayout() {
@@ -1441,7 +1450,9 @@
                 autoungrabify: false,
                 autounselectify: false,
             });
-            root.__prksResearchGraphLiveCount = 1;
+            retainLiveGraph();
+            observeCanvas(canvas);
+            const cy = liveCy;
             liveCy.on('tap', 'node', function (evt) {
                 const id = evt.target.id();
                 selectNode(id, { center: false });
@@ -1469,6 +1480,7 @@
             pendingFocus = pendingFocus || '';
             const layout = liveCy.layout(coseLayoutOptions(true));
             layout.one('layoutstop', function () {
+                if (destroyed || liveCy !== cy) return;
                 applyFocusAfterLayout();
             });
             layout.run();
@@ -1480,15 +1492,6 @@
                 ? liveDom.querySelector('[data-graph-filter="people"]')
                 : null);
             if (el) el.checked = !!includePeople;
-        }
-
-        function refreshHost(host, htmlOpts) {
-            if (!host) return;
-            unbindAll();
-            host.innerHTML = shellHtml(htmlOpts || {});
-            bindShell(host);
-            syncPeopleCheckbox();
-            if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(host);
         }
 
         async function loadSnapshot(people, signal) {
@@ -1519,19 +1522,23 @@
                 const result = await loadSnapshot(wantPeople, graphRouteSignal);
                 const data = result.snapshot;
                 if (graphReloadIsStale(gen, originDom)) return false;
+                if (!ownerStillMounts()) {
+                    destroy();
+                    return false;
+                }
                 includePeople = wantPeople;
                 filters.people = wantPeople;
                 snapshot = data;
                 statusMessage = '';
                 if (keep && nodeById(snapshot, keep)) pendingFocus = keep;
                 else pendingFocus = '';
+                if (!host || !usesAdoptedShell(host)) return false;
+                const htmlOpts = {
+                    derivedOff: data.meta && data.meta.derived_note_edges_available === false,
+                };
                 teardownCy();
                 unbindAll();
-                liveDom = null;
-                if (!host) return false;
-                host.innerHTML = shellHtml({
-                    derivedOff: data.meta && data.meta.derived_note_edges_available === false,
-                });
+                paintAdoptedBody(host, htmlOpts);
                 bindShell(host);
                 syncPeopleCheckbox();
                 mountCytoscape(host);
@@ -1567,28 +1574,41 @@
             findHits = [];
             findIndex = -1;
             graphRouteSignal = options.signal || graphRouteSignal;
-            if (!container) return;
+            if (!container || !usesAdoptedShell(container)) {
+                destroy();
+                return;
+            }
+            if (!ownerStillMounts()) {
+                destroy();
+                return;
+            }
             const gen = (reloadGeneration += 1);
             const originHost = container;
-            container.innerHTML = shellHtml({});
             bindShell(container);
+            syncPeopleCheckbox();
             try {
                 const result = await loadSnapshot(includePeople, options.signal);
                 const data = result.snapshot;
                 if (destroyed || gen !== reloadGeneration) return;
-                if (options.stale && options.stale()) return;
+                if (!claimMount()) return;
                 snapshot = data;
-                refreshHost(originHost, {
+                const htmlOpts = {
                     derivedOff: data.meta && data.meta.derived_note_edges_available === false,
-                });
+                };
+                paintAdoptedBody(originHost, htmlOpts);
                 mountCytoscape(originHost);
                 applyProvenance(result);
             } catch (e) {
                 if (destroyed || gen !== reloadGeneration) return;
-                if (options.stale && options.stale()) return;
+                if (!claimMount()) return;
                 if (typeof root.prksIsAbortError === 'function' && root.prksIsAbortError(e)) return;
                 const tooLarge = e && e.code === 'graph_too_large';
-                refreshHost(originHost, { tooLarge: tooLarge, loadError: !tooLarge, offlineUnavailable: e && e.code === 'graph_offline_unavailable' });
+                const htmlOpts = {
+                    tooLarge: tooLarge,
+                    loadError: !tooLarge,
+                    offlineUnavailable: e && e.code === 'graph_offline_unavailable',
+                };
+                paintAdoptedBody(originHost, htmlOpts);
             }
         }
 
@@ -1623,14 +1643,36 @@
         if (container && container.__prksGraphRuntime && typeof container.__prksGraphRuntime.destroy === 'function') {
             container.__prksGraphRuntime.destroy();
         }
-        const runtime = createResearchGraphRuntime(ctx, container, options);
-        if (ctx && typeof ctx.setResource === 'function') {
-            ctx.setResource('researchGraph', runtime, function () {
-                runtime.destroy();
+        const registry = ctx && ctx.resourceRegistry ? ctx.resourceRegistry : null;
+        const ticket = ctx && typeof ctx.resourceTicket === 'function'
+            ? ctx.resourceTicket(typeof options.routeGen === 'number' ? options.routeGen : undefined)
+            : null;
+        const runtime = createResearchGraphRuntime(ctx, container, options, {
+            registry: registry,
+            ticket: ticket,
+        });
+        let attached = 'rejected';
+        if (registry && ticket && typeof registry.register === 'function') {
+            attached = registry.register(ticket, {
+                kind: 'researchGraph',
+                value: runtime,
+                suspendable: false,
+                dispose: function () {
+                    runtime.destroy();
+                },
             });
+        }
+        if (attached === 'rejected') {
+            runtime.destroy();
+            return Promise.resolve();
         }
         if (container) container.__prksGraphRuntime = runtime;
         return runtime.start();
+    }
+
+    function prksReleaseResearchGraph(ctx) {
+        if (!ctx || !ctx.resourceRegistry || typeof ctx.resourceRegistry.dispose !== 'function') return;
+        ctx.resourceRegistry.dispose('researchGraph');
     }
 
     function destroyResearchGraph(container) {
@@ -1639,9 +1681,8 @@
             return;
         }
         const ctx = typeof root.prksGetFocusedTabContext === 'function' ? root.prksGetFocusedTabContext() : null;
-        if (ctx && typeof ctx.getResource === 'function' && ctx.getResource('researchGraph')) {
-            if (typeof ctx.clearResource === 'function') ctx.clearResource('researchGraph');
-            else ctx.getResource('researchGraph').destroy();
+        if (ctx && ctx.resourceRegistry && typeof ctx.resourceRegistry.dispose === 'function') {
+            ctx.resourceRegistry.dispose('researchGraph');
         }
     }
 
@@ -1649,7 +1690,7 @@
         const ctx = tabId && root.prksGetTabContext
             ? root.prksGetTabContext(tabId)
             : root.prksGetFocusedTabContext && root.prksGetFocusedTabContext();
-        const rt = ctx && ctx.getResource && ctx.getResource('researchGraph');
+        const rt = readGraphRuntime(ctx);
         if (rt && rt.debug) return rt.debug();
         return null;
     }
@@ -1698,6 +1739,7 @@
     const api = {
         renderResearchGraph: renderResearchGraph,
         destroyResearchGraph: destroyResearchGraph,
+        prksReleaseResearchGraph: prksReleaseResearchGraph,
         createResearchGraphRuntime: createResearchGraphRuntime,
         prksGetResearchGraphDebug: prksGetResearchGraphDebug,
         reloadGraph: reloadGraph,

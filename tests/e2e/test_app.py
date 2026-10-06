@@ -3830,8 +3830,13 @@ class WorkspaceTabsTests(_BrowserE2E):
                 };
                 const coldCtx = window.prksEnsureTabContext('e2e-cold-last-page');
                 coldCtx.mount(document.createElement('div'));
-                coldCtx.setResource('pdf', {
-                    flushLastPage: function () { cold += 1; },
+                coldCtx.registerResource(coldCtx.resourceTicket(), {
+                    kind: 'pdf',
+                    value: {
+                        flushLastPage: function () { cold += 1; },
+                    },
+                    suspendable: true,
+                    dispose: function () {},
                 });
                 window.prksUnmountTabContext(coldCtx.tabId, 'cold-park');
                 window.prksFlushPdfLastPageToStorage();
@@ -4458,7 +4463,7 @@ class TabContextHostRootTests(_BrowserE2E):
                 const ctxB = window.prksEnsureTabContext('prks-test-secondary');
                 ctxB.mount(host);
                 const workB = await fetchWorkDetails(workBId);
-                await renderWorkDetails(ctxB, workB, { generation: ctxB.generation });
+                await window.prksMountWorkDetail(ctxB, ctxB.root, workB, { generation: ctxB.generation, workId: workBId });
                 const afterFocused = window.prksGetFocusedTabContext();
                 const afterWork = afterFocused && afterFocused.getEntity ? afterFocused.getEntity('work') : null;
                 const annBtn = document.querySelector('#right-panel .tab-btn[data-target="annotations"]');
@@ -6227,9 +6232,12 @@ class WorkspaceTilingTests(_BrowserE2E):
         main_id = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
         page.evaluate(
             """() => {
-                window.__prksOriginalPresentConceptDetail = window.prksVuePresentConceptDetail;
-                window.prksVuePresentConceptDetail = function () {
-                    throw new Error('forced secondary render failure');
+                window.__prksOriginalPresentRoute = window.prksVuePresentRoute;
+                window.prksVuePresentRoute = function (request) {
+                    if (request && request.feature === 'concept-detail') {
+                        throw new Error('forced secondary render failure');
+                    }
+                    return window.__prksOriginalPresentRoute(request);
                 };
             }"""
         )
@@ -6249,7 +6257,7 @@ class WorkspaceTilingTests(_BrowserE2E):
             secondary_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
             page.evaluate(
                 """(id) => {
-                    window.prksVuePresentConceptDetail = window.__prksOriginalPresentConceptDetail;
+                    window.prksVuePresentRoute = window.__prksOriginalPresentRoute;
                     window.prksGetTabContext(id).query('#prks-route-retry').click();
                 }""",
                 arg=secondary_id,
@@ -6269,8 +6277,8 @@ class WorkspaceTilingTests(_BrowserE2E):
         finally:
             page.evaluate(
                 """() => {
-                    if (window.__prksOriginalPresentConceptDetail) {
-                        window.prksVuePresentConceptDetail = window.__prksOriginalPresentConceptDetail;
+                    if (window.__prksOriginalPresentRoute) {
+                        window.prksVuePresentRoute = window.__prksOriginalPresentRoute;
                     }
                 }"""
             )

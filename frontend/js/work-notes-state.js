@@ -220,15 +220,29 @@
         }
     }
 
+    /**
+     * One acknowledgement subscription per owner route. It patches the
+     * owner's Work entity, canonical bodies, and observed base whether or not
+     * a notes editor is mounted, so it is not an editor session and not a
+     * registry slot. registerCleanup ties it to the route: beginRoute, cold
+     * park, and destroy stop it; warm park keeps it, so an acknowledgement
+     * received while parked is on the entity at resume.
+     */
+    const syncBoundOwners = new WeakSet();
+
     function bindSync(ctx) {
-        if (!ctx || typeof ctx.setResource !== 'function') return;
-        if (ctx.getResource('workNotesSyncBound')) return;
+        if (!ctx || ctx.destroyed || typeof ctx.registerCleanup !== 'function') return;
+        if (syncBoundOwners.has(ctx)) return;
         if (!root.prksSync || typeof root.prksSync.subscribe !== 'function') return;
         const stop = root.prksSync.subscribe(function (event) {
             if (event && event.acknowledged) acceptAck(ctx, event);
             void refreshPending();
         });
-        ctx.setResource('workNotesSyncBound', { stop: stop }, function () { stop(); });
+        syncBoundOwners.add(ctx);
+        ctx.registerCleanup(function () {
+            syncBoundOwners.delete(ctx);
+            if (typeof stop === 'function') stop();
+        });
     }
 
     /* ---- save boundary ---- */

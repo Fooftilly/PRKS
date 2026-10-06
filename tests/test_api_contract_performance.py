@@ -27,6 +27,7 @@ from backend.performance import COUNTER_NAMES, reset, snapshot
 
 _ROOT = Path(__file__).resolve().parents[1]
 _CLIENT = _ROOT / "frontend-app" / "src" / "api" / "performance-diagnostics.ts"
+_ARTIFACT = _ROOT / "docs" / "api" / "openapi-performance-diagnostics.json"
 _SRC = _ROOT / "frontend-app" / "src"
 
 
@@ -53,6 +54,13 @@ class PerformanceDiagnosticsContractTests(unittest.TestCase):
             dump_response(PerformanceDiagnosticsReset, {"status": "reset"}),
             {"status": "reset"},
         )
+        status = performance_diagnostics_openapi_document()["components"]["schemas"][
+            "PerformanceDiagnosticsReset"
+        ]["properties"]["status"]
+        self.assertEqual(status.get("const"), "reset")
+        self.assertNotIn("pattern", status)
+        with self.assertRaises(ValidationError):
+            PerformanceDiagnosticsReset.model_validate({"status": "cleared"})
 
     def test_unknown_snapshot_key_is_refused(self):
         raw = snapshot()
@@ -99,6 +107,14 @@ class PerformanceDiagnosticsContractTests(unittest.TestCase):
         )
         api.validate_request(request)
         api.validate_response(request, response)
+
+    def test_checked_in_openapi_artifact_matches_generator(self):
+        self.assertTrue(
+            _ARTIFACT.is_file(),
+            "commit docs/api/openapi-performance-diagnostics.json",
+        )
+        on_disk = json.loads(_ARTIFACT.read_text(encoding="utf-8"))
+        self.assertEqual(on_disk, performance_diagnostics_openapi_document())
 
     def test_reset_operation_requires_json(self):
         document = performance_diagnostics_openapi_document()

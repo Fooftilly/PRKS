@@ -1,5 +1,5 @@
 import { render, type VNode } from 'vue'
-import type { PrksRouteInstanceBase, RouteInstanceInput } from './route-instance'
+import type { PrksRouteInstance, PrksRouteInstanceInput } from './routes'
 
 /**
  * Narrow owner the shared lifecycle needs.
@@ -24,7 +24,7 @@ interface OwnerSession {
   paintedGeneration: number
   closedGeneration: number
   cleanupArmed: boolean
-  route: PrksRouteInstanceBase | null
+  route: PrksRouteInstance | null
 }
 
 interface SessionCarrier {
@@ -47,7 +47,7 @@ const earlyPresenters = new Map<string, EarlyRoutePresenter>()
 export interface RouteSurfacePresent {
   owner: RouteSurfaceOwner
   host: HTMLElement
-  route: RouteInstanceInput
+  route: PrksRouteInstanceInput
   /** Called only after this owner's generation is accepted. */
   render: (generation: number) => VNode
   /**
@@ -57,12 +57,9 @@ export interface RouteSurfacePresent {
   armBeginRouteCleanup?: boolean
 }
 
-export interface RouteSurfaceState {
-  name: string
-  canonicalHash: string
-  ownsMainShell: boolean
-  generation: number
-  mounted: boolean
+/** This owner's accepted route, plus whether its host is still mounted. */
+export type RouteSurfaceState = PrksRouteInstance & {
+  readonly mounted: boolean
 }
 
 function isOwner(value: unknown): value is RouteSurfaceOwner {
@@ -127,8 +124,8 @@ function armOwnerCleanup(owner: RouteSurfaceOwner, session: OwnerSession): void 
 
 /**
  * Paint one owner's Vue tree. Generations are compared only with that owner's
- * previous paints. Main/Secondary identity is stored on the route record and
- * is not published to the shell.
+ * previous paints. The stored record is that owner's `PrksRouteInstance`,
+ * including params. Main/Secondary identity is not published to the shell.
  */
 export function presentRouteSurface(input: RouteSurfacePresent): boolean {
   if (!isOwner(input.owner)) return false
@@ -137,12 +134,7 @@ export function presentRouteSurface(input: RouteSurfacePresent): boolean {
   const generation = requested ?? session.paintedGeneration + 1
   if (generation <= session.closedGeneration || generation < session.paintedGeneration) return false
   if (!input.host || !input.host.isConnected) return false
-  const route: PrksRouteInstanceBase = {
-    name: input.route.name,
-    canonicalHash: input.route.canonicalHash,
-    ownsMainShell: input.route.ownsMainShell,
-    generation,
-  }
+  const route: PrksRouteInstance = { ...input.route, generation }
   session.paintedGeneration = generation
   session.route = route
   if (input.armBeginRouteCleanup !== false) {
@@ -183,10 +175,7 @@ export function readRouteSurface(owner: object | null | undefined): RouteSurface
   const session = readSession(owner)
   if (!session || !session.route) return null
   return {
-    name: session.route.name,
-    canonicalHash: session.route.canonicalHash,
-    ownsMainShell: session.route.ownsMainShell,
-    generation: session.route.generation,
+    ...session.route,
     mounted: session.mountedHost != null && session.mountedHost.isConnected,
   }
 }
@@ -220,6 +209,36 @@ export function registerEarlyRoutePresenter(
   if (typeof feature !== 'string' || feature.length === 0 || typeof present !== 'function') return
   earlyPresenters.set(feature, present)
   publishEarlyRouteRequests(target)
+}
+
+export interface RouteDispatchTarget {
+  prksVuePresentRoute?: (request: unknown) => boolean
+  prksVueDismissRoute?: (owner: object) => void
+}
+
+/**
+ * Deliver one host-local request to the presenter registered for its feature.
+ * That presenter records the owner's `PrksRouteInstance`. A request for an
+ * unregistered feature is not claimed, so the coordinator can leave it on the host.
+ */
+export function presentRegisteredRoute(request: unknown): boolean {
+  if (!request || typeof request !== 'object') return false
+  const host = (request as { host?: unknown }).host
+  if (!host || typeof (host as HTMLElement).setAttribute !== 'function') return false
+  const feature = earlyFeatureName(request)
+  const present = feature ? earlyPresenters.get(feature) : undefined
+  if (!feature || !present) return false
+  return present(request, host as HTMLElement) === true
+}
+
+/**
+ * The only window entries for route presentation and dismissal. Feature
+ * presenters stay off `window`. Each owner holds one route-surface session, so
+ * one dismiss drops whichever route feature that owner painted.
+ */
+export function registerRouteWindowBridge(target: RouteDispatchTarget = window): void {
+  target.prksVuePresentRoute = presentRegisteredRoute
+  target.prksVueDismissRoute = dismissRouteSurface
 }
 
 /**

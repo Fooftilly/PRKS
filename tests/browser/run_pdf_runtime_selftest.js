@@ -4,6 +4,7 @@
 const path = require('path');
 
 const rootDir = path.resolve(__dirname, '../..');
+globalThis.prksOwnerResource = require(path.join(rootDir, 'frontend/js/owner-resource.js'));
 const tc = require(path.join(rootDir, 'frontend/js/tab-context.js'));
 const pdfRt = require(path.join(rootDir, 'frontend/js/pdf-work-runtime.js'));
 
@@ -64,8 +65,13 @@ prksDestroyAllTabContexts();
 
 const pendingWarm = prksEnsureTabContext('pending-warm');
 pendingWarm.mount(makeHost());
-pendingWarm.setResource('pdf', {
-    hasPendingSync: function () { return true; },
+pendingWarm.registerResource(pendingWarm.resourceTicket(), {
+    kind: 'pdf',
+    value: {
+        hasPendingSync: function () { return true; },
+    },
+    suspendable: true,
+    dispose: function () {},
 });
 assert('pending PDF warm-suspends', prksWarmParkTabContext(pendingWarm.tabId, makeHost()));
 assertEq('global pending check sees warm PDF', prksHasPendingWorkAnnotationSync(), true);
@@ -127,11 +133,21 @@ rtB.annotationCache = {
 rtA.syncState.pendingChanges = false;
 rtB.syncState.pendingChanges = true;
 
-ctxA.setResource('pdf', rtA, function () {
-    rtA.destroy();
+ctxA.registerResource(ctxA.resourceTicket(), {
+    kind: 'pdf',
+    value: rtA,
+    suspendable: true,
+    dispose: function () {
+        rtA.destroy();
+    },
 });
-ctxB.setResource('pdf', rtB, function () {
-    rtB.destroy();
+ctxB.registerResource(ctxB.resourceTicket(), {
+    kind: 'pdf',
+    value: rtB,
+    suspendable: true,
+    dispose: function () {
+        rtB.destroy();
+    },
 });
 
 assert('cache A != B', ctxA.getResource('pdf').annotationCache !== ctxB.getResource('pdf').annotationCache);
@@ -232,8 +248,13 @@ assert('stale runtime has no worker', staleRt.annotationPersistence == null);
 
     const genDuringGet = ctxA.generation;
     const pendingRt = createWorkPdfRuntime({ workId: 'WA-get' });
-    ctxA.setResource('pdf', pendingRt, function () {
-        pendingRt.destroy();
+    ctxA.registerResource(ctxA.resourceTicket(), {
+        kind: 'pdf',
+        value: pendingRt,
+        suspendable: true,
+        dispose: function () {
+            pendingRt.destroy();
+        },
     });
     const getInFlight = fakeAnnotationGetThenInstall(ctxA, genDuringGet, pendingRt);
     ctxA.beginRoute({ name: 'work', hash: '#/works/WA-after-get' });
@@ -243,8 +264,13 @@ assert('stale runtime has no worker', staleRt.annotationPersistence == null);
     assert('pending runtime has no persistence after stale GET', pendingRt.annotationPersistence == null);
 
     const rtLive = createWorkPdfRuntime({ workId: 'WA-live' });
-    ctxA.setResource('pdf', rtLive, function () {
-        rtLive.destroy();
+    ctxA.registerResource(ctxA.resourceTicket(), {
+        kind: 'pdf',
+        value: rtLive,
+        suspendable: true,
+        dispose: function () {
+            rtLive.destroy();
+        },
     });
     let installedLive = 0;
     prksInstallPdfAnnotationPersistenceIfCurrent(ctxA, ctxA.generation, rtLive, undefined, undefined, function () {
@@ -278,8 +304,13 @@ assert('stale runtime has no worker', staleRt.annotationPersistence == null);
     ctxC.mount(makeHost());
     ctxC.beginRoute({ name: 'work', hash: '#/works/WC' });
     const rtC = createWorkPdfRuntime({ workId: 'WC' });
-    ctxC.setResource('pdf', rtC, function () {
-        rtC.destroy();
+    ctxC.registerResource(ctxC.resourceTicket(), {
+        kind: 'pdf',
+        value: rtC,
+        suspendable: true,
+        dispose: function () {
+            rtC.destroy();
+        },
     });
     const viewer1 = { id: 'v1' };
     rtC.viewer = viewer1;

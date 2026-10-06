@@ -1,5 +1,6 @@
 import { nextTick } from 'vue'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import ownerResourceSource from '../../../../frontend/js/owner-resource.js?raw'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
 import worksSource from '../../../../frontend/js/components/works.js?raw'
 import workNotesStateSource from '../../../../frontend/js/work-notes-state.js?raw'
@@ -26,6 +27,15 @@ type WorkCtx = {
   clearResource: (name: string) => void
   query: (selector: string) => Element | null
   beginRoute: (route: { name: string; params: { workId: string } }) => number
+  resourceTicket: (generation?: number) => unknown
+  registerResource: (
+    ticket: unknown,
+    registration: { kind: string; value: unknown; suspendable: boolean; dispose: () => void },
+  ) => string
+  suspend: (host: HTMLElement) => boolean
+  resume: (host: HTMLElement) => boolean
+  unmount: (reason?: string) => void
+  timers: Map<string, unknown>
 }
 
 type NotesWindow = {
@@ -39,7 +49,7 @@ type NotesWindow = {
   prksDestroyWorkNotesEditor: (ctx: WorkCtx) => void
   prksResetResearchDraftsForTest: () => void
   prksEnqueueWorkResearchNotesSave: (ctx: WorkCtx, workId: string) => Promise<{ code: string }>
-  initEasyMDE: (ctx: WorkCtx, work: { id: string }) => void
+  initEasyMDE: (ctx: WorkCtx, work: { id: string }, ticket: unknown) => void
   EasyMDE?: new (options: { element: HTMLTextAreaElement }) => {
     codemirror: { getInputField: () => HTMLElement; on: (event: string, handler: () => void) => void }
     value: () => string
@@ -112,12 +122,13 @@ function installRefreshedNotes(held: ReturnType<typeof holdResearchNotesSave>) {
     latestSaveEditGeneration: 0,
     settledSaveToken: 0,
   }
-  held.ctx.setResource('workNotes', notes)
+  held.ctx.registerResource(held.ctx.resourceTicket(), { kind: 'workNotes', value: notes, suspendable: true, dispose: function () {} })
   held.status.innerText = 'Saving...'
   return { started, notes }
 }
 
 beforeAll(() => {
+  notesWindow.eval(ownerResourceSource)
   notesWindow.eval(tabContextSource)
   notesWindow.eval(worksSource)
   registerWorkResearchNotesBridge(window)
@@ -177,7 +188,7 @@ describe('work research notes session', () => {
     main.setEntity('work', { id: 'work-a' })
     side.setEntity('work', { id: 'work-a' })
     const notes = { workId: 'work-a', editGeneration: 0, drafting: false }
-    main.setResource('workNotes', notes)
+    main.registerResource(main.resourceTicket(), { kind: 'workNotes', value: notes, suspendable: true, dispose: function () {} })
     notesWindow.prksWorkNotesMarkEdit(notes, 'work-a', 'Unscoped edit')
     expect(main.ui.workResearchNoteSession?.text).toBe('Unscoped edit')
     expect(main.ui.workResearchNoteSession?.ownerTabId).toBe(main.tabId)
@@ -285,7 +296,7 @@ describe('work research notes session', () => {
       latestSaveEditGeneration: 0,
       settledSaveToken: 0,
     }
-    held.ctx.setResource('workNotes', notes)
+    held.ctx.registerResource(held.ctx.resourceTicket(), { kind: 'workNotes', value: notes, suspendable: true, dispose: function () {} })
     notesWindow.prksWorkNotesMarkEdit(notes, 'work-a', 'second draft', held.ctx)
     const second = notesWindow.prksEnqueueWorkResearchNotesSave(held.ctx, 'work-a')
     expect(held.releases).toHaveLength(2)
@@ -324,7 +335,7 @@ describe('work research notes session', () => {
       value() { return '' }
     }
     try {
-      notesWindow.initEasyMDE(ctx, { id: 'work-a' })
+      notesWindow.initEasyMDE(ctx, { id: 'work-a' }, ctx.resourceTicket())
       expect(input.getAttribute('aria-label')).toBe('Research Notes')
     } finally {
       notesWindow.EasyMDE = previous
@@ -421,7 +432,7 @@ describe('work research notes session', () => {
 
   it('drops hint resources when the editor is destroyed', () => {
     const ctx = mount('main')
-    ctx.setResource('workNotes', { editor: {} })
+    ctx.registerResource(ctx.resourceTicket(), { kind: 'workNotes', value: { editor: {} }, suspendable: true, dispose: function () {} })
     ctx.setResource('wikiTitleMap', { alpha: 'work-a' })
     ctx.setResource('wikiWorkList', [{ id: 'work-a' }])
     ctx.setResource('conceptHintList', [{ id: 'c1' }])
@@ -517,3 +528,248 @@ describe('work research notes session', () => {
     expect(side.root.querySelectorAll('.work-notes-pane')).toHaveLength(1)
   })
 })
+
+type FakeEasyMDE = {
+  element: HTMLTextAreaElement
+  handlers: Map<string, () => void>
+  destroyed: number
+  text: string
+}
+
+type LiveNotes = { workId: string; editor: { value: () => string } }
+
+describe('Research Notes owner lifetime', () => {
+  const built: FakeEasyMDE[] = []
+  let subscribed = 0
+  let stopped = 0
+  let previousEasyMDE: NotesWindow['EasyMDE']
+  let previousSync: unknown
+
+  function installFakes() {
+    built.length = 0
+    subscribed = 0
+    stopped = 0
+    previousEasyMDE = notesWindow.EasyMDE
+    previousSync = (window as unknown as { prksSync?: unknown }).prksSync
+    const input = document.createElement('textarea')
+    ;(notesWindow as unknown as { EasyMDE: unknown }).EasyMDE = class {
+      record: FakeEasyMDE
+      codemirror: {
+        getInputField: () => HTMLElement
+        on: (event: string, handler: () => void) => void
+        off: (event: string, handler: () => void) => void
+      }
+      constructor(options: { element: HTMLTextAreaElement }) {
+        const record: FakeEasyMDE = { element: options.element, handlers: new Map(), destroyed: 0, text: '' }
+        this.record = record
+        built.push(record)
+        this.codemirror = {
+          getInputField: () => input,
+          on: (event, handler) => { record.handlers.set(event, handler) },
+          off: (event, handler) => {
+            if (record.handlers.get(event) === handler) record.handlers.delete(event)
+          },
+        }
+      }
+      value() { return this.record.text }
+      toTextArea() { this.record.destroyed += 1 }
+    }
+    ;(window as unknown as { prksSync: unknown }).prksSync = {
+      subscribe: () => {
+        subscribed += 1
+        return () => { stopped += 1 }
+      },
+    }
+  }
+
+  function restoreFakes() {
+    ;(notesWindow as unknown as { EasyMDE: unknown }).EasyMDE = previousEasyMDE
+    ;(window as unknown as { prksSync: unknown }).prksSync = previousSync
+  }
+
+  function paneOwner(tabId: string, workId = 'work-a'): WorkCtx {
+    const ctx = mount(tabId)
+    ctx.setEntity('work', { id: workId })
+    ctx.root.innerHTML = `
+      <div class="work-workspace" data-work-id="${workId}">
+        <div data-prks-role="editor-status"></div>
+        <div class="work-notes-editor-wrap">
+          <textarea data-prks-role="research-notes-editor"></textarea>
+        </div>
+      </div>`
+    return ctx
+  }
+
+  function live(ctx: WorkCtx): LiveNotes | undefined {
+    return ctx.getResource('workNotes') as LiveNotes | undefined
+  }
+
+  function parking(): HTMLElement {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    return host
+  }
+
+  afterEach(() => {
+    restoreFakes()
+  })
+
+  it('builds nothing from a ticket captured before the route moved on', () => {
+    installFakes()
+    const ctx = paneOwner('main')
+    const ticket = ctx.resourceTicket()
+    ctx.beginRoute({ name: 'work', params: { workId: 'work-a' } })
+    ctx.setEntity('work', { id: 'work-a' })
+    notesWindow.initEasyMDE(ctx, { id: 'work-a' }, ticket)
+    expect(built).toHaveLength(0)
+    expect(live(ctx)).toBeUndefined()
+    expect(subscribed).toBe(0)
+  })
+
+  it('builds nothing after a cold park, including once the owner remounts', () => {
+    installFakes()
+    const ctx = paneOwner('main')
+    const ticket = ctx.resourceTicket()
+    ctx.unmount('park')
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    notesWindow.prksMountTabContext('main', host)
+    const again = notesWindow.prksGetTabContext('main')
+    again.setEntity('work', { id: 'work-a' })
+    again.root.innerHTML = '<textarea data-prks-role="research-notes-editor"></textarea>'
+    notesWindow.initEasyMDE(again, { id: 'work-a' }, ticket)
+    expect(built).toHaveLength(0)
+    expect(live(again)).toBeUndefined()
+  })
+
+  it('keeps the same editor and debounce across warm park and destroys it once on cold release', () => {
+    installFakes()
+    const ctx = paneOwner('main')
+    notesWindow.initEasyMDE(ctx, { id: 'work-a' }, ctx.resourceTicket())
+    const notes = live(ctx)
+    expect(notes?.workId).toBe('work-a')
+    expect(built).toHaveLength(1)
+    expect(subscribed).toBe(1)
+    built[0].text = 'typed'
+    built[0].handlers.get('change')?.()
+    expect(ctx.timers.has('saveNotesTimeout')).toBe(true)
+
+    expect(ctx.suspend(parking())).toBe(true)
+    expect(live(ctx)).toBe(notes)
+    expect(built[0].destroyed).toBe(0)
+    expect(stopped).toBe(0)
+    expect(ctx.timers.has('saveNotesTimeout')).toBe(true)
+    expect(ctx.resume(parking())).toBe(true)
+    expect(live(ctx)).toBe(notes)
+
+    ctx.unmount('park')
+    expect(live(ctx)).toBeUndefined()
+    expect(built[0].destroyed).toBe(1)
+    expect(built[0].handlers.has('change')).toBe(false)
+    expect(stopped).toBe(1)
+    expect(ctx.timers.has('saveNotesTimeout')).toBe(false)
+  })
+
+  it('attaches already suspended when deferred setup lands during warm park', () => {
+    installFakes()
+    const ctx = paneOwner('main')
+    const ticket = ctx.resourceTicket()
+    expect(ctx.suspend(parking())).toBe(true)
+    notesWindow.initEasyMDE(ctx, { id: 'work-a' }, ticket)
+    expect(built).toHaveLength(1)
+    const notes = live(ctx)
+    expect(notes).toBeTruthy()
+    expect(ctx.resume(parking())).toBe(true)
+    expect(live(ctx)).toBe(notes)
+  })
+
+  it('keeps Main and Secondary editors independent', () => {
+    installFakes()
+    const main = paneOwner('main')
+    const side = paneOwner('side')
+    notesWindow.initEasyMDE(main, { id: 'work-a' }, main.resourceTicket())
+    notesWindow.initEasyMDE(side, { id: 'work-a' }, side.resourceTicket())
+    const sideNotes = live(side)
+    expect(built).toHaveLength(2)
+    main.unmount('park')
+    expect(built[0].destroyed).toBe(1)
+    expect(built[1].destroyed).toBe(0)
+    expect(live(side)).toBe(sideNotes)
+    expect(live(main)).toBeUndefined()
+  })
+
+  it('keeps a replaced same-generation editor from marking edits or painting', () => {
+    installFakes()
+    const ctx = paneOwner('main')
+    const ticket = ctx.resourceTicket()
+    notesWindow.initEasyMDE(ctx, { id: 'work-a' }, ticket)
+    const staleHandler = built[0].handlers.get('change')
+    ctx.root.innerHTML = `
+      <div class="work-workspace" data-work-id="work-a">
+        <div data-prks-role="editor-status">Replacement ready</div>
+        <div class="work-notes-editor-wrap">
+          <textarea data-prks-role="research-notes-editor"></textarea>
+        </div>
+      </div>`
+    notesWindow.initEasyMDE(ctx, { id: 'work-a' }, ticket)
+    expect(built).toHaveLength(2)
+    expect(built[0].destroyed).toBe(1)
+    const replacement = live(ctx)
+    expect(replacement?.editor).not.toBeUndefined()
+    built[0].text = 'stale buffer'
+    staleHandler?.()
+    const status = ctx.root.querySelector('[data-prks-role="editor-status"]') as HTMLElement
+    expect(status.textContent).toBe('Replacement ready')
+    expect(ctx.ui.workResearchNoteSession).toBeNull()
+    expect(ctx.timers.has('saveNotesTimeout')).toBe(false)
+    expect(live(ctx)).toBe(replacement)
+  })
+
+  it('keeps one owner acknowledgement subscription per route across warm park', () => {
+    const listeners: Array<{ fn: (event: unknown) => void; dead: boolean }> = []
+    const previous = (window as unknown as { prksSync?: unknown }).prksSync
+    ;(window as unknown as { prksSync: unknown }).prksSync = {
+      subscribe: (fn: (event: unknown) => void) => {
+        const rec = { fn, dead: false }
+        listeners.push(rec)
+        return () => { rec.dead = true }
+      },
+      store: { listOperations: async () => [] },
+    }
+    try {
+      notesWindow.eval(workNotesStateSource)
+      const bind = (notesWindow as unknown as { prksBindWorkNotesSync: (ctx: WorkCtx) => void }).prksBindWorkNotesSync
+      const main = paneOwner('main')
+      const side = paneOwner('side')
+      bind(main)
+      bind(main)
+      bind(side)
+      expect(listeners).toHaveLength(2)
+      expect(main.getResource('workNotesSyncBound')).toBeUndefined()
+
+      const record = main.getEntity('work') as { id: string; private_notes?: string }
+      expect(main.suspend(parking())).toBe(true)
+      expect(listeners[0].dead).toBe(false)
+      listeners[0].fn({
+        operation: 'SET_WORK_PRIVATE_NOTE',
+        op: { operation: 'SET_WORK_PRIVATE_NOTE', entity_id: 'work-a', payload: { text: 'acknowledged while parked' } },
+        acknowledged: { server_revision: 3 },
+      })
+      expect(record.private_notes).toBe('acknowledged while parked')
+      expect(main.resume(parking())).toBe(true)
+
+      main.beginRoute({ name: 'work', params: { workId: 'work-a' } })
+      expect(listeners[0].dead).toBe(true)
+      expect(listeners[1].dead).toBe(false)
+      main.setEntity('work', { id: 'work-a' })
+      bind(main)
+      expect(listeners).toHaveLength(3)
+      side.unmount('park')
+      expect(listeners[1].dead).toBe(true)
+      expect(listeners[2].dead).toBe(false)
+    } finally {
+      ;(window as unknown as { prksSync: unknown }).prksSync = previous
+    }
+  })
+})
+

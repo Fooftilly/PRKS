@@ -1611,7 +1611,7 @@ class TestBackupInventory(BackupRestoreTestCase):
     def test_non_path_fields_are_explicit(self):
         names = {f.name for f in fields(StorageConfig)}
         leftover = names - classified_storage_field_names()
-        self.assertEqual(leftover, {"mode", "processing_fallback_allowed"})
+        self.assertEqual(leftover, {"mode", "processing_fallback_allowed", "root_source"})
 
 
 class TestRestorePendingPdfCleanup(BackupRestoreTestCase):
@@ -2079,7 +2079,6 @@ class TestBackupRoundTrip(BackupRestoreTestCase):
         live = server_module.db
         versions = live.execute_query("SELECT version FROM schema_version")
         self.assertEqual([row["version"] for row in versions], [PRKS_SCHEMA_VERSION])
-        self.assertEqual(PRKS_SCHEMA_VERSION, 17)
         titles = [row["title"] for row in live.execute_query("SELECT title FROM works")]
         self.assertEqual(titles, ["Incoming V12"])
         canonical = live.execute_query(

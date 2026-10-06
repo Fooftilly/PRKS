@@ -1,5 +1,6 @@
 import { nextTick } from 'vue'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import ownerResourceSource from '../../../../frontend/js/owner-resource.js?raw'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
 import runtimeSource from '../../../../frontend/js/pdf-work-runtime.js?raw'
 import {
@@ -38,7 +39,12 @@ type PdfWindow = Window & {
     tabId: string
     generation: number
     setEntity: (type: string, value: { id: string } | null) => void
-    setResource: (name: string, value: unknown, disposer?: () => void) => unknown
+    setResource: (name: string, value: unknown) => unknown
+    resourceTicket: () => unknown
+    registerResource: (
+      ticket: unknown,
+      registration: { kind: string; value: unknown; suspendable: boolean; dispose: () => void },
+    ) => string
     getResource: (name: string) => unknown
     beginRoute: (route: { name: string }) => number
     query: (selector: string) => Element | null
@@ -78,6 +84,7 @@ type PdfWindow = Window & {
 const pdfWindow = window as unknown as PdfWindow
 
 beforeAll(() => {
+  pdfWindow.eval(ownerResourceSource)
   pdfWindow.eval(tabContextSource)
   pdfWindow.eval(runtimeSource)
 })
@@ -94,7 +101,7 @@ function mount(tabId: string) {
   ctx.beginRoute({ name: 'work' })
   const viewer = document.createElement('div')
   viewer.setAttribute('data-prks-role', 'pdf-viewer')
-  ctx.root instanceof HTMLElement && ctx.root.appendChild(viewer)
+  if (ctx.root instanceof HTMLElement) ctx.root.appendChild(viewer)
   return ctx
 }
 
@@ -105,7 +112,7 @@ describe('work PDF adapter', () => {
     expect(readWorkPdf(ctx).paneHost).toBe(true)
     const runtime = pdfWindow.createWorkPdfRuntime({ workId: 'work-a' })
     runtime.viewerSetupToken = 4
-    ctx.setResource('pdf', runtime, () => runtime.destroy())
+    ctx.registerResource(ctx.resourceTicket(), { kind: 'pdf', value: runtime, suspendable: true, dispose: () => runtime.destroy() })
     expect(readWorkPdf(ctx)).toMatchObject({
       present: true,
       workId: 'work-a',
@@ -136,7 +143,7 @@ describe('work PDF adapter', () => {
       originalFlush()
     }
     runtime.viewer = { resize: () => { resized += 1 } }
-    ctx.setResource('pdf', runtime, () => runtime.destroy())
+    ctx.registerResource(ctx.resourceTicket(), { kind: 'pdf', value: runtime, suspendable: true, dispose: () => runtime.destroy() })
     expect(intentFlushWorkPdf(ctx)).toBe(true)
     expect(flushed).toBe(1)
     expect(intentResizeWorkPdf(ctx)).toBe(true)
@@ -144,9 +151,14 @@ describe('work PDF adapter', () => {
 
     let resourceWrites = 0
     const originalSet = ctx.setResource.bind(ctx)
-    ctx.setResource = (name, value, disposer) => {
+    ctx.setResource = (name, value) => {
       resourceWrites += 1
-      return originalSet(name, value, disposer)
+      return originalSet(name, value)
+    }
+    const originalRegister = ctx.registerResource.bind(ctx)
+    ctx.registerResource = (ticket, registration) => {
+      resourceWrites += 1
+      return originalRegister(ticket, registration)
     }
     const seen: string[] = []
     ctx.setEntity('work', { id: 'work-a' })
@@ -166,6 +178,7 @@ describe('work PDF adapter', () => {
 
   it('requires a Work id from a typed caller and still rejects a missing id at runtime', () => {
     type MountArg = NonNullable<Parameters<typeof intentMountWorkPdf>[1]>
+    // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- `{} extends Pick` is the required-key check
     type MountIdIsRequired = {} extends Pick<MountArg, 'id'> ? false : true
     const mountIdIsRequired: MountIdIsRequired = true
     expect(mountIdIsRequired).toBe(true)
@@ -268,7 +281,7 @@ describe('work PDF adapter', () => {
       flushed += 1
     }
     runtime._destroyed = true
-    ctx.setResource('pdf', runtime, () => {})
+    ctx.registerResource(ctx.resourceTicket(), { kind: 'pdf', value: runtime, suspendable: true, dispose: () => {} })
     expect(intentFlushWorkPdf(ctx)).toBe(false)
     expect(flushed).toBe(0)
   })
@@ -276,7 +289,7 @@ describe('work PDF adapter', () => {
   it('uses the existing pending-annotation leave check', () => {
     const ctx = mount('leave')
     const runtime = pdfWindow.createWorkPdfRuntime({ workId: 'work-a' })
-    ctx.setResource('pdf', runtime, () => runtime.destroy())
+    ctx.registerResource(ctx.resourceTicket(), { kind: 'pdf', value: runtime, suspendable: true, dispose: () => runtime.destroy() })
     expect(workPdfLeaveNeedsConfirm(ctx)).toBe(false)
     runtime.syncState.pendingChanges = true
     expect(workPdfLeaveNeedsConfirm(ctx)).toBe(true)
@@ -336,7 +349,7 @@ describe('work PDF adapter', () => {
     }
     runtime.viewer = viewer
     const token = runtime.viewerSetupToken
-    ctx.setResource('pdf', runtime, () => runtime.destroy())
+    ctx.registerResource(ctx.resourceTicket(), { kind: 'pdf', value: runtime, suspendable: true, dispose: () => runtime.destroy() })
     const captured = { generation: ctx.generation }
     expect(readWorkPdfSearch(ctx).open).toBe(false)
     expect(intentOpenWorkPdfSearch(ctx, captured)).toBe(true)
@@ -385,7 +398,7 @@ describe('work PDF adapter', () => {
     const viewer = { id: 'viewer', updates: [] as string[], resize() {} }
     runtime.viewer = viewer
     runtime.viewerSetupToken = 3
-    ctx.setResource('pdf', runtime, () => runtime.destroy())
+    ctx.registerResource(ctx.resourceTicket(), { kind: 'pdf', value: runtime, suspendable: true, dispose: () => runtime.destroy() })
     const opened = runtime.openAnnotationPopup?.({
       annId: 'A',
       comment: 'from A',
@@ -443,7 +456,7 @@ describe('work PDF adapter', () => {
     runtime.viewer = viewer
     runtime.viewerSetupToken = 2
     runtime.annotationCache = { items: [{ id: 'ann-a' }], listPublished: true }
-    ctx.setResource('pdf', runtime, () => runtime.destroy())
+    ctx.registerResource(ctx.resourceTicket(), { kind: 'pdf', value: runtime, suspendable: true, dispose: () => runtime.destroy() })
     expect(runtime.openAnnotationDrawer()).toBe(true)
     const read = readWorkPdfAnnotationDrawer(ctx)
     expect(read.published).toBe(true)
@@ -483,7 +496,7 @@ describe('work PDF adapter', () => {
     runtime.viewer = viewer
     runtime.viewerSetupToken = 2
     runtime.noteAnnotationDrawerFrame({ paneWidth: 900, mobile: false })
-    ctx.setResource('pdf', runtime, () => runtime.destroy())
+    ctx.registerResource(ctx.resourceTicket(), { kind: 'pdf', value: runtime, suspendable: true, dispose: () => runtime.destroy() })
     expect(runtime.openAnnotationDrawer()).toBe(true)
     const read = readWorkPdfAnnotationDrawer(ctx)
     const ticket = {
@@ -539,7 +552,7 @@ describe('work PDF adapter', () => {
       destroy: () => void
     }
     runtime.viewerSetupToken = 2
-    ctx.setResource('pdf', runtime, () => runtime.destroy())
+    ctx.registerResource(ctx.resourceTicket(), { kind: 'pdf', value: runtime, suspendable: true, dispose: () => runtime.destroy() })
     expect(runtime.openAnnotationDrawer()).toBe(true)
     const read = readWorkPdfAnnotationDrawer(ctx)
     let finish: (ok: boolean) => void = () => {}
@@ -580,7 +593,7 @@ describe('work PDF adapter', () => {
       destroy: () => void
     }
     runtime.annotationCache = { items: [{ id: 'ann-a' }], listPublished: true }
-    ctx.setResource('pdf', runtime, () => runtime.destroy())
+    ctx.registerResource(ctx.resourceTicket(), { kind: 'pdf', value: runtime, suspendable: true, dispose: () => runtime.destroy() })
     expect(runtime.openAnnotationDrawer()).toBe(true)
     const row = () => document.querySelector('[data-ann-id="ann-a"]')
     syncWorkPdfAnnotationDrawer(ctx)

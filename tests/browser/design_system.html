@@ -206,44 +206,54 @@
                 </div>
             </div>
             <div class="work-browse-collection work-browse-collection--cards card-grid" style="margin-bottom:var(--space-md)">
-                <div class="project-card project-card--work-card" role="link" tabindex="0" aria-label="Specimen with ready thumb">
+                <div class="project-card project-card--work-card" data-prks-route="#/works/specimen-ready" aria-label="Specimen with ready thumb">
+                    <a class="work-card__link" href="#/works/specimen-ready" aria-label="Specimen with ready thumb">
                     <div class="work-card__thumb work-card__thumb--pdf work-card__thumb--ready" data-prks-thumb-state="ready" data-prks-thumb-preview-kind="pdf" data-prks-thumb-page="1"></div>
                     <div class="work-card__body">
                         <div class="card-title" title="Ready thumb">Ready thumb</div>
                         <div class="meta-row work-card__meta">Author: Specimen · 2024</div>
                     </div>
+                    </a>
                 </div>
-                <div class="project-card project-card--work-card" role="link" tabindex="0" aria-label="Specimen loading">
+                <div class="project-card project-card--work-card" data-prks-route="#/works/specimen-loading">
+                    <a class="work-card__link" href="#/works/specimen-loading" aria-label="Specimen loading">
                     <div class="work-card__thumb work-card__thumb--pdf work-card__thumb--loading" data-prks-thumb-state="loading" data-prks-thumb-preview-kind="pdf" data-prks-thumb-page="1"></div>
                     <div class="work-card__body">
                         <div class="card-title" title="Loading thumb">Loading thumb</div>
                         <div class="meta-row work-card__meta">Author: Specimen · 2024</div>
                     </div>
+                    </a>
                 </div>
-                <div class="project-card project-card--work-card" role="link" tabindex="0" aria-label="Specimen unavailable">
+                <div class="project-card project-card--work-card" data-prks-route="#/works/specimen-unavailable">
+                    <a class="work-card__link" href="#/works/specimen-unavailable" aria-label="Specimen unavailable">
                     <div class="work-card__thumb work-card__thumb--pdf work-card__thumb--error" data-prks-thumb-state="error" data-prks-thumb-preview-kind="pdf" data-prks-thumb-page="1"></div>
                     <div class="work-card__body">
                         <div class="card-title" title="Unavailable thumb">Unavailable thumb</div>
                         <div class="meta-row work-card__meta">Author: Specimen · 2024</div>
                     </div>
+                    </a>
                 </div>
-                <div class="project-card project-card--work-card" role="link" tabindex="0" aria-label="Specimen empty">
+                <div class="project-card project-card--work-card" data-prks-route="#/works/specimen-empty">
+                    <a class="work-card__link" href="#/works/specimen-empty" aria-label="Specimen empty">
                     <div class="work-card__thumb work-card__thumb--pdf work-card__thumb--empty" data-prks-thumb-state="empty" title="No preview" aria-hidden="true"></div>
                     <div class="work-card__body">
                         <div class="card-title" title="Empty thumb">Empty thumb</div>
                         <div class="meta-row work-card__meta">Author: Specimen · 2024</div>
                     </div>
+                    </a>
                 </div>
             </div>
             <p class="meta-row" style="margin-bottom:var(--space-xs)">List density (same cards, collection class only — no refetch):</p>
             <div class="work-browse-collection work-browse-collection--list">
-                <div class="project-card project-card--work-card" role="link" tabindex="0" aria-label="List-mode specimen">
+                <div class="project-card project-card--work-card" data-prks-route="#/works/specimen-list">
+                    <a class="work-card__link" href="#/works/specimen-list" aria-label="List-mode specimen">
                     <div class="work-card__thumb work-card__thumb--pdf work-card__thumb--ready" data-prks-thumb-state="ready" data-prks-thumb-preview-kind="pdf" data-prks-thumb-page="1"></div>
                     <div class="work-card__body">
                         <div class="card-title" title="List density row">List density row</div>
                         <div class="meta-row work-card__meta">Author: Specimen · 2024</div>
                         <div class="work-card__context">Last opened: specimen</div>
                     </div>
+                    </a>
                 </div>
             </div>
             <p class="prks-field__help" style="margin-top:var(--space-md)">Quick preview is decorative (<code>aria-hidden</code>): hover a ready thumb or focus a card and press <kbd>P</kbd>; <kbd>Escape</kbd> dismisses. It never replaces open/navigation.</p>

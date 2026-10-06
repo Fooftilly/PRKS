@@ -16,7 +16,7 @@ class ArgumentsVueContracts(unittest.TestCase):
         detail = app[app.index("case 'argument-detail': {") : app.index("case 'research-graph': {")]
         self.assertIn("prksEffectiveArgumentRows(", index)
         self.assertIn("prksFilterArgumentsByKind(allArguments, kind)", index)
-        self.assertIn("prksPresentVueArguments(", index)
+        self.assertIn("prksPresentVueRoute(ctx, contentDiv, 'arguments'", index)
         self.assertIn("availability: 'unavailable'", index)
         self.assertIn("prksEffectiveArgumentDetail(item, argumentOps)", detail)
         self.assertIn("prksPendingCreatedArgument", detail)
@@ -25,7 +25,7 @@ class ArgumentsVueContracts(unittest.TestCase):
         self.assertIn("prksApplyPendingArgumentNames(effectiveArgument.responses)", detail)
         self.assertIn("prksEffectiveWorkReferences('argument', effectiveArgument)", detail)
         self.assertIn("ctx.ui.argumentEditing = false;", detail)
-        self.assertIn("prksPresentVueArguments(", detail)
+        self.assertIn("prksPresentVueRoute(ctx, contentDiv, 'argument-detail'", detail)
         self.assertIn("availability: 'not-found'", detail)
         self.assertNotIn("renderArgumentsIndex", app)
         self.assertNotIn("renderArgumentDetail", app)
@@ -35,22 +35,38 @@ class ArgumentsVueContracts(unittest.TestCase):
         app = (FRONTEND / "app.js").read_text()
         self.assertIn("sameArgumentsWorkspace", app)
         self.assertIn("__prksRetainArgumentsSurface", app)
+        retained = app[app.index("const PRKS_RETAINED_VUE_ROUTE_FEATURES") : app.index("function prksPresentVueRoute(")]
+        self.assertIn("'arguments',", retained)
+        self.assertIn("'argument-detail',", retained)
         present = app[
-            app.index("function prksPresentVueArguments") : app.index("function prksRenderRouteLoading")
+            app.index("function prksPresentVueRoute(") : app.index("async function prksReloadTagsVocabulary")
         ]
         self.assertIn(":scope > [data-prks-vue-route-host]", present)
         self.assertIn("contentDiv.innerHTML = '';", present)
         self.assertLess(present.index("querySelector"), present.index("contentDiv.innerHTML = '';"))
         self.assertIn(
-            "sameArgumentsWorkspace && typeof window.prksVueDismissArguments",
+            "retainedRouteSurface && typeof window.prksVueDismissRoute",
             app,
         )
-        owned = app[
-            app.index("function prksCanLeaveTabContextOwnedDraft") : app.index(
-                "async function prksRenderTabRoute"
+        self.assertIn(
+            "sameArgumentsWorkspace ||",
+            app,
+        )
+        people = (FRONTEND / "components" / "people.js").read_text()
+        person_probe = people[
+            people.index("function prksAssessPersonProfileLeave") : people.index(
+                "function prksSyncPersonProfileDraftFromEditor"
             )
         ]
-        self.assertNotIn("argumentEditing", owned)
+        work_src = (FRONTEND / "ui.js").read_text()
+        work_probe = work_src[
+            work_src.index("function prksAssessWorkMetadataLeave") : work_src.index(
+                "function prksBindWorkMetaDraftEditor"
+            )
+        ]
+        self.assertNotIn("argumentEditing", person_probe + work_probe)
+        leave_src = (ROOT / "frontend-app" / "src" / "lifecycle" / "tab-leave.ts").read_text()
+        self.assertNotIn("argumentEditing", leave_src)
         refresh = app[
             app.index("function prksOfflineMaybeRefreshFocusedRoute") : app.index(
                 "function prksRenderConnectivityIndicator"
@@ -94,9 +110,11 @@ class ArgumentsVueContracts(unittest.TestCase):
         self.assertIn("target:${row.rowKey}", detail)
         self.assertIn("source:${row.rowKey}", detail)
         self.assertIn("argumentEditorDraftFromForm", detail)
-        self.assertIn('for="`prks-arg-verdict-${row.rowKey}`"', detail)
+        self.assertIn(':for="`prks-arg-verdict-${row.rowKey}`"', detail)
         self.assertIn(':id="`prks-arg-verdict-${row.rowKey}`"', detail)
         self.assertIn(">Verdict</label>", detail)
+        targets = detail[detail.index('id="prks-arg-targets"') : detail.index('id="prks-arg-add-target"')]
+        self.assertNotIn("PrksField", targets)
         self.assertIn('aria-label="Verdict"', detail)
         self.assertIn('busy-label="Saving…"', detail)
         self.assertIn('busy-label="Editing…"', detail)

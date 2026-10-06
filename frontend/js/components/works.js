@@ -829,348 +829,6 @@ async function deleteWork(w_id, ownerCtx) {
     }
 }
 
-function prksWorkDetailsShellHtml(shell) {
-    const editorRegionId = shell.editorRegionId || 'work-notes-editor-region';
-    let leftPane = '';
-    if (shell.kind === 'pdf') {
-        leftPane = shell.hasFile
-            ? '<div class="work-pdf-pane"><div data-prks-role="pdf-viewer"></div></div>'
-            : '<div class="work-pdf-pane work-pdf-pane--empty"><p class="work-pdf-empty">No PDF file attached.</p></div>';
-    } else if (shell.kind === 'video') {
-        leftPane = shell.viewerHtml
-            || '<div class="work-pdf-pane work-pdf-pane--empty"><p class="work-pdf-empty">Video viewer unavailable.</p></div>';
-    } else {
-        leftPane = '<div class="work-pdf-pane work-pdf-pane--empty"><p class="work-pdf-empty">No file attached.</p></div>';
-    }
-    const header = shell.showHeader
-        ? `
-            <div class="prks-page-header page-header page-header--work">
-                <div class="card-heading-row card-heading-row--wrap">
-                    <h2 class="page-header--work-title">${prksEscapeHtmlLite(shell.title || 'Document')}</h2>
-                    <span data-prks-role="work-header-doc-type-slot">${shell.docTypeHtml || ''}</span>
-                </div>
-                ${shell.relSummaryHtml || ''}
-            </div>
-        `
-        : '';
-    return `
-        <div class="work-detail">
-            ${header}
-            <div class="document-view document-view--work">
-                <div class="work-main-column">
-                    <div class="work-workspace" data-work-id="${prksEscapeAttr(shell.workId)}">
-                        ${leftPane}
-                        <div class="work-split-handle" role="separator" aria-orientation="horizontal" aria-label="Resize between document and research notes" tabindex="0">
-                            <span class="work-split-handle-grip" aria-hidden="true"></span>
-                        </div>
-                        <div data-prks-role="work-research-notes-anchor">
-                        <div class="work-notes-pane">
-                            <div class="work-notes-pane-header">
-                                <h3 class="work-notes-title">Research Notes</h3>
-                                <div class="work-notes-pane-header-actions">
-                                    <button type="button" class="work-notes-toggle-btn" data-prks-role="work-notes-collapse-btn" aria-expanded="true" aria-controls="${editorRegionId}" aria-label="Collapse research notes editor" title="Collapse notes"><span class="work-notes-toggle-btn__icon" aria-hidden="true"><svg class="work-notes-toggle-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.65" stroke-linecap="round" stroke-linejoin="round"><polyline points="6.5 13 12 19 17.5 13"/><polyline points="6.5 6 12 12 17.5 6"/></svg></span></button>
-                                    <div data-prks-role="annotation-sync-status" class="work-annotation-sync-status work-annotation-sync-status--hidden" aria-live="polite"></div>
-                                    <div data-prks-role="editor-status" class="work-editor-status"></div>
-                                </div>
-                            </div>
-                            <div class="work-notes-editor-wrap" data-prks-role="work-notes-editor-region" id="${editorRegionId}">
-                                <textarea data-prks-role="research-notes-editor"></textarea>
-                            </div>
-                        </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    `;
-}
-
-async function renderWorkDetails(ctx, work, requestCtx) {
-    const generation = requestCtx && requestCtx.generation;
-    const routeSignal = requestCtx && requestCtx.signal;
-    const container = ctx && ctx.root ? ctx.root : null;
-    if (!container) return;
-    if (!ctx || typeof ctx.isCurrent !== 'function') return;
-
-    const isCurrent = function () {
-        return ctx.isCurrent(generation);
-    };
-
-    if (!work) {
-        container.innerHTML = '<p class="prks-inline-message prks-inline-message--error">File not found.</p>';
-        return;
-    }
-    if (typeof prksRememberWorkNotesCanonical === 'function') {
-        prksRememberWorkNotesCanonical(ctx, work);
-    }
-    if (typeof prksBindWorkNotesSync === 'function') prksBindWorkNotesSync(ctx);
-    /* The EFFECTIVE source: a pending identity change decides which video
-     * plays before the server has heard about it. All four columns move
-     * together, so the viewer can never be handed a URL naming one video and
-     * an id naming another. The acknowledged Work is not mutated. */
-    /* Only a Work that is ALREADY a video can have a pending source: the
-     * aggregate refuses every other transition, and nothing renders a control
-     * to attempt one. So the acknowledged kind is enough to decide whether
-     * this read is needed -- and for everything else the detail must not wait
-     * on the durable queue at all. Blocking every Work's render on an
-     * IndexedDB read means a slow or stuck durable store leaves the user
-     * looking at nothing, for a value that Work could not have. */
-    const acknowledgedKind =
-        typeof prksInferWorkSourceKind === 'function' ? prksInferWorkSourceKind(work) : '';
-    /* The Work route already refreshed and overlaid an acknowledged video.
-     * Repeating that read here would wait twice for the same pending map. */
-    const sourcePrepared = !!(requestCtx && requestCtx.sourcePrepared);
-    if (!sourcePrepared && acknowledgedKind === 'video' && typeof prksRefreshPendingWorkSources === 'function') {
-        await prksRefreshPendingWorkSources();
-        if (!isCurrent()) return;
-    }
-    if (acknowledgedKind === 'video' && typeof prksEffectiveWorkSource === 'function') {
-        work = prksEffectiveWorkSource(work);
-    }
-    let pdfModule = null;
-    const inferredKind =
-        typeof prksInferWorkSourceKind === 'function' ? prksInferWorkSourceKind(work) : '';
-
-    if (inferredKind === 'pdf' && work.file_path) {
-        pdfModule = await import('/js/components/works-pdf.js');
-    }
-    if (!isCurrent()) return;
-    let videoModule = null;
-    if (inferredKind === 'video') {
-        videoModule = await import('/js/components/works-video.js');
-    }
-    if (!isCurrent()) return;
-
-    let authorsStr = '';
-    if (work.roles) {
-        const authorsList = [];
-        work.roles.forEach((r) => {
-            if (r.role_type === 'Author') authorsList.push(r);
-            else {
-                const display =
-                    typeof prksRoleDisplayName === 'function'
-                        ? prksRoleDisplayName(r)
-                        : `${r.first_name || ''} ${r.last_name || ''}`.trim();
-                const nm = `${prksEscapeHtmlLite(display)} (${prksEscapeHtmlLite(r.role_type)})`;
-                authorsStr += `<span class="tag prks-person-chip" data-person-id="${prksEscapeAttr(String(r.id || ''))}" data-prks-route="#/people/${encodeURIComponent(String(r.id || ''))}">${nm}</span>`;
-            }
-        });
-        if (authorsList.length > 0) {
-            const authorChips = authorsList
-                .map((a) => {
-                    const display =
-                        typeof prksRoleDisplayName === 'function'
-                            ? prksRoleDisplayName(a)
-                            : `${a.first_name || ''} ${a.last_name || ''}`.trim();
-                    return `<span class="tag author-tag prks-person-chip" data-person-id="${prksEscapeAttr(String(a.id || ''))}" data-prks-route="#/people/${encodeURIComponent(String(a.id || ''))}">${typeof prksIcon === 'function' ? prksIcon('user', { size: 'sm' }) : ''} ${prksEscapeHtmlLite(display)}</span>`;
-                })
-                .join(' ');
-            authorsStr = authorChips + authorsStr;
-        }
-    }
-
-    let viewerHtml = '';
-    if (inferredKind === 'video') {
-        viewerHtml =
-            videoModule && typeof window.renderVideoViewerPane === 'function'
-                ? window.renderVideoViewerPane(work)
-                : '<div class="work-pdf-pane work-pdf-pane--empty"><p class="work-pdf-empty">Video viewer unavailable.</p></div>';
-    }
-
-    if (typeof ctx.setEntity === 'function') ctx.setEntity('work', work);
-    const workTitle = String((work && work.title) || '').trim();
-    const pdfViewerActive = inferredKind === 'pdf' && !!work.file_path;
-    const rolesForRel =
-        typeof prksEffectiveWorkDetailRoles === 'function'
-            ? prksEffectiveWorkDetailRoles(work)
-            : work;
-    const peopleN = Array.isArray(rolesForRel && rolesForRel.roles)
-        ? rolesForRel.roles.length
-        : Array.isArray(work.roles)
-          ? work.roles.length
-          : null;
-    const tagsN = Array.isArray(work.tags) ? work.tags.length : null;
-    const folderTitle = work.folder_title || (work.folder && work.folder.title) || '';
-    const folderId = work.folder_id || (work.folder && work.folder.id) || '';
-    const credit =
-        typeof prksWorkCardCreditText === 'function'
-            ? prksWorkCardCreditText(work)
-            : '';
-    const relSummaryHtml =
-        !pdfViewerActive && typeof prksRelSummaryHtml === 'function'
-            ? prksRelSummaryHtml({
-                  parts: [
-                      folderTitle
-                          ? folderId
-                              ? {
-                                    text: folderTitle,
-                                    href: '#/folders/' + encodeURIComponent(String(folderId)),
-                                }
-                              : folderTitle
-                          : null,
-                      credit || null,
-                      peopleN != null && peopleN > 0
-                          ? peopleN + (peopleN === 1 ? ' person' : ' people')
-                          : null,
-                      tagsN != null && tagsN > 0
-                          ? tagsN + (tagsN === 1 ? ' tag' : ' tags')
-                          : null,
-                  ],
-              })
-            : '';
-    const shell = {
-        workId: String(work.id),
-        generation: typeof generation === 'number' ? generation : null,
-        kind: inferredKind === 'pdf' || inferredKind === 'video' ? inferredKind : 'empty',
-        hasFile: !!work.file_path,
-        showHeader: !pdfViewerActive,
-        title: workTitle || 'Document',
-        docTypeHtml: typeof prksDocTypeBadgeHtml === 'function' ? prksDocTypeBadgeHtml(work.doc_type) : '',
-        relSummaryHtml: relSummaryHtml,
-        viewerHtml: viewerHtml,
-        editorRegionId: ctx.domId('work-notes-editor-region'),
-    };
-    /* The legacy shell exists only when the Vue bridge was never registered.
-     * A bridge that rejects this generation or Work must not dismiss the
-     * current tile or write this shell into the replaced root. */
-    if (typeof prksVuePresentWorkMainSurface !== 'function') {
-        if (!isCurrent()) return;
-        const liveWork = typeof ctx.getEntity === 'function' ? ctx.getEntity('work') : null;
-        if (!liveWork || String(liveWork.id) !== String(work.id)) return;
-        container.innerHTML = prksWorkDetailsShellHtml(shell);
-    } else if (prksVuePresentWorkMainSurface(ctx, shell) !== true) {
-        return;
-    }
-
-    const notesTa = ctx.query('[data-prks-role="research-notes-editor"]');
-    if (notesTa) {
-        notesTa.value = prksResearchNotesTextForWork(work.id, work.text_content, ctx);
-    }
-    container.querySelectorAll('.prks-person-chip').forEach((el) => {
-        el.style.cursor = 'pointer';
-    });
-
-    // Populate Right Panel only when this context is focused.
-    if (typeof prksTabContextIsFocused === 'function' ? prksTabContextIsFocused(ctx) : true) {
-        const panelTab = (ctx.ui && ctx.ui.rightPanelTab) || 'details';
-        updatePanelContent(panelTab);
-        if (typeof prksSyncRightPanelTabStrip === 'function') prksSyncRightPanelTabStrip(panelTab);
-
-        const editBtn = document.getElementById('edit-metadata-btn');
-        if (editBtn) {
-            editBtn.onclick = () => toggleWorkMetaEdit(true);
-        }
-    }
-
-    if (work.file_path && pdfModule && isCurrent()) {
-        pdfModule.initPdfViewerForWork(ctx, work);
-    }
-
-    const setupTimer = setTimeout(async () => {
-        if (ctx && ctx.timers && ctx.timers.get('workDeferredSetup') === setupTimer) {
-            ctx.clearTimer('workDeferredSetup');
-        }
-        if (!isCurrent()) return;
-        const wsEarly = container.querySelector('.work-workspace');
-        if (wsEarly) {
-            const key = 'prks.workNotesCollapsed.' + work.id;
-            const saved = localStorage.getItem(key);
-            const defaultCollapsed =
-                saved == null &&
-                typeof prksIsSmallScreen === 'function' &&
-                prksIsSmallScreen();
-            const shouldCollapse = saved === '1' || defaultCollapsed;
-            if (shouldCollapse) wsEarly.classList.add('work-workspace--notes-collapsed');
-        }
-        try {
-            const works = await fetchWorks({ signal: routeSignal });
-            if (!isCurrent()) return;
-            if (typeof ctx.setResource === 'function') {
-                ctx.setResource('wikiTitleMap', prksBuildWorkTitleLowerToIdMap(works));
-                ctx.setResource('wikiWorkList', prksBuildWikiAutocompleteWorkList(works));
-            }
-        } catch (_e) {
-            if (!isCurrent()) return;
-            if (typeof ctx.setResource === 'function') {
-                ctx.setResource('wikiTitleMap', {});
-                ctx.setResource('wikiWorkList', []);
-            }
-        }
-        try {
-            if (typeof fetchConcepts === 'function') {
-                const concepts = await fetchConcepts({ signal: routeSignal });
-                if (!isCurrent()) return;
-                if (typeof ctx.setResource === 'function') ctx.setResource('conceptHintList', concepts);
-            }
-        } catch (_e) {
-            if (!isCurrent()) return;
-            if (typeof ctx.setResource === 'function') ctx.setResource('conceptHintList', []);
-        }
-        try {
-            if (typeof fetchArguments === 'function') {
-                const argumentsList = await fetchArguments(undefined, { signal: routeSignal });
-                if (!isCurrent()) return;
-                if (typeof ctx.setResource === 'function') ctx.setResource('argumentHintList', argumentsList);
-            }
-        } catch (_e) {
-            if (!isCurrent()) return;
-            if (typeof ctx.setResource === 'function') ctx.setResource('argumentHintList', []);
-        }
-        if (!isCurrent()) return;
-        if (typeof prksRefreshPendingWorkNotes === 'function') {
-            await prksRefreshPendingWorkNotes();
-            if (!isCurrent()) return;
-        }
-        if (typeof prksEnsureWorkNotesBase === 'function') {
-            await prksEnsureWorkNotesBase(ctx, ctx.getResource && ctx.getResource('workNotesCanonical') || work);
-            if (!isCurrent()) return;
-        }
-        const notesText = prksResearchNotesTextForWork(work.id, work.text_content, ctx);
-        const presentNotes = typeof prksVuePresentWorkResearchNotes === 'function'
-            ? prksVuePresentWorkResearchNotes
-            : null;
-        const vueNotes = presentNotes ? presentNotes(ctx, work, notesText) === true : false;
-        if (!vueNotes) {
-            const notesTaLive = ctx.query ? ctx.query('[data-prks-role="research-notes-editor"]') : null;
-            if (notesTaLive && !notesTaLive.dataset.prksNotesBound) {
-                notesTaLive.value = notesText;
-            }
-        }
-        initEasyMDE(ctx, work);
-        setupWorkNotesSplitResize(ctx, work.id);
-        setupWorkNotesCollapseToggle(ctx, work.id);
-    }, 200);
-    if (ctx && typeof ctx.setTimer === 'function') ctx.setTimer('workDeferredSetup', setupTimer);
-
-    prksRequest(
-        '/api/works/' + encodeURIComponent(work.id) + '/related_folders',
-        { signal: routeSignal },
-        { priority: 'background' }
-    )
-        .then((r) => (r.ok ? r.json() : []))
-        .then((related) => {
-            if (!isCurrent()) return;
-            const target = ctx.query ? ctx.query('[data-prks-role="related-folders"]') : null;
-            if (!target || !Array.isArray(related) || related.length === 0) return;
-            target.replaceChildren();
-            for (const f of related) {
-                const span = document.createElement('span');
-                span.className = 'tag';
-                span.style.background = 'var(--accent)';
-                span.style.color = 'white';
-                span.style.cursor = 'pointer';
-                span.textContent = '\uD83D\uDCC1 ' + String(f.title || '');
-                const fid = String(f.id || '');
-                span.setAttribute('data-prks-route', '#/folders/' + encodeURIComponent(fid));
-                target.appendChild(span);
-            }
-        })
-        .catch((err) => {
-            if (typeof prksIsAbortError === 'function' && prksIsAbortError(err)) return;
-            console.error('related folders fetch failed', err);
-        });
-}
-
 /** EasyMDE toolbar uses Font Awesome class names; PRKS does not load that webfont. Map buttons to Lucide. */
 const PRKS_EASYMDE_TOOLBAR_ICONS = {
     bold: 'bold',
@@ -1207,7 +865,26 @@ function prksPaintEasyMDEToolbarIcons(toolbar) {
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(toolbar);
 }
 
-function initEasyMDE(ctx, work) {
+/**
+ * Research Notes liveness: the owner generation and Work still match, and
+ * this exact session is the installed `workNotes` slot. A same-generation
+ * replacement fails the identity check.
+ */
+function prksWorkNotesSessionLive(ctx, notes, generation) {
+    if (!prksResearchNotesMayPaint(ctx, notes && notes.workId, generation)) return false;
+    return typeof ctx.getResource === 'function' && ctx.getResource('workNotes') === notes;
+}
+
+/**
+ * Builds the pane-local EasyMDE session and registers it as the `workNotes`
+ * owner resource with `ticket`, captured when the Work paint began. The
+ * session is warm-suspendable: it lives in the parked pane DOM beside the
+ * PDF, keeps its buffer and undo history, and its `saveNotesTimeout`
+ * debounce stays a TabContext timer. Cold release destroys it. A stale or
+ * rejected ticket builds nothing.
+ */
+function initEasyMDE(ctx, work, ticket) {
+    if (!ctx || !work || !ctx.resourceRegistry || !ctx.resourceRegistry.accepts(ticket)) return;
     const titleLowerToId = (ctx && ctx.getResource ? ctx.getResource('wikiTitleMap') : null) || {};
     const prksNotesHelpHtml = `
 <div class="prks-help-section">
@@ -1259,7 +936,7 @@ function initEasyMDE(ctx, work) {
     } catch (_e) {
         /* ignore */
     }
-    const notesEl = ctx && ctx.query ? ctx.query('[data-prks-role="research-notes-editor"]') : null;
+    const notesEl = ctx.query ? ctx.query('[data-prks-role="research-notes-editor"]') : null;
     if (!notesEl) return;
     const easyMDE = new EasyMDE({
         element: notesEl,
@@ -1375,23 +1052,30 @@ function initEasyMDE(ctx, work) {
         },
     };
     if (transient) prksSyncResearchNotesState(workNotes, transient);
-    if (ctx && typeof ctx.setResource === 'function') {
-        ctx.setResource('workNotes', workNotes, function () {
+    const attached = ctx.registerResource(ticket, {
+        kind: 'workNotes',
+        value: workNotes,
+        suspendable: true,
+        dispose: function () {
             if (typeof workNotes.stopSync === 'function') workNotes.stopSync();
             workNotes.destroy();
             if (typeof window.prksVueDismissWorkResearchNotes === 'function') {
                 window.prksVueDismissWorkResearchNotes(ctx);
             }
-        });
+        },
+    });
+    if (attached === 'rejected') {
+        workNotes.destroy();
+        return;
     }
-    const notesGeneration = ctx && typeof ctx.generation === 'number' ? ctx.generation : undefined;
+    const notesGeneration = ticket.generation;
     if (window.prksSync && typeof window.prksSync.subscribe === 'function') {
         workNotes.stopSync = window.prksSync.subscribe(function (event) {
             if (!event || event.operation !== 'SET_WORK_RESEARCH_NOTE') return;
             if (event.op && event.op.entity_id !== workNotes.workId) return;
             if (workNotes.drafting) return;
-            if (!prksResearchNotesMayPaint(ctx, workNotes.workId, notesGeneration)) return;
-            const statusEl = ctx && ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
+            if (!prksWorkNotesSessionLive(ctx, workNotes, notesGeneration)) return;
+            const statusEl = ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
             if (!statusEl) return;
             if (event.acknowledged) {
                 statusEl.innerText = 'All changes saved';
@@ -1425,7 +1109,7 @@ function initEasyMDE(ctx, work) {
     }
 
     const notesChangeHandler = () => {
-        if (!prksResearchNotesMayPaint(ctx, work.id, notesGeneration)) return;
+        if (!prksWorkNotesSessionLive(ctx, workNotes, notesGeneration)) return;
         const statusEl = ctx && ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
         if (statusEl) statusEl.innerText = "Drafting...";
         prksWorkNotesMarkEdit(workNotes, work.id, easyMDE.value(), ctx);
@@ -1977,6 +1661,9 @@ function setupWorkNotesSplitResize(ctx, workId) {
         }
     });
 
+    /* The one split-view observer for this route. registerCleanup ties it to
+     * the route: warm park keeps it on the parked pane; beginRoute, cold park,
+     * and destroy disconnect it. */
     if (typeof ResizeObserver === 'function') {
         const ro = new ResizeObserver(function () {
             prksReapplyWorkNotesSplitLayout(ctx);
@@ -2028,28 +1715,6 @@ function setupWorkNotesSplitResize(ctx, workId) {
             requestAnimationFrame(() => refreshNotesEditor());
         }
     });
-
-    if (ctx && typeof ctx.setResource === 'function' && typeof ResizeObserver !== 'undefined') {
-        if (!ctx.getResource('workNotesSideRo')) {
-            let ticking = false;
-            const ro = new ResizeObserver(function () {
-                if (ticking) return;
-                ticking = true;
-                requestAnimationFrame(function () {
-                    ticking = false;
-                    if (typeof prksReapplyWorkNotesSplitLayout === 'function') {
-                        prksReapplyWorkNotesSplitLayout(ctx);
-                    }
-                });
-            });
-            ro.observe(ws);
-            ctx.setResource('workNotesSideRo', ro, function () {
-                try {
-                    ro.disconnect();
-                } catch (_e) {}
-            });
-        }
-    }
 }
 
 function setupWorkNotesCollapseToggle(ctx, workId) {

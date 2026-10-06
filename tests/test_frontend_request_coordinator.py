@@ -11,7 +11,9 @@ _INDEX = os.path.join(_FRONTEND, "index.html")
 _COORD = os.path.join(_FRONTEND, "js", "request-coordinator.js")
 _API = os.path.join(_FRONTEND, "js", "api.js")
 _APP = os.path.join(_FRONTEND, "js", "app.js")
-_WORKS = os.path.join(_FRONTEND, "js", "components", "works.js")
+_WORK_LIFECYCLE = os.path.join(
+    _PROJECT_DIR, "frontend-app", "src", "features", "work", "detail-lifecycle.ts"
+)
 _TAB_CONTEXT = os.path.join(_FRONTEND, "js", "tab-context.js")
 _RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_request_coordinator_selftest.js")
 
@@ -89,20 +91,28 @@ class FrontendRequestCoordinatorTests(unittest.TestCase):
         self.assertIn("ctx.abortController.abort()", tab_ctx)
 
     def test_work_hint_publish_checks_stale_after_await(self):
-        works = _read(_WORKS)
-        concept_await = works.find("const concepts = await fetchConcepts({ signal: routeSignal });")
+        lifecycle = _read(_WORK_LIFECYCLE)
+        concept_await = lifecycle.find(
+            "const concepts = await fetchConcepts({ signal: routeSignal } as never)"
+        )
         self.assertNotEqual(concept_await, -1)
-        concept_stale = works.find("if (!isCurrent()) return;", concept_await)
-        concept_pub = works.find("ctx.setResource('conceptHintList', concepts)", concept_await)
+        concept_stale = lifecycle.find("if (!isCurrent()) return", concept_await)
+        concept_pub = lifecycle.find(
+            "ctx.setResource('conceptHintList', concepts)", concept_await
+        )
         self.assertNotEqual(concept_stale, -1)
         self.assertNotEqual(concept_pub, -1)
         self.assertLess(concept_await, concept_stale)
         self.assertLess(concept_stale, concept_pub)
 
-        arg_await = works.find("const argumentsList = await fetchArguments(undefined, { signal: routeSignal });")
+        arg_await = lifecycle.find(
+            "const argumentsList = await fetchArguments(undefined as never, { signal: routeSignal } as never)"
+        )
         self.assertNotEqual(arg_await, -1)
-        arg_stale = works.find("if (!isCurrent()) return;", arg_await)
-        arg_pub = works.find("ctx.setResource('argumentHintList', argumentsList)", arg_await)
+        arg_stale = lifecycle.find("if (!isCurrent()) return", arg_await)
+        arg_pub = lifecycle.find(
+            "ctx.setResource('argumentHintList', argumentsList)", arg_await
+        )
         self.assertNotEqual(arg_stale, -1)
         self.assertNotEqual(arg_pub, -1)
         self.assertLess(arg_await, arg_stale)
@@ -144,6 +154,80 @@ class FrontendRequestCoordinatorTests(unittest.TestCase):
             [],
             "raw fetch() outside the reviewed bypass contract:\n" + "\n".join(leftover),
         )
+
+    def test_retired_query_families_stay_out_of_prks_request(self):
+        """Publishers, Saved Views, Processing Files, and Performance Diagnostics
+        already own their reads outside the coordinator. A prksRequest of those
+        paths would be a second client."""
+        retired = (
+            "/api/publishers",
+            "/api/saved-views",
+            "/api/processing-files",
+            "/api/diagnostics",
+        )
+        hits = []
+        for path in _frontend_js_files():
+            src = _read(path)
+            start = 0
+            while True:
+                at = src.find("prksRequest(", start)
+                if at < 0:
+                    break
+                end = src.find(";", at)
+                if end < 0:
+                    end = min(len(src), at + 500)
+                call = src[at:end]
+                for token in retired:
+                    if token in call:
+                        rel = os.path.relpath(path, _PROJECT_DIR)
+                        hits.append("%s: %s" % (rel, token))
+                start = at + len("prksRequest(")
+        self.assertEqual(hits, [], "retired family drifted back into prksRequest:\n" + "\n".join(hits))
+        coord = _read(_COORD)
+        for token in ("publishers", "saved-views", "savedViews", "processing-files", "performance-diagnostics"):
+            self.assertNotIn(token, coord)
+
+    def test_dead_coordinator_wrappers_stay_removed(self):
+        api = _read(_API)
+        for name in (
+            "function fetchConcept(",
+            "function fetchPosition(",
+            "function fetchArgument(",
+            "function fetchArgumentVerdicts(",
+            "function fetchRecent(",
+            "function fetchRecentlyAdded(",
+            "function fetchPersonGroupDetails(",
+            "window.fetchConcept =",
+            "window.fetchPosition =",
+            "window.fetchArgument =",
+            "window.fetchArgumentVerdicts",
+        ):
+            self.assertNotIn(name, api)
+        for name, marker in (
+            ("fetchFolders", "async function fetchFolders("),
+            ("fetchConcepts", "async function fetchConcepts("),
+            ("fetchPositions", "async function fetchPositions("),
+            ("fetchArguments", "async function fetchArguments("),
+        ):
+            body = api.split(marker, 1)[1].split("\nasync function ", 1)[0]
+            self.assertNotIn("prksRequest(", body, name)
+        # Live owners that the audit kept.
+        for snippet in (
+            "prksRequest('/api/works'",
+            "prksRequest('/api/folders/'",
+            "prksRequest('/api/persons'",
+            "prksRequest('/api/person-groups'",
+            "prksRequest('/api/search?'",
+            "prksRequest('/api/tags'",
+            "prksRequest('/api/settings'",
+            "prksRequest('/api/works/reindex-pdf-text'",
+            "prksRequest('/api/works/linearize-existing-pdfs'",
+            "prksRequest('/api/works/bulk'",
+            "window.fetchConcepts = fetchConcepts",
+            "window.fetchPositions = fetchPositions",
+            "window.fetchArguments = fetchArguments",
+        ):
+            self.assertIn(snippet, api)
 
     def test_node_selftest(self):
         node = shutil.which("node")
