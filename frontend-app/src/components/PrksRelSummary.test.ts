@@ -43,6 +43,9 @@ describe('PrksRelSummary', () => {
           { text: 'a', href: '//evil.example' },
           { text: 'b', href: 'https://evil.example' },
           { text: 'c', href: '#/x?data:1' },
+          { text: 'd', href: '/\\evil.example/x' },
+          { text: 'e', href: '/\t/evil.example' },
+          { text: 'f', href: '/\n/evil.example' },
         ],
       },
     })

@@ -25,7 +25,8 @@
     function isSafeInternalHref(href) {
         if (typeof href !== 'string') return false;
         const h = href.trim();
-        if (!h) return false;
+        // `\` reads as `/` and tabs/newlines are dropped by the URL parser.
+        if (!h || /[\\\u0000-\u001f\u007f]/.test(h)) return false;
         if (h.charAt(0) === '#') {
             return h.indexOf('javascript:') === -1 && h.indexOf('data:') === -1;
         }

@@ -100,6 +100,10 @@ class OverviewPrimitivesTests(unittest.TestCase):
             });
             if (bad.includes('javascript:')) throw new Error('must not emit unsafe href');
             if (!bad.includes('>x<')) throw new Error('unsafe href should fall back to text');
+            for (const href of ['//evil.example', '/\\evil.example/x', '/\t/evil.example', '/\n/evil.example']) {
+                const offOrigin = context.prksPageSummaryHtml({ parts: [{ text: 'y', href }] });
+                if (offOrigin.includes('<a')) throw new Error('must not link off-origin href ' + JSON.stringify(href));
+            }
             """
         )
 

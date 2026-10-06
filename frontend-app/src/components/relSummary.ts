@@ -14,11 +14,18 @@ export interface RelSummaryItem {
   href: string | null
 }
 
+/**
+ * Backslash and ASCII control characters are rejected outright: the URL
+ * parser reads `\` as `/` and drops tabs/newlines, so `/\host` or `/\t/host`
+ * would otherwise resolve off-origin.
+ */
+const UNSAFE_HREF_CHARS = /[\\\u0000-\u001f\u007f]/
+
 /** Same-app hash routes and root-relative paths only. */
 export function safeInternalHref(href: unknown): string | null {
   if (typeof href !== 'string') return null
   const h = href.trim()
-  if (!h) return null
+  if (!h || UNSAFE_HREF_CHARS.test(h)) return null
   const lower = h.toLowerCase()
   if (lower.includes('javascript:') || lower.includes('data:')) return null
   if (h.charAt(0) === '#') return h
