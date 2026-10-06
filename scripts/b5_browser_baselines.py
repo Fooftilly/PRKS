@@ -1440,7 +1440,9 @@ def write_markdown(artifact: dict, path: Path) -> None:  # noqa: C901
         "",
         "## Follow-ups",
         "",
-        "- Long-lived EventTarget listener growth on persistent hosts is tracked in #459.",
+        "- #459 fixed the long-lived EventTarget listener growth on persistent hosts "
+        "(page-enter `animationend` on tab roots; EasyMDE `document` keydown). "
+        "A nonzero `longLivedListenerLive` Δ above is a regression to attribute.",
         "- Known unrelated Full E2E flake: #383 (private-reminder hide→re-tile).",
         "- Broader slowness is not turned into a threshold here.",
         "",

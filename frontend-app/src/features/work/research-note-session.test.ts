@@ -4,6 +4,7 @@ import ownerResourceSource from '../../../../frontend/js/owner-resource.js?raw'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
 import worksSource from '../../../../frontend/js/components/works.js?raw'
 import workNotesStateSource from '../../../../frontend/js/work-notes-state.js?raw'
+import easyMdeVendorSource from '../../../../frontend/vendor/easymde/easymde.min.js?raw'
 import { presentWorkResearchNotes, registerWorkResearchNotesBridge, resetWorkResearchNotesForTests } from './research-note-session'
 
 type NoteEntry = {
@@ -534,6 +535,7 @@ type FakeEasyMDE = {
   handlers: Map<string, () => void>
   destroyed: number
   text: string
+  documentKeydowns: number
 }
 
 type LiveNotes = { workId: string; editor: { value: () => string } }
@@ -560,9 +562,13 @@ describe('Research Notes owner lifetime', () => {
         off: (event: string, handler: () => void) => void
       }
       constructor(options: { element: HTMLTextAreaElement }) {
-        const record: FakeEasyMDE = { element: options.element, handlers: new Map(), destroyed: 0, text: '' }
+        const record: FakeEasyMDE = { element: options.element, handlers: new Map(), destroyed: 0, text: '', documentKeydowns: 0 }
         this.record = record
         built.push(record)
+        // Like vendored EasyMDE 2.21: render() binds a document keydown that
+        // toTextArea() leaves in place and only cleanup() removes.
+        this.documentOnKeyDown = () => { record.documentKeydowns += 1 }
+        document.addEventListener('keydown', this.documentOnKeyDown, false)
         this.codemirror = {
           getInputField: () => input,
           on: (event, handler) => { record.handlers.set(event, handler) },
@@ -571,8 +577,10 @@ describe('Research Notes owner lifetime', () => {
           },
         }
       }
+      documentOnKeyDown: () => void
       value() { return this.record.text }
       toTextArea() { this.record.destroyed += 1 }
+      cleanup() { document.removeEventListener('keydown', this.documentOnKeyDown) }
     }
     ;(window as unknown as { prksSync: unknown }).prksSync = {
       subscribe: () => {
@@ -668,6 +676,42 @@ describe('Research Notes owner lifetime', () => {
     expect(built[0].handlers.has('change')).toBe(false)
     expect(stopped).toBe(1)
     expect(ctx.timers.has('saveNotesTimeout')).toBe(false)
+  })
+
+  it('models the vendored EasyMDE document keydown pairing', () => {
+    expect(easyMdeVendorSource).toContain('easymde v2.21.0')
+    expect(easyMdeVendorSource).toContain('document.addEventListener("keydown",this.documentOnKeyDown,!1)')
+    expect(easyMdeVendorSource).toContain(
+      'cleanup=function(){document.removeEventListener("keydown",this.documentOnKeyDown)}',
+    )
+    expect(easyMdeVendorSource.split('document.removeEventListener("keydown"')).toHaveLength(2)
+  })
+
+  it('releases every editor document keydown across repeated Work mounts (#459)', () => {
+    installFakes()
+    const ctx = paneOwner('main')
+    const keydown = () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      const started = ctx.generation
+      if (cycle > 0) {
+        ctx.beginRoute({ name: 'work', params: { workId: 'work-a' } })
+        ctx.setEntity('work', { id: 'work-a' })
+        expect(ctx.generation).toBeGreaterThan(started)
+        ctx.root.innerHTML = '<div class="work-workspace" data-work-id="work-a">' +
+          '<div data-prks-role="editor-status"></div><div class="work-notes-editor-wrap">' +
+          '<textarea data-prks-role="research-notes-editor"></textarea></div></div>'
+      }
+      notesWindow.initEasyMDE(ctx, { id: 'work-a' }, ctx.resourceTicket())
+    }
+    expect(built).toHaveLength(3)
+    expect(built.slice(0, 2).map((r) => r.destroyed)).toEqual([1, 1])
+    keydown()
+    expect(built.map((r) => r.documentKeydowns)).toEqual([0, 0, 1])
+
+    ctx.unmount('park')
+    expect(built[2].destroyed).toBe(1)
+    keydown()
+    expect(built.map((r) => r.documentKeydowns)).toEqual([0, 0, 1])
   })
 
   it('attaches already suspended when deferred setup lands during warm park', () => {
