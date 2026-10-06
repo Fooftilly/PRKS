@@ -89,7 +89,8 @@ for a migrated surface.
   annotation drawer pin/width setters, the old PDF viewer destroy helper and
   scroll-point helper, workspace-overview close/toggle/refresh exports,
   `prksAssignRouteEntity`, `prksFocusedRouteIsCurrent`,
-  `prksOfflineIsMutationBlocked`, `prksOfflineMarkDomainChanged`, and private
+  `prksOfflineIsMutationBlocked`, the generic `prksOfflineMarkDomainChanged`
+  (domains use their named `prksOfflineMark*Changed` wrappers), and private
   graph, tab-menu, local-store, and doc-type helpers.
 - Unused classic copies of Vue-owned constants: the Work status labels and
   the Folder Library filter key.
