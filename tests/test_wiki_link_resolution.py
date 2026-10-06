@@ -227,6 +227,30 @@ class WikiLinkResolutionTests(unittest.TestCase):
         self.assertEqual(len(selects), 1)
         self.assertIn("FROM works", selects[0])
 
+    def test_first_row_wins_even_when_its_targets_straddle_chunks(self):
+        """A row matching targets in different chunks claims each independently."""
+        self.seed_ambiguous_library()
+        # One Work answers to two targets (its id and its title); an earlier
+        # Work shares the second target as its title.
+        self.work("W-ONE", "SharedTitle")
+        self.work("W-TWO", "W-ONE")
+        text = (
+            "[[W-ONE]] [[SharedTitle]] [[Alpha]] [[W-ALPHA-2]] [[Kant]] [[P-KANT-2]] "
+            "[[Shared]] [[W-LATE]] [[Late title]] [[W-ID-AS-TITLE]] [[nobody]] [[Solo]]"
+        )
+        expected = legacy_resolve_wiki_links(self.db, text)
+        for chunk in (1, 2, 3, 5, 400):
+            with self.subTest(chunk=chunk), patch.object(
+                PRKSDatabase, "_WIKI_LINK_LOOKUP_CHUNK", chunk
+            ):
+                self.assertEqual(self.db.resolve_wiki_links(text), expected)
+                # Reversed order puts the same targets into different chunks.
+                reversed_text = " ".join(reversed(text.split(" ")))
+                self.assertEqual(
+                    self.db.resolve_wiki_links(reversed_text),
+                    legacy_resolve_wiki_links(self.db, reversed_text),
+                )
+
     def test_many_distinct_targets_use_bounded_chunks(self):
         chunk = PRKSDatabase._WIKI_LINK_LOOKUP_CHUNK
         count = chunk * 2 + 7
