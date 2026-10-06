@@ -48,15 +48,21 @@ covers every publication mechanism, not only `window.X =`:
   `Object.assign` / `defineProperty` on those objects;
 - generated classic modules (`scripts/build-*.mjs` IIFE names and their
   entries);
-- Vue reads through `window.X`, typed aliases, and string lookups such as
+- Vue reads through `window.X`, typed aliases (including multi-line
+  `(window as … & { prksX?: … }).prksX` casts), and string lookups such as
   `classic('prksX')`;
+- properties one world sets on a shared host, TabContext, or error object and
+  the other reads (see "Host and object markers");
 - every `env.d.ts` global declaration against its readers. A declaration kept
   only so a Vitest can assert Vue does *not* call a classic global
   (`prksHideWorkThumbPreview`, `prksDeleteArgumentDurably`,
   `__prksProcessingPeople`) is a test contract, not a crossing.
 
-A Vue publication with no classic reader is dead and is removed. A new
-crossing gets a row here with its owner on each side, or it is migration debt.
+A Vue publication with no classic reader is dead and is removed. The
+classic-owned table names families with representative globals: every name
+Vue reads from classic code belongs to a row whose classic owner file is
+listed and whose reason covers it. A new crossing gets a row here with its
+owner on each side, or it is migration debt.
 
 ## Classic to Vue (Vue registers, classic calls)
 
@@ -86,13 +92,13 @@ for a migrated surface.
 | --- | --- | --- | --- |
 | Route coordinator | `app.js`, `tab-context.js`, `navigation.js` | `prksPresentVueRoute`, `prksTabContextOwnsEntityRoute`, `prksNavigate` | Owns the host and request envelope for every route feature, and the TabContext generation checks. |
 | People, Person Group, Playlist route families | `people.js`, `people-groups.js`, `playlists.js` | `renderPeopleList`, `renderPersonDetails`, `renderPlaylistDetail`, `prksRefreshPersonGroupMain`, `prksReloadPlaylistDetail` | They resolve the effective/offline/durable record and hand it to `prksPresentVueRoute`, then bind offline state. They paint no HTML. |
-| Durable and offline operations | `api.js`, `local-store.js`, `offline-runtime.js`, feature `*-state.js` | `savePersonProfileDraft`, `updatePlaylist`, `prksTagsMerge`, `prksSaveWorkMetadataFields`, `prksOfflineRuntimeState` | One durable queue and one effective-state model. Vue never mirrors them. |
-| Modals and dialogs | `ui.js`, `saved-views.js`, feature modal openers | `prksConfirmDestructive`, `prksPromptTextDialog`, `prksAlertDialog`, `prksOpenNewPersonModalFromPeoplePage`, `prksOpenSavedViewModal` | The shared modal system (Escape, overlay, focus restore) is classic and out of migration scope. The Saved View modal saves through `prksSavedViewRecords`. |
+| Durable and offline operations | `api.js`, `local-store.js`, `offline-runtime.js`, `sync-runtime.js`, `tags.js`, feature `*-state.js`, `work-metadata-editor.js`, `work-source-editor.js` | `savePersonProfileDraft`, `updatePlaylist`, `prksTagsMerge`, `prksTagsDelete`, `prksSaveWorkMetadataFields`, `prksSaveWorkSource`, `prksResolveWorkMetadataFieldConflict`, `prksOfflineRuntimeState`, `prksOfflineGuardMutation`, `prksSync` | One durable queue and one effective-state model. Vue never mirrors them. |
+| Modals and dialogs | `ui.js`, `saved-views.js`, `concepts.js`, feature modal openers | `prksConfirmDestructive`, `prksPromptTextDialog`, `prksAlertDialog`, `prksAlertMessage`, `prksOpenNewPersonModalFromPeoplePage`, `prksOpenSavedViewModal`, `prksCreateConceptFlow` | The shared modal system (Escape, overlay, focus restore) is classic and out of migration scope. The Saved View modal saves through `prksSavedViewRecords`. |
 | Folder tree and hierarchy | `folders.js`, `folder-hierarchy-nav.js` | `prksFolderLibraryTreeInnerHtml`, `prksToggleFolderNodeInHost`, `prksPaintFolderLibraryGlance`, `prksPublishFolderDashboardState`, `__prksFolderDashboardState`, `__prksFolderLibraryBrandHomeReset` | The folder tree markup, expand/collapse persistence, glance, and hierarchy navigation are the product owner. Vue routes host them. |
 | Folder detail host writer | `folders.js` | `prksCommitFolderDetailSurface`, `prksFolderDetailSummaryHtml`, `prksFolderDetailNavHtml`, `prksFolderDetailSubfoldersHtml`, `prksEffectiveFolderDetailWorks` | After the Vue paint, the writer commits the hierarchy nav and subfolder rows (folder-tree rows) into the Vue host and fills the detail tree. Same owner as the folder tree. |
 | Work-card infrastructure | `work-cards.js` | `prksInitLazyWorkThumbs`, `prksRegisterWorkThumbUrl`, `prksShowWorkThumbPreview`, `prksWorkBrowseModeToggleHtml` | Thumbnail lifetime, preview, and browse mode stay classic. `PrksWorkCard` owns card markup and the credit text. |
-| PDF, video, Research Notes, private notes | `works-pdf.js`, `works-video.js`, `works.js`, `ui.js` | `initPdfViewerForWork`, `renderVideoViewerPane`, `initEasyMDE`, `prksResearchNotesTextForWork`, `prksPrivateNotesTextForEntity` | Runtime owners kept out of migration scope. |
-| Research Graph, Processing, command palette, workspace tabs | `research-graph.js`, `processing-files.js`, `command-palette.js`, `workspace-*.js` | `prksReleaseResearchGraph`, `prksProcessingAttachResources`, `prksOpenCommandPalette`, `prksWorkspaceSubscribe` | Runtime owners kept out of migration scope. `workspace-tabs.js` is the live effect coordinator behind the Vue shell's detached projection. |
+| PDF, video, Research Notes, private notes | `works-pdf.js`, `pdf-work-runtime.js`, `works-video.js`, `works.js`, `ui.js` | `initPdfViewerForWork`, `prksLayoutAnnotationDrawer`, `prksHasPendingWorkAnnotationSync`, `renderVideoViewerPane`, `initEasyMDE`, `prksResearchNotesTextForWork`, `prksPrivateNotesTextForEntity`, `prksBindPrivateNotesField` | Runtime owners kept out of migration scope. |
+| Research Graph, Processing, command palette, workspace tabs | `research-graph.js`, `processing-files.js`, `command-palette.js`, `workspace-*.js` | `prksReleaseResearchGraph`, `prksProcessingAttachResources`, `prksOpenCommandPalette`, `prksWorkspaceSubscribe`, `prksWorkspaceOnShellCommit`, `prksWorkspacePlaceContentHost`, `prksWorkspaceWatchCanvas`, `prksWorkspaceOpenTabMenu` | Runtime owners kept out of migration scope. `workspace-tabs.js` is the live effect coordinator behind the Vue shell's detached projection. |
 | Classic summary primitives | `overview-primitives.js` | `prksPageSummaryHtml`, `prksStateSummaryHtml`, `prksNavAttentionBadgeHtml` | Remaining callers are classic: folder glance, workspace overview, Details state strip, nav badges. |
 | Generated typed modules | built from `frontend-app/` by `npm run build` | `route-model.js`, `search-query-codec.js`, `workspace-model.js`, `work-route-projection.js`, `tab-leave.js`, `owner-resource.js` | Canonical typed sources compiled for classic callers. Never hand-edited. |
 | Icons | `icons.js` | `prksIcon`, `prksRefreshIcons`, `prksPageHeaderIconHtml`, `prksTagSearchIconHtml`, `prksTagPlusIconHtml`, `prksProgressStatusIconHtml` | One icon registry for both worlds (classic modals, palette, folder tree, panels, and Vue routes, `PrksWorkCard`, the workspace drag adapter). A second Vue registry would duplicate it. `prksPageHeaderIconHtml` is read only by Vue route headers today; it stays with the registry it belongs to. |
@@ -101,7 +107,23 @@ for a migrated surface.
 | Dates | `date-format.js` | `prksIsoToDdMmYyyy`, `prksParsePublishedDateInput` | One parser and formatter for published dates, shared by classic metadata editing and the Vue Processing card and records. |
 | Tag matching and inline comboboxes | `ui.js` | `prksTagMatchesQuery`, `prksTagExactMatch`, `prksTagComboboxLabel`, `prksTagVocabularyMessage`, `prksShowInlineComboboxResults`, `prksHideInlineComboboxResults` | Tag alias matching and the inline combobox behaviour are the same for classic tag pickers and the Vue Processing card and Tags intents. |
 | Shared control helpers | `ui.js` | `prksSetButtonBusy`, `prksFlashButtonLabel`, `prksSegmentedControlHtml`, `prksBindSegmentedHidden`, `prksBindAutosizeTextareas`, `prksIsSmallScreen` | Busy/flash button feedback, segmented controls, textarea autosize, and the small-screen breakpoint follow `DESIGN.md` once for both worlds. `prksFlashButtonLabel` is read only by the Vue annotation drawer today. |
+| Separators and resize | `workspace-split.js` | `prksBindDrawerWidthSeparator`, `prksWorkspaceSyncSplitSeparator`, `prksWorkspaceSyncNestedSeparator`, `prksWorkspaceReleaseRootSeparator`, `prksWorkspaceReleaseNestedSeparator` | One separator implementation owns pointer drag, keyboard resize, and separator ARIA for the Main/Secondary divider, nested Secondary splits, and the PDF annotation drawer width handle (its width mode). Vue renders the separator elements: the workspace canvas and tree, and the PDF annotation drawer, which forwards the resize ticket captured at gesture start and calls the binding's `refresh` when the painted width or min/max changes. A second implementation in Vue would split drag and ARIA behaviour. |
 | Request and error reporting | `request-coordinator.js`, `api.js` | `prksRequest`, `prksIsAbortError`, `prksConsumeApiError`, `prksReportClientError`, `prksRequestCoordinatorSnapshot`, `prksResetRequestCoordinatorDiagnostics` | One request coordinator (dedupe, abort, diagnostics) and one client-error reporter. Vue Work detail, Playlist intents, the Query cache, and performance diagnostics use them. |
+
+## Host and object markers
+
+Some crossings are properties on a shared object rather than `window` globals.
+Each has one writer and one reader.
+
+| Marker | Written by | Read by | Purpose |
+| --- | --- | --- | --- |
+| `host.__prksVueRouteRequest` | `app.js` (`prksDeliverVueRoute`) | `src/route-surface/lifecycle.ts` | Early host-local route request for a route that paints before the Vue module registers. |
+| `panel.__prksWorkPanelReadRequest` | `ui.js` | `src/features/work/panel-session.ts` | Same early-request handoff for the Work view-mode panel. |
+| `panel.dataset.prksOwnerTabId`, `panel.dataset.prksOwnerGeneration` | `ui.js` | Work panel, metadata, and private-note sessions | TabContext ownership of the right panel; Vue drops stale presents. |
+| `ctx.__prksRetain*Surface` (People, Person Groups, Playlists, Arguments, Positions, Concepts, Folder Library, Folder detail) | `app.js` | the matching `src/features/*/session.ts` cleanup | Same-route refresh in one TabContext keeps the Vue host instead of disposing it. |
+| `contentRoot.__prksFolderOfflineDispose` | `folders.js` | `src/features/folder-library/intents.ts` | Folder offline-state binding teardown owned by the folder tree. |
+| `textarea.dataset.prksNotesBound` | `ui.js` | `src/features/work/detail-lifecycle.ts` | Marks the private-notes field as bound so mount does not bind twice. |
+| `err.prksOfflineRefused` | `api.js` offline guard, and the Saved View records error in `src/features/saved-views/records.ts` | `prksOfflineWasGuardRefusal` in `api.js` | One offline-refusal flag, so classic callers skip a duplicate alert for a refusal from either client. |
 
 ## Retired by the final audit
 
