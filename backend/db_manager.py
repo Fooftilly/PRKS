@@ -5141,34 +5141,43 @@ class PRKSDatabase:
         self.execute_query("DELETE FROM publishers WHERE id = ?", (publisher_id,))
 
     def get_publishers_in_use(self) -> List[dict]:
-        """Publishers that have at least one alias or at least one work matching name/alias (nocase)."""
+        """Publishers that have at least one alias or at least one work matching name/alias (nocase).
+
+        Three statements whatever the catalog size (#186): Publishers, every
+        alias, and one grouped pass counting Works per normalized legacy
+        ``works.publisher`` label. A Work has one label, so a Publisher's
+        count is the sum over its distinct labels -- the same Works the old
+        per-Publisher ``LOWER(TRIM(publisher)) IN (...)`` query counted.
+        """
         rows = self.execute_query(
             "SELECT id, name, created_at FROM publishers ORDER BY LOWER(name) ASC"
         )
+        if not rows:
+            return []
+        aliases_by_publisher: Dict[str, List[str]] = defaultdict(list)
+        for arow in self.execute_query(
+            "SELECT publisher_id, alias FROM publisher_aliases ORDER BY LOWER(alias) ASC"
+        ):
+            aliases_by_publisher[arow["publisher_id"]].append(arow["alias"])
+        works_by_label = {
+            wrow["label"]: int(wrow["c"])
+            for wrow in self.execute_query(
+                """
+                SELECT LOWER(TRIM(publisher)) AS label, COUNT(DISTINCT id) AS c FROM works
+                WHERE TRIM(COALESCE(publisher,'')) != ''
+                GROUP BY LOWER(TRIM(publisher))
+                """
+            )
+        }
         out: List[dict] = []
         for r in rows:
             pid = r["id"]
-            arows = self.execute_query(
-                "SELECT alias FROM publisher_aliases WHERE publisher_id = ? ORDER BY LOWER(alias) ASC",
-                (pid,),
-            )
-            aliases = [x["alias"] for x in arows if (x["alias"] or "").strip()]
+            aliases = [x for x in aliases_by_publisher.get(pid, ()) if (x or "").strip()]
             name = (r["name"] or "").strip()
             labels = [name] + aliases if name else list(aliases)
             cleaned = [x.strip() for x in labels if x and x.strip()]
-            work_count = 0
-            if cleaned:
-                lows = [x.lower() for x in cleaned]
-                ph = ",".join("?" * len(lows))
-                wc = self.execute_query(
-                    f"""
-                    SELECT COUNT(DISTINCT id) AS c FROM works
-                    WHERE TRIM(COALESCE(publisher,'')) != ''
-                      AND LOWER(TRIM(publisher)) IN ({ph})
-                    """,
-                    tuple(lows),
-                )
-                work_count = int(wc[0]["c"]) if wc else 0
+            lows = {x.lower() for x in cleaned}
+            work_count = sum(works_by_label.get(low, 0) for low in lows)
             out.append(
                 {
                     "id": pid,
