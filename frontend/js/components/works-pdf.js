@@ -633,7 +633,6 @@ function prksToggleAnnotationDrawer(ctx) {
     return !!toggled;
 }
 
-window.prksToggleAnnotationDrawer = prksToggleAnnotationDrawer;
 
 /**
  * Drag preview. Sets the painted width and, when pinned, resizes the viewer.

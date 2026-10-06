@@ -232,7 +232,7 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         interpretations of operation semantics would drift the moment either
         changed."""
         app = ROOT / 'frontend-app' / 'src' / 'features' / 'folder-library'
-        legacy = (app / 'legacy-recently-added.ts').read_text()
+        legacy = (app / 'recently-added.ts').read_text()
         intents = (app / 'intents.ts').read_text()
         self.assertIn("fn(acknowledged, 'recently-added')", legacy)
         self.assertIn('prksEffectiveProjectionRows', legacy)
@@ -503,11 +503,13 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         self.assertIn('effectiveRows.value.filter(', filter_line[0],
                       'the filter must run over the overlaid rows, not the acknowledged array')
         self.assertNotIn('props.works.filter(', pane)
-        folders = (FRONTEND / 'components' / 'folders.js').read_text()
-        haystack = folders[folders.index('function prksRecentlyAddedWorkMatchesQuery('):]
+        helper = (app / 'recently-added.ts').read_text()
+        haystack = helper[helper.index('export function recentlyAddedMatchesQuery('):]
         haystack = haystack[: haystack.index('\n}')]
         for field in ('year', 'published_date', 'publisher'):
             self.assertIn('work.%s' % field, haystack, field)
+        folders = (FRONTEND / 'components' / 'folders.js').read_text()
+        self.assertNotIn('prksRecentlyAddedWorkMatchesQuery', folders)
 
     def test_embedded_summary_routes_hydrate_the_overlay_before_rendering(self):
         """`prksEffectiveWorkSummaries()` reads a map hydrated from the durable

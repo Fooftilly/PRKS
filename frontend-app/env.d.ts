@@ -124,8 +124,6 @@ interface Window {
     generation: number,
     resume?: { visibleCount?: number | null } | null,
   ) => Promise<boolean | string>
-  prksProcessingRoleTypes?: () => string[]
-  prksProcessingDomPrefix?: (owner: { tabId?: string } | null | undefined) => string
   prksProcessingAttachResources?: (owner: object, host: HTMLElement) => void
   prksProcessingReleaseResources?: (owner: object) => void
   prksProcessingSetPreview?: (
@@ -216,8 +214,6 @@ interface Window {
   prksDeleteFolderFromDetail?: (folderId: string, still?: () => boolean) => Promise<void>
   prksOpenNewFolderFromDetail?: (folder: Record<string, unknown>) => void
   prksOpenNewGroupModalFromGroupsPage?: (owner?: object) => void
-  prksTakePersonGroupCreateNavigation?: () => { mode?: string; tabId?: string }
-  prksClearPersonGroupIndexCreateOrigin?: () => void
   openPersonGroupEdit?: (owner?: object) => void
   closePersonGroupEdit?: (owner?: object) => void
   prksTogglePersonGroupMembersEdit?: (owner?: object) => void
@@ -322,24 +318,10 @@ interface Window {
     [key: string]: unknown
   }) => void
   prksUnpublishFolderDashboardState?: (container: HTMLElement) => void
-  prksFolderDashboardStateForRoot?: (root: ParentNode | HTMLElement | null) =>
-    | {
-        container?: HTMLElement | null
-        folders?: unknown[]
-        recentlyAddedWorks?: unknown[] | null
-        [key: string]: unknown
-      }
-    | undefined
   prksFolderLibraryExpandToggleLabel?: (folders: unknown) => string
   prksFolderLibraryExpandToggleInnerHtml?: () => string
   prksFolderTreeHasCollapsibleNodes?: (folders: unknown) => boolean
   prksFolderTreeAllCollapsed?: (folders: unknown) => boolean
-  prksRecentlyAddedDateLabel?: (createdAt: unknown) => string
-  prksRecentlyAddedWorkMatchesQuery?: (
-    work: unknown,
-    query: string,
-    foldersById: Map<string, unknown>,
-  ) => boolean
   prksBindFolderOfflineState?: (ctx: unknown, container: HTMLElement) => void
   prksOpenFolderModalFromLibrarySearch?: (query?: string) => void
   prksToggleFolderNode?: (folderId: string) => void
@@ -473,7 +455,6 @@ interface Window {
     onPick: (id: string, pickType?: string) => void
   }) => void
   createPosition?: (body: { name: string; description?: string }) => Promise<{ id?: string } | null>
-  createConcept?: (body: { name: string }) => Promise<{ id?: string } | null>
   updateConcept?: (id: string, body: { name?: string; description?: string }) => Promise<unknown>
   deleteConcept?: (id: string) => Promise<unknown>
   putConceptAliases?: (id: string, aliases: string[]) => Promise<unknown>

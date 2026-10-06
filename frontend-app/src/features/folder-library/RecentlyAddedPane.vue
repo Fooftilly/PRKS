@@ -11,7 +11,7 @@ import {
   effectiveRecentlyAddedRows,
   recentlyAddedDateLabel,
   recentlyAddedMatchesQuery,
-} from './legacy-recently-added'
+} from './recently-added'
 import type { FolderRow, RecentlyAddedWork } from './types'
 
 const props = defineProps<{

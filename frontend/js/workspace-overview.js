@@ -325,9 +325,6 @@
     }
 
     root.prksWorkspaceOverviewOpen = openOverview;
-    root.prksWorkspaceOverviewClose = closeOverview;
-    root.prksWorkspaceOverviewToggle = toggleOverview;
-    root.prksWorkspaceOverviewRefresh = refreshBody;
     root.prksBindWorkspaceOverviewChrome = bindChrome;
 
     if (typeof module !== 'undefined' && module.exports) {
