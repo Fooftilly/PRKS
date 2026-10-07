@@ -613,7 +613,6 @@ async function blockedRetryKeepsItsBaseOverAForeignRefresh() {
      * so the server reports the conflict. */
     const h = await busyNoteHarness('busy-foreign-refresh');
     await h.blockB();
-    await until(() => h.session().blockedBehindText === 'A', 'the blocking body to be remembered');
     assert.deepEqual(h.session().blockedBase, { value: '', revision: 0 });
     await h.store.updateOperationSyncState(h.a.op_id, { status: 'acknowledged', last_error: null });
     await h.store.deleteAcknowledgedOperation(h.a.op_id);
@@ -648,7 +647,6 @@ async function refreshedBaseCountsOnlyForThisSessionsOwnBlockingSave() {
      * reports the conflict. */
     let h = await busyNoteHarness('busy-foreign-blocking-refresh', { foreignA: true });
     await h.blockB();
-    await until(() => h.session().blockedBehindText === 'A', 'the blocking body to be remembered');
     await retire(h, h.a);
     refreshTo(h, 'A', 1);
     h.emit();
@@ -664,7 +662,6 @@ async function refreshedBaseCountsOnlyForThisSessionsOwnBlockingSave() {
      * still keeps r0 and becomes a conflict rather than replacing A. */
     h = await busyNoteHarness('busy-foreign-blocking-ack', { foreignA: true });
     await h.blockB();
-    await until(() => h.session().blockedBehindText === 'A', 'the blocking body to be remembered');
     const foreignAck = await h.ack(h.a, 1);
     h.emit(foreignAck);
     await until(() => h.session().state === 'committed', 'the retried save after a foreign ack');
@@ -686,7 +683,6 @@ async function refreshedBaseCountsOnlyForThisSessionsOwnBlockingSave() {
     h.type('A2 B');
     h.ctx.clearTimer('saveNotesTimeout');
     assert.equal((await globalThis.prksEnqueueWorkResearchNotesSave(h.ctx, 'W-1')).code, 'scope_busy');
-    await until(() => h.session().blockedBehindText === 'A2', 'the own blocking body to be remembered');
     await retire(h, a2);
     refreshTo(h, 'A2', 1);
     h.emit();

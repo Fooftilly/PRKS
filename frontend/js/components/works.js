@@ -1249,14 +1249,13 @@ function prksResearchNotesBusyRetryTarget(ctx, workId) {
 /**
  * The base a blocked body is re-sent against. A blocked body was refused
  * against `entry.blockedBase`. The owner's current observed base replaces it
- * only when it is unchanged, or when it now holds the body the save was
- * blocked behind and that body is the one this session itself last queued.
- * The blocking row comes from the shared queue and its acknowledgement
- * advances every same-Work owner (and a same-Work refresh rebuilds the base
- * from the server), so an advanced base alone does not show that the
- * blocking save was this session's. Anything else keeps the blocked base, so
- * the server reports the conflict instead of the retry silently overwriting
- * a body this session never saw.
+ * only when it is unchanged, or when it advanced to the body this session
+ * itself last queued: B was typed on top of that body, so replacing it
+ * overwrites nothing this session has not seen. The blocking row comes from
+ * the shared queue, its acknowledgement advances every same-Work owner, and
+ * a same-Work refresh rebuilds the base from the server, so an advanced base
+ * holding any other body keeps the blocked base, and the server reports the
+ * conflict instead of the retry silently overwriting it.
  */
 function prksResearchNotesBlockedSendBase(ctx, entry) {
     const blockedBase = entry && entry.blockedBase;
@@ -1264,10 +1263,8 @@ function prksResearchNotesBlockedSendBase(ctx, entry) {
     if (!blockedBase) return prksResearchNotesBaseCopy(slot);
     if (!slot) return blockedBase;
     if (slot.value === blockedBase.value && slot.revision === blockedBase.revision) return prksResearchNotesBaseCopy(slot);
-    const ownBlocking = typeof entry.blockedBehindText === 'string' &&
-        entry.blockedBehindText === entry.ownQueuedText;
-    const advancedByOwn = ownBlocking && slot.value === entry.blockedBehindText &&
-        slot.revision >= blockedBase.revision;
+    const advancedByOwn = typeof entry.ownQueuedText === 'string' &&
+        slot.value === entry.ownQueuedText && slot.revision >= blockedBase.revision;
     return advancedByOwn ? prksResearchNotesBaseCopy(slot) : blockedBase;
 }
 
@@ -1374,17 +1371,6 @@ function prksScheduleResearchNotesBusyRetry(ctx, workId, entry) {
     if (typeof ctx.registerCleanup === 'function') unregisterCleanup = ctx.registerCleanup(stop);
     prksResearchNotesBusyRetryStops.set(ctx, stop);
     arm();
-    /* Remember the body this one is blocked behind, while its row is queued. */
-    if (typeof entry.blockedBehindText !== 'string' && typeof prksRefreshPendingWorkNotes === 'function' &&
-        typeof prksWorkNoteOperations === 'function') {
-        void prksRefreshPendingWorkNotes().then(function (rows) {
-            const ops = prksWorkNoteOperations(rows, id, 'work-research-note');
-            const op = ops.length ? ops[ops.length - 1] : null;
-            if (op && op.payload && typeof op.payload.text === 'string' && typeof entry.blockedBehindText !== 'string') {
-                entry.blockedBehindText = op.payload.text;
-            }
-        }, function () { /* the base then stays the blocked one */ });
-    }
 }
 
 window.prksWorkNotesMarkEdit = prksWorkNotesMarkEdit;
@@ -1519,7 +1505,6 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId, options) {
                 if (blocked) {
                     /* Refused against this base; a retry keeps it (#465). */
                     transient.blockedBase = usedBase;
-                    transient.blockedBehindText = undefined;
                 } else if (code === 'saved') {
                     transient.ownQueuedText = content;
                 }
