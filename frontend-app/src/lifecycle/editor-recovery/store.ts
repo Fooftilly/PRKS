@@ -446,6 +446,8 @@ export function createRecoveryStore(options: RecoveryStoreOptions = {}): Recover
             tx.objectStore(DRAFTS_STORE).put({ ...record, status: 'tail-missing', updatedAt: now() })
             return done('tail-missing')
           }
+          // Same as an ordinary write of this generation: the entry's base and
+          // pane are the writer's at the time, newer than the record's.
           putPair(
             tx,
             {
@@ -454,6 +456,9 @@ export function createRecoveryStore(options: RecoveryStoreOptions = {}): Recover
               bodyLength: entry.body.length,
               status: 'active',
               updatedAt: now(),
+              ...(entry.lineage
+                ? { base: { ...entry.lineage.base }, owner: { ...record.owner, paneId: entry.lineage.owner.paneId } }
+                : {}),
             },
             entry.body,
           )

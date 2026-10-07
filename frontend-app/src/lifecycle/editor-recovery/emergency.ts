@@ -90,15 +90,26 @@ function parsePayload(raw: string | null, pageInstanceId: string): EmergencyPayl
   }
 }
 
+/** Blocked storage can throw on enumeration or reads: that leaves the emergency layer empty, never failing startup. */
 export function readEmergencyKeys(storage: EmergencyStorage): StoredEmergency[] {
   const keys: string[] = []
-  for (let i = 0; i < storage.length; i++) {
-    const key = storage.key(i)
-    if (key && key.startsWith(EMERGENCY_KEY_PREFIX)) keys.push(key)
+  try {
+    for (let i = 0; i < storage.length; i++) {
+      const key = storage.key(i)
+      if (key && key.startsWith(EMERGENCY_KEY_PREFIX)) keys.push(key)
+    }
+  } catch {
+    return []
   }
   return keys.map((key) => {
     const pageInstanceId = key.slice(EMERGENCY_KEY_PREFIX.length)
-    return { key, pageInstanceId, payload: parsePayload(storage.getItem(key), pageInstanceId) }
+    let raw: string | null = null
+    try {
+      raw = storage.getItem(key)
+    } catch {
+      /* unreadable now: kept for a later page */
+    }
+    return { key, pageInstanceId, payload: parsePayload(raw, pageInstanceId) }
   })
 }
 

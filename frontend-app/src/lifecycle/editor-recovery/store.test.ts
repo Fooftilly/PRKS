@@ -218,6 +218,26 @@ describe('recovery store', () => {
       expect(await store.applyEmergencyEntry(payload('p-dead'), entry)).toBe('noop')
     })
 
+    it('takes the base and pane from the entry for a same-owner tail', async () => {
+      const { store } = setup()
+      await seed(store, 'd-a', 'p-dead', 3)
+      const newerBase = { revision: 42, length: 9, fingerprint: 'c'.repeat(32), source: 'server' as const }
+      const entry = {
+        draftId: 'd-a',
+        kind: 'work-research-note' as const,
+        entityType: 'work' as const,
+        entityId: 'w1',
+        generation: 4,
+        committedGeneration: 3,
+        body: 'tail on the newer base',
+        lineage: { createdAt: 1, owner: { runtimeId: 'r-dead', pageInstanceId: 'p-dead', paneId: 'tab-9' }, base: newerBase },
+      }
+      expect(await store.applyEmergencyEntry(payload('p-dead'), entry)).toBe('written')
+      const record = await store.get('d-a')
+      expect(record?.base).toEqual(newerBase)
+      expect(record?.owner).toMatchObject({ pageInstanceId: 'p-dead', paneId: 'tab-9' })
+    })
+
     it('marks tail-missing when the body could not be held', async () => {
       const { store } = setup()
       await seed(store, 'd-a', 'p-dead', 3)

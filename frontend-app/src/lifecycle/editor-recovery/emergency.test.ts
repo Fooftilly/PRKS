@@ -109,4 +109,26 @@ describe('mergeEmergencyEntries', () => {
     expect(storage.map.has(emergencyKeyOf('p-dead'))).toBe(true)
     expect(storage.map.has(emergencyKeyOf('p-garbled'))).toBe(true)
   })
+
+  it('treats storage that throws on enumeration or reads as empty instead of failing', async () => {
+    const blocked: EmergencyStorage = {
+      get length(): number {
+        throw new DOMException('blocked', 'SecurityError')
+      },
+      key: () => null,
+      getItem: () => null,
+      setItem: () => undefined,
+      removeItem: () => undefined,
+    }
+    const { store, applied } = fakeStore()
+    await expect(mergeEmergencyEntries({ storage: blocked, store, pageInstanceId: 'p-me', isPageAlive: async () => false })).resolves.toEqual([])
+    const unreadable = memoryStorage()
+    writeEmergency(unreadable, emergencyKeyOf('p-dead'), payload('p-dead'))
+    unreadable.getItem = () => {
+      throw new DOMException('blocked', 'SecurityError')
+    }
+    await mergeEmergencyEntries({ storage: unreadable, store, pageInstanceId: 'p-me', isPageAlive: async () => false })
+    expect(applied).toEqual([])
+    expect(unreadable.map.has(emergencyKeyOf('p-dead'))).toBe(true)
+  })
 })

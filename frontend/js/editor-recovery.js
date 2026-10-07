@@ -128,18 +128,27 @@ var prksEditorRecovery = (function(exports) {
 			return null;
 		}
 	}
+	/** Blocked storage can throw on enumeration or reads: that leaves the emergency layer empty, never failing startup. */
 	function readEmergencyKeys(storage) {
 		const keys = [];
-		for (let i = 0; i < storage.length; i++) {
-			const key = storage.key(i);
-			if (key && key.startsWith("prks.editorRecovery.emergency.v1.")) keys.push(key);
+		try {
+			for (let i = 0; i < storage.length; i++) {
+				const key = storage.key(i);
+				if (key && key.startsWith("prks.editorRecovery.emergency.v1.")) keys.push(key);
+			}
+		} catch {
+			return [];
 		}
 		return keys.map((key) => {
 			const pageInstanceId = key.slice(EMERGENCY_KEY_PREFIX.length);
+			let raw = null;
+			try {
+				raw = storage.getItem(key);
+			} catch {}
 			return {
 				key,
 				pageInstanceId,
-				payload: parsePayload(storage.getItem(key), pageInstanceId)
+				payload: parsePayload(raw, pageInstanceId)
 			};
 		});
 	}
@@ -969,7 +978,14 @@ var prksEditorRecovery = (function(exports) {
 							generation: entry.generation,
 							bodyLength: entry.body.length,
 							status: "active",
-							updatedAt: now()
+							updatedAt: now(),
+							...entry.lineage ? {
+								base: { ...entry.lineage.base },
+								owner: {
+									...record.owner,
+									paneId: entry.lineage.owner.paneId
+								}
+							} : {}
 						}, entry.body);
 						return done("written");
 					}
