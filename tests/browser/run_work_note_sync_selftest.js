@@ -814,6 +814,16 @@ async function aStaleWorksBlockedSettlementLeavesTheLiveRetry() {
     globalThis.prksScheduleResearchNotesBusyRetryForTest(h.ctx, 'W-OTHER', { state: 'blocked' });
     assert.ok(h.ctx.timers.has('researchNotesBusyRetry'), 'the live W-1 retry keeps its timer');
     assert.equal(h.listeners.size, 1, 'and its subscription');
+    /* Nor may a settlement for a session that is no longer this Work's. */
+    globalThis.prksScheduleResearchNotesBusyRetryForTest(h.ctx, 'W-1', { state: 'blocked' });
+    assert.ok(h.ctx.timers.has('researchNotesBusyRetry'), 'a replaced W-1 session keeps the live timer');
+    assert.equal(h.listeners.size, 1, 'and the live subscription');
+    /* The surviving retry still sends B once A settles. */
+    h.emit(await h.ack(h.a, 1));
+    await until(() => h.session().state === 'committed', 'the retried save to settle');
+    assert.deepEqual((await h.rows()).map(r => r.payload.text), ['A B'], 'B is enqueued after A settles');
+    assert.equal(h.ctx.timers.has('researchNotesBusyRetry'), false);
+    assert.equal(h.listeners.size, 0);
     h.done();
 }
 

@@ -1321,9 +1321,10 @@ const PRKS_RESEARCH_NOTES_UNCONFIRMED_STATUS = 'Not saved: this note changed els
  * stops both. Only one retry runs per owner.
  */
 function prksScheduleResearchNotesBusyRetry(ctx, workId, entry) {
-    /* A stale settlement (another Work, or a released editor) must not
-     * replace this owner's live retry. */
+    /* A stale settlement (another Work, a released editor, or a replaced
+     * session) must not replace this owner's live retry. */
     if (!entry || !prksResearchNotesBusyRetryTarget(ctx, workId)) return;
+    if (prksWorkResearchDrafts.get(prksResearchDraftKey(ctx, workId)) !== entry) return;
     prksStopResearchNotesBusyRetry(ctx);
     const id = String(workId);
     const generation = ctx.generation;
