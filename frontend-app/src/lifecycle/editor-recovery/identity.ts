@@ -73,9 +73,12 @@ export interface PageIdentity {
 type Message =
   | { t: 'claim'; rid: string; from: string }
   | { t: 'taken'; rid: string; to: string }
-  | { t: 'runtime?' | 'runtime!'; rid: string; q: string }
-  | { t: 'page?' | 'page!'; page: string; q: string }
-  | { t: 'lineage?' | 'lineage!'; draftId: string; q: string }
+  | { t: 'runtime?'; rid: string; q: string }
+  | { t: 'runtime!'; rid: string; q: string }
+  | { t: 'page?'; page: string; q: string }
+  | { t: 'page!'; page: string; q: string }
+  | { t: 'lineage?'; draftId: string; q: string }
+  | { t: 'lineage!'; draftId: string; q: string }
 
 const MAX_CLAIM_ROUNDS = 8
 
@@ -130,41 +133,50 @@ export function createPageIdentity(env: IdentityEnv = {}): PageIdentity {
     }
   }
 
+  function onClaim(m: { rid: string; from: string }): void {
+    if (m.from === pageInstanceId) return
+    if (settled && settled.runtimeId === m.rid) {
+      post({ t: 'taken', rid: m.rid, to: m.from })
+      return
+    }
+    if (!pending || pending.rid !== m.rid) return
+    // Simultaneous claim: the lower pageInstanceId keeps the id.
+    if (m.from < pageInstanceId) pending.lost = true
+    else post({ t: 'taken', rid: m.rid, to: m.from })
+  }
+
+  function onTaken(m: { rid: string; to: string }): void {
+    if (m.to === pageInstanceId && pending && pending.rid === m.rid) pending.lost = true
+  }
+
+  function onAnswer(m: { q: string }): void {
+    const resolve = answers.get(m.q)
+    if (resolve) resolve()
+  }
+
+  const handlers: { [K in Message['t']]: (m: Extract<Message, { t: K }>) => void } = {
+    claim: onClaim,
+    taken: onTaken,
+    'runtime?': (m) => {
+      if (settled && settled.runtimeId === m.rid) post({ t: 'runtime!', rid: m.rid, q: m.q })
+    },
+    'page?': (m) => {
+      if (m.page === pageInstanceId) post({ t: 'page!', page: m.page, q: m.q })
+    },
+    'lineage?': (m) => {
+      if (lineageResponder && lineageResponder(m.draftId)) post({ t: 'lineage!', draftId: m.draftId, q: m.q })
+    },
+    'runtime!': onAnswer,
+    'page!': onAnswer,
+    'lineage!': onAnswer,
+  }
+
   if (channel) {
     channel.onmessage = (event) => {
       const m = event && (event.data as Message)
       if (!m || typeof m !== 'object' || disposed) return
-      switch (m.t) {
-        case 'claim':
-          if (m.from === pageInstanceId) return
-          if (settled && settled.runtimeId === m.rid) {
-            post({ t: 'taken', rid: m.rid, to: m.from })
-          } else if (pending && pending.rid === m.rid) {
-            // Simultaneous claim: the lower pageInstanceId keeps the id.
-            if (m.from < pageInstanceId) pending.lost = true
-            else post({ t: 'taken', rid: m.rid, to: m.from })
-          }
-          return
-        case 'taken':
-          if (m.to === pageInstanceId && pending && pending.rid === m.rid) pending.lost = true
-          return
-        case 'runtime?':
-          if (settled && settled.runtimeId === m.rid) post({ t: 'runtime!', rid: m.rid, q: m.q })
-          return
-        case 'page?':
-          if (m.page === pageInstanceId) post({ t: 'page!', page: m.page, q: m.q })
-          return
-        case 'lineage?':
-          if (lineageResponder && lineageResponder(m.draftId)) post({ t: 'lineage!', draftId: m.draftId, q: m.q })
-          return
-        case 'runtime!':
-        case 'page!':
-        case 'lineage!': {
-          const resolve = answers.get(m.q)
-          if (resolve) resolve()
-          return
-        }
-      }
+      const handle = Object.prototype.hasOwnProperty.call(handlers, m.t) ? handlers[m.t] : null
+      if (handle) (handle as (message: Message) => void)(m)
     }
   }
 
