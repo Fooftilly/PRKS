@@ -1025,6 +1025,12 @@ only a NEVER SENT row may be rewritten, and editing back to the acknowledged
 identity leaves no intent at all. A row that has been attempted might already be
 ledgered, so it stays immutable and the save refuses with `scope_busy`.
 
+`scope_busy` refuses the write; it does not record the newer intent anywhere.
+The editor that asked keeps it. A whole-document note must not turn the refusal
+into a dead error or let a later acknowledgement of the *older* row read as
+"saved": Reminders and Research Notes (#465) keep the refused body dirty and
+re-enqueue it once the attempted row settles.
+
 Identity, not URL text, decides all of this — `A -> B -> A` is no change even
 when the two spellings of A differ.
 

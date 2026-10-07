@@ -16,6 +16,13 @@ let sequence = 0;
 const uuid = () => '00000000-0000-4000-8000-' + (++sequence).toString(16).padStart(12, '0');
 const tick = () => new Promise(resolve => setTimeout(resolve, 1));
 async function settle() { for (let i = 0; i < 5; i++) await tick(); }
+async function until(predicate, label) {
+    for (let i = 0; i < 200; i++) {
+        if (await predicate()) return;
+        await tick();
+    }
+    assert.fail('timed out waiting for ' + label);
+}
 
 const RESEARCH = 'SET_WORK_RESEARCH_NOTE';
 const PRIVATE = 'SET_WORK_PRIVATE_NOTE';
@@ -410,6 +417,235 @@ async function enqueuePathAtoBtoACancels() {
     delete globalThis.prksSync;
 }
 
+/* ---- #465: a scope_busy body is retried, never dropped or called saved ---- */
+const STILL_SYNCING = 'Still syncing — wait or resolve the conflict in Diagnostics';
+
+/** A TabContext-shaped owner for the production Research Notes save path:
+ * generation, timers, cleanups and the `workNotes` slot behave like
+ * tab-context.js so retry ownership is observable. */
+async function busyNoteHarness(tabId) {
+    ensureWorksEnqueueLoaded();
+    globalThis.prksResetResearchDraftsForTest();
+    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const listeners = new Set();
+    let saveCalls = 0;
+    const realSave = store.saveWorkNote;
+    store.saveWorkNote = function (...args) { saveCalls += 1; return realSave.apply(store, args); };
+    globalThis.prksSync = {
+        store,
+        changed() {},
+        subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
+    };
+    let editorText = 'A';
+    const notes = {
+        workId: 'W-1',
+        editor: { value: () => editorText },
+        editGeneration: 0, saveSequence: 0, latestSaveToken: 0,
+        latestSaveEditGeneration: 0, settledSaveToken: 0,
+        drafting: false, saveError: false, pendingSave: false,
+    };
+    const resources = {
+        workNotes: notes,
+        workNotesObserved: {
+            research: { value: '', revision: 0 },
+            private: { value: '', revision: 0 },
+        },
+    };
+    const statusEl = { innerText: '' };
+    const cleanups = new Set();
+    const ctx = {
+        tabId,
+        generation: 1,
+        mounted: true,
+        destroyed: false,
+        timers: new Map(),
+        ui: {},
+        getResource: key => resources[key],
+        setResource: (key, value) => { resources[key] = value; },
+        getEntity: () => ({ id: 'W-1' }),
+        query: () => statusEl,
+        isCurrent(generation) {
+            if (this.destroyed || !this.mounted) return false;
+            return typeof generation !== 'number' || generation === this.generation;
+        },
+        setTimer(name, tid) { this.clearTimer(name); this.timers.set(name, tid); },
+        clearTimer(name) {
+            const tid = this.timers.get(name);
+            if (tid) clearTimeout(tid);
+            this.timers.delete(name);
+        },
+        registerCleanup(fn) { cleanups.add(fn); return () => cleanups.delete(fn); },
+        /* tab-context.js teardownRuntime: timers, the editor slot, cleanups. */
+        teardown() {
+            for (const name of Array.from(this.timers.keys())) this.clearTimer(name);
+            delete resources.workNotes;
+            const fns = Array.from(cleanups);
+            cleanups.clear();
+            fns.forEach(fn => fn());
+        },
+    };
+    /* A was sent once and failed: attempted, so immutable in the store. */
+    const a = await store.saveWorkNote('W-1', RESEARCH, 'A', observed('', 0));
+    await store.claimOperation(a.op_id);
+    await store.updateOperationSyncState(a.op_id, { status: 'pending', last_error: 'Sync failed; retry scheduled.' });
+    const h = {
+        store, ctx, notes, resources, statusEl, listeners, cleanups, a,
+        saves: () => saveCalls,
+        type(text) {
+            editorText = text;
+            /* initEasyMDE's change handler: mark, then (re)arm the debounce. */
+            globalThis.prksWorkNotesMarkEdit(notes, 'W-1', text, ctx);
+            globalThis.prksScheduleWorkResearchNotesSave(ctx, 'W-1');
+        },
+        session: () => ctx.ui.workResearchNoteSession,
+        emit(event) { Array.from(listeners).forEach(fn => fn(event || {})); },
+        async rows() { return noteRows(await store.listOperations(), RESEARCH, 'W-1'); },
+        /* sync-runtime: acknowledge, retire, then emit with the op. */
+        async ack(row, revision) {
+            await store.updateOperationSyncState(row.op_id, { status: 'acknowledged', last_error: null });
+            await store.deleteAcknowledgedOperation(row.op_id);
+            resources.workNotesObserved.research = { value: row.payload.text, revision };
+            const event = { acknowledged: { code: 'ACKNOWLEDGED', server_revision: revision },
+                operation: RESEARCH, op: row };
+            return event;
+        },
+        async blockB() {
+            h.type('A B');
+            ctx.clearTimer('saveNotesTimeout');
+            const result = await globalThis.prksEnqueueWorkResearchNotesSave(ctx, 'W-1');
+            assert.equal(result.code, 'scope_busy', 'B is refused while attempted A holds the aggregate');
+            await settle();
+        },
+        done() {
+            ctx.teardown();
+            globalThis.prksResetResearchDraftsForTest();
+            delete globalThis.prksSync;
+        },
+    };
+    return h;
+}
+
+async function scopeBusyBodyRetriesAfterBlockingSaveSettles() {
+    const h = await busyNoteHarness('busy-retry');
+    await h.blockB();
+    assert.equal(h.session().state, 'blocked', 'B stays an unsaved draft, not a dead error');
+    assert.equal(h.session().text, 'A B');
+    assert.equal(h.notes.saveError, false);
+    assert.equal(h.notes.drafting, true, 'the tab status keeps showing an unsaved draft');
+    assert.equal(h.statusEl.innerText, STILL_SYNCING);
+    assert.ok(h.ctx.timers.has('researchNotesBusyRetry'), 'a fallback retry is armed on the owner');
+    assert.deepEqual((await h.rows()).map(r => r.payload.text), ['A'], 'B never entered the queue');
+
+    /* A sync event while A is still occupying the aggregate does not resend. */
+    const savesBefore = h.saves();
+    h.emit();
+    await settle();
+    assert.equal(h.saves(), savesBefore, 'no retry while the earlier row is unsettled');
+
+    /* A recovers and acknowledges. No further keystroke. */
+    const ackA = await h.ack(h.a, 1);
+    assert.equal(globalThis.prksResearchNotesSyncEventStatus(h.ctx, h.notes, ackA), null,
+        'an acknowledgement of A never reads as All changes saved while B is the editor body');
+    h.emit(ackA);
+    await until(() => h.session().state === 'committed', 'the retried save to settle');
+    const rows = await h.rows();
+    assert.deepEqual(rows.map(r => r.payload.text), ['A B'],
+        'B is enqueued once A settles, without another edit');
+    assert.equal(rows[0].base_revision, 1, 'B is measured against A\'s acknowledged revision');
+    assert.equal(h.session().state, 'committed');
+    assert.equal(h.statusEl.innerText, 'Waiting to sync', 'B is queued, not yet saved');
+    assert.equal(h.ctx.timers.has('researchNotesBusyRetry'), false, 'the retry timer is gone');
+    assert.equal(h.listeners.size, 0, 'the retry subscription is gone');
+
+    const ackB = await h.ack(rows[0], 2);
+    assert.equal(globalThis.prksResearchNotesSyncEventStatus(h.ctx, h.notes, ackB), 'All changes saved',
+        'saved once the acknowledged body is the editor body');
+    h.done();
+}
+
+async function ackOfOlderBodyNeverPaintsSaved() {
+    const h = await busyNoteHarness('busy-ack-older');
+    /* No session at all: the editor body alone decides. */
+    h.type('A B');
+    h.ctx.clearTimer('saveNotesTimeout');
+    globalThis.prksResetResearchDraftsForTest();
+    const ackA = await h.ack(h.a, 1);
+    assert.equal(globalThis.prksResearchNotesSyncEventStatus(h.ctx, h.notes, ackA), null,
+        'ack of A while the editor shows A B is not All changes saved');
+    h.type('A');
+    h.ctx.clearTimer('saveNotesTimeout');
+    assert.equal(globalThis.prksResearchNotesSyncEventStatus(h.ctx, h.notes, ackA), null,
+        'a drafting session is not saved even when its text matches');
+    h.done();
+}
+
+async function leaveFlushSendsBlockedBodyWithoutTimer() {
+    const h = await busyNoteHarness('busy-leave');
+    await h.blockB();
+    assert.equal(h.ctx.timers.has('saveNotesTimeout'), false, 'no debounce timer remains');
+    /* A settles while no event reaches this tab (another tab sent it). */
+    await h.ack(h.a, 1);
+    globalThis.prksFlushPendingWorkResearchNotes(h.ctx);
+    await until(() => h.session().state === 'committed', 'the flushed save to settle');
+    assert.deepEqual((await h.rows()).map(r => r.payload.text), ['A B'],
+        'leaving flushes the blocked body');
+    assert.equal(h.ctx.timers.has('researchNotesBusyRetry'), false);
+    assert.equal(h.listeners.size, 0);
+    h.done();
+}
+
+async function busyRetryIsOwnerScoped() {
+    /* Cold release / destroy: teardown stops timer and subscription. */
+    let h = await busyNoteHarness('busy-teardown');
+    await h.blockB();
+    assert.equal(h.listeners.size, 1);
+    assert.equal(h.cleanups.size, 1, 'the retry registers one owner cleanup');
+    h.ctx.teardown();
+    h.ctx.mounted = false;
+    assert.equal(h.listeners.size, 0, 'teardown stops the retry subscription');
+    assert.equal(h.ctx.timers.size, 0, 'teardown clears the retry timer');
+    let ack = await h.ack(h.a, 1);
+    const savesAfterTeardown = h.saves();
+    h.emit(ack);
+    await settle();
+    assert.equal(h.saves(), savesAfterTeardown, 'a released owner never sends');
+    h.done();
+
+    /* Generation change (route to another Work in the same tab). */
+    h = await busyNoteHarness('busy-generation');
+    await h.blockB();
+    h.ctx.generation += 1;
+    ack = await h.ack(h.a, 1);
+    const savesAfterGeneration = h.saves();
+    h.emit(ack);
+    await settle();
+    assert.equal(h.saves(), savesAfterGeneration, 'an older generation does not retry into the new one');
+    assert.equal(h.listeners.size, 0, 'the stale retry stops itself');
+    assert.equal(h.cleanups.size, 0, 'and unregisters its cleanup');
+    h.done();
+
+    /* A newer edit takes over: the debounce owns the newest body. */
+    h = await busyNoteHarness('busy-newer-edit');
+    await h.blockB();
+    h.type('A B C');
+    assert.equal(h.listeners.size, 0, 'a new edit stops the busy retry');
+    assert.equal(h.ctx.timers.has('researchNotesBusyRetry'), false);
+    assert.ok(h.ctx.timers.has('saveNotesTimeout'), 'the ordinary debounce is armed');
+    h.done();
+
+    /* The editor slot disposed (warm park keeps it; a cold dispose does not). */
+    h = await busyNoteHarness('busy-disposed');
+    await h.blockB();
+    delete h.resources.workNotes;
+    ack = await h.ack(h.a, 1);
+    const savesAfterDispose = h.saves();
+    h.emit(ack);
+    await settle();
+    assert.equal(h.saves(), savesAfterDispose, 'no editor, no retry: an empty body is never sent');
+    assert.equal(h.listeners.size, 0);
+    h.done();
+}
+
 async function reconciliation() {
     const cache = createPrksOfflineStore({ indexedDB: createFakeIndexedDBFactory() });
     await cache.putEntity('work', 'W-1', {
@@ -564,6 +800,10 @@ async function main() {
     await mutationTestAtoBtoA();
     await durableSaveThroughObservedBaseCancels();
     await enqueuePathAtoBtoACancels();
+    await scopeBusyBodyRetriesAfterBlockingSaveSettles();
+    await ackOfOlderBodyNeverPaintsSaved();
+    await leaveFlushSendsBlockedBodyWithoutTimer();
+    await busyRetryIsOwnerScoped();
     await reconciliation();
     console.log('All ' + checks + ' Work note checks passed');
 }
