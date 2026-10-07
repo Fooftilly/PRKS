@@ -504,7 +504,8 @@ async function busyNoteHarness(tabId) {
         async ack(row, revision) {
             await store.updateOperationSyncState(row.op_id, { status: 'acknowledged', last_error: null });
             await store.deleteAcknowledgedOperation(row.op_id);
-            resources.workNotesObserved.research = { value: row.payload.text, revision };
+            /* acceptAck advances the observed slot in place. */
+            Object.assign(resources.workNotesObserved.research, { value: row.payload.text, revision });
             const event = { acknowledged: { code: 'ACKNOWLEDGED', server_revision: revision },
                 operation: RESEARCH, op: row };
             return event;
@@ -614,6 +615,59 @@ async function blockedRetryKeepsItsBaseOverAForeignRefresh() {
     const rows = await h.rows();
     assert.deepEqual(rows.map(r => r.payload.text), ['A B']);
     assert.equal(rows[0].base_revision, 0, 'B keeps the base it was refused against, not C\'s');
+    h.done();
+}
+
+async function refreshedBaseCountsOnlyForThisSessionsOwnBlockingSave() {
+    const retire = async (h, row) => {
+        await h.store.updateOperationSyncState(row.op_id, { status: 'acknowledged', last_error: null });
+        await h.store.deleteAcknowledgedOperation(row.op_id);
+    };
+    const refreshTo = (h, value, revision) => {
+        h.resources.workNotesObserved = {
+            research: { value, revision },
+            private: { value: '', revision: 0 },
+        };
+    };
+
+    /* The blocking row A is another tab's (this session never queued it).
+     * Another runtime acknowledges it, then a same-Work refresh rebuilds the
+     * base as {A, 1}. B must not go out against r1: that would silently
+     * replace A, which this owner never saw. It keeps r0, so the server
+     * reports the conflict. */
+    let h = await busyNoteHarness('busy-foreign-blocking-refresh');
+    await h.blockB();
+    await until(() => h.session().blockedBehindText === 'A', 'the blocking body to be remembered');
+    await retire(h, h.a);
+    refreshTo(h, 'A', 1);
+    h.emit();
+    await until(() => h.session().state === 'committed', 'the retried save after a refresh');
+    let rows = await h.rows();
+    assert.deepEqual(rows.map(r => r.payload.text), ['A B']);
+    assert.equal(rows[0].base_revision, 0, 'another tab\'s A never becomes B\'s base through a refresh');
+    h.done();
+
+    /* This session queued A itself; the same refresh is then A's own advance. */
+    h = await busyNoteHarness('busy-own-blocking-refresh');
+    await retire(h, h.a);
+    h.type('A2');
+    h.ctx.clearTimer('saveNotesTimeout');
+    assert.equal((await globalThis.prksEnqueueWorkResearchNotesSave(h.ctx, 'W-1')).code, 'saved');
+    await until(() => h.session().state === 'committed', 'A2 to settle');
+    const [a2] = await h.rows();
+    await h.store.claimOperation(a2.op_id);
+    await h.store.updateOperationSyncState(a2.op_id, { status: 'pending', last_error: 'Sync failed; retry scheduled.' });
+    h.type('A2 B');
+    h.ctx.clearTimer('saveNotesTimeout');
+    assert.equal((await globalThis.prksEnqueueWorkResearchNotesSave(h.ctx, 'W-1')).code, 'scope_busy');
+    await until(() => h.session().blockedBehindText === 'A2', 'the own blocking body to be remembered');
+    await retire(h, a2);
+    refreshTo(h, 'A2', 1);
+    h.emit();
+    await until(() => h.session().state === 'committed', 'the retried save after an own refresh');
+    rows = await h.rows();
+    assert.deepEqual(rows.map(r => r.payload.text), ['A2 B']);
+    assert.equal(rows[0].base_revision, 1, 'this session\'s own A2 advanced the base');
     h.done();
 }
 
@@ -828,6 +882,7 @@ async function main() {
     await leaveFlushSendsBlockedBodyWithoutTimer();
     await busyRetryIsOwnerScoped();
     await blockedRetryKeepsItsBaseOverAForeignRefresh();
+    await refreshedBaseCountsOnlyForThisSessionsOwnBlockingSave();
     await reconciliation();
     console.log('All ' + checks + ' Work note checks passed');
 }
