@@ -1058,6 +1058,8 @@ var prksEditorRecovery = (function(exports) {
 	* only while some writer needs the guard, and `pagehide` /
 	* `visibilitychange` only while some writer is pending.
 	*/
+	/** Worst-case probe char on every engine (see canHold). */
+	var PROBE_FILLER = "ā";
 	var defaultScheduler = {
 		set: (fn, ms) => setTimeout(fn, ms),
 		clear: (handle) => clearTimeout(handle)
@@ -1185,7 +1187,7 @@ var prksEditorRecovery = (function(exports) {
 			if (!storage || distrusted) return false;
 			if (chars <= provenChars) return true;
 			for (const size of [chars * 2, chars]) try {
-				storage.setItem(EMERGENCY_PROBE_KEY, "x".repeat(size));
+				storage.setItem(EMERGENCY_PROBE_KEY, PROBE_FILLER.repeat(size));
 				provenChars = size;
 				return true;
 			} catch {} finally {

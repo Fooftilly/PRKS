@@ -133,6 +133,9 @@ interface Pending {
   body: string
 }
 
+/** Worst-case probe char on every engine (see canHold). */
+const PROBE_FILLER = '\u0101'
+
 const defaultScheduler: Scheduler = {
   set: (fn, ms) => setTimeout(fn, ms),
   clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
@@ -278,7 +281,10 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     if (chars <= provenChars) return true
     for (const size of [chars * 2, chars]) {
       try {
-        storage.setItem(EMERGENCY_PROBE_KEY, 'x'.repeat(size))
+        // A filler above U+00FF on purpose: Chromium stores an all-Latin-1
+        // value at 1 byte per char and anything else at 2, and its quota counts
+        // bytes, so an ASCII probe would prove half of what a real note needs.
+        storage.setItem(EMERGENCY_PROBE_KEY, PROBE_FILLER.repeat(size))
         provenChars = size
         return true
       } catch {
