@@ -1246,69 +1246,16 @@ function prksResearchNotesBusyRetryTarget(ctx, workId) {
     return notes;
 }
 
-/** The unsettled Research Notes row this body is blocked behind, if any. */
-function prksResearchNotesBlockingRow(rows, workId) {
-    if (typeof prksWorkNoteOperations !== 'function') return null;
-    const ops = prksWorkNoteOperations(rows, String(workId), 'work-research-note');
-    const op = ops.length ? ops[ops.length - 1] : null;
-    if (!op || !op.payload || typeof op.payload.text !== 'string') return null;
-    return { text: op.payload.text, baseRevision: op.base_revision };
-}
-
-/**
- * Before a busy retry re-sends, make this owner's observed Research Notes
- * base current with the blocking save's settlement. Sync acknowledgements
- * reach only the runtime that sent the row, so when another browser tab
- * settled A this owner's base still predates it and B would be parked as a
- * stale-base REVISION_CONFLICT.
- *
- * Adopts the server base only when it is coherent (one revision across two
- * notes-state reads, Work body read from the server) and the server body is
- * the blocking body A, so the advance is that save's own. Any other body
- * means a different edit landed: the base stays, and the server reports the
- * conflict. Never touches the editor. Returns false when the server cannot
- * be read coherently, so the caller retries later.
- */
-async function prksRefreshResearchNotesBaseAfterSettle(ctx, workId, blocking) {
-    const base = ctx && typeof ctx.getResource === 'function' ? ctx.getResource('workNotesObserved') : null;
-    const slot = base && base.research;
-    if (!slot || !blocking) return true;
-    if (slot.value === blocking.text && Number.isSafeInteger(blocking.baseRevision) &&
-        slot.revision > blocking.baseRevision) {
-        return true;
-    }
-    if (typeof prksReadWorkNotesState !== 'function' || typeof prksOfflineReadEntity !== 'function') return true;
-    const id = String(workId);
-    const fromServer = r => !!(r && r.source === 'server' && r.value);
-    try {
-        const first = await prksReadWorkNotesState(id);
-        const work = await prksOfflineReadEntity('work', id, '/api/works/' + encodeURIComponent(id),
-            { validate: value => !!value && value.id === id });
-        const second = await prksReadWorkNotesState(id);
-        if (!fromServer(first) || !fromServer(work) || !fromServer(second)) return false;
-        const revision = first.value.research_note_revision;
-        if (second.value.research_note_revision !== revision) return false;
-        const text = typeof work.value.text_content === 'string' ? work.value.text_content : '';
-        if (revision <= slot.revision || text !== blocking.text) return true;
-        const live = ctx.getResource('workNotesObserved');
-        if (!live || live.research !== slot) return true;
-        slot.value = text;
-        slot.revision = revision;
-        const canonical = ctx.getResource('workNotesCanonical');
-        if (canonical && canonical.id === id) canonical.text_content = text;
-        return true;
-    } catch (_e) {
-        return false;
-    }
-}
-
 /**
  * A save refused with `scope_busy` (#465): an earlier, attempted operation
  * still holds this note's aggregate, and the store keeps it immutable. The
  * newer body was never written. It stays `blocked` on the session, and this
  * re-enqueues the live editor body once no unsettled Research Notes row is
- * left for the Work, on a sync event or a backed-off fallback timer (another
- * browser tab may be the one sending). It retries only while this owner
+ * left for the Work, on a sync event or a backed-off fallback timer. The
+ * re-send uses this owner's observed base, which only an acknowledgement in
+ * this runtime advances: when another browser tab sent the blocking row, that
+ * base is stale and the server may park B as REVISION_CONFLICT instead of
+ * saving it (#476). It retries only while this owner
  * generation, Work, live editor, and blocked session still hold, so a newer
  * edit, a route change, cold release, or destroy stops it. The timer is a
  * TabContext timer and the subscription a `registerCleanup`, so teardown
@@ -1326,11 +1273,6 @@ function prksScheduleResearchNotesBusyRetry(ctx, workId, entry) {
     let recheck = false;
     let stopSync = null;
     let unregisterCleanup = null;
-    let blocking = null;
-    if (typeof prksPendingWorkNoteText === 'function') {
-        const text = prksPendingWorkNoteText(id, 'work-research-note', null);
-        if (typeof text === 'string') blocking = { text: text, baseRevision: null };
-    }
     const stop = function () {
         if (stopped) return;
         stopped = true;
@@ -1378,9 +1320,7 @@ function prksScheduleResearchNotesBusyRetry(ctx, workId, entry) {
             if (typeof prksRefreshPendingWorkNotes === 'function' && typeof prksWorkNoteOperations === 'function') {
                 const rows = await prksRefreshPendingWorkNotes();
                 busy = prksWorkNoteOperations(rows, id, 'work-research-note').length > 0;
-                if (busy) blocking = prksResearchNotesBlockingRow(rows, id) || blocking;
             }
-            if (!busy && due()) busy = !await prksRefreshResearchNotesBaseAfterSettle(ctx, id, blocking);
         } catch (_e) {
             busy = true;
         } finally {
@@ -1409,13 +1349,6 @@ function prksScheduleResearchNotesBusyRetry(ctx, workId, entry) {
     if (typeof ctx.registerCleanup === 'function') unregisterCleanup = ctx.registerCleanup(stop);
     prksResearchNotesBusyRetryStops.set(ctx, stop);
     arm();
-    /* Remember the blocking body now: another tab may retire it before the
-     * first check reads the queue. */
-    if (typeof prksRefreshPendingWorkNotes === 'function') {
-        void prksRefreshPendingWorkNotes().then(function (rows) {
-            if (!stopped && !checking) blocking = prksResearchNotesBlockingRow(rows, id) || blocking;
-        }, function () { /* the first check reads the queue again */ });
-    }
 }
 
 window.prksWorkNotesMarkEdit = prksWorkNotesMarkEdit;
