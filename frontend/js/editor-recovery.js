@@ -93,6 +93,18 @@ var prksEditorRecovery = (function(exports) {
 		return held;
 	}
 	/** Synchronous write. On failure retries once with every body null, then gives up. */
+	var SHORT_ESCAPE = /["\\\b\f\n\r\t]/g;
+	var UNICODE_ESCAPE = /[\u0000-\u0007\u000b\u000e-\u001f]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
+	/**
+	* Chars JSON.stringify adds to `text` beyond its length: one for each `"`,
+	* `\\` and short escape (`\n`, `\t`, ...), five for each other control char or
+	* lone surrogate (`\u00XX`). Exact, so capacity checks never undercount.
+	*/
+	function jsonEscapeExtra(text) {
+		const short = text.match(SHORT_ESCAPE);
+		const long = text.match(UNICODE_ESCAPE);
+		return (short ? short.length : 0) + (long ? long.length * 5 : 0);
+	}
 	function writeEmergency(storage, key, payload) {
 		try {
 			storage.setItem(key, JSON.stringify(payload));
@@ -1126,11 +1138,9 @@ var prksEditorRecovery = (function(exports) {
 			refreshEmergencyKey(pending);
 		}
 		function planHeld(pending) {
-			const lengths = pending.map((w) => w.pendingBody().body.length);
-			const plan = planEmergency(lengths);
+			const plan = planEmergency(pending.map((w) => w.pendingBody().body.length));
 			planned = new Set(pending.filter((_, i) => plan.has(i)));
-			const plannedChars = lengths.reduce((sum, length, i) => plan.has(i) ? sum + length : sum, 0);
-			held = pending.length && canHold(payloadEstimate(plannedChars, pending.length)) ? planned : /* @__PURE__ */ new Set();
+			held = pending.length && canHold(payloadChars(pending.length)) ? planned : /* @__PURE__ */ new Set();
 		}
 		function setGuard(needGuard) {
 			if (win && needGuard !== guardOn) {
@@ -1172,11 +1182,29 @@ var prksEditorRecovery = (function(exports) {
 				storage.removeItem(emergencyKey);
 				emergencyWritten = false;
 				emergencyIds = /* @__PURE__ */ new Set();
-			} catch {}
+			} catch {
+				const claim = identity.current();
+				const empty = {
+					v: 1,
+					pageInstanceId: identity.pageInstanceId,
+					runtimeId: claim ? claim.runtimeId : null,
+					at: now(),
+					entries: []
+				};
+				if (writeEmergency(storage, emergencyKey, empty) !== "failed") {
+					emergencyWritten = false;
+					emergencyIds = /* @__PURE__ */ new Set();
+				}
+			}
 		}
-		/** Planned body chars, a margin for JSON escaping, and per-entry metadata. */
-		function payloadEstimate(plannedChars, entries) {
-			return Math.ceil(plannedChars * 1.25) + entries * EMERGENCY_ENTRY_OVERHEAD_CHARS;
+		/**
+		* Serialized size of the planned payload: each planned body with its exact
+		* JSON escaping (counted once per generation), plus per-entry metadata.
+		*/
+		function payloadChars(entries) {
+			let chars = entries * EMERGENCY_ENTRY_OVERHEAD_CHARS;
+			for (const w of planned) chars += w.serializedBodyChars();
+			return chars;
 		}
 		/**
 		* Whether localStorage can take a payload of `chars` now. Beyond what is
@@ -1228,13 +1256,8 @@ var prksEditorRecovery = (function(exports) {
 				emergencyWritten = true;
 				emergencyIds = new Set(payload.entries.map((e) => e.draftId));
 			}
-			noteEmergencyResult(result, payloadEstimate(planned.size ? sumPlanned() : 0, pending.length));
+			noteEmergencyResult(result, payloadChars(pending.length));
 			return result;
-		}
-		function sumPlanned() {
-			let sum = 0;
-			for (const w of planned) sum += w.pendingBody().body.length;
-			return sum;
 		}
 		class WriterImpl {
 			sessionKey;
@@ -1283,6 +1306,17 @@ var prksEditorRecovery = (function(exports) {
 			}
 			pendingBody() {
 				return this.latest;
+			}
+			escapeCache = null;
+			/** The pending body's length once JSON-serialized; recounted only when the generation changes. */
+			serializedBodyChars() {
+				const pending = this.latest;
+				if (!pending) return 0;
+				if (!this.escapeCache || this.escapeCache.generation !== pending.generation) this.escapeCache = {
+					generation: pending.generation,
+					chars: pending.body.length + 2 + jsonEscapeExtra(pending.body)
+				};
+				return this.escapeCache.chars;
 			}
 			draftId() {
 				return this.lineageId;

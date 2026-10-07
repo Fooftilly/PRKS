@@ -253,6 +253,30 @@ describe('emergency storage that cannot keep a body', () => {
     expect(t.registry.leaveGuardActive()).toBe(true)
   })
 
+  it('sizes the capacity proof by the serialized body, so an escape-heavy note stays guarded', () => {
+    const storage = throwingStorage(4000)
+    const t = setup({ storage })
+    const w = t.open()
+    // 1000 chars that serialize to 6000: fits by length, not once escaped.
+    w.edit(1, '\u0001'.repeat(1000))
+    expect(w.heldByEmergency()).toBe(false)
+    expect(t.registry.leaveGuardActive()).toBe(true)
+    w.edit(2, 'x'.repeat(1000))
+    expect(w.heldByEmergency()).toBe(true)
+    expect(t.registry.leaveGuardActive()).toBe(false)
+  })
+
+  it('overwrites the key with no entries when removing it is refused', async () => {
+    const storage = memoryStorage()
+    const t = setup({ storage: { ...storage, removeItem: () => { throw new DOMException('blocked', 'SecurityError') } } })
+    const w = t.open()
+    w.edit(1, 'first words')
+    t.doc.fire('visibilitychange')
+    await w.discard()
+    const left = JSON.parse(storage.map.get(emergencyKeyOf('p-me')) as string) as EmergencyPayload
+    expect(left.entries).toEqual([])
+  })
+
   it('arms the guard once an emergency write had to drop bodies, and lifts it after a full write', async () => {
     const storage = throwingStorage(1500)
     const t = setup({ storage })

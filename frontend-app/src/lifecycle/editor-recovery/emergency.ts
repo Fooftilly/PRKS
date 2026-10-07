@@ -41,6 +41,20 @@ export function planEmergency(lengths: readonly number[]): Set<number> {
 export type EmergencyWriteResult = 'written' | 'written-without-bodies' | 'failed'
 
 /** Synchronous write. On failure retries once with every body null, then gives up. */
+const SHORT_ESCAPE = /["\\\b\f\n\r\t]/g
+const UNICODE_ESCAPE = /[\u0000-\u0007\u000b\u000e-\u001f]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g
+
+/**
+ * Chars JSON.stringify adds to `text` beyond its length: one for each `"`,
+ * `\\` and short escape (`\n`, `\t`, ...), five for each other control char or
+ * lone surrogate (`\u00XX`). Exact, so capacity checks never undercount.
+ */
+export function jsonEscapeExtra(text: string): number {
+  const short = text.match(SHORT_ESCAPE)
+  const long = text.match(UNICODE_ESCAPE)
+  return (short ? short.length : 0) + (long ? long.length * 5 : 0)
+}
+
 export function writeEmergency(storage: EmergencyStorage, key: string, payload: EmergencyPayload): EmergencyWriteResult {
   try {
     storage.setItem(key, JSON.stringify(payload))

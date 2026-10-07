@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mergeEmergencyEntries, planEmergency, readEmergencyKeys, writeEmergency, type EmergencyStorage } from './emergency'
+import { jsonEscapeExtra, mergeEmergencyEntries, planEmergency, readEmergencyKeys, writeEmergency, type EmergencyStorage } from './emergency'
 import { EMERGENCY_BODY_CHARS, EMERGENCY_PAGE_CHARS, emergencyKeyOf, type EmergencyPayload } from './schema'
 import type { EmergencyOutcome, RecoveryStore } from './store'
 
@@ -38,6 +38,19 @@ const payload = (page: string, body: string | null = 'tail'): EmergencyPayload =
       body,
     },
   ],
+})
+
+describe('jsonEscapeExtra', () => {
+  it('matches what JSON.stringify adds, for every escape class', () => {
+    const samples = [
+      'plain prose, čćšžđ — “quoted”',
+      'line\nbreaks\r\n\ttabs "quotes" back\\slash',
+      String.fromCharCode(...Array.from({ length: 32 }, (_, i) => i)),
+      'lone \ud800 high, lone \udc00 low, pair \ud83d\ude00',
+      '\n'.repeat(1000),
+    ]
+    for (const text of samples) expect(jsonEscapeExtra(text)).toBe(JSON.stringify(text).length - 2 - text.length)
+  })
 })
 
 describe('planEmergency', () => {

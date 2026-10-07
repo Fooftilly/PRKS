@@ -22,7 +22,7 @@
  * `visibilitychange` only while some writer is pending.
  */
 
-import { planEmergency, writeEmergency, type EmergencyStorage, type EmergencyWriteResult } from './emergency'
+import { jsonEscapeExtra, planEmergency, writeEmergency, type EmergencyStorage, type EmergencyWriteResult } from './emergency'
 import type { PageIdentity } from './identity'
 import type { DeleteOutcome, RecoveryStore, RecoveryStoreErrorCode } from './store'
 import { RecoveryStoreError } from './store'
@@ -214,8 +214,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     const lengths = pending.map((w) => (w.pendingBody() as Pending).body.length)
     const plan = planEmergency(lengths)
     planned = new Set(pending.filter((_, i) => plan.has(i)))
-    const plannedChars = lengths.reduce((sum, length, i) => (plan.has(i) ? sum + length : sum), 0)
-    held = pending.length && canHold(payloadEstimate(plannedChars, pending.length)) ? planned : new Set()
+    held = pending.length && canHold(payloadChars(pending.length)) ? planned : new Set()
   }
 
   function setGuard(needGuard: boolean): void {
@@ -262,13 +261,31 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       emergencyWritten = false
       emergencyIds = new Set()
     } catch {
-      /* a stale key is merged by a later page; store rules drop discarded lineages */
+      // Removal refused: overwrite with no entries, so a stale first-generation
+      // entry can never recreate a draft that was discarded or acknowledged.
+      const claim = identity.current()
+      const empty: EmergencyPayload = {
+        v: EMERGENCY_VERSION,
+        pageInstanceId: identity.pageInstanceId,
+        runtimeId: claim ? claim.runtimeId : null,
+        at: now(),
+        entries: [],
+      }
+      if (writeEmergency(storage, emergencyKey, empty) !== 'failed') {
+        emergencyWritten = false
+        emergencyIds = new Set()
+      }
     }
   }
 
-  /** Planned body chars, a margin for JSON escaping, and per-entry metadata. */
-  function payloadEstimate(plannedChars: number, entries: number): number {
-    return Math.ceil(plannedChars * 1.25) + entries * EMERGENCY_ENTRY_OVERHEAD_CHARS
+  /**
+   * Serialized size of the planned payload: each planned body with its exact
+   * JSON escaping (counted once per generation), plus per-entry metadata.
+   */
+  function payloadChars(entries: number): number {
+    let chars = entries * EMERGENCY_ENTRY_OVERHEAD_CHARS
+    for (const w of planned) chars += w.serializedBodyChars()
+    return chars
   }
 
   /**
@@ -334,14 +351,8 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       emergencyWritten = true
       emergencyIds = new Set(payload.entries.map((e) => e.draftId))
     }
-    noteEmergencyResult(result, payloadEstimate(planned.size ? sumPlanned() : 0, pending.length))
+    noteEmergencyResult(result, payloadChars(pending.length))
     return result
-  }
-
-  function sumPlanned(): number {
-    let sum = 0
-    for (const w of planned) sum += (w.pendingBody() as Pending).body.length
-    return sum
   }
 
   class WriterImpl implements DraftWriter {
@@ -394,6 +405,16 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     }
     pendingBody(): Pending | null {
       return this.latest
+    }
+    private escapeCache: { generation: number; chars: number } | null = null
+    /** The pending body's length once JSON-serialized; recounted only when the generation changes. */
+    serializedBodyChars(): number {
+      const pending = this.latest
+      if (!pending) return 0
+      if (!this.escapeCache || this.escapeCache.generation !== pending.generation) {
+        this.escapeCache = { generation: pending.generation, chars: pending.body.length + 2 + jsonEscapeExtra(pending.body) }
+      }
+      return this.escapeCache.chars
     }
     draftId(): string | null {
       return this.lineageId
