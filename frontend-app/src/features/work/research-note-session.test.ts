@@ -251,10 +251,20 @@ describe('work research notes session', () => {
 
   it('keeps a domain save result on a same-Work refresh', async () => {
     const cases = [
-      { code: 'scope_busy', status: 'Still syncing — wait or resolve the conflict in Diagnostics' },
-      { code: 'unknown_base', status: 'Notes cannot be saved yet — open this file while connected once' },
-      { code: 'too-long', status: 'This note is too large to save' },
-      { code: 'unavailable', status: 'Local changes could not be read from browser storage' },
+      /* scope_busy is not an error: the body stays an unsaved draft and is
+       * retried once the earlier save settles (#465). */
+      {
+        code: 'scope_busy',
+        status: 'Still syncing — wait or resolve the conflict in Diagnostics',
+        error: false,
+      },
+      {
+        code: 'unknown_base',
+        status: 'Notes cannot be saved yet — open this file while connected once',
+        error: true,
+      },
+      { code: 'too-long', status: 'This note is too large to save', error: true },
+      { code: 'unavailable', status: 'Local changes could not be read from browser storage', error: true },
     ]
     for (const item of cases) {
       notesWindow.prksResetResearchDraftsForTest()
@@ -265,7 +275,8 @@ describe('work research notes session', () => {
       held.releases[0]({ code: item.code })
       await held.pending
       expect(held.ctx.generation).not.toBe(started)
-      expect(notes.saveError).toBe(true)
+      expect(notes.saveError).toBe(item.error)
+      expect(notes.drafting).toBe(!item.error)
       expect(held.status.innerText).toBe(item.status)
       expect(notesWindow.prksResearchNotesMayPaint(held.ctx, 'work-a', started)).toBe(false)
     }

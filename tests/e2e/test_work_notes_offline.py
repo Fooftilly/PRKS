@@ -164,6 +164,60 @@ class OfflineWorkNotesTests(unittest.TestCase):
         names = {row['name'] for row in db.execute_query('SELECT name FROM concepts')}
         self.assertNotIn('Should Not Exist', names)
 
+    def test_text_typed_behind_a_failed_save_is_saved_after_recovery(self):
+        """#465: A is attempted and fails, B is refused with scope_busy.
+
+        Once A recovers, B is sent without another keystroke, the status never
+        reads "All changes saved" before B is acknowledged, and a reload keeps
+        B. The browser stays "online": only the sync POST is refused.
+        """
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        page.wait_for_function(
+            "() => !!prksGetFocusedTabContext().getResource('workNotesObserved')")
+        page.route('**/api/sync/operations', lambda route: route.abort('connectionrefused'))
+        self.set_notes(page, 'Body A')
+        wait_for_async(
+            page,
+            """() => prksSync.store.listOperations().then(rows => rows.some(r =>
+                r.operation === 'SET_WORK_RESEARCH_NOTE' && r.attempt_count > 0
+                && r.status === 'pending'))""",
+            timeout=15000,
+            message='A was never attempted')
+
+        self.set_notes(page, 'Body A then B')
+        page.locator('[data-prks-role="editor-status"]', has_text='Still syncing').wait_for()
+        rows = page.evaluate("""() => prksSync.store.listOperations().then(rows => rows
+            .filter(r => r.operation === 'SET_WORK_RESEARCH_NOTE').map(r => r.payload.text))""")
+        self.assertEqual(rows, ['Body A'], 'B is refused while attempted A holds the note')
+        page.evaluate("""() => {
+            const el = document.querySelector('[data-prks-role="editor-status"]');
+            window.__notesStatusLog = [el.innerText];
+            new MutationObserver(() => window.__notesStatusLog.push(el.innerText))
+                .observe(el, { childList: true, characterData: true, subtree: true });
+        }""")
+
+        page.unroute('**/api/sync/operations')
+        page.evaluate('() => prksSync.wake()')
+        wait_for_async(
+            page,
+            """(id) => fetch('/api/works/' + encodeURIComponent(id), { cache: 'no-store' })
+                .then(r => r.json()).then(w => w.text_content === 'Body A then B')""",
+            arg=work,
+            timeout=70000,
+            message='B never reached the server')
+        page.locator('[data-prks-role="editor-status"]', has_text='All changes saved').wait_for()
+        log = page.evaluate('() => window.__notesStatusLog')
+        self.assertIn('Saving...', log, 'B was re-sent by the retry: %r' % log)
+        last_saving = len(log) - 1 - log[::-1].index('Saving...')
+        self.assertNotIn('All changes saved', log[:last_saving],
+                         'saved was claimed while B was unsent: %r' % log)
+        self.assertEqual(self.db_for(server).get_work(work)['text_content'], 'Body A then B')
+
+        page.reload(wait_until='domcontentloaded')
+        page.wait_for_selector('.CodeMirror')
+        self.assertEqual(self.editor_text(page), 'Body A then B')
+
     def test_a_stale_research_revision_is_a_conflict(self):
         """Thin reconnect boundary: a stale base parks as conflict.
 

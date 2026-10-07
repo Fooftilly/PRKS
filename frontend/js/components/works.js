@@ -109,17 +109,45 @@ function prksSyncResearchNotesState(notes, entry) {
     notes.latestSaveEditGeneration = entry.latestSaveEditGeneration;
     notes.settledSaveToken = entry.settledSaveToken;
     notes.pendingSave = entry.latestSaveToken > entry.settledSaveToken;
-    notes.drafting = entry.state === 'drafting';
+    notes.drafting = entry.state === 'drafting' || entry.state === 'blocked';
     notes.saveError = entry.state === 'error';
 }
 
 function prksLiveResearchDraftStatus(entry, result) {
     if (entry && entry.state === 'drafting') return 'Drafting...';
     if (entry && entry.state === 'saving') return 'Saving...';
+    if (entry && entry.state === 'blocked') return prksResearchNotesStatusForResult('scope_busy', false);
     if (result && result.code) {
         return prksResearchNotesStatusForResult(result.code, !!result.pending);
     }
     return 'Error saving changes';
+}
+
+/**
+ * Status for one sync event on this owner's Research Notes (#465). An
+ * acknowledgement says the server holds THAT operation's body. It reads as
+ * "All changes saved" only when that body is what the editor shows and no
+ * newer session revision (drafting, saving, or blocked behind it) remains.
+ * Otherwise the save path owns the status, so this returns null.
+ */
+function prksResearchNotesSyncEventStatus(ctx, notes, event) {
+    if (!event || !notes) return null;
+    if (!event.acknowledged) {
+        return event.op && event.op.status === 'conflict'
+            ? 'This note needs a decision in Diagnostics'
+            : null;
+    }
+    return prksResearchNotesAckIsCurrent(ctx, notes, event.op) ? 'All changes saved' : null;
+}
+
+/** The acknowledged body is the editor body and the session holds nothing newer. */
+function prksResearchNotesAckIsCurrent(ctx, notes, op) {
+    const payload = op && op.payload;
+    if (!payload || typeof payload.text !== 'string') return false;
+    const editor = notes.editor;
+    if (!editor || typeof editor.value !== 'function' || editor.value() !== payload.text) return false;
+    const entry = prksWorkResearchDrafts.get(prksResearchDraftKey(ctx, notes.workId));
+    return !entry || (entry.state === 'committed' && entry.text === payload.text);
 }
 
 function prksSyncLiveResearchDraft(workId, entry, generation, result) {
@@ -144,6 +172,8 @@ function prksSyncLiveResearchDraft(workId, entry, generation, result) {
 
 window.prksResearchNotesTextForWork = prksResearchNotesTextForWork;
 window.prksResearchNotesMayPaint = prksResearchNotesMayPaint;
+window.prksResearchNotesSyncEventStatus = prksResearchNotesSyncEventStatus;
+window.prksScheduleResearchNotesBusyRetryForTest = prksScheduleResearchNotesBusyRetry;
 window.prksResetResearchDraftsForTest = function () {
     prksWorkResearchDrafts.clear();
     if (typeof prksForEachLiveTabContext === 'function') {
@@ -1081,12 +1111,15 @@ function initEasyMDE(ctx, work, ticket) {
             if (!prksWorkNotesSessionLive(ctx, workNotes, notesGeneration)) return;
             const statusEl = ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
             if (!statusEl) return;
-            if (event.acknowledged) {
-                statusEl.innerText = 'All changes saved';
-            } else if (event.op && event.op.status === 'conflict') {
-                statusEl.innerText = 'This note needs a decision in Diagnostics';
-            }
+            const text = prksResearchNotesSyncEventStatus(ctx, workNotes, event);
+            if (text) statusEl.innerText = text;
         });
+    }
+    /* A refresh of the same Work may remount while a newer body is still
+     * waiting behind an earlier save (#465); its retry died with the old
+     * editor, so arm one for this session. */
+    if (transient && transient.state === 'blocked') {
+        prksScheduleResearchNotesBusyRetry(ctx, work.id, transient);
     }
     prksAttachWikiLinkAutocomplete(easyMDE.codemirror, ctx);
     const toolbarHost = ctx && ctx.query ? ctx.query('.work-notes-editor-wrap .editor-toolbar') : null;
@@ -1154,6 +1187,7 @@ function prksWorkNotesMarkEdit(notes, workId, text, ctx) {
         entry.saveError = false;
         entry.updatedAt = Date.now();
         prksSyncResearchNotesState(notes, entry);
+        prksStopResearchNotesBusyRetry(owner);
     }
     return notes.editGeneration;
 }
@@ -1192,6 +1226,197 @@ function prksScheduleWorkResearchNotesSave(ctx, workId) {
     if (ctx && typeof ctx.setTimer === 'function') ctx.setTimer('saveNotesTimeout', tid);
 }
 
+const PRKS_RESEARCH_NOTES_BUSY_RETRY_TIMER = 'researchNotesBusyRetry';
+const PRKS_RESEARCH_NOTES_BUSY_RETRY_MAX_MS = 30000;
+// ctx -> stop for that owner's one Research Notes busy retry.
+const prksResearchNotesBusyRetryStops = new WeakMap();
+
+function prksStopResearchNotesBusyRetry(ctx) {
+    const stop = ctx ? prksResearchNotesBusyRetryStops.get(ctx) : null;
+    if (stop) stop();
+}
+
+/** The owner's live Research Notes editor for this Work, or null. */
+function prksResearchNotesBusyRetryTarget(ctx, workId) {
+    if (!ctx || ctx.destroyed) return null;
+    if (typeof ctx.isCurrent === 'function' && !ctx.isCurrent()) return null;
+    const live = ctx.getEntity ? ctx.getEntity('work') : null;
+    if (!live || String(live.id) !== String(workId)) return null;
+    const notes = ctx.getResource ? ctx.getResource('workNotes') : null;
+    if (!notes || String(notes.workId) !== String(workId) || !notes.editor) return null;
+    return notes;
+}
+
+/**
+ * The base a blocked body is re-sent against. A blocked body was refused
+ * against `entry.blockedBase`. The owner's current observed base replaces it
+ * only when it is unchanged, or when it advanced to the body this session
+ * itself last queued from that same blocked base: that save is B's immediate
+ * predecessor, B was typed on top of it, and replacing it overwrites nothing
+ * this session has not seen. An older own save with the same text, queued
+ * from a different base, does not count. The blocking row comes from
+ * the shared queue, its acknowledgement advances every same-Work owner, and
+ * a same-Work refresh rebuilds the base from the server, so an advanced base
+ * holding any other body keeps the blocked base, and the server reports the
+ * conflict instead of the retry silently overwriting it.
+ */
+function prksResearchNotesBlockedSendBase(ctx, entry) {
+    const blockedBase = entry && entry.blockedBase;
+    const slot = typeof prksWorkNoteObserved === 'function' ? prksWorkNoteObserved(ctx, 'work-research-note') : null;
+    if (!blockedBase) return prksResearchNotesBaseCopy(slot);
+    if (!slot) return blockedBase;
+    if (slot.value === blockedBase.value && slot.revision === blockedBase.revision) return prksResearchNotesBaseCopy(slot);
+    const ownBase = entry.ownQueuedBase;
+    const advancedByOwn = typeof entry.ownQueuedText === 'string' && slot.value === entry.ownQueuedText &&
+        !!ownBase && ownBase.value === blockedBase.value && ownBase.revision === blockedBase.revision &&
+        slot.revision >= blockedBase.revision;
+    return advancedByOwn ? prksResearchNotesBaseCopy(slot) : blockedBase;
+}
+
+/**
+ * Re-send a blocked body against `prksResearchNotesBlockedSendBase`. When
+ * that base still predates the blocking save's outcome (its revision is not
+ * newer than the refused base) and the body equals it, the store would treat
+ * the save as a no-op and nothing would reach the server, although the
+ * blocking save may have changed the note there. That cannot be confirmed
+ * locally, so the body is left explicitly unsaved instead of reading as
+ * saved; the next edit saves it again.
+ */
+function prksSendBlockedResearchNote(ctx, id, entry) {
+    const base = prksResearchNotesBlockedSendBase(ctx, entry);
+    const notes = prksResearchNotesBusyRetryTarget(ctx, id);
+    const editor = notes && notes.editor;
+    const body = editor && typeof editor.value === 'function' ? editor.value() : null;
+    const refused = entry.blockedBase;
+    if (base && refused && body === base.value && base.revision <= refused.revision) {
+        entry.state = 'error';
+        entry.saveError = true;
+        entry.updatedAt = Date.now();
+        prksSyncResearchNotesState(notes, entry);
+        const statusEl = ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
+        if (statusEl) statusEl.innerText = PRKS_RESEARCH_NOTES_UNCONFIRMED_STATUS;
+        if (ctx.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
+            window.prksWorkspaceRefreshTabStatus(ctx.tabId);
+        }
+        return;
+    }
+    void prksEnqueueWorkResearchNotesSave(ctx, id, base ? { base: base } : undefined);
+}
+
+const PRKS_RESEARCH_NOTES_UNCONFIRMED_STATUS = 'Not saved: this note changed elsewhere. Edit to save it again.';
+
+/**
+ * A save refused with `scope_busy` (#465): an earlier, attempted operation
+ * still holds this note's aggregate, and the store keeps it immutable. The
+ * newer body was never written. It stays `blocked` on the session, and this
+ * re-enqueues the live editor body once no unsettled Research Notes row is
+ * left for the Work, on a sync event or a backed-off fallback timer. The
+ * re-send uses this owner's observed base, which only an acknowledgement in
+ * this runtime advances: when another browser tab sent the blocking row, that
+ * base is stale and the server may park B as REVISION_CONFLICT instead of
+ * saving it (#476). It retries only while this owner
+ * generation, Work, live editor, and blocked session still hold, so a newer
+ * edit, a route change, cold release, or destroy stops it. The timer is a
+ * TabContext timer and the subscription a `registerCleanup`, so teardown
+ * stops both. Only one retry runs per owner.
+ */
+function prksScheduleResearchNotesBusyRetry(ctx, workId, entry) {
+    /* A stale settlement (another Work, a released editor, or a replaced
+     * session) must not replace this owner's live retry. */
+    if (!entry || !prksResearchNotesBusyRetryTarget(ctx, workId)) return;
+    if (prksWorkResearchDrafts.get(prksResearchDraftKey(ctx, workId)) !== entry) return;
+    prksStopResearchNotesBusyRetry(ctx);
+    /* A same-Work remount starts with a blank status; keep disclosing that
+     * the body is unsaved while the retry waits. */
+    const blockedStatus = entry.state === 'blocked' && ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
+    if (blockedStatus) blockedStatus.innerText = prksLiveResearchDraftStatus(entry, null);
+    const id = String(workId);
+    const generation = ctx.generation;
+    const token = entry.latestSaveToken;
+    let delay = 1000;
+    let stopped = false;
+    let checking = false;
+    let recheck = false;
+    let stopSync = null;
+    let unregisterCleanup = null;
+    const stop = function () {
+        if (stopped) return;
+        stopped = true;
+        if (prksResearchNotesBusyRetryStops.get(ctx) === stop) prksResearchNotesBusyRetryStops.delete(ctx);
+        if (typeof ctx.clearTimer === 'function') ctx.clearTimer(PRKS_RESEARCH_NOTES_BUSY_RETRY_TIMER);
+        const unsubscribe = stopSync;
+        const unregister = unregisterCleanup;
+        stopSync = null;
+        unregisterCleanup = null;
+        if (unregister) unregister();
+        if (unsubscribe) {
+            try { unsubscribe(); } catch (_e) { /* ignore */ }
+        }
+    };
+    const due = function () {
+        if (stopped) return false;
+        if (typeof generation === 'number' && ctx.generation !== generation) return false;
+        if (!prksResearchNotesBusyRetryTarget(ctx, id)) return false;
+        if (prksWorkResearchDrafts.get(prksResearchDraftKey(ctx, id)) !== entry) return false;
+        return entry.state === 'blocked' && !entry.promise && entry.latestSaveToken === token;
+    };
+    const arm = function () {
+        if (stopped || typeof ctx.setTimer !== 'function') return;
+        const tid = setTimeout(function () {
+            if (ctx.timers && ctx.timers.get(PRKS_RESEARCH_NOTES_BUSY_RETRY_TIMER) === tid) {
+                ctx.clearTimer(PRKS_RESEARCH_NOTES_BUSY_RETRY_TIMER);
+            }
+            void check();
+        }, delay);
+        delay = Math.min(delay * 2, PRKS_RESEARCH_NOTES_BUSY_RETRY_MAX_MS);
+        ctx.setTimer(PRKS_RESEARCH_NOTES_BUSY_RETRY_TIMER, tid);
+    };
+    const check = async function () {
+        if (checking) {
+            recheck = true;
+            return;
+        }
+        if (!due()) {
+            stop();
+            return;
+        }
+        checking = true;
+        let busy = false;
+        try {
+            if (typeof prksRefreshPendingWorkNotes === 'function' && typeof prksWorkNoteOperations === 'function') {
+                const rows = await prksRefreshPendingWorkNotes();
+                busy = prksWorkNoteOperations(rows, id, 'work-research-note').length > 0;
+            }
+        } catch (_e) {
+            busy = true;
+        } finally {
+            checking = false;
+        }
+        if (!due()) {
+            stop();
+            return;
+        }
+        if (busy) {
+            if (recheck) {
+                recheck = false;
+                void check();
+                return;
+            }
+            const armed = ctx.timers && ctx.timers.has(PRKS_RESEARCH_NOTES_BUSY_RETRY_TIMER);
+            if (!armed) arm();
+            return;
+        }
+        stop();
+        prksSendBlockedResearchNote(ctx, id, entry);
+    };
+    if (window.prksSync && typeof window.prksSync.subscribe === 'function') {
+        stopSync = window.prksSync.subscribe(function () { void check(); });
+    }
+    if (typeof ctx.registerCleanup === 'function') unregisterCleanup = ctx.registerCleanup(stop);
+    prksResearchNotesBusyRetryStops.set(ctx, stop);
+    arm();
+}
+
 window.prksWorkNotesMarkEdit = prksWorkNotesMarkEdit;
 window.prksWorkNotesBeginSave = prksWorkNotesBeginSave;
 window.prksWorkNotesSettleSave = prksWorkNotesSettleSave;
@@ -1213,7 +1438,33 @@ function prksResearchNotesStatusForResult(code, pending) {
     return 'Error saving changes';
 }
 
-function prksEnqueueWorkResearchNotesSave(ctx, workId) {
+/** Whether a Research Notes row is still queued for the Work after a save. */
+async function prksResearchNotesPendingAfterSave(workId) {
+    if (typeof prksRefreshPendingWorkNotes !== 'function') return false;
+    await prksRefreshPendingWorkNotes();
+    if (typeof prksWorkNoteOperations !== 'function') return false;
+    const rows = await prksRefreshPendingWorkNotes();
+    return prksWorkNoteOperations(rows, workId, 'work-research-note').length > 0;
+}
+
+/**
+ * Session state after a save settles. `scope_busy` means an earlier save
+ * still holds the aggregate (#465): this body was never written, so it stays
+ * unsaved (`blocked`) and is retried once that save settles, not dropped as
+ * an error.
+ */
+function prksResearchDraftSettledState(code, hasNewerDraft) {
+    if (hasNewerDraft) return 'drafting';
+    if (code === 'scope_busy') return 'blocked';
+    return code === 'saved' ? 'committed' : 'error';
+}
+
+function prksResearchNotesBaseCopy(base) {
+    return base ? { value: base.value, revision: base.revision } : null;
+}
+
+function prksEnqueueWorkResearchNotesSave(ctx, workId, options) {
+    const sendBase = options && options.base ? options.base : null;
     const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
     const saveGeneration = owner && typeof owner.generation === 'number' ? owner.generation : undefined;
     const _cwSave = owner && owner.getEntity ? owner.getEntity('work') : null;
@@ -1256,10 +1507,11 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
         window.prksWorkspaceRefreshTabStatus(owner.tabId);
     }
 
+    let usedBase = null;
     const savePromise = (async function () {
-        let observed = typeof prksWorkNoteObserved === 'function'
+        let observed = sendBase || (typeof prksWorkNoteObserved === 'function'
             ? prksWorkNoteObserved(owner, 'work-research-note')
-            : null;
+            : null);
         if (!observed && typeof prksEnsureWorkNotesBase === 'function') {
             const capturedWork = (owner.getResource && owner.getResource('workNotesCanonical')) || _cwSave;
             const base = await prksEnsureWorkNotesBase(owner, capturedWork, { publish: false });
@@ -1276,44 +1528,51 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
         if (typeof prksSaveWorkNoteDurably !== 'function') {
             return { code: 'unavailable' };
         }
-        return prksSaveWorkNoteDurably(id, 'work-research-note', content, observed);
+        usedBase = prksResearchNotesBaseCopy(observed);
+        const saved = await prksSaveWorkNoteDurably(id, 'work-research-note', content, observed);
+        /* Provenance for a later blocked body: every save this session queued,
+         * newest token wins, recorded before the pending scan and whether or
+         * not a newer save has since taken over the session's status. */
+        if (saved && saved.code === 'saved' && transient && transientToken > (transient.ownQueuedToken || 0)) {
+            transient.ownQueuedToken = transientToken;
+            transient.ownQueuedText = content;
+            transient.ownQueuedBase = usedBase;
+        }
+        return saved;
     })();
     if (transient) transient.promise = savePromise;
     void savePromise
         .then(async function (result) {
             const code = result && result.code;
             const ok = code === 'saved';
-            if (ok && typeof prksRefreshPendingWorkNotes === 'function') {
-                await prksRefreshPendingWorkNotes();
-            }
-            let pending = false;
-            if (ok && typeof prksRefreshPendingWorkNotes === 'function' &&
-                typeof prksWorkNoteOperations === 'function') {
-                const rows = await prksRefreshPendingWorkNotes();
-                pending = prksWorkNoteOperations(rows, id, 'work-research-note').length > 0;
-            }
+            const pending = ok ? await prksResearchNotesPendingAfterSave(id) : false;
             const localApplied = prksWorkNotesSettleSave(notes, token, ok);
             let transientApplied = false;
             if (transient && transientToken === transient.latestSaveToken) {
                 const hasNewerDraft = transient.editGeneration > transient.latestSaveEditGeneration;
                 transient.settledSaveToken = transientToken;
                 transient.promise = null;
-                transient.saveError = !ok && !hasNewerDraft;
-                transient.state = hasNewerDraft ? 'drafting' : !ok ? 'error' : 'committed';
+                transient.state = prksResearchDraftSettledState(code, hasNewerDraft);
+                transient.saveError = transient.state === 'error';
+                const blocked = transient.state === 'blocked';
+                if (blocked) {
+                    /* Refused against this base; a retry keeps it (#465). */
+                    transient.blockedBase = usedBase;
+                }
                 transient.updatedAt = Date.now();
                 transientApplied = true;
                 prksSyncResearchNotesState(notes, transient);
                 prksSyncLiveResearchDraft(id, transient, saveGeneration, { code: code, pending: pending });
                 prksPruneResearchDrafts();
+                if (blocked) prksScheduleResearchNotesBusyRetry(owner, id, transient);
             }
             if (!localApplied && !transientApplied) return undefined;
             if (prksResearchNotesMayPaint(owner, id, saveGeneration)) {
                 const liveStatus = owner.query ? owner.query('[data-prks-role="editor-status"]') : null;
                 if (liveStatus) {
-                    liveStatus.innerText =
-                        transientApplied && transient.state === 'drafting'
-                            ? 'Drafting...'
-                            : prksResearchNotesStatusForResult(code, pending);
+                    liveStatus.innerText = transientApplied
+                        ? prksLiveResearchDraftStatus(transient, { code: code, pending: pending })
+                        : prksResearchNotesStatusForResult(code, pending);
                 }
             }
             return result;
@@ -1348,12 +1607,33 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
 
 function prksFlushPendingWorkResearchNotes(ctx) {
     const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
-    const _hasSaveTimer = owner && owner.timers && owner.timers.has('saveNotesTimeout');
-    if (!_hasSaveTimer) return;
-    if (owner && typeof owner.clearTimer === 'function') owner.clearTimer('saveNotesTimeout');
-    const _cw = owner && owner.getEntity ? owner.getEntity('work') : null;
+    if (!owner) return;
+    const _hasSaveTimer = owner.timers && owner.timers.has('saveNotesTimeout');
+    if (_hasSaveTimer && typeof owner.clearTimer === 'function') owner.clearTimer('saveNotesTimeout');
+    const _cw = owner.getEntity ? owner.getEntity('work') : null;
     const id = _cw && _cw.id;
     if (!id) return;
+    if (_hasSaveTimer) {
+        prksEnqueueWorkResearchNotesSave(owner, id);
+        return;
+    }
+    prksFlushTimerlessResearchNote(owner, id);
+}
+
+/**
+ * A scope_busy settlement leaves the newest body unsaved with no debounce
+ * timer (#465). Leaving still sends it, through the live editor only, and a
+ * blocked body against the base it was refused on.
+ */
+function prksFlushTimerlessResearchNote(owner, id) {
+    const entry = prksWorkResearchDrafts.get(prksResearchDraftKey(owner, id));
+    if (!entry || entry.promise || (entry.state !== 'blocked' && entry.state !== 'drafting')) return;
+    if (!prksResearchNotesBusyRetryTarget(owner, id)) return;
+    prksStopResearchNotesBusyRetry(owner);
+    if (entry.state === 'blocked') {
+        prksSendBlockedResearchNote(owner, id, entry);
+        return;
+    }
     prksEnqueueWorkResearchNotesSave(owner, id);
 }
 
