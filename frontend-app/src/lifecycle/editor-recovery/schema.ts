@@ -20,6 +20,8 @@ export const EMERGENCY_VERSION = 1
 export const EMERGENCY_KEY_PREFIX = 'prks.editorRecovery.emergency.v1.'
 /** Not under the emergency prefix, so a leftover probe is never read as an emergency entry. */
 export const EMERGENCY_PROBE_KEY = 'prks.editorRecovery.probe.v1'
+/** Allowance for one entry's JSON metadata (ids, lineage, base) when sizing the emergency payload. */
+export const EMERGENCY_ENTRY_OVERHEAD_CHARS = 1024
 /** Candidate runtime id for this browser tab; copied by window.open and Duplicate tab. */
 export const RUNTIME_SESSION_KEY = 'prks.editorRecovery.runtime.v1'
 export const RECOVERY_CHANNEL = 'prks-editor-recovery-v1'

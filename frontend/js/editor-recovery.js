@@ -20,6 +20,8 @@ var prksEditorRecovery = (function(exports) {
 	var EMERGENCY_KEY_PREFIX = "prks.editorRecovery.emergency.v1.";
 	/** Not under the emergency prefix, so a leftover probe is never read as an emergency entry. */
 	var EMERGENCY_PROBE_KEY = "prks.editorRecovery.probe.v1";
+	/** Allowance for one entry's JSON metadata (ids, lineage, base) when sizing the emergency payload. */
+	var EMERGENCY_ENTRY_OVERHEAD_CHARS = 1024;
 	/** Candidate runtime id for this browser tab; copied by window.open and Duplicate tab. */
 	var RUNTIME_SESSION_KEY = "prks.editorRecovery.runtime.v1";
 	var RECOVERY_CHANNEL = "prks-editor-recovery-v1";
@@ -1022,7 +1024,7 @@ var prksEditorRecovery = (function(exports) {
 	*
 	* INV-DRAFT-1: while a writer reports a draft, its newest generation is either
 	* committed to recovery storage, held by the emergency entry plan (only while
-	* localStorage can keep a body: probed once, then updated by each write), or covered
+	* localStorage has shown it can take the planned payload), or covered
 	* by an armed leave guard. A generation in none of those reads `unprotected`.
 	*
 	* Coalescer, per lineage: at most one write in flight; a newer generation
@@ -1060,14 +1062,17 @@ var prksEditorRecovery = (function(exports) {
 		const live = /* @__PURE__ */ new Set();
 		/** Writers whose body the budget plan puts in the emergency entry. */
 		let planned = /* @__PURE__ */ new Set();
-		/** `planned`, but only while emergency storage can actually keep a body; otherwise empty. */
+		/** `planned`, but only while emergency storage has shown it can keep those bodies; otherwise empty. */
 		let held = /* @__PURE__ */ new Set();
 		/**
-		* Whether emergency storage keeps bodies: null until probed, then updated by
-		* every emergency write. A body counts as held only while this is true, so
-		* blocked or full localStorage leaves the leave guard armed instead.
+		* Largest payload, in chars, that localStorage accepted (a probe or a real
+		* emergency write). A body counts as held only when the planned payload fits
+		* within it, so blocked, missing or too-full storage leaves the leave guard
+		* armed before unload instead of discovering the failure at pagehide.
 		*/
-		let emergencyUsable = null;
+		let provenChars = 0;
+		/** Set when a real emergency write could not keep every planned body; cleared by a full write. */
+		let distrusted = false;
 		let guardOn = false;
 		let emergencyOn = false;
 		let emergencyWritten = false;
@@ -1090,44 +1095,57 @@ var prksEditorRecovery = (function(exports) {
 			for (const w of live) if (w.currentDraftId() === draftId) return w.sessionKey;
 			return null;
 		}
-		/** Recomputes the emergency plan and the listeners after any writer state change. */
+		function pendingWriters() {
+			return [...live].filter((w) => w.pendingBody() !== null);
+		}
+		/** Recomputes the emergency plan, the listeners and the stored key after any writer state change. */
 		function changed() {
 			if (disposed) return;
-			const pending = [...live].filter((w) => w.pendingBody() !== null);
-			const plan = planEmergency(pending.map((w) => w.pendingBody().body.length));
+			const pending = pendingWriters();
+			planHeld(pending);
+			setGuard(pending.some((w) => w.needsLeaveGuard()));
+			setEmergencyListeners(pending.length > 0);
+			refreshEmergencyKey(pending);
+		}
+		function planHeld(pending) {
+			const lengths = pending.map((w) => w.pendingBody().body.length);
+			const plan = planEmergency(lengths);
 			planned = new Set(pending.filter((_, i) => plan.has(i)));
-			if (pending.length && emergencyUsable === null) emergencyUsable = probeEmergencyStorage();
-			held = emergencyUsable ? planned : /* @__PURE__ */ new Set();
-			const needGuard = pending.some((w) => w.needsLeaveGuard());
+			const plannedChars = lengths.reduce((sum, length, i) => plan.has(i) ? sum + length : sum, 0);
+			held = pending.length && canHold(payloadEstimate(plannedChars, pending.length)) ? planned : /* @__PURE__ */ new Set();
+		}
+		function setGuard(needGuard) {
 			if (win && needGuard !== guardOn) {
 				if (needGuard) win.addEventListener("beforeunload", onBeforeUnload);
 				else win.removeEventListener("beforeunload", onBeforeUnload);
 			}
 			guardOn = needGuard;
-			const needEmergency = pending.length > 0;
+		}
+		function setEmergencyListeners(needEmergency) {
 			if (needEmergency !== emergencyOn) {
-				if (needEmergency) {
-					if (win) win.addEventListener("pagehide", onPageHide);
-					if (doc) doc.addEventListener("visibilitychange", onVisibility);
-				} else {
-					if (win) win.removeEventListener("pagehide", onPageHide);
-					if (doc) doc.removeEventListener("visibilitychange", onVisibility);
-				}
+				const method = needEmergency ? "addEventListener" : "removeEventListener";
+				if (win) win[method]("pagehide", onPageHide);
+				if (doc) doc[method]("visibilitychange", onVisibility);
 			}
 			emergencyOn = needEmergency;
+		}
+		/**
+		* An entry whose writer committed, was discarded or moved lineage must not
+		* outlive it: merged after a crash it could recreate a discarded draft.
+		*/
+		function refreshEmergencyKey(pending) {
 			if (!emergencyWritten || !storage || refreshingEmergency) return;
-			if (!needEmergency) {
+			if (!pending.length) {
 				removeEmergencyKey();
 				return;
 			}
 			const current = new Set(pending.map((w) => w.currentDraftId()));
-			if ([...emergencyIds].some((id) => !current.has(id))) {
-				refreshingEmergency = true;
-				try {
-					if (writeEmergencyNow() === "failed") removeEmergencyKey();
-				} finally {
-					refreshingEmergency = false;
-				}
+			if (![...emergencyIds].some((id) => !current.has(id))) return;
+			refreshingEmergency = true;
+			try {
+				if (writeEmergencyNow() === "failed") removeEmergencyKey();
+			} finally {
+				refreshingEmergency = false;
 			}
 		}
 		function removeEmergencyKey() {
@@ -1138,27 +1156,45 @@ var prksEditorRecovery = (function(exports) {
 				emergencyIds = /* @__PURE__ */ new Set();
 			} catch {}
 		}
-		/** Blocked storage (SecurityError, disabled) throws here; a full quota is caught by the write itself. */
-		function probeEmergencyStorage() {
-			if (!storage) return false;
-			try {
-				storage.setItem(EMERGENCY_PROBE_KEY, "1");
-				storage.removeItem(EMERGENCY_PROBE_KEY);
-				return true;
-			} catch {
-				return false;
-			}
+		/** Planned body chars, a margin for JSON escaping, and per-entry metadata. */
+		function payloadEstimate(plannedChars, entries) {
+			return Math.ceil(plannedChars * 1.25) + entries * EMERGENCY_ENTRY_OVERHEAD_CHARS;
 		}
-		function noteEmergencyUsable(usable) {
-			if (emergencyUsable === usable) return;
-			emergencyUsable = usable;
-			changed();
+		/**
+		* Whether localStorage can take a payload of `chars` now. Beyond what is
+		* already proven it writes a probe of twice the size (then the exact size),
+		* so proofs grow geometrically and typing does not probe on every keystroke.
+		*/
+		function canHold(chars) {
+			if (!storage || distrusted) return false;
+			if (chars <= provenChars) return true;
+			for (const size of [chars * 2, chars]) try {
+				storage.setItem(EMERGENCY_PROBE_KEY, "x".repeat(size));
+				provenChars = size;
+				return true;
+			} catch {} finally {
+				try {
+					storage.removeItem(EMERGENCY_PROBE_KEY);
+				} catch {}
+			}
+			return false;
+		}
+		function noteEmergencyResult(result, payloadChars) {
+			const wasDistrusted = distrusted;
+			if (result === "written") {
+				distrusted = false;
+				provenChars = Math.max(provenChars, payloadChars);
+			} else {
+				distrusted = true;
+				provenChars = 0;
+			}
+			if (wasDistrusted !== distrusted || result !== "written") changed();
 		}
 		function writeEmergencyNow() {
-			const pending = [...live].filter((w) => w.pendingBody() !== null);
+			const pending = pendingWriters();
 			if (!pending.length) return "nothing-pending";
 			if (!storage) {
-				noteEmergencyUsable(false);
+				noteEmergencyResult("unavailable", 0);
 				return "unavailable";
 			}
 			const claim = identity.current();
@@ -1174,8 +1210,13 @@ var prksEditorRecovery = (function(exports) {
 				emergencyWritten = true;
 				emergencyIds = new Set(payload.entries.map((e) => e.draftId));
 			}
-			noteEmergencyUsable(result === "written");
+			noteEmergencyResult(result, payloadEstimate(planned.size ? sumPlanned() : 0, pending.length));
 			return result;
+		}
+		function sumPlanned() {
+			let sum = 0;
+			for (const w of planned) sum += w.pendingBody().body.length;
+			return sum;
 		}
 		class WriterImpl {
 			sessionKey;
@@ -1631,6 +1672,7 @@ var prksEditorRecovery = (function(exports) {
 	exports.CLAIM_WAIT_MS = CLAIM_WAIT_MS;
 	exports.DRAFTS_STORE = DRAFTS_STORE;
 	exports.EMERGENCY_BODY_CHARS = EMERGENCY_BODY_CHARS;
+	exports.EMERGENCY_ENTRY_OVERHEAD_CHARS = EMERGENCY_ENTRY_OVERHEAD_CHARS;
 	exports.EMERGENCY_KEY_PREFIX = EMERGENCY_KEY_PREFIX;
 	exports.EMERGENCY_PAGE_CHARS = EMERGENCY_PAGE_CHARS;
 	exports.EMERGENCY_PROBE_KEY = EMERGENCY_PROBE_KEY;

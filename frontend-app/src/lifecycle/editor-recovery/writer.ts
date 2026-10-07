@@ -3,7 +3,7 @@
  *
  * INV-DRAFT-1: while a writer reports a draft, its newest generation is either
  * committed to recovery storage, held by the emergency entry plan (only while
- * localStorage can keep a body: probed once, then updated by each write), or covered
+ * localStorage has shown it can take the planned payload), or covered
  * by an armed leave guard. A generation in none of those reads `unprotected`.
  *
  * Coalescer, per lineage: at most one write in flight; a newer generation
@@ -27,6 +27,7 @@ import type { PageIdentity } from './identity'
 import type { DeleteOutcome, RecoveryStore, RecoveryStoreErrorCode } from './store'
 import { RecoveryStoreError } from './store'
 import {
+  EMERGENCY_ENTRY_OVERHEAD_CHARS,
   EMERGENCY_PROBE_KEY,
   EMERGENCY_VERSION,
   IDLE_WRITE_MS,
@@ -155,14 +156,17 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
   const live = new Set<WriterImpl>()
   /** Writers whose body the budget plan puts in the emergency entry. */
   let planned = new Set<WriterImpl>()
-  /** `planned`, but only while emergency storage can actually keep a body; otherwise empty. */
+  /** `planned`, but only while emergency storage has shown it can keep those bodies; otherwise empty. */
   let held = new Set<WriterImpl>()
   /**
-   * Whether emergency storage keeps bodies: null until probed, then updated by
-   * every emergency write. A body counts as held only while this is true, so
-   * blocked or full localStorage leaves the leave guard armed instead.
+   * Largest payload, in chars, that localStorage accepted (a probe or a real
+   * emergency write). A body counts as held only when the planned payload fits
+   * within it, so blocked, missing or too-full storage leaves the leave guard
+   * armed before unload instead of discovering the failure at pagehide.
    */
-  let emergencyUsable: boolean | null = null
+  let provenChars = 0
+  /** Set when a real emergency write could not keep every planned body; cleared by a full write. */
+  let distrusted = false
   let guardOn = false
   let emergencyOn = false
   let emergencyWritten = false
@@ -189,46 +193,62 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     return null
   }
 
-  /** Recomputes the emergency plan and the listeners after any writer state change. */
+  function pendingWriters(): WriterImpl[] {
+    return [...live].filter((w) => w.pendingBody() !== null)
+  }
+
+  /** Recomputes the emergency plan, the listeners and the stored key after any writer state change. */
   function changed(): void {
     if (disposed) return
-    const pending = [...live].filter((w) => w.pendingBody() !== null)
-    const plan = planEmergency(pending.map((w) => (w.pendingBody() as Pending).body.length))
+    const pending = pendingWriters()
+    planHeld(pending)
+    setGuard(pending.some((w) => w.needsLeaveGuard()))
+    setEmergencyListeners(pending.length > 0)
+    refreshEmergencyKey(pending)
+  }
+
+  function planHeld(pending: WriterImpl[]): void {
+    const lengths = pending.map((w) => (w.pendingBody() as Pending).body.length)
+    const plan = planEmergency(lengths)
     planned = new Set(pending.filter((_, i) => plan.has(i)))
-    if (pending.length && emergencyUsable === null) emergencyUsable = probeEmergencyStorage()
-    held = emergencyUsable ? planned : new Set()
-    const needGuard = pending.some((w) => w.needsLeaveGuard())
+    const plannedChars = lengths.reduce((sum, length, i) => (plan.has(i) ? sum + length : sum), 0)
+    held = pending.length && canHold(payloadEstimate(plannedChars, pending.length)) ? planned : new Set()
+  }
+
+  function setGuard(needGuard: boolean): void {
     if (win && needGuard !== guardOn) {
       if (needGuard) win.addEventListener('beforeunload', onBeforeUnload)
       else win.removeEventListener('beforeunload', onBeforeUnload)
     }
     guardOn = needGuard
-    const needEmergency = pending.length > 0
+  }
+
+  function setEmergencyListeners(needEmergency: boolean): void {
     if (needEmergency !== emergencyOn) {
-      if (needEmergency) {
-        if (win) win.addEventListener('pagehide', onPageHide)
-        if (doc) doc.addEventListener('visibilitychange', onVisibility)
-      } else {
-        if (win) win.removeEventListener('pagehide', onPageHide)
-        if (doc) doc.removeEventListener('visibilitychange', onVisibility)
-      }
+      const method = needEmergency ? 'addEventListener' : 'removeEventListener'
+      if (win) win[method]('pagehide', onPageHide)
+      if (doc) doc[method]('visibilitychange', onVisibility)
     }
     emergencyOn = needEmergency
+  }
+
+  /**
+   * An entry whose writer committed, was discarded or moved lineage must not
+   * outlive it: merged after a crash it could recreate a discarded draft.
+   */
+  function refreshEmergencyKey(pending: WriterImpl[]): void {
     if (!emergencyWritten || !storage || refreshingEmergency) return
-    if (!needEmergency) {
+    if (!pending.length) {
       removeEmergencyKey()
       return
     }
-    // An entry whose writer committed, was discarded or moved lineage must not
-    // outlive it: merged after a crash it could recreate a discarded draft.
     const current = new Set(pending.map((w) => w.currentDraftId()))
-    if ([...emergencyIds].some((id) => !current.has(id))) {
-      refreshingEmergency = true
-      try {
-        if (writeEmergencyNow() === 'failed') removeEmergencyKey()
-      } finally {
-        refreshingEmergency = false
-      }
+    if (![...emergencyIds].some((id) => !current.has(id))) return
+    refreshingEmergency = true
+    try {
+      if (writeEmergencyNow() === 'failed') removeEmergencyKey()
+    } finally {
+      refreshingEmergency = false
     }
   }
 
@@ -243,29 +263,56 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     }
   }
 
-  /** Blocked storage (SecurityError, disabled) throws here; a full quota is caught by the write itself. */
-  function probeEmergencyStorage(): boolean {
-    if (!storage) return false
-    try {
-      storage.setItem(EMERGENCY_PROBE_KEY, '1')
-      storage.removeItem(EMERGENCY_PROBE_KEY)
-      return true
-    } catch {
-      return false
-    }
+  /** Planned body chars, a margin for JSON escaping, and per-entry metadata. */
+  function payloadEstimate(plannedChars: number, entries: number): number {
+    return Math.ceil(plannedChars * 1.25) + entries * EMERGENCY_ENTRY_OVERHEAD_CHARS
   }
 
-  function noteEmergencyUsable(usable: boolean): void {
-    if (emergencyUsable === usable) return
-    emergencyUsable = usable
-    changed()
+  /**
+   * Whether localStorage can take a payload of `chars` now. Beyond what is
+   * already proven it writes a probe of twice the size (then the exact size),
+   * so proofs grow geometrically and typing does not probe on every keystroke.
+   */
+  function canHold(chars: number): boolean {
+    if (!storage || distrusted) return false
+    if (chars <= provenChars) return true
+    for (const size of [chars * 2, chars]) {
+      try {
+        storage.setItem(EMERGENCY_PROBE_KEY, 'x'.repeat(size))
+        provenChars = size
+        return true
+      } catch {
+        /* blocked or over quota at this size */
+      } finally {
+        try {
+          storage.removeItem(EMERGENCY_PROBE_KEY)
+        } catch {
+          /* nothing to remove */
+        }
+      }
+    }
+    return false
+  }
+
+  function noteEmergencyResult(result: EmergencyWriteResult | 'unavailable', payloadChars: number): void {
+    const wasDistrusted = distrusted
+    if (result === 'written') {
+      distrusted = false
+      provenChars = Math.max(provenChars, payloadChars)
+    } else {
+      // Bodies were dropped or nothing was stored: guard every pending body
+      // until a full write succeeds again.
+      distrusted = true
+      provenChars = 0
+    }
+    if (wasDistrusted !== distrusted || result !== 'written') changed()
   }
 
   function writeEmergencyNow(): EmergencyWriteResult | 'nothing-pending' | 'unavailable' {
-    const pending = [...live].filter((w) => w.pendingBody() !== null)
+    const pending = pendingWriters()
     if (!pending.length) return 'nothing-pending'
     if (!storage) {
-      noteEmergencyUsable(false)
+      noteEmergencyResult('unavailable', 0)
       return 'unavailable'
     }
     const claim = identity.current()
@@ -281,10 +328,14 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       emergencyWritten = true
       emergencyIds = new Set(payload.entries.map((e) => e.draftId))
     }
-    // Bodies were dropped or nothing was stored: guard every pending body from now on.
-    // A full write (a planned body may have shrunk) makes emergency storage usable again.
-    noteEmergencyUsable(result === 'written')
+    noteEmergencyResult(result, payloadEstimate(planned.size ? sumPlanned() : 0, pending.length))
     return result
+  }
+
+  function sumPlanned(): number {
+    let sum = 0
+    for (const w of planned) sum += (w.pendingBody() as Pending).body.length
+    return sum
   }
 
   class WriterImpl implements DraftWriter {

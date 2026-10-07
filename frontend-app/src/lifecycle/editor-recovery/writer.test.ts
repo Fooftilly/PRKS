@@ -261,6 +261,9 @@ describe('emergency storage that cannot keep a body', () => {
     expect(w.heldByEmergency()).toBe(true)
     expect(t.registry.leaveGuardActive()).toBe(false)
     w.edit(2, 'y'.repeat(3000))
+    // The probe already showed the payload will not fit: guarded before any unload.
+    expect(w.heldByEmergency()).toBe(false)
+    expect(t.registry.leaveGuardActive()).toBe(true)
     expect(t.registry.writeEmergencyNow()).toBe('written-without-bodies')
     expect(w.heldByEmergency()).toBe(false)
     expect(t.registry.leaveGuardActive()).toBe(true)
@@ -375,6 +378,22 @@ describe('acknowledgement', () => {
     await w.flush()
     expect(await w.acknowledged(1, 'one')).toBe('kept')
     expect(await t.store.getBody(w.draftId() as string)).toMatchObject({ generation: 2, body: 'one two' })
+  })
+
+  it('writes a newer generation whose timer fired while the acknowledgement deleted its lineage', async () => {
+    const t = setup()
+    const w = t.open()
+    w.edit(5, 'five')
+    await w.flush()
+    const first = w.draftId() as string
+    w.edit(6, 'six')
+    const ack = w.acknowledged(5, 'five')
+    t.scheduler.advance(300)
+    expect(await ack).toBe('deleted')
+    await settle()
+    expect(w.draftId()).not.toBe(first)
+    expect(w.state()).toBe('protected')
+    expect(await t.store.getBody(w.draftId() as string)).toMatchObject({ generation: 6, body: 'six' })
   })
 
   it('moves a newer pending generation to a fresh lineage when the committed one is acknowledged', async () => {
