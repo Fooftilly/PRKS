@@ -137,15 +137,17 @@ function prksResearchNotesSyncEventStatus(ctx, notes, event) {
             ? 'This note needs a decision in Diagnostics'
             : null;
     }
-    const entry = prksWorkResearchDrafts.get(prksResearchDraftKey(ctx, notes.workId));
-    if (entry && entry.state !== 'committed') return null;
-    const payload = event.op && event.op.payload;
-    const acknowledged = payload && typeof payload.text === 'string' ? payload.text : null;
+    return prksResearchNotesAckIsCurrent(ctx, notes, event.op) ? 'All changes saved' : null;
+}
+
+/** The acknowledged body is the editor body and the session holds nothing newer. */
+function prksResearchNotesAckIsCurrent(ctx, notes, op) {
+    const payload = op && op.payload;
+    if (!payload || typeof payload.text !== 'string') return false;
     const editor = notes.editor;
-    const body = editor && typeof editor.value === 'function' ? editor.value() : null;
-    if (acknowledged === null || body === null || body !== acknowledged) return null;
-    if (entry && entry.text !== acknowledged) return null;
-    return 'All changes saved';
+    if (!editor || typeof editor.value !== 'function' || editor.value() !== payload.text) return false;
+    const entry = prksWorkResearchDrafts.get(prksResearchDraftKey(ctx, notes.workId));
+    return !entry || (entry.state === 'committed' && entry.text === payload.text);
 }
 
 function prksSyncLiveResearchDraft(workId, entry, generation, result) {
@@ -1367,6 +1369,27 @@ function prksResearchNotesStatusForResult(code, pending) {
     return 'Error saving changes';
 }
 
+/** Whether a Research Notes row is still queued for the Work after a save. */
+async function prksResearchNotesPendingAfterSave(workId, ok) {
+    if (!ok || typeof prksRefreshPendingWorkNotes !== 'function') return false;
+    await prksRefreshPendingWorkNotes();
+    if (typeof prksWorkNoteOperations !== 'function') return false;
+    const rows = await prksRefreshPendingWorkNotes();
+    return prksWorkNoteOperations(rows, workId, 'work-research-note').length > 0;
+}
+
+/**
+ * Session state after a save settles. `scope_busy` means an earlier save
+ * still holds the aggregate (#465): this body was never written, so it stays
+ * unsaved (`blocked`) and is retried once that save settles, not dropped as
+ * an error.
+ */
+function prksResearchDraftSettledState(code, hasNewerDraft) {
+    if (hasNewerDraft) return 'drafting';
+    if (code === 'scope_busy') return 'blocked';
+    return code === 'saved' ? 'committed' : 'error';
+}
+
 function prksEnqueueWorkResearchNotesSave(ctx, workId) {
     const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
     const saveGeneration = owner && typeof owner.generation === 'number' ? owner.generation : undefined;
@@ -1437,27 +1460,16 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
         .then(async function (result) {
             const code = result && result.code;
             const ok = code === 'saved';
-            if (ok && typeof prksRefreshPendingWorkNotes === 'function') {
-                await prksRefreshPendingWorkNotes();
-            }
-            let pending = false;
-            if (ok && typeof prksRefreshPendingWorkNotes === 'function' &&
-                typeof prksWorkNoteOperations === 'function') {
-                const rows = await prksRefreshPendingWorkNotes();
-                pending = prksWorkNoteOperations(rows, id, 'work-research-note').length > 0;
-            }
+            const pending = await prksResearchNotesPendingAfterSave(id, ok);
             const localApplied = prksWorkNotesSettleSave(notes, token, ok);
             let transientApplied = false;
             if (transient && transientToken === transient.latestSaveToken) {
                 const hasNewerDraft = transient.editGeneration > transient.latestSaveEditGeneration;
-                /* An earlier save still holds the aggregate (#465). This body
-                 * was never written: keep it unsaved and retry it once that
-                 * save settles, rather than dropping it as an error. */
-                const blocked = code === 'scope_busy' && !hasNewerDraft;
                 transient.settledSaveToken = transientToken;
                 transient.promise = null;
-                transient.saveError = !ok && !hasNewerDraft && !blocked;
-                transient.state = hasNewerDraft ? 'drafting' : blocked ? 'blocked' : !ok ? 'error' : 'committed';
+                transient.state = prksResearchDraftSettledState(code, hasNewerDraft);
+                transient.saveError = transient.state === 'error';
+                const blocked = transient.state === 'blocked';
                 transient.updatedAt = Date.now();
                 transientApplied = true;
                 prksSyncResearchNotesState(notes, transient);
