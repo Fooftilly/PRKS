@@ -736,6 +736,75 @@ async function ownPredecessorIsRecognizedWithoutRacesOrStaleHistory() {
     h.done();
 }
 
+async function ownProvenanceSurvivesANewerSaveDuringSettlement() {
+    /* B's save starts while A's settlement is still in its pending scan, so
+     * A is no longer the session's latest save when it settles. A must still
+     * count as B's own predecessor. */
+    const h = await busyNoteHarness('busy-own-overtaken', { foreignA: true });
+    await h.store.updateOperationSyncState(h.a.op_id, { status: 'acknowledged', last_error: null });
+    await h.store.deleteAcknowledgedOperation(h.a.op_id);
+    globalThis.prksResetResearchDraftsForTest();
+    /* Hold A's post-save pending scan open until B has been refused. */
+    const realRefresh = globalThis.prksRefreshPendingWorkNotes;
+    let releaseScan;
+    const scanHeld = new Promise(resolve => { releaseScan = resolve; });
+    globalThis.prksRefreshPendingWorkNotes = async function () {
+        await scanHeld;
+        return realRefresh();
+    };
+    h.type('A');
+    h.ctx.clearTimer('saveNotesTimeout');
+    const savingA = globalThis.prksEnqueueWorkResearchNotesSave(h.ctx, 'W-1');
+    assert.equal((await savingA).code, 'saved');
+    assert.equal(h.session().state, 'saving', 'A has not settled yet');
+    const [a] = await h.rows();
+    await h.store.claimOperation(a.op_id);
+    await h.store.updateOperationSyncState(a.op_id, { status: 'pending', last_error: 'Sync failed; retry scheduled.' });
+    h.type('A B');
+    h.ctx.clearTimer('saveNotesTimeout');
+    assert.equal((await globalThis.prksEnqueueWorkResearchNotesSave(h.ctx, 'W-1')).code, 'scope_busy');
+    globalThis.prksRefreshPendingWorkNotes = realRefresh;
+    releaseScan();
+    await until(() => h.session().state === 'blocked', 'B to be blocked');
+    assert.equal(h.session().ownQueuedText, 'A');
+    const ackA = await h.ack(a, 1);
+    h.emit(ackA);
+    await until(() => h.session().state === 'committed', 'the retried save');
+    const rows = await h.rows();
+    assert.equal(rows[0].base_revision, 1, 'B goes out at A\'s revision');
+    h.done();
+}
+
+async function blockedRevertToTheStaleBaseIsNeverReadAsSaved() {
+    /* B reverts to the base text while another pane's or tab's A blocks it.
+     * Re-sent against that unchanged base, the store would drop B as a
+     * no-op and nothing would reach the server, which now holds A. B must
+     * stay explicitly unsaved, never All changes saved. */
+    for (const viaAck of [true, false]) {
+        const h = await busyNoteHarness(viaAck ? 'busy-revert-ack' : 'busy-revert-elsewhere', { foreignA: true });
+        h.type('');
+        h.ctx.clearTimer('saveNotesTimeout');
+        assert.equal((await globalThis.prksEnqueueWorkResearchNotesSave(h.ctx, 'W-1')).code, 'scope_busy');
+        await settle();
+        const savesBefore = h.saves();
+        if (viaAck) {
+            h.emit(await h.ack(h.a, 1));
+        } else {
+            await h.store.updateOperationSyncState(h.a.op_id, { status: 'acknowledged', last_error: null });
+            await h.store.deleteAcknowledgedOperation(h.a.op_id);
+            h.emit();
+        }
+        await until(() => h.session().state === 'error', 'B to be left unsaved');
+        assert.equal(h.saves(), savesBefore, 'no store no-op is taken as a save');
+        assert.deepEqual(await h.rows(), []);
+        assert.equal(h.notes.saveError, true);
+        assert.notEqual(h.statusEl.innerText, 'All changes saved');
+        assert.match(h.statusEl.innerText, /^Not saved/);
+        assert.equal(h.listeners.size, 0);
+        h.done();
+    }
+}
+
 async function busyRetryIsOwnerScoped() {
     /* Cold release / destroy: teardown stops timer and subscription. */
     let h = await busyNoteHarness('busy-teardown');
@@ -949,6 +1018,8 @@ async function main() {
     await blockedRetryKeepsItsBaseOverAForeignRefresh();
     await refreshedBaseCountsOnlyForThisSessionsOwnBlockingSave();
     await ownPredecessorIsRecognizedWithoutRacesOrStaleHistory();
+    await ownProvenanceSurvivesANewerSaveDuringSettlement();
+    await blockedRevertToTheStaleBaseIsNeverReadAsSaved();
     await reconciliation();
     console.log('All ' + checks + ' Work note checks passed');
 }
