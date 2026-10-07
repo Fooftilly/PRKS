@@ -818,6 +818,12 @@ async function aStaleWorksBlockedSettlementLeavesTheLiveRetry() {
     globalThis.prksScheduleResearchNotesBusyRetryForTest(h.ctx, 'W-1', { state: 'blocked' });
     assert.ok(h.ctx.timers.has('researchNotesBusyRetry'), 'a replaced W-1 session keeps the live timer');
     assert.equal(h.listeners.size, 1, 'and the live subscription');
+    /* A same-Work remount re-arms the live session on a blank status pane
+     * and must keep disclosing that B is unsaved. */
+    h.statusEl.innerText = '';
+    globalThis.prksScheduleResearchNotesBusyRetryForTest(h.ctx, 'W-1', h.session());
+    assert.equal(h.statusEl.innerText, STILL_SYNCING, 'the remounted status still says B is unsaved');
+    assert.equal(h.listeners.size, 1, 're-arming replaces the retry, not adds one');
     /* The surviving retry still sends B once A settles. */
     h.emit(await h.ack(h.a, 1));
     await until(() => h.session().state === 'committed', 'the retried save to settle');

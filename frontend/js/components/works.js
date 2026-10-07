@@ -1326,6 +1326,10 @@ function prksScheduleResearchNotesBusyRetry(ctx, workId, entry) {
     if (!entry || !prksResearchNotesBusyRetryTarget(ctx, workId)) return;
     if (prksWorkResearchDrafts.get(prksResearchDraftKey(ctx, workId)) !== entry) return;
     prksStopResearchNotesBusyRetry(ctx);
+    /* A same-Work remount starts with a blank status; keep disclosing that
+     * the body is unsaved while the retry waits. */
+    const blockedStatus = entry.state === 'blocked' && ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
+    if (blockedStatus) blockedStatus.innerText = prksLiveResearchDraftStatus(entry, null);
     const id = String(workId);
     const generation = ctx.generation;
     const token = entry.latestSaveToken;
