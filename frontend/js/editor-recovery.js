@@ -501,6 +501,12 @@ var prksEditorRecovery = (function(exports) {
 	function rotl(x, r) {
 		return x << r | x >>> 32 - r;
 	}
+	/** Sum modulo 2^32, as the C reference's uint32 arithmetic (not a truncation). */
+	function add32(...terms) {
+		let sum = 0;
+		for (const t of terms) sum = sum + t >>> 0;
+		return sum;
+	}
 	function fmix(h) {
 		h ^= h >>> 16;
 		h = Math.imul(h, 2246822507);
@@ -528,23 +534,23 @@ var prksEditorRecovery = (function(exports) {
 			k1 = Math.imul(rotl(Math.imul(k1, C1), 15), C2);
 			h1 ^= k1;
 			h1 = rotl(h1, 19);
-			h1 = h1 + h2 | 0;
-			h1 = Math.imul(h1, 5) + 1444728091 | 0;
+			h1 = add32(h1, h2);
+			h1 = add32(Math.imul(h1, 5), 1444728091);
 			k2 = Math.imul(rotl(Math.imul(k2, C2), 16), C3);
 			h2 ^= k2;
 			h2 = rotl(h2, 17);
-			h2 = h2 + h3 | 0;
-			h2 = Math.imul(h2, 5) + 197830471 | 0;
+			h2 = add32(h2, h3);
+			h2 = add32(Math.imul(h2, 5), 197830471);
 			k3 = Math.imul(rotl(Math.imul(k3, C3), 17), C4);
 			h3 ^= k3;
 			h3 = rotl(h3, 15);
-			h3 = h3 + h4 | 0;
-			h3 = Math.imul(h3, 5) + 2530024501 | 0;
+			h3 = add32(h3, h4);
+			h3 = add32(Math.imul(h3, 5), 2530024501);
 			k4 = Math.imul(rotl(Math.imul(k4, C4), 18), C1);
 			h4 ^= k4;
 			h4 = rotl(h4, 13);
-			h4 = h4 + h1 | 0;
-			h4 = Math.imul(h4, 5) + 850148119 | 0;
+			h4 = add32(h4, h1);
+			h4 = add32(Math.imul(h4, 5), 850148119);
 		}
 		const tailStart = blocks << 3;
 		const tailBytes = (units - tailStart) * 2;
@@ -579,23 +585,23 @@ var prksEditorRecovery = (function(exports) {
 			k1 = Math.imul(rotl(Math.imul(k1, C1), 15), C2);
 			h1 ^= k1;
 		}
-		const len = units * 2 | 0;
+		const len = units * 2 >>> 0;
 		h1 ^= len;
 		h2 ^= len;
 		h3 ^= len;
 		h4 ^= len;
-		h1 = h1 + h2 + h3 + h4 | 0;
-		h2 = h2 + h1 | 0;
-		h3 = h3 + h1 | 0;
-		h4 = h4 + h1 | 0;
+		h1 = add32(h1, h2, h3, h4);
+		h2 = add32(h2, h1);
+		h3 = add32(h3, h1);
+		h4 = add32(h4, h1);
 		h1 = fmix(h1);
 		h2 = fmix(h2);
 		h3 = fmix(h3);
 		h4 = fmix(h4);
-		h1 = h1 + h2 + h3 + h4 | 0;
-		h2 = h2 + h1 | 0;
-		h3 = h3 + h1 | 0;
-		h4 = h4 + h1 | 0;
+		h1 = add32(h1, h2, h3, h4);
+		h2 = add32(h2, h1);
+		h3 = add32(h3, h1);
+		h4 = add32(h4, h1);
 		return hex(h1) + hex(h2) + hex(h3) + hex(h4);
 	}
 	/**

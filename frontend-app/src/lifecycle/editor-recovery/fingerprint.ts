@@ -18,6 +18,13 @@ function rotl(x: number, r: number): number {
   return (x << r) | (x >>> (32 - r))
 }
 
+/** Sum modulo 2^32, as the C reference's uint32 arithmetic (not a truncation). */
+function add32(...terms: number[]): number {
+  let sum = 0
+  for (const t of terms) sum = (sum + t) >>> 0
+  return sum
+}
+
 function fmix(h: number): number {
   h ^= h >>> 16
   h = Math.imul(h, 0x85ebca6b)
@@ -49,26 +56,26 @@ export function fingerprintText(text: string): string {
     k1 = Math.imul(rotl(Math.imul(k1, C1), 15), C2)
     h1 ^= k1
     h1 = rotl(h1, 19)
-    h1 = (h1 + h2) | 0
-    h1 = (Math.imul(h1, 5) + 0x561ccd1b) | 0
+    h1 = add32(h1, h2)
+    h1 = add32(Math.imul(h1, 5), 0x561ccd1b)
 
     k2 = Math.imul(rotl(Math.imul(k2, C2), 16), C3)
     h2 ^= k2
     h2 = rotl(h2, 17)
-    h2 = (h2 + h3) | 0
-    h2 = (Math.imul(h2, 5) + 0x0bcaa747) | 0
+    h2 = add32(h2, h3)
+    h2 = add32(Math.imul(h2, 5), 0x0bcaa747)
 
     k3 = Math.imul(rotl(Math.imul(k3, C3), 17), C4)
     h3 ^= k3
     h3 = rotl(h3, 15)
-    h3 = (h3 + h4) | 0
-    h3 = (Math.imul(h3, 5) + 0x96cd1c35) | 0
+    h3 = add32(h3, h4)
+    h3 = add32(Math.imul(h3, 5), 0x96cd1c35)
 
     k4 = Math.imul(rotl(Math.imul(k4, C4), 18), C1)
     h4 ^= k4
     h4 = rotl(h4, 13)
-    h4 = (h4 + h1) | 0
-    h4 = (Math.imul(h4, 5) + 0x32ac3b17) | 0
+    h4 = add32(h4, h1)
+    h4 = add32(Math.imul(h4, 5), 0x32ac3b17)
   }
 
   // Tail: the remaining code units as little-endian bytes (always an even count).
@@ -106,24 +113,24 @@ export function fingerprintText(text: string): string {
     h1 ^= k1
   }
 
-  // Byte length; `| 0` keeps the low 32 bits like the C reference's uint32 cast.
-  const len = (units * 2) | 0
+  // Byte length; `>>> 0` keeps the low 32 bits like the C reference's uint32 cast.
+  const len = (units * 2) >>> 0
   h1 ^= len
   h2 ^= len
   h3 ^= len
   h4 ^= len
-  h1 = (h1 + h2 + h3 + h4) | 0
-  h2 = (h2 + h1) | 0
-  h3 = (h3 + h1) | 0
-  h4 = (h4 + h1) | 0
+  h1 = add32(h1, h2, h3, h4)
+  h2 = add32(h2, h1)
+  h3 = add32(h3, h1)
+  h4 = add32(h4, h1)
   h1 = fmix(h1)
   h2 = fmix(h2)
   h3 = fmix(h3)
   h4 = fmix(h4)
-  h1 = (h1 + h2 + h3 + h4) | 0
-  h2 = (h2 + h1) | 0
-  h3 = (h3 + h1) | 0
-  h4 = (h4 + h1) | 0
+  h1 = add32(h1, h2, h3, h4)
+  h2 = add32(h2, h1)
+  h3 = add32(h3, h1)
+  h4 = add32(h4, h1)
   return hex(h1) + hex(h2) + hex(h3) + hex(h4)
 }
 

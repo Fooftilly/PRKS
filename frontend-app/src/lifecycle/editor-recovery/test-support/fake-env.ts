@@ -21,7 +21,7 @@ export function createFakeBrowser() {
             }
             held.set(name, page)
             mine.add(name)
-            Promise.resolve(callback({ name })).then(() => {
+            void Promise.resolve(callback({ name })).then(() => {
               held.delete(name)
               mine.delete(name)
               resolve(undefined)

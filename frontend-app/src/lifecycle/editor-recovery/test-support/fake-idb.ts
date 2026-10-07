@@ -28,6 +28,12 @@ export interface FakeIdbControls {
 
 const tick = (fn: () => void) => setTimeout(fn, 0)
 
+/** IndexedDB orders string keys by code unit, not by locale. */
+function compareKeys(a: string, b: string): number {
+  if (a === b) return 0
+  return a < b ? -1 : 1
+}
+
 class FakeRequest {
   result: unknown = undefined
   error: unknown = null
@@ -143,7 +149,7 @@ class FakeTx {
     }
     return {
       get: (key: string) => request((rows) => (rows.has(key) ? structuredClone(rows.get(key)) : undefined)),
-      getAll: () => request((rows) => [...rows.keys()].sort().map((k) => structuredClone(rows.get(k)))),
+      getAll: () => request((rows) => [...rows.keys()].sort(compareKeys).map((k) => structuredClone(rows.get(k)))),
       put: (value: Row) => {
         writable()
         const copy = structuredClone(value)
