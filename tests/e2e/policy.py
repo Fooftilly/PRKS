@@ -558,6 +558,17 @@ AFFECTED_RULES = (
         "features": ("tabs", "workspace-persistence"),
     },
     {
+        # Overlaps workspace-tabs: its browser tests live in the offline feature.
+        "name": "editor-recovery",
+        "paths": (
+            "frontend/js/editor-recovery.js",
+            "frontend-app/src/lifecycle/editor-recovery/**",
+            "frontend-app/src/lifecycle/editor-recovery-entry.ts",
+            "frontend-app/scripts/build-editor-recovery.mjs",
+        ),
+        "features": ("offline",),
+    },
+    {
         "name": "workspace-tiling",
         "paths": (
             "frontend/js/workspace-tiling.js",

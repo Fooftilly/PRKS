@@ -18,6 +18,8 @@ var prksEditorRecovery = (function(exports) {
 	var EMERGENCY_VERSION = 1;
 	/** One localStorage key per page load, so duplicated tabs never share an entry. */
 	var EMERGENCY_KEY_PREFIX = "prks.editorRecovery.emergency.v1.";
+	/** Not under the emergency prefix, so a leftover probe is never read as an emergency entry. */
+	var EMERGENCY_PROBE_KEY = "prks.editorRecovery.probe.v1";
 	/** Candidate runtime id for this browser tab; copied by window.open and Duplicate tab. */
 	var RUNTIME_SESSION_KEY = "prks.editorRecovery.runtime.v1";
 	var RECOVERY_CHANNEL = "prks-editor-recovery-v1";
@@ -1019,7 +1021,8 @@ var prksEditorRecovery = (function(exports) {
 	* Page-level writer registry: one coalescing writer per editor lineage.
 	*
 	* INV-DRAFT-1: while a writer reports a draft, its newest generation is either
-	* committed to recovery storage, held by the emergency entry plan, or covered
+	* committed to recovery storage, held by the emergency entry plan (only while
+	* localStorage can keep a body: probed once, then updated by each write), or covered
 	* by an armed leave guard. A generation in none of those reads `unprotected`.
 	*
 	* Coalescer, per lineage: at most one write in flight; a newer generation
@@ -1055,7 +1058,16 @@ var prksEditorRecovery = (function(exports) {
 		const emit = options.onEvent || (() => {});
 		const emergencyKey = emergencyKeyOf(identity.pageInstanceId);
 		const live = /* @__PURE__ */ new Set();
+		/** Writers whose body the budget plan puts in the emergency entry. */
+		let planned = /* @__PURE__ */ new Set();
+		/** `planned`, but only while emergency storage can actually keep a body; otherwise empty. */
 		let held = /* @__PURE__ */ new Set();
+		/**
+		* Whether emergency storage keeps bodies: null until probed, then updated by
+		* every emergency write. A body counts as held only while this is true, so
+		* blocked or full localStorage leaves the leave guard armed instead.
+		*/
+		let emergencyUsable = null;
 		let guardOn = false;
 		let emergencyOn = false;
 		let emergencyWritten = false;
@@ -1080,7 +1092,9 @@ var prksEditorRecovery = (function(exports) {
 			if (disposed) return;
 			const pending = [...live].filter((w) => w.pendingBody() !== null);
 			const plan = planEmergency(pending.map((w) => w.pendingBody().body.length));
-			held = new Set(pending.filter((_, i) => plan.has(i)));
+			planned = new Set(pending.filter((_, i) => plan.has(i)));
+			if (pending.length && emergencyUsable === null) emergencyUsable = probeEmergencyStorage();
+			held = emergencyUsable ? planned : /* @__PURE__ */ new Set();
 			const needGuard = pending.some((w) => w.needsLeaveGuard());
 			if (win && needGuard !== guardOn) {
 				if (needGuard) win.addEventListener("beforeunload", onBeforeUnload);
@@ -1103,20 +1117,40 @@ var prksEditorRecovery = (function(exports) {
 				emergencyWritten = false;
 			} catch {}
 		}
+		/** Blocked storage (SecurityError, disabled) throws here; a full quota is caught by the write itself. */
+		function probeEmergencyStorage() {
+			if (!storage) return false;
+			try {
+				storage.setItem(EMERGENCY_PROBE_KEY, "1");
+				storage.removeItem(EMERGENCY_PROBE_KEY);
+				return true;
+			} catch {
+				return false;
+			}
+		}
+		function noteEmergencyUsable(usable) {
+			if (emergencyUsable === usable) return;
+			emergencyUsable = usable;
+			changed();
+		}
 		function writeEmergencyNow() {
 			const pending = [...live].filter((w) => w.pendingBody() !== null);
 			if (!pending.length) return "nothing-pending";
-			if (!storage) return "unavailable";
+			if (!storage) {
+				noteEmergencyUsable(false);
+				return "unavailable";
+			}
 			const claim = identity.current();
 			const payload = {
 				v: 1,
 				pageInstanceId: identity.pageInstanceId,
 				runtimeId: claim ? claim.runtimeId : null,
 				at: now(),
-				entries: pending.map((w) => w.emergencyEntry(held.has(w)))
+				entries: pending.map((w) => w.emergencyEntry(planned.has(w)))
 			};
 			const result = writeEmergency(storage, emergencyKey, payload);
 			if (result !== "failed") emergencyWritten = true;
+			noteEmergencyUsable(result === "written");
 			return result;
 		}
 		class WriterImpl {
@@ -1555,6 +1589,7 @@ var prksEditorRecovery = (function(exports) {
 	exports.EMERGENCY_BODY_CHARS = EMERGENCY_BODY_CHARS;
 	exports.EMERGENCY_KEY_PREFIX = EMERGENCY_KEY_PREFIX;
 	exports.EMERGENCY_PAGE_CHARS = EMERGENCY_PAGE_CHARS;
+	exports.EMERGENCY_PROBE_KEY = EMERGENCY_PROBE_KEY;
 	exports.EMERGENCY_VERSION = EMERGENCY_VERSION;
 	exports.IDLE_WRITE_MS = IDLE_WRITE_MS;
 	exports.LARGE_BODY_CHARS = LARGE_BODY_CHARS;

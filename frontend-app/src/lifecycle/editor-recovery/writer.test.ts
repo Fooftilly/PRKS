@@ -39,7 +39,7 @@ function memoryStorage(): EmergencyStorage & { map: Map<string, string> } {
 
 const BASE: DraftBase = { revision: 7, length: 3, fingerprint: 'a'.repeat(32), source: 'server' }
 
-function setup(options: { gate?: boolean } = {}) {
+function setup(options: { gate?: boolean; storage?: EmergencyStorage | null } = {}) {
   const idb = createFakeIdb()
   const realStore = createRecoveryStore({ indexedDB: idb.factory })
   const calls: WriteGenerationInput[] = []
@@ -66,7 +66,7 @@ function setup(options: { gate?: boolean } = {}) {
     now: scheduler.now,
     window: win,
     document: doc,
-    emergencyStorage: storage,
+    emergencyStorage: options.storage === undefined ? storage : options.storage,
     onEvent: (e) => events.push(e),
   })
   const open = (sessionKey = 's-1', entityId = 'w1') =>
@@ -216,6 +216,63 @@ describe('emergency entry', () => {
     t.registry.writeEmergencyNow()
     const payload = JSON.parse(t.storage.map.get(emergencyKeyOf('p-me')) as string) as EmergencyPayload
     expect(payload.entries.filter((e) => e.body === null)).toHaveLength(1)
+  })
+})
+
+describe('emergency storage that cannot keep a body', () => {
+  function throwingStorage(limit: number): EmergencyStorage & { map: Map<string, string> } {
+    const inner = memoryStorage()
+    return {
+      ...inner,
+      setItem(k: string, v: string) {
+        if (v.length > limit) throw new DOMException('full', 'QuotaExceededError')
+        inner.setItem(k, v)
+      },
+    }
+  }
+
+  it('guards a pending body when there is no localStorage', () => {
+    const t = setup({ storage: null })
+    const w = t.open()
+    w.edit(1, 'first words')
+    expect(w.heldByEmergency()).toBe(false)
+    expect(t.registry.leaveGuardActive()).toBe(true)
+    expect(t.registry.writeEmergencyNow()).toBe('unavailable')
+    expect(t.registry.leaveGuardActive()).toBe(true)
+    expectProtectedOrDisclosed(t.registry)
+  })
+
+  it('guards a pending body when localStorage is blocked', () => {
+    const t = setup({ storage: throwingStorage(-1) })
+    const w = t.open()
+    w.edit(1, 'first words')
+    expect(w.heldByEmergency()).toBe(false)
+    expect(t.registry.leaveGuardActive()).toBe(true)
+    expect(t.registry.writeEmergencyNow()).toBe('failed')
+    expect(t.registry.leaveGuardActive()).toBe(true)
+  })
+
+  it('arms the guard once an emergency write had to drop bodies, and lifts it after a full write', async () => {
+    const storage = throwingStorage(1500)
+    const t = setup({ storage })
+    const w = t.open()
+    w.edit(1, 'short')
+    expect(w.heldByEmergency()).toBe(true)
+    expect(t.registry.leaveGuardActive()).toBe(false)
+    w.edit(2, 'y'.repeat(3000))
+    expect(t.registry.writeEmergencyNow()).toBe('written-without-bodies')
+    expect(w.heldByEmergency()).toBe(false)
+    expect(t.registry.leaveGuardActive()).toBe(true)
+    expectProtectedOrDisclosed(t.registry)
+    w.edit(3, 'short again')
+    expect(t.registry.leaveGuardActive()).toBe(true)
+    expect(t.registry.writeEmergencyNow()).toBe('written')
+    expect(w.heldByEmergency()).toBe(true)
+    expect(t.registry.leaveGuardActive()).toBe(false)
+    t.scheduler.advance(300)
+    await settle()
+    expect(w.state()).toBe('protected')
+    expect(t.registry.leaveGuardActive()).toBe(false)
   })
 })
 

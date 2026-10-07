@@ -687,6 +687,18 @@ class AffectedMappingTests(unittest.TestCase):
                 self.assertFalse(skip)
                 self.assertTrue(feats)
 
+    def test_editor_recovery_paths_select_their_offline_browser_tests(self):
+        for path in (
+            "frontend/js/editor-recovery.js",
+            "frontend-app/src/lifecycle/editor-recovery/writer.ts",
+            "frontend-app/src/lifecycle/editor-recovery-entry.ts",
+        ):
+            with self.subTest(path=path):
+                features = policy.classify_affected_path(path)["features"]
+                self.assertIn("offline", features)
+                self.assertIn("tabs", features)
+        self.assertIn("tests.e2e.test_editor_recovery_store", policy.FEATURES["offline"]["selectors"])
+
     def test_select_affected_unions_features_and_explains(self):
         plan = policy.select_affected(
             FAKE_IDS,

@@ -2,7 +2,8 @@
  * Page-level writer registry: one coalescing writer per editor lineage.
  *
  * INV-DRAFT-1: while a writer reports a draft, its newest generation is either
- * committed to recovery storage, held by the emergency entry plan, or covered
+ * committed to recovery storage, held by the emergency entry plan (only while
+ * localStorage can keep a body: probed once, then updated by each write), or covered
  * by an armed leave guard. A generation in none of those reads `unprotected`.
  *
  * Coalescer, per lineage: at most one write in flight; a newer generation
@@ -26,6 +27,7 @@ import type { PageIdentity } from './identity'
 import type { DeleteOutcome, RecoveryStore, RecoveryStoreErrorCode } from './store'
 import { RecoveryStoreError } from './store'
 import {
+  EMERGENCY_PROBE_KEY,
   EMERGENCY_VERSION,
   IDLE_WRITE_MS,
   LARGE_BODY_CHARS,
@@ -151,7 +153,16 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
   const emergencyKey = emergencyKeyOf(identity.pageInstanceId)
 
   const live = new Set<WriterImpl>()
+  /** Writers whose body the budget plan puts in the emergency entry. */
+  let planned = new Set<WriterImpl>()
+  /** `planned`, but only while emergency storage can actually keep a body; otherwise empty. */
   let held = new Set<WriterImpl>()
+  /**
+   * Whether emergency storage keeps bodies: null until probed, then updated by
+   * every emergency write. A body counts as held only while this is true, so
+   * blocked or full localStorage leaves the leave guard armed instead.
+   */
+  let emergencyUsable: boolean | null = null
   let guardOn = false
   let emergencyOn = false
   let emergencyWritten = false
@@ -180,7 +191,9 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     if (disposed) return
     const pending = [...live].filter((w) => w.pendingBody() !== null)
     const plan = planEmergency(pending.map((w) => (w.pendingBody() as Pending).body.length))
-    held = new Set(pending.filter((_, i) => plan.has(i)))
+    planned = new Set(pending.filter((_, i) => plan.has(i)))
+    if (pending.length && emergencyUsable === null) emergencyUsable = probeEmergencyStorage()
+    held = emergencyUsable ? planned : new Set()
     const needGuard = pending.some((w) => w.needsLeaveGuard())
     if (win && needGuard !== guardOn) {
       if (needGuard) win.addEventListener('beforeunload', onBeforeUnload)
@@ -208,20 +221,44 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     }
   }
 
+  /** Blocked storage (SecurityError, disabled) throws here; a full quota is caught by the write itself. */
+  function probeEmergencyStorage(): boolean {
+    if (!storage) return false
+    try {
+      storage.setItem(EMERGENCY_PROBE_KEY, '1')
+      storage.removeItem(EMERGENCY_PROBE_KEY)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  function noteEmergencyUsable(usable: boolean): void {
+    if (emergencyUsable === usable) return
+    emergencyUsable = usable
+    changed()
+  }
+
   function writeEmergencyNow(): EmergencyWriteResult | 'nothing-pending' | 'unavailable' {
     const pending = [...live].filter((w) => w.pendingBody() !== null)
     if (!pending.length) return 'nothing-pending'
-    if (!storage) return 'unavailable'
+    if (!storage) {
+      noteEmergencyUsable(false)
+      return 'unavailable'
+    }
     const claim = identity.current()
     const payload: EmergencyPayload = {
       v: EMERGENCY_VERSION,
       pageInstanceId: identity.pageInstanceId,
       runtimeId: claim ? claim.runtimeId : null,
       at: now(),
-      entries: pending.map((w) => w.emergencyEntry(held.has(w))),
+      entries: pending.map((w) => w.emergencyEntry(planned.has(w))),
     }
     const result = writeEmergency(storage, emergencyKey, payload)
     if (result !== 'failed') emergencyWritten = true
+    // Bodies were dropped or nothing was stored: guard every pending body from now on.
+    // A full write (a planned body may have shrunk) makes emergency storage usable again.
+    noteEmergencyUsable(result === 'written')
     return result
   }
 
