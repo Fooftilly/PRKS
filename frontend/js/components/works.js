@@ -173,6 +173,7 @@ function prksSyncLiveResearchDraft(workId, entry, generation, result) {
 window.prksResearchNotesTextForWork = prksResearchNotesTextForWork;
 window.prksResearchNotesMayPaint = prksResearchNotesMayPaint;
 window.prksResearchNotesSyncEventStatus = prksResearchNotesSyncEventStatus;
+window.prksScheduleResearchNotesBusyRetryForTest = prksScheduleResearchNotesBusyRetry;
 window.prksResetResearchDraftsForTest = function () {
     prksWorkResearchDrafts.clear();
     if (typeof prksForEachLiveTabContext === 'function') {
@@ -1320,8 +1321,10 @@ const PRKS_RESEARCH_NOTES_UNCONFIRMED_STATUS = 'Not saved: this note changed els
  * stops both. Only one retry runs per owner.
  */
 function prksScheduleResearchNotesBusyRetry(ctx, workId, entry) {
-    prksStopResearchNotesBusyRetry(ctx);
+    /* A stale settlement (another Work, or a released editor) must not
+     * replace this owner's live retry. */
     if (!entry || !prksResearchNotesBusyRetryTarget(ctx, workId)) return;
+    prksStopResearchNotesBusyRetry(ctx);
     const id = String(workId);
     const generation = ctx.generation;
     const token = entry.latestSaveToken;

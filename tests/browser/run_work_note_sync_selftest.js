@@ -805,6 +805,18 @@ async function blockedRevertToTheStaleBaseIsNeverReadAsSaved() {
     }
 }
 
+async function aStaleWorksBlockedSettlementLeavesTheLiveRetry() {
+    /* This owner has a live blocked retry for W-1. A scope_busy settlement
+     * for another Work (one this TabContext showed earlier) must not stop it. */
+    const h = await busyNoteHarness('busy-stale-other-work');
+    await h.blockB();
+    assert.ok(h.ctx.timers.has('researchNotesBusyRetry'));
+    globalThis.prksScheduleResearchNotesBusyRetryForTest(h.ctx, 'W-OTHER', { state: 'blocked' });
+    assert.ok(h.ctx.timers.has('researchNotesBusyRetry'), 'the live W-1 retry keeps its timer');
+    assert.equal(h.listeners.size, 1, 'and its subscription');
+    h.done();
+}
+
 async function busyRetryIsOwnerScoped() {
     /* Cold release / destroy: teardown stops timer and subscription. */
     let h = await busyNoteHarness('busy-teardown');
@@ -1020,6 +1032,7 @@ async function main() {
     await ownPredecessorIsRecognizedWithoutRacesOrStaleHistory();
     await ownProvenanceSurvivesANewerSaveDuringSettlement();
     await blockedRevertToTheStaleBaseIsNeverReadAsSaved();
+    await aStaleWorksBlockedSettlementLeavesTheLiveRetry();
     await reconciliation();
     console.log('All ' + checks + ' Work note checks passed');
 }
