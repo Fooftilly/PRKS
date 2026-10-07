@@ -1250,8 +1250,10 @@ function prksResearchNotesBusyRetryTarget(ctx, workId) {
  * The base a blocked body is re-sent against. A blocked body was refused
  * against `entry.blockedBase`. The owner's current observed base replaces it
  * only when it is unchanged, or when it advanced to the body this session
- * itself last queued: B was typed on top of that body, so replacing it
- * overwrites nothing this session has not seen. The blocking row comes from
+ * itself last queued from that same blocked base: that save is B's immediate
+ * predecessor, B was typed on top of it, and replacing it overwrites nothing
+ * this session has not seen. An older own save with the same text, queued
+ * from a different base, does not count. The blocking row comes from
  * the shared queue, its acknowledgement advances every same-Work owner, and
  * a same-Work refresh rebuilds the base from the server, so an advanced base
  * holding any other body keeps the blocked base, and the server reports the
@@ -1263,8 +1265,10 @@ function prksResearchNotesBlockedSendBase(ctx, entry) {
     if (!blockedBase) return prksResearchNotesBaseCopy(slot);
     if (!slot) return blockedBase;
     if (slot.value === blockedBase.value && slot.revision === blockedBase.revision) return prksResearchNotesBaseCopy(slot);
-    const advancedByOwn = typeof entry.ownQueuedText === 'string' &&
-        slot.value === entry.ownQueuedText && slot.revision >= blockedBase.revision;
+    const ownBase = entry.ownQueuedBase;
+    const advancedByOwn = typeof entry.ownQueuedText === 'string' && slot.value === entry.ownQueuedText &&
+        !!ownBase && ownBase.value === blockedBase.value && ownBase.revision === blockedBase.revision &&
+        slot.revision >= blockedBase.revision;
     return advancedByOwn ? prksResearchNotesBaseCopy(slot) : blockedBase;
 }
 
@@ -1507,6 +1511,7 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId, options) {
                     transient.blockedBase = usedBase;
                 } else if (code === 'saved') {
                     transient.ownQueuedText = content;
+                    transient.ownQueuedBase = usedBase;
                 }
                 transient.updatedAt = Date.now();
                 transientApplied = true;

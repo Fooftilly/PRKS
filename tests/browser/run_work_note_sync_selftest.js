@@ -693,6 +693,49 @@ async function refreshedBaseCountsOnlyForThisSessionsOwnBlockingSave() {
     h.done();
 }
 
+async function ownPredecessorIsRecognizedWithoutRacesOrStaleHistory() {
+    /* A acknowledges right after B's refusal, before any other work: no
+     * queue read is needed to recognise A as B's own predecessor. */
+    let h = await busyNoteHarness('busy-own-ack-race');
+    h.type('A B');
+    h.ctx.clearTimer('saveNotesTimeout');
+    const refused = globalThis.prksEnqueueWorkResearchNotesSave(h.ctx, 'W-1');
+    const ackA = await h.ack(h.a, 1);
+    assert.equal((await refused).code, 'scope_busy');
+    h.emit(ackA);
+    await until(() => h.session().state === 'committed', 'the retried save after an immediate ack');
+    let rows = await h.rows();
+    assert.deepEqual(rows.map(r => r.payload.text), ['A B']);
+    assert.equal(rows[0].base_revision, 1, 'B goes out at A\'s revision');
+    h.done();
+
+    /* Stale history: this session queued A long ago from {'', 0}. Later the
+     * base is C/r2 and B is blocked behind another pane's row that also says
+     * A. That row's acknowledgement must not let the old own A authorise
+     * rebasing B. */
+    h = await busyNoteHarness('busy-own-stale-history');
+    await h.ack(h.a, 1);
+    h.resources.workNotesObserved = {
+        research: { value: 'C', revision: 2 },
+        private: { value: '', revision: 0 },
+    };
+    const foreign = await h.store.saveWorkNote('W-1', RESEARCH, 'A', observed('C', 2));
+    await h.store.claimOperation(foreign.op_id);
+    await h.store.updateOperationSyncState(foreign.op_id, { status: 'pending', last_error: 'Sync failed; retry scheduled.' });
+    h.type('C B');
+    h.ctx.clearTimer('saveNotesTimeout');
+    assert.equal((await globalThis.prksEnqueueWorkResearchNotesSave(h.ctx, 'W-1')).code, 'scope_busy');
+    await settle();
+    assert.equal(h.session().ownQueuedText, 'A');
+    const foreignAck = await h.ack(foreign, 3);
+    h.emit(foreignAck);
+    await until(() => h.session().state === 'committed', 'the retried save after a foreign ack');
+    rows = await h.rows();
+    assert.deepEqual(rows.map(r => r.payload.text), ['C B']);
+    assert.equal(rows[0].base_revision, 2, 'an older own A from another base never authorises a rebase');
+    h.done();
+}
+
 async function busyRetryIsOwnerScoped() {
     /* Cold release / destroy: teardown stops timer and subscription. */
     let h = await busyNoteHarness('busy-teardown');
@@ -905,6 +948,7 @@ async function main() {
     await busyRetryIsOwnerScoped();
     await blockedRetryKeepsItsBaseOverAForeignRefresh();
     await refreshedBaseCountsOnlyForThisSessionsOwnBlockingSave();
+    await ownPredecessorIsRecognizedWithoutRacesOrStaleHistory();
     await reconciliation();
     console.log('All ' + checks + ' Work note checks passed');
 }
