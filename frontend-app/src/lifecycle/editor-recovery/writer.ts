@@ -188,6 +188,20 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
   function onVisibility(): void {
     if (doc && doc.visibilityState === 'hidden') writeEmergencyNow()
   }
+  /**
+   * Another tab grew localStorage (shared quota): the cached capacity proof no
+   * longer holds, so drop it and re-probe. Probe writes are ignored, or two
+   * tabs with pending drafts would re-probe each other forever; removals and
+   * shrinking values only free quota.
+   */
+  function onStorage(event: Event): void {
+    const e = event as StorageEvent
+    if (e.key === EMERGENCY_PROBE_KEY || e.newValue === null) return
+    if (e.key !== null && e.oldValue !== null && e.newValue.length <= e.oldValue.length) return
+    if (provenChars === 0) return
+    provenChars = 0
+    changed()
+  }
 
   identity.setLineageResponder((draftId) => ownerOf(draftId) !== null)
 
@@ -228,7 +242,10 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
   function setEmergencyListeners(needEmergency: boolean): void {
     if (needEmergency !== emergencyOn) {
       const method = needEmergency ? 'addEventListener' : 'removeEventListener'
-      if (win) win[method]('pagehide', onPageHide)
+      if (win) {
+        win[method]('pagehide', onPageHide)
+        win[method]('storage', onStorage)
+      }
       if (doc) doc[method]('visibilitychange', onVisibility)
     }
     emergencyOn = needEmergency
@@ -750,6 +767,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       if (win) {
         win.removeEventListener('beforeunload', onBeforeUnload)
         win.removeEventListener('pagehide', onPageHide)
+        win.removeEventListener('storage', onStorage)
       }
       if (doc) doc.removeEventListener('visibilitychange', onVisibility)
       guardOn = false

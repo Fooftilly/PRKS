@@ -266,6 +266,28 @@ describe('emergency storage that cannot keep a body', () => {
     expect(t.registry.leaveGuardActive()).toBe(false)
   })
 
+  it('re-proves capacity when another tab grows localStorage, ignoring probe writes', () => {
+    const inner = memoryStorage()
+    let limit = 10_000
+    const storage: EmergencyStorage & { map: Map<string, string> } = {
+      ...inner,
+      setItem(k: string, v: string) {
+        if (v.length > limit) throw new DOMException('full', 'QuotaExceededError')
+        inner.setItem(k, v)
+      },
+    }
+    const t = setup({ storage })
+    const w = t.open()
+    w.edit(1, 'x'.repeat(1000))
+    expect(w.heldByEmergency()).toBe(true)
+    limit = 1500
+    t.win.fire('storage', { key: 'prks.editorRecovery.probe.v1', oldValue: null, newValue: 'ā' } as unknown as Partial<Event>)
+    expect(w.heldByEmergency()).toBe(true)
+    t.win.fire('storage', { key: 'other-app-key', oldValue: null, newValue: 'y'.repeat(9000) } as unknown as Partial<Event>)
+    expect(w.heldByEmergency()).toBe(false)
+    expect(t.registry.leaveGuardActive()).toBe(true)
+  })
+
   it('overwrites the key with no entries when removing it is refused', async () => {
     const storage = memoryStorage()
     const t = setup({ storage: { ...storage, removeItem: () => { throw new DOMException('blocked', 'SecurityError') } } })
