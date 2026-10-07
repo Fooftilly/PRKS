@@ -288,6 +288,29 @@ describe('emergency storage that cannot keep a body', () => {
     expect(t.registry.leaveGuardActive()).toBe(true)
   })
 
+  it('re-proves capacity for a new burst after an idle gap the listener could not watch', async () => {
+    const inner = memoryStorage()
+    let limit = 10_000
+    const storage: EmergencyStorage & { map: Map<string, string> } = {
+      ...inner,
+      setItem(k: string, v: string) {
+        if (v.length > limit) throw new DOMException('full', 'QuotaExceededError')
+        inner.setItem(k, v)
+      },
+    }
+    const t = setup({ storage })
+    const w = t.open()
+    w.edit(1, 'x'.repeat(1000))
+    expect(w.heldByEmergency()).toBe(true)
+    await w.flush()
+    expect(t.registry.emergencyListenersActive()).toBe(false)
+    limit = 1500
+    t.win.fire('storage', { key: 'other-app-key', oldValue: null, newValue: 'y'.repeat(9000) } as unknown as Partial<Event>)
+    w.edit(2, 'x'.repeat(1000))
+    expect(w.heldByEmergency()).toBe(false)
+    expect(t.registry.leaveGuardActive()).toBe(true)
+  })
+
   it('overwrites the key with no entries when removing it is refused', async () => {
     const storage = memoryStorage()
     const t = setup({ storage: { ...storage, removeItem: () => { throw new DOMException('blocked', 'SecurityError') } } })

@@ -1171,6 +1171,7 @@ var prksEditorRecovery = (function(exports) {
 					win[method]("storage", onStorage);
 				}
 				if (doc) doc[method]("visibilitychange", onVisibility);
+				if (!needEmergency) provenChars = 0;
 			}
 			emergencyOn = needEmergency;
 		}

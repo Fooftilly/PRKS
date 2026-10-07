@@ -247,6 +247,9 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
         win[method]('storage', onStorage)
       }
       if (doc) doc[method]('visibilitychange', onVisibility)
+      // Without the storage listener nothing would see another tab grow the
+      // shared quota, so each burst of typing proves capacity afresh.
+      if (!needEmergency) provenChars = 0
     }
     emergencyOn = needEmergency
   }
