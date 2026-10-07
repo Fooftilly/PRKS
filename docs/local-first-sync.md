@@ -1029,7 +1029,11 @@ ledgered, so it stays immutable and the save refuses with `scope_busy`.
 The editor that asked keeps it. A whole-document note must not turn the refusal
 into a dead error or let a later acknowledgement of the *older* row read as
 "saved": Reminders and Research Notes (#465) keep the refused body dirty and
-re-enqueue it once the attempted row settles.
+re-enqueue it once the attempted row settles. Acknowledgements are emitted
+only in the runtime that sent the row, so when another tab settled it the
+Research Notes retry first refreshes its observed base from the server, and
+only when the server body is the one that blocked it; any other body keeps the
+old base and surfaces as a conflict.
 
 Identity, not URL text, decides all of this — `A -> B -> A` is no change even
 when the two spellings of A differ.

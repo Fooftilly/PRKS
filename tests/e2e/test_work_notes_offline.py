@@ -218,6 +218,75 @@ class OfflineWorkNotesTests(unittest.TestCase):
         page.wait_for_selector('.CodeMirror')
         self.assertEqual(self.editor_text(page), 'Body A then B')
 
+    def test_blocked_text_is_saved_when_another_page_sends_the_earlier_save(self):
+        """#465 across pages: another page's runtime acknowledges A.
+
+        Acknowledgements reach only the page that sent the row, so page 1's
+        observed base predates A. Its retry must refresh that base before
+        sending B, or the server parks B as a stale-base REVISION_CONFLICT.
+        """
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        page.wait_for_function(
+            "() => !!prksGetFocusedTabContext().getResource('workNotesObserved')")
+        page.route('**/api/sync/operations', lambda route: route.abort('connectionrefused'))
+        self.set_notes(page, 'Body A')
+        wait_for_async(
+            page,
+            """() => prksSync.store.listOperations().then(rows => rows.some(r =>
+                r.operation === 'SET_WORK_RESEARCH_NOTE' && r.attempt_count > 0
+                && r.status === 'pending'))""",
+            timeout=15000,
+            message='A was never attempted')
+        self.set_notes(page, 'Body A then B')
+        page.locator('[data-prks-role="editor-status"]', has_text='Still syncing').wait_for()
+
+        # Page 2 shares this browser's storage and can reach the server.
+        other = context.new_page()
+        other.goto(server.origin, wait_until='domcontentloaded')
+        other.wait_for_function("() => typeof prksSync !== 'undefined' && !!prksSync.store")
+        other.evaluate('() => prksSync.wake()')
+        wait_for_async(
+            other,
+            """(id) => fetch('/api/works/' + encodeURIComponent(id), { cache: 'no-store' })
+                .then(r => r.json()).then(w => w.text_content === 'Body A')""",
+            arg=work,
+            timeout=30000,
+            message='page 2 never sent A')
+
+        # Page 1 notices A is gone, refreshes its base, and queues B.
+        wait_for_async(
+            page,
+            """(id) => prksSync.store.listOperations().then(rows => rows.some(r =>
+                r.operation === 'SET_WORK_RESEARCH_NOTE' && r.entity_id === id
+                && r.payload.text === 'Body A then B'))""",
+            arg=work,
+            timeout=70000,
+            message='B was never queued after A settled elsewhere')
+        state = page.evaluate(
+            "(id) => fetch('/api/works/' + encodeURIComponent(id) + '/notes-state', "
+            "{ cache: 'no-store' }).then(r => r.json())", work)
+        base = page.evaluate("""(id) => prksSync.store.listOperations().then(rows => rows
+            .find(r => r.entity_id === id && r.payload.text === 'Body A then B').base_revision)""", work)
+        self.assertEqual(base, state['research_note_revision'],
+                         'B is measured against the revision A received on page 2')
+
+        page.unroute('**/api/sync/operations')
+        page.evaluate('() => prksSync.wake()')
+        other.evaluate('() => prksSync.wake()')
+        wait_for_async(
+            page,
+            """(id) => fetch('/api/works/' + encodeURIComponent(id), { cache: 'no-store' })
+                .then(r => r.json()).then(w => w.text_content === 'Body A then B')""",
+            arg=work,
+            timeout=70000,
+            message='B never reached the server')
+        conflicts = page.evaluate("""() => prksSync.store.listOperations().then(rows => rows
+            .filter(r => r.operation === 'SET_WORK_RESEARCH_NOTE' && r.status === 'conflict').length)""")
+        self.assertEqual(conflicts, 0, 'no stale-base conflict was created')
+        self.assertEqual(self.db_for(server).get_work(work)['text_content'], 'Body A then B')
+        other.close()
+
     def test_a_stale_research_revision_is_a_conflict(self):
         """Thin reconnect boundary: a stale base parks as conflict.
 

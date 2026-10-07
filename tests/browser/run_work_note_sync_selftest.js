@@ -509,6 +509,26 @@ async function busyNoteHarness(tabId) {
                 operation: RESEARCH, op: row };
             return event;
         },
+        /* Another tab's runtime sent and retired A: no event and no
+         * acknowledgement reach this tab, so its observed base stays old. */
+        async settleElsewhere(row) {
+            await store.updateOperationSyncState(row.op_id, { status: 'acknowledged', last_error: null });
+            await store.deleteAcknowledgedOperation(row.op_id);
+        },
+        /* Server reads for the base refresh: `server.readable` false is a
+         * cache-only read (offline or failed request). */
+        server: null,
+        serve(server) {
+            h.server = Object.assign({ readable: true, reads: 0 }, server);
+            globalThis.prksOfflineReadEntity = async function (kind, id) {
+                h.server.reads += 1;
+                if (!h.server.readable) return { value: null, source: 'unavailable', cachedAt: null };
+                const value = kind === 'work'
+                    ? { id, text_content: h.server.text }
+                    : { work_id: id, research_note_revision: h.server.revision, private_note_revision: 0 };
+                return { value, source: 'server', cachedAt: Date.now() };
+            };
+        },
         async blockB() {
             h.type('A B');
             ctx.clearTimer('saveNotesTimeout');
@@ -520,6 +540,7 @@ async function busyNoteHarness(tabId) {
             ctx.teardown();
             globalThis.prksResetResearchDraftsForTest();
             delete globalThis.prksSync;
+            delete globalThis.prksOfflineReadEntity;
         },
     };
     return h;
@@ -591,6 +612,58 @@ async function leaveFlushSendsBlockedBodyWithoutTimer() {
         'leaving flushes the blocked body');
     assert.equal(h.ctx.timers.has('researchNotesBusyRetry'), false);
     assert.equal(h.listeners.size, 0);
+    h.done();
+}
+
+async function busyRetryRefreshesBaseAfterAnotherTabSettles() {
+    /* A acknowledged by another tab: the retry adopts the server base for A
+     * and sends B against A's revision, not a stale-base conflict. */
+    let h = await busyNoteHarness('busy-cross-tab');
+    await h.blockB();
+    h.serve({ text: 'A', revision: 1 });
+    await h.settleElsewhere(h.a);
+    h.emit(); /* the next check: a fallback timer tick or any local sync event */
+    await until(() => h.session().state === 'committed', 'the retried save after a cross-tab settle');
+    let rows = await h.rows();
+    assert.deepEqual(rows.map(r => r.payload.text), ['A B'], 'B is sent without another keystroke');
+    assert.equal(rows[0].base_revision, 1, 'B is measured against the revision A received elsewhere');
+    assert.deepEqual(h.resources.workNotesObserved.research, { value: 'A', revision: 1 });
+    assert.equal(h.listeners.size, 0);
+    assert.equal(h.ctx.timers.has('researchNotesBusyRetry'), false);
+    h.done();
+
+    /* The server holds a different body: another edit landed, not A. The
+     * base is not advanced, so the server reports the conflict instead of
+     * B silently overwriting that edit. */
+    h = await busyNoteHarness('busy-cross-tab-other-edit');
+    await h.blockB();
+    h.serve({ text: 'Other device', revision: 2 });
+    await h.settleElsewhere(h.a);
+    h.emit();
+    await until(() => h.session().state === 'committed', 'the retried save after a foreign edit');
+    rows = await h.rows();
+    assert.deepEqual(rows.map(r => r.payload.text), ['A B']);
+    assert.equal(rows[0].base_revision, 0, 'a foreign body never becomes B\'s base');
+    assert.deepEqual(h.resources.workNotesObserved.research, { value: '', revision: 0 });
+    h.done();
+
+    /* The server cannot be read: no stale-base send; the retry waits. */
+    h = await busyNoteHarness('busy-cross-tab-unreadable');
+    await h.blockB();
+    h.serve({ text: 'A', revision: 1, readable: false });
+    const savesBefore = h.saves();
+    await h.settleElsewhere(h.a);
+    h.emit();
+    await until(() => h.server.reads > 0, 'the base refresh to be attempted');
+    await settle();
+    assert.equal(h.saves(), savesBefore, 'B is not sent against an unverified base');
+    assert.equal(h.session().state, 'blocked');
+    assert.ok(h.ctx.timers.has('researchNotesBusyRetry'), 'the fallback retry stays armed');
+    h.server.readable = true;
+    h.emit();
+    await until(() => h.session().state === 'committed', 'the retried save once the server is readable');
+    rows = await h.rows();
+    assert.equal(rows[0].base_revision, 1);
     h.done();
 }
 
@@ -804,6 +877,7 @@ async function main() {
     await ackOfOlderBodyNeverPaintsSaved();
     await leaveFlushSendsBlockedBodyWithoutTimer();
     await busyRetryIsOwnerScoped();
+    await busyRetryRefreshesBaseAfterAnotherTabSettles();
     await reconciliation();
     console.log('All ' + checks + ' Work note checks passed');
 }
