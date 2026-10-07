@@ -1430,6 +1430,22 @@ function prksResearchDraftSettledState(code, hasNewerDraft) {
     return code === 'saved' ? 'committed' : 'error';
 }
 
+function prksResearchNotesBaseCopy(base) {
+    return base ? { value: base.value, revision: base.revision } : null;
+}
+
+function prksResearchNotesObservedSlot(owner) {
+    return typeof prksWorkNoteObserved === 'function'
+        ? prksWorkNoteObserved(owner, 'work-research-note') : null;
+}
+
+/** The owner's live observed slot when it holds `base`, else null. */
+function prksResearchNotesSlotHolding(owner, base) {
+    const slot = prksResearchNotesObservedSlot(owner);
+    if (!slot || !base) return null;
+    return slot.value === base.value && slot.revision === base.revision ? slot : null;
+}
+
 function prksEnqueueWorkResearchNotesSave(ctx, workId, options) {
     const sendBase = options && options.base ? options.base : null;
     const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
@@ -1496,11 +1512,8 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId, options) {
         if (typeof prksSaveWorkNoteDurably !== 'function') {
             return { code: 'unavailable' };
         }
-        usedBase = observed ? { value: observed.value, revision: observed.revision } : null;
-        const liveSlot = typeof prksWorkNoteObserved === 'function'
-            ? prksWorkNoteObserved(owner, 'work-research-note') : null;
-        usedSlot = liveSlot && usedBase && liveSlot.value === usedBase.value &&
-            liveSlot.revision === usedBase.revision ? liveSlot : null;
+        usedBase = prksResearchNotesBaseCopy(observed);
+        usedSlot = prksResearchNotesSlotHolding(owner, usedBase);
         return prksSaveWorkNoteDurably(id, 'work-research-note', content, observed);
     })();
     if (transient) transient.promise = savePromise;
@@ -1584,8 +1597,15 @@ function prksFlushPendingWorkResearchNotes(ctx) {
         prksEnqueueWorkResearchNotesSave(owner, id);
         return;
     }
-    /* A scope_busy settlement leaves the newest body unsaved with no debounce
-     * timer (#465). Leaving still sends it, through the live editor only. */
+    prksFlushTimerlessResearchNote(owner, id);
+}
+
+/**
+ * A scope_busy settlement leaves the newest body unsaved with no debounce
+ * timer (#465). Leaving still sends it, through the live editor only, and a
+ * blocked body against the base it was refused on.
+ */
+function prksFlushTimerlessResearchNote(owner, id) {
     const entry = prksWorkResearchDrafts.get(prksResearchDraftKey(owner, id));
     if (!entry || entry.promise || (entry.state !== 'blocked' && entry.state !== 'drafting')) return;
     if (!prksResearchNotesBusyRetryTarget(owner, id)) return;
