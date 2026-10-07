@@ -119,7 +119,11 @@ export interface EmergencyEntry {
   committedGeneration: number
   /** Null only when the body could not be held (budget or write failure). */
   body: string | null
-  /** Present if and only if committedGeneration === 0. */
+  /**
+   * Required when committedGeneration === 0 (it creates the record). Writers
+   * always include it, so a forked tail keeps the base its text was written
+   * against rather than an adopter's newer one.
+   */
   lineage?: EmergencyLineage
 }
 

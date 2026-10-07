@@ -199,7 +199,8 @@ describe('emergency entry', () => {
     t.win.fire('pagehide')
     const next = JSON.parse(t.storage.map.get(emergencyKeyOf('p-me')) as string) as EmergencyPayload
     expect(next.entries[0]).toMatchObject({ generation: 2, committedGeneration: 1 })
-    expect(next.entries[0]!.lineage).toBeUndefined()
+    // A committed lineage still carries its base, for a fork after adoption.
+    expect(next.entries[0]!.lineage).toMatchObject({ base: BASE })
   })
 
   it('guards writers that the page budget cannot hold', () => {
@@ -433,5 +434,62 @@ describe('adoption', () => {
     winner.edit(10, 'orphan continued')
     await winner.flush()
     expect(await t.store.getBody('d-orphan')).toMatchObject({ generation: 10, body: 'orphan continued' })
+  })
+
+  it('refuses a second adoption of a draft this page released', async () => {
+    const t = setup()
+    const w = t.open()
+    w.edit(1, 'mine')
+    await w.release()
+    const record = (await t.store.get(w.draftId() as string))!
+    expect(record.owner.pageInstanceId).toBe('p-me')
+    const [a, b] = await Promise.all([
+      t.registry.adopt(record, { paneId: 'tab-1', sessionKey: 's-a' }),
+      t.registry.adopt(record, { paneId: 'tab-2', sessionKey: 's-b' }),
+    ])
+    expect([a, b].filter(Boolean)).toHaveLength(1)
+    expect(await t.registry.adopt(record, { paneId: 'tab-3', sessionKey: 's-c' })).toBeNull()
+    expect(t.registry.writers().filter((x) => x.draftId() === record.draftId)).toHaveLength(1)
+  })
+})
+
+describe('discard', () => {
+  it('moves an edit made while a write is in flight to a fresh lineage', async () => {
+    const t = setup({ gate: true })
+    const w = t.open()
+    w.edit(1, 'to be discarded')
+    void w.flush()
+    const old = w.draftId() as string
+    const discarding = w.discard()
+    w.edit(2, 'kept words')
+    expect(w.draftId()).not.toBe(old)
+    expectProtectedOrDisclosed(t.registry)
+    await t.releaseGate()
+    await discarding
+    expect(w.state()).toBe('pending')
+    t.scheduler.advance(300)
+    await t.releaseGate()
+    expect(w.state()).toBe('protected')
+    expect(await t.store.getBody(w.draftId() as string)).toMatchObject({ generation: 2, body: 'kept words' })
+    expect(await t.store.get(old)).toBeNull()
+  })
+})
+
+describe('emergency key refresh', () => {
+  it('drops the entry of a discarded draft while another stays pending', async () => {
+    const t = setup()
+    const a = t.open('s-a', 'w1')
+    const b = t.open('s-b', 'w2')
+    a.edit(1, 'a text')
+    b.edit(1, 'b text')
+    t.doc.fire('visibilitychange')
+    const before = JSON.parse(t.storage.map.get(emergencyKeyOf('p-me')) as string) as EmergencyPayload
+    expect(before.entries).toHaveLength(2)
+    const aId = a.draftId() as string
+    await a.flush()
+    await a.discard()
+    const after = JSON.parse(t.storage.map.get(emergencyKeyOf('p-me')) as string) as EmergencyPayload
+    expect(after.entries.map((e) => e.draftId)).toEqual([b.draftId()])
+    expect(after.entries.some((e) => e.draftId === aId)).toBe(false)
   })
 })

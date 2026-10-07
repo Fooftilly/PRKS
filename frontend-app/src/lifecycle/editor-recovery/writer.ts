@@ -166,6 +166,9 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
   let guardOn = false
   let emergencyOn = false
   let emergencyWritten = false
+  /** Draft ids in the emergency key as last written. */
+  let emergencyIds = new Set<string>()
+  let refreshingEmergency = false
   let disposed = false
 
   function onBeforeUnload(event: Event): void {
@@ -211,13 +214,32 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       }
     }
     emergencyOn = needEmergency
-    if (!needEmergency && emergencyWritten && storage) {
+    if (!emergencyWritten || !storage || refreshingEmergency) return
+    if (!needEmergency) {
+      removeEmergencyKey()
+      return
+    }
+    // An entry whose writer committed, was discarded or moved lineage must not
+    // outlive it: merged after a crash it could recreate a discarded draft.
+    const current = new Set(pending.map((w) => w.currentDraftId()))
+    if ([...emergencyIds].some((id) => !current.has(id))) {
+      refreshingEmergency = true
       try {
-        storage.removeItem(emergencyKey)
-        emergencyWritten = false
-      } catch {
-        /* a stale key is merged harmlessly by a later page */
+        if (writeEmergencyNow() === 'failed') removeEmergencyKey()
+      } finally {
+        refreshingEmergency = false
       }
+    }
+  }
+
+  function removeEmergencyKey(): void {
+    if (!storage) return
+    try {
+      storage.removeItem(emergencyKey)
+      emergencyWritten = false
+      emergencyIds = new Set()
+    } catch {
+      /* a stale key is merged by a later page; store rules drop discarded lineages */
     }
   }
 
@@ -255,7 +277,10 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       entries: pending.map((w) => w.emergencyEntry(planned.has(w))),
     }
     const result = writeEmergency(storage, emergencyKey, payload)
-    if (result !== 'failed') emergencyWritten = true
+    if (result !== 'failed') {
+      emergencyWritten = true
+      emergencyIds = new Set(payload.entries.map((e) => e.draftId))
+    }
     // Bodies were dropped or nothing was stored: guard every pending body from now on.
     // A full write (a planned body may have shrunk) makes emergency storage usable again.
     noteEmergencyUsable(result === 'written')
@@ -414,7 +439,10 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
         })
         .then(
           (outcome) => {
-            if (this.lineageId !== draftId) return
+            if (this.lineageId !== draftId) {
+              this.writeRequested = true
+              return
+            }
             if (outcome === 'ok') {
               this.lineageStored = true
               this.committed = pending.generation
@@ -441,6 +469,11 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
             this.writeRequested = true
           },
           (error: unknown) => {
+            if (this.lineageId !== draftId) {
+              // Detached (discarded or acknowledged) meanwhile: write the newer lineage, if any.
+              this.writeRequested = true
+              return
+            }
             this.failedGeneration = pending.generation
             if (this.latest) this.status = 'unprotected'
             emit({ type: 'unprotected', sessionKey: this.sessionKey, draftId, code: codeOf(error) })
@@ -525,17 +558,23 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       this.clearTimers()
       this.clearRetry()
       this.latest = null
-      if (this.inFlight) await this.inFlight
+      // Detach before waiting: an edit that arrives during the wait starts a
+      // fresh lineage, and the in-flight write's result no longer applies here.
       const draftId = this.lineageId
+      if (draftId) this.cleared.add(draftId)
       this.lineageId = null
       this.lineageStored = false
       this.committed = 0
+      this.failedGeneration = 0
+      this.retryDelay = 0
       this.status = 'clean'
       changed()
-      if (draftId) {
-        this.cleared.add(draftId)
-        await store.discard(draftId)
+      if (this.inFlight) await this.inFlight
+      if (!this.latest && this.status !== 'clean') {
+        this.status = 'clean'
+        changed()
       }
+      if (draftId) await store.discard(draftId)
     }
 
     emergencyEntry(holdBody: boolean): EmergencyEntry {
@@ -550,13 +589,13 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
         committedGeneration,
         body: holdBody ? pending.body : null,
       }
-      if (committedGeneration === 0) {
-        const claim = identity.current()
-        entry.lineage = {
-          createdAt: this.lineageCreatedAt,
-          owner: { runtimeId: claim ? claim.runtimeId : null, pageInstanceId: identity.pageInstanceId, paneId: this.paneId },
-          base: { ...this.base },
-        }
+      // Always present: it creates an uncommitted lineage, and a forked tail
+      // keeps the base this text was written against.
+      const claim = identity.current()
+      entry.lineage = {
+        createdAt: this.lineageCreatedAt,
+        owner: { runtimeId: claim ? claim.runtimeId : null, pageInstanceId: identity.pageInstanceId, paneId: this.paneId },
+        base: { ...this.base },
       }
       return entry
     }
@@ -574,7 +613,25 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     return writer
   }
 
+  /** Draft ids with an adoption in progress on this page. */
+  const adopting = new Set<string>()
+
   async function adopt(
+    record: DraftRecord,
+    input: Omit<OpenWriterInput, 'kind' | 'entityType' | 'entityId' | 'base'>,
+  ): Promise<DraftWriter | null> {
+    // One live writer per lineage on this page: a second adoption of the same
+    // draft, concurrent or after the first, is refused.
+    if (disposed || adopting.has(record.draftId) || ownerOf(record.draftId) !== null) return null
+    adopting.add(record.draftId)
+    try {
+      return await adoptReserved(record, input)
+    } finally {
+      adopting.delete(record.draftId)
+    }
+  }
+
+  async function adoptReserved(
     record: DraftRecord,
     input: Omit<OpenWriterInput, 'kind' | 'entityType' | 'entityId' | 'base'>,
   ): Promise<DraftWriter | null> {
@@ -592,7 +649,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       paneId: input.paneId,
       claimedAt: now(),
     })
-    if (result.outcome !== 'ok') return null
+    if (result.outcome !== 'ok' || disposed) return null
     writer.adoptRecord(result.record)
     live.add(writer)
     return writer

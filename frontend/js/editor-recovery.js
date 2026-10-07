@@ -1071,6 +1071,9 @@ var prksEditorRecovery = (function(exports) {
 		let guardOn = false;
 		let emergencyOn = false;
 		let emergencyWritten = false;
+		/** Draft ids in the emergency key as last written. */
+		let emergencyIds = /* @__PURE__ */ new Set();
+		let refreshingEmergency = false;
 		let disposed = false;
 		function onBeforeUnload(event) {
 			event.preventDefault();
@@ -1112,9 +1115,27 @@ var prksEditorRecovery = (function(exports) {
 				}
 			}
 			emergencyOn = needEmergency;
-			if (!needEmergency && emergencyWritten && storage) try {
+			if (!emergencyWritten || !storage || refreshingEmergency) return;
+			if (!needEmergency) {
+				removeEmergencyKey();
+				return;
+			}
+			const current = new Set(pending.map((w) => w.currentDraftId()));
+			if ([...emergencyIds].some((id) => !current.has(id))) {
+				refreshingEmergency = true;
+				try {
+					if (writeEmergencyNow() === "failed") removeEmergencyKey();
+				} finally {
+					refreshingEmergency = false;
+				}
+			}
+		}
+		function removeEmergencyKey() {
+			if (!storage) return;
+			try {
 				storage.removeItem(emergencyKey);
 				emergencyWritten = false;
+				emergencyIds = /* @__PURE__ */ new Set();
 			} catch {}
 		}
 		/** Blocked storage (SecurityError, disabled) throws here; a full quota is caught by the write itself. */
@@ -1149,7 +1170,10 @@ var prksEditorRecovery = (function(exports) {
 				entries: pending.map((w) => w.emergencyEntry(planned.has(w)))
 			};
 			const result = writeEmergency(storage, emergencyKey, payload);
-			if (result !== "failed") emergencyWritten = true;
+			if (result !== "failed") {
+				emergencyWritten = true;
+				emergencyIds = new Set(payload.entries.map((e) => e.draftId));
+			}
 			noteEmergencyUsable(result === "written");
 			return result;
 		}
@@ -1302,7 +1326,10 @@ var prksEditorRecovery = (function(exports) {
 					base: this.base,
 					create
 				}).then((outcome) => {
-					if (this.lineageId !== draftId) return;
+					if (this.lineageId !== draftId) {
+						this.writeRequested = true;
+						return;
+					}
 					if (outcome === "ok") {
 						this.lineageStored = true;
 						this.committed = pending.generation;
@@ -1334,6 +1361,10 @@ var prksEditorRecovery = (function(exports) {
 					});
 					this.writeRequested = true;
 				}, (error) => {
+					if (this.lineageId !== draftId) {
+						this.writeRequested = true;
+						return;
+					}
 					this.failedGeneration = pending.generation;
 					if (this.latest) this.status = "unprotected";
 					emit({
@@ -1410,17 +1441,21 @@ var prksEditorRecovery = (function(exports) {
 				this.clearTimers();
 				this.clearRetry();
 				this.latest = null;
-				if (this.inFlight) await this.inFlight;
 				const draftId = this.lineageId;
+				if (draftId) this.cleared.add(draftId);
 				this.lineageId = null;
 				this.lineageStored = false;
 				this.committed = 0;
+				this.failedGeneration = 0;
+				this.retryDelay = 0;
 				this.status = "clean";
 				changed();
-				if (draftId) {
-					this.cleared.add(draftId);
-					await store.discard(draftId);
+				if (this.inFlight) await this.inFlight;
+				if (!this.latest && this.status !== "clean") {
+					this.status = "clean";
+					changed();
 				}
+				if (draftId) await store.discard(draftId);
 			}
 			emergencyEntry(holdBody) {
 				const pending = this.latest;
@@ -1434,18 +1469,16 @@ var prksEditorRecovery = (function(exports) {
 					committedGeneration,
 					body: holdBody ? pending.body : null
 				};
-				if (committedGeneration === 0) {
-					const claim = identity.current();
-					entry.lineage = {
-						createdAt: this.lineageCreatedAt,
-						owner: {
-							runtimeId: claim ? claim.runtimeId : null,
-							pageInstanceId: identity.pageInstanceId,
-							paneId: this.paneId
-						},
-						base: { ...this.base }
-					};
-				}
+				const claim = identity.current();
+				entry.lineage = {
+					createdAt: this.lineageCreatedAt,
+					owner: {
+						runtimeId: claim ? claim.runtimeId : null,
+						pageInstanceId: identity.pageInstanceId,
+						paneId: this.paneId
+					},
+					base: { ...this.base }
+				};
 				return entry;
 			}
 			dispose() {
@@ -1459,7 +1492,18 @@ var prksEditorRecovery = (function(exports) {
 			live.add(writer);
 			return writer;
 		}
+		/** Draft ids with an adoption in progress on this page. */
+		const adopting = /* @__PURE__ */ new Set();
 		async function adopt(record, input) {
+			if (disposed || adopting.has(record.draftId) || ownerOf(record.draftId) !== null) return null;
+			adopting.add(record.draftId);
+			try {
+				return await adoptReserved(record, input);
+			} finally {
+				adopting.delete(record.draftId);
+			}
+		}
+		async function adoptReserved(record, input) {
 			const writer = new WriterImpl({
 				...input,
 				kind: record.kind,
@@ -1474,7 +1518,7 @@ var prksEditorRecovery = (function(exports) {
 				paneId: input.paneId,
 				claimedAt: now()
 			});
-			if (result.outcome !== "ok") return null;
+			if (result.outcome !== "ok" || disposed) return null;
 			writer.adoptRecord(result.record);
 			live.add(writer);
 			return writer;
