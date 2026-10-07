@@ -1249,27 +1249,26 @@ function prksResearchNotesBusyRetryTarget(ctx, workId) {
 /**
  * The base a blocked body is re-sent against. A blocked body was refused
  * against `entry.blockedBase`. The owner's current observed base replaces it
- * only when it is provably the same line of history: unchanged, advanced in
- * place by an acknowledgement in this runtime (`acceptAck` mutates the slot
- * the save used), or rebuilt (a same-Work refresh) holding the body the save
- * was blocked behind when that body is one this session itself queued. The
- * blocking row comes from the shared queue and may be another tab's, so a
- * rebuilt base holding it is not enough. Anything else keeps the blocked
- * base, so the server reports the conflict instead of the retry silently
- * overwriting a body this owner never saw (#476).
+ * only when it is unchanged, or when it now holds the body the save was
+ * blocked behind and that body is the one this session itself last queued.
+ * The blocking row comes from the shared queue and its acknowledgement
+ * advances every same-Work owner (and a same-Work refresh rebuilds the base
+ * from the server), so an advanced base alone does not show that the
+ * blocking save was this session's. Anything else keeps the blocked base, so
+ * the server reports the conflict instead of the retry silently overwriting
+ * a body this session never saw.
  */
 function prksResearchNotesBlockedSendBase(ctx, entry) {
     const blockedBase = entry && entry.blockedBase;
     const slot = typeof prksWorkNoteObserved === 'function' ? prksWorkNoteObserved(ctx, 'work-research-note') : null;
-    if (!blockedBase) return slot ? { value: slot.value, revision: slot.revision } : null;
+    if (!blockedBase) return prksResearchNotesBaseCopy(slot);
     if (!slot) return blockedBase;
-    const current = { value: slot.value, revision: slot.revision };
-    if (slot.value === blockedBase.value && slot.revision === blockedBase.revision) return current;
-    if (slot.revision < blockedBase.revision) return blockedBase;
-    if (entry.blockedSlot === slot) return current;
+    if (slot.value === blockedBase.value && slot.revision === blockedBase.revision) return prksResearchNotesBaseCopy(slot);
     const ownBlocking = typeof entry.blockedBehindText === 'string' &&
         entry.blockedBehindText === entry.ownQueuedText;
-    return ownBlocking && slot.value === entry.blockedBehindText ? current : blockedBase;
+    const advancedByOwn = ownBlocking && slot.value === entry.blockedBehindText &&
+        slot.revision >= blockedBase.revision;
+    return advancedByOwn ? prksResearchNotesBaseCopy(slot) : blockedBase;
 }
 
 /**
@@ -1434,18 +1433,6 @@ function prksResearchNotesBaseCopy(base) {
     return base ? { value: base.value, revision: base.revision } : null;
 }
 
-function prksResearchNotesObservedSlot(owner) {
-    return typeof prksWorkNoteObserved === 'function'
-        ? prksWorkNoteObserved(owner, 'work-research-note') : null;
-}
-
-/** The owner's live observed slot when it holds `base`, else null. */
-function prksResearchNotesSlotHolding(owner, base) {
-    const slot = prksResearchNotesObservedSlot(owner);
-    if (!slot || !base) return null;
-    return slot.value === base.value && slot.revision === base.revision ? slot : null;
-}
-
 function prksEnqueueWorkResearchNotesSave(ctx, workId, options) {
     const sendBase = options && options.base ? options.base : null;
     const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
@@ -1491,7 +1478,6 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId, options) {
     }
 
     let usedBase = null;
-    let usedSlot = null;
     const savePromise = (async function () {
         let observed = sendBase || (typeof prksWorkNoteObserved === 'function'
             ? prksWorkNoteObserved(owner, 'work-research-note')
@@ -1513,7 +1499,6 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId, options) {
             return { code: 'unavailable' };
         }
         usedBase = prksResearchNotesBaseCopy(observed);
-        usedSlot = prksResearchNotesSlotHolding(owner, usedBase);
         return prksSaveWorkNoteDurably(id, 'work-research-note', content, observed);
     })();
     if (transient) transient.promise = savePromise;
@@ -1534,7 +1519,6 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId, options) {
                 if (blocked) {
                     /* Refused against this base; a retry keeps it (#465). */
                     transient.blockedBase = usedBase;
-                    transient.blockedSlot = usedSlot;
                     transient.blockedBehindText = undefined;
                 } else if (code === 'saved') {
                     transient.ownQueuedText = content;

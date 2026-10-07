@@ -423,7 +423,7 @@ const STILL_SYNCING = 'Still syncing — wait or resolve the conflict in Diagnos
 /** A TabContext-shaped owner for the production Research Notes save path:
  * generation, timers, cleanups and the `workNotes` slot behave like
  * tab-context.js so retry ownership is observable. */
-async function busyNoteHarness(tabId) {
+async function busyNoteHarness(tabId, options) {
     ensureWorksEnqueueLoaded();
     globalThis.prksResetResearchDraftsForTest();
     const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
@@ -484,8 +484,19 @@ async function busyNoteHarness(tabId) {
             fns.forEach(fn => fn());
         },
     };
-    /* A was sent once and failed: attempted, so immutable in the store. */
-    const a = await store.saveWorkNote('W-1', RESEARCH, 'A', observed('', 0));
+    /* A was sent once and failed: attempted, so immutable in the store. By
+     * default this session queued A itself; `foreignA` queues it as another
+     * tab or pane would, straight into the shared store. */
+    let a;
+    if (options && options.foreignA) {
+        a = await store.saveWorkNote('W-1', RESEARCH, 'A', observed('', 0));
+    } else {
+        globalThis.prksWorkNotesMarkEdit(notes, 'W-1', 'A', ctx);
+        assert.equal((await globalThis.prksEnqueueWorkResearchNotesSave(ctx, 'W-1')).code, 'saved');
+        await until(() => ctx.ui.workResearchNoteSession.state === 'committed', 'A to settle');
+        a = (await store.listOperations()).find(r => r.operation === RESEARCH);
+        statusEl.innerText = '';
+    }
     await store.claimOperation(a.op_id);
     await store.updateOperationSyncState(a.op_id, { status: 'pending', last_error: 'Sync failed; retry scheduled.' });
     const h = {
@@ -635,7 +646,7 @@ async function refreshedBaseCountsOnlyForThisSessionsOwnBlockingSave() {
      * base as {A, 1}. B must not go out against r1: that would silently
      * replace A, which this owner never saw. It keeps r0, so the server
      * reports the conflict. */
-    let h = await busyNoteHarness('busy-foreign-blocking-refresh');
+    let h = await busyNoteHarness('busy-foreign-blocking-refresh', { foreignA: true });
     await h.blockB();
     await until(() => h.session().blockedBehindText === 'A', 'the blocking body to be remembered');
     await retire(h, h.a);
@@ -645,6 +656,21 @@ async function refreshedBaseCountsOnlyForThisSessionsOwnBlockingSave() {
     let rows = await h.rows();
     assert.deepEqual(rows.map(r => r.payload.text), ['A B']);
     assert.equal(rows[0].base_revision, 0, 'another tab\'s A never becomes B\'s base through a refresh');
+    h.done();
+
+    /* Two panes in one runtime: pane 2 owns attempted A, this pane owns
+     * blocked B. A's acknowledgement in this runtime advances this pane's
+     * observed slot in place (acceptAck runs for every same-Work owner). B
+     * still keeps r0 and becomes a conflict rather than replacing A. */
+    h = await busyNoteHarness('busy-foreign-blocking-ack', { foreignA: true });
+    await h.blockB();
+    await until(() => h.session().blockedBehindText === 'A', 'the blocking body to be remembered');
+    const foreignAck = await h.ack(h.a, 1);
+    h.emit(foreignAck);
+    await until(() => h.session().state === 'committed', 'the retried save after a foreign ack');
+    rows = await h.rows();
+    assert.deepEqual(rows.map(r => r.payload.text), ['A B']);
+    assert.equal(rows[0].base_revision, 0, 'another pane\'s acknowledged A never becomes B\'s base');
     h.done();
 
     /* This session queued A itself; the same refresh is then A's own advance. */
