@@ -317,11 +317,12 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     return false
   }
 
-  function noteEmergencyResult(result: EmergencyWriteResult | 'unavailable', payloadChars: number): void {
+  function noteEmergencyResult(result: EmergencyWriteResult | 'unavailable'): void {
     const wasDistrusted = distrusted
     if (result === 'written') {
+      // No capacity credit: on Chromium an all-Latin-1 payload is stored at one
+      // byte per char, so a real write proves less than a worst-case probe.
       distrusted = false
-      provenChars = Math.max(provenChars, payloadChars)
     } else {
       // Bodies were dropped or nothing was stored: guard every pending body
       // until a full write succeeds again.
@@ -335,7 +336,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     const pending = pendingWriters()
     if (!pending.length) return 'nothing-pending'
     if (!storage) {
-      noteEmergencyResult('unavailable', 0)
+      noteEmergencyResult('unavailable')
       return 'unavailable'
     }
     const claim = identity.current()
@@ -351,7 +352,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       emergencyWritten = true
       emergencyIds = new Set(payload.entries.map((e) => e.draftId))
     }
-    noteEmergencyResult(result, payloadChars(pending.length))
+    noteEmergencyResult(result)
     return result
   }
 

@@ -1225,12 +1225,10 @@ var prksEditorRecovery = (function(exports) {
 			}
 			return false;
 		}
-		function noteEmergencyResult(result, payloadChars) {
+		function noteEmergencyResult(result) {
 			const wasDistrusted = distrusted;
-			if (result === "written") {
-				distrusted = false;
-				provenChars = Math.max(provenChars, payloadChars);
-			} else {
+			if (result === "written") distrusted = false;
+			else {
 				distrusted = true;
 				provenChars = 0;
 			}
@@ -1240,7 +1238,7 @@ var prksEditorRecovery = (function(exports) {
 			const pending = pendingWriters();
 			if (!pending.length) return "nothing-pending";
 			if (!storage) {
-				noteEmergencyResult("unavailable", 0);
+				noteEmergencyResult("unavailable");
 				return "unavailable";
 			}
 			const claim = identity.current();
@@ -1256,7 +1254,7 @@ var prksEditorRecovery = (function(exports) {
 				emergencyWritten = true;
 				emergencyIds = new Set(payload.entries.map((e) => e.draftId));
 			}
-			noteEmergencyResult(result, payloadChars(pending.length));
+			noteEmergencyResult(result);
 			return result;
 		}
 		class WriterImpl {
