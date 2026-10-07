@@ -1370,8 +1370,8 @@ function prksResearchNotesStatusForResult(code, pending) {
 }
 
 /** Whether a Research Notes row is still queued for the Work after a save. */
-async function prksResearchNotesPendingAfterSave(workId, ok) {
-    if (!ok || typeof prksRefreshPendingWorkNotes !== 'function') return false;
+async function prksResearchNotesPendingAfterSave(workId) {
+    if (typeof prksRefreshPendingWorkNotes !== 'function') return false;
     await prksRefreshPendingWorkNotes();
     if (typeof prksWorkNoteOperations !== 'function') return false;
     const rows = await prksRefreshPendingWorkNotes();
@@ -1460,7 +1460,7 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
         .then(async function (result) {
             const code = result && result.code;
             const ok = code === 'saved';
-            const pending = await prksResearchNotesPendingAfterSave(id, ok);
+            const pending = ok ? await prksResearchNotesPendingAfterSave(id) : false;
             const localApplied = prksWorkNotesSettleSave(notes, token, ok);
             let transientApplied = false;
             if (transient && transientToken === transient.latestSaveToken) {
