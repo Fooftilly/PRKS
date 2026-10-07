@@ -1247,6 +1247,26 @@ function prksResearchNotesBusyRetryTarget(ctx, workId) {
 }
 
 /**
+ * The base a blocked body is re-sent against. A blocked body was refused
+ * against `entry.blockedBase`. The owner's current observed base replaces it
+ * only when it is unchanged, or when it now holds the body the save was
+ * blocked behind (that save's acknowledgement advanced it). Anything else,
+ * such as a same-Work refresh that rebuilt the base from a newer body,
+ * keeps the blocked base so the server reports the conflict instead of the
+ * retry silently overwriting that body.
+ */
+function prksResearchNotesBlockedSendBase(ctx, entry) {
+    const blockedBase = entry && entry.blockedBase;
+    const slot = typeof prksWorkNoteObserved === 'function' ? prksWorkNoteObserved(ctx, 'work-research-note') : null;
+    if (!blockedBase) return slot ? { value: slot.value, revision: slot.revision } : null;
+    if (!slot) return blockedBase;
+    const unchanged = slot.value === blockedBase.value && slot.revision === blockedBase.revision;
+    const advancedByBlocking = typeof entry.blockedBehindText === 'string' &&
+        slot.value === entry.blockedBehindText && slot.revision >= blockedBase.revision;
+    return unchanged || advancedByBlocking ? { value: slot.value, revision: slot.revision } : blockedBase;
+}
+
+/**
  * A save refused with `scope_busy` (#465): an earlier, attempted operation
  * still holds this note's aggregate, and the store keeps it immutable. The
  * newer body was never written. It stays `blocked` on the session, and this
@@ -1341,7 +1361,7 @@ function prksScheduleResearchNotesBusyRetry(ctx, workId, entry) {
             return;
         }
         stop();
-        void prksEnqueueWorkResearchNotesSave(ctx, id);
+        void prksEnqueueWorkResearchNotesSave(ctx, id, { base: prksResearchNotesBlockedSendBase(ctx, entry) });
     };
     if (window.prksSync && typeof window.prksSync.subscribe === 'function') {
         stopSync = window.prksSync.subscribe(function () { void check(); });
@@ -1349,6 +1369,17 @@ function prksScheduleResearchNotesBusyRetry(ctx, workId, entry) {
     if (typeof ctx.registerCleanup === 'function') unregisterCleanup = ctx.registerCleanup(stop);
     prksResearchNotesBusyRetryStops.set(ctx, stop);
     arm();
+    /* Remember the body this one is blocked behind, while its row is queued. */
+    if (typeof entry.blockedBehindText !== 'string' && typeof prksRefreshPendingWorkNotes === 'function' &&
+        typeof prksWorkNoteOperations === 'function') {
+        void prksRefreshPendingWorkNotes().then(function (rows) {
+            const ops = prksWorkNoteOperations(rows, id, 'work-research-note');
+            const op = ops.length ? ops[ops.length - 1] : null;
+            if (op && op.payload && typeof op.payload.text === 'string' && typeof entry.blockedBehindText !== 'string') {
+                entry.blockedBehindText = op.payload.text;
+            }
+        }, function () { /* the base then stays the blocked one */ });
+    }
 }
 
 window.prksWorkNotesMarkEdit = prksWorkNotesMarkEdit;
@@ -1393,7 +1424,8 @@ function prksResearchDraftSettledState(code, hasNewerDraft) {
     return code === 'saved' ? 'committed' : 'error';
 }
 
-function prksEnqueueWorkResearchNotesSave(ctx, workId) {
+function prksEnqueueWorkResearchNotesSave(ctx, workId, options) {
+    const sendBase = options && options.base ? options.base : null;
     const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
     const saveGeneration = owner && typeof owner.generation === 'number' ? owner.generation : undefined;
     const _cwSave = owner && owner.getEntity ? owner.getEntity('work') : null;
@@ -1436,10 +1468,11 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
         window.prksWorkspaceRefreshTabStatus(owner.tabId);
     }
 
+    let usedBase = null;
     const savePromise = (async function () {
-        let observed = typeof prksWorkNoteObserved === 'function'
+        let observed = sendBase || (typeof prksWorkNoteObserved === 'function'
             ? prksWorkNoteObserved(owner, 'work-research-note')
-            : null;
+            : null);
         if (!observed && typeof prksEnsureWorkNotesBase === 'function') {
             const capturedWork = (owner.getResource && owner.getResource('workNotesCanonical')) || _cwSave;
             const base = await prksEnsureWorkNotesBase(owner, capturedWork, { publish: false });
@@ -1456,6 +1489,7 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
         if (typeof prksSaveWorkNoteDurably !== 'function') {
             return { code: 'unavailable' };
         }
+        usedBase = observed ? { value: observed.value, revision: observed.revision } : null;
         return prksSaveWorkNoteDurably(id, 'work-research-note', content, observed);
     })();
     if (transient) transient.promise = savePromise;
@@ -1473,6 +1507,11 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
                 transient.state = prksResearchDraftSettledState(code, hasNewerDraft);
                 transient.saveError = transient.state === 'error';
                 const blocked = transient.state === 'blocked';
+                if (blocked) {
+                    /* Refused against this base; a retry keeps it (#465). */
+                    transient.blockedBase = usedBase;
+                    transient.blockedBehindText = undefined;
+                }
                 transient.updatedAt = Date.now();
                 transientApplied = true;
                 prksSyncResearchNotesState(notes, transient);
@@ -1537,7 +1576,8 @@ function prksFlushPendingWorkResearchNotes(ctx) {
     if (!entry || entry.promise || (entry.state !== 'blocked' && entry.state !== 'drafting')) return;
     if (!prksResearchNotesBusyRetryTarget(owner, id)) return;
     prksStopResearchNotesBusyRetry(owner);
-    prksEnqueueWorkResearchNotesSave(owner, id);
+    const base = entry.state === 'blocked' ? prksResearchNotesBlockedSendBase(owner, entry) : null;
+    prksEnqueueWorkResearchNotesSave(owner, id, base ? { base: base } : undefined);
 }
 
 window.prksEnqueueWorkResearchNotesSave = prksEnqueueWorkResearchNotesSave;

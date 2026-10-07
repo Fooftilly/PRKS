@@ -594,6 +594,29 @@ async function leaveFlushSendsBlockedBodyWithoutTimer() {
     h.done();
 }
 
+async function blockedRetryKeepsItsBaseOverAForeignRefresh() {
+    /* A same-Work refresh rebuilds the observed base from a newer body C
+     * another device wrote after A. The retry must not send B against C's
+     * revision (a silent overwrite); it keeps the base B was refused against,
+     * so the server reports the conflict. */
+    const h = await busyNoteHarness('busy-foreign-refresh');
+    await h.blockB();
+    await until(() => h.session().blockedBehindText === 'A', 'the blocking body to be remembered');
+    assert.deepEqual(h.session().blockedBase, { value: '', revision: 0 });
+    await h.store.updateOperationSyncState(h.a.op_id, { status: 'acknowledged', last_error: null });
+    await h.store.deleteAcknowledgedOperation(h.a.op_id);
+    h.resources.workNotesObserved = {
+        research: { value: 'C', revision: 2 },
+        private: { value: '', revision: 0 },
+    };
+    h.emit();
+    await until(() => h.session().state === 'committed', 'the retried save after a refresh');
+    const rows = await h.rows();
+    assert.deepEqual(rows.map(r => r.payload.text), ['A B']);
+    assert.equal(rows[0].base_revision, 0, 'B keeps the base it was refused against, not C\'s');
+    h.done();
+}
+
 async function busyRetryIsOwnerScoped() {
     /* Cold release / destroy: teardown stops timer and subscription. */
     let h = await busyNoteHarness('busy-teardown');
@@ -804,6 +827,7 @@ async function main() {
     await ackOfOlderBodyNeverPaintsSaved();
     await leaveFlushSendsBlockedBodyWithoutTimer();
     await busyRetryIsOwnerScoped();
+    await blockedRetryKeepsItsBaseOverAForeignRefresh();
     await reconciliation();
     console.log('All ' + checks + ' Work note checks passed');
 }
