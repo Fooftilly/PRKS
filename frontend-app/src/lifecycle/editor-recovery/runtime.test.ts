@@ -1,0 +1,109 @@
+import { describe, expect, it } from 'vitest'
+import type { EmergencyStorage } from './emergency'
+import { createEditorRecoveryRuntime } from './runtime'
+import { EMERGENCY_KEY_PREFIX, RUNTIME_SESSION_KEY, UNKNOWN_BASE } from './schema'
+import { createFakeBrowser } from './test-support/fake-env'
+import { createFakeIdb, createManualScheduler, settle } from './test-support/fake-idb'
+
+function memoryStorage(): EmergencyStorage & { map: Map<string, string> } {
+  const map = new Map<string, string>()
+  return {
+    map,
+    get length() {
+      return map.size
+    },
+    key: (i: number) => [...map.keys()][i] ?? null,
+    getItem: (k: string) => map.get(k) ?? null,
+    setItem: (k: string, v: string) => void map.set(k, v),
+    removeItem: (k: string) => void map.delete(k),
+  }
+}
+
+const COPIED = 'r-' + 'c'.repeat(32)
+
+describe('editor recovery runtime', () => {
+  it('recovers both duplicated tabs that started simultaneously with one copied runtime id', async () => {
+    const browser = createFakeBrowser()
+    const idb = createFakeIdb()
+    const local = memoryStorage()
+    const pages = ['a', 'b'].map((name) => {
+      const scheduler = createManualScheduler()
+      const locks = browser.locksFor(name)
+      const rt = createEditorRecoveryRuntime({
+        store: { indexedDB: idb.factory },
+        identity: {
+          sessionStorage: browser.sessionStorageWith({ [RUNTIME_SESSION_KEY]: COPIED }),
+          locks,
+          createChannel: browser.channelFor(name),
+          claimWaitMs: 20,
+        },
+        writers: { scheduler, window: null, document: null },
+        emergencyStorage: local,
+      })
+      return { rt, scheduler, locks }
+    })
+    const starts = pages.map((p) => p.rt.start())
+    // Both type before their runtime claims settle.
+    const writers = pages.map((p, i) => {
+      const w = p.rt.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE })
+      w.edit(1, 'typed in tab ' + i)
+      return w
+    })
+    pages.forEach((p) => p.rt.writers.writeEmergencyNow())
+    const keys = [...local.map.keys()].filter((k) => k.startsWith(EMERGENCY_KEY_PREFIX))
+    expect(keys.sort()).toEqual(pages.map((p) => EMERGENCY_KEY_PREFIX + p.rt.identity.pageInstanceId).sort())
+    const claims = await Promise.all(starts)
+    expect(claims[0]!.claim.runtimeId).not.toBe(claims[1]!.claim.runtimeId)
+    expect(writers[0]!.draftId()).not.toBe(writers[1]!.draftId())
+
+    // Both pages die before any IndexedDB write: locks and channels go away, localStorage stays.
+    pages.forEach((p) => {
+      p.locks.releaseAll()
+      p.rt.identity.dispose()
+    })
+    await settle()
+    const next = createEditorRecoveryRuntime({
+      store: { indexedDB: idb.factory },
+      identity: { sessionStorage: browser.sessionStorageWith(), locks: browser.locksFor('next'), createChannel: browser.channelFor('next'), claimWaitMs: 20 },
+      writers: { window: null, document: null },
+      emergencyStorage: local,
+    })
+    const { merged } = await next.start()
+    expect(merged.flatMap((m) => m.outcomes).sort()).toEqual(['created', 'created'])
+    const rows = await next.store.listByEntity('work-research-note', 'w1')
+    expect(rows).toHaveLength(2)
+    const bodies = await Promise.all(rows.map((r) => next.store.getBody(r.draftId)))
+    expect(bodies.map((b) => b?.body).sort()).toEqual(['typed in tab 0', 'typed in tab 1'])
+    expect(local.map.size).toBe(0)
+    // Each recovered lineage keeps its own page as owner and is adoptable by the next page.
+    for (const row of rows) expect(await next.classify(row)).toBe('dead-runtime')
+  })
+
+  it('classifies a previous load of this tab as a same-runtime orphan after reload', async () => {
+    const browser = createFakeBrowser()
+    const idb = createFakeIdb()
+    const session = browser.sessionStorageWith()
+    const make = (name: string) =>
+      createEditorRecoveryRuntime({
+        store: { indexedDB: idb.factory },
+        identity: { sessionStorage: session, locks: browser.locksFor(name), createChannel: browser.channelFor(name), claimWaitMs: 20 },
+        writers: { window: null, document: null },
+        emergencyStorage: memoryStorage(),
+      })
+    const before = make('before')
+    await before.start()
+    const w = before.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-2', base: UNKNOWN_BASE })
+    w.edit(1, 'before reload')
+    await w.flush()
+    before.dispose()
+    await settle()
+    const after = make('after')
+    const { claim } = await after.start()
+    const [record] = await after.store.listByEntity('work-research-note', 'w1')
+    expect(record!.owner.runtimeId).toBe(claim.runtimeId)
+    expect(await after.classify(record!)).toBe('same-runtime-orphan')
+    const adopted = await after.writers.adopt(record!, { paneId: 'tab-7' })
+    expect(adopted).not.toBeNull()
+    expect(await after.classify(record!, adopted!.sessionKey)).toBe('self-live')
+  })
+})

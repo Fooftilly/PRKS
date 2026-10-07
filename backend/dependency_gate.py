@@ -1353,6 +1353,22 @@ def build_dependency_manifest(repo_root: Path | None = None) -> dict[str, Any]:
             }
         )
 
+    editor_recovery_path = root / "frontend" / "js" / "editor-recovery.js"
+    if editor_recovery_path.is_file():
+        entries.append(
+            {
+                "name": "prks-editor-recovery",
+                "version": "1",
+                "source_category": "frontend-app:editor-recovery",
+                "runtime_files": [
+                    {
+                        "path": "/js/editor-recovery.js",
+                        "sha256": sha256_file(editor_recovery_path),
+                    }
+                ],
+            }
+        )
+
     route_model_path = root / "frontend" / "js" / "route-model.js"
     if route_model_path.is_file():
         entries.append(

@@ -337,6 +337,7 @@ FEATURES = {
         "selectors": (
             "tests.e2e.test_offline.OfflineFoundationTests",
             "tests.e2e.test_local_store_durability",
+            "tests.e2e.test_editor_recovery_store",
         ),
     },
     "sync": {
@@ -551,6 +552,7 @@ AFFECTED_RULES = (
             "frontend/js/workspace-tab-menu.js",
             "frontend/js/tab-leave.js",
             "frontend/js/owner-resource.js",
+            "frontend/js/editor-recovery.js",
             "frontend-app/src/lifecycle/**",
         ),
         "features": ("tabs", "workspace-persistence"),

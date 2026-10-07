@@ -20,6 +20,7 @@
     "build:search-codec": "node scripts/build-search-codec.mjs",
     "build:tab-leave": "node scripts/build-tab-leave.mjs",
     "build:owner-resource": "node scripts/build-owner-resource.mjs",
+    "build:editor-recovery": "node scripts/build-editor-recovery.mjs",
     "build:route-model": "node scripts/build-route-model.mjs",
     "storybook": "storybook dev -p 6006 --no-open --disable-telemetry",
     "build-storybook": "storybook build --output-dir storybook-static --disable-telemetry"

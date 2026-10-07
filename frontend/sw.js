@@ -21,10 +21,11 @@
     // frontend/js/work-route-projection.js,
     // frontend/js/search-query-codec.js,
     // frontend/js/tab-leave.js,
-    // frontend/js/owner-resource.js, or
+    // frontend/js/owner-resource.js,
+    // frontend/js/editor-recovery.js, or
     // frontend/js/route-model.js) retires old
     // shell/static caches.
-    const DEPENDENCY_REVISION = 'f9e73532b6b2';
+    const DEPENDENCY_REVISION = '519b9aa41a93';
     const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
     const PDF_CACHE = 'prks-pdf-v1';
@@ -119,6 +120,7 @@
         '/js/offline-store.js',
         '/js/offline-runtime.js',
         '/js/local-store.js',
+        '/js/editor-recovery.js',
         '/js/work-tag-state.js',
         '/js/folder-tag-state.js',
         '/js/work-lifecycle-state.js',

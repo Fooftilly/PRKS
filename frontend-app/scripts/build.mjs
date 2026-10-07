@@ -113,6 +113,14 @@ if (ownerResourceBuild.status !== 0) {
   process.exit(ownerResourceBuild.status || 1);
 }
 
+const editorRecoveryBuild = spawnSync(process.execPath, [join(appRoot, "scripts/build-editor-recovery.mjs")], {
+  cwd: appRoot,
+  stdio: "inherit",
+});
+if (editorRecoveryBuild.status !== 0) {
+  process.exit(editorRecoveryBuild.status || 1);
+}
+
 const routeModelBuild = spawnSync(process.execPath, [join(appRoot, "scripts/build-route-model.mjs")], {
   cwd: appRoot,
   stdio: "inherit",
