@@ -520,13 +520,24 @@ async function prksRestoreResearchNotesRecoveryNow(ctx, work, attempt) {
     const otherDirty = Array.from(prksWorkResearchDrafts.values()).some(function (entry) {
         return entry.workId === id && entry.key !== key && entry.state !== 'committed';
     });
-    const plan = recovery.api.planResearchNotesRestore({
-        paneId: String(ctx.tabId == null ? '' : ctx.tabId),
-        candidates: candidates,
-        base: base,
-        queue: queue,
-        otherDirtySession: otherDirty,
-    });
+    const planWith = function (planBase) {
+        return recovery.api.planResearchNotesRestore({
+            paneId: String(ctx.tabId == null ? '' : ctx.tabId),
+            candidates: candidates,
+            base: planBase,
+            queue: queue,
+            otherDirtySession: otherDirty,
+        });
+    };
+    let plan = planWith(base);
+    /* The body and the revision were read separately. Before anything is
+     * cleared or restored on them, prove they are one server snapshot;
+     * otherwise every draft stays for review. */
+    if ((plan.cleanup.length || plan.restore) && !(await prksResearchRecoveryVerifyBase(id, base))) {
+        if (!current()) return null;
+        plan = planWith(Object.assign({}, base, { source: 'cache' }));
+    }
+    if (!current()) return null;
     for (const draftId of plan.cleanup) {
         const record = candidates.find(function (c) { return c.record.draftId === draftId; }).record;
         /* Only the generation it read, and only while no page has adopted it since. */
@@ -554,6 +565,9 @@ async function prksRestoreResearchNotesRecoveryNow(ctx, work, attempt) {
                  * already claimed this writer to clear it. */
                 if (writer && !watch.acknowledged && !current()) {
                     watch.writer = null;
+                    /* The adoption made this page the owner: a later
+                     * acknowledgement clears it under that owner. */
+                    watch.pageInstanceId = rt.identity.pageInstanceId;
                     void writer.release().catch(function () {});
                 }
             }).catch(function () {});
@@ -591,6 +605,30 @@ async function prksRestoreResearchNotesRecoveryNow(ctx, work, attempt) {
         ctx.ui.researchNotesRecovery = { status: 'needs-review', workId: id, candidates: plan.review };
     }
     return { restored: restored, review: plan.review };
+}
+
+/**
+ * Whether the server holds `base.value` at `base.revision`. The revision was
+ * read after the body, so the body is read again and then the revision: when
+ * that revision still equals `base.revision`, the body read between the two
+ * is the note at that revision. Any failed or cached read is unverified.
+ */
+async function prksResearchRecoveryVerifyBase(id, base) {
+    if (!base || base.source !== 'server' || typeof prksOfflineReadEntity !== 'function' ||
+        typeof prksReadWorkNotesState !== 'function') {
+        return false;
+    }
+    try {
+        const work = await prksOfflineReadEntity('work', id, '/api/works/' + encodeURIComponent(id), {});
+        if (!work || work.source !== 'server' || !work.value) return false;
+        const body = typeof work.value.text_content === 'string' ? work.value.text_content : '';
+        if (body !== base.value) return false;
+        const state = await prksReadWorkNotesState(id);
+        return !!(state && state.source === 'server' && state.value &&
+            state.value.research_note_revision === base.revision);
+    } catch (_e) {
+        return false;
+    }
 }
 
 /**
