@@ -675,6 +675,21 @@ class ResearchNotesTabCloseAndReviewTests(_RecoveryPage, unittest.TestCase):
         # The restored draft goes once its save is acknowledged; the other stays.
         self.wait_record_count(tab, work, 1)
 
+    def test_a_tab_already_open_learns_of_a_draft_another_tab_left_on_close(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        original = self.server_text(server, work)
+        survivor = self.other_tab(context, page)
+        self.hold_saves(page)
+        self.type_marker(page, ' Left behind')
+        self.wait_recorded(page, work, ' Left behind')
+        self.assertEqual(self.notice(survivor).count(), 0)
+        self.close_tab(page)
+        # No remount: the open pane re-plans when the other tab's close is recorded.
+        self.notice(survivor).wait_for()
+        self.assertEqual(self.editor_text(survivor), original)
+        self.assertEqual(self.note_rows(survivor), [])
+
     def test_a_live_editor_in_another_tab_is_never_adopted(self):
         server, page, context = self.start()
         work = server.ids['work_a']

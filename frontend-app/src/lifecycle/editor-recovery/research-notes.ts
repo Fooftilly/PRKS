@@ -275,6 +275,8 @@ const RECONCILABLE: ReadonlySet<ReviewReason> = new Set(['base-advanced', 'forei
 function actionFor(c: RestoreCandidate, input: RestoreInput, print: (text: string) => string): ReviewAction {
   if (c.record.status !== 'active' || c.body === null) return null
   if (c.lineage !== 'same-runtime-orphan' && c.lineage !== 'dead-runtime') return null
+  // Pending sync that cannot be read could be overwritten: copy and discard only.
+  if (!input.queue) return null
   // Judged alone: other drafts and other live lineages are the reviewer's to weigh.
   const judged = judge(c, { ...input, editorDirty: false }, false, print)
   if (!('reason' in judged)) return input.editorDirty ? 'reconcile' : 'restore'

@@ -1653,6 +1653,8 @@ var prksEditorRecovery = (function(exports) {
 			nextTaskTimer = null;
 			retryTimer = null;
 			retryDelay = 0;
+			/** Retries removing a stored generation the server already superseded. */
+			cleanupTimer = null;
 			released = false;
 			cleared = /* @__PURE__ */ new Set();
 			constructor(input) {
@@ -1949,12 +1951,8 @@ var prksEditorRecovery = (function(exports) {
 					this.retryDelay = 0;
 					this.status = "clean";
 					changed();
-					if (stored) await store.discard(draftId, void 0, {
-						pageInstanceId: identity.pageInstanceId,
-						generation: stored,
-						status: "active"
-					}).catch(() => "kept");
-					await this.tombstoneIfListed(draftId);
+					if (stored) await this.removeSuperseded(draftId, stored, 0);
+					else await this.tombstoneIfListed(draftId);
 					return "deleted";
 				}
 				if (outcome === "deleted" && this.lineageId === draftId) {
@@ -1970,6 +1968,29 @@ var prksEditorRecovery = (function(exports) {
 				}
 				if (outcome === "deleted") await this.tombstoneIfListed(draftId);
 				return outcome;
+			}
+			/**
+			* Removes this page's stored older generation once the server holds a newer
+			* one. A store that refuses is retried in the background with backoff,
+			* without the leave guard: the text is already on the server.
+			*/
+			async removeSuperseded(draftId, generation, delay) {
+				try {
+					await store.discard(draftId, void 0, {
+						pageInstanceId: identity.pageInstanceId,
+						generation,
+						status: "active"
+					});
+				} catch {
+					if (disposed || this.released) return;
+					const next = delay ? Math.min(delay * 2, RETRY_MAX_MS) : RETRY_FIRST_MS;
+					this.cleanupTimer = scheduler.set(() => {
+						this.cleanupTimer = null;
+						this.removeSuperseded(draftId, generation, next);
+					}, next);
+					return;
+				}
+				await this.tombstoneIfListed(draftId);
 			}
 			/** The newest generation, never committed to recovery storage, is exactly what was acknowledged. */
 			ackedUncommitted(draftId, generation, body) {
@@ -2040,6 +2061,8 @@ var prksEditorRecovery = (function(exports) {
 				this.released = true;
 				this.clearTimers();
 				this.clearRetry();
+				if (this.cleanupTimer !== null) scheduler.clear(this.cleanupTimer);
+				this.cleanupTimer = null;
 			}
 		}
 		function openWriter(input) {
@@ -2395,6 +2418,7 @@ var prksEditorRecovery = (function(exports) {
 	function actionFor(c, input, print) {
 		if (c.record.status !== "active" || c.body === null) return null;
 		if (c.lineage !== "same-runtime-orphan" && c.lineage !== "dead-runtime") return null;
+		if (!input.queue) return null;
 		const judged = judge(c, {
 			...input,
 			editorDirty: false

@@ -273,7 +273,7 @@ onBeforeUnmount(() => {
       </div>
       <div class="modal-footer editor-recovery-review__actions">
         <template v-if="selected && comparing">
-          <PrksButton variant="primary" :busy="busy === 'replace'" busy-label="Replacing…" :disabled="!!busy" data-prks-role="editor-recovery-replace" @click="replace">Replace note with this text</PrksButton>
+          <PrksButton variant="danger" :busy="busy === 'replace'" busy-label="Replacing…" :disabled="!!busy" data-prks-role="editor-recovery-replace" @click="replace">Replace note with this text</PrksButton>
           <PrksButton :disabled="!!busy" data-prks-role="editor-recovery-copy-current" @click="copy('current', details ? details.current.text : null)">{{ copyLabel.current || 'Copy current note' }}</PrksButton>
           <PrksButton variant="quiet-danger" :disabled="!!busy" data-prks-role="editor-recovery-discard" @click="discard">Keep current note, discard draft</PrksButton>
           <PrksButton variant="ghost" :disabled="!!busy" data-prks-role="editor-recovery-back" @click="comparing = false">Back</PrksButton>

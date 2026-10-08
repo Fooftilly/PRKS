@@ -170,6 +170,9 @@ describe('Research Notes same-pane restore plan', () => {
     expect(one.review).toMatchObject([{ reason: 'editor-dirty', action: 'reconcile' }])
     // Inspect and copy only.
     expect(plan([candidate('x')], { queue: null }).review).toMatchObject([{ reason: 'queue-unknown', action: null }])
+    // An unverified base does not hide an unreadable queue: no Compare either.
+    expect(plan([candidate('x')], { queue: null, base: null }).review).toMatchObject([{ reason: 'base-unverified', action: null }])
+    expect(plan([candidate('x')], { queue: null, editorDirty: true }).review).toMatchObject([{ action: null }])
     expect(plan([candidate('x')], { otherDirtySession: true }).review).toMatchObject([{ reason: 'dirty-session', action: null }])
     expect(plan([candidate('x', { status: 'tail-missing' })]).review).toMatchObject([{ reason: 'tail-missing', status: 'tail-missing', action: null }])
     expect(plan([candidate(null)]).review).toMatchObject([{ reason: 'body-missing', action: null }])

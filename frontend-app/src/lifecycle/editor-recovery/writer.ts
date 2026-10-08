@@ -456,6 +456,8 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     private nextTaskTimer: unknown = null
     private retryTimer: unknown = null
     private retryDelay = 0
+    /** Retries removing a stored generation the server already superseded. */
+    private cleanupTimer: unknown = null
     private released = false
     private readonly cleared = new Set<string>()
 
@@ -768,12 +770,8 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
         this.retryDelay = 0
         this.status = 'clean'
         changed()
-        if (stored) {
-          await store
-            .discard(draftId, undefined, { pageInstanceId: identity.pageInstanceId, generation: stored, status: 'active' })
-            .catch(() => 'kept' as const)
-        }
-        await this.tombstoneIfListed(draftId)
+        if (stored) await this.removeSuperseded(draftId, stored, 0)
+        else await this.tombstoneIfListed(draftId)
         return 'deleted'
       }
       if (outcome === 'deleted' && this.lineageId === draftId) {
@@ -790,6 +788,26 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       }
       if (outcome === 'deleted') await this.tombstoneIfListed(draftId)
       return outcome
+    }
+
+    /**
+     * Removes this page's stored older generation once the server holds a newer
+     * one. A store that refuses is retried in the background with backoff,
+     * without the leave guard: the text is already on the server.
+     */
+    private async removeSuperseded(draftId: string, generation: number, delay: number): Promise<void> {
+      try {
+        await store.discard(draftId, undefined, { pageInstanceId: identity.pageInstanceId, generation, status: 'active' })
+      } catch {
+        if (disposed || this.released) return
+        const next = delay ? Math.min(delay * 2, RETRY_MAX_MS) : RETRY_FIRST_MS
+        this.cleanupTimer = scheduler.set(() => {
+          this.cleanupTimer = null
+          void this.removeSuperseded(draftId, generation, next)
+        }, next)
+        return
+      }
+      await this.tombstoneIfListed(draftId)
     }
 
     /** The newest generation, never committed to recovery storage, is exactly what was acknowledged. */
@@ -866,6 +884,8 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       this.released = true
       this.clearTimers()
       this.clearRetry()
+      if (this.cleanupTimer !== null) scheduler.clear(this.cleanupTimer)
+      this.cleanupTimer = null
     }
   }
 

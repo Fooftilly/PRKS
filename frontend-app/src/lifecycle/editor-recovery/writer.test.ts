@@ -630,6 +630,28 @@ describe('acknowledgement', () => {
     expect(t.scheduler.pending()).toBe(0)
   })
 
+  it('retries removing the superseded generation in the background when storage still refuses', async () => {
+    const t = setup()
+    const w = t.open()
+    w.edit(1, 'stored')
+    await w.flush()
+    const id = w.draftId() as string
+    t.idb.failCommits = 100
+    w.edit(2, 'stored, then refused')
+    await w.flush()
+    expect(await w.acknowledged(2, 'stored, then refused')).toBe('deleted')
+    expect(w.state()).toBe('clean')
+    expect(t.registry.leaveGuardActive()).toBe(false)
+    // Still refused: the older record stays for now, with a cleanup retry.
+    expect(t.scheduler.pending()).toBe(1)
+    t.idb.failCommits = 0
+    t.scheduler.advance(60_000)
+    await settle()
+    expect(await t.store.get(id)).toBeNull()
+    expect(t.scheduler.pending()).toBe(0)
+    expect(t.registry.leaveGuardActive()).toBe(false)
+  })
+
   it('ends the warning when recovery storage cannot be opened at all', async () => {
     const t = setup()
     const w = t.open()

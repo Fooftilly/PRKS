@@ -387,9 +387,49 @@ function prksResearchRecoverySettled(owner, id, entry, result, saved) {
 }
 
 /** One page-level subscription: acknowledgements and conflicts of queued Research Notes rows. */
+/* `CLOSED_PAGES_LOCAL_KEY` in editor-recovery/schema.ts: another tab's final pagehide. */
+const PRKS_RESEARCH_RECOVERY_CLOSED_PAGES_KEY = 'prks.editorRecovery.closedPages.v1';
+let prksResearchRecoveryStopClosedPages = null;
+const PRKS_RESEARCH_RECOVERY_CLOSED_RESCAN_MS = [1000, 4000];
+
+/*
+ * Another tab closed: a draft it left on a Work already open here can now be
+ * reviewed, so every mounted Research Notes pane re-plans for review only.
+ */
+function prksResearchRecoveryWatchClosedPages() {
+    if (prksResearchRecoveryStopClosedPages || typeof window.addEventListener !== 'function') return;
+    let timers = [];
+    const refreshAll = function () {
+        if (typeof prksForEachLiveTabContext !== 'function') return;
+        prksForEachLiveTabContext(function (ctx) {
+            const live = ctx && ctx.getResource && ctx.getResource('workNotes') && ctx.getEntity ? ctx.getEntity('work') : null;
+            if (live && live.id != null) void window.prksRefreshResearchNotesRecovery(ctx, live.id);
+        });
+    };
+    const onStorage = function (event) {
+        if (!event || event.key !== PRKS_RESEARCH_RECOVERY_CLOSED_PAGES_KEY) return;
+        /*
+         * The record is written during the closing page's final pagehide, while
+         * it may still answer pings; until it stops, its draft reads as live.
+         * Re-plan once it has had time to go, and once more for a slow close.
+         */
+        timers.forEach(clearTimeout);
+        timers = PRKS_RESEARCH_RECOVERY_CLOSED_RESCAN_MS.map(function (ms) {
+            return setTimeout(refreshAll, ms);
+        });
+    };
+    window.addEventListener('storage', onStorage);
+    prksResearchRecoveryStopClosedPages = function () {
+        window.removeEventListener('storage', onStorage);
+        timers.forEach(clearTimeout);
+        timers = [];
+    };
+}
+
 function prksResearchRecoveryListen() {
     const recovery = prksResearchRecovery();
     if (recovery) prksResearchRecoveryWatchWriters(recovery);
+    if (recovery) prksResearchRecoveryWatchClosedPages();
     if (prksResearchRecoveryStopSync || !window.prksSync || typeof window.prksSync.subscribe !== 'function') return;
     prksResearchRecoveryStopSync = window.prksSync.subscribe(prksResearchRecoveryOnSync);
 }
@@ -1012,6 +1052,18 @@ async function prksResearchNotesRecoveryReplaceNow(ctx, workId, token, expect, t
         window.prksWorkspaceRefreshTabStatus(ctx.tabId);
     }
     prksScheduleWorkResearchNotesSave(ctx, id);
+    /*
+     * The reviewed draft goes only once the replacement has its own recovery
+     * copy. When recovery storage refuses it, the reviewed draft stays listed
+     * and the replacement is protected by the leave guard until it saves.
+     */
+    const owner = prksResearchNotesEditOwner(notes, ctx);
+    const entry = owner ? prksWorkResearchDrafts.get(prksResearchDraftKey(owner, id)) : null;
+    const writer = entry && entry.recovery;
+    if (!writer) return { ok: true };
+    const generation = entry.editGeneration;
+    await writer.flush().catch(function () {});
+    if (!(writer.committedGeneration() >= generation)) return { ok: true };
     await recovery.rt.discardReviewed({
         draftId: expect.draftId,
         pageInstanceId: recovery.rt.identity.pageInstanceId,
@@ -1110,6 +1162,8 @@ window.prksResetResearchDraftsForTest = function () {
     prksResearchRecoveryStopSync = null;
     if (prksResearchRecoveryStopWriterEvents) prksResearchRecoveryStopWriterEvents();
     prksResearchRecoveryStopWriterEvents = null;
+    if (prksResearchRecoveryStopClosedPages) prksResearchRecoveryStopClosedPages();
+    prksResearchRecoveryStopClosedPages = null;
     prksResearchRecoveryChain = Promise.resolve(null);
     if (typeof prksForEachLiveTabContext === 'function') {
         prksForEachLiveTabContext(function (ctx) {
