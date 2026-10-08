@@ -10,15 +10,17 @@ interface World {
   liveElsewhere: Set<string>
   local: Map<string, string>
   canProbe: boolean
+  closedInTab: Set<string>
 }
 
 function probeFor(world: World): LineageProbe {
-  const identity: Pick<PageIdentity, 'pageInstanceId' | 'current' | 'isPageAlive' | 'isRuntimeAlive' | 'isLineageLiveElsewhere'> = {
+  const identity: Pick<PageIdentity, 'pageInstanceId' | 'current' | 'isPageAlive' | 'isRuntimeAlive' | 'isLineageLiveElsewhere' | 'wasClosedInThisTab'> = {
     pageInstanceId: 'p-me',
     current: () => world.claim,
     isPageAlive: async (id) => (world.canProbe ? world.alivePages.has(id) : null),
     isRuntimeAlive: async (id) => (world.canProbe ? world.aliveRuntimes.has(id) : null),
     isLineageLiveElsewhere: async (id) => (world.canProbe ? world.liveElsewhere.has(id) : null),
+    wasClosedInThisTab: (id) => world.closedInTab.has(id),
   }
   return { identity, localOwner: (id) => world.local.get(id) ?? null }
 }
@@ -31,6 +33,7 @@ function world(partial: Partial<World> = {}): World {
     liveElsewhere: new Set(),
     local: new Map(),
     canProbe: true,
+    closedInTab: new Set(),
     ...partial,
   }
 }
@@ -87,10 +90,14 @@ describe('classifyLineage', () => {
     expect(await classifyLineage(record({ runtimeId: 'r-me' }), probeFor(w))).toBe('other-live')
   })
 
-  it('asks for a live writer before treating a channel-claimed runtime as this tab\'s', async () => {
+  it('adopts a channel-claimed runtime\'s lineage only when its page recorded its close in this tab', async () => {
     const w = world({ claim: { runtimeId: 'r-me', verified: 'channel' } })
+    // Silence from the tab this one was duplicated from proves nothing.
+    expect(await classifyLineage(record({ runtimeId: 'r-me' }), probeFor(w))).toBe('unknown')
+    // An earlier load of this tab ran pagehide.
+    w.closedInTab.add('p-other')
     expect(await classifyLineage(record({ runtimeId: 'r-me' }), probeFor(w))).toBe('same-runtime-orphan')
-    // The tab this one was duplicated from still edits it.
+    // A live writer elsewhere still wins.
     w.liveElsewhere.add('d-1')
     expect(await classifyLineage(record({ runtimeId: 'r-me' }), probeFor(w))).toBe('other-live')
   })

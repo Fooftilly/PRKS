@@ -28,6 +28,12 @@ export const RESERVATION_KEY_PREFIX = 'prks.editorRecovery.reserve.v1.'
 export const EMERGENCY_ENTRY_OVERHEAD_CHARS = 1024
 /** Candidate runtime id for this browser tab; copied by window.open and Duplicate tab. */
 export const RUNTIME_SESSION_KEY = 'prks.editorRecovery.runtime.v1'
+/**
+ * Pages of this tab that ran `pagehide`, newest last. A duplicated tab copies
+ * it before the original closes, so it never lists a page still open there.
+ */
+export const CLOSED_PAGES_SESSION_KEY = 'prks.editorRecovery.closed.v1'
+export const CLOSED_PAGES_KEPT = 8
 export const RECOVERY_CHANNEL = 'prks-editor-recovery-v1'
 export const RUNTIME_LOCK_PREFIX = 'prks-editor-recovery-runtime:'
 export const PAGE_LOCK_PREFIX = 'prks-editor-recovery-page:'

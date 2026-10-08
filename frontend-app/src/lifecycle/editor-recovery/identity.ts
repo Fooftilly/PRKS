@@ -19,6 +19,8 @@
 
 import {
   CLAIM_WAIT_MS,
+  CLOSED_PAGES_KEPT,
+  CLOSED_PAGES_SESSION_KEY,
   PAGE_LOCK_PREFIX,
   RECOVERY_CHANNEL,
   RUNTIME_LOCK_PREFIX,
@@ -38,8 +40,15 @@ export interface ChannelLike {
   onmessage: ((event: { data: unknown }) => void) | null
 }
 
+export interface PageEventTarget {
+  addEventListener(type: string, listener: (event: Event) => void): void
+  removeEventListener(type: string, listener: (event: Event) => void): void
+}
+
 export interface IdentityEnv {
   sessionStorage?: Pick<Storage, 'getItem' | 'setItem'> | null
+  /** Where `pagehide` / `pageshow` fire; the global window by default. */
+  window?: PageEventTarget | null
   locks?: LockManagerLike | null
   createChannel?: ((name: string) => ChannelLike) | null
   random?: RandomSource
@@ -68,6 +77,11 @@ export interface PageIdentity {
    */
   isPageGone(pageInstanceId: string): Promise<boolean>
   isRuntimeAlive(runtimeId: string): Promise<boolean | null>
+  /**
+   * Positive evidence that a page was an earlier load of this tab and has
+   * closed: it ran `pagehide` and recorded itself in this tab's sessionStorage.
+   */
+  wasClosedInThisTab(pageInstanceId: string): boolean
   /** Does another page report a live writer for this lineage? */
   isLineageLiveElsewhere(draftId: string): Promise<boolean | null>
   /** Answers other pages' `lineage?` queries; the writer registry installs it. */
@@ -123,6 +137,7 @@ export function createPageIdentity(env: IdentityEnv = {}): PageIdentity {
   const later = env.setTimeout || ((fn: () => void, ms: number) => setTimeout(fn, ms))
   const waitMs = env.claimWaitMs ?? CLAIM_WAIT_MS
   const pageInstanceId = mintId('p', random)
+  const pageEvents = env.window === undefined ? (typeof window !== 'undefined' ? window : null) : env.window
 
   let channel: ChannelLike | null = null
   try {
@@ -280,8 +295,39 @@ export function createPageIdentity(env: IdentityEnv = {}): PageIdentity {
     return { runtimeId: candidate, verified: 'unverified' }
   }
 
+  function closedPages(): string[] {
+    try {
+      const raw = session ? session.getItem(CLOSED_PAGES_SESSION_KEY) : null
+      const list: unknown = raw ? JSON.parse(raw) : []
+      return Array.isArray(list) ? list.filter((id): id is string => typeof id === 'string') : []
+    } catch {
+      return []
+    }
+  }
+
+  function writeClosedPages(list: string[]): void {
+    try {
+      if (session) session.setItem(CLOSED_PAGES_SESSION_KEY, JSON.stringify(list.slice(-CLOSED_PAGES_KEPT)))
+    } catch {
+      /* without the record a reload's drafts are offered for review, not adoption */
+    }
+  }
+
+  function onPageHide(): void {
+    writeClosedPages([...closedPages().filter((id) => id !== pageInstanceId), pageInstanceId])
+  }
+
+  function onPageShow(event: Event): void {
+    // Restored from the back/forward cache: open again.
+    if ((event as PageTransitionEvent).persisted) writeClosedPages(closedPages().filter((id) => id !== pageInstanceId))
+  }
+
   function claim(): Promise<RuntimeClaim> {
     if (claimPromise) return claimPromise
+    if (pageEvents) {
+      pageEvents.addEventListener('pagehide', onPageHide)
+      pageEvents.addEventListener('pageshow', onPageShow)
+    }
     const candidate = initialCandidate()
     const run = locks ? claimWithLocks(candidate) : channel ? claimWithChannel(candidate) : Promise.resolve({ runtimeId: candidate, verified: 'unverified' as const })
     claimPromise = run.then((result) => {
@@ -359,9 +405,16 @@ export function createPageIdentity(env: IdentityEnv = {}): PageIdentity {
     announceReservationRemoved(page) {
       post({ t: 'unreserved', page })
     },
+    wasClosedInThisTab(id) {
+      return id !== pageInstanceId && closedPages().includes(id)
+    },
     dispose() {
       if (disposed) return
       disposed = true
+      if (pageEvents) {
+        pageEvents.removeEventListener('pagehide', onPageHide)
+        pageEvents.removeEventListener('pageshow', onPageShow)
+      }
       while (releases.length) {
         const release = releases.pop()
         if (release) release()

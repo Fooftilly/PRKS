@@ -161,6 +161,34 @@ describe('reservation removal notice', () => {
   })
 })
 
+describe('closed-page record', () => {
+  function events() {
+    const listeners = new Map<string, Set<(e: Event) => void>>()
+    return {
+      addEventListener: (type: string, fn: (e: Event) => void) => void (listeners.get(type) ?? listeners.set(type, new Set()).get(type)!).add(fn),
+      removeEventListener: (type: string, fn: (e: Event) => void) => void listeners.get(type)?.delete(fn),
+      fire: (type: string, event: object = {}) => [...(listeners.get(type) ?? [])].forEach((fn) => fn({ type, ...event } as Event)),
+    }
+  }
+
+  it('lists a page of this tab only after it ran pagehide, and not after a back/forward restore', async () => {
+    const browser = createFakeBrowser()
+    const session = browser.sessionStorageWith()
+    const win = events()
+    const before = createPageIdentity({ sessionStorage: session, window: win, locks: null, createChannel: null })
+    await before.claim()
+    // A tab duplicated now copies sessionStorage without the page in it.
+    const copied = browser.sessionStorageWith(Object.fromEntries(session.values))
+    win.fire('pagehide')
+    const after = createPageIdentity({ sessionStorage: session, window: events(), locks: null, createChannel: null })
+    expect(after.wasClosedInThisTab(before.pageInstanceId)).toBe(true)
+    const duplicate = createPageIdentity({ sessionStorage: copied, window: events(), locks: null, createChannel: null })
+    expect(duplicate.wasClosedInThisTab(before.pageInstanceId)).toBe(false)
+    win.fire('pageshow', { persisted: true })
+    expect(after.wasClosedInThisTab(before.pageInstanceId)).toBe(false)
+  })
+})
+
 describe('runtime claim with neither', () => {
   it('uses the candidate unverified and cannot establish liveness', async () => {
     const browser = createFakeBrowser()

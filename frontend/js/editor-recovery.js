@@ -169,6 +169,12 @@ var prksEditorRecovery = (function(exports) {
 	var EMERGENCY_ENTRY_OVERHEAD_CHARS = 1024;
 	/** Candidate runtime id for this browser tab; copied by window.open and Duplicate tab. */
 	var RUNTIME_SESSION_KEY = "prks.editorRecovery.runtime.v1";
+	/**
+	* Pages of this tab that ran `pagehide`, newest last. A duplicated tab copies
+	* it before the original closes, so it never lists a page still open there.
+	*/
+	var CLOSED_PAGES_SESSION_KEY = "prks.editorRecovery.closed.v1";
+	var CLOSED_PAGES_KEPT = 8;
 	var RECOVERY_CHANNEL = "prks-editor-recovery-v1";
 	var RUNTIME_LOCK_PREFIX = "prks-editor-recovery-runtime:";
 	var PAGE_LOCK_PREFIX = "prks-editor-recovery-page:";
@@ -946,6 +952,7 @@ var prksEditorRecovery = (function(exports) {
 		const later = env.setTimeout || ((fn, ms) => setTimeout(fn, ms));
 		const waitMs = env.claimWaitMs ?? 250;
 		const pageInstanceId = mintId("p", random);
+		const pageEvents = env.window === void 0 ? typeof window !== "undefined" ? window : null : env.window;
 		let channel = null;
 		try {
 			channel = makeChannel ? makeChannel(RECOVERY_CHANNEL) : null;
@@ -1114,8 +1121,32 @@ var prksEditorRecovery = (function(exports) {
 				verified: "unverified"
 			};
 		}
+		function closedPages() {
+			try {
+				const raw = session ? session.getItem(CLOSED_PAGES_SESSION_KEY) : null;
+				const list = raw ? JSON.parse(raw) : [];
+				return Array.isArray(list) ? list.filter((id) => typeof id === "string") : [];
+			} catch {
+				return [];
+			}
+		}
+		function writeClosedPages(list) {
+			try {
+				if (session) session.setItem(CLOSED_PAGES_SESSION_KEY, JSON.stringify(list.slice(-8)));
+			} catch {}
+		}
+		function onPageHide() {
+			writeClosedPages([...closedPages().filter((id) => id !== pageInstanceId), pageInstanceId]);
+		}
+		function onPageShow(event) {
+			if (event.persisted) writeClosedPages(closedPages().filter((id) => id !== pageInstanceId));
+		}
 		function claim() {
 			if (claimPromise) return claimPromise;
+			if (pageEvents) {
+				pageEvents.addEventListener("pagehide", onPageHide);
+				pageEvents.addEventListener("pageshow", onPageShow);
+			}
 			const candidate = initialCandidate();
 			claimPromise = (locks ? claimWithLocks(candidate) : channel ? claimWithChannel(candidate) : Promise.resolve({
 				runtimeId: candidate,
@@ -1206,9 +1237,16 @@ var prksEditorRecovery = (function(exports) {
 					page
 				});
 			},
+			wasClosedInThisTab(id) {
+				return id !== pageInstanceId && closedPages().includes(id);
+			},
 			dispose() {
 				if (disposed) return;
 				disposed = true;
+				if (pageEvents) {
+					pageEvents.removeEventListener("pagehide", onPageHide);
+					pageEvents.removeEventListener("pageshow", onPageShow);
+				}
 				while (releases.length) {
 					const release = releases.pop();
 					if (release) release();
@@ -1238,7 +1276,7 @@ var prksEditorRecovery = (function(exports) {
 		if (claim && owner.runtimeId && owner.runtimeId === claim.runtimeId) {
 			if (claim.verified === "lock") return "same-runtime-orphan";
 			if (await identity.isLineageLiveElsewhere(record.draftId) === true) return "other-live";
-			return claim.verified === "channel" ? "same-runtime-orphan" : "unknown";
+			return claim.verified === "channel" && identity.wasClosedInThisTab(owner.pageInstanceId) ? "same-runtime-orphan" : "unknown";
 		}
 		if (await identity.isLineageLiveElsewhere(record.draftId) === true) return "other-live";
 		const pageAlive = await identity.isPageAlive(owner.pageInstanceId);
@@ -2030,6 +2068,8 @@ var prksEditorRecovery = (function(exports) {
 	//#endregion
 	exports.BODIES_STORE = BODIES_STORE;
 	exports.CLAIM_WAIT_MS = CLAIM_WAIT_MS;
+	exports.CLOSED_PAGES_KEPT = CLOSED_PAGES_KEPT;
+	exports.CLOSED_PAGES_SESSION_KEY = CLOSED_PAGES_SESSION_KEY;
 	exports.DRAFTS_STORE = DRAFTS_STORE;
 	exports.EMERGENCY_BODY_CHARS = EMERGENCY_BODY_CHARS;
 	exports.EMERGENCY_ENTRY_OVERHEAD_CHARS = EMERGENCY_ENTRY_OVERHEAD_CHARS;
