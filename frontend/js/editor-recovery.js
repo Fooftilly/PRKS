@@ -1669,7 +1669,9 @@ var prksEditorRecovery = (function(exports) {
 	* One editor-recovery runtime per page: store, identity and writer registry.
 	*
 	* `start()` claims the runtime id and then merges emergency entries left by
-	* pages that are no longer alive. Nothing starts at script load; slice 1 has
+	* pages that are no longer alive. `scanEmergency()` repeats that merge for a
+	* page that is already running, so a tab that closes later is picked up
+	* without a reload. Nothing starts at script load; slice 1 has
 	* no consumer, so the page holds no lock, channel or listener until a
 	* consumer asks for the runtime.
 	*/
@@ -1684,24 +1686,37 @@ var prksEditorRecovery = (function(exports) {
 			emergencyStorage
 		});
 		let started = null;
+		let lastScan = Promise.resolve();
+		function merge() {
+			const run = lastScan.then(runMerge);
+			lastScan = run.catch(() => void 0);
+			return run;
+		}
+		function runMerge() {
+			if (!emergencyStorage) return Promise.resolve([]);
+			return mergeEmergencyEntries({
+				storage: emergencyStorage,
+				store,
+				pageInstanceId: identity.pageInstanceId,
+				isPageAlive: (id) => identity.isPageAlive(id)
+			});
+		}
+		function start() {
+			if (started) return started;
+			started = identity.claim().then(async (claim) => ({
+				claim,
+				merged: await merge()
+			}));
+			return started;
+		}
 		return {
 			store,
 			identity,
 			writers,
-			start() {
-				if (started) return started;
-				started = identity.claim().then(async (claim) => {
-					return {
-						claim,
-						merged: emergencyStorage ? await mergeEmergencyEntries({
-							storage: emergencyStorage,
-							store,
-							pageInstanceId: identity.pageInstanceId,
-							isPageAlive: (id) => identity.isPageAlive(id)
-						}) : []
-					};
-				});
-				return started;
+			start,
+			scanEmergency() {
+				if (!started) return start().then((result) => result.merged);
+				return started.then(() => merge());
 			},
 			classify(record, askingSession = null) {
 				return classifyLineage(record, {

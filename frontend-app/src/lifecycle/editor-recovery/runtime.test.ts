@@ -106,4 +106,55 @@ describe('editor recovery runtime', () => {
     expect(adopted).not.toBeNull()
     expect(await after.classify(record!, adopted!.sessionKey)).toBe('self-live')
   })
+
+  it('picks up a tab that closes after this page started, without a reload', async () => {
+    const browser = createFakeBrowser()
+    const idb = createFakeIdb()
+    const local = memoryStorage()
+    const make = (name: string) => {
+      const locks = browser.locksFor(name)
+      const rt = createEditorRecoveryRuntime({
+        store: { indexedDB: idb.factory },
+        identity: { sessionStorage: browser.sessionStorageWith(), locks, createChannel: browser.channelFor(name), claimWaitMs: 20 },
+        writers: { scheduler: createManualScheduler(), window: null, document: null },
+        emergencyStorage: local,
+      })
+      return { rt, locks }
+    }
+    const b = make('b')
+    expect((await b.rt.start()).merged).toEqual([])
+    const a = make('a')
+    await a.rt.start()
+    a.rt.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE }).edit(1, 'closed later')
+    expect(a.rt.writers.writeEmergencyNow()).toBe('written')
+    const key = EMERGENCY_KEY_PREFIX + a.rt.identity.pageInstanceId
+
+    // A is still alive: its key is not consumed.
+    const [whileAlive, again] = await Promise.all([b.rt.scanEmergency(), b.rt.scanEmergency()])
+    expect([whileAlive, again]).toEqual([[], []])
+    expect(local.map.has(key)).toBe(true)
+    expect(await b.rt.store.listByEntity('work-research-note', 'w1')).toEqual([])
+
+    a.locks.releaseAll()
+    a.rt.identity.dispose()
+    await settle()
+    const merged = await b.rt.scanEmergency()
+    expect(merged.map((m) => [m.key, m.outcomes, m.removed])).toEqual([[key, ['created'], true]])
+    const [row] = await b.rt.store.listByEntity('work-research-note', 'w1')
+    expect((await b.rt.store.getBody(row!.draftId))?.body).toBe('closed later')
+    expect(local.map.has(key)).toBe(false)
+    expect(await b.rt.scanEmergency()).toEqual([])
+  })
+
+  it('scanEmergency starts the runtime when nothing has yet', async () => {
+    const browser = createFakeBrowser()
+    const rt = createEditorRecoveryRuntime({
+      store: { indexedDB: createFakeIdb().factory },
+      identity: { sessionStorage: browser.sessionStorageWith(), locks: browser.locksFor('x'), createChannel: browser.channelFor('x'), claimWaitMs: 20 },
+      writers: { window: null, document: null },
+      emergencyStorage: memoryStorage(),
+    })
+    expect(await rt.scanEmergency()).toEqual([])
+    expect((await rt.start()).claim.runtimeId).toBeTruthy()
+  })
 })

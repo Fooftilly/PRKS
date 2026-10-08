@@ -198,6 +198,37 @@ class EditorRecoveryStoreTests(unittest.TestCase):
         self.assertEqual(sorted(r['body'] for r in rows), ['typed in page 0', 'typed in page 1'])
         self.assertEqual(page.evaluate(_EMERGENCY_KEYS), [])
 
+    def test_running_page_rescans_a_tab_that_closes_later(self):
+        server, page, context = self.start()
+        self.assertEqual(page.evaluate(_START)['merged'], [])
+        other = self.open_page(context, server)
+        other.evaluate(_START)
+        other.evaluate(_HOLD_WRITES)
+        draft = other.evaluate(_EDIT, ['W-LATE', 1, 'closed later'])['draftId']
+        self.assertEqual(other.evaluate("() => window.prksEditorRecovery.runtime().writers.writeEmergencyNow()"), 'written')
+        other_page = other.evaluate("() => window.prksEditorRecovery.runtime().identity.pageInstanceId")
+        key = 'prks.editorRecovery.emergency.v1.' + other_page
+        # The other page is alive: a scan leaves its key alone.
+        page.evaluate("async () => { await window.prksEditorRecovery.runtime().scanEmergency(); }")
+        self.assertEqual(page.evaluate(_EMERGENCY_KEYS), [key])
+        self.assertEqual(page.evaluate(_LIST, 'W-LATE'), [])
+
+        other.close()
+        # No reload: the already running page scans until the closed page reads as dead.
+        wait_for_async(
+            page,
+            """async () => {
+                const rt = window.prksEditorRecovery.runtime();
+                await rt.scanEmergency();
+                return (await rt.store.listByEntity('work-research-note', 'W-LATE')).length > 0;
+            }""",
+            timeout=10000,
+            message='the closed page\'s emergency draft never reached the recovery store',
+        )
+        rows = page.evaluate(_LIST, 'W-LATE')
+        self.assertEqual([(r['draftId'], r['body']) for r in rows], [(draft, 'closed later')])
+        self.assertEqual(page.evaluate(_EMERGENCY_KEYS), [])
+
     def test_pending_ordinary_edit_survives_an_immediate_reload(self):
         server, page, context = self.start()
         page.evaluate(_START)

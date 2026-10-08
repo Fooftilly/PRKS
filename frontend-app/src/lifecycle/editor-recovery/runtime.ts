@@ -2,7 +2,9 @@
  * One editor-recovery runtime per page: store, identity and writer registry.
  *
  * `start()` claims the runtime id and then merges emergency entries left by
- * pages that are no longer alive. Nothing starts at script load; slice 1 has
+ * pages that are no longer alive. `scanEmergency()` repeats that merge for a
+ * page that is already running, so a tab that closes later is picked up
+ * without a reload. Nothing starts at script load; slice 1 has
  * no consumer, so the page holds no lock, channel or listener until a
  * consumer asks for the runtime.
  */
@@ -27,6 +29,11 @@ export interface EditorRecoveryRuntime {
   readonly writers: WriterRegistry
   /** Claims the runtime id, then merges dead pages' emergency entries. Idempotent. */
   start(): Promise<{ claim: RuntimeClaim; merged: MergeReport[] }>
+  /**
+   * Starts if needed, then merges emergency entries of pages that are dead now.
+   * Live pages' keys are left alone. Idempotent; scans run one at a time.
+   */
+  scanEmergency(): Promise<MergeReport[]>
   classify(record: Pick<DraftRecord, 'draftId' | 'owner'>, askingSession?: string | null): Promise<LineageClass>
   dispose(): void
 }
@@ -38,25 +45,39 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
     options.emergencyStorage !== undefined ? options.emergencyStorage : (options.writers?.emergencyStorage ?? defaultLocalStorage())
   const writers = createWriterRegistry({ ...options.writers, store, identity, emergencyStorage })
   let started: Promise<{ claim: RuntimeClaim; merged: MergeReport[] }> | null = null
+  let lastScan: Promise<unknown> = Promise.resolve()
+
+  // Serialized so two scans never apply the same key's entries concurrently.
+  function merge(): Promise<MergeReport[]> {
+    const run = lastScan.then(runMerge)
+    lastScan = run.catch(() => undefined)
+    return run
+  }
+
+  function runMerge(): Promise<MergeReport[]> {
+    if (!emergencyStorage) return Promise.resolve([])
+    return mergeEmergencyEntries({
+      storage: emergencyStorage,
+      store,
+      pageInstanceId: identity.pageInstanceId,
+      isPageAlive: (id) => identity.isPageAlive(id),
+    })
+  }
+
+  function start(): Promise<{ claim: RuntimeClaim; merged: MergeReport[] }> {
+    if (started) return started
+    started = identity.claim().then(async (claim) => ({ claim, merged: await merge() }))
+    return started
+  }
 
   return {
     store,
     identity,
     writers,
-    start() {
-      if (started) return started
-      started = identity.claim().then(async (claim) => {
-        const merged = emergencyStorage
-          ? await mergeEmergencyEntries({
-              storage: emergencyStorage,
-              store,
-              pageInstanceId: identity.pageInstanceId,
-              isPageAlive: (id) => identity.isPageAlive(id),
-            })
-          : []
-        return { claim, merged }
-      })
-      return started
+    start,
+    scanEmergency() {
+      if (!started) return start().then((result) => result.merged)
+      return started.then(() => merge())
     },
     classify(record, askingSession = null) {
       return classifyLineage(record, { identity, localOwner: (id) => writers.ownerOf(id) }, askingSession)
