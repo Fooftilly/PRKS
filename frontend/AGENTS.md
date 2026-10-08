@@ -460,8 +460,8 @@ behavior — or tests that encode those contracts — read
 
 Global rules still apply, especially:
 
-- disposable read cache state belongs in `offline-store.js`; durable
-  unsynchronized user intent belongs in `local-store.js`;
+- disposable read cache state belongs in `offline-store.js`; durable unsynchronized user intent
+  belongs in `local-store.js`; editor draft recovery (#466) in `editor-recovery.js`, never `prks-local-v1`;
 - never make disposable cache state authoritative for unsynchronized user work;
 - online and offline mutation paths must converge on the same domain semantics;
 - preserve revision/conflict and acknowledgement contracts rather than adding a

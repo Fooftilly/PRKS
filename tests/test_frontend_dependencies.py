@@ -131,6 +131,7 @@ class FrontendDependencyTests(unittest.TestCase):
             "prks-search-query-codec",
             "prks-tab-leave",
             "prks-owner-resource",
+            "prks-editor-recovery",
             "prks-route-model",
         ):
             self.assertIn(name, names)

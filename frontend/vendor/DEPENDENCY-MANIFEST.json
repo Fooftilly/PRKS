@@ -94,6 +94,17 @@
       "version": "1.47.0"
     },
     {
+      "name": "prks-editor-recovery",
+      "runtime_files": [
+        {
+          "path": "/js/editor-recovery.js",
+          "sha256": "19e6eeb37a9e78e1dc5039b78d5fb0edfada97f3cdcb8831a82ade7fd0ad34e3"
+        }
+      ],
+      "source_category": "frontend-app:editor-recovery",
+      "version": "1"
+    },
+    {
       "name": "prks-owner-resource",
       "runtime_files": [
         {

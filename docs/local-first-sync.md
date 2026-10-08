@@ -79,6 +79,23 @@ coordinator names no family: adding one is a registration.
 - Clear offline cache never touches durable operations. Without a cached Work
   base, PRKS shows unavailable rather than inventing a complete Work. Pending
   changes remain in Settings → Diagnostics and synchronize when possible.
+- `prks-editor-recovery-v1` (#466) is browser-local editor draft recovery,
+  a separate database and a distinct layer: not server state, not the
+  operation queue, not a cache. `frontend/js/editor-recovery.js` (built from
+  `frontend-app/src/lifecycle/editor-recovery/`) writes metadata and body in
+  one transaction with relaxed durability where supported (a plain readwrite
+  transaction otherwise), resolves only on completion, and never claims an
+  acknowledgement. Relaxed covers reload, tab close and a browser crash, not
+  OS crash or power loss; the operation queue stays the strict boundary.
+  Only a lineage's owner page (a fresh `pageInstanceId` per load) writes it;
+  generations are monotonic; adoption is compare-and-set. Records are deleted
+  only on an exact acknowledgement (same generation, `===` body), proven
+  equality, explicit discard, or a confirmed Work delete, never by age. A
+  discard whose emergency key could not be cleared leaves a bodyless
+  tombstone until that key is gone, so the key cannot recreate the draft.
+  A draft a merge created from another page's key carries that page's id
+  until the key is removed; deleting it meanwhile leaves the same tombstone.
+  Clear offline cache does not touch it. Slice 1 has no consumer.
 - A device ID is an identity for synchronization, never authentication or trust.
 - Editor state and observed projections belong to the Work's TabContext.
   The sync coordinator owns transport and retry policy, with one in-flight
