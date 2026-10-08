@@ -81,5 +81,5 @@ export interface ReviewActions {
   replace(details: RecoveryDetails, candidate: RecoveryCandidateView, text: string, shown: RecoveryCurrentNote): Promise<RecoveryActionResult>
   discard(details: RecoveryDetails, candidate: RecoveryCandidateView): Promise<RecoveryActionResult>
   copy(text: string): Promise<void>
-  confirm(options: { title: string; message: string; confirmLabel: string; danger: boolean }): Promise<boolean>
+  confirm(options: { title: string; message: string; confirmLabel: string; cancelLabel?: string; danger: boolean }): Promise<boolean>
 }

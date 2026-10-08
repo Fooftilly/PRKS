@@ -103,6 +103,7 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
       store,
       pageInstanceId: identity.pageInstanceId,
       isPageAlive: (id: string) => identity.isPageAlive(id),
+      wasPageClosed: (id: string) => identity.wasPageClosed(id),
       definiteOnly,
     }
     const reports = await mergeEmergencyEntries(env)

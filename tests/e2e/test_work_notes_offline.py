@@ -636,6 +636,12 @@ class ResearchNotesTabCloseAndReviewTests(_RecoveryPage, unittest.TestCase):
         dialog.locator('[data-prks-role="editor-recovery-chosen-text"]').fill(chosen)
         # Nothing is written before the explicit, confirmed choice.
         self.assertEqual(self.note_rows(tab), [])
+        # Escape asks before the combined text is dropped; Keep editing keeps it.
+        tab.keyboard.press('Escape')
+        tab.locator('#prks-modal-confirm-title', has_text='Discard the combined text?').wait_for()
+        tab.locator('#prks-modal-confirm-cancel').click()
+        tab.locator('#prks-modal-confirm').wait_for(state='hidden')
+        self.assertEqual(dialog.locator('[data-prks-role="editor-recovery-chosen-text"]').input_value(), chosen)
         dialog.locator('[data-prks-role="editor-recovery-replace"]').click()
         tab.locator('#prks-modal-confirm-ok').click()
         tab.locator('[data-prks-role="editor-recovery-review"]').wait_for(state='detached')

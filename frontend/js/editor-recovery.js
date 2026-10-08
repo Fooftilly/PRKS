@@ -862,9 +862,10 @@ var prksEditorRecovery = (function(exports) {
 	}
 	async function mergeable(env, stored) {
 		if (stored.pageInstanceId === env.pageInstanceId || !stored.payload) return false;
-		if (env.definiteOnly && stored.payload.runtimeId === null) return false;
+		const closed = env.definiteOnly && env.wasPageClosed ? env.wasPageClosed(stored.pageInstanceId) : false;
+		if (env.definiteOnly && !closed && stored.payload.runtimeId === null) return false;
 		const alive = await env.isPageAlive(stored.pageInstanceId);
-		return env.definiteOnly ? alive === false : alive !== true;
+		return env.definiteOnly && !closed ? alive === false : alive !== true;
 	}
 	/**
 	* Applies one key's entries, re-reading the key before each step: if its page
@@ -1990,7 +1991,7 @@ var prksEditorRecovery = (function(exports) {
 					const next = delay ? Math.min(delay * 2, RETRY_MAX_MS) : RETRY_FIRST_MS;
 					this.cleanupTimer = scheduler.set(() => {
 						this.cleanupTimer = null;
-						this.removeSuperseded(draftId, generation, next);
+						this.removeSuperseded(draftId, generation, next).catch(() => void 0);
 					}, next);
 					return;
 				}
@@ -2185,6 +2186,7 @@ var prksEditorRecovery = (function(exports) {
 				store,
 				pageInstanceId: identity.pageInstanceId,
 				isPageAlive: (id) => identity.isPageAlive(id),
+				wasPageClosed: (id) => identity.wasPageClosed(id),
 				definiteOnly
 			};
 			const reports = await mergeEmergencyEntries(env);

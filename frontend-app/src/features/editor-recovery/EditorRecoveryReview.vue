@@ -8,7 +8,8 @@
  * and Discard (after confirmation). Compare shows the current note beside an
  * editable copy of the recovered text; only "Replace note with this text"
  * writes, and only through the editor's ordinary save path. Close changes
- * nothing. A refused action (the draft or note changed meanwhile) reloads
+ * nothing; once the text to keep was edited, Close, Back, Escape and the
+ * backdrop confirm before that text is dropped. A refused action (the draft or note changed meanwhile) reloads
  * the list instead of acting on what it showed.
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
@@ -35,6 +36,8 @@ const props = defineProps<{
   /** The Work's title, for identity. */
   entityTitle: string
   actions: ReviewActions
+  /** Receives this dialog's close request, for Escape. */
+  bindClose?: (request: () => void) => void
 }>()
 
 const emit = defineEmits<{
@@ -52,6 +55,9 @@ const busy = ref<string | null>(null)
 const message = ref('')
 const comparing = ref(false)
 const chosenText = ref('')
+/** The recovered body Compare started from; edits beyond it are the user's only copy. */
+const composedFrom = ref<string | null>(null)
+let closing = false
 const copyLabel = ref<Record<string, string>>({})
 let copyTimers: Array<ReturnType<typeof setTimeout>> = []
 let disposed = false
@@ -75,7 +81,9 @@ async function load(keepMessage = false): Promise<void> {
   }
   unavailable.value = false
   details.value = next
-  comparing.value = false
+  // A refused Replace keeps the combined text while its draft can still be compared.
+  const still = next.candidates.find((c) => c.draftId === selectedId.value)
+  comparing.value = comparing.value && !!still && still.action === 'reconcile' && still.body === composedFrom.value
   // Never pick a winner: the first row is shown, nothing is applied.
   if (!next.candidates.some((c) => c.draftId === selectedId.value)) {
     selectedId.value = next.candidates.length ? next.candidates[0]!.draftId : null
@@ -117,8 +125,29 @@ function startCompare(): void {
   const c = selected.value
   if (!c || c.body === null) return
   chosenText.value = c.body
+  composedFrom.value = c.body
   comparing.value = true
   message.value = ''
+}
+
+/** True when nothing composed would be lost, or the user chose to drop it. */
+async function mayDropComposed(): Promise<boolean> {
+  if (!comparing.value || chosenText.value === composedFrom.value) return true
+  return props.actions.confirm({
+    title: 'Discard the combined text?',
+    message: 'Your edits to the text to keep are not saved anywhere. The draft and the current note stay as they are.',
+    confirmLabel: 'Discard text',
+    cancelLabel: 'Keep editing',
+    danger: true,
+  })
+}
+
+async function back(): Promise<void> {
+  if (busy.value || closing) return
+  closing = true
+  const ok = await mayDropComposed().catch(() => false)
+  closing = false
+  if (ok && !disposed) comparing.value = false
 }
 
 async function replace(): Promise<void> {
@@ -171,10 +200,16 @@ async function copy(key: string, text: string | null): Promise<void> {
   )
 }
 
-function close(): void {
-  if (busy.value) return
-  emit('close')
+async function close(): Promise<void> {
+  if (busy.value || closing) return
+  closing = true
+  const ok = await mayDropComposed().catch(() => false)
+  closing = false
+  if (ok && !disposed) emit('close')
 }
+
+/** Escape reaches Review through the page's modal lifecycle, under the same policy. */
+props.bindClose?.(() => void close())
 
 onMounted(() => {
   void load().then(() => nextTick(() => dialog.value?.focus()))
@@ -188,7 +223,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="modal-backdrop" data-prks-role="editor-recovery-review-backdrop" role="presentation" @click.self="close">
+  <div class="modal-backdrop" data-prks-role="editor-recovery-review-backdrop" role="presentation" @click.self="close()">
     <div
       id="editor-recovery-review-modal"
       ref="dialog"
@@ -201,7 +236,7 @@ onBeforeUnmount(() => {
     >
       <div class="modal-header">
         <h3 :id="headingId">Unsaved {{ subject }}</h3>
-        <PrksIconButton class="close-btn" label="Close" data-prks-role="editor-recovery-close" @click="close">
+        <PrksIconButton class="close-btn" label="Close" data-prks-role="editor-recovery-close" @click="close()">
           ×
         </PrksIconButton>
       </div>
@@ -276,7 +311,7 @@ onBeforeUnmount(() => {
           <PrksButton variant="danger" :busy="busy === 'replace'" busy-label="Replacing…" :disabled="!!busy" data-prks-role="editor-recovery-replace" @click="replace">Replace note with this text</PrksButton>
           <PrksButton :disabled="!!busy" data-prks-role="editor-recovery-copy-current" @click="copy('current', details ? details.current.text : null)">{{ copyLabel.current || 'Copy current note' }}</PrksButton>
           <PrksButton variant="quiet-danger" :disabled="!!busy" data-prks-role="editor-recovery-discard" @click="discard">Keep current note, discard draft</PrksButton>
-          <PrksButton variant="ghost" :disabled="!!busy" data-prks-role="editor-recovery-back" @click="comparing = false">Back</PrksButton>
+          <PrksButton variant="ghost" :disabled="!!busy" data-prks-role="editor-recovery-back" @click="back">Back</PrksButton>
         </template>
         <template v-else-if="selected">
           <PrksButton v-if="selected.action === 'restore'" variant="primary" :busy="busy === 'restore'" busy-label="Restoring…" :disabled="!!busy" data-prks-role="editor-recovery-restore" @click="restore">Restore for editing</PrksButton>
@@ -292,7 +327,7 @@ onBeforeUnmount(() => {
             @click="discard"
           >Discard draft</PrksButton>
         </template>
-        <PrksButton variant="ghost" class="editor-recovery-review__close" :disabled="!!busy" data-prks-role="editor-recovery-cancel" @click="close">Close</PrksButton>
+        <PrksButton variant="ghost" class="editor-recovery-review__close" :disabled="!!busy" data-prks-role="editor-recovery-cancel" @click="close()">Close</PrksButton>
       </div>
     </div>
   </div>

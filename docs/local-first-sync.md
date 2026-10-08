@@ -105,7 +105,10 @@ coordinator names no family: adding one is a registration.
   rules and only when no other lineage is live. A closed tab is proven by
   its lock disappearing or its final-pagehide record in `localStorage`
   (needed on LAN, where Web Locks are absent); a crashed LAN tab stays
-  unknown and is review-only. Everything else appears in the Notes pane's
+  unknown and is review-only. A tab that is already open re-scans when
+  another tab's final-pagehide record appears; that record also lets it
+  merge a close-time emergency entry written before the closing tab's
+  runtime claim settled. Everything else appears in the Notes pane's
   recovery notice and Review dialog, where restoring adopts by
   compare-and-set and reconciling is an explicit confirmed replace; nothing
   is enqueued until the user chooses. Review's Restore and Replace pass the

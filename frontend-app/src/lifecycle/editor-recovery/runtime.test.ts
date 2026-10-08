@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { EmergencyStorage } from './emergency'
 import { createEditorRecoveryRuntime } from './runtime'
-import { EMERGENCY_KEY_PREFIX, RUNTIME_SESSION_KEY, UNKNOWN_BASE, reservationKeyOf } from './schema'
+import { CLOSED_PAGES_LOCAL_KEY, EMERGENCY_KEY_PREFIX, RUNTIME_SESSION_KEY, UNKNOWN_BASE, reservationKeyOf } from './schema'
 import { createFakeBrowser } from './test-support/fake-env'
 import { createFakeIdb, createManualScheduler, settle } from './test-support/fake-idb'
 
@@ -236,6 +236,38 @@ describe('editor recovery runtime', () => {
     expect((await b.rt.store.getBody(row!.draftId))?.body).toBe('closed later')
     expect(local.map.has(key)).toBe(false)
     expect(await b.rt.scanEmergency()).toEqual([])
+  })
+
+  it('without Web Locks, picks up a tab that closed during its claim once its final pagehide is recorded', async () => {
+    const browser = createFakeBrowser()
+    const idb = createFakeIdb()
+    const local = memoryStorage()
+    const make = (name: string) =>
+      createEditorRecoveryRuntime({
+        store: { indexedDB: idb.factory },
+        identity: { sessionStorage: browser.sessionStorageWith(), locks: null, createChannel: browser.channelFor(name), claimWaitMs: 20, localStorage: local },
+        writers: { scheduler: createManualScheduler(), window: null, document: null },
+        emergencyStorage: local,
+      })
+    const b = make('b')
+    await b.start()
+    const a = make('a')
+    // Typed and closed before its runtime claim settled: the payload carries no runtime id.
+    void a.start()
+    a.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE }).edit(1, 'closed while claiming')
+    expect(a.writers.writeEmergencyNow()).toBe('written')
+    const key = EMERGENCY_KEY_PREFIX + a.identity.pageInstanceId
+    expect(JSON.parse(local.map.get(key)!).runtimeId).toBeNull()
+    a.identity.dispose()
+    await settle()
+    // Silence alone is not proof: the key stays.
+    expect(await b.scanEmergency()).toEqual([])
+    expect(local.map.has(key)).toBe(true)
+    local.setItem(CLOSED_PAGES_LOCAL_KEY, JSON.stringify([a.identity.pageInstanceId]))
+    const merged = await b.scanEmergency()
+    expect(merged.map((m) => [m.key, m.outcomes, m.removed])).toEqual([[key, ['created'], true]])
+    const [row] = await b.store.listByEntity('work-research-note', 'w1')
+    expect((await b.store.getBody(row!.draftId))?.body).toBe('closed while claiming')
   })
 
   it('scanEmergency starts the runtime when nothing has yet', async () => {

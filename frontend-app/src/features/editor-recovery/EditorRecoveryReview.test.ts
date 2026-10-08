@@ -136,6 +136,50 @@ describe('EditorRecoveryReview', () => {
     wrapper.unmount()
   })
 
+  it('confirms before Close, Back or the backdrop drop an edited text to keep', async () => {
+    const draft = candidate({ action: 'reconcile', reason: 'base-advanced' })
+    const confirm = vi.fn(async () => false)
+    const a = actions({ confirm }, [details([draft])])
+    const wrapper = await open(a)
+    await wrapper.get('[data-prks-role="editor-recovery-compare-btn"]').trigger('click')
+    // Unedited: nothing to lose, so Back asks nothing.
+    await wrapper.get('[data-prks-role="editor-recovery-back"]').trigger('click')
+    await flushPromises()
+    expect(confirm).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-prks-role="editor-recovery-compare"]').exists()).toBe(false)
+    await wrapper.get('[data-prks-role="editor-recovery-compare-btn"]').trigger('click')
+    await wrapper.get('[data-prks-role="editor-recovery-chosen-text"]').setValue('Combined.')
+    for (const role of ['editor-recovery-cancel', 'editor-recovery-close', 'editor-recovery-review-backdrop', 'editor-recovery-back']) {
+      await wrapper.get(`[data-prks-role="${role}"]`).trigger('click')
+      await flushPromises()
+    }
+    expect(confirm).toHaveBeenCalledTimes(4)
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ confirmLabel: 'Discard text', cancelLabel: 'Keep editing', danger: true }))
+    expect(wrapper.emitted('close')).toBeUndefined()
+    expect((wrapper.get('[data-prks-role="editor-recovery-chosen-text"]').element as HTMLTextAreaElement).value).toBe('Combined.')
+    confirm.mockResolvedValue(true)
+    await wrapper.get('[data-prks-role="editor-recovery-cancel"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.emitted('close')).toHaveLength(1)
+    expect(a.calls).toEqual([])
+    wrapper.unmount()
+  })
+
+  it('keeps the combined text when Replace is refused and the draft can still be compared', async () => {
+    const draft = candidate({ action: 'reconcile', reason: 'base-advanced' })
+    const replace = vi.fn(async () => ({ ok: false, code: 'current-changed' }) as RecoveryActionResult)
+    const a = actions({ replace }, [details([draft]), details([draft])])
+    const wrapper = await open(a)
+    await wrapper.get('[data-prks-role="editor-recovery-compare-btn"]').trigger('click')
+    await wrapper.get('[data-prks-role="editor-recovery-chosen-text"]').setValue('Combined.')
+    await wrapper.get('[data-prks-role="editor-recovery-replace"]').trigger('click')
+    await flushPromises()
+    expect(replace).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('[data-prks-role="editor-recovery-message"]').exists()).toBe(true)
+    expect((wrapper.get('[data-prks-role="editor-recovery-chosen-text"]').element as HTMLTextAreaElement).value).toBe('Combined.')
+    wrapper.unmount()
+  })
+
   it('Close changes nothing', async () => {
     const a = actions({}, [details([candidate()])])
     const wrapper = await open(a)

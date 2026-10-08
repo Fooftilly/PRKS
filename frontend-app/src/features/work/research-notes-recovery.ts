@@ -37,7 +37,7 @@ interface ClassicRecovery {
   prksResearchNotesRecoveryDiscard?: (ctx: RecoveryOwner, workId: string, token: string, expect: RecoveryExpectation) => Promise<RecoveryActionResult>
   prksRefreshResearchNotesRecovery?: (ctx: RecoveryOwner, workId: string) => Promise<unknown>
   prksCopyTextToClipboard?: (text: string) => Promise<void>
-  prksConfirmDialog?: (options: { title: string; message: string; confirmLabel: string; danger: boolean }) => Promise<boolean>
+  prksConfirmDialog?: (options: { title: string; message: string; confirmLabel: string; cancelLabel?: string; danger: boolean }) => Promise<boolean>
 }
 
 function classic(): ClassicRecovery {
@@ -53,6 +53,8 @@ interface OpenReview {
   tabId: string
   workId: string
   opener: HTMLElement | null
+  /** The dialog's own close request, bound once it mounts. */
+  requestClose: (() => void) | null
 }
 let openReview: OpenReview | null = null
 
@@ -145,12 +147,16 @@ export function openResearchNotesRecoveryReview(ctx: RecoveryOwner, opener: HTML
   const host = document.createElement('div')
   host.setAttribute('data-prks-role', 'editor-recovery-review-host')
   document.body.appendChild(host)
-  openReview = { host, ctx, tabId: tabKey(ctx), workId, opener }
+  const review: OpenReview = { host, ctx, tabId: tabKey(ctx), workId, opener, requestClose: null }
+  openReview = review
   render(
     h(EditorRecoveryReview, {
       subject: SUBJECT,
       entityTitle: title,
       actions: actionsFor(ctx, workId),
+      bindClose: (request: () => void) => {
+        review.requestClose = request
+      },
       onClose: () => closeResearchNotesRecoveryReview(),
     }),
     host,
@@ -177,11 +183,24 @@ export function closeResearchNotesRecoveryReview(modal?: Element | null): boolea
   return true
 }
 
+/**
+ * Escape on the open Review: the dialog decides, so a combined text it holds
+ * is confirmed before it is dropped. Returns whether that Review was open.
+ */
+export function requestResearchNotesRecoveryReviewClose(modal?: Element | null): boolean {
+  const open = openReview
+  if (!open) return false
+  if (modal instanceof Element && !open.host.contains(modal)) return false
+  if (!open.requestClose) return closeResearchNotesRecoveryReview(modal)
+  open.requestClose()
+  return true
+}
+
 export function registerResearchNotesRecoveryBridge(root: Window & typeof globalThis): void {
   const target = root as Window & {
     prksVueUpdateResearchNotesRecovery?: (ctx: RecoveryOwner) => void
     prksVueCloseResearchNotesRecoveryReview?: (modal?: Element | null) => boolean
   }
   target.prksVueUpdateResearchNotesRecovery = (ctx) => updateResearchNotesRecovery(ctx)
-  target.prksVueCloseResearchNotesRecoveryReview = (modal) => closeResearchNotesRecoveryReview(modal)
+  target.prksVueCloseResearchNotesRecoveryReview = (modal) => requestResearchNotesRecoveryReviewClose(modal)
 }

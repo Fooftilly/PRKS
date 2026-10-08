@@ -131,6 +131,28 @@ describe('mergeEmergencyEntries', () => {
     expect(storage.map.size).toBe(0)
   })
 
+  it('on a re-scan, merges a page with a final-pagehide record even before it settled its claim', async () => {
+    const storage = memoryStorage()
+    for (const page of ['p-closed', 'p-closed-answering', 'p-open']) {
+      const unsettled = payload(page)
+      unsettled.runtimeId = null
+      writeEmergency(storage, emergencyKeyOf(page), unsettled)
+    }
+    const liveness: Record<string, boolean | null> = { 'p-closed': null, 'p-closed-answering': true, 'p-open': null }
+    const { store, applied } = fakeStore()
+    await mergeEmergencyEntries({
+      storage,
+      store,
+      pageInstanceId: 'p-me',
+      isPageAlive: async (id: string) => liveness[id] ?? null,
+      wasPageClosed: (id: string) => id !== 'p-open',
+      definiteOnly: true,
+    })
+    // A page that still answers keeps its key whatever its record says.
+    expect(applied).toEqual(['p-closed'])
+    expect([...storage.map.keys()].sort()).toEqual([emergencyKeyOf('p-closed-answering'), emergencyKeyOf('p-open')])
+  })
+
   it('stops and keeps the key when its page rewrote it after the snapshot', async () => {
     const storage = memoryStorage()
     const two = payload('p-dead')

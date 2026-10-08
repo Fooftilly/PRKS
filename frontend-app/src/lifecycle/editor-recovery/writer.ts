@@ -803,7 +803,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
         const next = delay ? Math.min(delay * 2, RETRY_MAX_MS) : RETRY_FIRST_MS
         this.cleanupTimer = scheduler.set(() => {
           this.cleanupTimer = null
-          void this.removeSuperseded(draftId, generation, next)
+          this.removeSuperseded(draftId, generation, next).catch(() => undefined)
         }, next)
         return
       }
