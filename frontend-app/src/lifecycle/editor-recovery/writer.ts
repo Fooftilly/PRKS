@@ -72,7 +72,7 @@ export type WriterEvent =
 
 export interface WriterRegistryOptions {
   store: RecoveryStore
-  identity: Pick<PageIdentity, 'pageInstanceId' | 'current' | 'setLineageResponder'>
+  identity: Pick<PageIdentity, 'pageInstanceId' | 'current' | 'setLineageResponder'> & Partial<Pick<PageIdentity, 'setContestListener'>>
   scheduler?: Scheduler
   now?: () => number
   random?: RandomSource
@@ -211,9 +211,10 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     else onResume()
   }
   /**
-   * Back from hidden or frozen: write the reservation again before counting
-   * on it. Without Web Locks a page that claimed this runtime meanwhile may
-   * have removed it, taking a frozen page for a closed one.
+   * Back from hidden or frozen, or another page claimed this runtime: write
+   * the reservation again before counting on it. Without Web Locks a page
+   * that claimed this runtime while this one could not answer may have
+   * removed it, taking a frozen or busy page for a closed one.
    */
   function onResume(): void {
     if (hiding || reservedChars === 0) return
@@ -221,6 +222,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     changed()
   }
   identity.setLineageResponder((draftId) => ownerOf(draftId) !== null)
+  if (identity.setContestListener) identity.setContestListener(onResume)
 
   function ownerOf(draftId: string): string | null {
     for (const w of live) if (w.currentDraftId() === draftId) return w.sessionKey
@@ -846,6 +848,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       emergencyOn = false
       disposed = true
       identity.setLineageResponder(null)
+      if (identity.setContestListener) identity.setContestListener(null)
     },
   }
 }

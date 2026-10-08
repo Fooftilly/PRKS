@@ -72,6 +72,12 @@ export interface PageIdentity {
   isLineageLiveElsewhere(draftId: string): Promise<boolean | null>
   /** Answers other pages' `lineage?` queries; the writer registry installs it. */
   setLineageResponder(responder: ((draftId: string) => boolean) | null): void
+  /**
+   * Called when another page claims this page's settled runtime id. That
+   * page may have answered late and taken the id, and may have removed this
+   * page's reservation; the writer registry writes it again.
+   */
+  setContestListener(listener: (() => void) | null): void
   dispose(): void
 }
 
@@ -127,6 +133,7 @@ export function createPageIdentity(env: IdentityEnv = {}): PageIdentity {
   let claimPromise: Promise<RuntimeClaim> | null = null
   let pending: { rid: string; lost: boolean } | null = null
   let lineageResponder: ((draftId: string) => boolean) | null = null
+  let contestListener: (() => void) | null = null
   const answers = new Map<string, () => void>()
 
   function post(message: Message): void {
@@ -142,6 +149,7 @@ export function createPageIdentity(env: IdentityEnv = {}): PageIdentity {
     if (m.from === pageInstanceId) return
     if (settled && settled.runtimeId === m.rid) {
       post({ t: 'taken', rid: m.rid, to: m.from })
+      if (contestListener) contestListener()
       return
     }
     if (!pending || pending.rid !== m.rid) return
@@ -151,7 +159,16 @@ export function createPageIdentity(env: IdentityEnv = {}): PageIdentity {
   }
 
   function onTaken(m: { rid: string; to: string }): void {
-    if (m.to === pageInstanceId && pending && pending.rid === m.rid) pending.lost = true
+    if (m.to !== pageInstanceId) return
+    if (pending && pending.rid === m.rid) {
+      pending.lost = true
+      return
+    }
+    // A holder that was busy or frozen through the claim window answered
+    // late: another live page has this id, so it no longer proves anything.
+    if (settled && settled.runtimeId === m.rid && settled.verified === 'channel') {
+      settled = { runtimeId: m.rid, verified: 'unverified' }
+    }
   }
 
   function onAnswer(m: { q: string }): void {
@@ -328,6 +345,9 @@ export function createPageIdentity(env: IdentityEnv = {}): PageIdentity {
     },
     setLineageResponder(responder) {
       lineageResponder = responder
+    },
+    setContestListener(listener) {
+      contestListener = listener
     },
     dispose() {
       if (disposed) return

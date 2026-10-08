@@ -86,4 +86,12 @@ describe('classifyLineage', () => {
     w.liveElsewhere.add('d-1')
     expect(await classifyLineage(record({ runtimeId: 'r-me' }), probeFor(w))).toBe('other-live')
   })
+
+  it('asks for a live writer before treating a channel-claimed runtime as this tab\'s', async () => {
+    const w = world({ claim: { runtimeId: 'r-me', verified: 'channel' } })
+    expect(await classifyLineage(record({ runtimeId: 'r-me' }), probeFor(w))).toBe('same-runtime-orphan')
+    // The tab this one was duplicated from still edits it.
+    w.liveElsewhere.add('d-1')
+    expect(await classifyLineage(record({ runtimeId: 'r-me' }), probeFor(w))).toBe('other-live')
+  })
 })

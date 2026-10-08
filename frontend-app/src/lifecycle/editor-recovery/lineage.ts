@@ -10,7 +10,8 @@
  *   another page answers that it has a live writer for it.
  * - `same-runtime-orphan`: this page wrote it with no live writer now, or its
  *   owner runtime is this page's verified runtime (a previous load of this
- *   tab). Adoptable. Never hidden just because its runtime is alive.
+ *   tab) and, for a channel claim, no page answers for a live writer.
+ *   Adoptable. Never hidden just because its runtime is alive.
  * - `dead-runtime`: the owner page and runtime are both not alive. Adoptable.
  * - `unknown`: anything that cannot be established. Offered for review only.
  *
@@ -46,9 +47,12 @@ export async function classifyLineage(
 
   const claim = identity.current()
   if (claim && owner.runtimeId && owner.runtimeId === claim.runtimeId) {
-    if (claim.verified !== 'unverified') return 'same-runtime-orphan'
-    // An unverified id may be shared with a duplicated tab.
-    return (await identity.isLineageLiveElsewhere(record.draftId)) === true ? 'other-live' : 'unknown'
+    if (claim.verified === 'lock') return 'same-runtime-orphan'
+    // An unverified id may be shared with a duplicated tab, and a channel
+    // claim is only the absence of an answer: ask for a live writer first.
+    const elsewhere = await identity.isLineageLiveElsewhere(record.draftId)
+    if (elsewhere === true) return 'other-live'
+    return claim.verified === 'channel' ? 'same-runtime-orphan' : 'unknown'
   }
 
   if ((await identity.isLineageLiveElsewhere(record.draftId)) === true) return 'other-live'

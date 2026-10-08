@@ -110,6 +110,42 @@ describe('runtime claim over BroadcastChannel (no Web Locks)', () => {
   })
 })
 
+describe('a late answer to a channel claim', () => {
+  it('demotes the claim to unverified and tells the holder its runtime was contested', async () => {
+    const browser = createFakeBrowser()
+    // The original tab's channel, held back while its main thread is busy.
+    let busy = false
+    const held: Array<() => void> = []
+    const createChannel = (name: string) => {
+      const real = browser.channelFor('a')(name)
+      const proxy = {
+        onmessage: null as ((event: { data: unknown }) => void) | null,
+        postMessage: (message: unknown) => real.postMessage(message),
+        close: () => real.close(),
+      }
+      real.onmessage = (event) => {
+        const deliver = () => proxy.onmessage?.(event)
+        if (busy) held.push(deliver)
+        else deliver()
+      }
+      return proxy
+    }
+    const a = createPageIdentity({ sessionStorage: browser.sessionStorageWith({ [RUNTIME_SESSION_KEY]: COPIED }), locks: null, createChannel, claimWaitMs: 30 })
+    expect((await a.claim()).runtimeId).toBe(COPIED)
+    let contested = 0
+    a.setContestListener(() => contested++)
+    busy = true
+    const b = page(browser, 'b', 'channel', browser.sessionStorageWith({ [RUNTIME_SESSION_KEY]: COPIED }))
+    // Silence through the window: the duplicate keeps the copied id.
+    expect(await b.identity.claim()).toEqual({ runtimeId: COPIED, verified: 'channel' })
+    busy = false
+    held.splice(0).forEach((deliver) => deliver())
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(contested).toBe(1)
+    expect(b.identity.current()).toEqual({ runtimeId: COPIED, verified: 'unverified' })
+  })
+})
+
 describe('runtime claim with neither', () => {
   it('uses the candidate unverified and cannot establish liveness', async () => {
     const browser = createFakeBrowser()
