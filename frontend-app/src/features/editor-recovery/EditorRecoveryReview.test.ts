@@ -180,6 +180,43 @@ describe('EditorRecoveryReview', () => {
     wrapper.unmount()
   })
 
+  it('keeps edited text copyable when a refused Replace ends the comparison', async () => {
+    const draft = candidate({ action: 'reconcile', reason: 'base-advanced' })
+    const gone = candidate({ action: null, lineage: 'other-live', body: null })
+    const replace = vi.fn(async () => ({ ok: false, code: 'changed' }) as RecoveryActionResult)
+    const confirm = vi.fn(async () => true)
+    const a = actions({ replace, confirm }, [details([draft]), details([gone])])
+    const wrapper = await open(a)
+    await wrapper.get('[data-prks-role="editor-recovery-compare-btn"]').trigger('click')
+    await wrapper.get('[data-prks-role="editor-recovery-chosen-text"]').setValue('Combined.')
+    await wrapper.get('[data-prks-role="editor-recovery-replace"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-prks-role="editor-recovery-compare"]').exists()).toBe(false)
+    await wrapper.get('[data-prks-role="editor-recovery-copy-leftover"]').trigger('click')
+    await flushPromises()
+    expect(a.copy).toHaveBeenCalledWith('Combined.')
+    // Still the only copy: closing asks first.
+    confirm.mockClear()
+    confirm.mockResolvedValue(false)
+    await wrapper.get('[data-prks-role="editor-recovery-cancel"]').trigger('click')
+    await flushPromises()
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ confirmLabel: 'Discard text' }))
+    expect(wrapper.emitted('close')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('names the edited text when discarding the draft from Compare', async () => {
+    const draft = candidate({ action: 'reconcile', reason: 'base-advanced' })
+    const a = actions({}, [details([draft]), details([])])
+    const wrapper = await open(a)
+    await wrapper.get('[data-prks-role="editor-recovery-compare-btn"]').trigger('click')
+    await wrapper.get('[data-prks-role="editor-recovery-chosen-text"]').setValue('Combined.')
+    await wrapper.get('[data-prks-role="editor-recovery-discard"]').trigger('click')
+    await flushPromises()
+    expect(a.confirm).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('your edited text to keep') }))
+    wrapper.unmount()
+  })
+
   it('Close changes nothing', async () => {
     const a = actions({}, [details([candidate()])])
     const wrapper = await open(a)

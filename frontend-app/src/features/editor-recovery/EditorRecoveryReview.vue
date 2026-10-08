@@ -57,6 +57,8 @@ const comparing = ref(false)
 const chosenText = ref('')
 /** The recovered body Compare started from; edits beyond it are the user's only copy. */
 const composedFrom = ref<string | null>(null)
+/** Edited text whose comparison a refresh ended; kept so it can still be copied. */
+const leftover = ref<string | null>(null)
 let closing = false
 const copyLabel = ref<Record<string, string>>({})
 let copyTimers: Array<ReturnType<typeof setTimeout>> = []
@@ -83,7 +85,9 @@ async function load(keepMessage = false): Promise<void> {
   details.value = next
   // A refused Replace keeps the combined text while its draft can still be compared.
   const still = next.candidates.find((c) => c.draftId === selectedId.value)
-  comparing.value = comparing.value && !!still && still.action === 'reconcile' && still.body === composedFrom.value
+  const keep = !!still && still.action === 'reconcile' && still.body === composedFrom.value
+  if (comparing.value && !keep && chosenText.value !== composedFrom.value) leftover.value = chosenText.value
+  comparing.value = comparing.value && keep
   // Never pick a winner: the first row is shown, nothing is applied.
   if (!next.candidates.some((c) => c.draftId === selectedId.value)) {
     selectedId.value = next.candidates.length ? next.candidates[0]!.draftId : null
@@ -126,13 +130,18 @@ function startCompare(): void {
   if (!c || c.body === null) return
   chosenText.value = c.body
   composedFrom.value = c.body
+  leftover.value = null
   comparing.value = true
   message.value = ''
 }
 
 /** True when nothing composed would be lost, or the user chose to drop it. */
+function composedEdited(): boolean {
+  return (comparing.value && chosenText.value !== composedFrom.value) || leftover.value !== null
+}
+
 async function mayDropComposed(): Promise<boolean> {
-  if (!comparing.value || chosenText.value === composedFrom.value) return true
+  if (!composedEdited()) return true
   return props.actions.confirm({
     title: 'Discard the combined text?',
     message: 'Your edits to the text to keep are not saved anywhere. The draft and the current note stay as they are.',
@@ -147,7 +156,10 @@ async function back(): Promise<void> {
   closing = true
   const ok = await mayDropComposed().catch(() => false)
   closing = false
-  if (ok && !disposed) comparing.value = false
+  if (ok && !disposed) {
+    comparing.value = false
+    leftover.value = null
+  }
 }
 
 async function replace(): Promise<void> {
@@ -173,7 +185,7 @@ async function discard(): Promise<void> {
   if (!d || !c || busy.value) return
   const ok = await props.actions.confirm({
     title: 'Discard this draft?',
-    message: `Its ${lengthText(c.length)} are removed from this device. The current note does not change.`,
+    message: `Its ${lengthText(c.length)} are removed from this device${composedEdited() ? ', and so is your edited text to keep' : ''}. The current note does not change.`,
     confirmLabel: 'Discard draft',
     danger: true,
   })
@@ -249,6 +261,10 @@ onBeforeUnmount(() => {
           </template>
         </p>
         <PrksInlineMessage v-if="message" tone="error" status data-prks-role="editor-recovery-message">{{ message }}</PrksInlineMessage>
+        <div v-if="leftover !== null" class="editor-recovery-review__leftover" data-prks-role="editor-recovery-leftover">
+          <PrksInlineMessage tone="warning">Your edited text to keep was not applied and is not saved anywhere.</PrksInlineMessage>
+          <PrksButton size="sm" data-prks-role="editor-recovery-copy-leftover" @click="copy('leftover', leftover)">{{ copyLabel.leftover || 'Copy edited text' }}</PrksButton>
+        </div>
         <PrksInlineMessage v-if="loading && !details">Loading…</PrksInlineMessage>
         <PrksInlineMessage v-else-if="unavailable" tone="error" status>
           This review is no longer connected to an open editor. Close it and open Review from the note again.

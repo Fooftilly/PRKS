@@ -9628,6 +9628,13 @@ textarea[data-prks-autosize="1"] {
     margin: 0;
 }
 
+.editor-recovery-review__leftover {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-sm);
+}
+
 .editor-recovery-review__layout {
     display: grid;
     grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr);

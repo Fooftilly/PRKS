@@ -380,7 +380,12 @@ function prksResearchRecoverySettled(owner, id, entry, result, saved) {
             entry.editGeneration === saved.generation && prksResearchNotesMayPaint(owner, id)) {
             const slot = prksResearchRecoveryObservedBase(owner);
             if (slot && slot.source === 'server' && slot.value === saved.text) {
-                void entry.recovery.acknowledged(saved.generation, saved.text).catch(function () {});
+                /* No queued row will acknowledge it, so repaint here: a warning
+                 * shown while recovery storage failed goes once the text is clean. */
+                void entry.recovery.acknowledged(saved.generation, saved.text).then(function () {
+                    if (entry.recovery && entry.recovery.state() !== 'unprotected') entry.recoveryUnprotectedCode = null;
+                    prksResearchNotesRecoveryPublishFor(entry);
+                }).catch(function () {});
             }
         }
     } catch (_e) { /* recovery is best-effort beside the save path */ }
@@ -706,6 +711,8 @@ async function prksRestoreResearchNotesRecoveryNow(ctx, work, attempt, options) 
             restored = true;
         }
     }
+    /* Out of time: the unchecked report owns the notice; an empty review here would clear it. */
+    if (attempt && attempt.abandoned) return null;
     prksResearchRecoveryReport(ctx, id, plan.review, queue);
     return { restored: restored, review: plan.review };
 }

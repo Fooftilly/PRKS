@@ -12,7 +12,7 @@ import workNotesStateSource from '../../../../frontend/js/work-notes-state.js?ra
 import * as recoveryApi from '../../lifecycle/editor-recovery-entry'
 import type { EmergencyStorage } from '../../lifecycle/editor-recovery/emergency'
 import type { EditorRecoveryRuntime } from '../../lifecycle/editor-recovery/runtime'
-import { RUNTIME_SESSION_KEY, type DraftRecord } from '../../lifecycle/editor-recovery/schema'
+import { RUNTIME_SESSION_KEY, UNKNOWN_BASE, type DraftRecord } from '../../lifecycle/editor-recovery/schema'
 import { createFakeBrowser } from '../../lifecycle/editor-recovery/test-support/fake-env'
 import { createFakeIdb, settle } from '../../lifecycle/editor-recovery/test-support/fake-idb'
 
@@ -64,6 +64,7 @@ type W = Record<string, unknown> & {
   prksBindWorkNotesSync: (ctx: Ctx) => void
   prksSetResearchRecoveryRestoreMsForTest: (ms: number | null) => void
   prksRestoreResearchNotesRecovery: (ctx: Ctx, work: object) => Promise<{ restored: boolean; review: Array<{ reason: string }> } | null>
+  prksRefreshResearchNotesRecovery: (ctx: Ctx, workId: string) => Promise<unknown>
 }
 const win = window as unknown as W
 
@@ -268,6 +269,7 @@ async function closeTabAndOpenAnother(how: 'close' | 'crash' = 'close'): Promise
 /** Another page of the origin, alive, with its own runtime and writers. */
 function otherPage(name: string) {
   const locks = browser.locksFor(name)
+  const pageWindow = new EventTarget()
   const rt = recoveryApi.createEditorRecoveryRuntime({
     store: { indexedDB: idb.factory },
     identity: {
@@ -275,13 +277,13 @@ function otherPage(name: string) {
       locks: withoutLocks ? null : locks,
       createChannel: browser.channelFor(name),
       claimWaitMs: 20,
-      window: new EventTarget(),
+      window: pageWindow,
       localStorage: local,
     },
     writers: { window: null, document: null },
     emergencyStorage: local,
   })
-  return { rt, locks }
+  return { rt, locks, window: pageWindow }
 }
 
 type Details = {
@@ -761,6 +763,40 @@ describe('same-pane restore after reload', () => {
     }
   })
 
+  it('a restore that runs out of time while adopting keeps the unchecked notice', async () => {
+    const ctx = await openWork()
+    await type(ctx, 'Saved note. Slow adopt').recovery!.flush()
+    await reload()
+    const fresh = await openWork()
+    win.prksSetResearchRecoveryRestoreMsForTest(50)
+    const writers = page!.rt.writers
+    const adopt = writers.adopt.bind(writers)
+    let release!: () => void
+    const hung = new Promise<void>((resolve) => (release = resolve))
+    let adopting = false
+    writers.adopt = async (record, options) => {
+      writers.adopt = adopt
+      adopting = true
+      await hung
+      return adopt(record, options)
+    }
+    try {
+      expect(await win.prksRestoreResearchNotesRecovery(fresh, { id: 'w1' })).toBeNull()
+      expect(adopting).toBe(true)
+      await waitFor(() => !!fresh.ui.researchNotesRecovery, 'unchecked notice')
+      // The abandoned run finishes late: it gives the draft back and leaves the notice alone.
+      release()
+      await settle()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(fresh.ui.workResearchNoteSession).toBeNull()
+      expect(review().view(fresh)).toMatchObject({ drafts: 1 })
+      expect(fresh.ui.researchNotesRecovery).toMatchObject({ candidates: [{ reason: 'ownership-unknown', action: null }] })
+    } finally {
+      writers.adopt = adopt
+      win.prksSetResearchRecoveryRestoreMsForTest(null)
+    }
+  })
+
   describe('#488 follow-up: Greptile findings', () => {
     /** Restores with `hook` run inside the adoption, before or after the store adopts. */
     async function restoreAdopting(ctx: Ctx, hook: () => unknown, when: 'before' | 'after' = 'before') {
@@ -1036,6 +1072,29 @@ describe('tab-close recovery (slice 3)', () => {
     expect(page!.rt.identity.current()!.verified).toBe('channel')
     expect(result).toMatchObject({ restored: true })
     expect(notes.editor.value()).toBe('Saved note. Closed on the LAN')
+  })
+
+  it('without Web Locks, a pane already open finds the text of a tab closed before its runtime claim settled', async () => {
+    withoutLocks = true
+    startPage()
+    const { ctx } = await openAndRestore()
+    expect(review().view(ctx)).toBeNull()
+    // Another tab on the same Work types and closes during its 20 ms claim.
+    const other = otherPage('closing-tab')
+    void other.rt.start()
+    other.rt.writers
+      .openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-9', base: UNKNOWN_BASE })
+      .edit(1, 'Saved note. Typed while claiming')
+    expect(other.rt.writers.writeEmergencyNow()).toBe('written')
+    expect(other.rt.identity.current()).toBeNull()
+    other.window.dispatchEvent(new Event('pagehide'))
+    other.rt.dispose()
+    await settle()
+    // The closed-pages notification re-plans the open pane for review; no remount.
+    await win.prksRefreshResearchNotesRecovery(ctx, 'w1')
+    expect(review().view(ctx)).toMatchObject({ drafts: 1 })
+    const details = await review().details(ctx, 'w1')
+    expect(details!.candidates).toMatchObject([{ lineage: 'dead-runtime', body: 'Saved note. Typed while claiming' }])
   })
 
   it('lists every draft of many closed LAN tabs within the restore budget', async () => {
@@ -1357,5 +1416,26 @@ describe('protection warning (slice 3)', () => {
     sync.ack(saved.opId as string, 6)
     await waitFor(() => review().view(ctx) === null, 'warning cleared on ack')
     expect(page!.rt.writers.leaveGuardActive()).toBe(false)
+  })
+
+  it('repaints the warning away when the text returns to the saved note with nothing to queue', async () => {
+    const { ctx } = await openAndRestore()
+    const w = win as unknown as Record<string, unknown>
+    const painted: unknown[] = []
+    w.prksVueUpdateResearchNotesRecovery = (owner: Ctx) => painted.push(review().view(owner))
+    try {
+      idb.failCommits = 1000
+      const entry = type(ctx, 'Saved note. Unprotected')
+      await entry.recovery!.flush()
+      expect(painted.at(-1)).toMatchObject({ unprotected: 'quota' })
+      // A -> B -> A: the save is a no-op, so no queued row acknowledges it.
+      type(ctx, 'Saved note.')
+      const saved = await win.prksEnqueueWorkResearchNotesSave(ctx, 'w1')
+      expect(saved.opId).toBeFalsy()
+      await waitFor(() => painted.at(-1) === null, 'warning repainted away')
+      expect(page!.rt.writers.leaveGuardActive()).toBe(false)
+    } finally {
+      delete w.prksVueUpdateResearchNotesRecovery
+    }
   })
 })
