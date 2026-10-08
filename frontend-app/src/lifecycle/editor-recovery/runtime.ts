@@ -9,7 +9,7 @@
  * consumer asks for the runtime.
  */
 
-import { mergeEmergencyEntries, type EmergencyStorage, type MergeReport } from './emergency'
+import { mergeEmergencyEntries, releaseDeadReservations, type EmergencyStorage, type MergeReport } from './emergency'
 import { createPageIdentity, type IdentityEnv, type PageIdentity, type RuntimeClaim } from './identity'
 import { classifyLineage, type LineageClass } from './lineage'
 import type { DraftRecord } from './schema'
@@ -56,15 +56,18 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
     return run
   }
 
-  function runMerge(definiteOnly: boolean): Promise<MergeReport[]> {
-    if (!emergencyStorage) return Promise.resolve([])
-    return mergeEmergencyEntries({
+  async function runMerge(definiteOnly: boolean): Promise<MergeReport[]> {
+    if (!emergencyStorage) return []
+    const env = {
       storage: emergencyStorage,
       store,
       pageInstanceId: identity.pageInstanceId,
-      isPageAlive: (id) => identity.isPageAlive(id),
+      isPageAlive: (id: string) => identity.isPageAlive(id),
       definiteOnly,
-    })
+    }
+    const reports = await mergeEmergencyEntries(env)
+    await releaseDeadReservations(env)
+    return reports
   }
 
   function start(): Promise<{ claim: RuntimeClaim; merged: MergeReport[] }> {

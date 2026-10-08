@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { EmergencyStorage } from './emergency'
-import { RECOVERY_DB_NAME, BODIES_STORE, LARGE_BODY_CHARS, emergencyKeyOf, type DraftBase, type EmergencyPayload } from './schema'
+import { RECOVERY_DB_NAME, BODIES_STORE, LARGE_BODY_CHARS, emergencyKeyOf, reservationKeyOf, type DraftBase, type EmergencyPayload } from './schema'
 import { createRecoveryStore, type RecoveryStore, type WriteGenerationInput, type WriteOutcome } from './store'
 import { createFakeIdb, createManualScheduler, settle } from './test-support/fake-idb'
 import { createWriterRegistry, type DraftWriter, type WriterEvent, type WriterRegistry } from './writer'
@@ -39,7 +39,7 @@ function memoryStorage(): EmergencyStorage & { map: Map<string, string> } {
 
 const BASE: DraftBase = { revision: 7, length: 3, fingerprint: 'a'.repeat(32), source: 'server' }
 
-function setup(options: { gate?: boolean; storage?: EmergencyStorage | null; reserve?: number } = {}) {
+function setup(options: { gate?: boolean; storage?: EmergencyStorage | null; page?: string; settled?: () => boolean } = {}) {
   const idb = createFakeIdb()
   const realStore = createRecoveryStore({ indexedDB: idb.factory })
   const calls: WriteGenerationInput[] = []
@@ -61,14 +61,16 @@ function setup(options: { gate?: boolean; storage?: EmergencyStorage | null; res
   const events: WriterEvent[] = []
   const registry = createWriterRegistry({
     store,
-    identity: { pageInstanceId: 'p-me', current: () => ({ runtimeId: 'r-me', verified: 'lock' }), setLineageResponder() {} },
+    identity: {
+      pageInstanceId: options.page ?? 'p-me',
+      current: () => (!options.settled || options.settled() ? { runtimeId: 'r-me', verified: 'lock' } : null),
+      setLineageResponder() {},
+    },
     scheduler,
     now: scheduler.now,
     window: win,
     document: doc,
     emergencyStorage: options.storage === undefined ? storage : options.storage,
-    // Budget tests use small quotas; the reserve has its own tests.
-    storageReserveChars: options.reserve ?? 0,
     onEvent: (e) => events.push(e),
   })
   const open = (sessionKey = 's-1', entityId = 'w1') =>
@@ -268,47 +270,7 @@ describe('emergency storage that cannot keep a body', () => {
     expect(t.registry.leaveGuardActive()).toBe(false)
   })
 
-  it('re-proves capacity when another tab grows localStorage, ignoring probe writes', () => {
-    const inner = memoryStorage()
-    let limit = 10_000
-    const storage: EmergencyStorage & { map: Map<string, string> } = {
-      ...inner,
-      setItem(k: string, v: string) {
-        if (v.length > limit) throw new DOMException('full', 'QuotaExceededError')
-        inner.setItem(k, v)
-      },
-    }
-    const t = setup({ storage })
-    const w = t.open()
-    w.edit(1, 'x'.repeat(1000))
-    expect(w.heldByEmergency()).toBe(true)
-    limit = 1500
-    t.win.fire('storage', { key: 'prks.editorRecovery.probe.v1', oldValue: null, newValue: 'ā' } as unknown as Partial<Event>)
-    expect(w.heldByEmergency()).toBe(true)
-    t.win.fire('storage', { key: 'other-app-key', oldValue: null, newValue: 'y'.repeat(9000) } as unknown as Partial<Event>)
-    expect(w.heldByEmergency()).toBe(false)
-    expect(t.registry.leaveGuardActive()).toBe(true)
-  })
-
-  it('re-proves capacity when another tab replaces a value with one that grows in bytes or in UTF-16 units', () => {
-    const t = setup()
-    const w = t.open()
-    w.edit(1, 'x'.repeat(1000))
-    expect(w.heldByEmergency()).toBe(true)
-    const spy = vi.spyOn(t.storage, 'setItem')
-    // Same bytes: nothing to re-prove.
-    t.win.fire('storage', { key: 'other-app-key', oldValue: 'a'.repeat(50), newValue: 'b'.repeat(50) } as unknown as Partial<Event>)
-    expect(spy).not.toHaveBeenCalled()
-    // Equal length, but non-Latin text takes twice the bytes in Chromium.
-    t.win.fire('storage', { key: 'other-app-key', oldValue: 'a'.repeat(50), newValue: 'ж'.repeat(50) } as unknown as Partial<Event>)
-    expect(spy).toHaveBeenCalledWith('prks.editorRecovery.probe.v1', expect.any(String))
-    // Fewer bytes in Chromium, but more UTF-16 units, which Firefox counts.
-    spy.mockClear()
-    t.win.fire('storage', { key: 'other-app-key', oldValue: 'ж'.repeat(50), newValue: 'a'.repeat(100) } as unknown as Partial<Event>)
-    expect(spy).toHaveBeenCalledWith('prks.editorRecovery.probe.v1', expect.any(String))
-  })
-
-  it('re-proves capacity for a new burst after an idle gap the listener could not watch', async () => {
+  it('reserves afresh for a new burst after the previous one ended', async () => {
     const inner = memoryStorage()
     let limit = 10_000
     const storage: EmergencyStorage & { map: Map<string, string> } = {
@@ -369,42 +331,93 @@ describe('emergency storage that cannot keep a body', () => {
   })
 })
 
-describe('headroom for this page\'s own storage writes', () => {
-  /** A shared quota over every value, like a real origin's localStorage. */
+describe('quota reservation', () => {
+  /** One origin's localStorage: a quota shared by every value and every page. */
   function quotaStorage(quota: number): EmergencyStorage & { map: Map<string, string> } {
-    const inner = memoryStorage()
+    const map = new Map<string, string>()
     return {
-      ...inner,
+      map,
+      get length() {
+        return map.size
+      },
+      key: (i: number) => [...map.keys()][i] ?? null,
+      getItem: (k: string) => map.get(k) ?? null,
       setItem(k: string, v: string) {
         let used = v.length
-        for (const [key, value] of inner.map) if (key !== k) used += value.length
+        for (const [key, value] of map) if (key !== k) used += value.length
         if (used > quota) throw new DOMException('full', 'QuotaExceededError')
-        inner.setItem(k, v)
+        map.set(k, v)
       },
+      removeItem: (k: string) => void map.delete(k),
     }
   }
+  const free = (storage: { map: Map<string, string> }, quota: number) =>
+    quota - [...storage.map.values()].reduce((n, v) => n + v.length, 0)
 
-  it('keeps the guard when only the bare payload fits, without the reserve', () => {
-    // The payload (about 2000 chars) fits, but not with 2000 to spare.
-    const t = setup({ storage: quotaStorage(3500), reserve: 2000 })
-    const w = t.open()
-    w.edit(1, 'x'.repeat(1000))
-    expect(w.heldByEmergency()).toBe(false)
-    expect(t.registry.leaveGuardActive()).toBe(true)
+  it('keeps the reserved quota away from another page, which stays guarded instead', () => {
+    // Room for one page's reservation, not for two.
+    const storage = quotaStorage(6000)
+    const a = setup({ storage, page: 'p-a' })
+    const b = setup({ storage, page: 'p-b' })
+    const wa = a.open()
+    wa.edit(1, 'a'.repeat(1000))
+    expect(wa.heldByEmergency()).toBe(true)
+    expect(a.registry.leaveGuardActive()).toBe(false)
+    const wb = b.open()
+    wb.edit(1, 'b'.repeat(1000))
+    expect(wb.heldByEmergency()).toBe(false)
+    expect(b.registry.leaveGuardActive()).toBe(true)
+    // Both close, the guarded page first: whatever it manages to write, the
+    // held page's payload still fits.
+    b.registry.writeEmergencyNow()
+    expect(a.registry.writeEmergencyNow()).toBe('written')
+    const left = JSON.parse(storage.map.get(emergencyKeyOf('p-a')) as string) as EmergencyPayload
+    expect(left.entries[0]!.body).toBe('a'.repeat(1000))
   })
 
-  it('still writes the emergency entry after this page grew storage within the reserve', () => {
-    const storage = quotaStorage(6000)
-    const t = setup({ storage, reserve: 2000 })
+  it('still writes the whole payload after this page fills every byte the reservation left', () => {
+    const quota = 200_000
+    const storage = quotaStorage(quota)
+    const t = setup({ storage })
     const w = t.open()
     w.edit(1, 'x'.repeat(1000))
     expect(w.heldByEmergency()).toBe(true)
-    expect(t.registry.leaveGuardActive()).toBe(false)
-    // Workspace persistence on this page: no storage event reaches the writer.
-    storage.setItem('prks.workspace.v1', 'w'.repeat(1900))
+    // Same-page workspace persistence, far larger than any fixed headroom, takes all the rest.
+    storage.setItem('prks.workspace.v1', 'w'.repeat(free(storage, quota)))
+    expect(free(storage, quota)).toBe(0)
+    expect(() => storage.setItem('other', 'y')).toThrow()
     expect(t.registry.writeEmergencyNow()).toBe('written')
     const left = JSON.parse(storage.map.get(emergencyKeyOf('p-me')) as string) as EmergencyPayload
     expect(left.entries[0]!.body).toBe('x'.repeat(1000))
+  })
+
+  it('reserves with a two-byte filler and frees the reservation once nothing is pending', async () => {
+    const t = setup()
+    const w = t.open()
+    w.edit(1, 'x'.repeat(1000))
+    const reservation = t.storage.map.get(reservationKeyOf('p-me')) as string
+    expect(reservation.length).toBeGreaterThan(2000)
+    expect(/^\u0101+$/.test(reservation)).toBe(true)
+    // Grows geometrically, not on every keystroke.
+    const spy = vi.spyOn(t.storage, 'setItem')
+    w.edit(2, 'x'.repeat(1001))
+    expect(spy).not.toHaveBeenCalled()
+    await w.flush()
+    expect(t.storage.map.has(reservationKeyOf('p-me'))).toBe(false)
+  })
+
+  it('does not reserve, and guards, until the runtime claim has settled', () => {
+    let settled = false
+    const t = setup({ settled: () => settled })
+    const w = t.open()
+    w.edit(1, 'before the claim')
+    expect(w.heldByEmergency()).toBe(false)
+    expect(t.registry.leaveGuardActive()).toBe(true)
+    expect(t.storage.map.has(reservationKeyOf('p-me'))).toBe(false)
+    settled = true
+    w.edit(2, 'after the claim')
+    expect(w.heldByEmergency()).toBe(true)
+    expect(t.registry.leaveGuardActive()).toBe(false)
   })
 })
 

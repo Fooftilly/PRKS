@@ -15,6 +15,7 @@ import type { RecoveryStore, EmergencyOutcome } from './store'
 import {
   EMERGENCY_BODY_CHARS,
   EMERGENCY_KEY_PREFIX,
+  RESERVATION_KEY_PREFIX,
   EMERGENCY_PAGE_CHARS,
   EMERGENCY_VERSION,
   isDraftKind,
@@ -217,4 +218,35 @@ export async function mergeEmergencyEntries(env: MergeEnv): Promise<MergeReport[
     reports.push(await mergeKey(env, stored, stored.payload as EmergencyPayload))
   }
   return reports
+}
+
+/**
+ * Removes the quota reservations of pages that are definitely gone. A page
+ * reserves only after its claim settled, with its page lock held, so a live
+ * page never reads as `false`; unknown liveness leaves the key alone. A
+ * reservation holds only filler, never text, so removing it loses nothing.
+ */
+export async function releaseDeadReservations(env: Pick<MergeEnv, 'storage' | 'pageInstanceId' | 'isPageAlive'>): Promise<string[]> {
+  const keys: string[] = []
+  try {
+    for (let i = 0; i < env.storage.length; i++) {
+      const key = env.storage.key(i)
+      if (key && key.startsWith(RESERVATION_KEY_PREFIX)) keys.push(key)
+    }
+  } catch {
+    return []
+  }
+  const removed: string[] = []
+  for (const key of keys) {
+    const pageInstanceId = key.slice(RESERVATION_KEY_PREFIX.length)
+    if (pageInstanceId === env.pageInstanceId) continue
+    if ((await env.isPageAlive(pageInstanceId)) !== false) continue
+    try {
+      env.storage.removeItem(key)
+      removed.push(key)
+    } catch {
+      /* kept for a later page */
+    }
+  }
+  return removed
 }

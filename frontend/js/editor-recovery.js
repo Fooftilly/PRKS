@@ -18,16 +18,13 @@ var prksEditorRecovery = (function(exports) {
 	var EMERGENCY_VERSION = 1;
 	/** One localStorage key per page load, so duplicated tabs never share an entry. */
 	var EMERGENCY_KEY_PREFIX = "prks.editorRecovery.emergency.v1.";
-	/** Not under the emergency prefix, so a leftover probe is never read as an emergency entry. */
-	var EMERGENCY_PROBE_KEY = "prks.editorRecovery.probe.v1";
+	/**
+	* One key per page load holding filler that reserves quota for that page's
+	* emergency payload. Not under the emergency prefix, so it is never read as a draft.
+	*/
+	var RESERVATION_KEY_PREFIX = "prks.editorRecovery.reserve.v1.";
 	/** Allowance for one entry's JSON metadata (ids, lineage, base) when sizing the emergency payload. */
 	var EMERGENCY_ENTRY_OVERHEAD_CHARS = 1024;
-	/**
-	* Headroom a capacity proof leaves for this page's own later localStorage
-	* writes (workspace persistence, preferences). They raise no storage event
-	* here, so the proof must already allow for them.
-	*/
-	var SAME_PAGE_STORAGE_RESERVE_CHARS = 65536;
 	/** Candidate runtime id for this browser tab; copied by window.open and Duplicate tab. */
 	var RUNTIME_SESSION_KEY = "prks.editorRecovery.runtime.v1";
 	var RECOVERY_CHANNEL = "prks-editor-recovery-v1";
@@ -54,6 +51,9 @@ var prksEditorRecovery = (function(exports) {
 	}
 	function emergencyKeyOf(pageInstanceId) {
 		return EMERGENCY_KEY_PREFIX + pageInstanceId;
+	}
+	function reservationKeyOf(pageInstanceId) {
+		return RESERVATION_KEY_PREFIX + pageInstanceId;
 	}
 	/**
 	* Random id with 128 bits from `crypto.getRandomValues`, which exists in
@@ -229,6 +229,34 @@ var prksEditorRecovery = (function(exports) {
 			reports.push(await mergeKey(env, stored, stored.payload));
 		}
 		return reports;
+	}
+	/**
+	* Removes the quota reservations of pages that are definitely gone. A page
+	* reserves only after its claim settled, with its page lock held, so a live
+	* page never reads as `false`; unknown liveness leaves the key alone. A
+	* reservation holds only filler, never text, so removing it loses nothing.
+	*/
+	async function releaseDeadReservations(env) {
+		const keys = [];
+		try {
+			for (let i = 0; i < env.storage.length; i++) {
+				const key = env.storage.key(i);
+				if (key && key.startsWith("prks.editorRecovery.reserve.v1.")) keys.push(key);
+			}
+		} catch {
+			return [];
+		}
+		const removed = [];
+		for (const key of keys) {
+			const pageInstanceId = key.slice(RESERVATION_KEY_PREFIX.length);
+			if (pageInstanceId === env.pageInstanceId) continue;
+			if (await env.isPageAlive(pageInstanceId) !== false) continue;
+			try {
+				env.storage.removeItem(key);
+				removed.push(key);
+			} catch {}
+		}
+		return removed;
 	}
 	//#endregion
 	//#region src/lifecycle/editor-recovery/identity.ts
@@ -1145,19 +1173,12 @@ var prksEditorRecovery = (function(exports) {
 	* only while some writer needs the guard, and `pagehide` /
 	* `visibilitychange` only while some writer is pending.
 	*/
-	/** Worst-case probe char on every engine (see canHold). */
-	var PROBE_FILLER = "ā";
+	/** Worst-case reservation char on every engine (see canHold). */
+	var RESERVATION_FILLER = "ā";
 	var defaultScheduler = {
 		set: (fn, ms) => setTimeout(fn, ms),
 		clear: (handle) => clearTimeout(handle)
 	};
-	/**
-	* Bytes Chromium charges for a value: one per char when every char is
-	* Latin-1, otherwise two. Length alone cannot show that usage did not grow.
-	*/
-	function storedBytes(value) {
-		return /[^\u0000-\u00ff]/.test(value) ? value.length * 2 : value.length;
-	}
 	function codeOf(error) {
 		return error instanceof RecoveryStoreError ? error.code : "unknown";
 	}
@@ -1171,19 +1192,21 @@ var prksEditorRecovery = (function(exports) {
 		const storage = options.emergencyStorage === void 0 ? defaultLocalStorage$1() : options.emergencyStorage;
 		const emit = options.onEvent || (() => {});
 		const emergencyKey = emergencyKeyOf(identity.pageInstanceId);
-		const reserveChars = options.storageReserveChars ?? 65536;
+		const reservationKey = reservationKeyOf(identity.pageInstanceId);
 		const live = /* @__PURE__ */ new Set();
 		/** Writers whose body the budget plan puts in the emergency entry. */
 		let planned = /* @__PURE__ */ new Set();
 		/** `planned`, but only while emergency storage has shown it can keep those bodies; otherwise empty. */
 		let held = /* @__PURE__ */ new Set();
 		/**
-		* Largest payload, in chars, that localStorage accepted (a probe or a real
-		* emergency write). A body counts as held only when the planned payload fits
-		* within it, so blocked, missing or too-full storage leaves the leave guard
+		* Chars of filler this page keeps written under its reservation key while
+		* something is pending. A body counts as held only when the planned payload
+		* fits within it. The quota stays occupied, so no other write, from this
+		* page or another, can take it; at hide the reservation is swapped for the
+		* real payload. Blocked, missing or too-full storage leaves the leave guard
 		* armed before unload instead of discovering the failure at pagehide.
 		*/
-		let provenChars = 0;
+		let reservedChars = 0;
 		/** Set when a real emergency write could not keep every planned body; cleared by a full write. */
 		let distrusted = false;
 		let guardOn = false;
@@ -1204,20 +1227,6 @@ var prksEditorRecovery = (function(exports) {
 		}
 		function onVisibility() {
 			if (doc && doc.visibilityState === "hidden") writeEmergencyNow();
-		}
-		/**
-		* Another tab grew localStorage (shared quota): the cached capacity proof no
-		* longer holds, so drop it and re-probe. Probe writes are ignored, or two
-		* tabs with pending drafts would re-probe each other forever; removals and
-		* values that are neither longer nor wider in bytes than before only free quota.
-		*/
-		function onStorage(event) {
-			const e = event;
-			if (e.key === "prks.editorRecovery.probe.v1" || e.newValue === null) return;
-			if (e.key !== null && e.oldValue !== null && e.newValue.length <= e.oldValue.length && storedBytes(e.newValue) <= storedBytes(e.oldValue)) return;
-			if (provenChars === 0) return;
-			provenChars = 0;
-			changed();
 		}
 		identity.setLineageResponder((draftId) => ownerOf(draftId) !== null);
 		function ownerOf(draftId) {
@@ -1251,12 +1260,9 @@ var prksEditorRecovery = (function(exports) {
 		function setEmergencyListeners(needEmergency) {
 			if (needEmergency !== emergencyOn) {
 				const method = needEmergency ? "addEventListener" : "removeEventListener";
-				if (win) {
-					win[method]("pagehide", onPageHide);
-					win[method]("storage", onStorage);
-				}
+				if (win) win[method]("pagehide", onPageHide);
 				if (doc) doc[method]("visibilitychange", onVisibility);
-				if (!needEmergency) provenChars = 0;
+				if (!needEmergency) releaseReservation();
 			}
 			emergencyOn = needEmergency;
 		}
@@ -1320,35 +1326,34 @@ var prksEditorRecovery = (function(exports) {
 			return chars;
 		}
 		/**
-		* Whether localStorage can take a payload of `chars` now. Beyond what is
-		* already proven it writes a probe of twice the size (then the exact size),
-		* so proofs grow geometrically and typing does not probe on every keystroke.
-		* Each probe also carries `reserveChars` that the proof never hands out:
-		* this page's own writes (workspace persistence at pagehide, preferences)
-		* raise no storage event here, so the proof must already allow for them.
+		* Whether this page's reservation covers a payload of `chars`. Beyond what
+		* is reserved it grows the reservation to twice the size (then the exact
+		* size), so it grows geometrically and typing does not rewrite it on every
+		* keystroke. Only a page whose runtime claim has settled reserves: its page
+		* lock is held by then, so no live page's reservation reads as dead and is
+		* cleaned up by another page.
 		*/
 		function canHold(chars) {
-			if (!storage || distrusted) return false;
-			if (chars <= provenChars) return true;
+			if (!storage || distrusted || !identity.current()) return false;
+			if (chars <= reservedChars) return true;
 			for (const size of [chars * 2, chars]) try {
-				storage.setItem(EMERGENCY_PROBE_KEY, PROBE_FILLER.repeat(size + reserveChars));
-				provenChars = size;
+				storage.setItem(reservationKey, RESERVATION_FILLER.repeat(size));
+				reservedChars = size;
 				return true;
-			} catch {} finally {
-				try {
-					storage.removeItem(EMERGENCY_PROBE_KEY);
-				} catch {}
-			}
+			} catch {}
 			return false;
 		}
+		function releaseReservation() {
+			if (!storage || reservedChars === 0) return;
+			reservedChars = 0;
+			try {
+				storage.removeItem(reservationKey);
+			} catch {}
+		}
 		function noteEmergencyResult(result) {
-			const wasDistrusted = distrusted;
 			if (result === "written") distrusted = false;
-			else {
-				distrusted = true;
-				provenChars = 0;
-			}
-			if (wasDistrusted !== distrusted || result !== "written") changed();
+			else distrusted = true;
+			changed();
 		}
 		function writeEmergencyNow() {
 			const pending = pendingWriters();
@@ -1365,6 +1370,7 @@ var prksEditorRecovery = (function(exports) {
 				at: now(),
 				entries: pending.map((w) => w.emergencyEntry(planned.has(w)))
 			};
+			releaseReservation();
 			const result = writeEmergency(storage, emergencyKey, payload);
 			if (result !== "failed") {
 				emergencyWritten = true;
@@ -1763,8 +1769,8 @@ var prksEditorRecovery = (function(exports) {
 				if (win) {
 					win.removeEventListener("beforeunload", onBeforeUnload);
 					win.removeEventListener("pagehide", onPageHide);
-					win.removeEventListener("storage", onStorage);
 				}
+				releaseReservation();
 				if (doc) doc.removeEventListener("visibilitychange", onVisibility);
 				guardOn = false;
 				emergencyOn = false;
@@ -1809,15 +1815,18 @@ var prksEditorRecovery = (function(exports) {
 			lastScan = run.catch(() => void 0);
 			return run;
 		}
-		function runMerge(definiteOnly) {
-			if (!emergencyStorage) return Promise.resolve([]);
-			return mergeEmergencyEntries({
+		async function runMerge(definiteOnly) {
+			if (!emergencyStorage) return [];
+			const env = {
 				storage: emergencyStorage,
 				store,
 				pageInstanceId: identity.pageInstanceId,
 				isPageAlive: (id) => identity.isPageAlive(id),
 				definiteOnly
-			});
+			};
+			const reports = await mergeEmergencyEntries(env);
+			await releaseDeadReservations(env);
+			return reports;
 		}
 		function start() {
 			if (started) return started;
@@ -1877,7 +1886,6 @@ var prksEditorRecovery = (function(exports) {
 	exports.EMERGENCY_ENTRY_OVERHEAD_CHARS = EMERGENCY_ENTRY_OVERHEAD_CHARS;
 	exports.EMERGENCY_KEY_PREFIX = EMERGENCY_KEY_PREFIX;
 	exports.EMERGENCY_PAGE_CHARS = EMERGENCY_PAGE_CHARS;
-	exports.EMERGENCY_PROBE_KEY = EMERGENCY_PROBE_KEY;
 	exports.EMERGENCY_VERSION = EMERGENCY_VERSION;
 	exports.IDLE_WRITE_MS = IDLE_WRITE_MS;
 	exports.LARGE_BODY_CHARS = LARGE_BODY_CHARS;
@@ -1887,12 +1895,12 @@ var prksEditorRecovery = (function(exports) {
 	exports.RECOVERY_CHANNEL = RECOVERY_CHANNEL;
 	exports.RECOVERY_DB_NAME = RECOVERY_DB_NAME;
 	exports.RECOVERY_DB_VERSION = RECOVERY_DB_VERSION;
+	exports.RESERVATION_KEY_PREFIX = RESERVATION_KEY_PREFIX;
 	exports.RETRY_FIRST_MS = RETRY_FIRST_MS;
 	exports.RETRY_MAX_MS = RETRY_MAX_MS;
 	exports.RUNTIME_LOCK_PREFIX = RUNTIME_LOCK_PREFIX;
 	exports.RUNTIME_SESSION_KEY = RUNTIME_SESSION_KEY;
 	exports.RecoveryStoreError = RecoveryStoreError;
-	exports.SAME_PAGE_STORAGE_RESERVE_CHARS = SAME_PAGE_STORAGE_RESERVE_CHARS;
 	exports.UNKNOWN_BASE = UNKNOWN_BASE;
 	exports.classifyLineage = classifyLineage;
 	exports.createEditorRecoveryRuntime = createEditorRecoveryRuntime;
@@ -1910,6 +1918,7 @@ var prksEditorRecovery = (function(exports) {
 	exports.mintId = mintId;
 	exports.planEmergency = planEmergency;
 	exports.readEmergencyKeys = readEmergencyKeys;
+	exports.reservationKeyOf = reservationKeyOf;
 	exports.runtime = runtime;
 	exports.sameBaseIdentity = sameBaseIdentity;
 	exports.sameBody = sameBody;

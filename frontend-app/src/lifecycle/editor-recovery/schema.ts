@@ -18,16 +18,13 @@ export const EMERGENCY_VERSION = 1
 
 /** One localStorage key per page load, so duplicated tabs never share an entry. */
 export const EMERGENCY_KEY_PREFIX = 'prks.editorRecovery.emergency.v1.'
-/** Not under the emergency prefix, so a leftover probe is never read as an emergency entry. */
-export const EMERGENCY_PROBE_KEY = 'prks.editorRecovery.probe.v1'
+/**
+ * One key per page load holding filler that reserves quota for that page's
+ * emergency payload. Not under the emergency prefix, so it is never read as a draft.
+ */
+export const RESERVATION_KEY_PREFIX = 'prks.editorRecovery.reserve.v1.'
 /** Allowance for one entry's JSON metadata (ids, lineage, base) when sizing the emergency payload. */
 export const EMERGENCY_ENTRY_OVERHEAD_CHARS = 1024
-/**
- * Headroom a capacity proof leaves for this page's own later localStorage
- * writes (workspace persistence, preferences). They raise no storage event
- * here, so the proof must already allow for them.
- */
-export const SAME_PAGE_STORAGE_RESERVE_CHARS = 64 * 1024
 /** Candidate runtime id for this browser tab; copied by window.open and Duplicate tab. */
 export const RUNTIME_SESSION_KEY = 'prks.editorRecovery.runtime.v1'
 export const RECOVERY_CHANNEL = 'prks-editor-recovery-v1'
@@ -153,6 +150,10 @@ export function entityKeyOf(kind: DraftKind, entityId: string): string {
 
 export function emergencyKeyOf(pageInstanceId: string): string {
   return EMERGENCY_KEY_PREFIX + pageInstanceId
+}
+
+export function reservationKeyOf(pageInstanceId: string): string {
+  return RESERVATION_KEY_PREFIX + pageInstanceId
 }
 
 export interface RandomSource {

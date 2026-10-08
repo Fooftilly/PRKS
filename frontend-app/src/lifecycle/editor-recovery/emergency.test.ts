@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { jsonEscapeExtra, mergeEmergencyEntries, planEmergency, readEmergencyKeys, writeEmergency, type EmergencyStorage } from './emergency'
-import { EMERGENCY_BODY_CHARS, EMERGENCY_PAGE_CHARS, emergencyKeyOf, type EmergencyPayload } from './schema'
+import { jsonEscapeExtra, mergeEmergencyEntries, planEmergency, readEmergencyKeys, releaseDeadReservations, writeEmergency, type EmergencyStorage } from './emergency'
+import { EMERGENCY_BODY_CHARS, EMERGENCY_PAGE_CHARS, emergencyKeyOf, reservationKeyOf, type EmergencyPayload } from './schema'
 import type { EmergencyOutcome, RecoveryStore } from './store'
 
 function memoryStorage(limitChars = Infinity): EmergencyStorage & { map: Map<string, string> } {
@@ -180,5 +180,21 @@ describe('mergeEmergencyEntries', () => {
     await mergeEmergencyEntries({ storage: unreadable, store, pageInstanceId: 'p-me', isPageAlive: async () => false })
     expect(applied).toEqual([])
     expect(unreadable.map.has(emergencyKeyOf('p-dead'))).toBe(true)
+  })
+})
+
+describe('releaseDeadReservations', () => {
+  it('removes only definitely dead pages\' reservations, never its own, a live or an unknown one', async () => {
+    const storage = memoryStorage()
+    for (const page of ['p-me', 'p-live', 'p-dead', 'p-unknown']) storage.setItem(reservationKeyOf(page), 'ā'.repeat(10))
+    writeEmergency(storage, emergencyKeyOf('p-dead'), payload('p-dead'))
+    const liveness: Record<string, boolean | null> = { 'p-live': true, 'p-dead': false, 'p-unknown': null }
+    const removed = await releaseDeadReservations({ storage, pageInstanceId: 'p-me', isPageAlive: async (id) => liveness[id] ?? null })
+    expect(removed).toEqual([reservationKeyOf('p-dead')])
+    expect([...storage.map.keys()].sort()).toEqual(
+      [emergencyKeyOf('p-dead'), reservationKeyOf('p-live'), reservationKeyOf('p-me'), reservationKeyOf('p-unknown')].sort(),
+    )
+    // A reservation is never read as an emergency entry.
+    expect(readEmergencyKeys(storage).map((r) => r.key)).toEqual([emergencyKeyOf('p-dead')])
   })
 })

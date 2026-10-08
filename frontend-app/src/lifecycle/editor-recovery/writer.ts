@@ -28,16 +28,15 @@ import type { DeleteOutcome, RecoveryStore, RecoveryStoreErrorCode } from './sto
 import { RecoveryStoreError } from './store'
 import {
   EMERGENCY_ENTRY_OVERHEAD_CHARS,
-  EMERGENCY_PROBE_KEY,
   EMERGENCY_VERSION,
   IDLE_WRITE_MS,
   LARGE_BODY_CHARS,
   MAX_WRITE_WAIT_MS,
   RETRY_FIRST_MS,
   RETRY_MAX_MS,
-  SAME_PAGE_STORAGE_RESERVE_CHARS,
   UNKNOWN_BASE,
   emergencyKeyOf,
+  reservationKeyOf,
   mintId,
   type DraftBase,
   type DraftEntityType,
@@ -82,8 +81,6 @@ export interface WriterRegistryOptions {
   document?: VisibilityTarget | null
   /** `localStorage` for the emergency entry. */
   emergencyStorage?: EmergencyStorage | null
-  /** Headroom every capacity proof leaves; defaults to SAME_PAGE_STORAGE_RESERVE_CHARS. */
-  storageReserveChars?: number
   onEvent?: (event: WriterEvent) => void
 }
 
@@ -136,20 +133,12 @@ interface Pending {
   body: string
 }
 
-/** Worst-case probe char on every engine (see canHold). */
-const PROBE_FILLER = '\u0101'
+/** Worst-case reservation char on every engine (see canHold). */
+const RESERVATION_FILLER = '\u0101'
 
 const defaultScheduler: Scheduler = {
   set: (fn, ms) => setTimeout(fn, ms),
   clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
-}
-
-/**
- * Bytes Chromium charges for a value: one per char when every char is
- * Latin-1, otherwise two. Length alone cannot show that usage did not grow.
- */
-function storedBytes(value: string): number {
-  return /[^\u0000-\u00ff]/.test(value) ? value.length * 2 : value.length
 }
 
 function codeOf(error: unknown): RecoveryStoreErrorCode | 'unknown' {
@@ -166,7 +155,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
   const storage = options.emergencyStorage === undefined ? defaultLocalStorage() : options.emergencyStorage
   const emit = options.onEvent || (() => {})
   const emergencyKey = emergencyKeyOf(identity.pageInstanceId)
-  const reserveChars = options.storageReserveChars ?? SAME_PAGE_STORAGE_RESERVE_CHARS
+  const reservationKey = reservationKeyOf(identity.pageInstanceId)
 
   const live = new Set<WriterImpl>()
   /** Writers whose body the budget plan puts in the emergency entry. */
@@ -174,12 +163,14 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
   /** `planned`, but only while emergency storage has shown it can keep those bodies; otherwise empty. */
   let held = new Set<WriterImpl>()
   /**
-   * Largest payload, in chars, that localStorage accepted (a probe or a real
-   * emergency write). A body counts as held only when the planned payload fits
-   * within it, so blocked, missing or too-full storage leaves the leave guard
+   * Chars of filler this page keeps written under its reservation key while
+   * something is pending. A body counts as held only when the planned payload
+   * fits within it. The quota stays occupied, so no other write, from this
+   * page or another, can take it; at hide the reservation is swapped for the
+   * real payload. Blocked, missing or too-full storage leaves the leave guard
    * armed before unload instead of discovering the failure at pagehide.
    */
-  let provenChars = 0
+  let reservedChars = 0
   /** Set when a real emergency write could not keep every planned body; cleared by a full write. */
   let distrusted = false
   let guardOn = false
@@ -202,28 +193,6 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
   function onVisibility(): void {
     if (doc && doc.visibilityState === 'hidden') writeEmergencyNow()
   }
-  /**
-   * Another tab grew localStorage (shared quota): the cached capacity proof no
-   * longer holds, so drop it and re-probe. Probe writes are ignored, or two
-   * tabs with pending drafts would re-probe each other forever; removals and
-   * values that are neither longer nor wider in bytes than before only free quota.
-   */
-  function onStorage(event: Event): void {
-    const e = event as StorageEvent
-    if (e.key === EMERGENCY_PROBE_KEY || e.newValue === null) return
-    // Neither measure may grow: Chromium charges bytes, Firefox UTF-16 units.
-    if (
-      e.key !== null &&
-      e.oldValue !== null &&
-      e.newValue.length <= e.oldValue.length &&
-      storedBytes(e.newValue) <= storedBytes(e.oldValue)
-    )
-      return
-    if (provenChars === 0) return
-    provenChars = 0
-    changed()
-  }
-
   identity.setLineageResponder((draftId) => ownerOf(draftId) !== null)
 
   function ownerOf(draftId: string): string | null {
@@ -263,14 +232,9 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
   function setEmergencyListeners(needEmergency: boolean): void {
     if (needEmergency !== emergencyOn) {
       const method = needEmergency ? 'addEventListener' : 'removeEventListener'
-      if (win) {
-        win[method]('pagehide', onPageHide)
-        win[method]('storage', onStorage)
-      }
+      if (win) win[method]('pagehide', onPageHide)
       if (doc) doc[method]('visibilitychange', onVisibility)
-      // Without the storage listener nothing would see another tab grow the
-      // shared quota, so each burst of typing proves capacity afresh.
-      if (!needEmergency) provenChars = 0
+      if (!needEmergency) releaseReservation()
     }
     emergencyOn = needEmergency
   }
@@ -343,50 +307,52 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
   }
 
   /**
-   * Whether localStorage can take a payload of `chars` now. Beyond what is
-   * already proven it writes a probe of twice the size (then the exact size),
-   * so proofs grow geometrically and typing does not probe on every keystroke.
-   * Each probe also carries `reserveChars` that the proof never hands out:
-   * this page's own writes (workspace persistence at pagehide, preferences)
-   * raise no storage event here, so the proof must already allow for them.
+   * Whether this page's reservation covers a payload of `chars`. Beyond what
+   * is reserved it grows the reservation to twice the size (then the exact
+   * size), so it grows geometrically and typing does not rewrite it on every
+   * keystroke. Only a page whose runtime claim has settled reserves: its page
+   * lock is held by then, so no live page's reservation reads as dead and is
+   * cleaned up by another page.
    */
   function canHold(chars: number): boolean {
-    if (!storage || distrusted) return false
-    if (chars <= provenChars) return true
+    if (!storage || distrusted || !identity.current()) return false
+    if (chars <= reservedChars) return true
     for (const size of [chars * 2, chars]) {
       try {
         // A filler above U+00FF on purpose: Chromium stores an all-Latin-1
         // value at 1 byte per char and anything else at 2, and its quota counts
-        // bytes, so an ASCII probe would prove half of what a real note needs.
-        storage.setItem(EMERGENCY_PROBE_KEY, PROBE_FILLER.repeat(size + reserveChars))
-        provenChars = size
+        // bytes, so an ASCII filler would reserve half of what a real note needs.
+        storage.setItem(reservationKey, RESERVATION_FILLER.repeat(size))
+        reservedChars = size
         return true
       } catch {
         /* blocked or over quota at this size */
-      } finally {
-        try {
-          storage.removeItem(EMERGENCY_PROBE_KEY)
-        } catch {
-          /* nothing to remove */
-        }
       }
     }
     return false
   }
 
+  function releaseReservation(): void {
+    if (!storage || reservedChars === 0) return
+    reservedChars = 0
+    try {
+      storage.removeItem(reservationKey)
+    } catch {
+      /* a later page removes it once this page is gone */
+    }
+  }
+
   function noteEmergencyResult(result: EmergencyWriteResult | 'unavailable'): void {
-    const wasDistrusted = distrusted
     if (result === 'written') {
-      // No capacity credit: on Chromium an all-Latin-1 payload is stored at one
-      // byte per char, so a real write proves less than a worst-case probe.
       distrusted = false
     } else {
       // Bodies were dropped or nothing was stored: guard every pending body
       // until a full write succeeds again.
       distrusted = true
-      provenChars = 0
     }
-    if (wasDistrusted !== distrusted || result !== 'written') changed()
+    // The reservation was spent on this write: re-plan, which reserves again
+    // for what is still pending or arms the guard.
+    changed()
   }
 
   function writeEmergencyNow(): EmergencyWriteResult | 'nothing-pending' | 'unavailable' {
@@ -404,6 +370,8 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       at: now(),
       entries: pending.map((w) => w.emergencyEntry(planned.has(w))),
     }
+    // The reserved quota becomes the payload's: free it in the same task, then write.
+    releaseReservation()
     const result = writeEmergency(storage, emergencyKey, payload)
     if (result !== 'failed') {
       emergencyWritten = true
@@ -828,8 +796,8 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       if (win) {
         win.removeEventListener('beforeunload', onBeforeUnload)
         win.removeEventListener('pagehide', onPageHide)
-        win.removeEventListener('storage', onStorage)
       }
+      releaseReservation()
       if (doc) doc.removeEventListener('visibilitychange', onVisibility)
       guardOn = false
       emergencyOn = false
