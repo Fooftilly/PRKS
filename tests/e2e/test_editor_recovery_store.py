@@ -12,7 +12,7 @@ import os
 import unittest
 
 from tests.e2e.fixtures import seed_folders_library
-from tests.e2e.harness import AppServer, open_app_page, require_chromium
+from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -182,13 +182,15 @@ class EditorRecoveryStoreTests(unittest.TestCase):
         two.close()
         # A closed page's locks are released asynchronously; a key whose page
         # still reads as alive is kept for a later start, never merged early.
-        page.wait_for_function(
-            """(pids) => {
-                navigator.locks.query().then((snap) => { window.__held = snap.held.map((l) => l.name); });
-                return !!window.__held && pids.every((pid) => !window.__held.includes('prks-editor-recovery-page:' + pid));
-            }""",
+        wait_for_async(
+            page,
+            """(pids) => navigator.locks.query().then((snap) => {
+                const held = snap.held.map((l) => String(l.name));
+                return pids.every((pid) => !held.includes('prks-editor-recovery-page:' + pid));
+            })""",
             arg=pages,
-            polling=100,
+            timeout=10000,
+            message='closed pages still hold their recovery page locks',
         )
         page.evaluate(_START)
         rows = page.evaluate(_LIST, 'W-DUP')
