@@ -465,6 +465,22 @@ describe('same-pane restore after reload', () => {
     expect(await records()).toHaveLength(1)
   })
 
+  it('keeps the draft without applying it when the queue cannot be read', async () => {
+    const ctx = await typedThenReloaded('Saved note. Queue unknown')
+    const list = sync.store.listOperations
+    sync.store.listOperations = async () => {
+      throw new Error('queue unavailable')
+    }
+    try {
+      const result = await win.prksRestoreResearchNotesRecovery(ctx, { id: 'w1' })
+      expect(result).toMatchObject({ restored: false, review: [{ reason: 'queue-unknown' }] })
+    } finally {
+      sync.store.listOperations = list
+    }
+    expect(win.prksResearchNotesTextForWork('w1', server.text, ctx)).toBe('Saved note.')
+    expect(await records()).toHaveLength(1)
+  })
+
   it('does not restore another pane\'s draft into this pane', async () => {
     const side = await openWork('tab-2')
     const entry = type(side, 'Saved note. Side pane')

@@ -194,7 +194,7 @@ function prksSyncLiveResearchDraft(workId, entry, generation, result) {
  */
 const PRKS_RESEARCH_RECOVERY_KIND = 'work-research-note';
 const PRKS_RESEARCH_NOTES_RESTORED_STATUS = 'Restored unsaved changes';
-/* Represented drafts (already the exact body of a queued row) by op id,
+/* Represented drafts (already the exact body of a queued row): op id -> list,
  * cleared on that row's acknowledgement. One from this pane before reload is
  * adopted (`writer`, `key`): the pane's next edit continues that lineage, so
  * a later save that replaces the row still ends in an exact clear. */
@@ -308,9 +308,11 @@ function prksResearchRecoveryEdit(owner, entry) {
 /** The represented lineage this pane adopted on mount becomes the session's lineage. */
 function prksResearchRecoveryTakeWatched(entry) {
     let taken = null;
-    prksResearchRecoveryAckWatch.forEach(function (item, opId) {
-        if (taken || !item.writer || item.key !== entry.key) return;
-        prksResearchRecoveryAckWatch.delete(opId);
+    prksResearchRecoveryAckWatch.forEach(function (watches, opId) {
+        const item = taken ? null : watches.find(function (w) { return w.writer && w.key === entry.key; });
+        if (!item) return;
+        watches.splice(watches.indexOf(item), 1);
+        if (!watches.length) prksResearchRecoveryAckWatch.delete(opId);
         taken = item.writer;
         entry.recovery = taken;
         /* Continue the adopted lineage past its stored generation. */
@@ -397,9 +399,9 @@ function prksResearchRecoveryOnSync(event) {
         const text = op.payload && typeof op.payload.text === 'string' ? op.payload.text : null;
         const rev = event.acknowledged.server_revision;
         if (text === null || !Number.isSafeInteger(rev)) return;
-        const watched = prksResearchRecoveryAckWatch.get(op.op_id);
-        if (watched) {
-            prksResearchRecoveryAckWatch.delete(op.op_id);
+        const watches = prksResearchRecoveryAckWatch.get(op.op_id) || [];
+        prksResearchRecoveryAckWatch.delete(op.op_id);
+        watches.forEach(function (watched) {
             const writer = watched.writer;
             const clear = watched.text !== text ? Promise.resolve()
                 : writer ? writer.acknowledged(watched.generation, text)
@@ -408,7 +410,7 @@ function prksResearchRecoveryOnSync(event) {
                 if (writer) return writer.release();
                 return undefined;
             }).catch(function () {});
-        }
+        });
         prksWorkResearchDrafts.forEach(function (entry) {
             const queued = entry.recoveryQueued;
             if (!entry.recovery || entry.workId !== op.entity_id || !queued) return;
@@ -442,6 +444,18 @@ function prksResearchRecoveryOnSync(event) {
     }).catch(function () {});
 }
 
+/** The durable queue's rows, or null when they could not be read. */
+async function prksResearchRecoveryQueueRows() {
+    const store = window.prksSync && window.prksSync.store;
+    if (!store || typeof store.listOperations !== 'function') return null;
+    try {
+        const rows = await store.listOperations();
+        return Array.isArray(rows) ? rows : null;
+    } catch (_e) {
+        return null;
+    }
+}
+
 /**
  * Same-pane restore on Research Notes mount, between `ensureBase` and the
  * first read of the session text. Applies `planResearchNotesRestore`:
@@ -452,10 +466,6 @@ function prksResearchRecoveryOnSync(event) {
  */
 function prksRestoreResearchNotesRecovery(ctx, work) {
     const attempt = { abandoned: false };
-    const run = prksResearchRecoveryChain.then(function () {
-        return attempt.abandoned ? null : prksRestoreResearchNotesRecoveryNow(ctx, work, attempt);
-    });
-    prksResearchRecoveryChain = run.catch(function () { return null; });
     let timer = null;
     const timeout = new Promise(function (resolve) {
         timer = setTimeout(function () {
@@ -463,7 +473,13 @@ function prksRestoreResearchNotesRecovery(ctx, work) {
             resolve(null);
         }, PRKS_RESEARCH_RECOVERY_RESTORE_MS);
     });
-    return Promise.race([run.catch(function () { return null; }), timeout]).then(function (result) {
+    const run = prksResearchRecoveryChain.then(function () {
+        return attempt.abandoned ? null : prksRestoreResearchNotesRecoveryNow(ctx, work, attempt);
+    }).catch(function () { return null; });
+    /* An abandoned run that never settles must not hold up later restores. */
+    const settled = Promise.race([run, timeout]);
+    prksResearchRecoveryChain = settled;
+    return settled.then(function (result) {
         clearTimeout(timer);
         return result;
     });
@@ -497,13 +513,14 @@ async function prksRestoreResearchNotesRecoveryNow(ctx, work, attempt) {
         }
         candidates.push({ record: record, body: body, lineage: lineage });
     }
-    const rows = typeof prksRefreshPendingWorkNotes === 'function' ? await prksRefreshPendingWorkNotes() : [];
+    const rows = await prksResearchRecoveryQueueRows();
     if (!current()) return null;
-    const ops = typeof prksWorkNoteOperations === 'function'
-        ? prksWorkNoteOperations(rows, id, PRKS_RESEARCH_RECOVERY_KIND) : [];
-    const queue = ops.map(function (row) {
-        return { opId: row.op_id, text: row.payload && typeof row.payload.text === 'string' ? row.payload.text : '' };
-    });
+    /* An unread queue is unknown, never empty. */
+    const queue = rows && typeof prksWorkNoteOperations === 'function'
+        ? prksWorkNoteOperations(rows, id, PRKS_RESEARCH_RECOVERY_KIND).map(function (row) {
+            return { opId: row.op_id, text: row.payload && typeof row.payload.text === 'string' ? row.payload.text : '' };
+        })
+        : null;
     const base = prksResearchRecoveryObservedBase(ctx);
     const otherDirty = Array.from(prksWorkResearchDrafts.values()).some(function (entry) {
         return entry.workId === id && entry.key !== key && entry.state !== 'committed';
@@ -516,22 +533,27 @@ async function prksRestoreResearchNotesRecoveryNow(ctx, work, attempt) {
         otherDirtySession: otherDirty,
     });
     for (const draftId of plan.cleanup) {
-        void rt.store.deleteIfEqual(draftId, base.value).catch(function () {});
+        const record = candidates.find(function (c) { return c.record.draftId === draftId; }).record;
+        /* Only the generation it read, and only while no page has adopted it since. */
+        void rt.store.deleteIfAcknowledged(draftId, record.generation, base.value, record.owner.pageInstanceId)
+            .catch(function () {});
     }
     const paneId = String(ctx.tabId == null ? '' : ctx.tabId);
     for (const item of plan.represented) {
         const candidate = candidates.find(function (c) { return c.record.draftId === item.draftId; });
+        const watches = prksResearchRecoveryAckWatch.get(item.opId) || [];
+        if (watches.some(function (w) { return w.draftId === item.draftId; })) continue;
         const watch = Object.assign({ writer: null, key: key, base: base, pipeline: candidate.record.pipeline }, item);
-        if (candidate.lineage === 'same-runtime-orphan' && candidate.record.owner.paneId === paneId &&
-            !prksResearchRecoveryAckWatch.has(item.opId)) {
+        if (candidate.lineage === 'same-runtime-orphan' && candidate.record.owner.paneId === paneId) {
             watch.writer = await rt.writers.adopt(candidate.record, { paneId: paneId });
             if (watch.writer && !current()) {
                 void watch.writer.release().catch(function () {});
                 watch.writer = null;
             }
         }
-        const previous = prksResearchRecoveryAckWatch.get(item.opId);
-        if (!previous || !previous.writer) prksResearchRecoveryAckWatch.set(item.opId, watch);
+        /* Every lineage the row represents is cleared by its acknowledgement. */
+        watches.push(watch);
+        prksResearchRecoveryAckWatch.set(item.opId, watches);
     }
     let restored = false;
     if (plan.restore) {
@@ -586,10 +608,15 @@ window.prksScheduleResearchNotesBusyRetryForTest = prksScheduleResearchNotesBusy
 window.prksResetResearchDraftsForTest = function () {
     prksWorkResearchDrafts.forEach(prksResearchRecoveryRelease);
     prksWorkResearchDrafts.clear();
-    prksResearchRecoveryAckWatch.forEach(function (item) {
-        if (item.writer) void item.writer.release().catch(function () {});
+    prksResearchRecoveryAckWatch.forEach(function (watches) {
+        watches.forEach(function (item) {
+            if (item.writer) void item.writer.release().catch(function () {});
+        });
     });
     prksResearchRecoveryAckWatch.clear();
+    if (prksResearchRecoveryStopSync) prksResearchRecoveryStopSync();
+    prksResearchRecoveryStopSync = null;
+    prksResearchRecoveryChain = Promise.resolve(null);
     if (typeof prksForEachLiveTabContext === 'function') {
         prksForEachLiveTabContext(function (ctx) {
             if (ctx && ctx.ui) ctx.ui.workResearchNoteSession = null;

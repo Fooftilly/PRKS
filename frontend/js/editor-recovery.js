@@ -556,11 +556,12 @@ var prksEditorRecovery = (function(exports) {
 			const key = entityKeyOf(kind, entityId);
 			return listAll().then((rows) => rows.filter((row) => row && row.entityKey === key && row.status !== "discarded"));
 		}
-		function deleteIfAcknowledged(draftId, generation, body) {
+		function deleteIfAcknowledged(draftId, generation, body, expectedPageInstanceId) {
 			return run("readwrite", (tx, done) => {
 				readBoth(tx, draftId, (record, row) => {
 					if (!record) return done("missing");
 					if (!isSupportedRecord(record)) return done("unsupported");
+					if (expectedPageInstanceId !== void 0 && record.owner.pageInstanceId !== expectedPageInstanceId) return done("kept");
 					if (record.generation !== generation || !row || row.generation !== generation) return done("kept");
 					if (!sameBody(row.body, body, compare)) return done("kept");
 					retire(tx, record);
@@ -2174,24 +2175,28 @@ var prksEditorRecovery = (function(exports) {
 			paneId: c.record.owner.paneId,
 			updatedAt: c.record.updatedAt
 		});
+		const queue = input.queue;
 		let liveElsewhere = false;
+		let unreadable = 0;
 		const remaining = [];
 		for (const c of input.candidates) {
 			if (c.record.status === "discarded") continue;
 			if (c.lineage === "self-live" || c.lineage === "other-live") {
 				liveElsewhere = true;
+				review(c, "live-elsewhere");
 				continue;
 			}
 			if (c.body === null) {
+				unreadable++;
 				review(c, "body-missing");
 				continue;
 			}
-			if (K && K.source === "server" && c.body === K.value) {
+			if (K && K.source === "server" && queue && !queue.length && c.body === K.value) {
 				plan.cleanup.push(c.record.draftId);
 				continue;
 			}
 			const queuedOpId = c.record.pipeline ? c.record.pipeline.queuedOpId : null;
-			const last = input.queue[input.queue.length - 1];
+			const last = queue ? queue[queue.length - 1] : void 0;
 			if (queuedOpId && last && last.opId === queuedOpId && last.text === c.body) {
 				plan.represented.push({
 					draftId: c.record.draftId,
@@ -2203,10 +2208,11 @@ var prksEditorRecovery = (function(exports) {
 			}
 			remaining.push(c);
 		}
-		if (remaining.length !== 1) {
+		if (remaining.length + unreadable !== 1) {
 			for (const c of remaining) review(c, "multiple-drafts");
 			return plan;
 		}
+		if (!remaining.length) return plan;
 		const c = remaining[0];
 		const reason = blockingReason(c, input, liveElsewhere);
 		if (reason) {
@@ -2218,8 +2224,12 @@ var prksEditorRecovery = (function(exports) {
 		const own = pipeline ? pipeline.ownQueued : null;
 		const k = kIdentity();
 		let predecessor = null;
-		if (input.queue.length) {
-			const row = input.queue.length === 1 ? input.queue[0] : null;
+		if (!queue) {
+			review(c, "queue-unknown");
+			return plan;
+		}
+		if (queue.length) {
+			const row = queue.length === 1 ? queue[0] : null;
 			if (!own || !row || row.opId !== own.opId || row.text.length !== own.textLength || print(row.text) !== own.textFingerprint) {
 				review(c, "foreign-queue");
 				return plan;

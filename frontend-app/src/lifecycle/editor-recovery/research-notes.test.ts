@@ -91,7 +91,43 @@ describe('Research Notes same-pane restore plan', () => {
 
   it('defers while a live editor elsewhere holds a draft for the Work', () => {
     const p = plan([candidate('mine'), candidate(null, { draftId: 'd-live' }, 'other-live')])
-    expect(p.review).toMatchObject([{ draftId: 'd-1', reason: 'live-elsewhere' }])
+    expect(p.restore).toBeNull()
+    expect(p.review.map((r) => [r.draftId, r.reason])).toEqual([
+      ['d-live', 'live-elsewhere'],
+      ['d-1', 'live-elsewhere'],
+    ])
+  })
+
+  it('reports a live draft elsewhere even when it is the only one', () => {
+    const p = plan([candidate(null, { draftId: 'd-live' }, 'other-live')])
+    expect(p.review).toMatchObject([{ draftId: 'd-live', reason: 'live-elsewhere' }])
+  })
+
+  it('counts an unreadable draft as a second draft', () => {
+    const p = plan([candidate('Saved note. More'), candidate(null, { draftId: 'd-2' })])
+    expect(p.restore).toBeNull()
+    expect(p.review.map((r) => [r.draftId, r.reason])).toEqual([
+      ['d-2', 'body-missing'],
+      ['d-1', 'multiple-drafts'],
+    ])
+  })
+
+  it('neither cleans up, leaves as represented nor restores when the queue could not be read', () => {
+    expect(plan([candidate('Saved note. More')], { queue: null }).review).toMatchObject([{ reason: 'queue-unknown' }])
+    const equal = plan([candidate(SERVER)], { queue: null })
+    expect(equal.cleanup).toEqual([])
+    expect(equal.review).toMatchObject([{ reason: 'queue-unknown' }])
+  })
+
+  it('does not clear a body equal to the server note while a queued row can still replace that note', () => {
+    const pipeline: DraftPipeline = { state: 'blocked', queuedOpId: null, queuedGeneration: 0, blockedBase: identity(SERVER, 5), ownQueued: ownQueued() }
+    const p = plan([candidate(SERVER, { pipeline })], { queue: [{ opId: 'op-a', text: OWN_A }] })
+    expect(p.cleanup).toEqual([])
+    // Typed back to the note behind its own predecessor: restored, so it saves after that row.
+    expect(p.restore).toMatchObject({ body: SERVER, state: 'blocked', predecessor: { opId: 'op-a' } })
+    const foreign = plan([candidate(SERVER)], { queue: [{ opId: 'op-x', text: 'Other' }] })
+    expect(foreign.cleanup).toEqual([])
+    expect(foreign.review).toMatchObject([{ reason: 'foreign-queue' }])
   })
 
   it('defers unknown ownership, closed tabs and other panes to slice 3', () => {
@@ -171,12 +207,17 @@ describe('Research Notes same-pane restore plan', () => {
       expect(p.review).toMatchObject([{ reason: 'base-advanced' }])
     })
 
-    it('rejects an injected fingerprint collision on the predecessor\'s length', () => {
-      const p = plan([candidate(B, { pipeline: blocked() })], {
-        base: { value: 'Saved note. Z' + 'z', revision: 6, source: 'server' },
-        fingerprint: () => 'f'.repeat(32),
-      })
+    it('rejects a server note of the predecessor\'s length whose fingerprint differs', () => {
+      const sameLength = 'Saved note. Z'
+      expect(sameLength.length).toBe(OWN_A.length)
+      const p = plan([candidate(B, { pipeline: blocked() })], { base: { value: sameLength, revision: 6, source: 'server' } })
       expect(p.restore).toBeNull()
+      expect(p.review).toMatchObject([{ reason: 'base-advanced' }])
+    })
+
+    it('rejects a queued row of the predecessor\'s length whose fingerprint differs', () => {
+      const p = plan([candidate(B, { pipeline: blocked() })], { queue: [{ opId: 'op-a', text: 'Saved note. Z' }] })
+      expect(p.review).toMatchObject([{ reason: 'foreign-queue' }])
     })
   })
 })

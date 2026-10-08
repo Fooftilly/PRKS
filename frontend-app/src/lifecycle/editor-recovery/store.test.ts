@@ -116,6 +116,14 @@ describe('recovery store', () => {
     expect(await store.getBody('d-a')).toBeNull()
   })
 
+  it('clears on acknowledgement only while the expected page still owns the lineage', async () => {
+    const { store } = setup()
+    await seed(store, 'd-a', 'p-dead', 2, 'acked body')
+    await store.adopt('d-a', 'p-dead', owner('p-new', 'r-new'))
+    expect(await store.deleteIfAcknowledged('d-a', 2, 'acked body', 'p-dead')).toBe('kept')
+    expect(await store.deleteIfAcknowledged('d-a', 2, 'acked body', 'p-new')).toBe('deleted')
+  })
+
   it('keeps a different body when an injected fingerprint collides', async () => {
     const { store } = setup({ fingerprint: () => '0'.repeat(32) })
     await seed(store, 'd-a', 'p-a', 2, 'draft text A')

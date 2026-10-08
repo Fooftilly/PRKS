@@ -44,7 +44,8 @@ export interface RestoreInput {
   paneId: string
   candidates: RestoreCandidate[]
   base: AcknowledgedNote | null
-  queue: QueuedNoteRow[]
+  /** Null when the durable queue could not be read: nothing is cleaned up or restored. */
+  queue: QueuedNoteRow[] | null
   /** Another session in this page holds unsaved text for this Work. */
   otherDirtySession: boolean
   /** Injected in tests to force collisions. */
@@ -61,6 +62,7 @@ export type ReviewReason =
   | 'dirty-session'
   | 'base-unverified'
   | 'foreign-queue'
+  | 'queue-unknown'
   | 'base-advanced'
 
 export interface ReviewCandidate {
@@ -74,7 +76,10 @@ export interface ReviewCandidate {
 }
 
 export interface RestorePlan {
-  /** Bodies exactly equal to the server's acknowledged note: compare-and-delete. */
+  /**
+   * Bodies exactly equal to the server's acknowledged note while nothing is
+   * queued that could still change it: compare-and-delete.
+   */
   cleanup: string[]
   /** Already the queued row's exact body: kept until that row's acknowledgement. */
   represented: Array<{ draftId: string; opId: string; generation: number; text: string }>
@@ -111,26 +116,32 @@ export function planResearchNotesRestore(input: RestoreInput): RestorePlan {
       updatedAt: c.record.updatedAt,
     })
 
+  const queue = input.queue
   let liveElsewhere = false
+  let unreadable = 0
   const remaining: RestoreCandidate[] = []
   for (const c of input.candidates) {
     if (c.record.status === 'discarded') continue
-    // Being edited in this or another live editor: not offered, and its
-    // existence alone stops an automatic restore of anything else.
+    // Being edited in this or another live editor: reported, never offered
+    // for restore here, and its existence alone stops an automatic restore.
     if (c.lineage === 'self-live' || c.lineage === 'other-live') {
       liveElsewhere = true
+      review(c, 'live-elsewhere')
       continue
     }
     if (c.body === null) {
+      unreadable++
       review(c, 'body-missing')
       continue
     }
-    if (K && K.source === 'server' && c.body === K.value) {
+    // Equal to the note only proves it saved while no queued row can still
+    // replace that note.
+    if (K && K.source === 'server' && queue && !queue.length && c.body === K.value) {
       plan.cleanup.push(c.record.draftId)
       continue
     }
     const queuedOpId = c.record.pipeline ? c.record.pipeline.queuedOpId : null
-    const last = input.queue[input.queue.length - 1]
+    const last = queue ? queue[queue.length - 1] : undefined
     if (queuedOpId && last && last.opId === queuedOpId && last.text === c.body) {
       plan.represented.push({ draftId: c.record.draftId, opId: queuedOpId, generation: c.record.generation, text: c.body })
       continue
@@ -138,10 +149,12 @@ export function planResearchNotesRestore(input: RestoreInput): RestorePlan {
     remaining.push(c)
   }
 
-  if (remaining.length !== 1) {
+  // An unreadable draft is still a draft: it keeps the restore ambiguous.
+  if (remaining.length + unreadable !== 1) {
     for (const c of remaining) review(c, 'multiple-drafts')
     return plan
   }
+  if (!remaining.length) return plan
   const c = remaining[0]!
   const reason = blockingReason(c, input, liveElsewhere)
   if (reason) {
@@ -154,10 +167,14 @@ export function planResearchNotesRestore(input: RestoreInput): RestorePlan {
   const own = pipeline ? pipeline.ownQueued : null
   const k = kIdentity()
   let predecessor: QueuedNoteRow | null = null
-  if (input.queue.length) {
+  if (!queue) {
+    review(c, 'queue-unknown')
+    return plan
+  }
+  if (queue.length) {
     // Only this lineage's own predecessor may still be queued: one row, the
     // op it queued, with the length and fingerprint it recorded.
-    const row = input.queue.length === 1 ? input.queue[0]! : null
+    const row = queue.length === 1 ? queue[0]! : null
     if (!own || !row || row.opId !== own.opId || row.text.length !== own.textLength || print(row.text) !== own.textFingerprint) {
       review(c, 'foreign-queue')
       return plan

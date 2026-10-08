@@ -131,8 +131,12 @@ export interface RecoveryStore {
   getBody(draftId: string): Promise<DraftBodyRow | null>
   listByEntity(kind: DraftKind, entityId: string): Promise<DraftRecord[]>
   listAll(): Promise<DraftRecord[]>
-  /** Deletes only if the stored generation is `generation` and the stored body is exactly `body`. */
-  deleteIfAcknowledged(draftId: string, generation: number, body: string): Promise<DeleteOutcome>
+  /**
+   * Deletes only if the stored generation is `generation` and the stored body
+   * is exactly `body`; with `expectedPageInstanceId`, also only while that
+   * page still owns the lineage (not adopted since it was read).
+   */
+  deleteIfAcknowledged(draftId: string, generation: number, body: string, expectedPageInstanceId?: string): Promise<DeleteOutcome>
   /** Deletes only if the stored body is exactly `body` (proven equal to acknowledged state). */
   deleteIfEqual(draftId: string, body: string): Promise<DeleteOutcome>
   /**
@@ -466,11 +470,12 @@ export function createRecoveryStore(options: RecoveryStoreOptions = {}): Recover
     return listAll().then((rows) => rows.filter((row) => row && row.entityKey === key && row.status !== 'discarded'))
   }
 
-  function deleteIfAcknowledged(draftId: string, generation: number, body: string): Promise<DeleteOutcome> {
+  function deleteIfAcknowledged(draftId: string, generation: number, body: string, expectedPageInstanceId?: string): Promise<DeleteOutcome> {
     return run<DeleteOutcome>('readwrite', (tx, done) => {
       readBoth(tx, draftId, (record, row) => {
         if (!record) return done('missing')
         if (!isSupportedRecord(record)) return done('unsupported')
+        if (expectedPageInstanceId !== undefined && record.owner.pageInstanceId !== expectedPageInstanceId) return done('kept')
         if (record.generation !== generation || !row || row.generation !== generation) return done('kept')
         if (!sameBody(row.body, body, compare)) return done('kept')
         retire(tx, record)
