@@ -93,6 +93,8 @@ coordinator names no family: adding one is a registration.
   equality, explicit discard, or a confirmed Work delete, never by age. A
   discard whose emergency key could not be cleared leaves a bodyless
   tombstone until that key is gone, so the key cannot recreate the draft.
+  A draft a merge created from another page's key carries that page's id
+  until the key is removed; deleting it meanwhile leaves the same tombstone.
   Clear offline cache does not touch it. Slice 1 has no consumer.
 - A device ID is an identity for synchronization, never authentication or trust.
 - Editor state and observed projections belong to the Work's TabContext.

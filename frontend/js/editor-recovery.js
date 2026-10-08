@@ -1,5 +1,146 @@
 var prksEditorRecovery = (function(exports) {
 	Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
+	//#region src/lifecycle/editor-recovery/fingerprint.ts
+	/**
+	* Deterministic 128-bit text fingerprint and exact body equality.
+	*
+	* MurmurHash3 x86_128 (seed 0) over the UTF-16LE bytes of the string, rendered
+	* as 32 hex characters (h1..h4). Pure JavaScript, so it works where
+	* `crypto.subtle` is missing (LAN/HTTP). It is not a security primitive and it
+	* never decides a delete on its own: it identifies a base that is not
+	* retained, and it is a precheck before exact `===` comparison. Callers compute
+	* it once per base, never per keystroke.
+	*/
+	var C1 = 597399067;
+	var C2 = 2869860233;
+	var C3 = 951274213;
+	var C4 = 2716044179;
+	function rotl(x, r) {
+		return x << r | x >>> 32 - r;
+	}
+	/** Sum modulo 2^32, as the C reference's uint32 arithmetic (not a truncation). */
+	function add32(...terms) {
+		let sum = 0;
+		for (const t of terms) sum = sum + t >>> 0;
+		return sum;
+	}
+	function fmix(h) {
+		h ^= h >>> 16;
+		h = Math.imul(h, 2246822507);
+		h ^= h >>> 13;
+		h = Math.imul(h, 3266489909);
+		h ^= h >>> 16;
+		return h;
+	}
+	function hex(h) {
+		return (h >>> 0).toString(16).padStart(8, "0");
+	}
+	function fingerprintText(text) {
+		const units = text.length;
+		const blocks = units >>> 3;
+		let h1 = 0;
+		let h2 = 0;
+		let h3 = 0;
+		let h4 = 0;
+		for (let i = 0; i < blocks; i++) {
+			const o = i << 3;
+			let k1 = text.charCodeAt(o) | text.charCodeAt(o + 1) << 16;
+			let k2 = text.charCodeAt(o + 2) | text.charCodeAt(o + 3) << 16;
+			let k3 = text.charCodeAt(o + 4) | text.charCodeAt(o + 5) << 16;
+			let k4 = text.charCodeAt(o + 6) | text.charCodeAt(o + 7) << 16;
+			k1 = Math.imul(rotl(Math.imul(k1, C1), 15), C2);
+			h1 ^= k1;
+			h1 = rotl(h1, 19);
+			h1 = add32(h1, h2);
+			h1 = add32(Math.imul(h1, 5), 1444728091);
+			k2 = Math.imul(rotl(Math.imul(k2, C2), 16), C3);
+			h2 ^= k2;
+			h2 = rotl(h2, 17);
+			h2 = add32(h2, h3);
+			h2 = add32(Math.imul(h2, 5), 197830471);
+			k3 = Math.imul(rotl(Math.imul(k3, C3), 17), C4);
+			h3 ^= k3;
+			h3 = rotl(h3, 15);
+			h3 = add32(h3, h4);
+			h3 = add32(Math.imul(h3, 5), 2530024501);
+			k4 = Math.imul(rotl(Math.imul(k4, C4), 18), C1);
+			h4 ^= k4;
+			h4 = rotl(h4, 13);
+			h4 = add32(h4, h1);
+			h4 = add32(Math.imul(h4, 5), 850148119);
+		}
+		const tailStart = blocks << 3;
+		const tailBytes = (units - tailStart) * 2;
+		const byteAt = (j) => {
+			const unit = text.charCodeAt(tailStart + (j >>> 1));
+			return j & 1 ? unit >>> 8 : unit & 255;
+		};
+		let k1 = 0;
+		let k2 = 0;
+		let k3 = 0;
+		let k4 = 0;
+		for (let j = tailBytes - 1; j >= 0; j--) {
+			const b = byteAt(j) << (j & 3) * 8;
+			if (j >= 12) k4 ^= b;
+			else if (j >= 8) k3 ^= b;
+			else if (j >= 4) k2 ^= b;
+			else k1 ^= b;
+		}
+		if (tailBytes > 12) {
+			k4 = Math.imul(rotl(Math.imul(k4, C4), 18), C1);
+			h4 ^= k4;
+		}
+		if (tailBytes > 8) {
+			k3 = Math.imul(rotl(Math.imul(k3, C3), 17), C4);
+			h3 ^= k3;
+		}
+		if (tailBytes > 4) {
+			k2 = Math.imul(rotl(Math.imul(k2, C2), 16), C3);
+			h2 ^= k2;
+		}
+		if (tailBytes > 0) {
+			k1 = Math.imul(rotl(Math.imul(k1, C1), 15), C2);
+			h1 ^= k1;
+		}
+		const len = units * 2 >>> 0;
+		h1 ^= len;
+		h2 ^= len;
+		h3 ^= len;
+		h4 ^= len;
+		h1 = add32(h1, h2, h3, h4);
+		h2 = add32(h2, h1);
+		h3 = add32(h3, h1);
+		h4 = add32(h4, h1);
+		h1 = fmix(h1);
+		h2 = fmix(h2);
+		h3 = fmix(h3);
+		h4 = fmix(h4);
+		h1 = add32(h1, h2, h3, h4);
+		h2 = add32(h2, h1);
+		h3 = add32(h3, h1);
+		h4 = add32(h4, h1);
+		return hex(h1) + hex(h2) + hex(h3) + hex(h4);
+	}
+	/**
+	* Exact body equality: length precheck, optional fingerprint precheck, then
+	* `===`. A colliding fingerprint can only make this slower, never true.
+	*/
+	function sameBody(a, b, options = {}) {
+		if (a.length !== b.length) return false;
+		if (options.fingerprint && options.fingerprint(a) !== options.fingerprint(b)) return false;
+		return a === b;
+	}
+	/**
+	* A base that is not retained is unchanged only when revision, length and
+	* fingerprint all match. Revision is primary; the fingerprint catches a
+	* revision that was reused or regressed (for example a restored backup).
+	*/
+	function sameBaseIdentity(a, b) {
+		if (!a || !b) return false;
+		if (a.revision === null || b.revision === null) return false;
+		return a.revision === b.revision && a.length === b.length && a.fingerprint !== null && a.fingerprint === b.fingerprint;
+	}
+	//#endregion
 	//#region src/lifecycle/editor-recovery/schema.ts
 	/**
 	* Browser-local editor draft recovery (#466): names, budgets and record shapes.
@@ -95,7 +236,482 @@ var prksEditorRecovery = (function(exports) {
 		return typeof r.v === "number" && r.v >= 1 && r.v <= 1 && typeof r.draftId === "string" && isDraftKind(r.kind) && typeof r.generation === "number" && !!r.owner && typeof r.owner.pageInstanceId === "string";
 	}
 	//#endregion
+	//#region src/lifecycle/editor-recovery/store.ts
+	/**
+	* IndexedDB store for editor recovery drafts (`prks-editor-recovery-v1`).
+	*
+	* Two object stores written together: `drafts` (small metadata, enumerated
+	* with getAll + filter) and `bodies` (`{draftId, generation, body}`). Every
+	* write puts both in one readwrite transaction and resolves only from
+	* `oncomplete`; an abort rejects, so metadata and body never diverge and a
+	* write is never reported before it committed.
+	*
+	* Write transactions request `{durability: 'relaxed'}` where supported and fall
+	* back to a plain readwrite transaction. That covers reload, tab close and a
+	* browser-process crash. It is not a promise against OS crash or power loss;
+	* the semantic operation queue stays the strict durability boundary.
+	*
+	* Every decision that depends on stored state (owner, generation, exact body)
+	* is made inside the same transaction that writes or deletes, so concurrent
+	* pages are serialized by IndexedDB itself. Nothing here deletes by age.
+	*/
+	var RecoveryStoreError = class extends Error {
+		code;
+		constructor(code, message) {
+			super(message);
+			this.name = "RecoveryStoreError";
+			this.code = code;
+		}
+	};
+	function supportsDurabilityHint() {
+		try {
+			return typeof IDBTransaction !== "undefined" && "durability" in IDBTransaction.prototype;
+		} catch {
+			return false;
+		}
+	}
+	function errorFromTransaction(tx) {
+		if ((tx.error && tx.error.name) === "QuotaExceededError") return new RecoveryStoreError("quota", "Recovery storage is full.");
+		return new RecoveryStoreError("aborted", "The recovery write was rolled back.");
+	}
+	/** Lineage id for an emergency tail forked away from a lineage adopted since. Deterministic, so merges are idempotent. */
+	function forkedDraftId(draftId, generation) {
+		return draftId + ".e" + generation;
+	}
+	function createRecoveryStore(options = {}) {
+		const factory = options.indexedDB === void 0 ? globalThis.indexedDB : options.indexedDB;
+		const name = options.name || "prks-editor-recovery-v1";
+		const now = options.now || Date.now;
+		const durability = options.durability || "auto";
+		const compare = { fingerprint: options.fingerprint };
+		let dbPromise = null;
+		let handle = null;
+		let lastMode = null;
+		function openDb() {
+			if (dbPromise) return dbPromise;
+			const opening = new Promise((resolve, reject) => {
+				if (!factory) {
+					reject(new RecoveryStoreError("unavailable", "IndexedDB is not available."));
+					return;
+				}
+				let req;
+				try {
+					req = factory.open(name, 1);
+				} catch {
+					reject(new RecoveryStoreError("unavailable", "Could not open recovery storage."));
+					return;
+				}
+				req.onupgradeneeded = () => {
+					const db = req.result;
+					if (!db.objectStoreNames.contains("drafts")) db.createObjectStore(DRAFTS_STORE, { keyPath: "draftId" });
+					if (!db.objectStoreNames.contains("bodies")) db.createObjectStore(BODIES_STORE, { keyPath: "draftId" });
+				};
+				req.onsuccess = () => {
+					const db = req.result;
+					handle = db;
+					db.onversionchange = () => {
+						try {
+							db.close();
+						} catch {}
+						if (handle === db) handle = null;
+						dbPromise = null;
+					};
+					resolve(db);
+				};
+				req.onerror = () => reject(new RecoveryStoreError("unavailable", "Could not open recovery storage."));
+				req.onblocked = () => reject(new RecoveryStoreError("blocked", "Recovery storage is blocked by another tab."));
+			});
+			dbPromise = opening;
+			opening.catch(() => {
+				if (dbPromise === opening) dbPromise = null;
+			});
+			return opening;
+		}
+		function begin(db, mode) {
+			const stores = [DRAFTS_STORE, BODIES_STORE];
+			if (mode === "readwrite" && (durability === "relaxed" || durability === "auto" && supportsDurabilityHint())) try {
+				const tx = db.transaction(stores, mode, { durability: "relaxed" });
+				lastMode = "relaxed";
+				return tx;
+			} catch {}
+			const tx = db.transaction(stores, mode);
+			if (mode === "readwrite") lastMode = "default";
+			return tx;
+		}
+		/**
+		* Runs `fn` in one transaction over both stores and resolves from
+		* `oncomplete` with the value `fn` reported. Rejects on abort or error.
+		*/
+		function run(mode, fn) {
+			return openDb().then((db) => new Promise((resolve, reject) => {
+				let tx;
+				try {
+					tx = begin(db, mode);
+				} catch {
+					reject(new RecoveryStoreError("unavailable", "Could not start a recovery transaction."));
+					return;
+				}
+				let value;
+				let reported = false;
+				let settled = false;
+				tx.oncomplete = () => {
+					if (settled) return;
+					settled = true;
+					if (!reported) reject(new RecoveryStoreError("aborted", "The recovery transaction ended without a result."));
+					else resolve(value);
+				};
+				tx.onabort = () => {
+					if (settled) return;
+					settled = true;
+					reject(errorFromTransaction(tx));
+				};
+				try {
+					fn(tx, (v) => {
+						value = v;
+						reported = true;
+					});
+				} catch {
+					settled = true;
+					try {
+						tx.abort();
+					} catch {}
+					reject(new RecoveryStoreError("aborted", "The recovery transaction failed."));
+				}
+			}));
+		}
+		/** Reads the metadata and body rows of one draft, then calls `next` inside the same transaction. */
+		function readBoth(tx, draftId, next) {
+			let record;
+			let body;
+			let pending = 2;
+			const step = () => {
+				pending -= 1;
+				if (pending === 0) next(record, body);
+			};
+			const r1 = tx.objectStore(DRAFTS_STORE).get(draftId);
+			r1.onsuccess = () => {
+				record = r1.result;
+				step();
+			};
+			const r2 = tx.objectStore(BODIES_STORE).get(draftId);
+			r2.onsuccess = () => {
+				body = r2.result;
+				step();
+			};
+		}
+		function readRecord(tx, draftId, next) {
+			const r = tx.objectStore(DRAFTS_STORE).get(draftId);
+			r.onsuccess = () => next(r.result);
+		}
+		function putPair(tx, record, body) {
+			tx.objectStore(DRAFTS_STORE).put(record);
+			tx.objectStore(BODIES_STORE).put({
+				draftId: record.draftId,
+				generation: record.generation,
+				body
+			});
+		}
+		function deletePair(tx, draftId) {
+			tx.objectStore(DRAFTS_STORE).delete(draftId);
+			tx.objectStore(BODIES_STORE).delete(draftId);
+		}
+		/** Deletes a record, or leaves a tombstone for the emergency key that may still list it. */
+		function retire(tx, record) {
+			if (!record.emergencySource) return deletePair(tx, record.draftId);
+			tx.objectStore(BODIES_STORE).delete(record.draftId);
+			tx.objectStore(DRAFTS_STORE).put(tombstoneRecord(record.draftId, {
+				kind: record.kind,
+				entityType: record.entityType,
+				entityId: record.entityId,
+				generation: record.generation,
+				pageInstanceId: record.emergencySource
+			}, record.generation));
+		}
+		function newRecord(draftId, lineage, generation, bodyLength) {
+			const at = now();
+			return {
+				v: 1,
+				draftId,
+				kind: lineage.kind,
+				entityType: lineage.entityType,
+				entityId: lineage.entityId,
+				entityKey: entityKeyOf(lineage.kind, lineage.entityId),
+				owner: { ...lineage.owner },
+				generation,
+				bodyLength,
+				base: { ...lineage.base },
+				pipeline: null,
+				status: "active",
+				createdAt: at,
+				updatedAt: at
+			};
+		}
+		function writeGeneration(input) {
+			return run("readwrite", (tx, done) => {
+				readRecord(tx, input.draftId, (record) => {
+					if (!record) {
+						if (!input.create) {
+							done("missing");
+							return;
+						}
+						putPair(tx, newRecord(input.draftId, input.create, input.generation, input.body.length), input.body);
+						done("ok");
+						return;
+					}
+					if (!isSupportedRecord(record)) return done("unsupported");
+					if (record.owner.pageInstanceId !== input.pageInstanceId) return done("not-owner");
+					if (record.generation >= input.generation) return done("stale");
+					putPair(tx, {
+						...record,
+						v: 1,
+						owner: {
+							...record.owner,
+							paneId: input.paneId ?? record.owner.paneId
+						},
+						generation: input.generation,
+						bodyLength: input.body.length,
+						base: input.base ? { ...input.base } : record.base,
+						status: "active",
+						updatedAt: now()
+					}, input.body);
+					done("ok");
+				});
+			});
+		}
+		function adopt(draftId, expectedPageInstanceId, owner) {
+			return run("readwrite", (tx, done) => {
+				readRecord(tx, draftId, (record) => {
+					if (!record) return done({ outcome: "missing" });
+					if (!isSupportedRecord(record)) return done({ outcome: "unsupported" });
+					if (record.status === "discarded") return done({ outcome: "missing" });
+					if (record.owner.pageInstanceId !== expectedPageInstanceId) return done({ outcome: "conflict" });
+					const next = {
+						...record,
+						owner: { ...owner },
+						updatedAt: now()
+					};
+					tx.objectStore(DRAFTS_STORE).put(next);
+					done({
+						outcome: "ok",
+						record: next
+					});
+				});
+			});
+		}
+		function get(draftId) {
+			return run("readonly", (tx, done) => {
+				readRecord(tx, draftId, (record) => done(record || null));
+			});
+		}
+		function getBody(draftId) {
+			return run("readonly", (tx, done) => {
+				const r = tx.objectStore(BODIES_STORE).get(draftId);
+				r.onsuccess = () => done(r.result || null);
+			});
+		}
+		function listAll() {
+			return run("readonly", (tx, done) => {
+				const r = tx.objectStore(DRAFTS_STORE).getAll();
+				r.onsuccess = () => done(r.result || []);
+			});
+		}
+		function listByEntity(kind, entityId) {
+			const key = entityKeyOf(kind, entityId);
+			return listAll().then((rows) => rows.filter((row) => row && row.entityKey === key && row.status !== "discarded"));
+		}
+		function deleteIfAcknowledged(draftId, generation, body) {
+			return run("readwrite", (tx, done) => {
+				readBoth(tx, draftId, (record, row) => {
+					if (!record) return done("missing");
+					if (!isSupportedRecord(record)) return done("unsupported");
+					if (record.generation !== generation || !row || row.generation !== generation) return done("kept");
+					if (!sameBody(row.body, body, compare)) return done("kept");
+					retire(tx, record);
+					done("deleted");
+				});
+			});
+		}
+		function deleteIfEqual(draftId, body) {
+			return run("readwrite", (tx, done) => {
+				readBoth(tx, draftId, (record, row) => {
+					if (!record) return done("missing");
+					if (!isSupportedRecord(record)) return done("unsupported");
+					if (!row || row.generation !== record.generation || !sameBody(row.body, body, compare)) return done("kept");
+					retire(tx, record);
+					done("deleted");
+				});
+			});
+		}
+		function tombstoneRecord(draftId, tombstone, storedGeneration) {
+			return {
+				...newRecord(draftId, {
+					kind: tombstone.kind,
+					entityType: tombstone.entityType,
+					entityId: tombstone.entityId,
+					owner: {
+						runtimeId: null,
+						pageInstanceId: tombstone.pageInstanceId,
+						paneId: "",
+						claimedAt: now()
+					},
+					base: UNKNOWN_BASE
+				}, Math.max(tombstone.generation, storedGeneration), 0),
+				status: "discarded"
+			};
+		}
+		function discard(draftId, tombstone) {
+			return run("readwrite", (tx, done) => {
+				readRecord(tx, draftId, (record) => {
+					if (record && !isSupportedRecord(record)) return done("unsupported");
+					if (!tombstone) {
+						if (!record) return done("missing");
+						retire(tx, record);
+						return done("deleted");
+					}
+					tx.objectStore(BODIES_STORE).delete(draftId);
+					const stone = tombstoneRecord(draftId, tombstone, record ? record.generation : 0);
+					const source = record ? record.emergencySource : void 0;
+					if (source && source !== tombstone.pageInstanceId) stone.emergencySource = source;
+					tx.objectStore(DRAFTS_STORE).put(stone);
+					done(record ? "deleted" : "missing");
+				});
+			});
+		}
+		function clearTombstone(draftId, pageInstanceId) {
+			return run("readwrite", (tx, done) => {
+				readRecord(tx, draftId, (record) => {
+					if (!record) return done("missing");
+					if (!isSupportedRecord(record)) return done("unsupported");
+					const next = {
+						...record,
+						owner: { ...record.owner }
+					};
+					if (record.emergencySource === pageInstanceId) delete next.emergencySource;
+					else if (record.status === "discarded" && record.owner.pageInstanceId === pageInstanceId) {
+						if (!record.emergencySource) {
+							deletePair(tx, draftId);
+							return done("deleted");
+						}
+						next.owner.pageInstanceId = record.emergencySource;
+						delete next.emergencySource;
+					} else return done("kept");
+					tx.objectStore(DRAFTS_STORE).put(next);
+					done("kept");
+				});
+			});
+		}
+		function applyEmergencyEntry(payload, entry) {
+			return run("readwrite", (tx, done) => {
+				readRecord(tx, entry.draftId, (record) => {
+					if (record && !isSupportedRecord(record)) return done("deferred");
+					if (record && record.status === "discarded") return done("suppressed");
+					if (!record) {
+						if (entry.committedGeneration === 0 && entry.lineage && entry.body !== null) {
+							const lineage = {
+								kind: entry.kind,
+								entityType: entry.entityType,
+								entityId: entry.entityId,
+								owner: {
+									...entry.lineage.owner,
+									claimedAt: entry.lineage.createdAt
+								},
+								base: entry.lineage.base
+							};
+							const created = newRecord(entry.draftId, lineage, entry.generation, entry.body.length);
+							created.createdAt = entry.lineage.createdAt;
+							created.emergencySource = payload.pageInstanceId;
+							putPair(tx, created, entry.body);
+							return done("created");
+						}
+						return done("dropped");
+					}
+					if (record.owner.pageInstanceId === payload.pageInstanceId) {
+						if (record.generation >= entry.generation) return done("noop");
+						if (entry.body === null) {
+							tx.objectStore(DRAFTS_STORE).put({
+								...record,
+								status: "tail-missing",
+								updatedAt: now()
+							});
+							return done("tail-missing");
+						}
+						putPair(tx, {
+							...record,
+							generation: entry.generation,
+							bodyLength: entry.body.length,
+							status: "active",
+							updatedAt: now(),
+							...entry.lineage ? {
+								base: { ...entry.lineage.base },
+								owner: {
+									...record.owner,
+									paneId: entry.lineage.owner.paneId
+								}
+							} : {}
+						}, entry.body);
+						return done("written");
+					}
+					if (entry.body === null) return done("dropped");
+					const forkId = forkedDraftId(entry.draftId, entry.generation);
+					readRecord(tx, forkId, (existing) => {
+						if (existing) return done("noop");
+						const lineage = {
+							kind: entry.kind,
+							entityType: entry.entityType,
+							entityId: entry.entityId,
+							owner: {
+								runtimeId: payload.runtimeId,
+								pageInstanceId: payload.pageInstanceId,
+								paneId: entry.lineage ? entry.lineage.owner.paneId : record.owner.paneId,
+								claimedAt: payload.at
+							},
+							base: entry.lineage ? entry.lineage.base : record.base
+						};
+						const forked = newRecord(forkId, lineage, entry.generation, entry.body.length);
+						forked.emergencySource = payload.pageInstanceId;
+						putPair(tx, forked, entry.body);
+						done("forked");
+					});
+				});
+			});
+		}
+		return {
+			writeGeneration,
+			adopt,
+			get,
+			getBody,
+			listByEntity,
+			listAll,
+			deleteIfAcknowledged,
+			deleteIfEqual,
+			discard,
+			clearTombstone,
+			applyEmergencyEntry,
+			lastDurability: () => lastMode,
+			close() {
+				const db = handle;
+				handle = null;
+				dbPromise = null;
+				if (db) try {
+					db.close();
+				} catch {}
+			}
+		};
+	}
+	//#endregion
 	//#region src/lifecycle/editor-recovery/emergency.ts
+	/**
+	* Unload emergency entry: one synchronous localStorage key per page load
+	* (`prks.editorRecovery.emergency.v1.<pageInstanceId>`), written at
+	* `visibilitychange:hidden` / `pagehide` only while a writer is pending.
+	*
+	* The plan decides which pending bodies the entry may hold: each at most
+	* 256 Ki chars and all of a page together at most 1 Mi chars, smallest first.
+	* A pending writer outside the plan has the leave guard armed instead.
+	*
+	* Startup merges entries of pages that are no longer alive into IndexedDB and
+	* removes a key only after every entry in it was handled.
+	*/
 	/** Indexes of the bodies the emergency entry holds, chosen smallest first within the budget. */
 	function planEmergency(lengths) {
 		const order = lengths.map((length, index) => ({
@@ -205,7 +821,8 @@ var prksEditorRecovery = (function(exports) {
 	*/
 	async function mergeKey(env, stored, payload) {
 		const outcomes = [];
-		const suppressed = [];
+		/** Records that may carry a tombstone or mark for this key. */
+		const sourced = [];
 		let complete = true;
 		for (const entry of payload.entries) {
 			if (readRaw(env.storage, stored.key) !== stored.raw) {
@@ -216,7 +833,7 @@ var prksEditorRecovery = (function(exports) {
 				const outcome = await env.store.applyEmergencyEntry(payload, entry);
 				outcomes.push(outcome);
 				if (outcome === "deferred") complete = false;
-				if (outcome === "suppressed") suppressed.push(entry.draftId);
+				sourced.push(entry.draftId, forkedDraftId(entry.draftId, entry.generation));
 			} catch {
 				complete = false;
 			}
@@ -227,7 +844,7 @@ var prksEditorRecovery = (function(exports) {
 		} catch {
 			complete = false;
 		}
-		if (complete && env.store.clearTombstone) for (const draftId of suppressed) try {
+		if (complete && env.store.clearTombstone) for (const draftId of sourced) try {
 			await env.store.clearTombstone(draftId, stored.pageInstanceId);
 		} catch {}
 		return {
@@ -341,6 +958,7 @@ var prksEditorRecovery = (function(exports) {
 		let claimPromise = null;
 		let pending = null;
 		let lineageResponder = null;
+		let contestListener = null;
 		const answers = /* @__PURE__ */ new Map();
 		function post(message) {
 			if (!channel || disposed) return;
@@ -356,6 +974,7 @@ var prksEditorRecovery = (function(exports) {
 					rid: m.rid,
 					to: m.from
 				});
+				if (contestListener) contestListener();
 				return;
 			}
 			if (!pending || pending.rid !== m.rid) return;
@@ -367,7 +986,15 @@ var prksEditorRecovery = (function(exports) {
 			});
 		}
 		function onTaken(m) {
-			if (m.to === pageInstanceId && pending && pending.rid === m.rid) pending.lost = true;
+			if (m.to !== pageInstanceId) return;
+			if (pending && pending.rid === m.rid) {
+				pending.lost = true;
+				return;
+			}
+			if (settled && settled.runtimeId === m.rid && settled.verified === "channel") settled = {
+				runtimeId: m.rid,
+				verified: "unverified"
+			};
 		}
 		function onAnswer(m) {
 			const resolve = answers.get(m.q);
@@ -567,6 +1194,9 @@ var prksEditorRecovery = (function(exports) {
 			setLineageResponder(responder) {
 				lineageResponder = responder;
 			},
+			setContestListener(listener) {
+				contestListener = listener;
+			},
 			dispose() {
 				if (disposed) return;
 				disposed = true;
@@ -597,588 +1227,15 @@ var prksEditorRecovery = (function(exports) {
 		if (owner.pageInstanceId === identity.pageInstanceId) return "same-runtime-orphan";
 		const claim = identity.current();
 		if (claim && owner.runtimeId && owner.runtimeId === claim.runtimeId) {
-			if (claim.verified !== "unverified") return "same-runtime-orphan";
-			return await identity.isLineageLiveElsewhere(record.draftId) === true ? "other-live" : "unknown";
+			if (claim.verified === "lock") return "same-runtime-orphan";
+			if (await identity.isLineageLiveElsewhere(record.draftId) === true) return "other-live";
+			return claim.verified === "channel" ? "same-runtime-orphan" : "unknown";
 		}
 		if (await identity.isLineageLiveElsewhere(record.draftId) === true) return "other-live";
 		const pageAlive = await identity.isPageAlive(owner.pageInstanceId);
 		const runtimeAlive = owner.runtimeId ? await identity.isRuntimeAlive(owner.runtimeId) : false;
 		if (pageAlive === false && runtimeAlive === false) return "dead-runtime";
 		return "unknown";
-	}
-	//#endregion
-	//#region src/lifecycle/editor-recovery/fingerprint.ts
-	/**
-	* Deterministic 128-bit text fingerprint and exact body equality.
-	*
-	* MurmurHash3 x86_128 (seed 0) over the UTF-16LE bytes of the string, rendered
-	* as 32 hex characters (h1..h4). Pure JavaScript, so it works where
-	* `crypto.subtle` is missing (LAN/HTTP). It is not a security primitive and it
-	* never decides a delete on its own: it identifies a base that is not
-	* retained, and it is a precheck before exact `===` comparison. Callers compute
-	* it once per base, never per keystroke.
-	*/
-	var C1 = 597399067;
-	var C2 = 2869860233;
-	var C3 = 951274213;
-	var C4 = 2716044179;
-	function rotl(x, r) {
-		return x << r | x >>> 32 - r;
-	}
-	/** Sum modulo 2^32, as the C reference's uint32 arithmetic (not a truncation). */
-	function add32(...terms) {
-		let sum = 0;
-		for (const t of terms) sum = sum + t >>> 0;
-		return sum;
-	}
-	function fmix(h) {
-		h ^= h >>> 16;
-		h = Math.imul(h, 2246822507);
-		h ^= h >>> 13;
-		h = Math.imul(h, 3266489909);
-		h ^= h >>> 16;
-		return h;
-	}
-	function hex(h) {
-		return (h >>> 0).toString(16).padStart(8, "0");
-	}
-	function fingerprintText(text) {
-		const units = text.length;
-		const blocks = units >>> 3;
-		let h1 = 0;
-		let h2 = 0;
-		let h3 = 0;
-		let h4 = 0;
-		for (let i = 0; i < blocks; i++) {
-			const o = i << 3;
-			let k1 = text.charCodeAt(o) | text.charCodeAt(o + 1) << 16;
-			let k2 = text.charCodeAt(o + 2) | text.charCodeAt(o + 3) << 16;
-			let k3 = text.charCodeAt(o + 4) | text.charCodeAt(o + 5) << 16;
-			let k4 = text.charCodeAt(o + 6) | text.charCodeAt(o + 7) << 16;
-			k1 = Math.imul(rotl(Math.imul(k1, C1), 15), C2);
-			h1 ^= k1;
-			h1 = rotl(h1, 19);
-			h1 = add32(h1, h2);
-			h1 = add32(Math.imul(h1, 5), 1444728091);
-			k2 = Math.imul(rotl(Math.imul(k2, C2), 16), C3);
-			h2 ^= k2;
-			h2 = rotl(h2, 17);
-			h2 = add32(h2, h3);
-			h2 = add32(Math.imul(h2, 5), 197830471);
-			k3 = Math.imul(rotl(Math.imul(k3, C3), 17), C4);
-			h3 ^= k3;
-			h3 = rotl(h3, 15);
-			h3 = add32(h3, h4);
-			h3 = add32(Math.imul(h3, 5), 2530024501);
-			k4 = Math.imul(rotl(Math.imul(k4, C4), 18), C1);
-			h4 ^= k4;
-			h4 = rotl(h4, 13);
-			h4 = add32(h4, h1);
-			h4 = add32(Math.imul(h4, 5), 850148119);
-		}
-		const tailStart = blocks << 3;
-		const tailBytes = (units - tailStart) * 2;
-		const byteAt = (j) => {
-			const unit = text.charCodeAt(tailStart + (j >>> 1));
-			return j & 1 ? unit >>> 8 : unit & 255;
-		};
-		let k1 = 0;
-		let k2 = 0;
-		let k3 = 0;
-		let k4 = 0;
-		for (let j = tailBytes - 1; j >= 0; j--) {
-			const b = byteAt(j) << (j & 3) * 8;
-			if (j >= 12) k4 ^= b;
-			else if (j >= 8) k3 ^= b;
-			else if (j >= 4) k2 ^= b;
-			else k1 ^= b;
-		}
-		if (tailBytes > 12) {
-			k4 = Math.imul(rotl(Math.imul(k4, C4), 18), C1);
-			h4 ^= k4;
-		}
-		if (tailBytes > 8) {
-			k3 = Math.imul(rotl(Math.imul(k3, C3), 17), C4);
-			h3 ^= k3;
-		}
-		if (tailBytes > 4) {
-			k2 = Math.imul(rotl(Math.imul(k2, C2), 16), C3);
-			h2 ^= k2;
-		}
-		if (tailBytes > 0) {
-			k1 = Math.imul(rotl(Math.imul(k1, C1), 15), C2);
-			h1 ^= k1;
-		}
-		const len = units * 2 >>> 0;
-		h1 ^= len;
-		h2 ^= len;
-		h3 ^= len;
-		h4 ^= len;
-		h1 = add32(h1, h2, h3, h4);
-		h2 = add32(h2, h1);
-		h3 = add32(h3, h1);
-		h4 = add32(h4, h1);
-		h1 = fmix(h1);
-		h2 = fmix(h2);
-		h3 = fmix(h3);
-		h4 = fmix(h4);
-		h1 = add32(h1, h2, h3, h4);
-		h2 = add32(h2, h1);
-		h3 = add32(h3, h1);
-		h4 = add32(h4, h1);
-		return hex(h1) + hex(h2) + hex(h3) + hex(h4);
-	}
-	/**
-	* Exact body equality: length precheck, optional fingerprint precheck, then
-	* `===`. A colliding fingerprint can only make this slower, never true.
-	*/
-	function sameBody(a, b, options = {}) {
-		if (a.length !== b.length) return false;
-		if (options.fingerprint && options.fingerprint(a) !== options.fingerprint(b)) return false;
-		return a === b;
-	}
-	/**
-	* A base that is not retained is unchanged only when revision, length and
-	* fingerprint all match. Revision is primary; the fingerprint catches a
-	* revision that was reused or regressed (for example a restored backup).
-	*/
-	function sameBaseIdentity(a, b) {
-		if (!a || !b) return false;
-		if (a.revision === null || b.revision === null) return false;
-		return a.revision === b.revision && a.length === b.length && a.fingerprint !== null && a.fingerprint === b.fingerprint;
-	}
-	//#endregion
-	//#region src/lifecycle/editor-recovery/store.ts
-	/**
-	* IndexedDB store for editor recovery drafts (`prks-editor-recovery-v1`).
-	*
-	* Two object stores written together: `drafts` (small metadata, enumerated
-	* with getAll + filter) and `bodies` (`{draftId, generation, body}`). Every
-	* write puts both in one readwrite transaction and resolves only from
-	* `oncomplete`; an abort rejects, so metadata and body never diverge and a
-	* write is never reported before it committed.
-	*
-	* Write transactions request `{durability: 'relaxed'}` where supported and fall
-	* back to a plain readwrite transaction. That covers reload, tab close and a
-	* browser-process crash. It is not a promise against OS crash or power loss;
-	* the semantic operation queue stays the strict durability boundary.
-	*
-	* Every decision that depends on stored state (owner, generation, exact body)
-	* is made inside the same transaction that writes or deletes, so concurrent
-	* pages are serialized by IndexedDB itself. Nothing here deletes by age.
-	*/
-	var RecoveryStoreError = class extends Error {
-		code;
-		constructor(code, message) {
-			super(message);
-			this.name = "RecoveryStoreError";
-			this.code = code;
-		}
-	};
-	function supportsDurabilityHint() {
-		try {
-			return typeof IDBTransaction !== "undefined" && "durability" in IDBTransaction.prototype;
-		} catch {
-			return false;
-		}
-	}
-	function errorFromTransaction(tx) {
-		if ((tx.error && tx.error.name) === "QuotaExceededError") return new RecoveryStoreError("quota", "Recovery storage is full.");
-		return new RecoveryStoreError("aborted", "The recovery write was rolled back.");
-	}
-	/** Lineage id for an emergency tail forked away from a lineage adopted since. Deterministic, so merges are idempotent. */
-	function forkedDraftId(draftId, generation) {
-		return draftId + ".e" + generation;
-	}
-	function createRecoveryStore(options = {}) {
-		const factory = options.indexedDB === void 0 ? globalThis.indexedDB : options.indexedDB;
-		const name = options.name || "prks-editor-recovery-v1";
-		const now = options.now || Date.now;
-		const durability = options.durability || "auto";
-		const compare = { fingerprint: options.fingerprint };
-		let dbPromise = null;
-		let handle = null;
-		let lastMode = null;
-		function openDb() {
-			if (dbPromise) return dbPromise;
-			const opening = new Promise((resolve, reject) => {
-				if (!factory) {
-					reject(new RecoveryStoreError("unavailable", "IndexedDB is not available."));
-					return;
-				}
-				let req;
-				try {
-					req = factory.open(name, 1);
-				} catch {
-					reject(new RecoveryStoreError("unavailable", "Could not open recovery storage."));
-					return;
-				}
-				req.onupgradeneeded = () => {
-					const db = req.result;
-					if (!db.objectStoreNames.contains("drafts")) db.createObjectStore(DRAFTS_STORE, { keyPath: "draftId" });
-					if (!db.objectStoreNames.contains("bodies")) db.createObjectStore(BODIES_STORE, { keyPath: "draftId" });
-				};
-				req.onsuccess = () => {
-					const db = req.result;
-					handle = db;
-					db.onversionchange = () => {
-						try {
-							db.close();
-						} catch {}
-						if (handle === db) handle = null;
-						dbPromise = null;
-					};
-					resolve(db);
-				};
-				req.onerror = () => reject(new RecoveryStoreError("unavailable", "Could not open recovery storage."));
-				req.onblocked = () => reject(new RecoveryStoreError("blocked", "Recovery storage is blocked by another tab."));
-			});
-			dbPromise = opening;
-			opening.catch(() => {
-				if (dbPromise === opening) dbPromise = null;
-			});
-			return opening;
-		}
-		function begin(db, mode) {
-			const stores = [DRAFTS_STORE, BODIES_STORE];
-			if (mode === "readwrite" && (durability === "relaxed" || durability === "auto" && supportsDurabilityHint())) try {
-				const tx = db.transaction(stores, mode, { durability: "relaxed" });
-				lastMode = "relaxed";
-				return tx;
-			} catch {}
-			const tx = db.transaction(stores, mode);
-			if (mode === "readwrite") lastMode = "default";
-			return tx;
-		}
-		/**
-		* Runs `fn` in one transaction over both stores and resolves from
-		* `oncomplete` with the value `fn` reported. Rejects on abort or error.
-		*/
-		function run(mode, fn) {
-			return openDb().then((db) => new Promise((resolve, reject) => {
-				let tx;
-				try {
-					tx = begin(db, mode);
-				} catch {
-					reject(new RecoveryStoreError("unavailable", "Could not start a recovery transaction."));
-					return;
-				}
-				let value;
-				let reported = false;
-				let settled = false;
-				tx.oncomplete = () => {
-					if (settled) return;
-					settled = true;
-					if (!reported) reject(new RecoveryStoreError("aborted", "The recovery transaction ended without a result."));
-					else resolve(value);
-				};
-				tx.onabort = () => {
-					if (settled) return;
-					settled = true;
-					reject(errorFromTransaction(tx));
-				};
-				try {
-					fn(tx, (v) => {
-						value = v;
-						reported = true;
-					});
-				} catch {
-					settled = true;
-					try {
-						tx.abort();
-					} catch {}
-					reject(new RecoveryStoreError("aborted", "The recovery transaction failed."));
-				}
-			}));
-		}
-		/** Reads the metadata and body rows of one draft, then calls `next` inside the same transaction. */
-		function readBoth(tx, draftId, next) {
-			let record;
-			let body;
-			let pending = 2;
-			const step = () => {
-				pending -= 1;
-				if (pending === 0) next(record, body);
-			};
-			const r1 = tx.objectStore(DRAFTS_STORE).get(draftId);
-			r1.onsuccess = () => {
-				record = r1.result;
-				step();
-			};
-			const r2 = tx.objectStore(BODIES_STORE).get(draftId);
-			r2.onsuccess = () => {
-				body = r2.result;
-				step();
-			};
-		}
-		function readRecord(tx, draftId, next) {
-			const r = tx.objectStore(DRAFTS_STORE).get(draftId);
-			r.onsuccess = () => next(r.result);
-		}
-		function putPair(tx, record, body) {
-			tx.objectStore(DRAFTS_STORE).put(record);
-			tx.objectStore(BODIES_STORE).put({
-				draftId: record.draftId,
-				generation: record.generation,
-				body
-			});
-		}
-		function deletePair(tx, draftId) {
-			tx.objectStore(DRAFTS_STORE).delete(draftId);
-			tx.objectStore(BODIES_STORE).delete(draftId);
-		}
-		function newRecord(draftId, lineage, generation, bodyLength) {
-			const at = now();
-			return {
-				v: 1,
-				draftId,
-				kind: lineage.kind,
-				entityType: lineage.entityType,
-				entityId: lineage.entityId,
-				entityKey: entityKeyOf(lineage.kind, lineage.entityId),
-				owner: { ...lineage.owner },
-				generation,
-				bodyLength,
-				base: { ...lineage.base },
-				pipeline: null,
-				status: "active",
-				createdAt: at,
-				updatedAt: at
-			};
-		}
-		function writeGeneration(input) {
-			return run("readwrite", (tx, done) => {
-				readRecord(tx, input.draftId, (record) => {
-					if (!record) {
-						if (!input.create) {
-							done("missing");
-							return;
-						}
-						putPair(tx, newRecord(input.draftId, input.create, input.generation, input.body.length), input.body);
-						done("ok");
-						return;
-					}
-					if (!isSupportedRecord(record)) return done("unsupported");
-					if (record.owner.pageInstanceId !== input.pageInstanceId) return done("not-owner");
-					if (record.generation >= input.generation) return done("stale");
-					putPair(tx, {
-						...record,
-						v: 1,
-						owner: {
-							...record.owner,
-							paneId: input.paneId ?? record.owner.paneId
-						},
-						generation: input.generation,
-						bodyLength: input.body.length,
-						base: input.base ? { ...input.base } : record.base,
-						status: "active",
-						updatedAt: now()
-					}, input.body);
-					done("ok");
-				});
-			});
-		}
-		function adopt(draftId, expectedPageInstanceId, owner) {
-			return run("readwrite", (tx, done) => {
-				readRecord(tx, draftId, (record) => {
-					if (!record) return done({ outcome: "missing" });
-					if (!isSupportedRecord(record)) return done({ outcome: "unsupported" });
-					if (record.status === "discarded") return done({ outcome: "missing" });
-					if (record.owner.pageInstanceId !== expectedPageInstanceId) return done({ outcome: "conflict" });
-					const next = {
-						...record,
-						owner: { ...owner },
-						updatedAt: now()
-					};
-					tx.objectStore(DRAFTS_STORE).put(next);
-					done({
-						outcome: "ok",
-						record: next
-					});
-				});
-			});
-		}
-		function get(draftId) {
-			return run("readonly", (tx, done) => {
-				readRecord(tx, draftId, (record) => done(record || null));
-			});
-		}
-		function getBody(draftId) {
-			return run("readonly", (tx, done) => {
-				const r = tx.objectStore(BODIES_STORE).get(draftId);
-				r.onsuccess = () => done(r.result || null);
-			});
-		}
-		function listAll() {
-			return run("readonly", (tx, done) => {
-				const r = tx.objectStore(DRAFTS_STORE).getAll();
-				r.onsuccess = () => done(r.result || []);
-			});
-		}
-		function listByEntity(kind, entityId) {
-			const key = entityKeyOf(kind, entityId);
-			return listAll().then((rows) => rows.filter((row) => row && row.entityKey === key && row.status !== "discarded"));
-		}
-		function deleteIfAcknowledged(draftId, generation, body) {
-			return run("readwrite", (tx, done) => {
-				readBoth(tx, draftId, (record, row) => {
-					if (!record) return done("missing");
-					if (!isSupportedRecord(record)) return done("unsupported");
-					if (record.generation !== generation || !row || row.generation !== generation) return done("kept");
-					if (!sameBody(row.body, body, compare)) return done("kept");
-					deletePair(tx, draftId);
-					done("deleted");
-				});
-			});
-		}
-		function deleteIfEqual(draftId, body) {
-			return run("readwrite", (tx, done) => {
-				readBoth(tx, draftId, (record, row) => {
-					if (!record) return done("missing");
-					if (!isSupportedRecord(record)) return done("unsupported");
-					if (!row || row.generation !== record.generation || !sameBody(row.body, body, compare)) return done("kept");
-					deletePair(tx, draftId);
-					done("deleted");
-				});
-			});
-		}
-		function tombstoneRecord(draftId, tombstone, storedGeneration) {
-			return {
-				...newRecord(draftId, {
-					kind: tombstone.kind,
-					entityType: tombstone.entityType,
-					entityId: tombstone.entityId,
-					owner: {
-						runtimeId: null,
-						pageInstanceId: tombstone.pageInstanceId,
-						paneId: "",
-						claimedAt: now()
-					},
-					base: UNKNOWN_BASE
-				}, Math.max(tombstone.generation, storedGeneration), 0),
-				status: "discarded"
-			};
-		}
-		function discard(draftId, tombstone) {
-			return run("readwrite", (tx, done) => {
-				readRecord(tx, draftId, (record) => {
-					if (record && !isSupportedRecord(record)) return done("unsupported");
-					if (!tombstone) {
-						if (!record) return done("missing");
-						deletePair(tx, draftId);
-						return done("deleted");
-					}
-					tx.objectStore(BODIES_STORE).delete(draftId);
-					tx.objectStore(DRAFTS_STORE).put(tombstoneRecord(draftId, tombstone, record ? record.generation : 0));
-					done(record ? "deleted" : "missing");
-				});
-			});
-		}
-		function clearTombstone(draftId, pageInstanceId) {
-			return run("readwrite", (tx, done) => {
-				readRecord(tx, draftId, (record) => {
-					if (!record) return done("missing");
-					if (!isSupportedRecord(record)) return done("unsupported");
-					if (record.status !== "discarded" || record.owner.pageInstanceId !== pageInstanceId) return done("kept");
-					deletePair(tx, draftId);
-					done("deleted");
-				});
-			});
-		}
-		function applyEmergencyEntry(payload, entry) {
-			return run("readwrite", (tx, done) => {
-				readRecord(tx, entry.draftId, (record) => {
-					if (record && !isSupportedRecord(record)) return done("deferred");
-					if (record && record.status === "discarded") return done("suppressed");
-					if (!record) {
-						if (entry.committedGeneration === 0 && entry.lineage && entry.body !== null) {
-							const lineage = {
-								kind: entry.kind,
-								entityType: entry.entityType,
-								entityId: entry.entityId,
-								owner: {
-									...entry.lineage.owner,
-									claimedAt: entry.lineage.createdAt
-								},
-								base: entry.lineage.base
-							};
-							const created = newRecord(entry.draftId, lineage, entry.generation, entry.body.length);
-							created.createdAt = entry.lineage.createdAt;
-							putPair(tx, created, entry.body);
-							return done("created");
-						}
-						return done("dropped");
-					}
-					if (record.owner.pageInstanceId === payload.pageInstanceId) {
-						if (record.generation >= entry.generation) return done("noop");
-						if (entry.body === null) {
-							tx.objectStore(DRAFTS_STORE).put({
-								...record,
-								status: "tail-missing",
-								updatedAt: now()
-							});
-							return done("tail-missing");
-						}
-						putPair(tx, {
-							...record,
-							generation: entry.generation,
-							bodyLength: entry.body.length,
-							status: "active",
-							updatedAt: now(),
-							...entry.lineage ? {
-								base: { ...entry.lineage.base },
-								owner: {
-									...record.owner,
-									paneId: entry.lineage.owner.paneId
-								}
-							} : {}
-						}, entry.body);
-						return done("written");
-					}
-					if (entry.body === null) return done("dropped");
-					const forkId = forkedDraftId(entry.draftId, entry.generation);
-					readRecord(tx, forkId, (existing) => {
-						if (existing) return done("noop");
-						const lineage = {
-							kind: entry.kind,
-							entityType: entry.entityType,
-							entityId: entry.entityId,
-							owner: {
-								runtimeId: payload.runtimeId,
-								pageInstanceId: payload.pageInstanceId,
-								paneId: entry.lineage ? entry.lineage.owner.paneId : record.owner.paneId,
-								claimedAt: payload.at
-							},
-							base: entry.lineage ? entry.lineage.base : record.base
-						};
-						putPair(tx, newRecord(forkId, lineage, entry.generation, entry.body.length), entry.body);
-						done("forked");
-					});
-				});
-			});
-		}
-		return {
-			writeGeneration,
-			adopt,
-			get,
-			getBody,
-			listByEntity,
-			listAll,
-			deleteIfAcknowledged,
-			deleteIfEqual,
-			discard,
-			clearTombstone,
-			applyEmergencyEntry,
-			lastDurability: () => lastMode,
-			close() {
-				const db = handle;
-				handle = null;
-				dbPromise = null;
-				if (db) try {
-					db.close();
-				} catch {}
-			}
-		};
 	}
 	//#endregion
 	//#region src/lifecycle/editor-recovery/writer.ts
@@ -1277,9 +1334,10 @@ var prksEditorRecovery = (function(exports) {
 			else onResume();
 		}
 		/**
-		* Back from hidden or frozen: write the reservation again before counting
-		* on it. Without Web Locks a page that claimed this runtime meanwhile may
-		* have removed it, taking a frozen page for a closed one.
+		* Back from hidden or frozen, or another page claimed this runtime: write
+		* the reservation again before counting on it. Without Web Locks a page
+		* that claimed this runtime while this one could not answer may have
+		* removed it, taking a frozen or busy page for a closed one.
 		*/
 		function onResume() {
 			if (hiding || reservedChars === 0) return;
@@ -1287,6 +1345,7 @@ var prksEditorRecovery = (function(exports) {
 			changed();
 		}
 		identity.setLineageResponder((draftId) => ownerOf(draftId) !== null);
+		if (identity.setContestListener) identity.setContestListener(onResume);
 		function ownerOf(draftId) {
 			for (const w of live) if (w.currentDraftId() === draftId) return w.sessionKey;
 			return null;
@@ -1850,6 +1909,7 @@ var prksEditorRecovery = (function(exports) {
 				emergencyOn = false;
 				disposed = true;
 				identity.setLineageResponder(null);
+				if (identity.setContestListener) identity.setContestListener(null);
 			}
 		};
 	}

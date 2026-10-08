@@ -104,6 +104,12 @@ export interface DraftRecord {
   status: DraftStatus
   createdAt: number
   updatedAt: number
+  /**
+   * Set on a record an emergency merge created: the page whose emergency key
+   * may still list it. Until that key is gone, deleting the record leaves a
+   * `discarded` tombstone for that page instead, so the key never recreates it.
+   */
+  emergencySource?: string
 }
 
 export interface DraftBodyRow {

@@ -11,7 +11,7 @@
  * removes a key only after every entry in it was handled.
  */
 
-import type { RecoveryStore, EmergencyOutcome } from './store'
+import { forkedDraftId, type RecoveryStore, type EmergencyOutcome } from './store'
 import {
   EMERGENCY_BODY_CHARS,
   EMERGENCY_KEY_PREFIX,
@@ -175,7 +175,8 @@ async function mergeable(env: MergeEnv, stored: StoredEmergency): Promise<boolea
  */
 async function mergeKey(env: MergeEnv, stored: StoredEmergency, payload: EmergencyPayload): Promise<MergeReport> {
   const outcomes: EmergencyOutcome[] = []
-  const suppressed: string[] = []
+  /** Records that may carry a tombstone or mark for this key. */
+  const sourced: string[] = []
   let complete = true
   for (const entry of payload.entries) {
     if (readRaw(env.storage, stored.key) !== stored.raw) {
@@ -186,7 +187,8 @@ async function mergeKey(env: MergeEnv, stored: StoredEmergency, payload: Emergen
       const outcome = await env.store.applyEmergencyEntry(payload, entry)
       outcomes.push(outcome)
       if (outcome === 'deferred') complete = false
-      if (outcome === 'suppressed') suppressed.push(entry.draftId)
+      // An earlier, incomplete merge of this key may have left either one.
+      sourced.push(entry.draftId, forkedDraftId(entry.draftId, entry.generation))
     } catch {
       complete = false
     }
@@ -199,9 +201,10 @@ async function mergeKey(env: MergeEnv, stored: StoredEmergency, payload: Emergen
       complete = false
     }
   }
-  // The stale key is gone, so the tombstone that answered it is no longer needed.
+  // The key is gone, so neither the tombstones that answered it nor the marks
+  // that would leave one are needed. A key kept for a later scan keeps both.
   if (complete && env.store.clearTombstone) {
-    for (const draftId of suppressed) {
+    for (const draftId of sourced) {
       try {
         await env.store.clearTombstone(draftId, stored.pageInstanceId)
       } catch {

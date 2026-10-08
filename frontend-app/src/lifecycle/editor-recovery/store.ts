@@ -118,14 +118,20 @@ export interface RecoveryStore {
   deleteIfAcknowledged(draftId: string, generation: number, body: string): Promise<DeleteOutcome>
   /** Deletes only if the stored body is exactly `body` (proven equal to acknowledged state). */
   deleteIfEqual(draftId: string, body: string): Promise<DeleteOutcome>
-  /** Explicit user discard. */
   /**
-   * With `tombstone`, the body is deleted and a bodyless `discarded` record
-   * stays in its place, so an emergency entry that could not be cleared can
-   * never recreate the draft. `clearTombstone` removes it later.
+   * Explicit user discard. With `tombstone`, the body is deleted and a
+   * bodyless `discarded` record stays in its place, so an emergency entry
+   * that could not be cleared can never recreate the draft. `clearTombstone`
+   * removes it later. Every delete (discard or acknowledgement) of a record
+   * with an `emergencySource` leaves such a tombstone for that page.
    */
   discard(draftId: string, tombstone?: DiscardTombstone): Promise<DeleteOutcome>
-  /** Deletes the tombstone only if it is still one, left by that page. */
+  /**
+   * Called once that page's emergency key is gone: drops what answered that
+   * key. A tombstone answering only that page is deleted; one also answering
+   * another page's key (its `emergencySource`) stays for that one; a live
+   * record loses its `emergencySource` mark. Anything else is kept.
+   */
   clearTombstone(draftId: string, pageInstanceId: string): Promise<DeleteOutcome>
   /** Applies one emergency entry from a page that is no longer alive (§6 merge rules). */
   applyEmergencyEntry(payload: EmergencyPayload, entry: EmergencyEntry): Promise<EmergencyOutcome>
@@ -310,6 +316,19 @@ export function createRecoveryStore(options: RecoveryStoreOptions = {}): Recover
     tx.objectStore(BODIES_STORE).delete(draftId)
   }
 
+  /** Deletes a record, or leaves a tombstone for the emergency key that may still list it. */
+  function retire(tx: IDBTransaction, record: DraftRecord): void {
+    if (!record.emergencySource) return deletePair(tx, record.draftId)
+    tx.objectStore(BODIES_STORE).delete(record.draftId)
+    tx.objectStore(DRAFTS_STORE).put(
+      tombstoneRecord(
+        record.draftId,
+        { kind: record.kind, entityType: record.entityType, entityId: record.entityId, generation: record.generation, pageInstanceId: record.emergencySource },
+        record.generation,
+      ),
+    )
+  }
+
   function newRecord(draftId: string, lineage: CreateLineage, generation: number, bodyLength: number): DraftRecord {
     const at = now()
     return {
@@ -407,7 +426,7 @@ export function createRecoveryStore(options: RecoveryStoreOptions = {}): Recover
         if (!isSupportedRecord(record)) return done('unsupported')
         if (record.generation !== generation || !row || row.generation !== generation) return done('kept')
         if (!sameBody(row.body, body, compare)) return done('kept')
-        deletePair(tx, draftId)
+        retire(tx, record)
         done('deleted')
       })
     })
@@ -419,7 +438,7 @@ export function createRecoveryStore(options: RecoveryStoreOptions = {}): Recover
         if (!record) return done('missing')
         if (!isSupportedRecord(record)) return done('unsupported')
         if (!row || row.generation !== record.generation || !sameBody(row.body, body, compare)) return done('kept')
-        deletePair(tx, draftId)
+        retire(tx, record)
         done('deleted')
       })
     })
@@ -442,11 +461,15 @@ export function createRecoveryStore(options: RecoveryStoreOptions = {}): Recover
         if (record && !isSupportedRecord(record)) return done('unsupported')
         if (!tombstone) {
           if (!record) return done('missing')
-          deletePair(tx, draftId)
+          retire(tx, record)
           return done('deleted')
         }
         tx.objectStore(BODIES_STORE).delete(draftId)
-        tx.objectStore(DRAFTS_STORE).put(tombstoneRecord(draftId, tombstone, record ? record.generation : 0))
+        const stone = tombstoneRecord(draftId, tombstone, record ? record.generation : 0)
+        // It answers both keys: the discarding page's and the one the merge came from.
+        const source = record ? record.emergencySource : undefined
+        if (source && source !== tombstone.pageInstanceId) stone.emergencySource = source
+        tx.objectStore(DRAFTS_STORE).put(stone)
         done(record ? 'deleted' : 'missing')
       })
     })
@@ -457,9 +480,22 @@ export function createRecoveryStore(options: RecoveryStoreOptions = {}): Recover
       readRecord(tx, draftId, (record) => {
         if (!record) return done('missing')
         if (!isSupportedRecord(record)) return done('unsupported')
-        if (record.status !== 'discarded' || record.owner.pageInstanceId !== pageInstanceId) return done('kept')
-        deletePair(tx, draftId)
-        done('deleted')
+        const next: DraftRecord = { ...record, owner: { ...record.owner } }
+        if (record.emergencySource === pageInstanceId) {
+          delete next.emergencySource
+        } else if (record.status === 'discarded' && record.owner.pageInstanceId === pageInstanceId) {
+          // A tombstone answering a second key stays for that one.
+          if (!record.emergencySource) {
+            deletePair(tx, draftId)
+            return done('deleted')
+          }
+          next.owner.pageInstanceId = record.emergencySource
+          delete next.emergencySource
+        } else {
+          return done('kept')
+        }
+        tx.objectStore(DRAFTS_STORE).put(next)
+        done('kept')
       })
     })
   }
@@ -481,6 +517,7 @@ export function createRecoveryStore(options: RecoveryStoreOptions = {}): Recover
             }
             const created = newRecord(entry.draftId, lineage, entry.generation, entry.body.length)
             created.createdAt = entry.lineage.createdAt
+            created.emergencySource = payload.pageInstanceId
             putPair(tx, created, entry.body)
             return done('created')
           }
@@ -531,7 +568,9 @@ export function createRecoveryStore(options: RecoveryStoreOptions = {}): Recover
             },
             base: entry.lineage ? entry.lineage.base : record.base,
           }
-          putPair(tx, newRecord(forkId, lineage, entry.generation, (entry.body as string).length), entry.body as string)
+          const forked = newRecord(forkId, lineage, entry.generation, (entry.body as string).length)
+          forked.emergencySource = payload.pageInstanceId
+          putPair(tx, forked, entry.body as string)
           done('forked')
         })
       })

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { jsonEscapeExtra, mergeEmergencyEntries, planEmergency, readEmergencyKeys, releaseDeadReservations, writeEmergency, type EmergencyStorage } from './emergency'
-import { EMERGENCY_BODY_CHARS, EMERGENCY_PAGE_CHARS, emergencyKeyOf, reservationKeyOf, reservationValue, type EmergencyPayload } from './schema'
-import type { EmergencyOutcome, RecoveryStore } from './store'
+import { EMERGENCY_BODY_CHARS, EMERGENCY_PAGE_CHARS, UNKNOWN_BASE, emergencyKeyOf, reservationKeyOf, reservationValue, type EmergencyPayload } from './schema'
+import { createRecoveryStore, type EmergencyOutcome, type RecoveryStore } from './store'
+import { createFakeIdb } from './test-support/fake-idb'
 
 function memoryStorage(limitChars = Infinity): EmergencyStorage & { map: Map<string, string> } {
   const map = new Map<string, string>()
@@ -180,6 +181,78 @@ describe('mergeEmergencyEntries', () => {
     await mergeEmergencyEntries({ storage: unreadable, store, pageInstanceId: 'p-me', isPageAlive: async () => false })
     expect(applied).toEqual([])
     expect(unreadable.map.has(emergencyKeyOf('p-dead'))).toBe(true)
+  })
+})
+
+describe('a merged draft whose emergency key could not be removed', () => {
+  /** A dead page's key with one uncommitted lineage: a merge creates the draft. */
+  function uncommitted(page: string): EmergencyPayload {
+    const p = payload(page, 'unsaved words')
+    p.entries[0] = {
+      ...p.entries[0]!,
+      generation: 1,
+      committedGeneration: 0,
+      lineage: { createdAt: 1, owner: { runtimeId: 'r-shared', pageInstanceId: page, paneId: 'tab-1' }, base: UNKNOWN_BASE },
+    }
+    return p
+  }
+  function stuckStorage() {
+    const storage = memoryStorage()
+    let stuck = true
+    const remove = storage.removeItem
+    storage.removeItem = (k) => {
+      if (stuck) throw new DOMException('busy', 'UnknownError')
+      remove(k)
+    }
+    return { storage, unstick: () => void (stuck = false) }
+  }
+  const env = (storage: EmergencyStorage, store: RecoveryStore) => ({ storage, store, pageInstanceId: 'p-me', isPageAlive: async () => false })
+
+  it('is never recreated by the kept key after a discard or an acknowledgement', async () => {
+    for (const retire of ['discard', 'acknowledge'] as const) {
+      const store = createRecoveryStore({ indexedDB: createFakeIdb().factory })
+      const { storage, unstick } = stuckStorage()
+      writeEmergency(storage, emergencyKeyOf('p-dead'), uncommitted('p-dead'))
+      const [first] = await mergeEmergencyEntries(env(storage, store))
+      expect(first!.outcomes).toEqual(['created'])
+      expect(first!.removed).toBe(false)
+      if (retire === 'discard') expect(await store.discard('d-p-dead')).toBe('deleted')
+      else expect(await store.deleteIfAcknowledged('d-p-dead', 1, 'unsaved words')).toBe('deleted')
+      expect(await store.listByEntity('work-research-note', 'w1')).toEqual([])
+      unstick()
+      const [second] = await mergeEmergencyEntries(env(storage, store))
+      expect(second!.outcomes).toEqual(['suppressed'])
+      expect(second!.removed).toBe(true)
+      // The key is gone, and the tombstone with it.
+      expect(await store.get('d-p-dead')).toBeNull()
+    }
+  })
+
+  it('drops the mark once the key is removed, so a later discard leaves nothing behind', async () => {
+    const store = createRecoveryStore({ indexedDB: createFakeIdb().factory })
+    const { storage, unstick } = stuckStorage()
+    writeEmergency(storage, emergencyKeyOf('p-dead'), uncommitted('p-dead'))
+    await mergeEmergencyEntries(env(storage, store))
+    expect((await store.get('d-p-dead'))!.emergencySource).toBe('p-dead')
+    unstick()
+    const [again] = await mergeEmergencyEntries(env(storage, store))
+    expect(again!.removed).toBe(true)
+    expect((await store.get('d-p-dead'))!.emergencySource).toBeUndefined()
+    await store.discard('d-p-dead')
+    expect(await store.get('d-p-dead')).toBeNull()
+  })
+
+  it('keeps a tombstone that answers two keys until both are gone', async () => {
+    const store = createRecoveryStore({ indexedDB: createFakeIdb().factory })
+    const { storage } = stuckStorage()
+    writeEmergency(storage, emergencyKeyOf('p-dead'), uncommitted('p-dead'))
+    await mergeEmergencyEntries(env(storage, store))
+    // An adopter discards it while its own key still lists it, too.
+    await store.discard('d-p-dead', { kind: 'work-research-note', entityType: 'work', entityId: 'w1', generation: 1, pageInstanceId: 'p-adopter' })
+    expect(await store.clearTombstone('d-p-dead', 'p-adopter')).toBe('kept')
+    expect((await store.get('d-p-dead'))!.status).toBe('discarded')
+    expect(await store.clearTombstone('d-p-dead', 'p-dead')).toBe('deleted')
+    expect(await store.get('d-p-dead')).toBeNull()
   })
 })
 
