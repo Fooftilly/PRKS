@@ -82,8 +82,12 @@ export interface RestorePlan {
    * still own: compare-and-delete.
    */
   cleanup: string[]
-  /** Already the queued row's exact body: kept until that row's acknowledgement. */
-  represented: Array<{ draftId: string; opId: string; generation: number; text: string }>
+  /**
+   * Already the queued row's exact body, from an inactive lineage: kept until
+   * that row's acknowledgement, then cleared only while `pageInstanceId`
+   * still owns it.
+   */
+  represented: Array<{ draftId: string; opId: string; generation: number; text: string; pageInstanceId: string }>
   restore: {
     record: DraftRecord
     body: string
@@ -149,10 +153,18 @@ export function planResearchNotesRestore(input: RestoreInput): RestorePlan {
       plan.cleanup.push(c.record.draftId)
       continue
     }
+    // Left for its row's acknowledgement to clear, which is only safe for a
+    // lineage no live editor can still be extending.
     const queuedOpId = c.record.pipeline ? c.record.pipeline.queuedOpId : null
     const last = queue ? queue[queue.length - 1] : undefined
-    if (queuedOpId && last && last.opId === queuedOpId && last.text === c.body) {
-      plan.represented.push({ draftId: c.record.draftId, opId: queuedOpId, generation: c.record.generation, text: c.body })
+    if (inactive && queuedOpId && last && last.opId === queuedOpId && last.text === c.body) {
+      plan.represented.push({
+        draftId: c.record.draftId,
+        opId: queuedOpId,
+        generation: c.record.generation,
+        text: c.body,
+        pageInstanceId: c.record.owner.pageInstanceId,
+      })
       continue
     }
     remaining.push(c)

@@ -406,7 +406,8 @@ function prksResearchRecoveryOnSync(event) {
             const writer = watched.writer;
             const clear = watched.text !== text ? Promise.resolve()
                 : writer ? writer.acknowledged(watched.generation, text)
-                    : recovery.rt.store.deleteIfAcknowledged(watched.draftId, watched.generation, text);
+                    /* Only while the page it observed still owns it: never under a writer that adopted it since. */
+                    : recovery.rt.store.deleteIfAcknowledged(watched.draftId, watched.generation, text, watched.pageInstanceId);
             void clear.catch(function () {}).then(function () {
                 if (writer) return writer.release();
                 return undefined;

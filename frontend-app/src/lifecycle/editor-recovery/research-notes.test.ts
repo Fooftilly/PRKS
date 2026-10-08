@@ -64,9 +64,16 @@ describe('Research Notes same-pane restore plan', () => {
   it('leaves a draft already queued as that exact row for the row\'s acknowledgement', () => {
     const pipeline: DraftPipeline = { state: 'queued', queuedOpId: 'op-1', queuedGeneration: 4, blockedBase: null, ownQueued: null }
     const p = plan([candidate('Queued body', { pipeline })], { queue: [{ opId: 'op-1', text: 'Queued body' }], base: { ...K, source: 'cache' } })
-    expect(p.represented).toEqual([{ draftId: 'd-1', opId: 'op-1', generation: 4, text: 'Queued body' }])
+    expect(p.represented).toEqual([{ draftId: 'd-1', opId: 'op-1', generation: 4, text: 'Queued body', pageInstanceId: 'p-old' }])
     expect(p.restore).toBeNull()
     expect(p.review).toEqual([])
+  })
+
+  it('never leaves an uncertain owner\'s queued body for the acknowledgement to clear', () => {
+    const pipeline: DraftPipeline = { state: 'queued', queuedOpId: 'op-1', queuedGeneration: 4, blockedBase: null, ownQueued: null }
+    const p = plan([candidate('Queued body', { pipeline }, 'unknown')], { queue: [{ opId: 'op-1', text: 'Queued body' }] })
+    expect(p.represented).toEqual([])
+    expect(p.review).toMatchObject([{ reason: 'ownership-unknown' }])
   })
 
   it('never restores when the server note changed independently', () => {

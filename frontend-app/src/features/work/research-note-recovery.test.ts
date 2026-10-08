@@ -575,6 +575,51 @@ describe('same-pane restore after reload', () => {
     await waitFor(async () => (await records()).length === 0, 'represented record cleared on its ack')
   })
 
+  it('never clears a queued body whose owner may still be live when its row acknowledges', async () => {
+    const ctx = await openWork()
+    type(ctx, 'Saved note. Queued by A')
+    const saved = await win.prksEnqueueWorkResearchNotesSave(ctx, 'w1')
+    await waitFor(async () => (await records())[0]?.pipeline?.state === 'queued', 'queued recorded')
+    await reload()
+    // Page A is frozen: its lineage cannot be classified.
+    const classify = page!.rt.classify.bind(page!.rt)
+    page!.rt.classify = async () => 'unknown'
+    let result
+    const fresh = await openWork()
+    try {
+      result = await win.prksRestoreResearchNotesRecovery(fresh, { id: 'w1' })
+    } finally {
+      page!.rt.classify = classify
+    }
+    expect(result).toMatchObject({ restored: false, review: [{ reason: 'ownership-unknown' }] })
+    sync.ack(saved.opId as string, 6)
+    await settle()
+    expect(await records()).toHaveLength(1)
+  })
+
+  it('never clears a represented body that another page adopted before its row acknowledged', async () => {
+    const side = await openWork('tab-2')
+    type(side, 'Saved note. Queued in side pane')
+    const saved = await win.prksEnqueueWorkResearchNotesSave(side, 'w1')
+    await waitFor(async () => (await records())[0]?.pipeline?.state === 'queued', 'queued recorded')
+    await reload()
+    const main = await openWork('tab-1')
+    // Another pane's lineage: watched for its ack, not adopted here.
+    expect(await win.prksRestoreResearchNotesRecovery(main, { id: 'w1' })).toMatchObject({ restored: false, review: [] })
+    const [record] = await records()
+    const adopted = await page!.rt.store.adopt(record!.draftId, record!.owner.pageInstanceId, {
+      runtimeId: 'r-other',
+      pageInstanceId: 'p-adopter',
+      paneId: 'tab-9',
+      claimedAt: Date.now(),
+    })
+    expect(adopted.outcome).toBe('ok')
+    sync.ack(saved.opId as string, 6)
+    await settle()
+    const [kept] = await records()
+    expect(kept && kept.owner.pageInstanceId).toBe('p-adopter')
+  })
+
   it('an acknowledgement of the represented row does not clear text typed after the restore', async () => {
     const ctx = await openWork()
     type(ctx, 'Saved note. Queued')

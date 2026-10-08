@@ -2196,18 +2196,20 @@ var prksEditorRecovery = (function(exports) {
 				review(c, "body-missing");
 				continue;
 			}
-			if ((c.lineage === "same-runtime-orphan" || c.lineage === "dead-runtime") && K && K.source === "server" && queue && !queue.length && c.body === K.value) {
+			const inactive = c.lineage === "same-runtime-orphan" || c.lineage === "dead-runtime";
+			if (inactive && K && K.source === "server" && queue && !queue.length && c.body === K.value) {
 				plan.cleanup.push(c.record.draftId);
 				continue;
 			}
 			const queuedOpId = c.record.pipeline ? c.record.pipeline.queuedOpId : null;
 			const last = queue ? queue[queue.length - 1] : void 0;
-			if (queuedOpId && last && last.opId === queuedOpId && last.text === c.body) {
+			if (inactive && queuedOpId && last && last.opId === queuedOpId && last.text === c.body) {
 				plan.represented.push({
 					draftId: c.record.draftId,
 					opId: queuedOpId,
 					generation: c.record.generation,
-					text: c.body
+					text: c.body,
+					pageInstanceId: c.record.owner.pageInstanceId
 				});
 				continue;
 			}
