@@ -231,10 +231,12 @@ var prksEditorRecovery = (function(exports) {
 		return reports;
 	}
 	/**
-	* Removes the quota reservations of pages that are definitely gone. A page
-	* reserves only after its claim settled, with its page lock held, so a live
-	* page never reads as `false`; unknown liveness leaves the key alone. A
-	* reservation holds only filler, never text, so removing it loses nothing.
+	* Removes the quota reservations of pages that are proven gone. Only held Web
+	* Locks prove that: a page reserves only after its claim settled, with its page
+	* lock held. A missed BroadcastChannel answer never removes a reservation,
+	* because a frozen or busy page misses it while its writer still counts the
+	* reservation as held. A reservation holds only filler, never text, so
+	* removing it loses nothing.
 	*/
 	async function releaseDeadReservations(env) {
 		const keys = [];
@@ -250,7 +252,7 @@ var prksEditorRecovery = (function(exports) {
 		for (const key of keys) {
 			const pageInstanceId = key.slice(RESERVATION_KEY_PREFIX.length);
 			if (pageInstanceId === env.pageInstanceId) continue;
-			if (await env.isPageAlive(pageInstanceId) !== false) continue;
+			if (!await env.isPageGone(pageInstanceId)) continue;
 			try {
 				env.storage.removeItem(key);
 				removed.push(key);
@@ -514,6 +516,11 @@ var prksEditorRecovery = (function(exports) {
 					page: id,
 					q: queryId()
 				});
+			},
+			async isPageGone(id) {
+				if (id === pageInstanceId) return false;
+				const held = await heldLockNames();
+				return held ? !held.has(PAGE_LOCK_PREFIX + id) : false;
 			},
 			async isRuntimeAlive(id) {
 				if (settled && settled.runtimeId === id) return true;
@@ -1848,7 +1855,10 @@ var prksEditorRecovery = (function(exports) {
 				definiteOnly
 			};
 			const reports = await mergeEmergencyEntries(env);
-			await releaseDeadReservations(env);
+			await releaseDeadReservations({
+				...env,
+				isPageGone: (id) => identity.isPageGone(id)
+			});
 			return reports;
 		}
 		function start() {

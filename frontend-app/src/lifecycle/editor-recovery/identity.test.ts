@@ -60,8 +60,10 @@ describe('runtime claim with Web Locks', () => {
     expect(browser.held.has(PAGE_LOCK_PREFIX + a.identity.pageInstanceId)).toBe(true)
     expect(await b.identity.isPageAlive(a.identity.pageInstanceId)).toBe(true)
     expect(await b.identity.isRuntimeAlive(ca.runtimeId)).toBe(true)
+    expect(await b.identity.isPageGone(a.identity.pageInstanceId)).toBe(false)
     a.identity.dispose()
     await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(await b.identity.isPageGone(a.identity.pageInstanceId)).toBe(true)
     expect(browser.held.has(RUNTIME_LOCK_PREFIX + ca.runtimeId)).toBe(false)
     expect(await b.identity.isPageAlive(a.identity.pageInstanceId)).toBe(false)
     expect(await b.identity.isRuntimeAlive(ca.runtimeId)).toBe(false)
@@ -103,6 +105,8 @@ describe('runtime claim over BroadcastChannel (no Web Locks)', () => {
     expect(await b.identity.isLineageLiveElsewhere('d-other')).toBe(false)
     a.identity.dispose()
     expect(await b.identity.isPageAlive(a.identity.pageInstanceId)).toBe(false)
+    // An unanswered ping is not proof: a frozen or busy page misses it too.
+    expect(await b.identity.isPageGone(a.identity.pageInstanceId)).toBe(false)
   })
 })
 
@@ -112,6 +116,7 @@ describe('runtime claim with neither', () => {
     const a = page(browser, 'a', 'none', browser.sessionStorageWith({ [RUNTIME_SESSION_KEY]: COPIED }))
     expect(await a.identity.claim()).toEqual({ runtimeId: COPIED, verified: 'unverified' })
     expect(await a.identity.isPageAlive('p-x')).toBeNull()
+    expect(await a.identity.isPageGone('p-x')).toBe(false)
     expect(await a.identity.isLineageLiveElsewhere('d-x')).toBeNull()
   })
 })

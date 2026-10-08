@@ -62,6 +62,11 @@ export interface PageIdentity {
   current(): RuntimeClaim | null
   /** true/false when established; null when liveness cannot be established. */
   isPageAlive(pageInstanceId: string): Promise<boolean | null>
+  /**
+   * true only when held Web Locks prove the page is gone. A missed
+   * BroadcastChannel answer is never proof: a frozen or busy page misses it.
+   */
+  isPageGone(pageInstanceId: string): Promise<boolean>
   isRuntimeAlive(runtimeId: string): Promise<boolean | null>
   /** Does another page report a live writer for this lineage? */
   isLineageLiveElsewhere(draftId: string): Promise<boolean | null>
@@ -306,6 +311,11 @@ export function createPageIdentity(env: IdentityEnv = {}): PageIdentity {
       const held = await heldLockNames()
       if (held) return held.has(PAGE_LOCK_PREFIX + id)
       return ask({ t: 'page?', page: id, q: queryId() })
+    },
+    async isPageGone(id) {
+      if (id === pageInstanceId) return false
+      const held = await heldLockNames()
+      return held ? !held.has(PAGE_LOCK_PREFIX + id) : false
     },
     async isRuntimeAlive(id) {
       if (settled && settled.runtimeId === id) return true

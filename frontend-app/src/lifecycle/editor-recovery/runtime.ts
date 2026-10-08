@@ -66,7 +66,7 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
       definiteOnly,
     }
     const reports = await mergeEmergencyEntries(env)
-    await releaseDeadReservations(env)
+    await releaseDeadReservations({ ...env, isPageGone: (id: string) => identity.isPageGone(id) })
     return reports
   }
 
