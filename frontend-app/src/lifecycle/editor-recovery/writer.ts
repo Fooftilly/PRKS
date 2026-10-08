@@ -135,6 +135,8 @@ interface Pending {
 
 /** Worst-case reservation char on every engine (see canHold). */
 const RESERVATION_FILLER = '\u0101'
+/** Most slack a reservation takes beyond the payload it covers. */
+const RESERVATION_STEP_CHARS = 64 * 1024
 
 const defaultScheduler: Scheduler = {
   set: (fn, ms) => setTimeout(fn, ms),
@@ -171,6 +173,13 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
    * armed before unload instead of discovering the failure at pagehide.
    */
   let reservedChars = 0
+  /**
+   * Set at pagehide: the page is going away (or into the back/forward cache),
+   * so it does not reserve again after its emergency write; a reservation
+   * left by a closed page would only hold quota until a later page cleans it.
+   * Cleared at pageshow, which re-plans.
+   */
+  let hiding = false
   /** Set when a real emergency write could not keep every planned body; cleared by a full write. */
   let distrusted = false
   let guardOn = false
@@ -188,7 +197,13 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     ;(event as BeforeUnloadEvent).returnValue = ''
   }
   function onPageHide(): void {
+    hiding = true
     writeEmergencyNow()
+  }
+  function onPageShow(): void {
+    if (!hiding) return
+    hiding = false
+    changed()
   }
   function onVisibility(): void {
     if (doc && doc.visibilityState === 'hidden') writeEmergencyNow()
@@ -218,7 +233,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     const lengths = pending.map((w) => (w.pendingBody() as Pending).body.length)
     const plan = planEmergency(lengths)
     planned = new Set(pending.filter((_, i) => plan.has(i)))
-    held = pending.length && canHold(payloadChars(pending.length)) ? planned : new Set()
+    held = pending.length && !hiding && canHold(payloadChars(pending.length)) ? planned : new Set()
   }
 
   function setGuard(needGuard: boolean): void {
@@ -232,9 +247,15 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
   function setEmergencyListeners(needEmergency: boolean): void {
     if (needEmergency !== emergencyOn) {
       const method = needEmergency ? 'addEventListener' : 'removeEventListener'
-      if (win) win[method]('pagehide', onPageHide)
+      if (win) {
+        win[method]('pagehide', onPageHide)
+        win[method]('pageshow', onPageShow)
+      }
       if (doc) doc[method]('visibilitychange', onVisibility)
-      if (!needEmergency) releaseReservation()
+      if (!needEmergency) {
+        releaseReservation()
+        hiding = false
+      }
     }
     emergencyOn = needEmergency
   }
@@ -308,16 +329,17 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
 
   /**
    * Whether this page's reservation covers a payload of `chars`. Beyond what
-   * is reserved it grows the reservation to twice the size (then the exact
-   * size), so it grows geometrically and typing does not rewrite it on every
-   * keystroke. Only a page whose runtime claim has settled reserves: its page
+   * is reserved it grows the reservation by up to RESERVATION_STEP_CHARS of
+   * slack (then to the exact size), so typing does not rewrite it on every
+   * keystroke while a large note never holds twice its size of other writes'
+   * quota. Only a page whose runtime claim has settled reserves: its page
    * lock is held by then, so no live page's reservation reads as dead and is
    * cleaned up by another page.
    */
   function canHold(chars: number): boolean {
     if (!storage || distrusted || !identity.current()) return false
     if (chars <= reservedChars) return true
-    for (const size of [chars * 2, chars]) {
+    for (const size of [chars + Math.min(chars, RESERVATION_STEP_CHARS), chars]) {
       try {
         // A filler above U+00FF on purpose: Chromium stores an all-Latin-1
         // value at 1 byte per char and anything else at 2, and its quota counts
@@ -796,6 +818,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       if (win) {
         win.removeEventListener('beforeunload', onBeforeUnload)
         win.removeEventListener('pagehide', onPageHide)
+        win.removeEventListener('pageshow', onPageShow)
       }
       releaseReservation()
       if (doc) doc.removeEventListener('visibilitychange', onVisibility)

@@ -1175,6 +1175,8 @@ var prksEditorRecovery = (function(exports) {
 	*/
 	/** Worst-case reservation char on every engine (see canHold). */
 	var RESERVATION_FILLER = "ā";
+	/** Most slack a reservation takes beyond the payload it covers. */
+	var RESERVATION_STEP_CHARS = 65536;
 	var defaultScheduler = {
 		set: (fn, ms) => setTimeout(fn, ms),
 		clear: (handle) => clearTimeout(handle)
@@ -1207,6 +1209,13 @@ var prksEditorRecovery = (function(exports) {
 		* armed before unload instead of discovering the failure at pagehide.
 		*/
 		let reservedChars = 0;
+		/**
+		* Set at pagehide: the page is going away (or into the back/forward cache),
+		* so it does not reserve again after its emergency write; a reservation
+		* left by a closed page would only hold quota until a later page cleans it.
+		* Cleared at pageshow, which re-plans.
+		*/
+		let hiding = false;
 		/** Set when a real emergency write could not keep every planned body; cleared by a full write. */
 		let distrusted = false;
 		let guardOn = false;
@@ -1223,7 +1232,13 @@ var prksEditorRecovery = (function(exports) {
 			event.returnValue = "";
 		}
 		function onPageHide() {
+			hiding = true;
 			writeEmergencyNow();
+		}
+		function onPageShow() {
+			if (!hiding) return;
+			hiding = false;
+			changed();
 		}
 		function onVisibility() {
 			if (doc && doc.visibilityState === "hidden") writeEmergencyNow();
@@ -1248,7 +1263,7 @@ var prksEditorRecovery = (function(exports) {
 		function planHeld(pending) {
 			const plan = planEmergency(pending.map((w) => w.pendingBody().body.length));
 			planned = new Set(pending.filter((_, i) => plan.has(i)));
-			held = pending.length && canHold(payloadChars(pending.length)) ? planned : /* @__PURE__ */ new Set();
+			held = pending.length && !hiding && canHold(payloadChars(pending.length)) ? planned : /* @__PURE__ */ new Set();
 		}
 		function setGuard(needGuard) {
 			if (win && needGuard !== guardOn) {
@@ -1260,9 +1275,15 @@ var prksEditorRecovery = (function(exports) {
 		function setEmergencyListeners(needEmergency) {
 			if (needEmergency !== emergencyOn) {
 				const method = needEmergency ? "addEventListener" : "removeEventListener";
-				if (win) win[method]("pagehide", onPageHide);
+				if (win) {
+					win[method]("pagehide", onPageHide);
+					win[method]("pageshow", onPageShow);
+				}
 				if (doc) doc[method]("visibilitychange", onVisibility);
-				if (!needEmergency) releaseReservation();
+				if (!needEmergency) {
+					releaseReservation();
+					hiding = false;
+				}
 			}
 			emergencyOn = needEmergency;
 		}
@@ -1327,16 +1348,17 @@ var prksEditorRecovery = (function(exports) {
 		}
 		/**
 		* Whether this page's reservation covers a payload of `chars`. Beyond what
-		* is reserved it grows the reservation to twice the size (then the exact
-		* size), so it grows geometrically and typing does not rewrite it on every
-		* keystroke. Only a page whose runtime claim has settled reserves: its page
+		* is reserved it grows the reservation by up to RESERVATION_STEP_CHARS of
+		* slack (then to the exact size), so typing does not rewrite it on every
+		* keystroke while a large note never holds twice its size of other writes'
+		* quota. Only a page whose runtime claim has settled reserves: its page
 		* lock is held by then, so no live page's reservation reads as dead and is
 		* cleaned up by another page.
 		*/
 		function canHold(chars) {
 			if (!storage || distrusted || !identity.current()) return false;
 			if (chars <= reservedChars) return true;
-			for (const size of [chars * 2, chars]) try {
+			for (const size of [chars + Math.min(chars, RESERVATION_STEP_CHARS), chars]) try {
 				storage.setItem(reservationKey, RESERVATION_FILLER.repeat(size));
 				reservedChars = size;
 				return true;
@@ -1769,6 +1791,7 @@ var prksEditorRecovery = (function(exports) {
 				if (win) {
 					win.removeEventListener("beforeunload", onBeforeUnload);
 					win.removeEventListener("pagehide", onPageHide);
+					win.removeEventListener("pageshow", onPageShow);
 				}
 				releaseReservation();
 				if (doc) doc.removeEventListener("visibilitychange", onVisibility);

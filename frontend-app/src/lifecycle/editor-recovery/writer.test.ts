@@ -406,6 +406,30 @@ describe('quota reservation', () => {
     expect(t.storage.map.has(reservationKeyOf('p-me'))).toBe(false)
   })
 
+  it('does not reserve again after the pagehide write, and re-plans when the page is shown again', () => {
+    const t = setup()
+    const w = t.open()
+    w.edit(1, 'closing with this')
+    expect(t.storage.map.has(reservationKeyOf('p-me'))).toBe(true)
+    t.win.fire('pagehide')
+    expect(t.storage.map.has(reservationKeyOf('p-me'))).toBe(false)
+    const left = JSON.parse(t.storage.map.get(emergencyKeyOf('p-me')) as string) as EmergencyPayload
+    expect(left.entries[0]!.body).toBe('closing with this')
+    // Restored from the back/forward cache: it reserves again.
+    t.win.fire('pageshow')
+    expect(t.storage.map.has(reservationKeyOf('p-me'))).toBe(true)
+    expect(w.heldByEmergency()).toBe(true)
+  })
+
+  it('takes bounded slack beyond a large payload', () => {
+    const t = setup()
+    const w = t.open()
+    w.edit(1, 'x'.repeat(200_000))
+    const reserved = (t.storage.map.get(reservationKeyOf('p-me')) as string).length
+    expect(reserved).toBeGreaterThan(200_000)
+    expect(reserved).toBeLessThanOrEqual(200_000 + 2 + 1024 + 64 * 1024)
+  })
+
   it('does not reserve, and guards, until the runtime claim has settled', () => {
     let settled = false
     const t = setup({ settled: () => settled })
