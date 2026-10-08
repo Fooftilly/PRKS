@@ -467,6 +467,8 @@ describe('same-pane restore after reload', () => {
 
   it('keeps the draft without applying it when the queue cannot be read', async () => {
     const ctx = await typedThenReloaded('Saved note. Queue unknown')
+    // A foreign, unattempted row the restored body must never replace.
+    await sync.store.saveWorkNote('w1', 'SET_WORK_RESEARCH_NOTE', 'Saved note. Foreign A', { value: server.text, revision: server.revision })
     const list = sync.store.listOperations
     sync.store.listOperations = async () => {
       throw new Error('queue unavailable')
@@ -477,8 +479,10 @@ describe('same-pane restore after reload', () => {
     } finally {
       sync.store.listOperations = list
     }
-    expect(win.prksResearchNotesTextForWork('w1', server.text, ctx)).toBe('Saved note.')
+    expect(ctx.ui.workResearchNoteSession).toBeNull()
     expect(await records()).toHaveLength(1)
+    // Storage works again: the foreign row is intact and nothing was enqueued.
+    expect(sync.rows().map((r) => r.payload.text)).toEqual(['Saved note. Foreign A'])
   })
 
   it('does not restore another pane\'s draft into this pane', async () => {
@@ -591,6 +595,29 @@ describe('same-pane restore after reload', () => {
       expect(entry.ownQueuedText).toBe('Saved note. A')
       expect(entry.blockedBase).toEqual({ value: 'Saved note.', revision: 5 })
       expect(sync.rows().map((r) => r.payload.text)).toEqual(['Saved note. A'])
+    })
+
+    it('keeps a blocked body that reverts to the server note behind its own predecessor', async () => {
+      const ctx = await openWork()
+      type(ctx, 'Saved note. A')
+      await win.prksEnqueueWorkResearchNotesSave(ctx, 'w1')
+      sync.attempt('op-1')
+      type(ctx, 'Saved note.')
+      await win.prksEnqueueWorkResearchNotesSave(ctx, 'w1')
+      await waitFor(async () => (await records())[0]?.pipeline?.state === 'blocked', 'blocked recorded')
+      await reload()
+      const fresh = await openWork()
+      const result = await win.prksRestoreResearchNotesRecovery(fresh, { id: 'w1' })
+      expect(result).toMatchObject({ restored: true })
+      expect(fresh.ui.workResearchNoteSession).toMatchObject({ state: 'blocked', text: 'Saved note.' })
+      const [record] = await records()
+      expect(await bodyOf(record!.draftId)).toBe('Saved note.')
+      sync.ack('op-1', 6)
+      await settle()
+      // A is acknowledged; the newer intent (back to the old note) is still recoverable and unsaved.
+      expect(server.text).toBe('Saved note. A')
+      const [kept] = await records()
+      expect(kept && (await bodyOf(kept.draftId))).toBe('Saved note.')
     })
 
     it('resumes on its own acknowledged predecessor', async () => {
