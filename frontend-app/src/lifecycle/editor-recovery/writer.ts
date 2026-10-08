@@ -206,12 +206,19 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
    * Another tab grew localStorage (shared quota): the cached capacity proof no
    * longer holds, so drop it and re-probe. Probe writes are ignored, or two
    * tabs with pending drafts would re-probe each other forever; removals and
-   * values that take no more bytes than before only free quota.
+   * values that are neither longer nor wider in bytes than before only free quota.
    */
   function onStorage(event: Event): void {
     const e = event as StorageEvent
     if (e.key === EMERGENCY_PROBE_KEY || e.newValue === null) return
-    if (e.key !== null && e.oldValue !== null && storedBytes(e.newValue) <= storedBytes(e.oldValue)) return
+    // Neither measure may grow: Chromium charges bytes, Firefox UTF-16 units.
+    if (
+      e.key !== null &&
+      e.oldValue !== null &&
+      e.newValue.length <= e.oldValue.length &&
+      storedBytes(e.newValue) <= storedBytes(e.oldValue)
+    )
+      return
     if (provenChars === 0) return
     provenChars = 0
     changed()

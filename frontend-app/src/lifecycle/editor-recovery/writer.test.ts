@@ -290,7 +290,7 @@ describe('emergency storage that cannot keep a body', () => {
     expect(t.registry.leaveGuardActive()).toBe(true)
   })
 
-  it('re-proves capacity when another tab replaces a value with one of equal length but wider bytes', () => {
+  it('re-proves capacity when another tab replaces a value with one that grows in bytes or in UTF-16 units', () => {
     const t = setup()
     const w = t.open()
     w.edit(1, 'x'.repeat(1000))
@@ -301,6 +301,10 @@ describe('emergency storage that cannot keep a body', () => {
     expect(spy).not.toHaveBeenCalled()
     // Equal length, but non-Latin text takes twice the bytes in Chromium.
     t.win.fire('storage', { key: 'other-app-key', oldValue: 'a'.repeat(50), newValue: 'ж'.repeat(50) } as unknown as Partial<Event>)
+    expect(spy).toHaveBeenCalledWith('prks.editorRecovery.probe.v1', expect.any(String))
+    // Fewer bytes in Chromium, but more UTF-16 units, which Firefox counts.
+    spy.mockClear()
+    t.win.fire('storage', { key: 'other-app-key', oldValue: 'ж'.repeat(50), newValue: 'a'.repeat(100) } as unknown as Partial<Event>)
     expect(spy).toHaveBeenCalledWith('prks.editorRecovery.probe.v1', expect.any(String))
   })
 
