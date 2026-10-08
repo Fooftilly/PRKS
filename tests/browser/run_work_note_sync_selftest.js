@@ -279,12 +279,14 @@ async function durableSaveThroughObservedBaseCancels() {
         const result = await globalThis.prksSaveWorkNoteDurably(
             'W-1', RESEARCH_KIND, text, observedOf());
         assert.equal(result.code, 'saved', 'editor-path save of ' + JSON.stringify(text));
+        return result;
     }
 
-    await saveEditorText('B');
+    const savedB = await saveEditorText('B');
     let rows = noteRows(await store.listOperations(), RESEARCH, 'W-1');
     assert.equal(rows.length, 1, 'A->B through durable save leaves one intent');
     assert.equal(rows[0].payload.text, 'B');
+    assert.equal(savedB.opId, rows[0].op_id, 'the save reports the row holding exactly its body (#466)');
     assert.equal(observedOf().value, 'A',
         'pending B must not rewrite the acknowledged observed base');
     const effective = globalThis.prksEffectiveNoteWork(
@@ -293,9 +295,10 @@ async function durableSaveThroughObservedBaseCancels() {
     assert.notEqual(observedOf().value, effective.text_content,
         'observed stays on A while the overlay shows B');
 
-    await saveEditorText('A');
+    const savedA = await saveEditorText('A');
     rows = noteRows(await store.listOperations(), RESEARCH, 'W-1');
     assert.equal(rows.length, 0, 'A->B->A through acknowledged observed cancels');
+    assert.equal(savedA.opId, null, 'nothing queued: no row id');
 
     /* Failure mode Codex called out: feeding the effective body as observed
      * makes editing back to A look like a new change. */

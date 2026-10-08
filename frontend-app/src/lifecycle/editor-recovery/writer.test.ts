@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { EmergencyStorage } from './emergency'
-import { RECOVERY_DB_NAME, BODIES_STORE, LARGE_BODY_CHARS, emergencyKeyOf, reservationKeyOf, type DraftBase, type EmergencyPayload } from './schema'
+import { RECOVERY_DB_NAME, BODIES_STORE, LARGE_BODY_CHARS, emergencyKeyOf, reservationKeyOf, type DraftBase, type DraftPipeline, type EmergencyPayload } from './schema'
 import { createRecoveryStore, type RecoveryStore, type WriteGenerationInput, type WriteOutcome } from './store'
 import { createFakeIdb, createManualScheduler, settle } from './test-support/fake-idb'
 import { createWriterRegistry, type DraftWriter, type WriterEvent, type WriterRegistry } from './writer'
@@ -673,6 +673,57 @@ describe('acknowledgement', () => {
     await w.flush()
     expect(w.draftId()).not.toBe(first)
     expect(t.events.some((e) => e.type === 'ownership-lost')).toBe(false)
+  })
+})
+
+describe('lineage metadata', () => {
+  const PIPELINE: DraftPipeline = { state: 'queued', queuedOpId: 'op-7', queuedGeneration: 1, blockedBase: null, ownQueued: null }
+  const NEWER: DraftBase = { revision: 8, length: 5, fingerprint: 'b'.repeat(32), source: 'server' }
+
+  it('carries base and pipeline with the next write while a body is pending', async () => {
+    const t = setup()
+    const w = t.open()
+    w.setPipeline(PIPELINE)
+    w.edit(1, 'one')
+    await w.flush()
+    expect(t.calls).toHaveLength(1)
+    expect(t.calls[0]).toMatchObject({ generation: 1, base: BASE, pipeline: PIPELINE })
+    expect(await t.store.get(w.draftId() as string)).toMatchObject({ base: BASE, pipeline: PIPELINE })
+  })
+
+  it('updates a stored lineage in place when nothing is pending, without a body write', async () => {
+    const t = setup()
+    const w = t.open()
+    w.edit(1, 'one')
+    await w.flush()
+    w.setBase(NEWER)
+    w.setPipeline(PIPELINE)
+    await settle()
+    expect(t.calls).toHaveLength(1)
+    expect(await t.store.get(w.draftId() as string)).toMatchObject({ generation: 1, base: NEWER, pipeline: PIPELINE })
+    expect(await t.store.getBody(w.draftId() as string)).toMatchObject({ generation: 1, body: 'one' })
+  })
+
+  it('never races a body write: a metadata change during a write lands after it', async () => {
+    const t = setup({ gate: true })
+    const w = t.open()
+    w.edit(1, 'one')
+    void w.flush()
+    await settle()
+    w.setPipeline(PIPELINE)
+    await t.releaseGate()
+    await settle()
+    expect(t.calls).toHaveLength(1)
+    expect(await t.store.get(w.draftId() as string)).toMatchObject({ generation: 1, pipeline: PIPELINE })
+  })
+
+  it('writes nothing for a writer that has no stored lineage yet', async () => {
+    const t = setup()
+    const w = t.open()
+    w.setPipeline(PIPELINE)
+    await settle()
+    expect(t.calls).toHaveLength(0)
+    expect(await t.store.listAll()).toEqual([])
   })
 })
 

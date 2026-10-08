@@ -72,7 +72,10 @@ function prksPruneResearchDrafts() {
         .sort((a, b) => a.updatedAt - b.updatedAt);
     while (committed.length > PRKS_RESEARCH_DRAFT_MAX_COMMITTED) {
         const old = committed.shift();
-        if (old) prksWorkResearchDrafts.delete(old.key);
+        if (old) {
+            prksWorkResearchDrafts.delete(old.key);
+            prksResearchRecoveryRelease(old);
+        }
     }
 }
 
@@ -88,6 +91,7 @@ function prksResearchNotesTextForWork(workId, serverText, ctx) {
     }
     if (entry.state === 'committed' && !entry.promise && entry.text === acknowledged) {
         prksWorkResearchDrafts.delete(entry.key);
+        prksResearchRecoveryRelease(entry);
         if (ctx.ui && ctx.ui.workResearchNoteSession === entry) ctx.ui.workResearchNoteSession = null;
         return acknowledged;
     }
@@ -170,12 +174,442 @@ function prksSyncLiveResearchDraft(workId, entry, generation, result) {
     });
 }
 
+/*
+ * Browser-local recovery of Research Notes text (#466 slice 2).
+ *
+ * Every edit reports the session's newest generation and body to one
+ * recovery writer per session entry (`entry.recovery`), independently of the
+ * 2 s semantic-save debounce. The writer belongs to `prksEditorRecovery`'s
+ * page registry, not to TabContext timers, so a warm park, cold release or
+ * remount keeps the lineage; it is released only when the session entry
+ * itself is dropped. A recovery commit means "recoverable on this device",
+ * never "saved": no status here reads as saved because of it.
+ *
+ * `entry.recoveryBase` is the acknowledged body this session's text was typed
+ * on. It is set from the observed base when a lineage starts and advanced
+ * only by the acknowledgement of this session's own queued operation, never
+ * by another pane's or tab's, so a foreign edit is never silently treated as
+ * the base. The record is cleared only by the exact acknowledged generation
+ * and body, or when a save proves the body equals the acknowledged note.
+ */
+const PRKS_RESEARCH_RECOVERY_KIND = 'work-research-note';
+const PRKS_RESEARCH_NOTES_RESTORED_STATUS = 'Restored unsaved changes';
+/* Represented drafts (already the exact body of a queued row): op id -> list,
+ * cleared on that row's acknowledgement. One from this pane before reload is
+ * adopted (`writer`, `key`): the pane's next edit continues that lineage, so
+ * a later save that replaces the row still ends in an exact clear. */
+const prksResearchRecoveryAckWatch = new Map();
+/* A restore that has not finished by then is abandoned and the editor opens
+ * as it would without recovery; nothing it reads later is applied. */
+const PRKS_RESEARCH_RECOVERY_RESTORE_MS = 5000;
+let prksResearchRecoveryRestoreMs = PRKS_RESEARCH_RECOVERY_RESTORE_MS;
+const prksResearchRecoveryPrints = [];
+let prksResearchRecoveryStopSync = null;
+let prksResearchRecoveryChain = Promise.resolve();
+
+function prksResearchRecovery() {
+    const api = window.prksEditorRecovery;
+    if (!api || typeof api.runtime !== 'function' || typeof api.planResearchNotesRestore !== 'function') return null;
+    try {
+        return { api: api, rt: api.runtime() };
+    } catch (_e) {
+        return null;
+    }
+}
+
+/* A note body is fingerprinted once per base or own save, never per keystroke. */
+function prksResearchRecoveryPrint(api, text) {
+    for (const item of prksResearchRecoveryPrints) {
+        if (item.text === text) return item.print;
+    }
+    const print = api.fingerprintText(text);
+    prksResearchRecoveryPrints.unshift({ text: text, print: print });
+    if (prksResearchRecoveryPrints.length > 4) prksResearchRecoveryPrints.pop();
+    return print;
+}
+
+function prksResearchRecoveryIdentity(api, base) {
+    if (!base || typeof base.value !== 'string' || !Number.isSafeInteger(base.revision)) return null;
+    return { revision: base.revision, length: base.value.length, fingerprint: prksResearchRecoveryPrint(api, base.value) };
+}
+
+function prksResearchRecoveryDraftBase(api, base) {
+    const identity = prksResearchRecoveryIdentity(api, base);
+    if (!identity) return Object.assign({}, api.UNKNOWN_BASE);
+    const source = base.source === 'cache' || base.source === 'pending-create' ? base.source : 'server';
+    return Object.assign(identity, { source: source });
+}
+
+function prksResearchRecoveryObservedBase(owner) {
+    const slot = typeof prksWorkNoteObserved === 'function' ? prksWorkNoteObserved(owner, PRKS_RESEARCH_RECOVERY_KIND) : null;
+    if (!slot || typeof slot.value !== 'string' || !Number.isSafeInteger(slot.revision)) return null;
+    return { value: slot.value, revision: slot.revision, source: slot.source || 'server' };
+}
+
+/* Pipeline state for the stored record: informational, never authoritative. */
+function prksResearchRecoveryPipeline(entry, patch) {
+    const writer = entry && entry.recovery;
+    if (!writer) return;
+    const current = entry.recoveryPipeline || {
+        state: 'drafting', queuedOpId: null, queuedGeneration: 0, blockedBase: null, ownQueued: null,
+    };
+    const next = Object.assign({}, current, patch);
+    const same = Object.keys(next).every(function (k) {
+        return JSON.stringify(next[k]) === JSON.stringify(current[k]);
+    });
+    entry.recoveryPipeline = next;
+    if (!same || !entry.recoveryPipelineStored) {
+        entry.recoveryPipelineStored = true;
+        try {
+            writer.setPipeline(next);
+        } catch (_e) { /* recovery is best-effort beside the save path */ }
+    }
+}
+
+function prksResearchRecoveryStateOf(entry) {
+    if (!entry) return 'drafting';
+    if (entry.state === 'committed') {
+        if (!entry.recoveryQueued) return 'drafting';
+        return entry.recoveryConflictOpId === entry.recoveryQueued.opId ? 'conflict' : 'queued';
+    }
+    return entry.state === 'saving' || entry.state === 'blocked' || entry.state === 'error' ? entry.state : 'drafting';
+}
+
+/** Reports the session's newest body to its recovery writer (one lineage per session). */
+function prksResearchRecoveryEdit(owner, entry) {
+    const recovery = prksResearchRecovery();
+    if (!recovery || !entry) return;
+    try {
+        void recovery.rt.start().catch(function () {});
+        prksResearchRecoveryListen();
+        let writer = entry.recovery;
+        if (!writer) writer = prksResearchRecoveryTakeWatched(entry);
+        if (!writer) {
+            writer = recovery.rt.writers.openWriter({
+                kind: PRKS_RESEARCH_RECOVERY_KIND,
+                entityType: 'work',
+                entityId: entry.workId,
+                paneId: entry.ownerTabId,
+            });
+            entry.recovery = writer;
+        }
+        if (writer.state() === 'clean') {
+            /* A fresh lineage: typed on the acknowledged body this pane observes now. */
+            entry.recoveryBase = prksResearchRecoveryObservedBase(owner);
+            entry.recoveryQueued = null;
+            entry.recoveryPipeline = null;
+            entry.recoveryPipelineStored = false;
+            writer.setBase(prksResearchRecoveryDraftBase(recovery.api, entry.recoveryBase));
+        }
+        writer.edit(entry.editGeneration, entry.text);
+        prksResearchRecoveryPipeline(entry, { state: 'drafting' });
+    } catch (_e) { /* recovery is best-effort beside the save path */ }
+}
+
+/** The represented lineage this pane adopted on mount becomes the session's lineage. */
+function prksResearchRecoveryTakeWatched(entry) {
+    let taken = null;
+    prksResearchRecoveryAckWatch.forEach(function (watches, opId) {
+        const item = taken ? null : watches.find(function (w) { return w.writer && w.key === entry.key; });
+        if (!item) return;
+        watches.splice(watches.indexOf(item), 1);
+        if (!watches.length) prksResearchRecoveryAckWatch.delete(opId);
+        taken = item.writer;
+        entry.recovery = taken;
+        /* Continue the adopted lineage past its stored generation. */
+        entry.editGeneration = Math.max(entry.editGeneration, item.generation + 1);
+        entry.recoveryBase = item.base;
+        entry.recoveryQueued = { opId: opId, generation: item.generation, text: item.text };
+        entry.recoveryPipeline = item.pipeline;
+        entry.recoveryPipelineStored = true;
+    });
+    return taken;
+}
+
+/** The session entry is dropped: finish the last write; the lineage stays for recovery. */
+function prksResearchRecoveryRelease(entry) {
+    const writer = entry && entry.recovery;
+    if (!writer) return;
+    entry.recovery = null;
+    void writer.release().catch(function () {});
+}
+
+/** Starts the recovery write before an ordinary save is queued. */
+function prksResearchRecoveryFlush(entry) {
+    const writer = entry && entry.recovery;
+    if (writer) void writer.flush().catch(function () {});
+}
+
+/**
+ * This session queued `text` (generation `generation`) as row `opId`, from
+ * `base`. Recorded with the #475 provenance, whether or not a newer save has
+ * taken over the session since: it is what a newer body was typed on.
+ */
+function prksResearchRecoveryQueued(entry, opId, generation, text, base) {
+    const recovery = prksResearchRecovery();
+    if (!recovery || !entry || !entry.recovery || !opId) return;
+    try {
+        entry.recoveryQueued = { opId: opId, generation: generation, text: text };
+        prksResearchRecoveryPipeline(entry, {
+            queuedOpId: opId,
+            queuedGeneration: generation,
+            ownQueued: {
+                opId: opId,
+                textLength: text.length,
+                textFingerprint: prksResearchRecoveryPrint(recovery.api, text),
+                base: prksResearchRecoveryIdentity(recovery.api, base) || { revision: null, length: null, fingerprint: null },
+            },
+        });
+    } catch (_e) { /* recovery is best-effort beside the save path */ }
+}
+
+/** A save settled: record its pipeline outcome; clear only what the server provably holds. */
+function prksResearchRecoverySettled(owner, id, entry, result, saved) {
+    const recovery = prksResearchRecovery();
+    if (!recovery || !entry || !entry.recovery) return;
+    try {
+        const code = result && result.code;
+        const patch = { state: prksResearchRecoveryStateOf(entry) };
+        if (entry.state === 'blocked') {
+            patch.blockedBase = prksResearchRecoveryIdentity(recovery.api, entry.blockedBase);
+        }
+        prksResearchRecoveryPipeline(entry, patch);
+        /* Nothing queued and the body is the acknowledged note (A -> B -> A,
+         * or a save of an unchanged body): proven equal, so clear it. */
+        if (code === 'saved' && saved && !result.opId && entry.state === 'committed' &&
+            entry.editGeneration === saved.generation && prksResearchNotesMayPaint(owner, id)) {
+            const slot = prksResearchRecoveryObservedBase(owner);
+            if (slot && slot.source === 'server' && slot.value === saved.text) {
+                void entry.recovery.acknowledged(saved.generation, saved.text).catch(function () {});
+            }
+        }
+    } catch (_e) { /* recovery is best-effort beside the save path */ }
+}
+
+/** One page-level subscription: acknowledgements and conflicts of queued Research Notes rows. */
+function prksResearchRecoveryListen() {
+    if (prksResearchRecoveryStopSync || !window.prksSync || typeof window.prksSync.subscribe !== 'function') return;
+    prksResearchRecoveryStopSync = window.prksSync.subscribe(prksResearchRecoveryOnSync);
+}
+
+function prksResearchRecoveryOnSync(event) {
+    const recovery = prksResearchRecovery();
+    if (!recovery) return;
+    const op = event && event.op;
+    if (event && event.acknowledged && op && op.operation === 'SET_WORK_RESEARCH_NOTE') {
+        const text = op.payload && typeof op.payload.text === 'string' ? op.payload.text : null;
+        const rev = event.acknowledged.server_revision;
+        if (text === null || !Number.isSafeInteger(rev)) return;
+        const watches = prksResearchRecoveryAckWatch.get(op.op_id) || [];
+        prksResearchRecoveryAckWatch.delete(op.op_id);
+        watches.forEach(function (watched) {
+            const writer = watched.writer;
+            const clear = watched.text !== text ? Promise.resolve()
+                : writer ? writer.acknowledged(watched.generation, text)
+                    /* Only while the page it observed still owns it: never under a writer that adopted it since. */
+                    : recovery.rt.store.deleteIfAcknowledged(watched.draftId, watched.generation, text, watched.pageInstanceId);
+            void clear.catch(function () {}).then(function () {
+                if (writer) return writer.release();
+                return undefined;
+            }).catch(function () {});
+        });
+        prksWorkResearchDrafts.forEach(function (entry) {
+            const queued = entry.recoveryQueued;
+            if (!entry.recovery || entry.workId !== op.entity_id || !queued) return;
+            if (queued.opId !== op.op_id || queued.text !== text) return;
+            /* This session's own operation: its text is now the base the
+             * session's newer text was typed on. */
+            entry.recoveryQueued = null;
+            entry.recoveryBase = { value: text, revision: rev, source: 'server' };
+            try {
+                entry.recovery.setBase(prksResearchRecoveryDraftBase(recovery.api, entry.recoveryBase));
+                prksResearchRecoveryPipeline(entry, {
+                    state: prksResearchRecoveryStateOf(entry), queuedOpId: null, queuedGeneration: 0,
+                });
+                void entry.recovery.acknowledged(queued.generation, text).catch(function () {});
+            } catch (_e) { /* best-effort */ }
+        });
+        return;
+    }
+    if (!Array.from(prksWorkResearchDrafts.values()).some(function (entry) { return entry.recovery && entry.recoveryQueued; })) return;
+    if (typeof prksRefreshPendingWorkNotes !== 'function') return;
+    void prksRefreshPendingWorkNotes().then(function (rows) {
+        const conflicted = new Set((rows || []).filter(function (row) {
+            return row && row.status === 'conflict';
+        }).map(function (row) { return row.op_id; }));
+        prksWorkResearchDrafts.forEach(function (entry) {
+            if (entry.recovery && entry.recoveryQueued && conflicted.has(entry.recoveryQueued.opId)) {
+                entry.recoveryConflictOpId = entry.recoveryQueued.opId;
+                prksResearchRecoveryPipeline(entry, { state: prksResearchRecoveryStateOf(entry) });
+            }
+        });
+    }).catch(function () {});
+}
+
+/**
+ * Same-pane restore on Research Notes mount, between `ensureBase` and the
+ * first read of the session text. Applies `planResearchNotesRestore`:
+ * restores only this pane's own draft from before reload when that cannot
+ * overwrite anything; drafts proven equal to the server note are cleared;
+ * everything else is kept untouched, never enqueued, and reported on
+ * `ctx.ui.researchNotesRecovery` for slice 3. Restores run one at a time.
+ */
+function prksRestoreResearchNotesRecovery(ctx, work) {
+    const attempt = { abandoned: false };
+    let timer = null;
+    const timeout = new Promise(function (resolve) {
+        timer = setTimeout(function () {
+            attempt.abandoned = true;
+            resolve(null);
+        }, prksResearchRecoveryRestoreMs);
+    });
+    const run = prksResearchRecoveryChain.then(function () {
+        return attempt.abandoned ? null : prksRestoreResearchNotesRecoveryNow(ctx, work, attempt);
+    }).catch(function () { return null; });
+    /* An abandoned run that never settles must not hold up later restores. */
+    const settled = Promise.race([run, timeout]);
+    prksResearchRecoveryChain = settled;
+    return settled.then(function (result) {
+        clearTimeout(timer);
+        return result;
+    });
+}
+
+async function prksRestoreResearchNotesRecoveryNow(ctx, work, attempt) {
+    const recovery = prksResearchRecovery();
+    if (!recovery || !ctx || !work || work.id == null) return null;
+    const id = String(work.id);
+    const generation = ctx.generation;
+    const key = prksResearchDraftKey(ctx, id);
+    const current = function () {
+        return !(attempt && attempt.abandoned) && prksResearchNotesMayPaint(ctx, id, generation) &&
+            !prksWorkResearchDrafts.has(key);
+    };
+    if (ctx.ui) ctx.ui.researchNotesRecovery = null;
+    /* A live session in this pane is the authority for its text. */
+    if (!current()) return null;
+    const rt = recovery.rt;
+    prksResearchRecoveryListen();
+    await rt.scanEmergency();
+    const records = await rt.store.listByEntity(PRKS_RESEARCH_RECOVERY_KIND, id);
+    if (!records.length || !current()) return null;
+    const candidates = [];
+    for (const record of records) {
+        const lineage = await rt.classify(record, null);
+        let body = null;
+        if (lineage !== 'self-live' && lineage !== 'other-live') {
+            const row = await rt.store.getBody(record.draftId);
+            body = row && row.generation === record.generation ? row.body : null;
+        }
+        candidates.push({ record: record, body: body, lineage: lineage });
+    }
+    const rows = typeof prksReadPendingWorkNotesSnapshot === 'function' ? await prksReadPendingWorkNotesSnapshot() : null;
+    if (!current()) return null;
+    /* An unread queue is unknown, never empty. */
+    const queue = rows && typeof prksWorkNoteOperations === 'function'
+        ? prksWorkNoteOperations(rows, id, PRKS_RESEARCH_RECOVERY_KIND).map(function (row) {
+            return { opId: row.op_id, text: row.payload && typeof row.payload.text === 'string' ? row.payload.text : '' };
+        })
+        : null;
+    const base = prksResearchRecoveryObservedBase(ctx);
+    const otherDirty = Array.from(prksWorkResearchDrafts.values()).some(function (entry) {
+        return entry.workId === id && entry.key !== key && entry.state !== 'committed';
+    });
+    const plan = recovery.api.planResearchNotesRestore({
+        paneId: String(ctx.tabId == null ? '' : ctx.tabId),
+        candidates: candidates,
+        base: base,
+        queue: queue,
+        otherDirtySession: otherDirty,
+    });
+    for (const draftId of plan.cleanup) {
+        const record = candidates.find(function (c) { return c.record.draftId === draftId; }).record;
+        /* Only the generation it read, and only while no page has adopted it since. */
+        void rt.store.deleteIfAcknowledged(draftId, record.generation, base.value, record.owner.pageInstanceId)
+            .catch(function () {});
+    }
+    const paneId = String(ctx.tabId == null ? '' : ctx.tabId);
+    for (const item of plan.represented) {
+        const candidate = candidates.find(function (c) { return c.record.draftId === item.draftId; });
+        const watches = prksResearchRecoveryAckWatch.get(item.opId) || [];
+        if (watches.some(function (w) { return w.draftId === item.draftId; })) continue;
+        const watch = Object.assign({ writer: null, key: key, base: base, pipeline: candidate.record.pipeline }, item);
+        if (candidate.lineage === 'same-runtime-orphan' && candidate.record.owner.paneId === paneId) {
+            watch.writer = await rt.writers.adopt(candidate.record, { paneId: paneId });
+            if (watch.writer && !current()) {
+                void watch.writer.release().catch(function () {});
+                watch.writer = null;
+            }
+        }
+        /* Every lineage the row represents is cleared by its acknowledgement. */
+        watches.push(watch);
+        prksResearchRecoveryAckWatch.set(item.opId, watches);
+    }
+    let restored = false;
+    if (plan.restore) {
+        const writer = await rt.writers.adopt(plan.restore.record, { paneId: paneId });
+        if (writer && !current()) {
+            /* Stale mount: the lineage stays this pane's orphan for the next one. */
+            void writer.release().catch(function () {});
+        } else if (writer) {
+            prksResearchRecoveryInstall(recovery.api, ctx, id, writer, plan.restore, base);
+            restored = true;
+        }
+    }
+    if (ctx.ui && plan.review.length) {
+        ctx.ui.researchNotesRecovery = { status: 'needs-review', workId: id, candidates: plan.review };
+    }
+    return { restored: restored, review: plan.review };
+}
+
+function prksResearchRecoveryInstall(api, ctx, id, writer, restore, base) {
+    const entry = prksResearchDraftEntry(ctx, id, restore.body);
+    entry.text = restore.body;
+    entry.editGeneration = restore.record.generation;
+    entry.state = restore.state;
+    entry.saveError = false;
+    entry.updatedAt = Date.now();
+    entry.recovery = writer;
+    entry.recoveryBase = base;
+    entry.recoveryRestored = true;
+    entry.recoverySaveDue = restore.state === 'drafting';
+    entry.recoveryPipeline = restore.record.pipeline;
+    entry.recoveryPipelineStored = true;
+    entry.recoveryQueued = null;
+    const acknowledged = { value: base.value, revision: base.revision };
+    if (restore.predecessor) {
+        /* #475 provenance after reload: the queued predecessor's exact text,
+         * queued from the base the server still holds. */
+        entry.ownQueuedToken = 0;
+        entry.ownQueuedText = restore.predecessor.text;
+        entry.ownQueuedBase = acknowledged;
+        entry.recoveryQueued = { opId: restore.predecessor.opId, generation: 0, text: restore.predecessor.text };
+    }
+    if (restore.state === 'blocked') entry.blockedBase = acknowledged;
+    writer.setBase(prksResearchRecoveryDraftBase(api, base));
+    prksResearchRecoveryPipeline(entry, { state: restore.state });
+}
+
+window.prksRestoreResearchNotesRecovery = prksRestoreResearchNotesRecovery;
 window.prksResearchNotesTextForWork = prksResearchNotesTextForWork;
 window.prksResearchNotesMayPaint = prksResearchNotesMayPaint;
 window.prksResearchNotesSyncEventStatus = prksResearchNotesSyncEventStatus;
 window.prksScheduleResearchNotesBusyRetryForTest = prksScheduleResearchNotesBusyRetry;
+window.prksSetResearchRecoveryRestoreMsForTest = function (ms) {
+    prksResearchRecoveryRestoreMs = Number.isFinite(ms) && ms > 0 ? ms : PRKS_RESEARCH_RECOVERY_RESTORE_MS;
+};
 window.prksResetResearchDraftsForTest = function () {
+    prksWorkResearchDrafts.forEach(prksResearchRecoveryRelease);
     prksWorkResearchDrafts.clear();
+    prksResearchRecoveryAckWatch.forEach(function (watches) {
+        watches.forEach(function (item) {
+            if (item.writer) void item.writer.release().catch(function () {});
+        });
+    });
+    prksResearchRecoveryAckWatch.clear();
+    if (prksResearchRecoveryStopSync) prksResearchRecoveryStopSync();
+    prksResearchRecoveryStopSync = null;
+    prksResearchRecoveryChain = Promise.resolve(null);
     if (typeof prksForEachLiveTabContext === 'function') {
         prksForEachLiveTabContext(function (ctx) {
             if (ctx && ctx.ui) ctx.ui.workResearchNoteSession = null;
@@ -1121,6 +1555,19 @@ function initEasyMDE(ctx, work, ticket) {
     if (transient && transient.state === 'blocked') {
         prksScheduleResearchNotesBusyRetry(ctx, work.id, transient);
     }
+    /* Restored from recovery storage (#466): say so, and send it through the
+     * ordinary save path as if it had just been typed. */
+    if (transient && transient.recoveryRestored) {
+        const restoredStatus = ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
+        if (restoredStatus && transient.state === 'drafting') restoredStatus.innerText = PRKS_RESEARCH_NOTES_RESTORED_STATUS;
+        if (transient.recoverySaveDue && transient.state === 'drafting') {
+            transient.recoverySaveDue = false;
+            prksScheduleWorkResearchNotesSave(ctx, work.id);
+        }
+        if (ctx.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
+            window.prksWorkspaceRefreshTabStatus(ctx.tabId);
+        }
+    }
     prksAttachWikiLinkAutocomplete(easyMDE.codemirror, ctx);
     const toolbarHost = ctx && ctx.query ? ctx.query('.work-notes-editor-wrap .editor-toolbar') : null;
     prksPaintEasyMDEToolbarIcons(toolbarHost);
@@ -1186,6 +1633,8 @@ function prksWorkNotesMarkEdit(notes, workId, text, ctx) {
         entry.state = 'drafting';
         entry.saveError = false;
         entry.updatedAt = Date.now();
+        entry.recoveryRestored = false;
+        prksResearchRecoveryEdit(owner, entry);
         prksSyncResearchNotesState(notes, entry);
         prksStopResearchNotesBusyRetry(owner);
     }
@@ -1292,6 +1741,7 @@ function prksSendBlockedResearchNote(ctx, id, entry) {
         entry.state = 'error';
         entry.saveError = true;
         entry.updatedAt = Date.now();
+        prksResearchRecoveryPipeline(entry, { state: 'error' });
         prksSyncResearchNotesState(notes, entry);
         const statusEl = ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
         if (statusEl) statusEl.innerText = PRKS_RESEARCH_NOTES_UNCONFIRMED_STATUS;
@@ -1501,7 +1951,11 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId, options) {
         transient.saveError = false;
         transient.updatedAt = Date.now();
         prksSyncResearchNotesState(notes, transient);
+        /* The queue never holds a body newer than recovery storage. */
+        prksResearchRecoveryFlush(transient);
+        prksResearchRecoveryPipeline(transient, { state: 'saving' });
     }
+    const savedGeneration = transient ? transient.latestSaveEditGeneration : 0;
     if (statusEl) statusEl.innerText = 'Saving...';
     if (owner && owner.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
         window.prksWorkspaceRefreshTabStatus(owner.tabId);
@@ -1537,6 +1991,7 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId, options) {
             transient.ownQueuedToken = transientToken;
             transient.ownQueuedText = content;
             transient.ownQueuedBase = usedBase;
+            prksResearchRecoveryQueued(transient, saved.opId, savedGeneration, content, usedBase);
         }
         return saved;
     })();
@@ -1561,6 +2016,8 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId, options) {
                 }
                 transient.updatedAt = Date.now();
                 transientApplied = true;
+                prksResearchRecoverySettled(owner, id, transient, result,
+                    { generation: savedGeneration, text: content });
                 prksSyncResearchNotesState(notes, transient);
                 prksSyncLiveResearchDraft(id, transient, saveGeneration, { code: code, pending: pending });
                 prksPruneResearchDrafts();
@@ -1588,6 +2045,7 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId, options) {
                 transient.state = hasNewerDraft ? 'drafting' : 'error';
                 transient.updatedAt = Date.now();
                 transientApplied = true;
+                prksResearchRecoverySettled(owner, id, transient, { code: 'failed' }, null);
                 prksSyncResearchNotesState(notes, transient);
                 prksSyncLiveResearchDraft(id, transient, saveGeneration, { code: 'failed', pending: false });
             }

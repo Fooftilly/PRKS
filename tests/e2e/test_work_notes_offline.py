@@ -6,7 +6,8 @@ research markup; the server still does on ACK.
 Deterministic cancel / private-fence / compact-conflict shape contracts live in
 Node (`run_work_note_sync_selftest.js`) and Python (`test_work_note_sync.py`).
 This module keeps the Chromium boundaries: real editor reload/remount and a
-thin reconnect conflict park.
+thin reconnect conflict park, and browser-local recovery of Research Notes
+text across a reload (#466 slice 2).
 """
 import os
 import unittest
@@ -32,13 +33,19 @@ def tearDownModule():
     _BROWSER.close(); _PW.stop()
 
 
-class OfflineWorkNotesTests(unittest.TestCase):
-    def start(self):
+class _WorkNotesPage:
+    def start(self, without_locks=False):
         server = AppServer(seed_fn=seed_library)
         self.addCleanup(server.stop); server.start()
         page, context, collector = open_app_page(_BROWSER, server.origin, service_workers='allow')
         self.addCleanup(context.close)
         self.addCleanup(lambda: self.assertEqual(collector.pageerrors, []))
+        if without_locks:
+            # The LAN/HTTP deployment is an insecure context: no Web Locks.
+            context.add_init_script(_WITHOUT_WEB_LOCKS)
+            page.reload(wait_until='domcontentloaded')
+            page.wait_for_selector('#sidebar')
+            self.assertFalse(page.evaluate('() => !!navigator.locks'))
         o._wait_sw_active(page)
         o._open_work_from_home(page, WORK_A_TITLE)
         o._wait_entity_cached(page, 'work', server.ids['work_a'])
@@ -106,6 +113,9 @@ class OfflineWorkNotesTests(unittest.TestCase):
         return page.evaluate(
             "id => window.createPrksOfflineStore().getEntity('work', id).then(row => row && row.value)",
             work_id)
+
+
+class OfflineWorkNotesTests(_WorkNotesPage, unittest.TestCase):
 
     def test_offline_research_note_survives_reload_and_creates_a_concept_on_ack(self):
         server, page, context = self.start()
@@ -239,3 +249,260 @@ class OfflineWorkNotesTests(unittest.TestCase):
         self.assertEqual(result['code'], 'REVISION_CONFLICT')
         self.assertEqual(self.db_for(server).get_work(work)['text_content'],
                          'Other device wrote C')
+
+
+_WITHOUT_WEB_LOCKS = """
+    Object.defineProperty(Navigator.prototype, 'locks', { configurable: true, get() { return undefined; } });
+"""
+
+_RECOVERY_RECORDS = """
+    async (workId) => {
+        const store = window.prksEditorRecovery.runtime().store;
+        const out = [];
+        for (const row of await store.listByEntity('work-research-note', workId)) {
+            const body = await store.getBody(row.draftId);
+            out.push({ draftId: row.draftId, generation: row.generation, owner: row.owner,
+                       pipeline: row.pipeline, base: row.base, body: body && body.body });
+        }
+        return out;
+    }
+"""
+
+_RECOVERY_IDLE = """
+    () => {
+        const writers = window.prksEditorRecovery.runtime().writers;
+        return {
+            pending: writers.writers().filter(w => w.state() === 'pending' || w.state() === 'unprotected').length,
+            guard: writers.leaveGuardActive(),
+            unloadListeners: writers.emergencyListenersActive(),
+        };
+    }
+"""
+
+
+class ResearchNotesRecoveryTests(_WorkNotesPage, unittest.TestCase):
+    """#466 slice 2: Research Notes text typed inside the 2 s save debounce
+    survives a reload in the same pane, without a prompt, and then saves
+    through the ordinary queue. Anything that could overwrite newer text is
+    kept for review instead."""
+
+    def start(self, without_locks=False):
+        server, page, context = super().start(without_locks=without_locks)
+        self.dialogs = []
+        page.on('dialog', lambda d: (self.dialogs.append(d.type), d.accept()))
+        self.addCleanup(lambda: self.assertEqual(self.dialogs, [], 'no leave prompt for an ordinary note'))
+        page.wait_for_function(
+            "() => !!prksGetFocusedTabContext().getResource('workNotesObserved')")
+        return server, page, context
+
+    def type_marker(self, page, marker):
+        page.locator('.CodeMirror').click()
+        page.keyboard.press('Control+End')
+        page.keyboard.type(marker)
+        page.locator('[data-prks-role="editor-status"]', has_text='Drafting').wait_for()
+
+    def records(self, page, work):
+        return page.evaluate(_RECOVERY_RECORDS, work)
+
+    def wait_recorded(self, page, work, marker):
+        wait_for_async(
+            page,
+            """async ([workId, marker]) => {
+                const store = window.prksEditorRecovery.runtime().store;
+                for (const row of await store.listByEntity('work-research-note', workId)) {
+                    const body = await store.getBody(row.draftId);
+                    if (body && body.body.endsWith(marker)) return true;
+                }
+                return false;
+            }""",
+            arg=[work, marker],
+            timeout=5000,
+            message='the edit never reached recovery storage')
+
+    def leave_after(self, page, ms):
+        # prks-allow-wait-for-timeout: the contract is "reload within N ms of the last keystroke"
+        page.wait_for_timeout(ms)
+        page.reload(wait_until='domcontentloaded')
+        page.wait_for_selector('.CodeMirror')
+
+    def server_text(self, server, work):
+        return self.db_for(server).get_work(work)['text_content']
+
+    def wait_server_text(self, page, work, text):
+        wait_for_async(
+            page,
+            """([id, text]) => fetch('/api/works/' + encodeURIComponent(id), { cache: 'no-store' })
+                .then(r => r.json()).then(w => w.text_content === text)""",
+            arg=[work, text],
+            timeout=30000,
+            message='the server never received the text')
+
+    def wait_no_records(self, page, work):
+        wait_for_async(
+            page,
+            """(workId) => window.prksEditorRecovery.runtime().store
+                .listByEntity('work-research-note', workId).then(rows => rows.length === 0)""",
+            arg=work,
+            timeout=15000,
+            message='the recovery record outlived the acknowledgement')
+
+    def note_rows(self, page):
+        return page.evaluate("""() => prksSync.store.listOperations().then(rows => rows
+            .filter(r => r.operation === 'SET_WORK_RESEARCH_NOTE').map(r => r.payload.text))""")
+
+    def recovery_notice(self, page):
+        return page.evaluate("() => prksGetFocusedTabContext().ui.researchNotesRecovery || null")
+
+    def assert_restored_and_saved(self, server, page, work, expected):
+        page.wait_for_function(
+            "text => prksGetFocusedTabContext().getResource('workNotes')?.editor.value() === text",
+            arg=expected)
+        self.assertIsNone(self.recovery_notice(page))
+        self.wait_server_text(page, work, expected)
+        self.wait_no_records(page, work)
+        page.locator('[data-prks-role="editor-status"]', has_text='All changes saved').wait_for()
+        self.assertEqual(page.evaluate(_RECOVERY_IDLE), {'pending': 0, 'guard': False, 'unloadListeners': False})
+
+    def test_reload_within_500_ms_restores_the_exact_newest_text_and_saves_it(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        original = self.server_text(server, work)
+        self.type_marker(page, ' Recovered 500')
+        self.wait_recorded(page, work, ' Recovered 500')
+        # Recoverable is not saved: the status still says Drafting, and nothing is queued.
+        self.assertEqual(page.locator('[data-prks-role="editor-status"]').inner_text(), 'Drafting...')
+        self.assertEqual(self.note_rows(page), [])
+        self.leave_after(page, 150)
+        page.wait_for_function(
+            "text => prksGetFocusedTabContext().getResource('workNotes')?.editor.value() === text",
+            arg=original + ' Recovered 500')
+        page.locator('[data-prks-role="editor-status"]', has_text='Restored unsaved changes').wait_for()
+        self.assertEqual(self.server_text(server, work), original)
+        self.assert_restored_and_saved(server, page, work, original + ' Recovered 500')
+
+    def test_reload_within_1200_ms_restores_the_exact_newest_text(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        original = self.server_text(server, work)
+        self.type_marker(page, ' Recovered 1200')
+        self.leave_after(page, 1200)
+        self.assert_restored_and_saved(server, page, work, original + ' Recovered 1200')
+
+    def test_reload_without_web_locks_restores_the_text(self):
+        """LAN over HTTP: Web Locks are missing, the runtime claim is the channel."""
+        server, page, context = self.start(without_locks=True)
+        work = server.ids['work_a']
+        original = self.server_text(server, work)
+        self.type_marker(page, ' On the LAN')
+        self.leave_after(page, 500)
+        self.assertEqual(page.evaluate(
+            "() => window.prksEditorRecovery.runtime().identity.current().verified"), 'channel')
+        self.assert_restored_and_saved(server, page, work, original + ' On the LAN')
+
+    def test_in_app_navigation_still_saves_and_leaves_no_recovery_record(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        original = self.server_text(server, work)
+        self.type_marker(page, ' Left in app')
+        page.locator('#sidebar a.nav-link[href="#/folders"]').click()
+        page.wait_for_function("() => location.hash === '#/folders'")
+        self.wait_server_text(page, work, original + ' Left in app')
+        self.wait_no_records(page, work)
+
+    def test_text_changed_elsewhere_is_kept_for_review_and_never_applied(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.type_marker(page, ' Mine')
+        self.wait_recorded(page, work, ' Mine')
+        work_note_sync.set_research_note(self.db_for(server), work, 'Another device wrote this.')
+        page.reload(wait_until='domcontentloaded')
+        page.wait_for_selector('.CodeMirror')
+        page.wait_for_function(
+            "() => !!prksGetFocusedTabContext().ui.researchNotesRecovery")
+        notice = self.recovery_notice(page)
+        self.assertEqual([c['reason'] for c in notice['candidates']], ['base-advanced'])
+        self.assertEqual(self.editor_text(page), 'Another device wrote this.')
+        records = self.records(page, work)
+        self.assertEqual(len(records), 1)
+        self.assertTrue(records[0]['body'].endswith(' Mine'))
+        self.assertEqual(self.note_rows(page), [])
+        self.assertEqual(self.server_text(server, work), 'Another device wrote this.')
+
+    def test_offline_reload_keeps_the_text_until_the_server_can_be_checked(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        original = self.server_text(server, work)
+        self.offline(page, context)
+        self.type_marker(page, ' Typed offline')
+        self.wait_recorded(page, work, ' Typed offline')
+        self.leave_after(page, 100)
+        page.wait_for_function(
+            "() => !!prksGetFocusedTabContext().ui.researchNotesRecovery")
+        self.assertEqual([c['reason'] for c in self.recovery_notice(page)['candidates']], ['base-unverified'])
+        self.assertEqual(self.editor_text(page), original)
+        self.assertEqual(self.note_rows(page), [])
+        self.reconnect(page, context)
+        page.reload(wait_until='domcontentloaded')
+        page.wait_for_selector('.CodeMirror')
+        self.assert_restored_and_saved(server, page, work, original + ' Typed offline')
+
+    def test_blocked_body_survives_reload_and_resumes_on_its_own_predecessor(self):
+        """#465/#475: A is attempted and fails, B waits behind it (scope_busy).
+
+        After a reload B is restored as blocked, A is still the only queued
+        row, and once A is acknowledged B is sent on top of it."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        page.route('**/api/sync/operations', lambda route: route.abort('connectionrefused'))
+        self.set_notes(page, 'Body A')
+        wait_for_async(
+            page,
+            """() => prksSync.store.listOperations().then(rows => rows.some(r =>
+                r.operation === 'SET_WORK_RESEARCH_NOTE' && r.attempt_count > 0
+                && r.status === 'pending'))""",
+            timeout=15000,
+            message='A was never attempted')
+        self.set_notes(page, 'Body A then B')
+        page.locator('[data-prks-role="editor-status"]', has_text='Still syncing').wait_for()
+        wait_for_async(
+            page,
+            """(workId) => window.prksEditorRecovery.runtime().store.listByEntity('work-research-note', workId)
+                .then(rows => rows.some(r => r.pipeline && r.pipeline.state === 'blocked'))""",
+            arg=work,
+            timeout=5000,
+            message='the blocked state never reached recovery storage')
+
+        page.reload(wait_until='domcontentloaded')
+        page.wait_for_selector('.CodeMirror')
+        page.wait_for_function(
+            "() => prksGetFocusedTabContext().getResource('workNotes')?.editor.value() === 'Body A then B'")
+        page.locator('[data-prks-role="editor-status"]', has_text='Still syncing').wait_for()
+        self.assertIsNone(self.recovery_notice(page))
+        rows = page.evaluate("""() => prksSync.store.listOperations().then(rows => rows
+            .filter(r => r.operation === 'SET_WORK_RESEARCH_NOTE').map(r => r.payload.text))""")
+        self.assertEqual(rows, ['Body A'])
+        self.assertNotEqual(self.server_text(server, work), 'Body A then B')
+
+        page.unroute('**/api/sync/operations')
+        page.evaluate('() => prksSync.wake()')
+        self.wait_server_text(page, work, 'Body A then B')
+        self.wait_no_records(page, work)
+
+    def test_two_tabs_on_one_work_keep_separate_recovery_records(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        other = context.new_page()
+        other.on('dialog', lambda d: (self.dialogs.append(d.type), d.accept()))
+        other.goto(page.url, wait_until='domcontentloaded')
+        other.wait_for_selector('.CodeMirror')
+        other.wait_for_function(
+            "() => !!prksGetFocusedTabContext().getResource('workNotesObserved')")
+        self.type_marker(page, ' From tab one')
+        self.type_marker(other, ' From tab two')
+        self.wait_recorded(page, work, ' From tab one')
+        self.wait_recorded(page, work, ' From tab two')
+        records = self.records(page, work)
+        self.assertEqual(len(records), 2)
+        self.assertEqual(len({r['draftId'] for r in records}), 2)
+        self.assertEqual(len({r['owner']['pageInstanceId'] for r in records}), 2)
+        self.assertEqual(sorted(r['body'][-13:] for r in records), sorted([' From tab one', ' From tab two']))

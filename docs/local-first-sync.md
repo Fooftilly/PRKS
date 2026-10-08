@@ -95,7 +95,12 @@ coordinator names no family: adding one is a registration.
   tombstone until that key is gone, so the key cannot recreate the draft.
   A draft a merge created from another page's key carries that page's id
   until the key is removed; deleting it meanwhile leaves the same tombstone.
-  Clear offline cache does not touch it. Slice 1 has no consumer.
+  Clear offline cache does not touch it. Research Notes is its consumer
+  (slice 2): a reload restores the same pane's own draft automatically only
+  when the server's acknowledged note is the one it was typed on (or this
+  pane's own queued predecessor, #475 rules); every other draft is kept,
+  not enqueued and not applied. A recovery commit means recoverable, never
+  saved.
 - A device ID is an identity for synchronization, never authentication or trust.
 - Editor state and observed projections belong to the Work's TabContext.
   The sync coordinator owns transport and retry policy, with one in-flight

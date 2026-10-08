@@ -410,7 +410,8 @@ describe('work research notes session', () => {
       await pending
       expect(saved).toEqual([{
         workId: 'work-a',
-        observed: { value: 'A body', revision: 4 },
+        // The read reported no source, so the base is not a verified server read.
+        observed: { value: 'A body', revision: 4, source: 'unknown' },
       }])
       expect(ctx.getResource('workNotesObserved')).toEqual(baseB)
       expect(ctx.getResource('workNotesCanonical')).toEqual({

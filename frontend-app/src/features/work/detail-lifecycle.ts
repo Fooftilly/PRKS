@@ -280,6 +280,13 @@ export async function mountWorkDetail(
           await ensureBase(ctx as never, (canonical || current) as never)
           if (!isCurrent()) return
         }
+        /* Browser-local recovery (#466): restore this pane's own unsaved text
+         * from before a reload, only where that cannot overwrite anything. */
+        const restoreNotes = classic('prksRestoreResearchNotesRecovery')
+        if (restoreNotes) {
+          await restoreNotes(ctx as never, current as never)
+          if (!isCurrent()) return
+        }
         const readNotes = classic('prksResearchNotesTextForWork')
         const notesText = readNotes
           ? String(readNotes(current.id as never, current.text_content as never, ctx as never) || '')

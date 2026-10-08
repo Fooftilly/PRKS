@@ -43,6 +43,7 @@ import {
   type DraftEntityType,
   type DraftKind,
   type DraftOwner,
+  type DraftPipeline,
   type DraftRecord,
   type EmergencyEntry,
   type EmergencyPayload,
@@ -102,7 +103,13 @@ export interface DraftWriter {
   committedGeneration(): number
   needsLeaveGuard(): boolean
   heldByEmergency(): boolean
+  /**
+   * The acknowledged base the newest body was typed against. Carried by the
+   * next write; with nothing pending, a stored lineage is updated in place.
+   */
   setBase(base: DraftBase): void
+  /** Relationship to the save pipeline (informational). Persisted like `setBase`. */
+  setPipeline(pipeline: DraftPipeline | null): void
   setPane(paneId: string): void
   /** Reports the editor's newest generation; never reads the editor itself. */
   edit(generation: number, body: string): void
@@ -430,6 +437,9 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     private readonly entityId: string
     private paneId: string
     private base: DraftBase
+    private pipelineState: DraftPipeline | null = null
+    /** Base or pipeline changed since the stored record last carried them. */
+    private metaDirty = false
     private lineageId: string | null = null
     private lineageCreatedAt = 0
     /** A record for `lineageId` exists that this page owns (created or adopted). */
@@ -465,6 +475,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       this.committed = record.generation
       this.lastSeen = record.generation
       this.base = { ...record.base }
+      this.pipelineState = record.pipeline
       this.status = 'protected'
     }
 
@@ -503,6 +514,52 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     }
     setBase(base: DraftBase): void {
       this.base = { ...base }
+      this.metaChanged()
+    }
+    setPipeline(pipeline: DraftPipeline | null): void {
+      this.pipelineState = pipeline
+      this.metaChanged()
+    }
+
+    /**
+     * A pending or in-flight write carries the new metadata; otherwise a
+     * stored lineage gets a metadata-only update through the same one-at-a-time
+     * slot, so it never races a body write.
+     */
+    private metaChanged(): void {
+      this.metaDirty = true
+      if (this.released || disposed || !this.lineageStored || !this.lineageId) return
+      if (this.inFlight || this.latest) return
+      this.startMeta()
+    }
+
+    private startMeta(): void {
+      const draftId = this.lineageId
+      if (!draftId || !this.lineageStored) return
+      this.metaDirty = false
+      let failed = false
+      const attempt = store
+        .updateLineage({ draftId, pageInstanceId: identity.pageInstanceId, base: this.base, pipeline: this.pipelineState })
+        .then(
+          () => {
+            /* not-owner or missing: the next body write moves to a fresh lineage */
+          },
+          () => {
+            // Kept for the next write or change; not retried in a loop.
+            failed = true
+            if (this.lineageId === draftId) this.metaDirty = true
+          },
+        )
+        .finally(() => {
+          this.inFlight = null
+          if (this.writeRequested && this.latest) {
+            this.writeRequested = false
+            this.startWrite()
+          } else if (this.metaDirty && !failed && !this.latest) {
+            this.metaChanged()
+          }
+        })
+      this.inFlight = attempt
     }
     setPane(paneId: string): void {
       this.paneId = paneId
@@ -573,6 +630,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       const create = this.lineageStored
         ? undefined
         : { kind: this.kind, entityType: this.entityType, entityId: this.entityId, owner: this.owner(), base: this.base }
+      this.metaDirty = false
       const attempt = store
         .writeGeneration({
           draftId,
@@ -581,6 +639,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
           body: pending.body,
           paneId: this.paneId,
           base: this.base,
+          pipeline: this.pipelineState,
           create,
         })
         .then(
@@ -631,6 +690,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
           const again = this.writeRequested && this.latest !== null
           this.writeRequested = false
           if (again) this.startWrite()
+          else if (this.metaDirty && !this.latest) this.metaChanged()
           changed()
           this.leaveIfDone()
         })

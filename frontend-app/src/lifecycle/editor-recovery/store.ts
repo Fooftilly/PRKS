@@ -32,6 +32,7 @@ import {
   type DraftEntityType,
   type DraftKind,
   type DraftOwner,
+  type DraftPipeline,
   type DraftRecord,
   type EmergencyEntry,
   type EmergencyPayload,
@@ -84,8 +85,22 @@ export interface WriteGenerationInput {
   body: string
   paneId?: string
   base?: DraftBase
+  /** Replaces the stored pipeline when given (null clears it). */
+  pipeline?: DraftPipeline | null
   /** Create the lineage if it does not exist yet. */
   create?: CreateLineage
+}
+
+/**
+ * Metadata-only update of a lineage this page owns: the base its body was
+ * typed against and its relationship to the save pipeline. Never touches the
+ * body or the generation.
+ */
+export interface UpdateLineageInput {
+  draftId: string
+  pageInstanceId: string
+  base?: DraftBase
+  pipeline?: DraftPipeline | null
 }
 
 /** `ok` committed; every other outcome wrote nothing. */
@@ -108,14 +123,20 @@ export interface DiscardTombstone {
 
 export interface RecoveryStore {
   writeGeneration(input: WriteGenerationInput): Promise<WriteOutcome>
+  /** Owner-checked metadata update in one transaction; `missing` for an absent or discarded record. */
+  updateLineage(input: UpdateLineageInput): Promise<WriteOutcome>
   /** Compare-and-set ownership: succeeds only if the stored owner page is still `expectedPageInstanceId`. */
   adopt(draftId: string, expectedPageInstanceId: string, owner: DraftOwner): Promise<AdoptOutcome>
   get(draftId: string): Promise<DraftRecord | null>
   getBody(draftId: string): Promise<DraftBodyRow | null>
   listByEntity(kind: DraftKind, entityId: string): Promise<DraftRecord[]>
   listAll(): Promise<DraftRecord[]>
-  /** Deletes only if the stored generation is `generation` and the stored body is exactly `body`. */
-  deleteIfAcknowledged(draftId: string, generation: number, body: string): Promise<DeleteOutcome>
+  /**
+   * Deletes only if the stored generation is `generation` and the stored body
+   * is exactly `body`; with `expectedPageInstanceId`, also only while that
+   * page still owns the lineage (not adopted since it was read).
+   */
+  deleteIfAcknowledged(draftId: string, generation: number, body: string, expectedPageInstanceId?: string): Promise<DeleteOutcome>
   /** Deletes only if the stored body is exactly `body` (proven equal to acknowledged state). */
   deleteIfEqual(draftId: string, body: string): Promise<DeleteOutcome>
   /**
@@ -152,6 +173,15 @@ function errorFromTransaction(tx: IDBTransaction): RecoveryStoreError {
   const name = tx.error && tx.error.name
   if (name === 'QuotaExceededError') return new RecoveryStoreError('quota', 'Recovery storage is full.')
   return new RecoveryStoreError('aborted', 'The recovery write was rolled back.')
+}
+
+function clonePipeline(pipeline: DraftPipeline | null): DraftPipeline | null {
+  if (!pipeline) return null
+  return {
+    ...pipeline,
+    blockedBase: pipeline.blockedBase ? { ...pipeline.blockedBase } : null,
+    ownQueued: pipeline.ownQueued ? { ...pipeline.ownQueued, base: { ...pipeline.ownQueued.base } } : null,
+  }
 }
 
 /** Lineage id for an emergency tail forked away from a lineage adopted since. Deterministic, so merges are idempotent. */
@@ -357,7 +387,9 @@ export function createRecoveryStore(options: RecoveryStoreOptions = {}): Recover
             done('missing')
             return
           }
-          putPair(tx, newRecord(input.draftId, input.create, input.generation, input.body.length), input.body)
+          const created = newRecord(input.draftId, input.create, input.generation, input.body.length)
+          if (input.pipeline !== undefined) created.pipeline = clonePipeline(input.pipeline)
+          putPair(tx, created, input.body)
           done('ok')
           return
         }
@@ -371,10 +403,29 @@ export function createRecoveryStore(options: RecoveryStoreOptions = {}): Recover
           generation: input.generation,
           bodyLength: input.body.length,
           base: input.base ? { ...input.base } : record.base,
+          pipeline: input.pipeline !== undefined ? clonePipeline(input.pipeline) : record.pipeline,
           status: 'active',
           updatedAt: now(),
         }
         putPair(tx, next, input.body)
+        done('ok')
+      })
+    })
+  }
+
+  function updateLineage(input: UpdateLineageInput): Promise<WriteOutcome> {
+    return run<WriteOutcome>('readwrite', (tx, done) => {
+      readRecord(tx, input.draftId, (record) => {
+        if (!record || record.status === 'discarded') return done('missing')
+        if (!isSupportedRecord(record)) return done('unsupported')
+        if (record.owner.pageInstanceId !== input.pageInstanceId) return done('not-owner')
+        const next: DraftRecord = {
+          ...record,
+          base: input.base ? { ...input.base } : record.base,
+          pipeline: input.pipeline !== undefined ? clonePipeline(input.pipeline) : record.pipeline,
+          updatedAt: now(),
+        }
+        tx.objectStore(DRAFTS_STORE).put(next)
         done('ok')
       })
     })
@@ -419,11 +470,12 @@ export function createRecoveryStore(options: RecoveryStoreOptions = {}): Recover
     return listAll().then((rows) => rows.filter((row) => row && row.entityKey === key && row.status !== 'discarded'))
   }
 
-  function deleteIfAcknowledged(draftId: string, generation: number, body: string): Promise<DeleteOutcome> {
+  function deleteIfAcknowledged(draftId: string, generation: number, body: string, expectedPageInstanceId?: string): Promise<DeleteOutcome> {
     return run<DeleteOutcome>('readwrite', (tx, done) => {
       readBoth(tx, draftId, (record, row) => {
         if (!record) return done('missing')
         if (!isSupportedRecord(record)) return done('unsupported')
+        if (expectedPageInstanceId !== undefined && record.owner.pageInstanceId !== expectedPageInstanceId) return done('kept')
         if (record.generation !== generation || !row || row.generation !== generation) return done('kept')
         if (!sameBody(row.body, body, compare)) return done('kept')
         retire(tx, record)
@@ -581,6 +633,7 @@ export function createRecoveryStore(options: RecoveryStoreOptions = {}): Recover
 
   return {
     writeGeneration,
+    updateLineage,
     adopt,
     get,
     getBody,

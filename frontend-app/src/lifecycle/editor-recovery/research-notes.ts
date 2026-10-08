@@ -1,0 +1,250 @@
+/**
+ * Research Notes same-pane restore decision (#466 slice 2).
+ *
+ * A pure function over what the mount path already knows: the recovery
+ * records for one Work with their lineage class and stored body, the
+ * acknowledged base `K` from notes-state, and the unsettled Research Notes
+ * queue rows `Q`. It reads nothing and changes nothing; `works.js` applies
+ * the plan.
+ *
+ * Automatic restore is allowed only when it cannot overwrite anything:
+ * exactly one candidate, written by this pane before reload, typed on exactly
+ * the acknowledged body the server still holds, or on a body this lineage
+ * itself queued from that same base (the #475 own-predecessor rule). Every
+ * other candidate is kept untouched and reported for review (slice 3).
+ */
+
+import { fingerprintText, sameBaseIdentity } from './fingerprint'
+import type { LineageClass } from './lineage'
+import type { DraftBase, DraftRecord } from './schema'
+
+/** The acknowledged note the mount read, never an effective overlay. */
+export interface AcknowledgedNote {
+  value: string
+  revision: number
+  /** `server`: read from the server now. `cache`, `pending-create`: not verified. */
+  source: DraftBase['source']
+}
+
+/** One unsettled Research Notes operation for this Work, in queue order. */
+export interface QueuedNoteRow {
+  opId: string
+  text: string
+}
+
+export interface RestoreCandidate {
+  record: DraftRecord
+  /** The stored body at the record's generation; null when it could not be read. */
+  body: string | null
+  lineage: LineageClass
+}
+
+export interface RestoreInput {
+  /** Workspace tab id of the pane that is mounting. */
+  paneId: string
+  candidates: RestoreCandidate[]
+  base: AcknowledgedNote | null
+  /** Null when the durable queue could not be read: nothing is cleaned up or restored. */
+  queue: QueuedNoteRow[] | null
+  /** Another session in this page holds unsaved text for this Work. */
+  otherDirtySession: boolean
+  /** Injected in tests to force collisions. */
+  fingerprint?: (text: string) => string
+}
+
+export type ReviewReason =
+  | 'multiple-drafts'
+  | 'live-elsewhere'
+  | 'ownership-unknown'
+  | 'other-source'
+  | 'tail-missing'
+  | 'body-missing'
+  | 'dirty-session'
+  | 'base-unverified'
+  | 'foreign-queue'
+  | 'queue-unknown'
+  | 'base-advanced'
+
+export interface ReviewCandidate {
+  draftId: string
+  reason: ReviewReason
+  lineage: LineageClass
+  generation: number
+  bodyLength: number
+  paneId: string
+  updatedAt: number
+}
+
+export interface RestorePlan {
+  /**
+   * Bodies exactly equal to the server's acknowledged note while nothing is
+   * queued that could still change it, from a lineage no live editor can
+   * still own: compare-and-delete.
+   */
+  cleanup: string[]
+  /**
+   * Already the queued row's exact body, from an inactive lineage: kept until
+   * that row's acknowledgement, then cleared only while `pageInstanceId`
+   * still owns it.
+   */
+  represented: Array<{ draftId: string; opId: string; generation: number; text: string; pageInstanceId: string }>
+  restore: {
+    record: DraftRecord
+    body: string
+    /** `blocked` only while its own predecessor row is still unsettled. */
+    state: 'drafting' | 'blocked'
+    /** This lineage's own unsettled predecessor, still in the queue. */
+    predecessor: QueuedNoteRow | null
+  } | null
+  /** Kept and not applied; slice 3 shows them. */
+  review: ReviewCandidate[]
+}
+
+export function planResearchNotesRestore(input: RestoreInput): RestorePlan {
+  const print = input.fingerprint || fingerprintText
+  const K = input.base
+  let kPrint: string | null = null
+  const kIdentity = () => {
+    if (!K) return null
+    if (kPrint === null) kPrint = print(K.value)
+    return { revision: K.revision, length: K.value.length, fingerprint: kPrint }
+  }
+  const plan: RestorePlan = { cleanup: [], represented: [], restore: null, review: [] }
+  const review = (c: RestoreCandidate, reason: ReviewReason) =>
+    plan.review.push({
+      draftId: c.record.draftId,
+      reason,
+      lineage: c.lineage,
+      generation: c.record.generation,
+      bodyLength: c.record.bodyLength,
+      paneId: c.record.owner.paneId,
+      updatedAt: c.record.updatedAt,
+    })
+
+  const queue = input.queue
+  let liveElsewhere = false
+  let unresolved = 0
+  const remaining: RestoreCandidate[] = []
+  for (const c of input.candidates) {
+    if (c.record.status === 'discarded') continue
+    // Being edited in this or another live editor: reported, never offered
+    // for restore here, and its existence alone stops an automatic restore.
+    if (c.lineage === 'self-live' || c.lineage === 'other-live') {
+      liveElsewhere = true
+      review(c, 'live-elsewhere')
+      continue
+    }
+    // A newer generation never reached storage: the stored body is not the
+    // latest text, so it proves nothing about what was saved.
+    if (c.record.status === 'tail-missing') {
+      unresolved++
+      review(c, 'tail-missing')
+      continue
+    }
+    if (c.body === null) {
+      unresolved++
+      review(c, 'body-missing')
+      continue
+    }
+    // Equal to the note only proves it saved while no queued row can still
+    // replace that note, and only for a lineage no live editor may still own.
+    const inactive = c.lineage === 'same-runtime-orphan' || c.lineage === 'dead-runtime'
+    if (inactive && K && K.source === 'server' && queue && !queue.length && c.body === K.value) {
+      plan.cleanup.push(c.record.draftId)
+      continue
+    }
+    // Left for its row's acknowledgement to clear, which is only safe for a
+    // lineage no live editor can still be extending.
+    const queuedOpId = c.record.pipeline ? c.record.pipeline.queuedOpId : null
+    const last = queue ? queue[queue.length - 1] : undefined
+    if (inactive && queuedOpId && last && last.opId === queuedOpId && last.text === c.body) {
+      plan.represented.push({
+        draftId: c.record.draftId,
+        opId: queuedOpId,
+        generation: c.record.generation,
+        text: c.body,
+        pageInstanceId: c.record.owner.pageInstanceId,
+      })
+      continue
+    }
+    remaining.push(c)
+  }
+
+  // An unreadable or incomplete draft is still a draft: it keeps the restore ambiguous.
+  if (remaining.length + unresolved !== 1) {
+    for (const c of remaining) review(c, 'multiple-drafts')
+    return plan
+  }
+  if (!remaining.length) return plan
+  const c = remaining[0]!
+  const reason = blockingReason(c, input, liveElsewhere)
+  if (reason) {
+    review(c, reason)
+    return plan
+  }
+
+  const record = c.record
+  const pipeline = record.pipeline
+  const own = pipeline ? pipeline.ownQueued : null
+  const k = kIdentity()
+  let predecessor: QueuedNoteRow | null = null
+  if (!queue) {
+    review(c, 'queue-unknown')
+    return plan
+  }
+  if (queue.length) {
+    // Only this lineage's own predecessor may still be queued: one row, the
+    // op it queued, with the length and fingerprint it recorded.
+    const row = queue.length === 1 ? queue[0]! : null
+    if (!own || !row || row.opId !== own.opId || row.text.length !== own.textLength || print(row.text) !== own.textFingerprint) {
+      review(c, 'foreign-queue')
+      return plan
+    }
+    predecessor = row
+  }
+
+  const blockedBase = pipeline && pipeline.state === 'blocked' ? pipeline.blockedBase : null
+  const typedOn = blockedBase || record.base
+  const unchanged = sameBaseIdentity(record.base, k) || (!!blockedBase && sameBaseIdentity(blockedBase, k))
+  if (predecessor) {
+    // The predecessor is unsettled, so the server cannot have moved on from
+    // the base it was queued from.
+    if (!unchanged || !own || !sameBaseIdentity(own.base, k)) {
+      review(c, 'base-advanced')
+      return plan
+    }
+  } else if (!unchanged) {
+    const advancedByOwn =
+      !!own &&
+      !!K &&
+      !!k &&
+      sameBaseIdentity(own.base, typedOn) &&
+      typedOn.revision !== null &&
+      K.revision > typedOn.revision &&
+      k.length === own.textLength &&
+      k.fingerprint === own.textFingerprint
+    if (!advancedByOwn) {
+      review(c, 'base-advanced')
+      return plan
+    }
+  }
+
+  plan.restore = {
+    record,
+    body: c.body as string,
+    state: predecessor && pipeline && pipeline.state === 'blocked' ? 'blocked' : 'drafting',
+    predecessor,
+  }
+  return plan
+}
+
+function blockingReason(c: RestoreCandidate, input: RestoreInput, liveElsewhere: boolean): ReviewReason | null {
+  if (liveElsewhere) return 'live-elsewhere'
+  if (c.lineage === 'unknown') return 'ownership-unknown'
+  // Adoptable, but from a closed tab or another pane: slice 3 offers it.
+  if (c.lineage !== 'same-runtime-orphan' || c.record.owner.paneId !== input.paneId) return 'other-source'
+  if (input.otherDirtySession) return 'dirty-session'
+  if (!input.base || input.base.source !== 'server') return 'base-unverified'
+  if (c.record.base.source === 'unknown' || c.record.base.revision === null) return 'base-unverified'
+  return null
+}
