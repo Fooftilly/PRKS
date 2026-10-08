@@ -304,3 +304,84 @@ describe('editor recovery runtime', () => {
     expect(await b.rt.scanEmergency()).toEqual([])
   })
 })
+
+describe('review actions', () => {
+  function runtimeOn(idb: ReturnType<typeof createFakeIdb>, local: EmergencyStorage, name: string) {
+    const browser = createFakeBrowser()
+    return createEditorRecoveryRuntime({
+      store: { indexedDB: idb.factory },
+      identity: { sessionStorage: browser.sessionStorageWith(), locks: null, createChannel: browser.channelFor(name), claimWaitMs: 5, localStorage: local },
+      writers: { window: null, document: null },
+      emergencyStorage: local,
+    })
+  }
+
+  it('leaves a tombstone when a stale emergency key still lists the discarded draft, so a merge never brings it back', async () => {
+    const idb = createFakeIdb()
+    const local = memoryStorage()
+    const rt = runtimeOn(idb, local, 'reviewer')
+    await rt.start()
+    const draftId = 'd-' + 'e'.repeat(32)
+    const lineage = { createdAt: 1, owner: { runtimeId: null, pageInstanceId: 'p-gone', paneId: 'tab-1' }, base: UNKNOWN_BASE }
+    expect(await rt.store.writeGeneration({
+      draftId, pageInstanceId: 'p-gone', generation: 2, body: 'reviewed text',
+      create: { kind: 'work-research-note', entityType: 'work', entityId: 'w1', owner: { ...lineage.owner, claimedAt: 1 }, base: UNKNOWN_BASE },
+    })).toBe('ok')
+    // The gone page's key could not be removed and still lists the lineage at generation 1.
+    const payload = { v: 1, pageInstanceId: 'p-gone', runtimeId: null, at: 1, entries: [
+      { draftId, kind: 'work-research-note' as const, entityType: 'work' as const, entityId: 'w1', generation: 1, committedGeneration: 0, body: 'older text', lineage },
+    ] }
+    local.setItem(EMERGENCY_KEY_PREFIX + 'p-gone', JSON.stringify(payload))
+    const reviewed = { draftId, pageInstanceId: 'p-gone', generation: 2, status: 'active' as const, kind: 'work-research-note' as const, entityType: 'work' as const, entityId: 'w1' }
+    // A stale review (older generation) removes nothing.
+    expect(await rt.discardReviewed({ ...reviewed, generation: 1 })).toBe('kept')
+    expect(await rt.discardReviewed(reviewed)).toBe('deleted')
+    expect(await rt.store.get(draftId)).toMatchObject({ status: 'discarded' })
+    expect(await rt.store.getBody(draftId)).toBeNull()
+    expect(await rt.store.applyEmergencyEntry(payload, payload.entries[0]!)).toBe('suppressed')
+    expect((await rt.store.listByEntity('work-research-note', 'w1')).filter((r) => r.status !== 'discarded')).toEqual([])
+    rt.dispose()
+  })
+
+  it('claims a reviewed record by compare-and-set on its owner and generation', async () => {
+    const idb = createFakeIdb()
+    const local = memoryStorage()
+    const rt = runtimeOn(idb, local, 'claimer')
+    await rt.start()
+    const draftId = 'd-' + 'f'.repeat(32)
+    await rt.store.writeGeneration({
+      draftId, pageInstanceId: 'p-gone', generation: 3, body: 'text',
+      create: { kind: 'work-research-note', entityType: 'work', entityId: 'w1', owner: { runtimeId: null, pageInstanceId: 'p-gone', paneId: 'tab-1', claimedAt: 1 }, base: UNKNOWN_BASE },
+    })
+    const reviewed = { draftId, pageInstanceId: 'p-gone', generation: 3, status: 'active' as const }
+    expect((await rt.claimReviewed({ ...reviewed, generation: 2 }, 'tab-1')).outcome).toBe('conflict')
+    expect((await rt.claimReviewed({ ...reviewed, status: 'tail-missing' }, 'tab-1')).outcome).toBe('conflict')
+    expect((await rt.claimReviewed(reviewed, 'tab-1')).outcome).toBe('ok')
+    expect((await rt.store.get(draftId))!.owner.pageInstanceId).toBe(rt.identity.pageInstanceId)
+    // A second claim from the same review is now stale.
+    expect((await rt.claimReviewed(reviewed, 'tab-1')).outcome).toBe('conflict')
+    rt.dispose()
+  })
+
+  it('fans writer protection events out to every listener until it unsubscribes', async () => {
+    const idb = createFakeIdb()
+    const rt = runtimeOn(idb, memoryStorage(), 'events')
+    await rt.start()
+    const seen: string[] = []
+    const stop = rt.onWriterEvent((event) => seen.push(event.type))
+    rt.onWriterEvent(() => {
+      throw new Error('a broken listener')
+    })
+    idb.failCommits = 5
+    const w = rt.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE })
+    w.edit(1, 'text')
+    await w.flush()
+    expect(seen).toEqual(['unprotected'])
+    stop()
+    idb.failCommits = 0
+    await w.flush()
+    expect(seen).toEqual(['unprotected'])
+    rt.dispose()
+    await settle()
+  })
+})

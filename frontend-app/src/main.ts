@@ -21,6 +21,7 @@ import { registerWorkPanelReadBridge } from './features/work/panel-session'
 import { registerWorkMetadataEditorBridge } from './features/work/metadata-session'
 import { registerWorkPrivateNotesBridge } from './features/work/private-note-session'
 import { registerWorkResearchNotesBridge } from './features/work/research-note-session'
+import { registerResearchNotesRecoveryBridge } from './features/work/research-notes-recovery'
 import { registerWorkDetailBridge } from './features/work/session'
 import { registerWorkPdfAnnotationPopupBridge } from './features/work/pdf-annotation-popup'
 import { registerWorkPdfAnnotationDrawerBridge } from './features/work/pdf-annotation-drawer'
@@ -52,6 +53,7 @@ registerWorkPanelReadBridge(window)
 registerWorkMetadataEditorBridge(window)
 registerWorkPrivateNotesBridge(window)
 registerWorkResearchNotesBridge(window)
+registerResearchNotesRecoveryBridge(window)
 registerWorkDetailBridge(window)
 registerWorkPdfAnnotationPopupBridge(window)
 registerWorkPdfAnnotationDrawerBridge(window)

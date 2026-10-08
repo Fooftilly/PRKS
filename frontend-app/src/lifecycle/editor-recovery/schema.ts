@@ -34,6 +34,14 @@ export const RUNTIME_SESSION_KEY = 'prks.editorRecovery.runtime.v1'
  */
 export const CLOSED_PAGES_SESSION_KEY = 'prks.editorRecovery.closed.v1'
 export const CLOSED_PAGES_KEPT = 8
+/**
+ * Pages of any tab that ran a final `pagehide` (not into the back/forward
+ * cache), newest last: positive evidence that the page is gone where Web
+ * Locks cannot prove it (LAN/HTTP). A page that crashed or was discarded
+ * never records itself, so its drafts stay `unknown`.
+ */
+export const CLOSED_PAGES_LOCAL_KEY = 'prks.editorRecovery.closedPages.v1'
+export const CLOSED_PAGES_LOCAL_KEPT = 64
 export const RECOVERY_CHANNEL = 'prks-editor-recovery-v1'
 export const RUNTIME_LOCK_PREFIX = 'prks-editor-recovery-runtime:'
 export const PAGE_LOCK_PREFIX = 'prks-editor-recovery-page:'

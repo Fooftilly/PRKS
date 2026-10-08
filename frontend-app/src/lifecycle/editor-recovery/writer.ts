@@ -744,7 +744,38 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       else if (this.inFlight) await this.inFlight
       const draftId = this.lineageId
       if (!draftId) return 'none'
-      const outcome = await store.deleteIfAcknowledged(draftId, generation, body)
+      let outcome: DeleteOutcome
+      try {
+        outcome = await store.deleteIfAcknowledged(draftId, generation, body)
+      } catch (error) {
+        if (!this.ackedUncommitted(draftId, generation, body)) throw error
+        outcome = 'kept'
+      }
+      if (outcome !== 'deleted' && this.ackedUncommitted(draftId, generation, body)) {
+        // Recovery storage never took this exact generation, but the server
+        // now holds it: nothing is left to protect, so the warning and the
+        // leave guard end. The stored older generation of this lineage is
+        // superseded by it and goes too, while this page still owns it.
+        const stored = this.lineageStored ? this.committed : 0
+        this.clearTimers()
+        this.clearRetry()
+        this.latest = null
+        this.cleared.add(draftId)
+        this.lineageId = null
+        this.lineageStored = false
+        this.committed = 0
+        this.failedGeneration = 0
+        this.retryDelay = 0
+        this.status = 'clean'
+        changed()
+        if (stored) {
+          await store
+            .discard(draftId, undefined, { pageInstanceId: identity.pageInstanceId, generation: stored, status: 'active' })
+            .catch(() => 'kept' as const)
+        }
+        await this.tombstoneIfListed(draftId)
+        return 'deleted'
+      }
       if (outcome === 'deleted' && this.lineageId === draftId) {
         this.cleared.add(draftId)
         if (this.latest) {
@@ -759,6 +790,11 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       }
       if (outcome === 'deleted') await this.tombstoneIfListed(draftId)
       return outcome
+    }
+
+    /** The newest generation, never committed to recovery storage, is exactly what was acknowledged. */
+    private ackedUncommitted(draftId: string, generation: number, body: string): boolean {
+      return this.lineageId === draftId && !!this.latest && this.latest.generation === generation && this.latest.body === body && !this.inFlight
     }
 
     async discard(): Promise<void> {
@@ -874,7 +910,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       pageInstanceId: identity.pageInstanceId,
       paneId: input.paneId,
       claimedAt: now(),
-    })
+    }, record.generation)
     if (result.outcome !== 'ok' || disposed) return null
     writer.adoptRecord(result.record)
     live.add(writer)

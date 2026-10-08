@@ -9,12 +9,20 @@
  * consumer asks for the runtime.
  */
 
-import { mergeEmergencyEntries, releaseDeadReservations, type EmergencyStorage, type MergeReport } from './emergency'
+import { mergeEmergencyEntries, readEmergencyKeys, releaseDeadReservations, type EmergencyStorage, type MergeReport } from './emergency'
 import { createPageIdentity, type IdentityEnv, type PageIdentity, type RuntimeClaim } from './identity'
 import { classifyLineage, type LineageClass } from './lineage'
-import { RESERVATION_KEY_PREFIX, type DraftRecord } from './schema'
-import { createRecoveryStore, type RecoveryStore, type RecoveryStoreOptions } from './store'
-import { createWriterRegistry, type WriterRegistry, type WriterRegistryOptions } from './writer'
+import { RESERVATION_KEY_PREFIX, type DraftOwner, type DraftRecord } from './schema'
+import { createRecoveryStore, forkedDraftId, type AdoptOutcome, type DeleteOutcome, type RecoveryStore, type RecoveryStoreOptions } from './store'
+import { createWriterRegistry, type WriterEvent, type WriterRegistry, type WriterRegistryOptions } from './writer'
+
+/** What a reviewer saw of one record; an action on it applies only while it still holds. */
+export interface ReviewedRecord {
+  draftId: string
+  pageInstanceId: string
+  generation: number
+  status: DraftRecord['status']
+}
 
 export interface EditorRecoveryRuntimeOptions {
   store?: RecoveryStoreOptions
@@ -37,6 +45,21 @@ export interface EditorRecoveryRuntime {
    */
   scanEmergency(): Promise<MergeReport[]>
   classify(record: Pick<DraftRecord, 'draftId' | 'owner'>, askingSession?: string | null): Promise<LineageClass>
+  /**
+   * Takes ownership of a reviewed record for this page without a writer
+   * (compare-and-set on its owner page and generation), so no other page can
+   * adopt it while this page applies the user's choice. The record then
+   * reads as this page's orphan until `discardReviewed` removes it.
+   */
+  claimReviewed(reviewed: ReviewedRecord, paneId: string): Promise<AdoptOutcome>
+  /**
+   * Explicit user discard of a reviewed record, only while it is unchanged.
+   * When an emergency key that this page cannot clear still lists the
+   * lineage, a tombstone stays in its place so a later merge never brings it back.
+   */
+  discardReviewed(reviewed: ReviewedRecord & Pick<DraftRecord, 'kind' | 'entityType' | 'entityId'>): Promise<DeleteOutcome>
+  /** Writer protection events (`unprotected`, `protected`, `ownership-lost`) for this page. */
+  onWriterEvent(listener: (event: WriterEvent) => void): () => void
   dispose(): void
 }
 
@@ -45,7 +68,24 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
   const identity = createPageIdentity(options.identity)
   const emergencyStorage =
     options.emergencyStorage !== undefined ? options.emergencyStorage : (options.writers?.emergencyStorage ?? defaultLocalStorage())
-  const writers = createWriterRegistry({ ...options.writers, store, identity, emergencyStorage })
+  const writerListeners = new Set<(event: WriterEvent) => void>()
+  const ownEvent = options.writers?.onEvent
+  const writers = createWriterRegistry({
+    ...options.writers,
+    store,
+    identity,
+    emergencyStorage,
+    onEvent(event) {
+      if (ownEvent) ownEvent(event)
+      for (const listener of [...writerListeners]) {
+        try {
+          listener(event)
+        } catch {
+          /* one listener never stops the others */
+        }
+      }
+    },
+  })
   let started: Promise<{ claim: RuntimeClaim; merged: MergeReport[] }> | null = null
   let lastScan: Promise<unknown> = Promise.resolve()
 
@@ -97,12 +137,49 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
     classify(record, askingSession = null) {
       return classifyLineage(record, { identity, localOwner: (id) => writers.ownerOf(id) }, askingSession)
     },
+    claimReviewed(reviewed, paneId) {
+      if (reviewed.status !== 'active') return Promise.resolve({ outcome: 'conflict' as const })
+      const claim = identity.current()
+      const owner: DraftOwner = {
+        runtimeId: claim ? claim.runtimeId : null,
+        pageInstanceId: identity.pageInstanceId,
+        paneId,
+        claimedAt: Date.now(),
+      }
+      return store.adopt(reviewed.draftId, reviewed.pageInstanceId, owner, reviewed.generation)
+    },
+    discardReviewed(reviewed) {
+      const expected = { pageInstanceId: reviewed.pageInstanceId, generation: reviewed.generation, status: reviewed.status }
+      const listing = emergencyStorage ? listingPage(emergencyStorage, reviewed.draftId) : null
+      const tombstone = listing
+        ? { kind: reviewed.kind, entityType: reviewed.entityType, entityId: reviewed.entityId, generation: reviewed.generation, pageInstanceId: listing }
+        : undefined
+      return store.discard(reviewed.draftId, tombstone, expected)
+    },
+    onWriterEvent(listener) {
+      writerListeners.add(listener)
+      return () => {
+        writerListeners.delete(listener)
+      }
+    },
     dispose() {
+      writerListeners.clear()
       writers.dispose()
       identity.dispose()
       store.close()
     },
   }
+}
+
+/** The page whose emergency key still lists `draftId` (or its fork), if any. */
+function listingPage(storage: EmergencyStorage, draftId: string): string | null {
+  for (const stored of readEmergencyKeys(storage)) {
+    const entries = stored.payload ? stored.payload.entries : []
+    if (entries.some((entry) => entry.draftId === draftId || forkedDraftId(entry.draftId, entry.generation) === draftId)) {
+      return stored.pageInstanceId
+    }
+  }
+  return null
 }
 
 function defaultLocalStorage(): EmergencyStorage | null {

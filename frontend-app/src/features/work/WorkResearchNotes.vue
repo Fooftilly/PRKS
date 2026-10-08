@@ -1,10 +1,20 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, type ShallowRef } from 'vue'
+import EditorRecoveryNotice from '../editor-recovery/EditorRecoveryNotice.vue'
+import type { RecoveryNoticeView } from '../editor-recovery/types'
 
 const props = defineProps<{
   initialText: string
   editorRegionId: string
+  /** Unsaved drafts left for review and the unprotected warning (#466). */
+  recovery?: ShallowRef<RecoveryNoticeView | null> | null
 }>()
+
+const emit = defineEmits<{
+  reviewRecovery: [opener: HTMLElement | null]
+}>()
+
+const recoveryView = computed(() => (props.recovery ? props.recovery.value : null))
 
 const field = ref<HTMLTextAreaElement | null>(null)
 const notesEditorId = computed(() => `${props.editorRegionId}-field`)
@@ -41,6 +51,11 @@ onMounted(() => {
         <div data-prks-role="editor-status" class="work-editor-status"></div>
       </div>
     </div>
+    <EditorRecoveryNotice
+      :view="recoveryView"
+      subject="Research Notes"
+      @review="(opener) => emit('reviewRecovery', opener)"
+    />
     <div class="work-notes-editor-wrap" data-prks-role="work-notes-editor-region" :id="editorRegionId">
       <textarea
         ref="field"

@@ -38,4 +38,14 @@ describe('PrksInlineMessage', () => {
     expect(message.classes()).toContain('prks-inline-message--error')
     expect(message.attributes('role')).toBeUndefined()
   })
+
+  it('marks a warning without making it an error', () => {
+    const wrapper = mount(PrksInlineMessage, {
+      props: { tone: 'warning', status: true },
+      slots: { default: 'Not protected if the browser closes.' },
+    })
+    const message = wrapper.get('p')
+    expect(message.classes()).toEqual(['prks-inline-message', 'prks-inline-message--warning'])
+    expect(message.attributes('role')).toBe('status')
+  })
 })

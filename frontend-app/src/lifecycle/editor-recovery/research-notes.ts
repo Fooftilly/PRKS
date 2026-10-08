@@ -1,5 +1,5 @@
 /**
- * Research Notes same-pane restore decision (#466 slice 2).
+ * Research Notes restore decision (#466 slices 2 and 3).
  *
  * A pure function over what the mount path already knows: the recovery
  * records for one Work with their lineage class and stored body, the
@@ -8,10 +8,13 @@
  * the plan.
  *
  * Automatic restore is allowed only when it cannot overwrite anything:
- * exactly one candidate, written by this pane before reload, typed on exactly
- * the acknowledged body the server still holds, or on a body this lineage
- * itself queued from that same base (the #475 own-predecessor rule). Every
- * other candidate is kept untouched and reported for review (slice 3).
+ * exactly one candidate, from a lineage no live editor can own (this tab
+ * before reload, another pane of this tab, or a tab proven closed), typed on
+ * exactly the acknowledged body the server still holds, or on a body this
+ * lineage itself queued from that same base (the #475 own-predecessor rule).
+ * Every other candidate is kept untouched and reported for review, with the
+ * one action a user may take on it there: restore it as it is, reconcile it
+ * against the current note first, or neither (inspect and copy only).
  */
 
 import { fingerprintText, sameBaseIdentity } from './fingerprint'
@@ -48,6 +51,12 @@ export interface RestoreInput {
   queue: QueuedNoteRow[] | null
   /** Another session in this page holds unsaved text for this Work. */
   otherDirtySession: boolean
+  /**
+   * The mounting pane's own editor already shows text other than the
+   * acknowledged note, or has queued it: a restore would replace it, so it
+   * is offered only as a reconciliation. False on mount.
+   */
+  editorDirty?: boolean
   /** Injected in tests to force collisions. */
   fingerprint?: (text: string) => string
 }
@@ -55,15 +64,27 @@ export interface RestoreInput {
 export type ReviewReason =
   | 'multiple-drafts'
   | 'live-elsewhere'
+  | 'other-draft-live'
   | 'ownership-unknown'
-  | 'other-source'
   | 'tail-missing'
   | 'body-missing'
   | 'dirty-session'
+  | 'editor-dirty'
   | 'base-unverified'
   | 'foreign-queue'
   | 'queue-unknown'
   | 'base-advanced'
+
+/**
+ * What Review may offer for one candidate, judged on its own:
+ * - `restore`: put it in the editor as it is (it overwrites nothing);
+ * - `reconcile`: compare it with the current note and choose explicitly
+ *   before anything is written (the note moved on, a foreign row is queued,
+ *   the base cannot be verified, or the editor already shows other text);
+ * - null: inspect and copy only (live or uncertain owner, incomplete or
+ *   unreadable body, unreadable queue, unsaved text in another pane).
+ */
+export type ReviewAction = 'restore' | 'reconcile' | null
 
 export interface ReviewCandidate {
   draftId: string
@@ -73,6 +94,8 @@ export interface ReviewCandidate {
   bodyLength: number
   paneId: string
   updatedAt: number
+  status: DraftRecord['status']
+  action: ReviewAction
 }
 
 export interface RestorePlan {
@@ -101,14 +124,8 @@ export interface RestorePlan {
 }
 
 export function planResearchNotesRestore(input: RestoreInput): RestorePlan {
-  const print = input.fingerprint || fingerprintText
+  const print = memoized(input.fingerprint || fingerprintText)
   const K = input.base
-  let kPrint: string | null = null
-  const kIdentity = () => {
-    if (!K) return null
-    if (kPrint === null) kPrint = print(K.value)
-    return { revision: K.revision, length: K.value.length, fingerprint: kPrint }
-  }
   const plan: RestorePlan = { cleanup: [], represented: [], restore: null, review: [] }
   const review = (c: RestoreCandidate, reason: ReviewReason) =>
     plan.review.push({
@@ -119,6 +136,8 @@ export function planResearchNotesRestore(input: RestoreInput): RestorePlan {
       bodyLength: c.record.bodyLength,
       paneId: c.record.owner.paneId,
       updatedAt: c.record.updatedAt,
+      status: c.record.status,
+      action: actionFor(c, input, print),
     })
 
   const queue = input.queue
@@ -177,28 +196,47 @@ export function planResearchNotesRestore(input: RestoreInput): RestorePlan {
   }
   if (!remaining.length) return plan
   const c = remaining[0]!
-  const reason = blockingReason(c, input, liveElsewhere)
-  if (reason) {
-    review(c, reason)
-    return plan
-  }
+  const judged = judge(c, input, liveElsewhere, print)
+  if ('reason' in judged) review(c, judged.reason)
+  else plan.restore = judged
+  return plan
+}
 
+/** Fingerprints the note once however many candidates are judged against it. */
+function memoized(print: (text: string) => string): (text: string) => string {
+  const seen = new Map<string, string>()
+  return (text) => {
+    let value = seen.get(text)
+    if (value === undefined) {
+      value = print(text)
+      if (seen.size > 8) seen.clear()
+      seen.set(text, value)
+    }
+    return value
+  }
+}
+
+type Judgement = NonNullable<RestorePlan['restore']> | { reason: ReviewReason }
+
+/** One remaining candidate on its own: restorable as it is, or why not. */
+function judge(c: RestoreCandidate, input: RestoreInput, liveElsewhere: boolean, print: (text: string) => string): Judgement {
+  const reason = blockingReason(c, input, liveElsewhere)
+  if (reason) return { reason }
+
+  const K = input.base
+  const queue = input.queue
   const record = c.record
   const pipeline = record.pipeline
   const own = pipeline ? pipeline.ownQueued : null
-  const k = kIdentity()
+  const k = K ? { revision: K.revision, length: K.value.length, fingerprint: print(K.value) } : null
   let predecessor: QueuedNoteRow | null = null
-  if (!queue) {
-    review(c, 'queue-unknown')
-    return plan
-  }
+  if (!queue) return { reason: 'queue-unknown' }
   if (queue.length) {
     // Only this lineage's own predecessor may still be queued: one row, the
     // op it queued, with the length and fingerprint it recorded.
     const row = queue.length === 1 ? queue[0]! : null
     if (!own || !row || row.opId !== own.opId || row.text.length !== own.textLength || print(row.text) !== own.textFingerprint) {
-      review(c, 'foreign-queue')
-      return plan
+      return { reason: 'foreign-queue' }
     }
     predecessor = row
   }
@@ -209,10 +247,7 @@ export function planResearchNotesRestore(input: RestoreInput): RestorePlan {
   if (predecessor) {
     // The predecessor is unsettled, so the server cannot have moved on from
     // the base it was queued from.
-    if (!unchanged || !own || !sameBaseIdentity(own.base, k)) {
-      review(c, 'base-advanced')
-      return plan
-    }
+    if (!unchanged || !own || !sameBaseIdentity(own.base, k)) return { reason: 'base-advanced' }
   } else if (!unchanged) {
     const advancedByOwn =
       !!own &&
@@ -223,27 +258,35 @@ export function planResearchNotesRestore(input: RestoreInput): RestorePlan {
       K.revision > typedOn.revision &&
       k.length === own.textLength &&
       k.fingerprint === own.textFingerprint
-    if (!advancedByOwn) {
-      review(c, 'base-advanced')
-      return plan
-    }
+    if (!advancedByOwn) return { reason: 'base-advanced' }
   }
 
-  plan.restore = {
+  return {
     record,
     body: c.body as string,
     state: predecessor && pipeline && pipeline.state === 'blocked' ? 'blocked' : 'drafting',
     predecessor,
   }
-  return plan
+}
+
+/** Reasons a reviewer can still act on by comparing with the current note first. */
+const RECONCILABLE: ReadonlySet<ReviewReason> = new Set(['base-advanced', 'foreign-queue', 'base-unverified'])
+
+function actionFor(c: RestoreCandidate, input: RestoreInput, print: (text: string) => string): ReviewAction {
+  if (c.record.status !== 'active' || c.body === null) return null
+  if (c.lineage !== 'same-runtime-orphan' && c.lineage !== 'dead-runtime') return null
+  // Judged alone: other drafts and other live lineages are the reviewer's to weigh.
+  const judged = judge(c, { ...input, editorDirty: false }, false, print)
+  if (!('reason' in judged)) return input.editorDirty ? 'reconcile' : 'restore'
+  return RECONCILABLE.has(judged.reason) ? 'reconcile' : null
 }
 
 function blockingReason(c: RestoreCandidate, input: RestoreInput, liveElsewhere: boolean): ReviewReason | null {
-  if (liveElsewhere) return 'live-elsewhere'
-  if (c.lineage === 'unknown') return 'ownership-unknown'
-  // Adoptable, but from a closed tab or another pane: slice 3 offers it.
-  if (c.lineage !== 'same-runtime-orphan' || c.record.owner.paneId !== input.paneId) return 'other-source'
+  // Another editor is still extending a draft of this note.
+  if (liveElsewhere) return 'other-draft-live'
+  if (c.lineage !== 'same-runtime-orphan' && c.lineage !== 'dead-runtime') return 'ownership-unknown'
   if (input.otherDirtySession) return 'dirty-session'
+  if (input.editorDirty) return 'editor-dirty'
   if (!input.base || input.base.source !== 'server') return 'base-unverified'
   if (c.record.base.source === 'unknown' || c.record.base.revision === null) return 'base-unverified'
   return null

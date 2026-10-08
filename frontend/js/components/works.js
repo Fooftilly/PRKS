@@ -388,6 +388,8 @@ function prksResearchRecoverySettled(owner, id, entry, result, saved) {
 
 /** One page-level subscription: acknowledgements and conflicts of queued Research Notes rows. */
 function prksResearchRecoveryListen() {
+    const recovery = prksResearchRecovery();
+    if (recovery) prksResearchRecoveryWatchWriters(recovery);
     if (prksResearchRecoveryStopSync || !window.prksSync || typeof window.prksSync.subscribe !== 'function') return;
     prksResearchRecoveryStopSync = window.prksSync.subscribe(prksResearchRecoveryOnSync);
 }
@@ -431,7 +433,10 @@ function prksResearchRecoveryOnSync(event) {
                 prksResearchRecoveryPipeline(entry, {
                     state: prksResearchRecoveryStateOf(entry), queuedOpId: null, queuedGeneration: 0,
                 });
-                void entry.recovery.acknowledged(queued.generation, text).catch(function () {});
+                void entry.recovery.acknowledged(queued.generation, text).catch(function () {}).then(function () {
+                    /* A copy storage refused is now saved: the warning ends. */
+                    prksResearchNotesRecoveryPublishFor(entry);
+                });
             } catch (_e) { /* best-effort */ }
         });
         return;
@@ -452,14 +457,17 @@ function prksResearchRecoveryOnSync(event) {
 }
 
 /**
- * Same-pane restore on Research Notes mount, between `ensureBase` and the
- * first read of the session text. Applies `planResearchNotesRestore`:
- * restores only this pane's own draft from before reload when that cannot
- * overwrite anything; drafts proven equal to the server note are cleared;
- * everything else is kept untouched, never enqueued, and reported on
- * `ctx.ui.researchNotesRecovery` for slice 3. Restores run one at a time.
+ * Restore on Research Notes mount, between `ensureBase` and the first read of
+ * the session text. Applies `planResearchNotesRestore`: restores the one
+ * draft that cannot overwrite anything (this tab before reload, another pane
+ * of this tab, or a tab proven closed); drafts proven equal to the server
+ * note are cleared; everything else is kept untouched, never enqueued, and
+ * reported on `ctx.ui.researchNotesRecovery`, which the pane shows as a
+ * notice with a Review action (slice 3). A pane that already has a session
+ * for the Work, or a refresh after Review, only recomputes that report.
+ * Restores run one at a time.
  */
-function prksRestoreResearchNotesRecovery(ctx, work) {
+function prksRestoreResearchNotesRecovery(ctx, work, options) {
     const attempt = { abandoned: false };
     let timer = null;
     const timeout = new Promise(function (resolve) {
@@ -469,7 +477,7 @@ function prksRestoreResearchNotesRecovery(ctx, work) {
         }, prksResearchRecoveryRestoreMs);
     });
     const run = prksResearchRecoveryChain.then(function () {
-        return attempt.abandoned ? null : prksRestoreResearchNotesRecoveryNow(ctx, work, attempt);
+        return attempt.abandoned ? null : prksRestoreResearchNotesRecoveryNow(ctx, work, attempt, options);
     }).catch(function () { return null; });
     /* An abandoned run that never settles must not hold up later restores. */
     const settled = Promise.race([run, timeout]);
@@ -480,46 +488,64 @@ function prksRestoreResearchNotesRecovery(ctx, work) {
     });
 }
 
-async function prksRestoreResearchNotesRecoveryNow(ctx, work, attempt) {
+/* Unsettled Research Notes rows for one Work; null when the queue could not be read. */
+async function prksResearchRecoveryQueue(id) {
+    const rows = typeof prksReadPendingWorkNotesSnapshot === 'function' ? await prksReadPendingWorkNotesSnapshot() : null;
+    /* An unread queue is unknown, never empty. */
+    return rows && typeof prksWorkNoteOperations === 'function'
+        ? prksWorkNoteOperations(rows, id, PRKS_RESEARCH_RECOVERY_KIND).map(function (row) {
+            return { opId: row.op_id, text: row.payload && typeof row.payload.text === 'string' ? row.payload.text : '' };
+        })
+        : null;
+}
+
+function prksResearchRecoveryOtherDirty(id, key) {
+    return Array.from(prksWorkResearchDrafts.values()).some(function (entry) {
+        return entry.workId === id && entry.key !== key && entry.state !== 'committed';
+    });
+}
+
+async function prksResearchRecoveryCandidate(rt, record, askingSession) {
+    const lineage = await rt.classify(record, askingSession);
+    let body = null;
+    if (lineage !== 'self-live' && lineage !== 'other-live') {
+        const row = await rt.store.getBody(record.draftId);
+        body = row && row.generation === record.generation ? row.body : null;
+    }
+    return { record: record, body: body, lineage: lineage };
+}
+
+async function prksRestoreResearchNotesRecoveryNow(ctx, work, attempt, options) {
     const recovery = prksResearchRecovery();
     if (!recovery || !ctx || !work || work.id == null) return null;
     const id = String(work.id);
     const generation = ctx.generation;
     const key = prksResearchDraftKey(ctx, id);
+    /* A live session in this pane is the authority for its text: report only. */
+    const refresh = !!(options && options.reviewOnly);
+    const reviewOnly = refresh || prksWorkResearchDrafts.has(key);
     const current = function () {
-        return !(attempt && attempt.abandoned) && prksResearchNotesMayPaint(ctx, id, generation) &&
-            !prksWorkResearchDrafts.has(key);
+        return !(attempt && attempt.abandoned) && prksResearchNotesMayPaint(ctx, id, refresh ? undefined : generation) &&
+            (reviewOnly || !prksWorkResearchDrafts.has(key));
     };
-    if (ctx.ui) ctx.ui.researchNotesRecovery = null;
-    /* A live session in this pane is the authority for its text. */
     if (!current()) return null;
     const rt = recovery.rt;
     prksResearchRecoveryListen();
     await rt.scanEmergency();
     const records = await rt.store.listByEntity(PRKS_RESEARCH_RECOVERY_KIND, id);
-    if (!records.length || !current()) return null;
-    const candidates = [];
-    for (const record of records) {
-        const lineage = await rt.classify(record, null);
-        let body = null;
-        if (lineage !== 'self-live' && lineage !== 'other-live') {
-            const row = await rt.store.getBody(record.draftId);
-            body = row && row.generation === record.generation ? row.body : null;
-        }
-        candidates.push({ record: record, body: body, lineage: lineage });
-    }
-    const rows = typeof prksReadPendingWorkNotesSnapshot === 'function' ? await prksReadPendingWorkNotesSnapshot() : null;
     if (!current()) return null;
-    /* An unread queue is unknown, never empty. */
-    const queue = rows && typeof prksWorkNoteOperations === 'function'
-        ? prksWorkNoteOperations(rows, id, PRKS_RESEARCH_RECOVERY_KIND).map(function (row) {
-            return { opId: row.op_id, text: row.payload && typeof row.payload.text === 'string' ? row.payload.text : '' };
-        })
-        : null;
+    if (!records.length) {
+        prksResearchRecoveryReport(ctx, id, []);
+        return null;
+    }
+    const session = prksWorkResearchDrafts.get(key);
+    const asking = session && session.recovery ? session.recovery.sessionKey : null;
+    const candidates = [];
+    for (const record of records) candidates.push(await prksResearchRecoveryCandidate(rt, record, asking));
+    const queue = await prksResearchRecoveryQueue(id);
+    if (!current()) return null;
     const base = prksResearchRecoveryObservedBase(ctx);
-    const otherDirty = Array.from(prksWorkResearchDrafts.values()).some(function (entry) {
-        return entry.workId === id && entry.key !== key && entry.state !== 'committed';
-    });
+    const otherDirty = prksResearchRecoveryOtherDirty(id, key);
     const planWith = function (planBase) {
         return recovery.api.planResearchNotesRestore({
             paneId: String(ctx.tabId == null ? '' : ctx.tabId),
@@ -527,6 +553,8 @@ async function prksRestoreResearchNotesRecoveryNow(ctx, work, attempt) {
             base: planBase,
             queue: queue,
             otherDirtySession: otherDirty,
+            /* Never replace what an open editor shows; Review recomputes exactly. */
+            editorDirty: reviewOnly,
         });
     };
     let plan = planWith(base);
@@ -555,7 +583,7 @@ async function prksRestoreResearchNotesRecoveryNow(ctx, work, attempt) {
          * while the adoption is pending still finds it. */
         watches.push(watch);
         prksResearchRecoveryAckWatch.set(item.opId, watches);
-        if (candidate.lineage === 'same-runtime-orphan' && candidate.record.owner.paneId === paneId) {
+        if (!reviewOnly && candidate.lineage === 'same-runtime-orphan' && candidate.record.owner.paneId === paneId) {
             /* Assigned before the adoption starts, so no acknowledgement can miss it. */
             watch.adopting = Promise.resolve().then(function () {
                 return rt.writers.adopt(candidate.record, { paneId: paneId });
@@ -575,7 +603,7 @@ async function prksRestoreResearchNotesRecoveryNow(ctx, work, attempt) {
         }
     }
     let restored = false;
-    if (plan.restore) {
+    if (plan.restore && !reviewOnly) {
         const writer = await rt.writers.adopt(plan.restore.record, { paneId: paneId });
         /* The plan was made before adopting. Another pane may have saved,
          * queued or started editing meanwhile; then the draft stays unapplied
@@ -594,6 +622,9 @@ async function prksRestoreResearchNotesRecoveryNow(ctx, work, attempt) {
                     bodyLength: record.bodyLength,
                     paneId: record.owner.paneId,
                     updatedAt: record.updatedAt,
+                    status: record.status,
+                    /* Now this page's orphan: Review can compare it, never apply it silently. */
+                    action: changed === 'base-advanced' || changed === 'foreign-queue' ? 'reconcile' : null,
                 });
             }
         } else if (writer) {
@@ -601,9 +632,7 @@ async function prksRestoreResearchNotesRecoveryNow(ctx, work, attempt) {
             restored = true;
         }
     }
-    if (ctx.ui && plan.review.length) {
-        ctx.ui.researchNotesRecovery = { status: 'needs-review', workId: id, candidates: plan.review };
-    }
+    prksResearchRecoveryReport(ctx, id, plan.review);
     return { restored: restored, review: plan.review };
 }
 
@@ -655,6 +684,13 @@ async function prksResearchRecoveryChangedSince(ctx, id, key, base, queue) {
     return otherDirty ? 'dirty-session' : null;
 }
 
+/** Records what this pane's notice offers for review, and repaints it. */
+function prksResearchRecoveryReport(ctx, id, review) {
+    if (!ctx || !ctx.ui) return;
+    ctx.ui.researchNotesRecovery = review.length ? { status: 'needs-review', workId: id, candidates: review } : null;
+    prksResearchNotesRecoveryPublish(ctx);
+}
+
 function prksResearchRecoveryInstall(api, ctx, id, writer, restore, base) {
     const entry = prksResearchDraftEntry(ctx, id, restore.body);
     entry.text = restore.body;
@@ -683,6 +719,376 @@ function prksResearchRecoveryInstall(api, ctx, id, writer, restore, base) {
     prksResearchRecoveryPipeline(entry, { state: restore.state });
 }
 
+/*
+ * Recovery notice and Review (#466 slice 3).
+ *
+ * The pane's notice reads `prksResearchNotesRecoveryView`: how many drafts
+ * this pane's last restore left for review (never one a live editor owns)
+ * and whether this pane's own newest text is unprotected because recovery
+ * storage refused it. Review reads `prksResearchNotesRecoveryDetails` and
+ * acts through Restore, Replace and Discard below. Every action re-reads the
+ * record, re-classifies its owner and applies only through the store's
+ * compare-and-set, against the editor session the dialog was opened for
+ * (`token`); anything that changed meanwhile is refused and the dialog
+ * refreshes. Nothing here writes the queue except the ordinary save path,
+ * and only after the user chose the text.
+ */
+let prksResearchRecoveryStopWriterEvents = null;
+let prksResearchRecoveryTokenSeq = 0;
+
+function prksResearchNotesRecoveryView(ctx) {
+    if (!ctx || !ctx.ui || ctx.destroyed) return null;
+    const live = ctx.getEntity ? ctx.getEntity('work') : null;
+    if (!live || live.id == null) return null;
+    const id = String(live.id);
+    const review = ctx.ui.researchNotesRecovery;
+    /* Another live editor's draft is that editor's, not a recovery. */
+    const drafts = review && review.workId === id
+        ? review.candidates.filter(function (c) { return c.lineage !== 'self-live' && c.lineage !== 'other-live'; })
+        : [];
+    const entry = prksWorkResearchDrafts.get(prksResearchDraftKey(ctx, id));
+    let unprotected = null;
+    try {
+        if (entry && entry.recovery && entry.recovery.state() === 'unprotected') {
+            unprotected = entry.recoveryUnprotectedCode || 'unknown';
+        }
+    } catch (_e) { /* best-effort */ }
+    if (!drafts.length && !unprotected) return null;
+    return {
+        workId: id,
+        drafts: drafts.length,
+        incomplete: drafts.filter(function (c) { return c.status === 'tail-missing' || c.reason === 'body-missing'; }).length,
+        unprotected: unprotected,
+    };
+}
+
+function prksResearchNotesRecoveryPublish(ctx) {
+    if (typeof window.prksVueUpdateResearchNotesRecovery === 'function') window.prksVueUpdateResearchNotesRecovery(ctx);
+}
+
+/* Repaints the pane that owns this session entry. */
+function prksResearchNotesRecoveryPublishFor(entry) {
+    if (!entry || typeof prksForEachLiveTabContext !== 'function') return;
+    prksForEachLiveTabContext(function (ctx) {
+        if (String(ctx.tabId == null ? '' : ctx.tabId) !== String(entry.ownerTabId)) return;
+        const work = ctx.getEntity ? ctx.getEntity('work') : null;
+        if (work && String(work.id) === entry.workId) prksResearchNotesRecoveryPublish(ctx);
+    });
+}
+
+/* One page-level subscription: a session's recovery copy failed or caught up. */
+function prksResearchRecoveryWatchWriters(recovery) {
+    if (prksResearchRecoveryStopWriterEvents || typeof recovery.rt.onWriterEvent !== 'function') return;
+    prksResearchRecoveryStopWriterEvents = recovery.rt.onWriterEvent(function (event) {
+        if (!event || (event.type !== 'unprotected' && event.type !== 'protected')) return;
+        prksWorkResearchDrafts.forEach(function (entry) {
+            if (!entry.recovery || entry.recovery.sessionKey !== event.sessionKey) return;
+            entry.recoveryUnprotectedCode = event.type === 'unprotected' ? event.code : null;
+            prksResearchNotesRecoveryPublishFor(entry);
+        });
+    });
+}
+
+/* The editor shows something other than the acknowledged note, or its session has unsettled text. */
+function prksResearchNotesEditorDirty(entry, notes, base) {
+    const shown = notes && notes.editor && typeof notes.editor.value === 'function' ? notes.editor.value() : null;
+    if (!base || shown !== base.value) return true;
+    return !!(entry && (entry.state !== 'committed' || entry.recoveryQueued || entry.promise));
+}
+
+/* The live editor the dialog was opened for, or null when the pane, Work or session moved on. */
+function prksResearchNotesRecoveryTarget(ctx, workId, token) {
+    const notes = prksResearchNotesBusyRetryTarget(ctx, workId);
+    if (!notes || !token || notes.recoveryToken !== token) return null;
+    return notes;
+}
+
+/* Puts text in the editor without it reading as a keystroke; callers decide what follows. */
+function prksResearchNotesApplyText(notes, text) {
+    notes.applyingRecovery = true;
+    try {
+        notes.editor.value(text);
+    } finally {
+        notes.applyingRecovery = false;
+    }
+}
+
+/** Status and save for a session that was just restored from recovery storage. */
+function prksResearchNotesAnnounceRestored(ctx, workId, entry) {
+    const statusEl = ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
+    if (statusEl && entry.state === 'drafting') statusEl.innerText = PRKS_RESEARCH_NOTES_RESTORED_STATUS;
+    if (entry.recoverySaveDue && entry.state === 'drafting') {
+        entry.recoverySaveDue = false;
+        prksScheduleWorkResearchNotesSave(ctx, workId);
+    }
+    if (ctx.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
+        window.prksWorkspaceRefreshTabStatus(ctx.tabId);
+    }
+}
+
+function prksResearchNotesRecoveryExpectation(record) {
+    return { draftId: record.draftId, pageInstanceId: record.owner.pageInstanceId, generation: record.generation, status: record.status };
+}
+
+function prksResearchNotesRecoveryMatches(record, expect, id) {
+    return !!(record && expect && record.status !== 'discarded' && record.kind === PRKS_RESEARCH_RECOVERY_KIND &&
+        String(record.entityId) === id && record.owner.pageInstanceId === expect.pageInstanceId &&
+        record.generation === expect.generation && record.status === expect.status);
+}
+
+/**
+ * Everything Review shows for one Work in this pane: the current note (the
+ * editor's text, the acknowledged revision and whether the base was read from
+ * the server), the unsettled queue, and every recovery record with its owner
+ * class, stored body and the one action it allows now.
+ */
+async function prksResearchNotesRecoveryDetailsNow(ctx, workId) {
+    const recovery = prksResearchRecovery();
+    const id = String(workId || '');
+    const notes = prksResearchNotesBusyRetryTarget(ctx, id);
+    if (!recovery || !notes) return null;
+    if (!notes.recoveryToken) notes.recoveryToken = 'review-' + (++prksResearchRecoveryTokenSeq);
+    const token = notes.recoveryToken;
+    const rt = recovery.rt;
+    await rt.start();
+    await rt.scanEmergency();
+    const key = prksResearchDraftKey(ctx, id);
+    const entry = prksWorkResearchDrafts.get(key);
+    const asking = entry && entry.recovery ? entry.recovery.sessionKey : null;
+    const records = await rt.store.listByEntity(PRKS_RESEARCH_RECOVERY_KIND, id);
+    const candidates = [];
+    for (const record of records) {
+        if (record.status === 'discarded') continue;
+        candidates.push(await prksResearchRecoveryCandidate(rt, record, asking));
+    }
+    const queue = await prksResearchRecoveryQueue(id);
+    if (!prksResearchNotesRecoveryTarget(ctx, id, token)) return null;
+    const base = prksResearchRecoveryObservedBase(ctx);
+    const paneId = String(ctx.tabId == null ? '' : ctx.tabId);
+    const otherDirty = prksResearchRecoveryOtherDirty(id, key);
+    const editorDirty = prksResearchNotesEditorDirty(entry, notes, base);
+    const out = candidates.map(function (c) {
+        /* Each judged on its own: the reviewer weighs them against each other. */
+        const plan = recovery.api.planResearchNotesRestore({
+            paneId: paneId, candidates: [c], base: base, queue: queue,
+            otherDirtySession: otherDirty, editorDirty: editorDirty,
+        });
+        const judged = plan.review[0];
+        let reason = judged ? judged.reason : 'restorable';
+        let action = judged ? judged.action : 'restore';
+        if (plan.cleanup.length) { reason = 'saved'; action = null; }
+        if (plan.represented.length) { reason = 'queued'; action = null; }
+        const live = c.lineage === 'self-live' || c.lineage === 'other-live';
+        return {
+            expect: prksResearchNotesRecoveryExpectation(c.record),
+            draftId: c.record.draftId,
+            lineage: c.lineage,
+            samePane: c.record.owner.paneId === paneId,
+            status: c.record.status,
+            reason: reason,
+            action: action,
+            generation: c.record.generation,
+            updatedAt: c.record.updatedAt,
+            length: c.body !== null ? c.body.length : c.record.bodyLength,
+            /* Another live editor's text stays there; it is not offered as a recovery. */
+            body: live ? null : c.body,
+            typedOnRevision: c.record.base ? c.record.base.revision : null,
+            pipelineState: c.record.pipeline ? c.record.pipeline.state : null,
+        };
+    });
+    return {
+        workId: id,
+        token: token,
+        current: {
+            text: notes.editor.value(),
+            revision: base ? base.revision : null,
+            source: base ? base.source : 'unknown',
+            queue: queue === null ? 'unknown' : (queue.length ? 'queued' : 'none'),
+            queued: queue === null ? 0 : queue.length,
+            unsaved: !!(entry && entry.state !== 'committed'),
+        },
+        candidates: out,
+    };
+}
+
+/* Re-reads one reviewed record and judges it alone against the pane as it is now. */
+async function prksResearchNotesRecoveryJudge(recovery, ctx, id, token, expect) {
+    const rt = recovery.rt;
+    const record = await rt.store.get(expect && expect.draftId);
+    if (!prksResearchNotesRecoveryMatches(record, expect, id)) return { code: 'changed' };
+    const key = prksResearchDraftKey(ctx, id);
+    const entry = prksWorkResearchDrafts.get(key);
+    const candidate = await prksResearchRecoveryCandidate(rt, record, entry && entry.recovery ? entry.recovery.sessionKey : null);
+    const queue = await prksResearchRecoveryQueue(id);
+    const notes = prksResearchNotesRecoveryTarget(ctx, id, token);
+    if (!notes) return { code: 'stale' };
+    const base = prksResearchRecoveryObservedBase(ctx);
+    const editorDirty = prksResearchNotesEditorDirty(prksWorkResearchDrafts.get(key), notes, base);
+    const plan = recovery.api.planResearchNotesRestore({
+        paneId: String(ctx.tabId == null ? '' : ctx.tabId),
+        candidates: [candidate],
+        base: base,
+        queue: queue,
+        otherDirtySession: prksResearchRecoveryOtherDirty(id, key),
+        editorDirty: editorDirty,
+    });
+    const action = plan.restore ? 'restore' : (plan.review[0] ? plan.review[0].action : null);
+    return { candidate: candidate, plan: plan, base: base, action: action };
+}
+
+/** Restore for editing: the draft overwrites nothing, so it continues its own lineage here. */
+async function prksResearchNotesRecoveryRestoreNow(ctx, workId, token, expect) {
+    const recovery = prksResearchRecovery();
+    const id = String(workId || '');
+    if (!recovery || !prksResearchNotesRecoveryTarget(ctx, id, token)) return { ok: false, code: 'stale' };
+    const judged = await prksResearchNotesRecoveryJudge(recovery, ctx, id, token, expect);
+    if (judged.code) return { ok: false, code: judged.code };
+    if (!judged.plan.restore) return { ok: false, code: 'changed' };
+    const paneId = String(ctx.tabId == null ? '' : ctx.tabId);
+    const writer = await recovery.rt.writers.adopt(judged.candidate.record, { paneId: paneId });
+    if (!writer) return { ok: false, code: 'changed' };
+    const key = prksResearchDraftKey(ctx, id);
+    const notes = prksResearchNotesRecoveryTarget(ctx, id, token);
+    const base = prksResearchRecoveryObservedBase(ctx);
+    if (!notes || prksResearchNotesEditorDirty(prksWorkResearchDrafts.get(key), notes, base) ||
+        !base || base.revision !== judged.base.revision || base.value !== judged.base.value) {
+        /* Moved on while adopting: the lineage stays this page's orphan, still listed. */
+        void writer.release().catch(function () {});
+        return { ok: false, code: 'stale' };
+    }
+    /* The editor's clean session gives way to the restored lineage. */
+    const existing = prksWorkResearchDrafts.get(key);
+    if (existing) {
+        prksWorkResearchDrafts.delete(key);
+        prksResearchRecoveryRelease(existing);
+        if (ctx.ui && ctx.ui.workResearchNoteSession === existing) ctx.ui.workResearchNoteSession = null;
+    }
+    prksResearchRecoveryInstall(recovery.api, ctx, id, writer, judged.plan.restore, base);
+    const entry = prksWorkResearchDrafts.get(key);
+    prksResearchNotesApplyText(notes, entry.text);
+    prksSyncResearchNotesState(notes, entry);
+    if (entry.state === 'blocked') {
+        const statusEl = ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
+        if (statusEl) statusEl.innerText = prksLiveResearchDraftStatus(entry, null);
+        prksScheduleResearchNotesBusyRetry(ctx, id, entry);
+    }
+    prksResearchNotesAnnounceRestored(ctx, id, entry);
+    return { ok: true };
+}
+
+/**
+ * Reconciliation: the user compared the draft with the current note and chose
+ * `text`. Applied only while the current note is still exactly what they
+ * compared (`shown`), after this page took the record by compare-and-set; the
+ * text then saves through the ordinary path as this pane's edit, and the
+ * reviewed record, now superseded by it, is removed.
+ */
+async function prksResearchNotesRecoveryReplaceNow(ctx, workId, token, expect, text, shown) {
+    const recovery = prksResearchRecovery();
+    const id = String(workId || '');
+    if (!recovery || typeof text !== 'string' || !shown || !prksResearchNotesRecoveryTarget(ctx, id, token)) {
+        return { ok: false, code: 'stale' };
+    }
+    const judged = await prksResearchNotesRecoveryJudge(recovery, ctx, id, token, expect);
+    if (judged.code) return { ok: false, code: judged.code };
+    if (judged.action !== 'restore' && judged.action !== 'reconcile') return { ok: false, code: 'changed' };
+    const unchanged = function () {
+        const notes = prksResearchNotesRecoveryTarget(ctx, id, token);
+        const base = prksResearchRecoveryObservedBase(ctx);
+        return notes && notes.editor.value() === shown.text && (base ? base.revision : null) === shown.revision ? notes : null;
+    };
+    if (!unchanged()) return { ok: false, code: 'current-changed' };
+    const paneId = String(ctx.tabId == null ? '' : ctx.tabId);
+    const claim = await recovery.rt.claimReviewed(expect, paneId);
+    if (!claim || claim.outcome !== 'ok') return { ok: false, code: 'changed' };
+    const notes = unchanged();
+    /* Claimed but not applied: it reads as this page's orphan and stays listed. */
+    if (!notes) return { ok: false, code: 'current-changed' };
+    prksResearchNotesApplyText(notes, text);
+    prksWorkNotesMarkEdit(notes, id, text, ctx);
+    const statusEl = ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
+    if (statusEl) statusEl.innerText = 'Drafting...';
+    if (ctx.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
+        window.prksWorkspaceRefreshTabStatus(ctx.tabId);
+    }
+    prksScheduleWorkResearchNotesSave(ctx, id);
+    await recovery.rt.discardReviewed({
+        draftId: expect.draftId,
+        pageInstanceId: recovery.rt.identity.pageInstanceId,
+        generation: expect.generation,
+        status: expect.status,
+        kind: PRKS_RESEARCH_RECOVERY_KIND,
+        entityType: 'work',
+        entityId: id,
+    }).catch(function () { return 'kept'; });
+    return { ok: true };
+}
+
+/** Explicit discard after confirmation; never a draft some editor is extending now. */
+async function prksResearchNotesRecoveryDiscardNow(ctx, workId, token, expect) {
+    const recovery = prksResearchRecovery();
+    const id = String(workId || '');
+    if (!recovery || !prksResearchNotesRecoveryTarget(ctx, id, token)) return { ok: false, code: 'stale' };
+    const rt = recovery.rt;
+    const record = await rt.store.get(expect && expect.draftId);
+    if (!prksResearchNotesRecoveryMatches(record, expect, id)) return { ok: false, code: 'changed' };
+    const entry = prksWorkResearchDrafts.get(prksResearchDraftKey(ctx, id));
+    const lineage = await rt.classify(record, entry && entry.recovery ? entry.recovery.sessionKey : null);
+    if (lineage === 'self-live' || lineage === 'other-live') return { ok: false, code: 'changed' };
+    if (!prksResearchNotesRecoveryTarget(ctx, id, token)) return { ok: false, code: 'stale' };
+    const outcome = await rt.discardReviewed({
+        draftId: expect.draftId,
+        pageInstanceId: expect.pageInstanceId,
+        generation: expect.generation,
+        status: expect.status,
+        kind: PRKS_RESEARCH_RECOVERY_KIND,
+        entityType: 'work',
+        entityId: id,
+    });
+    return outcome === 'deleted' ? { ok: true } : { ok: false, code: 'changed' };
+}
+
+/* Review work runs one at a time with restores, then refreshes this pane's notice. */
+function prksResearchNotesRecoveryRun(ctx, workId, fn) {
+    const run = prksResearchRecoveryChain.then(fn).catch(function () {
+        return { ok: false, code: 'failed' };
+    }).then(async function (result) {
+        const live = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
+        if (live && String(live.id) === String(workId || '')) {
+            await prksRestoreResearchNotesRecoveryNow(ctx, live, null, { reviewOnly: true }).catch(function () {});
+        }
+        return result;
+    });
+    prksResearchRecoveryChain = run.catch(function () { return null; });
+    return run;
+}
+
+window.prksResearchNotesRecoveryView = prksResearchNotesRecoveryView;
+window.prksResearchNotesRecoveryDetails = function (ctx, workId) {
+    const run = prksResearchRecoveryChain.then(function () {
+        return prksResearchNotesRecoveryDetailsNow(ctx, workId);
+    }).catch(function () { return null; });
+    prksResearchRecoveryChain = run.catch(function () { return null; });
+    return run;
+};
+window.prksResearchNotesRecoveryRestore = function (ctx, workId, token, expect) {
+    return prksResearchNotesRecoveryRun(ctx, workId, function () {
+        return prksResearchNotesRecoveryRestoreNow(ctx, workId, token, expect);
+    });
+};
+window.prksResearchNotesRecoveryReplace = function (ctx, workId, token, expect, text, shown) {
+    return prksResearchNotesRecoveryRun(ctx, workId, function () {
+        return prksResearchNotesRecoveryReplaceNow(ctx, workId, token, expect, text, shown);
+    });
+};
+window.prksResearchNotesRecoveryDiscard = function (ctx, workId, token, expect) {
+    return prksResearchNotesRecoveryRun(ctx, workId, function () {
+        return prksResearchNotesRecoveryDiscardNow(ctx, workId, token, expect);
+    });
+};
+window.prksRefreshResearchNotesRecovery = function (ctx, workId) {
+    return prksResearchNotesRecoveryRun(ctx, workId, function () { return null; });
+};
 window.prksRestoreResearchNotesRecovery = prksRestoreResearchNotesRecovery;
 window.prksResearchNotesTextForWork = prksResearchNotesTextForWork;
 window.prksResearchNotesMayPaint = prksResearchNotesMayPaint;
@@ -702,6 +1108,8 @@ window.prksResetResearchDraftsForTest = function () {
     prksResearchRecoveryAckWatch.clear();
     if (prksResearchRecoveryStopSync) prksResearchRecoveryStopSync();
     prksResearchRecoveryStopSync = null;
+    if (prksResearchRecoveryStopWriterEvents) prksResearchRecoveryStopWriterEvents();
+    prksResearchRecoveryStopWriterEvents = null;
     prksResearchRecoveryChain = Promise.resolve(null);
     if (typeof prksForEachLiveTabContext === 'function') {
         prksForEachLiveTabContext(function (ctx) {
@@ -1650,17 +2058,7 @@ function initEasyMDE(ctx, work, ticket) {
     }
     /* Restored from recovery storage (#466): say so, and send it through the
      * ordinary save path as if it had just been typed. */
-    if (transient && transient.recoveryRestored) {
-        const restoredStatus = ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
-        if (restoredStatus && transient.state === 'drafting') restoredStatus.innerText = PRKS_RESEARCH_NOTES_RESTORED_STATUS;
-        if (transient.recoverySaveDue && transient.state === 'drafting') {
-            transient.recoverySaveDue = false;
-            prksScheduleWorkResearchNotesSave(ctx, work.id);
-        }
-        if (ctx.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
-            window.prksWorkspaceRefreshTabStatus(ctx.tabId);
-        }
-    }
+    if (transient && transient.recoveryRestored) prksResearchNotesAnnounceRestored(ctx, work.id, transient);
     prksAttachWikiLinkAutocomplete(easyMDE.codemirror, ctx);
     const toolbarHost = ctx && ctx.query ? ctx.query('.work-notes-editor-wrap .editor-toolbar') : null;
     prksPaintEasyMDEToolbarIcons(toolbarHost);
@@ -1686,6 +2084,8 @@ function initEasyMDE(ctx, work, ticket) {
     }
 
     const notesChangeHandler = () => {
+        /* Review put recovered text in; it decides what that means. */
+        if (workNotes.applyingRecovery) return;
         if (!prksWorkNotesSessionLive(ctx, workNotes, notesGeneration)) return;
         const statusEl = ctx && ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
         if (statusEl) statusEl.innerText = "Drafting...";

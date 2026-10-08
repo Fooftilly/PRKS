@@ -101,7 +101,7 @@ describe('Research Notes same-pane restore plan', () => {
     expect(p.restore).toBeNull()
     expect(p.review.map((r) => [r.draftId, r.reason])).toEqual([
       ['d-live', 'live-elsewhere'],
-      ['d-1', 'live-elsewhere'],
+      ['d-1', 'other-draft-live'],
     ])
   })
 
@@ -137,11 +137,43 @@ describe('Research Notes same-pane restore plan', () => {
     expect(foreign.review).toMatchObject([{ reason: 'foreign-queue' }])
   })
 
-  it('defers unknown ownership, closed tabs and other panes to slice 3', () => {
-    expect(plan([candidate('x', {}, 'unknown')]).review).toMatchObject([{ reason: 'ownership-unknown' }])
-    expect(plan([candidate('x', {}, 'dead-runtime')]).review).toMatchObject([{ reason: 'other-source' }])
+  it('restores a closed tab\'s draft and another pane\'s orphan; never one of unknown ownership', () => {
+    const unknown = plan([candidate('x', {}, 'unknown')])
+    expect(unknown.restore).toBeNull()
+    expect(unknown.review).toMatchObject([{ reason: 'ownership-unknown', action: null }])
+    expect(plan([candidate('Saved note. Closed tab', {}, 'dead-runtime')]).restore).toMatchObject({ body: 'Saved note. Closed tab' })
     const otherPane = record().owner
-    expect(plan([candidate('x', { owner: { ...otherPane, paneId: 'tab-2' } })]).review).toMatchObject([{ reason: 'other-source', paneId: 'tab-2' }])
+    const fromTab2 = plan([candidate('Saved note. Tab 2', { owner: { ...otherPane, paneId: 'tab-2' } })])
+    expect(fromTab2.restore).toMatchObject({ body: 'Saved note. Tab 2' })
+    expect(fromTab2.review).toEqual([])
+  })
+
+  it('offers each reviewed draft the one action it allows, judged on its own', () => {
+    const two = plan([candidate('Saved note. One'), candidate('Saved note. Two', { draftId: 'd-2' }, 'dead-runtime')])
+    expect(two.restore).toBeNull()
+    expect(two.review.map((r) => [r.draftId, r.reason, r.action])).toEqual([
+      ['d-1', 'multiple-drafts', 'restore'],
+      ['d-2', 'multiple-drafts', 'restore'],
+    ])
+    // The note moved on, a foreign row is queued, or the base is not verified: compare first.
+    expect(plan([candidate('x')], { base: { value: 'Other', revision: 6, source: 'server' } }).review)
+      .toMatchObject([{ reason: 'base-advanced', action: 'reconcile' }])
+    expect(plan([candidate('x')], { queue: [{ opId: 'op-9', text: 'Foreign' }] }).review)
+      .toMatchObject([{ reason: 'foreign-queue', action: 'reconcile' }])
+    expect(plan([candidate('x')], { base: { ...K, source: 'cache' } }).review)
+      .toMatchObject([{ reason: 'base-unverified', action: 'reconcile' }])
+    // The editor already shows other text: a restore would replace it.
+    const dirty = plan([candidate('Saved note. One'), candidate('Saved note. Two', { draftId: 'd-2' })], { editorDirty: true })
+    expect(dirty.review.map((r) => r.action)).toEqual(['reconcile', 'reconcile'])
+    const one = plan([candidate('Saved note. One')], { editorDirty: true })
+    expect(one.restore).toBeNull()
+    expect(one.review).toMatchObject([{ reason: 'editor-dirty', action: 'reconcile' }])
+    // Inspect and copy only.
+    expect(plan([candidate('x')], { queue: null }).review).toMatchObject([{ reason: 'queue-unknown', action: null }])
+    expect(plan([candidate('x')], { otherDirtySession: true }).review).toMatchObject([{ reason: 'dirty-session', action: null }])
+    expect(plan([candidate('x', { status: 'tail-missing' })]).review).toMatchObject([{ reason: 'tail-missing', status: 'tail-missing', action: null }])
+    expect(plan([candidate(null)]).review).toMatchObject([{ reason: 'body-missing', action: null }])
+    expect(plan([candidate('x', {}, 'other-live')]).review).toMatchObject([{ reason: 'live-elsewhere', action: null }])
   })
 
   it('keeps a missing-tail draft for review even when its stored body equals the note or the queued row', () => {

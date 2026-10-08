@@ -607,6 +607,41 @@ describe('release after a failed write', () => {
 })
 
 describe('acknowledgement', () => {
+  it('ends the warning and the guard when the server acknowledges a generation storage refused', async () => {
+    const t = setup()
+    const w = t.open()
+    w.edit(1, 'stored')
+    await w.flush()
+    const id = w.draftId() as string
+    t.idb.failCommits = 100
+    w.edit(2, 'stored, then refused')
+    await w.flush()
+    expect(w.state()).toBe('unprotected')
+    expect(t.registry.leaveGuardActive()).toBe(true)
+    // Another body is not this generation: still unprotected.
+    await expect(w.acknowledged(2, 'stored, then refuseD')).rejects.toThrow()
+    expect(w.state()).toBe('unprotected')
+    t.idb.failCommits = 0
+    expect(await w.acknowledged(2, 'stored, then refused')).toBe('deleted')
+    expect(w.state()).toBe('clean')
+    expect(t.registry.leaveGuardActive()).toBe(false)
+    // The superseded older generation of the same lineage goes with it.
+    expect(await t.store.get(id)).toBeNull()
+    expect(t.scheduler.pending()).toBe(0)
+  })
+
+  it('ends the warning when recovery storage cannot be opened at all', async () => {
+    const t = setup()
+    const w = t.open()
+    t.idb.failCommits = 100
+    w.edit(1, 'never stored')
+    await w.flush()
+    expect(w.state()).toBe('unprotected')
+    expect(await w.acknowledged(1, 'never stored')).toBe('deleted')
+    expect(w.state()).toBe('clean')
+    expect(t.registry.leaveGuardActive()).toBe(false)
+  })
+
   it('clears only the exact acknowledged generation and body', async () => {
     const t = setup()
     const w = t.open()

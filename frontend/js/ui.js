@@ -606,6 +606,7 @@ const PRKS_STANDALONE_PAGE_MODAL_CLOSERS = {
     'tags-page-alias-modal': 'prksCloseTagsAliasModal',
     'tags-page-merge-modal': 'prksCloseTagsMergeModal',
     'publishers-page-alias-modal': 'prksVueClosePublishersAliasModal',
+    'editor-recovery-review-modal': 'prksVueCloseResearchNotesRecoveryReview',
 };
 
 function prksCloseStandalonePageModal(modal) {
