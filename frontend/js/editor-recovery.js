@@ -22,6 +22,12 @@ var prksEditorRecovery = (function(exports) {
 	var EMERGENCY_PROBE_KEY = "prks.editorRecovery.probe.v1";
 	/** Allowance for one entry's JSON metadata (ids, lineage, base) when sizing the emergency payload. */
 	var EMERGENCY_ENTRY_OVERHEAD_CHARS = 1024;
+	/**
+	* Headroom a capacity proof leaves for this page's own later localStorage
+	* writes (workspace persistence, preferences). They raise no storage event
+	* here, so the proof must already allow for them.
+	*/
+	var SAME_PAGE_STORAGE_RESERVE_CHARS = 65536;
 	/** Candidate runtime id for this browser tab; copied by window.open and Duplicate tab. */
 	var RUNTIME_SESSION_KEY = "prks.editorRecovery.runtime.v1";
 	var RECOVERY_CHANNEL = "prks-editor-recovery-v1";
@@ -170,11 +176,13 @@ var prksEditorRecovery = (function(exports) {
 			if (stored.pageInstanceId === env.pageInstanceId || !stored.payload) continue;
 			if (await env.isPageAlive(stored.pageInstanceId) === true) continue;
 			const outcomes = [];
+			const suppressed = [];
 			let complete = true;
 			for (const entry of stored.payload.entries) try {
 				const outcome = await env.store.applyEmergencyEntry(stored.payload, entry);
 				outcomes.push(outcome);
 				if (outcome === "deferred") complete = false;
+				if (outcome === "suppressed") suppressed.push(entry.draftId);
 			} catch {
 				complete = false;
 			}
@@ -183,6 +191,9 @@ var prksEditorRecovery = (function(exports) {
 			} catch {
 				complete = false;
 			}
+			if (complete && env.store.clearTombstone) for (const draftId of suppressed) try {
+				await env.store.clearTombstone(draftId, stored.pageInstanceId);
+			} catch {}
 			reports.push({
 				key: stored.key,
 				outcomes,
@@ -884,6 +895,7 @@ var prksEditorRecovery = (function(exports) {
 				readRecord(tx, draftId, (record) => {
 					if (!record) return done({ outcome: "missing" });
 					if (!isSupportedRecord(record)) return done({ outcome: "unsupported" });
+					if (record.status === "discarded") return done({ outcome: "missing" });
 					if (record.owner.pageInstanceId !== expectedPageInstanceId) return done({ outcome: "conflict" });
 					const next = {
 						...record,
@@ -917,7 +929,7 @@ var prksEditorRecovery = (function(exports) {
 		}
 		function listByEntity(kind, entityId) {
 			const key = entityKeyOf(kind, entityId);
-			return listAll().then((rows) => rows.filter((row) => row && row.entityKey === key));
+			return listAll().then((rows) => rows.filter((row) => row && row.entityKey === key && row.status !== "discarded"));
 		}
 		function deleteIfAcknowledged(draftId, generation, body) {
 			return run("readwrite", (tx, done) => {
@@ -942,11 +954,44 @@ var prksEditorRecovery = (function(exports) {
 				});
 			});
 		}
-		function discard(draftId) {
+		function tombstoneRecord(draftId, tombstone, storedGeneration) {
+			return {
+				...newRecord(draftId, {
+					kind: tombstone.kind,
+					entityType: tombstone.entityType,
+					entityId: tombstone.entityId,
+					owner: {
+						runtimeId: null,
+						pageInstanceId: tombstone.pageInstanceId,
+						paneId: "",
+						claimedAt: now()
+					},
+					base: UNKNOWN_BASE
+				}, Math.max(tombstone.generation, storedGeneration), 0),
+				status: "discarded"
+			};
+		}
+		function discard(draftId, tombstone) {
+			return run("readwrite", (tx, done) => {
+				readRecord(tx, draftId, (record) => {
+					if (record && !isSupportedRecord(record)) return done("unsupported");
+					if (!tombstone) {
+						if (!record) return done("missing");
+						deletePair(tx, draftId);
+						return done("deleted");
+					}
+					tx.objectStore(BODIES_STORE).delete(draftId);
+					tx.objectStore(DRAFTS_STORE).put(tombstoneRecord(draftId, tombstone, record ? record.generation : 0));
+					done(record ? "deleted" : "missing");
+				});
+			});
+		}
+		function clearTombstone(draftId, pageInstanceId) {
 			return run("readwrite", (tx, done) => {
 				readRecord(tx, draftId, (record) => {
 					if (!record) return done("missing");
 					if (!isSupportedRecord(record)) return done("unsupported");
+					if (record.status !== "discarded" || record.owner.pageInstanceId !== pageInstanceId) return done("kept");
 					deletePair(tx, draftId);
 					done("deleted");
 				});
@@ -956,6 +1001,7 @@ var prksEditorRecovery = (function(exports) {
 			return run("readwrite", (tx, done) => {
 				readRecord(tx, entry.draftId, (record) => {
 					if (record && !isSupportedRecord(record)) return done("deferred");
+					if (record && record.status === "discarded") return done("suppressed");
 					if (!record) {
 						if (entry.committedGeneration === 0 && entry.lineage && entry.body !== null) {
 							const lineage = {
@@ -1033,6 +1079,7 @@ var prksEditorRecovery = (function(exports) {
 			deleteIfAcknowledged,
 			deleteIfEqual,
 			discard,
+			clearTombstone,
 			applyEmergencyEntry,
 			lastDurability: () => lastMode,
 			close() {
@@ -1089,6 +1136,7 @@ var prksEditorRecovery = (function(exports) {
 		const storage = options.emergencyStorage === void 0 ? defaultLocalStorage$1() : options.emergencyStorage;
 		const emit = options.onEvent || (() => {});
 		const emergencyKey = emergencyKeyOf(identity.pageInstanceId);
+		const reserveChars = options.storageReserveChars ?? 65536;
 		const live = /* @__PURE__ */ new Set();
 		/** Writers whose body the budget plan puts in the emergency entry. */
 		let planned = /* @__PURE__ */ new Set();
@@ -1108,6 +1156,8 @@ var prksEditorRecovery = (function(exports) {
 		let emergencyWritten = false;
 		/** Draft ids in the emergency key as last written. */
 		let emergencyIds = /* @__PURE__ */ new Set();
+		/** Discarded lineages a stale emergency key still lists; each has a tombstone record. */
+		const tombstoned = /* @__PURE__ */ new Set();
 		let refreshingEmergency = false;
 		let disposed = false;
 		function onBeforeUnload(event) {
@@ -1200,6 +1250,7 @@ var prksEditorRecovery = (function(exports) {
 				storage.removeItem(emergencyKey);
 				emergencyWritten = false;
 				emergencyIds = /* @__PURE__ */ new Set();
+				releaseTombstones();
 			} catch {
 				const claim = identity.current();
 				const empty = {
@@ -1212,7 +1263,16 @@ var prksEditorRecovery = (function(exports) {
 				if (writeEmergency(storage, emergencyKey, empty) !== "failed") {
 					emergencyWritten = false;
 					emergencyIds = /* @__PURE__ */ new Set();
+					releaseTombstones();
 				}
+			}
+		}
+		/** Drops the tombstones whose lineage the emergency key no longer lists. */
+		function releaseTombstones() {
+			for (const draftId of [...tombstoned]) {
+				if (emergencyWritten && emergencyIds.has(draftId)) continue;
+				tombstoned.delete(draftId);
+				store.clearTombstone(draftId, identity.pageInstanceId).catch(() => {});
 			}
 		}
 		/**
@@ -1228,12 +1288,15 @@ var prksEditorRecovery = (function(exports) {
 		* Whether localStorage can take a payload of `chars` now. Beyond what is
 		* already proven it writes a probe of twice the size (then the exact size),
 		* so proofs grow geometrically and typing does not probe on every keystroke.
+		* Each probe also carries `reserveChars` that the proof never hands out:
+		* this page's own writes (workspace persistence at pagehide, preferences)
+		* raise no storage event here, so the proof must already allow for them.
 		*/
 		function canHold(chars) {
 			if (!storage || distrusted) return false;
 			if (chars <= provenChars) return true;
 			for (const size of [chars * 2, chars]) try {
-				storage.setItem(EMERGENCY_PROBE_KEY, PROBE_FILLER.repeat(size));
+				storage.setItem(EMERGENCY_PROBE_KEY, PROBE_FILLER.repeat(size + reserveChars));
 				provenChars = size;
 				return true;
 			} catch {} finally {
@@ -1271,6 +1334,7 @@ var prksEditorRecovery = (function(exports) {
 			if (result !== "failed") {
 				emergencyWritten = true;
 				emergencyIds = new Set(payload.entries.map((e) => e.draftId));
+				releaseTombstones();
 			}
 			noteEmergencyResult(result);
 			return result;
@@ -1564,7 +1628,18 @@ var prksEditorRecovery = (function(exports) {
 					this.status = "clean";
 					changed();
 				}
-				if (draftId) await store.discard(draftId);
+				if (!draftId) return;
+				if (emergencyWritten && emergencyIds.has(draftId)) {
+					tombstoned.add(draftId);
+					await store.discard(draftId, {
+						kind: this.kind,
+						entityType: this.entityType,
+						entityId: this.entityId,
+						generation: this.lastSeen,
+						pageInstanceId: identity.pageInstanceId
+					});
+					releaseTombstones();
+				} else await store.discard(draftId);
 			}
 			emergencyEntry(holdBody) {
 				const pending = this.latest;
@@ -1774,6 +1849,7 @@ var prksEditorRecovery = (function(exports) {
 	exports.RUNTIME_LOCK_PREFIX = RUNTIME_LOCK_PREFIX;
 	exports.RUNTIME_SESSION_KEY = RUNTIME_SESSION_KEY;
 	exports.RecoveryStoreError = RecoveryStoreError;
+	exports.SAME_PAGE_STORAGE_RESERVE_CHARS = SAME_PAGE_STORAGE_RESERVE_CHARS;
 	exports.UNKNOWN_BASE = UNKNOWN_BASE;
 	exports.classifyLineage = classifyLineage;
 	exports.createEditorRecoveryRuntime = createEditorRecoveryRuntime;

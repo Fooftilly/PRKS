@@ -90,7 +90,9 @@ coordinator names no family: adding one is a registration.
   Only a lineage's owner page (a fresh `pageInstanceId` per load) writes it;
   generations are monotonic; adoption is compare-and-set. Records are deleted
   only on an exact acknowledgement (same generation, `===` body), proven
-  equality, explicit discard, or a confirmed Work delete, never by age.
+  equality, explicit discard, or a confirmed Work delete, never by age. A
+  discard whose emergency key could not be cleared leaves a bodyless
+  tombstone until that key is gone, so the key cannot recreate the draft.
   Clear offline cache does not touch it. Slice 1 has no consumer.
 - A device ID is an identity for synchronization, never authentication or trust.
 - Editor state and observed projections belong to the Work's TabContext.

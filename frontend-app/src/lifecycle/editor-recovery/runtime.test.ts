@@ -157,4 +157,58 @@ describe('editor recovery runtime', () => {
     expect(await rt.scanEmergency()).toEqual([])
     expect((await rt.start()).claim.runtimeId).toBeTruthy()
   })
+
+  it('never recreates a draft discarded while its emergency key could not be cleared', async () => {
+    const browser = createFakeBrowser()
+    const idb = createFakeIdb()
+    const inner = memoryStorage()
+    let blocked = false
+    const local: EmergencyStorage & { map: Map<string, string> } = {
+      ...inner,
+      get length() {
+        return inner.map.size
+      },
+      setItem(k: string, v: string) {
+        if (blocked) throw new DOMException('blocked', 'SecurityError')
+        inner.setItem(k, v)
+      },
+      removeItem(k: string) {
+        if (blocked) throw new DOMException('blocked', 'SecurityError')
+        inner.removeItem(k)
+      },
+    }
+    const make = (name: string) => {
+      const locks = browser.locksFor(name)
+      const rt = createEditorRecoveryRuntime({
+        store: { indexedDB: idb.factory },
+        identity: { sessionStorage: browser.sessionStorageWith(), locks, createChannel: browser.channelFor(name), claimWaitMs: 20 },
+        writers: { scheduler: createManualScheduler(), window: null, document: null },
+        emergencyStorage: local,
+      })
+      return { rt, locks }
+    }
+    const a = make('a')
+    await a.rt.start()
+    const w = a.rt.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE })
+    // First generation, only in the emergency entry.
+    w.edit(1, 'discarded words')
+    expect(a.rt.writers.writeEmergencyNow()).toBe('written')
+    blocked = true
+    await w.discard()
+    const key = EMERGENCY_KEY_PREFIX + a.rt.identity.pageInstanceId
+    expect(local.map.has(key)).toBe(true)
+    a.locks.releaseAll()
+    a.rt.identity.dispose()
+    await settle()
+
+    blocked = false
+    const b = make('b')
+    const { merged } = await b.rt.start()
+    expect(merged.map((m) => [m.key, m.outcomes, m.removed])).toEqual([[key, ['suppressed'], true]])
+    expect(await b.rt.store.listByEntity('work-research-note', 'w1')).toEqual([])
+    // The key is gone, so the tombstone went with it.
+    expect(await b.rt.store.listAll()).toEqual([])
+    expect(local.map.has(key)).toBe(false)
+    expect(await b.rt.scanEmergency()).toEqual([])
+  })
 })

@@ -35,6 +35,7 @@ import {
   MAX_WRITE_WAIT_MS,
   RETRY_FIRST_MS,
   RETRY_MAX_MS,
+  SAME_PAGE_STORAGE_RESERVE_CHARS,
   UNKNOWN_BASE,
   emergencyKeyOf,
   mintId,
@@ -81,6 +82,8 @@ export interface WriterRegistryOptions {
   document?: VisibilityTarget | null
   /** `localStorage` for the emergency entry. */
   emergencyStorage?: EmergencyStorage | null
+  /** Headroom every capacity proof leaves; defaults to SAME_PAGE_STORAGE_RESERVE_CHARS. */
+  storageReserveChars?: number
   onEvent?: (event: WriterEvent) => void
 }
 
@@ -155,6 +158,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
   const storage = options.emergencyStorage === undefined ? defaultLocalStorage() : options.emergencyStorage
   const emit = options.onEvent || (() => {})
   const emergencyKey = emergencyKeyOf(identity.pageInstanceId)
+  const reserveChars = options.storageReserveChars ?? SAME_PAGE_STORAGE_RESERVE_CHARS
 
   const live = new Set<WriterImpl>()
   /** Writers whose body the budget plan puts in the emergency entry. */
@@ -175,6 +179,8 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
   let emergencyWritten = false
   /** Draft ids in the emergency key as last written. */
   let emergencyIds = new Set<string>()
+  /** Discarded lineages a stale emergency key still lists; each has a tombstone record. */
+  const tombstoned = new Set<string>()
   let refreshingEmergency = false
   let disposed = false
 
@@ -280,6 +286,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       storage.removeItem(emergencyKey)
       emergencyWritten = false
       emergencyIds = new Set()
+      releaseTombstones()
     } catch {
       // Removal refused: overwrite with no entries, so a stale first-generation
       // entry can never recreate a draft that was discarded or acknowledged.
@@ -294,7 +301,19 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       if (writeEmergency(storage, emergencyKey, empty) !== 'failed') {
         emergencyWritten = false
         emergencyIds = new Set()
+        releaseTombstones()
       }
+    }
+  }
+
+  /** Drops the tombstones whose lineage the emergency key no longer lists. */
+  function releaseTombstones(): void {
+    for (const draftId of [...tombstoned]) {
+      if (emergencyWritten && emergencyIds.has(draftId)) continue
+      tombstoned.delete(draftId)
+      store.clearTombstone(draftId, identity.pageInstanceId).catch(() => {
+        /* a leftover tombstone only suppresses; it is never a candidate */
+      })
     }
   }
 
@@ -312,6 +331,9 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
    * Whether localStorage can take a payload of `chars` now. Beyond what is
    * already proven it writes a probe of twice the size (then the exact size),
    * so proofs grow geometrically and typing does not probe on every keystroke.
+   * Each probe also carries `reserveChars` that the proof never hands out:
+   * this page's own writes (workspace persistence at pagehide, preferences)
+   * raise no storage event here, so the proof must already allow for them.
    */
   function canHold(chars: number): boolean {
     if (!storage || distrusted) return false
@@ -321,7 +343,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
         // A filler above U+00FF on purpose: Chromium stores an all-Latin-1
         // value at 1 byte per char and anything else at 2, and its quota counts
         // bytes, so an ASCII probe would prove half of what a real note needs.
-        storage.setItem(EMERGENCY_PROBE_KEY, PROBE_FILLER.repeat(size))
+        storage.setItem(EMERGENCY_PROBE_KEY, PROBE_FILLER.repeat(size + reserveChars))
         provenChars = size
         return true
       } catch {
@@ -371,6 +393,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     if (result !== 'failed') {
       emergencyWritten = true
       emergencyIds = new Set(payload.entries.map((e) => e.draftId))
+      releaseTombstones()
     }
     noteEmergencyResult(result)
     return result
@@ -673,7 +696,23 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
         this.status = 'clean'
         changed()
       }
-      if (draftId) await store.discard(draftId)
+      if (!draftId) return
+      // A key that could be neither removed nor emptied still lists this
+      // lineage: leave a tombstone, so no later page recreates the draft.
+      if (emergencyWritten && emergencyIds.has(draftId)) {
+        tombstoned.add(draftId)
+        await store.discard(draftId, {
+          kind: this.kind,
+          entityType: this.entityType,
+          entityId: this.entityId,
+          generation: this.lastSeen,
+          pageInstanceId: identity.pageInstanceId,
+        })
+        // Cleared while the tombstone was being written: drop it again.
+        releaseTombstones()
+      } else {
+        await store.discard(draftId)
+      }
     }
 
     emergencyEntry(holdBody: boolean): EmergencyEntry {

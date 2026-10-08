@@ -39,7 +39,7 @@ function memoryStorage(): EmergencyStorage & { map: Map<string, string> } {
 
 const BASE: DraftBase = { revision: 7, length: 3, fingerprint: 'a'.repeat(32), source: 'server' }
 
-function setup(options: { gate?: boolean; storage?: EmergencyStorage | null } = {}) {
+function setup(options: { gate?: boolean; storage?: EmergencyStorage | null; reserve?: number } = {}) {
   const idb = createFakeIdb()
   const realStore = createRecoveryStore({ indexedDB: idb.factory })
   const calls: WriteGenerationInput[] = []
@@ -67,6 +67,8 @@ function setup(options: { gate?: boolean; storage?: EmergencyStorage | null } = 
     window: win,
     document: doc,
     emergencyStorage: options.storage === undefined ? storage : options.storage,
+    // Budget tests use small quotas; the reserve has its own tests.
+    storageReserveChars: options.reserve ?? 0,
     onEvent: (e) => events.push(e),
   })
   const open = (sessionKey = 's-1', entityId = 'w1') =>
@@ -346,6 +348,98 @@ describe('emergency storage that cannot keep a body', () => {
     await settle()
     expect(w.state()).toBe('protected')
     expect(t.registry.leaveGuardActive()).toBe(false)
+  })
+})
+
+describe('headroom for this page\'s own storage writes', () => {
+  /** A shared quota over every value, like a real origin's localStorage. */
+  function quotaStorage(quota: number): EmergencyStorage & { map: Map<string, string> } {
+    const inner = memoryStorage()
+    return {
+      ...inner,
+      setItem(k: string, v: string) {
+        let used = v.length
+        for (const [key, value] of inner.map) if (key !== k) used += value.length
+        if (used > quota) throw new DOMException('full', 'QuotaExceededError')
+        inner.setItem(k, v)
+      },
+    }
+  }
+
+  it('keeps the guard when only the bare payload fits, without the reserve', () => {
+    // The payload (about 2000 chars) fits, but not with 2000 to spare.
+    const t = setup({ storage: quotaStorage(3500), reserve: 2000 })
+    const w = t.open()
+    w.edit(1, 'x'.repeat(1000))
+    expect(w.heldByEmergency()).toBe(false)
+    expect(t.registry.leaveGuardActive()).toBe(true)
+  })
+
+  it('still writes the emergency entry after this page grew storage within the reserve', () => {
+    const storage = quotaStorage(6000)
+    const t = setup({ storage, reserve: 2000 })
+    const w = t.open()
+    w.edit(1, 'x'.repeat(1000))
+    expect(w.heldByEmergency()).toBe(true)
+    expect(t.registry.leaveGuardActive()).toBe(false)
+    // Workspace persistence on this page: no storage event reaches the writer.
+    storage.setItem('prks.workspace.v1', 'w'.repeat(1900))
+    expect(t.registry.writeEmergencyNow()).toBe('written')
+    const left = JSON.parse(storage.map.get(emergencyKeyOf('p-me')) as string) as EmergencyPayload
+    expect(left.entries[0]!.body).toBe('x'.repeat(1000))
+  })
+})
+
+describe('discard when the emergency key cannot be cleared', () => {
+  function stuckStorage() {
+    const inner = memoryStorage()
+    const state = { blocked: false }
+    const storage: EmergencyStorage & { map: Map<string, string> } = {
+      ...inner,
+      setItem(k: string, v: string) {
+        if (state.blocked) throw new DOMException('blocked', 'SecurityError')
+        inner.setItem(k, v)
+      },
+      removeItem(k: string) {
+        if (state.blocked) throw new DOMException('blocked', 'SecurityError')
+        inner.removeItem(k)
+      },
+    }
+    return { storage, state }
+  }
+
+  it('leaves a tombstone that is never a candidate, and clears it once the key is rewritten', async () => {
+    const { storage, state } = stuckStorage()
+    const t = setup({ storage })
+    const w = t.open()
+    w.edit(1, 'discard me')
+    expect(t.registry.writeEmergencyNow()).toBe('written')
+    const draftId = w.draftId() as string
+    state.blocked = true
+    await w.discard()
+    expect(storage.map.has(emergencyKeyOf('p-me'))).toBe(true)
+    expect(await t.store.listByEntity('work-research-note', 'w1')).toEqual([])
+    expect(await t.store.getBody(draftId)).toBeNull()
+    expect(await t.store.get(draftId)).toMatchObject({ status: 'discarded', bodyLength: 0 })
+    expect(await t.store.adopt(draftId, 'p-me', { runtimeId: 'r-x', pageInstanceId: 'p-x', paneId: 'tab-1', claimedAt: 0 })).toEqual({ outcome: 'missing' })
+
+    state.blocked = false
+    const other = t.open('s-2', 'w2')
+    other.edit(1, 'another note')
+    await settle()
+    expect(JSON.parse(storage.map.get(emergencyKeyOf('p-me')) as string).entries.map((e: { draftId: string }) => e.draftId)).toEqual([other.draftId()])
+    expect(await t.store.get(draftId)).toBeNull()
+  })
+
+  it('discards without a tombstone when the key could be cleared', async () => {
+    const t = setup()
+    const w = t.open()
+    w.edit(1, 'discard me')
+    t.registry.writeEmergencyNow()
+    const draftId = w.draftId() as string
+    await w.discard()
+    expect(t.storage.map.size).toBe(0)
+    expect(await t.store.get(draftId)).toBeNull()
   })
 })
 

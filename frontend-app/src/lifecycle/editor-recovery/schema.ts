@@ -22,6 +22,12 @@ export const EMERGENCY_KEY_PREFIX = 'prks.editorRecovery.emergency.v1.'
 export const EMERGENCY_PROBE_KEY = 'prks.editorRecovery.probe.v1'
 /** Allowance for one entry's JSON metadata (ids, lineage, base) when sizing the emergency payload. */
 export const EMERGENCY_ENTRY_OVERHEAD_CHARS = 1024
+/**
+ * Headroom a capacity proof leaves for this page's own later localStorage
+ * writes (workspace persistence, preferences). They raise no storage event
+ * here, so the proof must already allow for them.
+ */
+export const SAME_PAGE_STORAGE_RESERVE_CHARS = 64 * 1024
 /** Candidate runtime id for this browser tab; copied by window.open and Duplicate tab. */
 export const RUNTIME_SESSION_KEY = 'prks.editorRecovery.runtime.v1'
 export const RECOVERY_CHANNEL = 'prks-editor-recovery-v1'
@@ -42,7 +48,11 @@ export const RETRY_MAX_MS = 30000
 
 export type DraftKind = 'work-research-note' | 'work-private-note' | 'folder-private-note'
 export type DraftEntityType = 'work' | 'folder'
-export type DraftStatus = 'active' | 'tail-missing'
+/**
+ * `discarded`: a tombstone with no body, kept only while a stale emergency key
+ * that this page could not clear still lists the lineage. Never a candidate.
+ */
+export type DraftStatus = 'active' | 'tail-missing' | 'discarded'
 export type BaseSource = 'server' | 'cache' | 'pending-create' | 'unknown'
 
 export interface DraftOwner {

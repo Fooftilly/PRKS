@@ -129,7 +129,7 @@ export function readEmergencyKeys(storage: EmergencyStorage): StoredEmergency[] 
 
 export interface MergeEnv {
   storage: EmergencyStorage
-  store: Pick<RecoveryStore, 'applyEmergencyEntry'>
+  store: Pick<RecoveryStore, 'applyEmergencyEntry'> & Partial<Pick<RecoveryStore, 'clearTombstone'>>
   /** This page; its own key is never merged. */
   pageInstanceId: string
   /** null (cannot establish) is treated as not alive: keys are only ever read by a later page. */
@@ -148,12 +148,14 @@ export async function mergeEmergencyEntries(env: MergeEnv): Promise<MergeReport[
     if (stored.pageInstanceId === env.pageInstanceId || !stored.payload) continue
     if ((await env.isPageAlive(stored.pageInstanceId)) === true) continue
     const outcomes: EmergencyOutcome[] = []
+    const suppressed: string[] = []
     let complete = true
     for (const entry of stored.payload.entries) {
       try {
         const outcome = await env.store.applyEmergencyEntry(stored.payload, entry)
         outcomes.push(outcome)
         if (outcome === 'deferred') complete = false
+        if (outcome === 'suppressed') suppressed.push(entry.draftId)
       } catch {
         complete = false
       }
@@ -163,6 +165,16 @@ export async function mergeEmergencyEntries(env: MergeEnv): Promise<MergeReport[
         env.storage.removeItem(stored.key)
       } catch {
         complete = false
+      }
+    }
+    // The stale key is gone, so the tombstone that answered it is no longer needed.
+    if (complete && env.store.clearTombstone) {
+      for (const draftId of suppressed) {
+        try {
+          await env.store.clearTombstone(draftId, stored.pageInstanceId)
+        } catch {
+          /* a leftover tombstone only suppresses; it is never a candidate */
+        }
       }
     }
     reports.push({ key: stored.key, outcomes, removed: complete })

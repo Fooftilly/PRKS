@@ -24,6 +24,7 @@ import {
   RECORD_VERSION,
   RECOVERY_DB_NAME,
   RECOVERY_DB_VERSION,
+  UNKNOWN_BASE,
   entityKeyOf,
   isSupportedRecord,
   type DraftBase,
@@ -93,7 +94,17 @@ export type AdoptOutcome =
   | { outcome: 'ok'; record: DraftRecord }
   | { outcome: 'conflict' | 'missing' | 'unsupported' }
 export type DeleteOutcome = 'deleted' | 'kept' | 'missing' | 'unsupported'
-export type EmergencyOutcome = 'written' | 'tail-missing' | 'created' | 'forked' | 'noop' | 'dropped' | 'deferred'
+export type EmergencyOutcome = 'written' | 'tail-missing' | 'created' | 'forked' | 'noop' | 'dropped' | 'suppressed' | 'deferred'
+
+/** What a discard tombstone records: enough to name the lineage, never its text. */
+export interface DiscardTombstone {
+  kind: DraftKind
+  entityType: DraftEntityType
+  entityId: string
+  generation: number
+  /** The discarding page, whose stale emergency key the tombstone answers. */
+  pageInstanceId: string
+}
 
 export interface RecoveryStore {
   writeGeneration(input: WriteGenerationInput): Promise<WriteOutcome>
@@ -108,7 +119,14 @@ export interface RecoveryStore {
   /** Deletes only if the stored body is exactly `body` (proven equal to acknowledged state). */
   deleteIfEqual(draftId: string, body: string): Promise<DeleteOutcome>
   /** Explicit user discard. */
-  discard(draftId: string): Promise<DeleteOutcome>
+  /**
+   * With `tombstone`, the body is deleted and a bodyless `discarded` record
+   * stays in its place, so an emergency entry that could not be cleared can
+   * never recreate the draft. `clearTombstone` removes it later.
+   */
+  discard(draftId: string, tombstone?: DiscardTombstone): Promise<DeleteOutcome>
+  /** Deletes the tombstone only if it is still one, left by that page. */
+  clearTombstone(draftId: string, pageInstanceId: string): Promise<DeleteOutcome>
   /** Applies one emergency entry from a page that is no longer alive (§6 merge rules). */
   applyEmergencyEntry(payload: EmergencyPayload, entry: EmergencyEntry): Promise<EmergencyOutcome>
   /** Durability mode the most recent write transaction actually used. */
@@ -348,6 +366,7 @@ export function createRecoveryStore(options: RecoveryStoreOptions = {}): Recover
       readRecord(tx, draftId, (record) => {
         if (!record) return done({ outcome: 'missing' })
         if (!isSupportedRecord(record)) return done({ outcome: 'unsupported' })
+        if (record.status === 'discarded') return done({ outcome: 'missing' })
         if (record.owner.pageInstanceId !== expectedPageInstanceId) return done({ outcome: 'conflict' })
         const next: DraftRecord = { ...record, owner: { ...owner }, updatedAt: now() }
         tx.objectStore(DRAFTS_STORE).put(next)
@@ -378,7 +397,7 @@ export function createRecoveryStore(options: RecoveryStoreOptions = {}): Recover
 
   function listByEntity(kind: DraftKind, entityId: string): Promise<DraftRecord[]> {
     const key = entityKeyOf(kind, entityId)
-    return listAll().then((rows) => rows.filter((row) => row && row.entityKey === key))
+    return listAll().then((rows) => rows.filter((row) => row && row.entityKey === key && row.status !== 'discarded'))
   }
 
   function deleteIfAcknowledged(draftId: string, generation: number, body: string): Promise<DeleteOutcome> {
@@ -406,11 +425,39 @@ export function createRecoveryStore(options: RecoveryStoreOptions = {}): Recover
     })
   }
 
-  function discard(draftId: string): Promise<DeleteOutcome> {
+  function tombstoneRecord(draftId: string, tombstone: DiscardTombstone, storedGeneration: number): DraftRecord {
+    const lineage: CreateLineage = {
+      kind: tombstone.kind,
+      entityType: tombstone.entityType,
+      entityId: tombstone.entityId,
+      owner: { runtimeId: null, pageInstanceId: tombstone.pageInstanceId, paneId: '', claimedAt: now() },
+      base: UNKNOWN_BASE,
+    }
+    return { ...newRecord(draftId, lineage, Math.max(tombstone.generation, storedGeneration), 0), status: 'discarded' }
+  }
+
+  function discard(draftId: string, tombstone?: DiscardTombstone): Promise<DeleteOutcome> {
+    return run<DeleteOutcome>('readwrite', (tx, done) => {
+      readRecord(tx, draftId, (record) => {
+        if (record && !isSupportedRecord(record)) return done('unsupported')
+        if (!tombstone) {
+          if (!record) return done('missing')
+          deletePair(tx, draftId)
+          return done('deleted')
+        }
+        tx.objectStore(BODIES_STORE).delete(draftId)
+        tx.objectStore(DRAFTS_STORE).put(tombstoneRecord(draftId, tombstone, record ? record.generation : 0))
+        done(record ? 'deleted' : 'missing')
+      })
+    })
+  }
+
+  function clearTombstone(draftId: string, pageInstanceId: string): Promise<DeleteOutcome> {
     return run<DeleteOutcome>('readwrite', (tx, done) => {
       readRecord(tx, draftId, (record) => {
         if (!record) return done('missing')
         if (!isSupportedRecord(record)) return done('unsupported')
+        if (record.status !== 'discarded' || record.owner.pageInstanceId !== pageInstanceId) return done('kept')
         deletePair(tx, draftId)
         done('deleted')
       })
@@ -421,6 +468,8 @@ export function createRecoveryStore(options: RecoveryStoreOptions = {}): Recover
     return run<EmergencyOutcome>('readwrite', (tx, done) => {
       readRecord(tx, entry.draftId, (record) => {
         if (record && !isSupportedRecord(record)) return done('deferred')
+        // Explicitly discarded while this entry could not be cleared: never recreated.
+        if (record && record.status === 'discarded') return done('suppressed')
         if (!record) {
           if (entry.committedGeneration === 0 && entry.lineage && entry.body !== null) {
             const lineage: CreateLineage = {
@@ -499,6 +548,7 @@ export function createRecoveryStore(options: RecoveryStoreOptions = {}): Recover
     deleteIfAcknowledged,
     deleteIfEqual,
     discard,
+    clearTombstone,
     applyEmergencyEntry,
     lastDurability: () => lastMode,
     close() {
