@@ -513,6 +513,8 @@ function prksRestoreResearchNotesRecovery(ctx, work, options) {
     const timeout = new Promise(function (resolve) {
         timer = setTimeout(function () {
             attempt.abandoned = true;
+            /* Too slow to plan: nothing is restored, but the drafts stay reachable. */
+            void prksResearchRecoveryReportUnchecked(ctx, work, ctx ? ctx.generation : null);
             resolve(null);
         }, prksResearchRecoveryRestoreMs);
     });
@@ -526,6 +528,36 @@ function prksRestoreResearchNotesRecovery(ctx, work, options) {
         clearTimeout(timer);
         return result;
     });
+}
+
+/*
+ * A restore that ran out of time lists every remaining draft as unchecked so
+ * the notice and Review stay reachable; Review classifies them itself.
+ */
+async function prksResearchRecoveryReportUnchecked(ctx, work, generation) {
+    const recovery = prksResearchRecovery();
+    if (!recovery || !ctx || !work || work.id == null) return;
+    const id = String(work.id);
+    try {
+        const records = await recovery.rt.store.listByEntity(PRKS_RESEARCH_RECOVERY_KIND, id);
+        if (!prksResearchNotesMayPaint(ctx, id, generation)) return;
+        const review = records.filter(function (record) { return record.status !== 'discarded'; }).map(function (record) {
+            return {
+                draftId: record.draftId,
+                reason: 'ownership-unknown',
+                lineage: 'unknown',
+                generation: record.generation,
+                bodyLength: record.bodyLength,
+                paneId: record.owner.paneId,
+                updatedAt: record.updatedAt,
+                status: record.status,
+                action: null,
+            };
+        });
+        if (review.length) prksResearchRecoveryReport(ctx, id, review);
+    } catch (_e) {
+        /* Recovery storage unreadable: nothing to list. */
+    }
 }
 
 /* Unsettled Research Notes rows for one Work; null when the queue could not be read. */
@@ -580,8 +612,10 @@ async function prksRestoreResearchNotesRecoveryNow(ctx, work, attempt, options) 
     }
     const session = prksWorkResearchDrafts.get(key);
     const asking = session && session.recovery ? session.recovery.sessionKey : null;
-    const candidates = [];
-    for (const record of records) candidates.push(await prksResearchRecoveryCandidate(rt, record, asking));
+    /* Classified together: each owner check waits on silence, so serial checks add up. */
+    const candidates = await Promise.all(records.map(function (record) {
+        return prksResearchRecoveryCandidate(rt, record, asking);
+    }));
     const queue = await prksResearchRecoveryQueue(id);
     if (!current()) return null;
     const base = prksResearchRecoveryObservedBase(ctx);
@@ -672,7 +706,7 @@ async function prksRestoreResearchNotesRecoveryNow(ctx, work, attempt, options) 
             restored = true;
         }
     }
-    prksResearchRecoveryReport(ctx, id, plan.review);
+    prksResearchRecoveryReport(ctx, id, plan.review, queue);
     return { restored: restored, review: plan.review };
 }
 
@@ -700,6 +734,12 @@ async function prksResearchRecoveryVerifyBase(id, base) {
     }
 }
 
+/* `base` when it is proven one server snapshot, else the same base marked unverified. */
+async function prksResearchRecoveryCheckedBase(id, base) {
+    if (!base || base.source !== 'server') return base;
+    return (await prksResearchRecoveryVerifyBase(id, base)) ? base : Object.assign({}, base, { source: 'cache' });
+}
+
 /**
  * Why a restore planned on `base` and `queue` is no longer safe to apply, or
  * null. The queue is re-read fail-closed; everything after that read is
@@ -707,8 +747,9 @@ async function prksResearchRecoveryVerifyBase(id, base) {
  */
 async function prksResearchRecoveryChangedSince(ctx, id, key, base, queue) {
     const rows = typeof prksReadPendingWorkNotesSnapshot === 'function' ? await prksReadPendingWorkNotesSnapshot() : null;
-    if (!rows || typeof prksWorkNoteOperations !== 'function') return 'queue-unknown';
+    if (!rows || !queue || typeof prksWorkNoteOperations !== 'function') return 'queue-unknown';
     const observed = prksResearchRecoveryObservedBase(ctx);
+    if (!base) return observed ? 'base-advanced' : null;
     if (!observed || observed.value !== base.value || observed.revision !== base.revision ||
         observed.source !== base.source) {
         return 'base-advanced';
@@ -725,9 +766,12 @@ async function prksResearchRecoveryChangedSince(ctx, id, key, base, queue) {
 }
 
 /** Records what this pane's notice offers for review, and repaints it. */
-function prksResearchRecoveryReport(ctx, id, review) {
+function prksResearchRecoveryReport(ctx, id, review, queue) {
     if (!ctx || !ctx.ui) return;
-    ctx.ui.researchNotesRecovery = review.length ? { status: 'needs-review', workId: id, candidates: review } : null;
+    /* `queue` as the plan read it: undefined when not read, null when unreadable. */
+    const pendingSync = queue === undefined ? 'none' : (queue === null ? 'unknown' : (queue.length ? 'queued' : 'none'));
+    ctx.ui.researchNotesRecovery = review.length
+        ? { status: 'needs-review', workId: id, candidates: review, pendingSync: pendingSync } : null;
     prksResearchNotesRecoveryPublish(ctx);
 }
 
@@ -798,6 +842,7 @@ function prksResearchNotesRecoveryView(ctx) {
         workId: id,
         drafts: drafts.length,
         incomplete: drafts.filter(function (c) { return c.status === 'tail-missing' || c.reason === 'body-missing'; }).length,
+        pendingSync: drafts.length && review.pendingSync ? review.pendingSync : 'none',
         unprotected: unprotected,
     };
 }
@@ -896,18 +941,22 @@ async function prksResearchNotesRecoveryDetailsNow(ctx, workId) {
     const entry = prksWorkResearchDrafts.get(key);
     const asking = entry && entry.recovery ? entry.recovery.sessionKey : null;
     const records = await rt.store.listByEntity(PRKS_RESEARCH_RECOVERY_KIND, id);
-    const candidates = [];
-    for (const record of records) {
-        if (record.status === 'discarded') continue;
-        candidates.push(await prksResearchRecoveryCandidate(rt, record, asking));
-    }
+    const candidates = await Promise.all(records.filter(function (record) {
+        return record.status !== 'discarded';
+    }).map(function (record) {
+        return prksResearchRecoveryCandidate(rt, record, asking);
+    }));
     const queue = await prksResearchRecoveryQueue(id);
     if (!prksResearchNotesRecoveryTarget(ctx, id, token)) return null;
-    const base = prksResearchRecoveryObservedBase(ctx);
+    const observed = prksResearchRecoveryObservedBase(ctx);
+    /* Review offers nothing on a base that is not one server snapshot (#490). */
+    const base = await prksResearchRecoveryCheckedBase(id, observed);
+    if (!prksResearchNotesRecoveryTarget(ctx, id, token)) return null;
     const paneId = String(ctx.tabId == null ? '' : ctx.tabId);
     const otherDirty = prksResearchRecoveryOtherDirty(id, key);
-    const editorDirty = prksResearchNotesEditorDirty(entry, notes, base);
-    const out = candidates.map(function (c) {
+    const editorDirty = prksResearchNotesEditorDirty(entry, notes, observed);
+    /* This editor's own live session is what the editor shows, not a draft to review. */
+    const out = candidates.filter(function (c) { return c.lineage !== 'self-live'; }).map(function (c) {
         /* Each judged on its own: the reviewer weighs them against each other. */
         const plan = recovery.api.planResearchNotesRestore({
             paneId: paneId, candidates: [c], base: base, queue: queue,
@@ -962,18 +1011,27 @@ async function prksResearchNotesRecoveryJudge(recovery, ctx, id, token, expect) 
     const queue = await prksResearchRecoveryQueue(id);
     const notes = prksResearchNotesRecoveryTarget(ctx, id, token);
     if (!notes) return { code: 'stale' };
-    const base = prksResearchRecoveryObservedBase(ctx);
-    const editorDirty = prksResearchNotesEditorDirty(prksWorkResearchDrafts.get(key), notes, base);
-    const plan = recovery.api.planResearchNotesRestore({
-        paneId: String(ctx.tabId == null ? '' : ctx.tabId),
-        candidates: [candidate],
-        base: base,
-        queue: queue,
-        otherDirtySession: prksResearchRecoveryOtherDirty(id, key),
-        editorDirty: editorDirty,
-    });
+    const observed = prksResearchRecoveryObservedBase(ctx);
+    const editorDirty = prksResearchNotesEditorDirty(prksWorkResearchDrafts.get(key), notes, observed);
+    const planWith = function (planBase) {
+        return recovery.api.planResearchNotesRestore({
+            paneId: String(ctx.tabId == null ? '' : ctx.tabId),
+            candidates: [candidate],
+            base: planBase,
+            queue: queue,
+            otherDirtySession: prksResearchRecoveryOtherDirty(id, key),
+            editorDirty: editorDirty,
+        });
+    };
+    let plan = planWith(observed);
+    /* A restore applies the draft as is: only on a base proven one server snapshot (#490). */
+    if (plan.restore) {
+        const checked = await prksResearchRecoveryCheckedBase(id, observed);
+        if (!prksResearchNotesRecoveryTarget(ctx, id, token)) return { code: 'stale' };
+        if (checked !== observed) plan = planWith(checked);
+    }
     const action = plan.restore ? 'restore' : (plan.review[0] ? plan.review[0].action : null);
-    return { candidate: candidate, plan: plan, base: base, action: action };
+    return { candidate: candidate, plan: plan, base: observed, queue: queue, action: action };
 }
 
 /** Restore for editing: the draft overwrites nothing, so it continues its own lineage here. */
@@ -988,13 +1046,15 @@ async function prksResearchNotesRecoveryRestoreNow(ctx, workId, token, expect) {
     const writer = await recovery.rt.writers.adopt(judged.candidate.record, { paneId: paneId });
     if (!writer) return { ok: false, code: 'changed' };
     const key = prksResearchDraftKey(ctx, id);
+    /* Adopting was asynchronous: the queue, the base and other panes are read again (#490). */
+    const changed = prksResearchNotesRecoveryTarget(ctx, id, token)
+        ? await prksResearchRecoveryChangedSince(ctx, id, key, judged.base, judged.queue) : 'stale';
     const notes = prksResearchNotesRecoveryTarget(ctx, id, token);
     const base = prksResearchRecoveryObservedBase(ctx);
-    if (!notes || prksResearchNotesEditorDirty(prksWorkResearchDrafts.get(key), notes, base) ||
-        !base || base.revision !== judged.base.revision || base.value !== judged.base.value) {
+    if (changed || !notes || prksResearchNotesEditorDirty(prksWorkResearchDrafts.get(key), notes, base)) {
         /* Moved on while adopting: the lineage stays this page's orphan, still listed. */
         void writer.release().catch(function () {});
-        return { ok: false, code: 'stale' };
+        return { ok: false, code: notes && changed !== 'stale' ? 'changed' : 'stale' };
     }
     /* The editor's clean session gives way to the restored lineage. */
     const existing = prksWorkResearchDrafts.get(key);
@@ -1041,6 +1101,9 @@ async function prksResearchNotesRecoveryReplaceNow(ctx, workId, token, expect, t
     const paneId = String(ctx.tabId == null ? '' : ctx.tabId);
     const claim = await recovery.rt.claimReviewed(expect, paneId);
     if (!claim || claim.outcome !== 'ok') return { ok: false, code: 'changed' };
+    /* Claiming was asynchronous: pending sync, the base and other panes are read again. */
+    const moved = await prksResearchRecoveryChangedSince(ctx, id, prksResearchDraftKey(ctx, id), judged.base, judged.queue);
+    if (moved) return { ok: false, code: 'current-changed' };
     const notes = unchanged();
     /* Claimed but not applied: it reads as this page's orphan and stays listed. */
     if (!notes) return { ok: false, code: 'current-changed' };

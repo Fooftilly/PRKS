@@ -52,6 +52,34 @@ const record = (owner: Partial<DraftOwner>) => ({
 })
 
 describe('classifyLineage', () => {
+  it('sends the page and runtime pings only with local proof the page is gone, and together', async () => {
+    const sent: string[] = []
+    const pending: Array<() => void> = []
+    const w = world({ locksProveGone: false })
+    const probe = probeFor(w)
+    const ping = (name: string) => () => {
+      sent.push(name)
+      return new Promise<boolean>((resolve) => pending.push(() => resolve(false)))
+    }
+    probe.identity.isPageAlive = ping('page')
+    probe.identity.isRuntimeAlive = ping('runtime')
+    probe.identity.isLineageLiveElsewhere = ping('lineage')
+    // No proof: unknown after the lineage ping alone.
+    const unproven = classifyLineage(record({}), probe)
+    await Promise.resolve()
+    expect(sent).toEqual(['lineage'])
+    pending.splice(0).forEach((resolve) => resolve())
+    expect(await unproven).toBe('unknown')
+    // A recorded final pagehide: all three pings are in flight at once.
+    sent.length = 0
+    w.closed.add('p-other')
+    const proven = classifyLineage(record({}), probe)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(sent.sort()).toEqual(['lineage', 'page', 'runtime'])
+    pending.splice(0).forEach((resolve) => resolve())
+    expect(await proven).toBe('dead-runtime')
+  })
+
   it('self-live and other-live for writers in this page', async () => {
     const w = world({ local: new Map([['d-1', 's-a']]) })
     expect(await classifyLineage(record({ pageInstanceId: 'p-me' }), probeFor(w), 's-a')).toBe('self-live')

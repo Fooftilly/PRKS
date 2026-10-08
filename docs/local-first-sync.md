@@ -108,7 +108,10 @@ coordinator names no family: adding one is a registration.
   unknown and is review-only. Everything else appears in the Notes pane's
   recovery notice and Review dialog, where restoring adopts by
   compare-and-set and reconciling is an explicit confirmed replace; nothing
-  is enqueued until the user chooses.
+  is enqueued until the user chooses. Review's Restore and Replace pass the
+  same checks as the automatic restore (#490): Restore needs a base proven
+  one server snapshot, and both re-read the queue, base and other panes
+  after the asynchronous adoption or claim before applying anything.
 - A device ID is an identity for synchronization, never authentication or trust.
 - Editor state and observed projections belong to the Work's TabContext.
   The sync coordinator owns transport and retry policy, with one in-flight

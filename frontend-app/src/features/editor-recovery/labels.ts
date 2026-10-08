@@ -6,6 +6,10 @@
 import type { RecoveryCandidateView, RecoveryCurrentNote, RecoveryNoticeView } from './types'
 
 export function noticeText(view: RecoveryNoticeView, subject: string): string {
+  return draftsText(view, subject) + pendingSyncText(view)
+}
+
+function draftsText(view: RecoveryNoticeView, subject: string): string {
   const complete = view.drafts - view.incomplete
   if (view.drafts === 1) {
     return view.incomplete
@@ -15,6 +19,12 @@ export function noticeText(view: RecoveryNoticeView, subject: string): string {
   const head = `${view.drafts} unsaved ${subject} drafts from earlier sessions are available.`
   if (!view.incomplete) return head
   return complete ? `${head} ${view.incomplete} of them ${view.incomplete === 1 ? 'is' : 'are'} incomplete.` : `${head} All are incomplete.`
+}
+
+function pendingSyncText(view: RecoveryNoticeView): string {
+  if (view.pendingSync === 'queued') return ' Other changes to this note are waiting to sync.'
+  if (view.pendingSync === 'unknown') return ' Changes waiting to sync could not be checked.'
+  return ''
 }
 
 export function unprotectedText(code: string): string {

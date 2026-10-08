@@ -752,6 +752,9 @@ describe('same-pane restore after reload', () => {
       expect(win.prksResearchNotesTextForWork('w1', server.text, stuckMain)).toBe('Saved note.')
       const [w1After] = (await records()).filter((r) => r.entityId === 'w1')
       expect(w1After!.owner.pageInstanceId).toBe(w1Before!.owner.pageInstanceId)
+      // Out of time, but not out of reach: the notice still lists the draft, unchecked.
+      expect(review().view(stuckMain)).toMatchObject({ drafts: 1 })
+      expect(stuckMain.ui.researchNotesRecovery).toMatchObject({ candidates: [{ reason: 'ownership-unknown', action: null }] })
     } finally {
       page!.rt.scanEmergency = scan
       win.prksSetResearchRecoveryRestoreMsForTest(null)
@@ -1035,6 +1038,29 @@ describe('tab-close recovery (slice 3)', () => {
     expect(notes.editor.value()).toBe('Saved note. Closed on the LAN')
   })
 
+  it('lists every draft of many closed LAN tabs within the restore budget', async () => {
+    withoutLocks = true
+    startPage()
+    const count = 9
+    for (let i = 0; i < count; i++) {
+      const ctx = await openWork()
+      await type(ctx, `Saved note. LAN tab ${i}`).recovery!.flush()
+      await closeTabAndOpenAnother()
+    }
+    win.prksSetResearchRecoveryRestoreMsForTest(2000)
+    try {
+      const started = Date.now()
+      const { ctx, result } = await openAndRestore()
+      expect(result).toMatchObject({ restored: false })
+      expect(result!.review).toHaveLength(count)
+      expect(review().view(ctx)).toMatchObject({ drafts: count })
+      // The owner checks run side by side, not one after another.
+      expect(Date.now() - started).toBeLessThan(2000)
+    } finally {
+      win.prksSetResearchRecoveryRestoreMsForTest(null)
+    }
+  }, 20000)
+
   it('never adopts a crashed LAN tab\'s draft: silence is not proof, so it is offered for review only', async () => {
     withoutLocks = true
     startPage()
@@ -1124,11 +1150,82 @@ describe('Review (slice 3)', () => {
     expect((ctx.root.querySelector('[data-prks-role="editor-status"]') as HTMLElement).innerText).toBe('Restored unsaved changes')
     expect(review().view(ctx)).toMatchObject({ drafts: 1 })
     const after = await review().details(ctx, 'w1')
-    const rest = after!.candidates.filter((c) => c.lineage !== 'self-live')
-    expect(rest).toMatchObject([{ body: 'Saved note. First tab', action: 'reconcile', reason: 'editor-dirty' }])
-    // The restored draft is this editor's own lineage now.
-    expect(after!.candidates.find((c) => c.lineage === 'self-live')).toBeTruthy()
+    // The restored draft is this editor's own lineage now: what it shows, not a draft to review.
+    expect(after!.candidates).toMatchObject([{ body: 'Saved note. First tab', action: 'reconcile', reason: 'editor-dirty' }])
+    expect(after!.candidates.some((c) => c.lineage === 'self-live')).toBe(false)
     expect(sync.rows()).toEqual([])
+  })
+
+  describe('with the #490 checks', () => {
+    /** Runs `hook` inside the next adoption or claim, before the store takes the record. */
+    function during(name: 'adopt' | 'claimReviewed', hook: () => unknown) {
+      const target = (name === 'adopt' ? page!.rt.writers : page!.rt) as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>
+      const original = target[name]!.bind(target)
+      target[name] = async (...args: unknown[]) => {
+        target[name] = original
+        await hook()
+        return original(...args)
+      }
+    }
+    const foreign = () =>
+      sync.store.saveWorkNote('w1', 'SET_WORK_RESEARCH_NOTE', 'Saved note. Queued elsewhere', { value: server.text, revision: server.revision })
+
+    it('offers no restore when the note body and revision are not one server snapshot', async () => {
+      const { ctx, notes } = await twoClosedTabs()
+      // Same revision, other body: the observed base cannot be proven.
+      server.text = 'Saved note, changed without a new revision.'
+      const details = await review().details(ctx, 'w1')
+      expect(details!.current.source).toBe('cache')
+      expect(details!.candidates.map((c) => c.action)).toEqual(['reconcile', 'reconcile'])
+      expect(await review().restore(ctx, 'w1', details!.token, details!.candidates[0]!.expect)).toMatchObject({ ok: false, code: 'changed' })
+      expect(notes.editor.value()).toBe('Saved note.')
+      expect(await records()).toHaveLength(2)
+      expect(sync.rows()).toEqual([])
+    })
+
+    it('does not apply a restore when a row was queued while adopting', async () => {
+      const { ctx, notes } = await twoClosedTabs()
+      const details = await review().details(ctx, 'w1')
+      const target = details!.candidates[0]!
+      during('adopt', foreign)
+      expect(await review().restore(ctx, 'w1', details!.token, target.expect)).toMatchObject({ ok: false, code: 'changed' })
+      expect(notes.editor.value()).toBe('Saved note.')
+      expect(ctx.ui.workResearchNoteSession).toBeNull()
+      expect(sync.rows().map((r) => r.payload.text)).toEqual(['Saved note. Queued elsewhere'])
+      expect(await bodyOf(target.draftId)).toBe(target.body)
+    })
+
+    it('does not replace the note when a row was queued while claiming', async () => {
+      const { ctx, notes } = await twoClosedTabs()
+      const details = await review().details(ctx, 'w1')
+      const target = details!.candidates[0]!
+      during('claimReviewed', foreign)
+      expect(await review().replace(ctx, 'w1', details!.token, target.expect, 'Combined', { text: 'Saved note.', revision: 5 }))
+        .toMatchObject({ ok: false, code: 'current-changed' })
+      expect(notes.editor.value()).toBe('Saved note.')
+      expect(sync.rows().map((r) => r.payload.text)).toEqual(['Saved note. Queued elsewhere'])
+      // Claimed but not applied: still listed, with its text.
+      expect(await bodyOf(target.draftId)).toBe(target.body)
+    })
+
+    it('keeps the reviewed draft when the replacement text gets no recovery copy', async () => {
+      const { ctx, notes } = await twoClosedTabs()
+      const details = await review().details(ctx, 'w1')
+      const target = details!.candidates[0]!
+      // The claim commits; the replacement's recovery write is refused.
+      const claim = page!.rt.claimReviewed.bind(page!.rt)
+      page!.rt.claimReviewed = async (...args: Parameters<typeof claim>) => {
+        const outcome = await claim(...args)
+        // Exactly the replacement's write: a discard after it would succeed.
+        idb.failCommits = 1
+        return outcome
+      }
+      expect(await review().replace(ctx, 'w1', details!.token, target.expect, 'Combined', { text: 'Saved note.', revision: 5 })).toEqual({ ok: true })
+      expect(notes.editor.value()).toBe('Combined')
+      idb.failCommits = 0
+      await settle()
+      expect(await bodyOf(target.draftId)).toBe(target.body)
+    })
   })
 
   it('refuses an action decided before the owner changed, and changes nothing', async () => {

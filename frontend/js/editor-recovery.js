@@ -1349,11 +1349,15 @@ var prksEditorRecovery = (function(exports) {
 			if (await identity.isLineageLiveElsewhere(record.draftId) === true) return "other-live";
 			return claim.verified === "channel" && identity.wasClosedInThisTab(owner.pageInstanceId) ? "same-runtime-orphan" : "unknown";
 		}
-		if (await identity.isLineageLiveElsewhere(record.draftId) === true) return "other-live";
-		const pageAlive = await identity.isPageAlive(owner.pageInstanceId);
-		const runtimeAlive = owner.runtimeId ? await identity.isRuntimeAlive(owner.runtimeId) : false;
-		if (pageAlive !== false || runtimeAlive !== false) return "unknown";
-		return (identity.wasPageClosed ? identity.wasPageClosed(owner.pageInstanceId) : false) || (identity.isPageGone ? await identity.isPageGone(owner.pageInstanceId) : false) ? "dead-runtime" : "unknown";
+		const gone = (identity.wasPageClosed ? identity.wasPageClosed(owner.pageInstanceId) : false) || (identity.isPageGone ? await identity.isPageGone(owner.pageInstanceId) : false);
+		const [liveElsewhere, pageAlive, runtimeAlive] = await Promise.all([
+			identity.isLineageLiveElsewhere(record.draftId),
+			gone ? identity.isPageAlive(owner.pageInstanceId) : Promise.resolve(null),
+			gone && owner.runtimeId ? identity.isRuntimeAlive(owner.runtimeId) : Promise.resolve(false)
+		]);
+		if (liveElsewhere === true) return "other-live";
+		if (!gone || pageAlive !== false || runtimeAlive !== false) return "unknown";
+		return "dead-runtime";
 	}
 	//#endregion
 	//#region src/lifecycle/editor-recovery/writer.ts

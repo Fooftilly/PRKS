@@ -28,6 +28,16 @@ describe('EditorRecoveryNotice', () => {
     expect(some.text()).toContain('3 unsaved Research Notes drafts from earlier sessions are available. 1 of them is incomplete.')
   })
 
+  it('says when other changes are waiting to sync, never that anything is saved', () => {
+    const queued = mount(EditorRecoveryNotice, { props: { view: view({ pendingSync: 'queued' }), subject: 'Research Notes' } })
+    expect(queued.text()).toContain('Other changes to this note are waiting to sync.')
+    const unknown = mount(EditorRecoveryNotice, { props: { view: view({ pendingSync: 'unknown' }), subject: 'Research Notes' } })
+    expect(unknown.text()).toContain('Changes waiting to sync could not be checked.')
+    const none = mount(EditorRecoveryNotice, { props: { view: view({ pendingSync: 'none' }), subject: 'Research Notes' } })
+    expect(none.text()).not.toContain('sync')
+    for (const w of [queued, unknown, none]) expect(w.text()).not.toMatch(/\bsaved\b/i)
+  })
+
   it('keeps the unprotected warning visible; it cannot be hidden', async () => {
     const wrapper = mount(EditorRecoveryNotice, { props: { view: view({ unprotected: 'quota' }), subject: 'Research Notes' } })
     const warning = wrapper.get('[data-prks-role="editor-recovery-unprotected"]')

@@ -62,12 +62,18 @@ export async function classifyLineage(
     return claim.verified === 'channel' && identity.wasClosedInThisTab(owner.pageInstanceId) ? 'same-runtime-orphan' : 'unknown'
   }
 
-  if ((await identity.isLineageLiveElsewhere(record.draftId)) === true) return 'other-live'
-  const pageAlive = await identity.isPageAlive(owner.pageInstanceId)
-  const runtimeAlive = owner.runtimeId ? await identity.isRuntimeAlive(owner.runtimeId) : false
-  if (pageAlive !== false || runtimeAlive !== false) return 'unknown'
+  // Local evidence first: without proof the page is gone the answer is at
+  // best 'unknown', so the page and runtime pings are not worth waiting for.
   const gone =
     (identity.wasPageClosed ? identity.wasPageClosed(owner.pageInstanceId) : false) ||
     (identity.isPageGone ? await identity.isPageGone(owner.pageInstanceId) : false)
-  return gone ? 'dead-runtime' : 'unknown'
+  // The pings wait on silence, so they run together rather than one by one.
+  const [liveElsewhere, pageAlive, runtimeAlive] = await Promise.all([
+    identity.isLineageLiveElsewhere(record.draftId),
+    gone ? identity.isPageAlive(owner.pageInstanceId) : Promise.resolve(null),
+    gone && owner.runtimeId ? identity.isRuntimeAlive(owner.runtimeId) : Promise.resolve(false),
+  ])
+  if (liveElsewhere === true) return 'other-live'
+  if (!gone || pageAlive !== false || runtimeAlive !== false) return 'unknown'
+  return 'dead-runtime'
 }

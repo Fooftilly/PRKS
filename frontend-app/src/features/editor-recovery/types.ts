@@ -12,6 +12,8 @@ export interface RecoveryNoticeView {
   drafts: number
   /** Of those, how many are incomplete or unreadable. */
   incomplete: number
+  /** Whether other Research Notes changes are waiting to sync, as last read. */
+  pendingSync?: 'none' | 'queued' | 'unknown'
   /** This pane's newest text has no recovery copy: the storage error code, or null. */
   unprotected: string | null
 }
