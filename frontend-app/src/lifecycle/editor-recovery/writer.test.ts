@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { EmergencyStorage } from './emergency'
 import { RECOVERY_DB_NAME, BODIES_STORE, LARGE_BODY_CHARS, emergencyKeyOf, type DraftBase, type EmergencyPayload } from './schema'
 import { createRecoveryStore, type RecoveryStore, type WriteGenerationInput, type WriteOutcome } from './store'
@@ -290,6 +290,20 @@ describe('emergency storage that cannot keep a body', () => {
     expect(t.registry.leaveGuardActive()).toBe(true)
   })
 
+  it('re-proves capacity when another tab replaces a value with one of equal length but wider bytes', () => {
+    const t = setup()
+    const w = t.open()
+    w.edit(1, 'x'.repeat(1000))
+    expect(w.heldByEmergency()).toBe(true)
+    const spy = vi.spyOn(t.storage, 'setItem')
+    // Same bytes: nothing to re-prove.
+    t.win.fire('storage', { key: 'other-app-key', oldValue: 'a'.repeat(50), newValue: 'b'.repeat(50) } as unknown as Partial<Event>)
+    expect(spy).not.toHaveBeenCalled()
+    // Equal length, but non-Latin text takes twice the bytes in Chromium.
+    t.win.fire('storage', { key: 'other-app-key', oldValue: 'a'.repeat(50), newValue: 'ж'.repeat(50) } as unknown as Partial<Event>)
+    expect(spy).toHaveBeenCalledWith('prks.editorRecovery.probe.v1', expect.any(String))
+  })
+
   it('re-proves capacity for a new burst after an idle gap the listener could not watch', async () => {
     const inner = memoryStorage()
     let limit = 10_000
@@ -429,6 +443,23 @@ describe('discard when the emergency key cannot be cleared', () => {
     await settle()
     expect(JSON.parse(storage.map.get(emergencyKeyOf('p-me')) as string).entries.map((e: { draftId: string }) => e.draftId)).toEqual([other.draftId()])
     expect(await t.store.get(draftId)).toBeNull()
+  })
+
+  it('tombstones an acknowledged first generation whose stale key could not be cleared', async () => {
+    const { storage, state } = stuckStorage()
+    const t = setup({ storage })
+    const w = t.open()
+    w.edit(1, 'saved words')
+    expect(t.registry.writeEmergencyNow()).toBe('written')
+    const draftId = w.draftId() as string
+    state.blocked = true
+    await w.flush()
+    expect(await w.acknowledged(1, 'saved words')).toBe('deleted')
+    expect(JSON.parse(storage.map.get(emergencyKeyOf('p-me')) as string).entries[0].committedGeneration).toBe(0)
+    expect(await t.store.get(draftId)).toMatchObject({ status: 'discarded' })
+    const payload = JSON.parse(storage.map.get(emergencyKeyOf('p-me')) as string) as EmergencyPayload
+    expect(await t.store.applyEmergencyEntry(payload, payload.entries[0]!)).toBe('suppressed')
+    expect(await t.store.listByEntity('work-research-note', 'w1')).toEqual([])
   })
 
   it('discards without a tombstone when the key could be cleared', async () => {

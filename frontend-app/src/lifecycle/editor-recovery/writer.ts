@@ -144,6 +144,14 @@ const defaultScheduler: Scheduler = {
   clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
 }
 
+/**
+ * Bytes Chromium charges for a value: one per char when every char is
+ * Latin-1, otherwise two. Length alone cannot show that usage did not grow.
+ */
+function storedBytes(value: string): number {
+  return /[^\u0000-\u00ff]/.test(value) ? value.length * 2 : value.length
+}
+
 function codeOf(error: unknown): RecoveryStoreErrorCode | 'unknown' {
   return error instanceof RecoveryStoreError ? error.code : 'unknown'
 }
@@ -198,12 +206,12 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
    * Another tab grew localStorage (shared quota): the cached capacity proof no
    * longer holds, so drop it and re-probe. Probe writes are ignored, or two
    * tabs with pending drafts would re-probe each other forever; removals and
-   * shrinking values only free quota.
+   * values that take no more bytes than before only free quota.
    */
   function onStorage(event: Event): void {
     const e = event as StorageEvent
     if (e.key === EMERGENCY_PROBE_KEY || e.newValue === null) return
-    if (e.key !== null && e.oldValue !== null && e.newValue.length <= e.oldValue.length) return
+    if (e.key !== null && e.oldValue !== null && storedBytes(e.newValue) <= storedBytes(e.oldValue)) return
     if (provenChars === 0) return
     provenChars = 0
     changed()
@@ -673,6 +681,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
         }
         changed()
       }
+      if (outcome === 'deleted') await this.tombstoneIfListed(draftId)
       return outcome
     }
 
@@ -696,23 +705,26 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
         this.status = 'clean'
         changed()
       }
-      if (!draftId) return
-      // A key that could be neither removed nor emptied still lists this
-      // lineage: leave a tombstone, so no later page recreates the draft.
-      if (emergencyWritten && emergencyIds.has(draftId)) {
-        tombstoned.add(draftId)
-        await store.discard(draftId, {
-          kind: this.kind,
-          entityType: this.entityType,
-          entityId: this.entityId,
-          generation: this.lastSeen,
-          pageInstanceId: identity.pageInstanceId,
-        })
-        // Cleared while the tombstone was being written: drop it again.
-        releaseTombstones()
-      } else {
-        await store.discard(draftId)
-      }
+      if (draftId && !(await this.tombstoneIfListed(draftId))) await store.discard(draftId)
+    }
+
+    /**
+     * A key that could be neither removed nor emptied still lists this retired
+     * lineage: leave a tombstone, so no later page recreates the draft from it.
+     */
+    private async tombstoneIfListed(draftId: string): Promise<boolean> {
+      if (!emergencyWritten || !emergencyIds.has(draftId)) return false
+      tombstoned.add(draftId)
+      await store.discard(draftId, {
+        kind: this.kind,
+        entityType: this.entityType,
+        entityId: this.entityId,
+        generation: this.lastSeen,
+        pageInstanceId: identity.pageInstanceId,
+      })
+      // Cleared while the tombstone was being written: drop it again.
+      releaseTombstones()
+      return true
     }
 
     emergencyEntry(holdBody: boolean): EmergencyEntry {
