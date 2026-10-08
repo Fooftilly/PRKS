@@ -487,6 +487,26 @@ describe('same-pane restore after reload', () => {
     expect(sync.rows().map((r) => r.payload.text)).toEqual(['Saved note. Foreign A'])
   })
 
+  it('keeps a draft whose newer tail never reached storage, even when its stored body equals the note', async () => {
+    const ctx = await openWork()
+    // Generation 1 equals the server note; a newer, oversized generation only left a bodyless tail.
+    await type(ctx, 'Saved note.').recovery!.flush()
+    await reload()
+    const [stored] = await records()
+    expect(await bodyOf(stored!.draftId)).toBe('Saved note.')
+    const outcome = await page!.rt.store.applyEmergencyEntry(
+      { v: 1, pageInstanceId: stored!.owner.pageInstanceId, runtimeId: stored!.owner.runtimeId, at: Date.now(), entries: [] },
+      { draftId: stored!.draftId, kind: 'work-research-note', entityType: 'work', entityId: 'w1', generation: stored!.generation + 1, committedGeneration: stored!.generation, body: null },
+    )
+    expect(outcome).toBe('tail-missing')
+    const fresh = await openWork()
+    const result = await win.prksRestoreResearchNotesRecovery(fresh, { id: 'w1' })
+    expect(sync.rows()).toEqual([])
+    expect(result).toMatchObject({ restored: false, review: [{ reason: 'tail-missing' }] })
+    await settle()
+    expect(await records()).toHaveLength(1)
+  })
+
   it('does not restore another pane\'s draft into this pane', async () => {
     const side = await openWork('tab-2')
     const entry = type(side, 'Saved note. Side pane')

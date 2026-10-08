@@ -2177,7 +2177,7 @@ var prksEditorRecovery = (function(exports) {
 		});
 		const queue = input.queue;
 		let liveElsewhere = false;
-		let unreadable = 0;
+		let unresolved = 0;
 		const remaining = [];
 		for (const c of input.candidates) {
 			if (c.record.status === "discarded") continue;
@@ -2186,12 +2186,17 @@ var prksEditorRecovery = (function(exports) {
 				review(c, "live-elsewhere");
 				continue;
 			}
+			if (c.record.status === "tail-missing") {
+				unresolved++;
+				review(c, "tail-missing");
+				continue;
+			}
 			if (c.body === null) {
-				unreadable++;
+				unresolved++;
 				review(c, "body-missing");
 				continue;
 			}
-			if (K && K.source === "server" && queue && !queue.length && c.body === K.value) {
+			if ((c.lineage === "same-runtime-orphan" || c.lineage === "dead-runtime") && K && K.source === "server" && queue && !queue.length && c.body === K.value) {
 				plan.cleanup.push(c.record.draftId);
 				continue;
 			}
@@ -2208,7 +2213,7 @@ var prksEditorRecovery = (function(exports) {
 			}
 			remaining.push(c);
 		}
-		if (remaining.length + unreadable !== 1) {
+		if (remaining.length + unresolved !== 1) {
 			for (const c of remaining) review(c, "multiple-drafts");
 			return plan;
 		}
@@ -2262,7 +2267,6 @@ var prksEditorRecovery = (function(exports) {
 		if (liveElsewhere) return "live-elsewhere";
 		if (c.lineage === "unknown") return "ownership-unknown";
 		if (c.lineage !== "same-runtime-orphan" || c.record.owner.paneId !== input.paneId) return "other-source";
-		if (c.record.status === "tail-missing") return "tail-missing";
 		if (input.otherDirtySession) return "dirty-session";
 		if (!input.base || input.base.source !== "server") return "base-unverified";
 		if (c.record.base.source === "unknown" || c.record.base.revision === null) return "base-unverified";

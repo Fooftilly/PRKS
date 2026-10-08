@@ -78,7 +78,8 @@ export interface ReviewCandidate {
 export interface RestorePlan {
   /**
    * Bodies exactly equal to the server's acknowledged note while nothing is
-   * queued that could still change it: compare-and-delete.
+   * queued that could still change it, from a lineage no live editor can
+   * still own: compare-and-delete.
    */
   cleanup: string[]
   /** Already the queued row's exact body: kept until that row's acknowledgement. */
@@ -118,7 +119,7 @@ export function planResearchNotesRestore(input: RestoreInput): RestorePlan {
 
   const queue = input.queue
   let liveElsewhere = false
-  let unreadable = 0
+  let unresolved = 0
   const remaining: RestoreCandidate[] = []
   for (const c of input.candidates) {
     if (c.record.status === 'discarded') continue
@@ -129,14 +130,22 @@ export function planResearchNotesRestore(input: RestoreInput): RestorePlan {
       review(c, 'live-elsewhere')
       continue
     }
+    // A newer generation never reached storage: the stored body is not the
+    // latest text, so it proves nothing about what was saved.
+    if (c.record.status === 'tail-missing') {
+      unresolved++
+      review(c, 'tail-missing')
+      continue
+    }
     if (c.body === null) {
-      unreadable++
+      unresolved++
       review(c, 'body-missing')
       continue
     }
     // Equal to the note only proves it saved while no queued row can still
-    // replace that note.
-    if (K && K.source === 'server' && queue && !queue.length && c.body === K.value) {
+    // replace that note, and only for a lineage no live editor may still own.
+    const inactive = c.lineage === 'same-runtime-orphan' || c.lineage === 'dead-runtime'
+    if (inactive && K && K.source === 'server' && queue && !queue.length && c.body === K.value) {
       plan.cleanup.push(c.record.draftId)
       continue
     }
@@ -149,8 +158,8 @@ export function planResearchNotesRestore(input: RestoreInput): RestorePlan {
     remaining.push(c)
   }
 
-  // An unreadable draft is still a draft: it keeps the restore ambiguous.
-  if (remaining.length + unreadable !== 1) {
+  // An unreadable or incomplete draft is still a draft: it keeps the restore ambiguous.
+  if (remaining.length + unresolved !== 1) {
     for (const c of remaining) review(c, 'multiple-drafts')
     return plan
   }
@@ -222,7 +231,6 @@ function blockingReason(c: RestoreCandidate, input: RestoreInput, liveElsewhere:
   if (c.lineage === 'unknown') return 'ownership-unknown'
   // Adoptable, but from a closed tab or another pane: slice 3 offers it.
   if (c.lineage !== 'same-runtime-orphan' || c.record.owner.paneId !== input.paneId) return 'other-source'
-  if (c.record.status === 'tail-missing') return 'tail-missing'
   if (input.otherDirtySession) return 'dirty-session'
   if (!input.base || input.base.source !== 'server') return 'base-unverified'
   if (c.record.base.source === 'unknown' || c.record.base.revision === null) return 'base-unverified'

@@ -137,6 +137,34 @@ describe('Research Notes same-pane restore plan', () => {
     expect(plan([candidate('x', { owner: { ...otherPane, paneId: 'tab-2' } })]).review).toMatchObject([{ reason: 'other-source', paneId: 'tab-2' }])
   })
 
+  it('keeps a missing-tail draft for review even when its stored body equals the note or the queued row', () => {
+    const equal = plan([candidate(SERVER, { status: 'tail-missing' })])
+    expect(equal.cleanup).toEqual([])
+    expect(equal.review).toMatchObject([{ reason: 'tail-missing' }])
+    const pipeline: DraftPipeline = { state: 'queued', queuedOpId: 'op-1', queuedGeneration: 4, blockedBase: null, ownQueued: null }
+    const queued = plan([candidate('Queued body', { status: 'tail-missing', pipeline })], { queue: [{ opId: 'op-1', text: 'Queued body' }] })
+    expect(queued.represented).toEqual([])
+    expect(queued.review).toMatchObject([{ reason: 'tail-missing' }])
+    // And it keeps another draft from restoring on its own.
+    const both = plan([candidate('Saved note. More'), candidate(SERVER, { draftId: 'd-2', status: 'tail-missing' })])
+    expect(both.restore).toBeNull()
+    expect(both.review.map((r) => [r.draftId, r.reason])).toEqual([
+      ['d-2', 'tail-missing'],
+      ['d-1', 'multiple-drafts'],
+    ])
+  })
+
+  it('cleans up an equal draft only from a lineage no live editor can own', () => {
+    expect(plan([candidate(SERVER, {}, 'dead-runtime')]).cleanup).toEqual(['d-1'])
+    const unknown = plan([candidate(SERVER, {}, 'unknown')])
+    expect(unknown.cleanup).toEqual([])
+    expect(unknown.review).toMatchObject([{ reason: 'ownership-unknown' }])
+    // An uncertain owner keeps another draft from restoring.
+    const both = plan([candidate('Saved note. More'), candidate(SERVER, { draftId: 'd-2' }, 'unknown')])
+    expect(both.restore).toBeNull()
+    expect(both.review.map((r) => r.reason)).toEqual(['multiple-drafts', 'multiple-drafts'])
+  })
+
   it('defers a known missing tail, another dirty session and an unread body', () => {
     expect(plan([candidate('x', { status: 'tail-missing' })]).review).toMatchObject([{ reason: 'tail-missing' }])
     expect(plan([candidate('x')], { otherDirtySession: true }).review).toMatchObject([{ reason: 'dirty-session' }])
