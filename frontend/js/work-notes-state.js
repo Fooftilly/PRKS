@@ -160,21 +160,30 @@
         /* A pending CREATE_WORK has no server row yet. Hitting notes-state
          * would 404 and trip harness console gates; seed revision 0 locally. */
         let state = null;
+        let source = 'unknown';
         if (options && options.pendingCreate) {
             state = {
                 work_id: work.id,
                 research_note_revision: 0,
                 private_note_revision: 0,
             };
+            source = 'pending-create';
         } else {
             const result = await readState(work.id);
             state = result && result.value;
+            if (result && (result.source === 'server' || result.source === 'cache')) source = result.source;
         }
         const base = acknowledgedNoteBase({
             id: work.id,
             text_content: canonical.text_content,
             private_notes: canonical.private_notes,
         }, state);
+        /* Where the revisions came from. Editor recovery (#466) restores
+         * automatically only against a base read from the server. */
+        if (base) {
+            base.research.source = source;
+            base.private.source = source;
+        }
         if (!deferPublish && typeof ctx.setResource === 'function') {
             ctx.setResource('workNotesObserved', base);
         }
@@ -216,6 +225,7 @@
             if (slot) {
                 slot.value = text;
                 slot.revision = rev;
+                slot.source = 'server';
             }
         }
     }
@@ -256,14 +266,17 @@
             !Number.isSafeInteger(observed.revision) || observed.revision < 0) {
             return { code: 'unknown_base' };
         }
+        let row;
         try {
-            await root.prksSync.store.saveWorkNote(workId, op, text, observed);
+            row = await root.prksSync.store.saveWorkNote(workId, op, text, observed);
         } catch (e) {
             return { code: (e && e.prksLocalStoreCode) || 'failed',
                 error: (e && e.message) || 'Store refused write.' };
         }
         root.prksSync.changed();
-        return { code: 'saved' };
+        /* opId: the queued row holding exactly this body, or null when the
+         * body equals the acknowledged base and nothing was queued. */
+        return { code: 'saved', opId: row && typeof row.op_id === 'string' ? row.op_id : null };
     }
 
     /* ---- sync handler (compact; server guarantees value_omitted) ---- */

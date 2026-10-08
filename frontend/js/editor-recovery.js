@@ -280,6 +280,17 @@ var prksEditorRecovery = (function(exports) {
 		if ((tx.error && tx.error.name) === "QuotaExceededError") return new RecoveryStoreError("quota", "Recovery storage is full.");
 		return new RecoveryStoreError("aborted", "The recovery write was rolled back.");
 	}
+	function clonePipeline(pipeline) {
+		if (!pipeline) return null;
+		return {
+			...pipeline,
+			blockedBase: pipeline.blockedBase ? { ...pipeline.blockedBase } : null,
+			ownQueued: pipeline.ownQueued ? {
+				...pipeline.ownQueued,
+				base: { ...pipeline.ownQueued.base }
+			} : null
+		};
+	}
 	/** Lineage id for an emergency tail forked away from a lineage adopted since. Deterministic, so merges are idempotent. */
 	function forkedDraftId(draftId, generation) {
 		return draftId + ".e" + generation;
@@ -460,7 +471,9 @@ var prksEditorRecovery = (function(exports) {
 							done("missing");
 							return;
 						}
-						putPair(tx, newRecord(input.draftId, input.create, input.generation, input.body.length), input.body);
+						const created = newRecord(input.draftId, input.create, input.generation, input.body.length);
+						if (input.pipeline !== void 0) created.pipeline = clonePipeline(input.pipeline);
+						putPair(tx, created, input.body);
 						done("ok");
 						return;
 					}
@@ -477,9 +490,27 @@ var prksEditorRecovery = (function(exports) {
 						generation: input.generation,
 						bodyLength: input.body.length,
 						base: input.base ? { ...input.base } : record.base,
+						pipeline: input.pipeline !== void 0 ? clonePipeline(input.pipeline) : record.pipeline,
 						status: "active",
 						updatedAt: now()
 					}, input.body);
+					done("ok");
+				});
+			});
+		}
+		function updateLineage(input) {
+			return run("readwrite", (tx, done) => {
+				readRecord(tx, input.draftId, (record) => {
+					if (!record || record.status === "discarded") return done("missing");
+					if (!isSupportedRecord(record)) return done("unsupported");
+					if (record.owner.pageInstanceId !== input.pageInstanceId) return done("not-owner");
+					const next = {
+						...record,
+						base: input.base ? { ...input.base } : record.base,
+						pipeline: input.pipeline !== void 0 ? clonePipeline(input.pipeline) : record.pipeline,
+						updatedAt: now()
+					};
+					tx.objectStore(DRAFTS_STORE).put(next);
 					done("ok");
 				});
 			});
@@ -683,6 +714,7 @@ var prksEditorRecovery = (function(exports) {
 		}
 		return {
 			writeGeneration,
+			updateLineage,
 			adopt,
 			get,
 			getBody,
@@ -1563,6 +1595,9 @@ var prksEditorRecovery = (function(exports) {
 			entityId;
 			paneId;
 			base;
+			pipelineState = null;
+			/** Base or pipeline changed since the stored record last carried them. */
+			metaDirty = false;
 			lineageId = null;
 			lineageCreatedAt = 0;
 			/** A record for `lineageId` exists that this page owns (created or adopted). */
@@ -1596,6 +1631,7 @@ var prksEditorRecovery = (function(exports) {
 				this.committed = record.generation;
 				this.lastSeen = record.generation;
 				this.base = { ...record.base };
+				this.pipelineState = record.pipeline;
 				this.status = "protected";
 			}
 			currentDraftId() {
@@ -1634,6 +1670,44 @@ var prksEditorRecovery = (function(exports) {
 			}
 			setBase(base) {
 				this.base = { ...base };
+				this.metaChanged();
+			}
+			setPipeline(pipeline) {
+				this.pipelineState = pipeline;
+				this.metaChanged();
+			}
+			/**
+			* A pending or in-flight write carries the new metadata; otherwise a
+			* stored lineage gets a metadata-only update through the same one-at-a-time
+			* slot, so it never races a body write.
+			*/
+			metaChanged() {
+				this.metaDirty = true;
+				if (this.released || disposed || !this.lineageStored || !this.lineageId) return;
+				if (this.inFlight || this.latest) return;
+				this.startMeta();
+			}
+			startMeta() {
+				const draftId = this.lineageId;
+				if (!draftId || !this.lineageStored) return;
+				this.metaDirty = false;
+				let failed = false;
+				const attempt = store.updateLineage({
+					draftId,
+					pageInstanceId: identity.pageInstanceId,
+					base: this.base,
+					pipeline: this.pipelineState
+				}).then(() => {}, () => {
+					failed = true;
+					if (this.lineageId === draftId) this.metaDirty = true;
+				}).finally(() => {
+					this.inFlight = null;
+					if (this.writeRequested && this.latest) {
+						this.writeRequested = false;
+						this.startWrite();
+					} else if (this.metaDirty && !failed && !this.latest) this.metaChanged();
+				});
+				this.inFlight = attempt;
 			}
 			setPane(paneId) {
 				this.paneId = paneId;
@@ -1707,6 +1781,7 @@ var prksEditorRecovery = (function(exports) {
 					owner: this.owner(),
 					base: this.base
 				};
+				this.metaDirty = false;
 				const attempt = store.writeGeneration({
 					draftId,
 					pageInstanceId: identity.pageInstanceId,
@@ -1714,6 +1789,7 @@ var prksEditorRecovery = (function(exports) {
 					body: pending.body,
 					paneId: this.paneId,
 					base: this.base,
+					pipeline: this.pipelineState,
 					create
 				}).then((outcome) => {
 					if (this.lineageId !== draftId) {
@@ -1769,6 +1845,7 @@ var prksEditorRecovery = (function(exports) {
 					const again = this.writeRequested && this.latest !== null;
 					this.writeRequested = false;
 					if (again) this.startWrite();
+					else if (this.metaDirty && !this.latest) this.metaChanged();
 					changed();
 					this.leaveIfDone();
 				});
@@ -2053,12 +2130,141 @@ var prksEditorRecovery = (function(exports) {
 		}
 	}
 	//#endregion
+	//#region src/lifecycle/editor-recovery/research-notes.ts
+	/**
+	* Research Notes same-pane restore decision (#466 slice 2).
+	*
+	* A pure function over what the mount path already knows: the recovery
+	* records for one Work with their lineage class and stored body, the
+	* acknowledged base `K` from notes-state, and the unsettled Research Notes
+	* queue rows `Q`. It reads nothing and changes nothing; `works.js` applies
+	* the plan.
+	*
+	* Automatic restore is allowed only when it cannot overwrite anything:
+	* exactly one candidate, written by this pane before reload, typed on exactly
+	* the acknowledged body the server still holds, or on a body this lineage
+	* itself queued from that same base (the #475 own-predecessor rule). Every
+	* other candidate is kept untouched and reported for review (slice 3).
+	*/
+	function planResearchNotesRestore(input) {
+		const print = input.fingerprint || fingerprintText;
+		const K = input.base;
+		let kPrint = null;
+		const kIdentity = () => {
+			if (!K) return null;
+			if (kPrint === null) kPrint = print(K.value);
+			return {
+				revision: K.revision,
+				length: K.value.length,
+				fingerprint: kPrint
+			};
+		};
+		const plan = {
+			cleanup: [],
+			represented: [],
+			restore: null,
+			review: []
+		};
+		const review = (c, reason) => plan.review.push({
+			draftId: c.record.draftId,
+			reason,
+			lineage: c.lineage,
+			generation: c.record.generation,
+			bodyLength: c.record.bodyLength,
+			paneId: c.record.owner.paneId,
+			updatedAt: c.record.updatedAt
+		});
+		let liveElsewhere = false;
+		const remaining = [];
+		for (const c of input.candidates) {
+			if (c.record.status === "discarded") continue;
+			if (c.lineage === "self-live" || c.lineage === "other-live") {
+				liveElsewhere = true;
+				continue;
+			}
+			if (c.body === null) {
+				review(c, "body-missing");
+				continue;
+			}
+			if (K && K.source === "server" && c.body === K.value) {
+				plan.cleanup.push(c.record.draftId);
+				continue;
+			}
+			const queuedOpId = c.record.pipeline ? c.record.pipeline.queuedOpId : null;
+			const last = input.queue[input.queue.length - 1];
+			if (queuedOpId && last && last.opId === queuedOpId && last.text === c.body) {
+				plan.represented.push({
+					draftId: c.record.draftId,
+					opId: queuedOpId,
+					generation: c.record.generation,
+					text: c.body
+				});
+				continue;
+			}
+			remaining.push(c);
+		}
+		if (remaining.length !== 1) {
+			for (const c of remaining) review(c, "multiple-drafts");
+			return plan;
+		}
+		const c = remaining[0];
+		const reason = blockingReason(c, input, liveElsewhere);
+		if (reason) {
+			review(c, reason);
+			return plan;
+		}
+		const record = c.record;
+		const pipeline = record.pipeline;
+		const own = pipeline ? pipeline.ownQueued : null;
+		const k = kIdentity();
+		let predecessor = null;
+		if (input.queue.length) {
+			const row = input.queue.length === 1 ? input.queue[0] : null;
+			if (!own || !row || row.opId !== own.opId || row.text.length !== own.textLength || print(row.text) !== own.textFingerprint) {
+				review(c, "foreign-queue");
+				return plan;
+			}
+			predecessor = row;
+		}
+		const blockedBase = pipeline && pipeline.state === "blocked" ? pipeline.blockedBase : null;
+		const typedOn = blockedBase || record.base;
+		const unchanged = sameBaseIdentity(record.base, k) || !!blockedBase && sameBaseIdentity(blockedBase, k);
+		if (predecessor) {
+			if (!unchanged || !own || !sameBaseIdentity(own.base, k)) {
+				review(c, "base-advanced");
+				return plan;
+			}
+		} else if (!unchanged) {
+			if (!(!!own && !!K && !!k && sameBaseIdentity(own.base, typedOn) && typedOn.revision !== null && K.revision > typedOn.revision && k.length === own.textLength && k.fingerprint === own.textFingerprint)) {
+				review(c, "base-advanced");
+				return plan;
+			}
+		}
+		plan.restore = {
+			record,
+			body: c.body,
+			state: predecessor && pipeline && pipeline.state === "blocked" ? "blocked" : "drafting",
+			predecessor
+		};
+		return plan;
+	}
+	function blockingReason(c, input, liveElsewhere) {
+		if (liveElsewhere) return "live-elsewhere";
+		if (c.lineage === "unknown") return "ownership-unknown";
+		if (c.lineage !== "same-runtime-orphan" || c.record.owner.paneId !== input.paneId) return "other-source";
+		if (c.record.status === "tail-missing") return "tail-missing";
+		if (input.otherDirtySession) return "dirty-session";
+		if (!input.base || input.base.source !== "server") return "base-unverified";
+		if (c.record.base.source === "unknown" || c.record.base.revision === null) return "base-unverified";
+		return null;
+	}
+	//#endregion
 	//#region src/lifecycle/editor-recovery-entry.ts
 	/**
 	* Classic-script entry. The maintainer build emits `frontend/js/editor-recovery.js`
-	* as the global `prksEditorRecovery`. Slice 1 of #466 has no consumer: loading
-	* the script starts nothing. `runtime()` creates the page's single runtime on
-	* first use.
+	* as the global `prksEditorRecovery`. Loading the script starts nothing;
+	* `runtime()` creates the page's single runtime on first use. Research Notes
+	* (`works.js`) is the consumer since #466 slice 2.
 	*/
 	var pageRuntime = null;
 	function runtime() {
@@ -2106,6 +2312,7 @@ var prksEditorRecovery = (function(exports) {
 	exports.mergeEmergencyEntries = mergeEmergencyEntries;
 	exports.mintId = mintId;
 	exports.planEmergency = planEmergency;
+	exports.planResearchNotesRestore = planResearchNotesRestore;
 	exports.readEmergencyKeys = readEmergencyKeys;
 	exports.reservationKeyOf = reservationKeyOf;
 	exports.reservationRuntimeOf = reservationRuntimeOf;

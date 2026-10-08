@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { BODIES_STORE, DRAFTS_STORE, RECOVERY_DB_NAME, UNKNOWN_BASE, type DraftOwner, type DraftRecord } from './schema'
+import { BODIES_STORE, DRAFTS_STORE, RECOVERY_DB_NAME, UNKNOWN_BASE, type DraftOwner, type DraftPipeline, type DraftRecord } from './schema'
 import { createRecoveryStore, forkedDraftId, type CreateLineage, type RecoveryStore } from './store'
 import { createFakeIdb, type FakeIdbControls } from './test-support/fake-idb'
 
@@ -63,6 +63,33 @@ describe('recovery store', () => {
     expect(await store.writeGeneration({ draftId: 'd-a', pageInstanceId: 'p-b', generation: 9, body: 'intruder' })).toBe('not-owner')
     expect(await store.writeGeneration({ draftId: 'd-missing', pageInstanceId: 'p-a', generation: 9, body: 'x' })).toBe('missing')
     expect(await store.getBody('d-a')).toMatchObject({ generation: 5, body: 'body one' })
+  })
+
+  it('updates base and pipeline in place for the owner page only, never the body', async () => {
+    const { store } = setup()
+    await seed(store, 'd-a', 'p-a', 4, 'kept body')
+    const pipeline: DraftPipeline = {
+      state: 'blocked',
+      queuedOpId: null,
+      queuedGeneration: 0,
+      blockedBase: { revision: 3, length: 4, fingerprint: 'f'.repeat(32) },
+      ownQueued: { opId: 'op-1', textLength: 2, textFingerprint: 'e'.repeat(32), base: { revision: 3, length: 4, fingerprint: 'f'.repeat(32) } },
+    }
+    const base = { revision: 9, length: 2, fingerprint: 'c'.repeat(32), source: 'server' as const }
+    expect(await store.updateLineage({ draftId: 'd-a', pageInstanceId: 'p-other', pipeline })).toBe('not-owner')
+    expect((await store.get('d-a'))?.pipeline).toBeNull()
+    expect(await store.updateLineage({ draftId: 'd-a', pageInstanceId: 'p-a', base, pipeline })).toBe('ok')
+    const record = (await store.get('d-a')) as DraftRecord
+    expect(record).toMatchObject({ generation: 4, base, pipeline })
+    expect(await store.getBody('d-a')).toEqual({ draftId: 'd-a', generation: 4, body: 'kept body' })
+    // The next body write keeps the stored pipeline unless it brings its own.
+    expect(await store.writeGeneration({ draftId: 'd-a', pageInstanceId: 'p-a', generation: 5, body: 'next' })).toBe('ok')
+    expect((await store.get('d-a'))?.pipeline).toEqual(pipeline)
+    expect(await store.writeGeneration({ draftId: 'd-a', pageInstanceId: 'p-a', generation: 6, body: 'n', pipeline: null })).toBe('ok')
+    expect((await store.get('d-a'))?.pipeline).toBeNull()
+    expect(await store.updateLineage({ draftId: 'd-missing', pageInstanceId: 'p-a', base })).toBe('missing')
+    await store.discard('d-a', { kind: 'work-research-note', entityType: 'work', entityId: 'w1', generation: 6, pageInstanceId: 'p-a' })
+    expect(await store.updateLineage({ draftId: 'd-a', pageInstanceId: 'p-a', base })).toBe('missing')
   })
 
   it('adopts by compare-and-set: of two simultaneous adopters exactly one wins', async () => {
