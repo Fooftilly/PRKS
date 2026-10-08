@@ -135,27 +135,46 @@
         return out;
     }
 
-    function canonicalFrom(work) {
+    /* Where each body came from: 'server' only when the Work itself was read
+     * from the server (or a body is an acknowledgement's text). A body read
+     * from cache can be older than the notes-state revision it is joined to. */
+    function bodySources(work, source) {
+        if (typeof source === 'string') return { research: source, private: source };
+        const known = work && work.sources;
+        return {
+            research: known && typeof known.research === 'string' ? known.research : 'unknown',
+            private: known && typeof known.private === 'string' ? known.private : 'unknown',
+        };
+    }
+
+    function canonicalFrom(work, source) {
         if (!work || typeof work.id !== 'string') return null;
         return {
             id: work.id,
             text_content: typeof work.text_content === 'string' ? work.text_content : '',
             private_notes: work.private_notes == null ? '' : String(work.private_notes),
+            sources: bodySources(work, source),
         };
     }
 
     /**
      * Snapshot acknowledged note bodies before any overlay mutates the Work
      * object. Revisions arrive from notes-state (ensureBase). The two are
-     * joined only at save time.
+     * joined only at save time. `source` is where the Work was read from.
      */
-    function rememberCanonical(ctx, work) {
+    function rememberCanonical(ctx, work, source) {
         if (!ctx || typeof ctx.setResource !== 'function') return null;
         const existing = ctx.getResource('workNotesCanonical');
         if (existing && existing.id === work.id) return existing;
-        const canonical = canonicalFrom(work);
+        const canonical = canonicalFrom(work, source);
         ctx.setResource('workNotesCanonical', canonical);
         return canonical;
+    }
+
+    /* A base is server-verified only when its body and its revision both are. */
+    function baseSource(stateSource, bodySource) {
+        if (stateSource === 'server' && bodySource === 'server') return 'server';
+        return stateSource === 'server' || stateSource === 'cache' ? 'cache' : stateSource;
     }
 
     async function ensureBase(ctx, work, options) {
@@ -189,11 +208,12 @@
             text_content: canonical.text_content,
             private_notes: canonical.private_notes,
         }, state);
-        /* Where the revisions came from. Editor recovery (#466) restores
-         * automatically only against a base read from the server. */
+        /* Where the revisions and bodies came from. Editor recovery (#466)
+         * restores or clears automatically only against a base whose body and
+         * revision were both read from the server. */
         if (base) {
-            base.research.source = source;
-            base.private.source = source;
+            base.research.source = baseSource(source, canonical.sources.research);
+            base.private.source = baseSource(source, canonical.sources.private);
         }
         if (!deferPublish && typeof ctx.setResource === 'function') {
             ctx.setResource('workNotesObserved', base);
@@ -225,10 +245,16 @@
             if (refs && typeof refs === 'object' && !Array.isArray(refs)) {
                 work.research_refs = refs;
             }
-            if (canonical && canonical.id === op.entity_id) canonical.text_content = text;
+            if (canonical && canonical.id === op.entity_id) {
+                canonical.text_content = text;
+                if (canonical.sources) canonical.sources.research = 'server';
+            }
         } else {
             work.private_notes = text;
-            if (canonical && canonical.id === op.entity_id) canonical.private_notes = text;
+            if (canonical && canonical.id === op.entity_id) {
+                canonical.private_notes = text;
+                if (canonical.sources) canonical.sources.private = 'server';
+            }
         }
         const base = ctx.getResource && ctx.getResource('workNotesObserved');
         if (base) {

@@ -4544,7 +4544,9 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     work = prksPlacePendingWork(prksPendingWorkDetail(createOp));
                 }
                 if (work && typeof prksRememberWorkNotesCanonical === 'function') {
-                    prksRememberWorkNotesCanonical(ctx, work);
+                    /* A cached Work body is never verified against the server's revision. */
+                    prksRememberWorkNotesCanonical(ctx, work,
+                        workUnsent ? 'pending-create' : offlineWork.source);
                 }
                 if (work && typeof prksEnsureWorkNotesBase === 'function') {
                     void prksEnsureWorkNotesBase(ctx, work, { pendingCreate: !!workUnsent });
