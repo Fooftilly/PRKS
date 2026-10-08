@@ -99,6 +99,17 @@
         return pendingRows;
     }
 
+    /** Fail-closed read for recovery decisions: the rows, or null when they could not be read. */
+    async function readPendingSnapshot() {
+        if (!root.prksSync || !root.prksSync.store || typeof root.prksSync.store.listOperations !== 'function') return null;
+        try {
+            const rows = await root.prksSync.store.listOperations();
+            return Array.isArray(rows) ? rows : null;
+        } catch (_e) {
+            return null;
+        }
+    }
+
     function pendingText(workId, kind, fallback) {
         const ops = noteOperations(pendingRows, workId, kind);
         if (!ops.length) return fallback;
@@ -337,6 +348,7 @@
         prksEffectiveNoteWork: effectiveNoteWork,
         prksWorkNoteOperations: noteOperations,
         prksRefreshPendingWorkNotes: refreshPending,
+        prksReadPendingWorkNotesSnapshot: readPendingSnapshot,
         prksPendingWorkNoteText: pendingText,
         prksApplyPendingWorkNotes: function (work) { return effectiveNoteWork(work, pendingRows); },
         prksRememberWorkNotesCanonical: rememberCanonical,

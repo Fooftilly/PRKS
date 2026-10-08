@@ -445,18 +445,6 @@ function prksResearchRecoveryOnSync(event) {
     }).catch(function () {});
 }
 
-/** The durable queue's rows, or null when they could not be read. */
-async function prksResearchRecoveryQueueRows() {
-    const store = window.prksSync && window.prksSync.store;
-    if (!store || typeof store.listOperations !== 'function') return null;
-    try {
-        const rows = await store.listOperations();
-        return Array.isArray(rows) ? rows : null;
-    } catch (_e) {
-        return null;
-    }
-}
-
 /**
  * Same-pane restore on Research Notes mount, between `ensureBase` and the
  * first read of the session text. Applies `planResearchNotesRestore`:
@@ -514,7 +502,7 @@ async function prksRestoreResearchNotesRecoveryNow(ctx, work, attempt) {
         }
         candidates.push({ record: record, body: body, lineage: lineage });
     }
-    const rows = await prksResearchRecoveryQueueRows();
+    const rows = typeof prksReadPendingWorkNotesSnapshot === 'function' ? await prksReadPendingWorkNotesSnapshot() : null;
     if (!current()) return null;
     /* An unread queue is unknown, never empty. */
     const queue = rows && typeof prksWorkNoteOperations === 'function'
