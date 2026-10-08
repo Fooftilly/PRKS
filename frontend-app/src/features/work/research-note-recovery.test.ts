@@ -60,6 +60,7 @@ type W = Record<string, unknown> & {
   prksResearchNotesTextForWork: (workId: string, serverText: string, ctx: Ctx) => string
   prksResetResearchDraftsForTest: () => void
   prksEnsureWorkNotesBase: (ctx: Ctx, work: object) => Promise<unknown>
+  prksSetResearchRecoveryRestoreMsForTest: (ms: number | null) => void
   prksRestoreResearchNotesRecovery: (ctx: Ctx, work: object) => Promise<{ restored: boolean; review: Array<{ reason: string }> } | null>
 }
 const win = window as unknown as W
@@ -196,6 +197,7 @@ async function openWork(tabId = 'tab-1', workId = 'w1'): Promise<Ctx> {
   const ctx = mount(tabId, workId)
   // The mount path starts the runtime (restore) before the editor exists.
   await page!.rt.start()
+  await (window as unknown as { prksRefreshPendingWorkNotes: () => Promise<unknown> }).prksRefreshPendingWorkNotes()
   await win.prksEnsureWorkNotesBase(ctx, { id: workId, text_content: server.text, private_notes: '' })
   return ctx
 }
@@ -570,6 +572,44 @@ describe('same-pane restore after reload', () => {
     await settle()
     const [kept] = await records()
     expect(kept && (await bodyOf(kept.draftId))).toBe('Saved note. Queued, then more')
+  })
+
+  it('a timed-out restore does not hold up the next Work\'s restore, and paints nothing when it finishes late', async () => {
+    const main = await openWork('tab-1', 'w1')
+    const side = await openWork('tab-2', 'w2')
+    await type(main, 'Saved note. Stuck W1', 'w1').recovery!.flush()
+    await type(side, 'Saved note. Ready W2', 'w2').recovery!.flush()
+    await reload()
+    const stuckMain = await openWork('tab-1', 'w1')
+    const readySide = await openWork('tab-2', 'w2')
+    const [w1Before] = (await records()).filter((r) => r.entityId === 'w1')
+    win.prksSetResearchRecoveryRestoreMsForTest(50)
+    const scan = page!.rt.scanEmergency.bind(page!.rt)
+    let release!: () => void
+    const hung = new Promise<void>((resolve) => (release = resolve))
+    page!.rt.scanEmergency = async () => {
+      page!.rt.scanEmergency = scan
+      await hung
+      return scan()
+    }
+    try {
+      // Stuck in storage past the timeout: abandoned, the editor opens without recovery.
+      expect(await win.prksRestoreResearchNotesRecovery(stuckMain, { id: 'w1' })).toBeNull()
+      // The next restore is not queued behind the stuck one.
+      expect(await win.prksRestoreResearchNotesRecovery(readySide, { id: 'w2' })).toMatchObject({ restored: true })
+      expect(win.prksResearchNotesTextForWork('w2', server.text, readySide)).toBe('Saved note. Ready W2')
+      // The stuck run finishing late neither paints nor adopts.
+      release()
+      await settle()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(stuckMain.ui.workResearchNoteSession).toBeNull()
+      expect(win.prksResearchNotesTextForWork('w1', server.text, stuckMain)).toBe('Saved note.')
+      const [w1After] = (await records()).filter((r) => r.entityId === 'w1')
+      expect(w1After!.owner.pageInstanceId).toBe(w1Before!.owner.pageInstanceId)
+    } finally {
+      page!.rt.scanEmergency = scan
+      win.prksSetResearchRecoveryRestoreMsForTest(null)
+    }
   })
 
   describe('#475 blocked body', () => {

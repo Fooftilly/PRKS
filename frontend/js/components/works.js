@@ -202,6 +202,7 @@ const prksResearchRecoveryAckWatch = new Map();
 /* A restore that has not finished by then is abandoned and the editor opens
  * as it would without recovery; nothing it reads later is applied. */
 const PRKS_RESEARCH_RECOVERY_RESTORE_MS = 5000;
+let prksResearchRecoveryRestoreMs = PRKS_RESEARCH_RECOVERY_RESTORE_MS;
 const prksResearchRecoveryPrints = [];
 let prksResearchRecoveryStopSync = null;
 let prksResearchRecoveryChain = Promise.resolve();
@@ -471,7 +472,7 @@ function prksRestoreResearchNotesRecovery(ctx, work) {
         timer = setTimeout(function () {
             attempt.abandoned = true;
             resolve(null);
-        }, PRKS_RESEARCH_RECOVERY_RESTORE_MS);
+        }, prksResearchRecoveryRestoreMs);
     });
     const run = prksResearchRecoveryChain.then(function () {
         return attempt.abandoned ? null : prksRestoreResearchNotesRecoveryNow(ctx, work, attempt);
@@ -605,6 +606,9 @@ window.prksResearchNotesTextForWork = prksResearchNotesTextForWork;
 window.prksResearchNotesMayPaint = prksResearchNotesMayPaint;
 window.prksResearchNotesSyncEventStatus = prksResearchNotesSyncEventStatus;
 window.prksScheduleResearchNotesBusyRetryForTest = prksScheduleResearchNotesBusyRetry;
+window.prksSetResearchRecoveryRestoreMsForTest = function (ms) {
+    prksResearchRecoveryRestoreMs = Number.isFinite(ms) && ms > 0 ? ms : PRKS_RESEARCH_RECOVERY_RESTORE_MS;
+};
 window.prksResetResearchDraftsForTest = function () {
     prksWorkResearchDrafts.forEach(prksResearchRecoveryRelease);
     prksWorkResearchDrafts.clear();
