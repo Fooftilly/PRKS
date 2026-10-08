@@ -270,6 +270,44 @@ describe('editor recovery runtime', () => {
     expect((await b.store.getBody(row!.draftId))?.body).toBe('closed while claiming')
   })
 
+  it('without Web Locks, never takes a page of this tab frozen in the back/forward cache for an orphan', async () => {
+    const browser = createFakeBrowser()
+    const idb = createFakeIdb()
+    const local = memoryStorage()
+    const session = browser.sessionStorageWith()
+    const events = () => {
+      const target = new EventTarget()
+      return {
+        target,
+        fire: (type: string, persisted: boolean) => target.dispatchEvent(Object.assign(new Event(type), { persisted })),
+      }
+    }
+    const make = (name: string, win: EventTarget) =>
+      createEditorRecoveryRuntime({
+        store: { indexedDB: idb.factory },
+        identity: { sessionStorage: session, locks: null, createChannel: browser.channelFor(name), claimWaitMs: 20, localStorage: local, window: win },
+        writers: { scheduler: createManualScheduler(), window: null, document: null },
+        emergencyStorage: local,
+      })
+    const aWin = events()
+    const a = make('a', aWin.target)
+    await a.start()
+    const w = a.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE })
+    w.edit(1, 'still in the cache')
+    await w.flush()
+    const [record] = await a.store.listByEntity('work-research-note', 'w1')
+    // Into the cache, then frozen: it answers nothing.
+    aWin.fire('pagehide', true)
+    a.identity.dispose()
+    await settle()
+    // The same tab opens PRKS again: it inherits the runtime id and verifies it by silence.
+    const b = make('b', events().target)
+    const { claim } = await b.start()
+    expect(claim).toMatchObject({ runtimeId: record!.owner.runtimeId, verified: 'channel' })
+    expect(await b.classify(record!)).toBe('unknown')
+    expect(b.identity.wasPageClosed(record!.owner.pageInstanceId)).toBe(false)
+  })
+
   it('scanEmergency starts the runtime when nothing has yet', async () => {
     const browser = createFakeBrowser()
     const rt = createEditorRecoveryRuntime({

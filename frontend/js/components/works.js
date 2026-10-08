@@ -687,7 +687,7 @@ async function prksRestoreResearchNotesRecoveryNow(ctx, work, attempt, options) 
         /* The plan was made before adopting. Another pane may have saved,
          * queued or started editing meanwhile; then the draft stays unapplied
          * for review rather than being saved over a base it was not typed on. */
-        const changed = writer && current() ? await prksResearchRecoveryChangedSince(ctx, id, key, base, queue) : null;
+        const changed = writer && current() ? await prksResearchRecoveryChangedSince(ctx, id, key, base, queue, true) : null;
         if (writer && (!current() || changed)) {
             /* Stale mount or moved on: the lineage stays this pane's orphan. */
             void writer.release().catch(function () {});
@@ -749,10 +749,15 @@ async function prksResearchRecoveryCheckedBase(id, base) {
 
 /**
  * Why a restore planned on `base` and `queue` is no longer safe to apply, or
- * null. The queue is re-read fail-closed; everything after that read is
+ * null. With `verifyServer`, a base proven from the server is proven again
+ * first (another device may have saved meanwhile without telling this page).
+ * The queue is then re-read fail-closed; everything after that read is
  * synchronous up to the install.
  */
-async function prksResearchRecoveryChangedSince(ctx, id, key, base, queue) {
+async function prksResearchRecoveryChangedSince(ctx, id, key, base, queue, verifyServer) {
+    if (verifyServer && base && base.source === 'server' && !(await prksResearchRecoveryVerifyBase(id, base))) {
+        return 'base-advanced';
+    }
     const rows = typeof prksReadPendingWorkNotesSnapshot === 'function' ? await prksReadPendingWorkNotesSnapshot() : null;
     if (!rows || !queue || typeof prksWorkNoteOperations !== 'function') return 'queue-unknown';
     const observed = prksResearchRecoveryObservedBase(ctx);
@@ -1055,7 +1060,7 @@ async function prksResearchNotesRecoveryRestoreNow(ctx, workId, token, expect) {
     const key = prksResearchDraftKey(ctx, id);
     /* Adopting was asynchronous: the queue, the base and other panes are read again (#490). */
     const changed = prksResearchNotesRecoveryTarget(ctx, id, token)
-        ? await prksResearchRecoveryChangedSince(ctx, id, key, judged.base, judged.queue) : 'stale';
+        ? await prksResearchRecoveryChangedSince(ctx, id, key, judged.base, judged.queue, true) : 'stale';
     const notes = prksResearchNotesRecoveryTarget(ctx, id, token);
     const base = prksResearchRecoveryObservedBase(ctx);
     if (changed || !notes || prksResearchNotesEditorDirty(prksWorkResearchDrafts.get(key), notes, base)) {
@@ -1109,7 +1114,9 @@ async function prksResearchNotesRecoveryReplaceNow(ctx, workId, token, expect, t
     const claim = await recovery.rt.claimReviewed(expect, paneId);
     if (!claim || claim.outcome !== 'ok') return { ok: false, code: 'changed' };
     /* Claiming was asynchronous: pending sync, the base and other panes are read again. */
-    const moved = await prksResearchRecoveryChangedSince(ctx, id, prksResearchDraftKey(ctx, id), judged.base, judged.queue);
+    /* A note shown from the server is proven again; one shown from the cache
+     * (offline) has nothing to prove against, and the save's revision check guards it. */
+    const moved = await prksResearchRecoveryChangedSince(ctx, id, prksResearchDraftKey(ctx, id), judged.base, judged.queue, true);
     if (moved) return { ok: false, code: 'current-changed' };
     const notes = unchanged();
     /* Claimed but not applied: it reads as this page's orphan and stays listed. */

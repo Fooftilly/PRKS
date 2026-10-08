@@ -1267,6 +1267,48 @@ describe('Review (slice 3)', () => {
       expect(await bodyOf(target.draftId)).toBe(target.body)
     })
 
+    /** Another device saves: the server moves on and this page hears nothing. */
+    const remote = () => {
+      server.text = 'Saved elsewhere.'
+      server.revision = 6
+    }
+
+    it('does not apply a restore when another device saved while adopting', async () => {
+      const { ctx, notes } = await twoClosedTabs()
+      const details = await review().details(ctx, 'w1')
+      const target = details!.candidates[0]!
+      during('adopt', remote)
+      expect(await review().restore(ctx, 'w1', details!.token, target.expect)).toMatchObject({ ok: false, code: 'changed' })
+      expect(notes.editor.value()).toBe('Saved note.')
+      expect(ctx.ui.workResearchNoteSession).toBeNull()
+      expect(sync.rows()).toEqual([])
+      expect(await bodyOf(target.draftId)).toBe(target.body)
+    })
+
+    it('does not replace the note when another device saved while claiming', async () => {
+      const { ctx, notes } = await twoClosedTabs()
+      const details = await review().details(ctx, 'w1')
+      const target = details!.candidates[0]!
+      during('claimReviewed', remote)
+      expect(await review().replace(ctx, 'w1', details!.token, target.expect, 'Combined', { text: 'Saved note.', revision: 5 }))
+        .toMatchObject({ ok: false, code: 'current-changed' })
+      expect(notes.editor.value()).toBe('Saved note.')
+      expect(sync.rows()).toEqual([])
+      expect(await bodyOf(target.draftId)).toBe(target.body)
+    })
+
+    it('keeps an automatic restore for review when another device saved while adopting', async () => {
+      const ctx = await openWork()
+      await type(ctx, 'Saved note. Closed tab').recovery!.flush()
+      await closeTabAndOpenAnother()
+      during('adopt', remote)
+      const { ctx: fresh, result, notes } = await openAndRestore()
+      expect(result).toMatchObject({ restored: false, review: [{ reason: 'base-advanced', action: 'reconcile' }] })
+      expect(notes.editor.value()).not.toContain('Closed tab')
+      expect(fresh.ui.workResearchNoteSession).toBeNull()
+      expect(sync.rows()).toEqual([])
+    })
+
     it('keeps the reviewed draft when the replacement text gets no recovery copy', async () => {
       const { ctx, notes } = await twoClosedTabs()
       const details = await review().details(ctx, 'w1')

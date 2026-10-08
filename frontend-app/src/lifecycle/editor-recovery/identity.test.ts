@@ -188,6 +188,22 @@ describe('closed-page record', () => {
     expect(after.wasClosedInThisTab(before.pageInstanceId)).toBe(false)
   })
 
+  it('never lists a page of this tab that went into the back/forward cache', async () => {
+    const browser = createFakeBrowser()
+    const session = browser.sessionStorageWith()
+    const win = events()
+    const cached = createPageIdentity({ sessionStorage: session, window: win, locks: null, createChannel: null })
+    await cached.claim()
+    win.fire('pagehide', { persisted: true })
+    // The tab opens PRKS again while the old page is frozen in the cache.
+    const next = createPageIdentity({ sessionStorage: session, window: events(), locks: null, createChannel: null })
+    expect(next.wasClosedInThisTab(cached.pageInstanceId)).toBe(false)
+    // It comes back, and later closes for real.
+    win.fire('pageshow', { persisted: true })
+    win.fire('pagehide', { persisted: false })
+    expect(next.wasClosedInThisTab(cached.pageInstanceId)).toBe(true)
+  })
+
   it('records a final pagehide in localStorage for every tab, but not one into the back/forward cache', async () => {
     const browser = createFakeBrowser()
     const local = browser.sessionStorageWith()

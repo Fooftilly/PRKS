@@ -341,9 +341,10 @@ export function createPageIdentity(env: IdentityEnv = {}): PageIdentity {
   }
 
   function onPageHide(event: Event): void {
-    writeClosedPages([...closedPages().filter((id) => id !== pageInstanceId), pageInstanceId])
-    // Into the back/forward cache the page may come back: no proof for other tabs.
+    // Into the back/forward cache the page may come back: no proof for this
+    // tab's next page or for other tabs, so neither record is written.
     if ((event as PageTransitionEvent).persisted) return
+    writeClosedPages([...closedPages().filter((id) => id !== pageInstanceId), pageInstanceId])
     try {
       if (!local) return
       const list = readIdList(local, CLOSED_PAGES_LOCAL_KEY).filter((id) => id !== pageInstanceId)

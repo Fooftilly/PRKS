@@ -1198,8 +1198,8 @@ var prksEditorRecovery = (function(exports) {
 			} catch {}
 		}
 		function onPageHide(event) {
-			writeClosedPages([...closedPages().filter((id) => id !== pageInstanceId), pageInstanceId]);
 			if (event.persisted) return;
+			writeClosedPages([...closedPages().filter((id) => id !== pageInstanceId), pageInstanceId]);
 			try {
 				if (!local) return;
 				const list = readIdList(local, CLOSED_PAGES_LOCAL_KEY).filter((id) => id !== pageInstanceId);
