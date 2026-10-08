@@ -16,6 +16,7 @@ import {
   EMERGENCY_BODY_CHARS,
   EMERGENCY_KEY_PREFIX,
   RESERVATION_KEY_PREFIX,
+  reservationRuntimeOf,
   EMERGENCY_PAGE_CHARS,
   EMERGENCY_VERSION,
   isDraftKind,
@@ -221,17 +222,21 @@ export async function mergeEmergencyEntries(env: MergeEnv): Promise<MergeReport[
 }
 
 /**
- * Removes the quota reservations of pages that are proven gone. Only held Web
- * Locks prove that: a page reserves only after its claim settled, with its page
- * lock held. A missed BroadcastChannel answer never removes a reservation,
- * because a frozen or busy page misses it while its writer still counts the
- * reservation as held. A reservation holds only filler, never text, so
- * removing it loses nothing.
+ * Removes the quota reservations of pages that are proven gone: held Web
+ * Locks no longer list the page lock, or this page verifiably claimed the
+ * runtime the reservation is tagged with (a reload or crash restore in that
+ * tab), which a live page would still hold. A missed BroadcastChannel answer
+ * alone never removes one, because a frozen or busy page misses it while its
+ * writer still counts the reservation as held; and a writer coming back from
+ * hidden or frozen writes its reservation again. A reservation holds only
+ * filler, never text, so removing it loses nothing.
  */
 export async function releaseDeadReservations(env: {
   storage: EmergencyStorage
   pageInstanceId: string
   isPageGone(pageInstanceId: string): Promise<boolean>
+  /** This page's runtime id when its claim was verified (lock or channel); else null. */
+  verifiedRuntimeId?: string | null
 }): Promise<string[]> {
   const keys: string[] = []
   try {
@@ -246,7 +251,7 @@ export async function releaseDeadReservations(env: {
   for (const key of keys) {
     const pageInstanceId = key.slice(RESERVATION_KEY_PREFIX.length)
     if (pageInstanceId === env.pageInstanceId) continue
-    if (!(await env.isPageGone(pageInstanceId))) continue
+    if (!(await env.isPageGone(pageInstanceId)) && !claimedRuntimeOf(env, key)) continue
     try {
       env.storage.removeItem(key)
       removed.push(key)
@@ -255,4 +260,14 @@ export async function releaseDeadReservations(env: {
     }
   }
   return removed
+}
+
+function claimedRuntimeOf(env: { storage: EmergencyStorage; verifiedRuntimeId?: string | null }, key: string): boolean {
+  if (!env.verifiedRuntimeId) return false
+  try {
+    const value = env.storage.getItem(key)
+    return value !== null && reservationRuntimeOf(value) === env.verifiedRuntimeId
+  } catch {
+    return false
+  }
 }

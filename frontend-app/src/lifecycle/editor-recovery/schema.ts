@@ -21,6 +21,7 @@ export const EMERGENCY_KEY_PREFIX = 'prks.editorRecovery.emergency.v1.'
 /**
  * One key per page load holding filler that reserves quota for that page's
  * emergency payload. Not under the emergency prefix, so it is never read as a draft.
+ * The value starts with the page's runtime id and a newline (see reservationValue).
  */
 export const RESERVATION_KEY_PREFIX = 'prks.editorRecovery.reserve.v1.'
 /** Allowance for one entry's JSON metadata (ids, lineage, base) when sizing the emergency payload. */
@@ -154,6 +155,21 @@ export function emergencyKeyOf(pageInstanceId: string): string {
 
 export function reservationKeyOf(pageInstanceId: string): string {
   return RESERVATION_KEY_PREFIX + pageInstanceId
+}
+
+/**
+ * A reservation value: the reserving page's runtime id, a newline, then
+ * filler. A later page that claims the same runtime (a reload or crash
+ * restore in that tab) knows the reserving page is gone without Web Locks.
+ */
+export function reservationValue(runtimeId: string, filler: string): string {
+  return runtimeId + '\n' + filler
+}
+
+/** The runtime id a reservation value was tagged with, or null for an untagged value. */
+export function reservationRuntimeOf(value: string): string | null {
+  const end = value.indexOf('\n')
+  return end > 0 ? value.slice(0, end) : null
 }
 
 export interface RandomSource {

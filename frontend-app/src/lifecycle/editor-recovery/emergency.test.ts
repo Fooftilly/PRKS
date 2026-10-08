@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { jsonEscapeExtra, mergeEmergencyEntries, planEmergency, readEmergencyKeys, releaseDeadReservations, writeEmergency, type EmergencyStorage } from './emergency'
-import { EMERGENCY_BODY_CHARS, EMERGENCY_PAGE_CHARS, emergencyKeyOf, reservationKeyOf, type EmergencyPayload } from './schema'
+import { EMERGENCY_BODY_CHARS, EMERGENCY_PAGE_CHARS, emergencyKeyOf, reservationKeyOf, reservationValue, type EmergencyPayload } from './schema'
 import type { EmergencyOutcome, RecoveryStore } from './store'
 
 function memoryStorage(limitChars = Infinity): EmergencyStorage & { map: Map<string, string> } {
@@ -195,5 +195,17 @@ describe('releaseDeadReservations', () => {
     )
     // A reservation is never read as an emergency entry.
     expect(readEmergencyKeys(storage).map((r) => r.key)).toEqual([emergencyKeyOf('p-dead')])
+  })
+
+  it('removes, without Web Locks, the reservation of an earlier page of the runtime this page verifiably claimed', async () => {
+    const storage = memoryStorage()
+    storage.setItem(reservationKeyOf('p-crashed'), reservationValue('r-tab', 'ā'.repeat(10)))
+    storage.setItem(reservationKeyOf('p-other-tab'), reservationValue('r-other', 'ā'.repeat(10)))
+    storage.setItem(reservationKeyOf('p-untagged'), 'ā'.repeat(10))
+    const env = { storage, pageInstanceId: 'p-me', isPageGone: async () => false }
+    // An unverified claim proves nothing.
+    expect(await releaseDeadReservations({ ...env, verifiedRuntimeId: null })).toEqual([])
+    expect(await releaseDeadReservations({ ...env, verifiedRuntimeId: 'r-tab' })).toEqual([reservationKeyOf('p-crashed')])
+    expect([...storage.map.keys()].sort()).toEqual([reservationKeyOf('p-other-tab'), reservationKeyOf('p-untagged')].sort())
   })
 })

@@ -37,6 +37,7 @@ import {
   UNKNOWN_BASE,
   emergencyKeyOf,
   reservationKeyOf,
+  reservationValue,
   mintId,
   type DraftBase,
   type DraftEntityType,
@@ -207,6 +208,17 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
   }
   function onVisibility(): void {
     if (doc && doc.visibilityState === 'hidden') writeEmergencyNow()
+    else onResume()
+  }
+  /**
+   * Back from hidden or frozen: write the reservation again before counting
+   * on it. Without Web Locks a page that claimed this runtime meanwhile may
+   * have removed it, taking a frozen page for a closed one.
+   */
+  function onResume(): void {
+    if (hiding || reservedChars === 0) return
+    reservedChars = 0
+    changed()
   }
   identity.setLineageResponder((draftId) => ownerOf(draftId) !== null)
 
@@ -251,7 +263,10 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
         win[method]('pagehide', onPageHide)
         win[method]('pageshow', onPageShow)
       }
-      if (doc) doc[method]('visibilitychange', onVisibility)
+      if (doc) {
+        doc[method]('visibilitychange', onVisibility)
+        doc[method]('resume', onResume)
+      }
       if (!needEmergency) {
         releaseReservation()
         hiding = false
@@ -333,18 +348,20 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
    * slack (then to the exact size), so typing does not rewrite it on every
    * keystroke while a large note never holds twice its size of other writes'
    * quota. Only a page whose runtime claim has settled reserves: its page
-   * lock is held by then, so no live page's reservation reads as dead and is
-   * cleaned up by another page.
+   * lock is held by then, so no live page's reservation reads as gone. The
+   * value is tagged with the runtime id, so without Web Locks a later page
+   * that claims this runtime removes it once this page is gone.
    */
   function canHold(chars: number): boolean {
-    if (!storage || distrusted || !identity.current()) return false
+    const claim = identity.current()
+    if (!storage || distrusted || !claim) return false
     if (chars <= reservedChars) return true
     for (const size of [chars + Math.min(chars, RESERVATION_STEP_CHARS), chars]) {
       try {
         // A filler above U+00FF on purpose: Chromium stores an all-Latin-1
         // value at 1 byte per char and anything else at 2, and its quota counts
         // bytes, so an ASCII filler would reserve half of what a real note needs.
-        storage.setItem(reservationKey, RESERVATION_FILLER.repeat(size))
+        storage.setItem(reservationKey, reservationValue(claim.runtimeId, RESERVATION_FILLER.repeat(size)))
         reservedChars = size
         return true
       } catch {
@@ -360,7 +377,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     try {
       storage.removeItem(reservationKey)
     } catch {
-      /* a later page removes it once this page is gone */
+      /* a later page removes it once Web Locks or a claim of this runtime show this page gone */
     }
   }
 
@@ -821,7 +838,10 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
         win.removeEventListener('pageshow', onPageShow)
       }
       releaseReservation()
-      if (doc) doc.removeEventListener('visibilitychange', onVisibility)
+      if (doc) {
+        doc.removeEventListener('visibilitychange', onVisibility)
+        doc.removeEventListener('resume', onResume)
+      }
       guardOn = false
       emergencyOn = false
       disposed = true

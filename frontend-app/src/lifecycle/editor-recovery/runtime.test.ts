@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { EmergencyStorage } from './emergency'
 import { createEditorRecoveryRuntime } from './runtime'
-import { EMERGENCY_KEY_PREFIX, RUNTIME_SESSION_KEY, UNKNOWN_BASE } from './schema'
+import { EMERGENCY_KEY_PREFIX, RUNTIME_SESSION_KEY, UNKNOWN_BASE, reservationKeyOf } from './schema'
 import { createFakeBrowser } from './test-support/fake-env'
 import { createFakeIdb, createManualScheduler, settle } from './test-support/fake-idb'
 
@@ -22,6 +22,40 @@ function memoryStorage(): EmergencyStorage & { map: Map<string, string> } {
 const COPIED = 'r-' + 'c'.repeat(32)
 
 describe('editor recovery runtime', () => {
+  it('without Web Locks, frees a crashed page\'s reservation when its tab reloads and claims the same runtime', async () => {
+    const browser = createFakeBrowser()
+    const idb = createFakeIdb()
+    const local = memoryStorage()
+    const session = browser.sessionStorageWith({ [RUNTIME_SESSION_KEY]: COPIED })
+    const load = (name: string) =>
+      createEditorRecoveryRuntime({
+        store: { indexedDB: idb.factory },
+        identity: { sessionStorage: session, locks: null, createChannel: browser.channelFor(name), claimWaitMs: 20 },
+        writers: { scheduler: createManualScheduler(), window: null, document: null },
+        emergencyStorage: local,
+      })
+    const crashed = load('crashed')
+    expect((await crashed.start()).claim).toEqual({ runtimeId: COPIED, verified: 'channel' })
+    crashed.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE }).edit(1, 'typed')
+    const leaked = reservationKeyOf(crashed.identity.pageInstanceId)
+    expect(local.map.has(leaked)).toBe(true)
+    // An unrelated tab cannot tell a crash from a freeze, so it leaves the reservation alone.
+    const other = createEditorRecoveryRuntime({
+      store: { indexedDB: idb.factory },
+      identity: { sessionStorage: browser.sessionStorageWith(), locks: null, createChannel: browser.channelFor('other'), claimWaitMs: 20 },
+      writers: { window: null, document: null },
+      emergencyStorage: local,
+    })
+    // Renderer crash: no pagehide, the channel goes silent, localStorage stays.
+    crashed.identity.dispose()
+    await other.start()
+    expect(local.map.has(leaked)).toBe(true)
+    // The same tab reloads and verifiably claims the runtime again.
+    const reloaded = load('reloaded')
+    expect((await reloaded.start()).claim.runtimeId).toBe(COPIED)
+    expect(local.map.has(leaked)).toBe(false)
+  })
+
   it('recovers both duplicated tabs that started simultaneously with one copied runtime id', async () => {
     const browser = createFakeBrowser()
     const idb = createFakeIdb()

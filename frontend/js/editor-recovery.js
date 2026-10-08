@@ -21,6 +21,7 @@ var prksEditorRecovery = (function(exports) {
 	/**
 	* One key per page load holding filler that reserves quota for that page's
 	* emergency payload. Not under the emergency prefix, so it is never read as a draft.
+	* The value starts with the page's runtime id and a newline (see reservationValue).
 	*/
 	var RESERVATION_KEY_PREFIX = "prks.editorRecovery.reserve.v1.";
 	/** Allowance for one entry's JSON metadata (ids, lineage, base) when sizing the emergency payload. */
@@ -54,6 +55,19 @@ var prksEditorRecovery = (function(exports) {
 	}
 	function reservationKeyOf(pageInstanceId) {
 		return RESERVATION_KEY_PREFIX + pageInstanceId;
+	}
+	/**
+	* A reservation value: the reserving page's runtime id, a newline, then
+	* filler. A later page that claims the same runtime (a reload or crash
+	* restore in that tab) knows the reserving page is gone without Web Locks.
+	*/
+	function reservationValue(runtimeId, filler) {
+		return runtimeId + "\n" + filler;
+	}
+	/** The runtime id a reservation value was tagged with, or null for an untagged value. */
+	function reservationRuntimeOf(value) {
+		const end = value.indexOf("\n");
+		return end > 0 ? value.slice(0, end) : null;
 	}
 	/**
 	* Random id with 128 bits from `crypto.getRandomValues`, which exists in
@@ -231,12 +245,14 @@ var prksEditorRecovery = (function(exports) {
 		return reports;
 	}
 	/**
-	* Removes the quota reservations of pages that are proven gone. Only held Web
-	* Locks prove that: a page reserves only after its claim settled, with its page
-	* lock held. A missed BroadcastChannel answer never removes a reservation,
-	* because a frozen or busy page misses it while its writer still counts the
-	* reservation as held. A reservation holds only filler, never text, so
-	* removing it loses nothing.
+	* Removes the quota reservations of pages that are proven gone: held Web
+	* Locks no longer list the page lock, or this page verifiably claimed the
+	* runtime the reservation is tagged with (a reload or crash restore in that
+	* tab), which a live page would still hold. A missed BroadcastChannel answer
+	* alone never removes one, because a frozen or busy page misses it while its
+	* writer still counts the reservation as held; and a writer coming back from
+	* hidden or frozen writes its reservation again. A reservation holds only
+	* filler, never text, so removing it loses nothing.
 	*/
 	async function releaseDeadReservations(env) {
 		const keys = [];
@@ -252,13 +268,22 @@ var prksEditorRecovery = (function(exports) {
 		for (const key of keys) {
 			const pageInstanceId = key.slice(RESERVATION_KEY_PREFIX.length);
 			if (pageInstanceId === env.pageInstanceId) continue;
-			if (!await env.isPageGone(pageInstanceId)) continue;
+			if (!await env.isPageGone(pageInstanceId) && !claimedRuntimeOf(env, key)) continue;
 			try {
 				env.storage.removeItem(key);
 				removed.push(key);
 			} catch {}
 		}
 		return removed;
+	}
+	function claimedRuntimeOf(env, key) {
+		if (!env.verifiedRuntimeId) return false;
+		try {
+			const value = env.storage.getItem(key);
+			return value !== null && reservationRuntimeOf(value) === env.verifiedRuntimeId;
+		} catch {
+			return false;
+		}
 	}
 	//#endregion
 	//#region src/lifecycle/editor-recovery/identity.ts
@@ -1249,6 +1274,17 @@ var prksEditorRecovery = (function(exports) {
 		}
 		function onVisibility() {
 			if (doc && doc.visibilityState === "hidden") writeEmergencyNow();
+			else onResume();
+		}
+		/**
+		* Back from hidden or frozen: write the reservation again before counting
+		* on it. Without Web Locks a page that claimed this runtime meanwhile may
+		* have removed it, taking a frozen page for a closed one.
+		*/
+		function onResume() {
+			if (hiding || reservedChars === 0) return;
+			reservedChars = 0;
+			changed();
 		}
 		identity.setLineageResponder((draftId) => ownerOf(draftId) !== null);
 		function ownerOf(draftId) {
@@ -1286,7 +1322,10 @@ var prksEditorRecovery = (function(exports) {
 					win[method]("pagehide", onPageHide);
 					win[method]("pageshow", onPageShow);
 				}
-				if (doc) doc[method]("visibilitychange", onVisibility);
+				if (doc) {
+					doc[method]("visibilitychange", onVisibility);
+					doc[method]("resume", onResume);
+				}
 				if (!needEmergency) {
 					releaseReservation();
 					hiding = false;
@@ -1359,14 +1398,16 @@ var prksEditorRecovery = (function(exports) {
 		* slack (then to the exact size), so typing does not rewrite it on every
 		* keystroke while a large note never holds twice its size of other writes'
 		* quota. Only a page whose runtime claim has settled reserves: its page
-		* lock is held by then, so no live page's reservation reads as dead and is
-		* cleaned up by another page.
+		* lock is held by then, so no live page's reservation reads as gone. The
+		* value is tagged with the runtime id, so without Web Locks a later page
+		* that claims this runtime removes it once this page is gone.
 		*/
 		function canHold(chars) {
-			if (!storage || distrusted || !identity.current()) return false;
+			const claim = identity.current();
+			if (!storage || distrusted || !claim) return false;
 			if (chars <= reservedChars) return true;
 			for (const size of [chars + Math.min(chars, RESERVATION_STEP_CHARS), chars]) try {
-				storage.setItem(reservationKey, RESERVATION_FILLER.repeat(size));
+				storage.setItem(reservationKey, reservationValue(claim.runtimeId, RESERVATION_FILLER.repeat(size)));
 				reservedChars = size;
 				return true;
 			} catch {}
@@ -1801,7 +1842,10 @@ var prksEditorRecovery = (function(exports) {
 					win.removeEventListener("pageshow", onPageShow);
 				}
 				releaseReservation();
-				if (doc) doc.removeEventListener("visibilitychange", onVisibility);
+				if (doc) {
+					doc.removeEventListener("visibilitychange", onVisibility);
+					doc.removeEventListener("resume", onResume);
+				}
 				guardOn = false;
 				emergencyOn = false;
 				disposed = true;
@@ -1855,9 +1899,11 @@ var prksEditorRecovery = (function(exports) {
 				definiteOnly
 			};
 			const reports = await mergeEmergencyEntries(env);
+			const claim = identity.current();
 			await releaseDeadReservations({
 				...env,
-				isPageGone: (id) => identity.isPageGone(id)
+				isPageGone: (id) => identity.isPageGone(id),
+				verifiedRuntimeId: claim && claim.verified !== "unverified" ? claim.runtimeId : null
 			});
 			return reports;
 		}
@@ -1952,6 +1998,8 @@ var prksEditorRecovery = (function(exports) {
 	exports.planEmergency = planEmergency;
 	exports.readEmergencyKeys = readEmergencyKeys;
 	exports.reservationKeyOf = reservationKeyOf;
+	exports.reservationRuntimeOf = reservationRuntimeOf;
+	exports.reservationValue = reservationValue;
 	exports.runtime = runtime;
 	exports.sameBaseIdentity = sameBaseIdentity;
 	exports.sameBody = sameBody;

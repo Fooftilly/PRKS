@@ -397,7 +397,7 @@ describe('quota reservation', () => {
     w.edit(1, 'x'.repeat(1000))
     const reservation = t.storage.map.get(reservationKeyOf('p-me')) as string
     expect(reservation.length).toBeGreaterThan(2000)
-    expect(/^\u0101+$/.test(reservation)).toBe(true)
+    expect(/^r-me\n\u0101+$/.test(reservation)).toBe(true)
     // Grows geometrically, not on every keystroke.
     const spy = vi.spyOn(t.storage, 'setItem')
     w.edit(2, 'x'.repeat(1001))
@@ -421,13 +421,29 @@ describe('quota reservation', () => {
     expect(w.heldByEmergency()).toBe(true)
   })
 
+  it('writes its reservation again when the page comes back from hidden or frozen', () => {
+    const t = setup()
+    const w = t.open()
+    w.edit(1, 'typed before the tab was frozen')
+    t.doc.fire('visibilitychange')
+    // While frozen, a page that claimed this runtime took it for closed.
+    t.storage.map.delete(reservationKeyOf('p-me'))
+    t.doc.fire('resume')
+    expect(t.storage.map.has(reservationKeyOf('p-me'))).toBe(true)
+    t.storage.map.delete(reservationKeyOf('p-me'))
+    ;(t.doc as { visibilityState: string }).visibilityState = 'visible'
+    t.doc.fire('visibilitychange')
+    expect(t.storage.map.has(reservationKeyOf('p-me'))).toBe(true)
+    expect(w.heldByEmergency()).toBe(true)
+  })
+
   it('takes bounded slack beyond a large payload', () => {
     const t = setup()
     const w = t.open()
     w.edit(1, 'x'.repeat(200_000))
     const reserved = (t.storage.map.get(reservationKeyOf('p-me')) as string).length
     expect(reserved).toBeGreaterThan(200_000)
-    expect(reserved).toBeLessThanOrEqual(200_000 + 2 + 1024 + 64 * 1024)
+    expect(reserved).toBeLessThanOrEqual('r-me\n'.length + 200_000 + 2 + 1024 + 64 * 1024)
   })
 
   it('does not reserve, and guards, until the runtime claim has settled', () => {
