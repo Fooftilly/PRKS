@@ -683,10 +683,13 @@ class ResearchNotesTabCloseAndReviewTests(_RecoveryPage, unittest.TestCase):
         owners = self.owners(page, work)
         # No final pagehide and no Web Locks: nothing proves the page is gone.
         from playwright.sync_api import Error as PlaywrightError
-        try:
-            page.goto('chrome://crash', timeout=5000)
-        except PlaywrightError:
-            pass
+        # Wait for the renderer to be gone before opening the next tab, so the
+        # new tab never lands in the dying process.
+        with page.expect_event('crash', timeout=15000):
+            try:
+                page.goto('chrome://crash', timeout=5000)
+            except PlaywrightError:
+                pass
         tab = self.new_tab(context, server)
         self.notice(tab).wait_for()
         self.assertEqual(self.editor_text(tab), original)
