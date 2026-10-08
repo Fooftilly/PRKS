@@ -466,8 +466,10 @@ export function createRecoveryStore(options: RecoveryStoreOptions = {}): Recover
         }
         tx.objectStore(BODIES_STORE).delete(draftId)
         const stone = tombstoneRecord(draftId, tombstone, record ? record.generation : 0)
-        // It answers both keys: the discarding page's and the one the merge came from.
-        const source = record ? record.emergencySource : undefined
+        // It answers both keys: the discarding page's and the one the merge came
+        // from, whether the record still carries that mark or already became
+        // that key's tombstone (an acknowledgement retires before this runs).
+        const source = record ? (record.emergencySource ?? (record.status === 'discarded' ? record.owner.pageInstanceId : undefined)) : undefined
         if (source && source !== tombstone.pageInstanceId) stone.emergencySource = source
         tx.objectStore(DRAFTS_STORE).put(stone)
         done(record ? 'deleted' : 'missing')

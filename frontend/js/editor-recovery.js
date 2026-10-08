@@ -570,7 +570,7 @@ var prksEditorRecovery = (function(exports) {
 					}
 					tx.objectStore(BODIES_STORE).delete(draftId);
 					const stone = tombstoneRecord(draftId, tombstone, record ? record.generation : 0);
-					const source = record ? record.emergencySource : void 0;
+					const source = record ? record.emergencySource ?? (record.status === "discarded" ? record.owner.pageInstanceId : void 0) : void 0;
 					if (source && source !== tombstone.pageInstanceId) stone.emergencySource = source;
 					tx.objectStore(DRAFTS_STORE).put(stone);
 					done(record ? "deleted" : "missing");

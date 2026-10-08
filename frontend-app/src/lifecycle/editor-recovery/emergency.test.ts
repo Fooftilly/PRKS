@@ -242,6 +242,22 @@ describe('a merged draft whose emergency key could not be removed', () => {
     expect(await store.get('d-p-dead')).toBeNull()
   })
 
+  it('keeps answering the source key when an acknowledged draft is tombstoned again for the adopter\'s key', async () => {
+    const store = createRecoveryStore({ indexedDB: createFakeIdb().factory })
+    const { storage, unstick } = stuckStorage()
+    writeEmergency(storage, emergencyKeyOf('p-dead'), uncommitted('p-dead'))
+    await mergeEmergencyEntries(env(storage, store))
+    // The writer's order on acknowledgement: retire first, then its own key's tombstone.
+    expect(await store.deleteIfAcknowledged('d-p-dead', 1, 'unsaved words')).toBe('deleted')
+    await store.discard('d-p-dead', { kind: 'work-research-note', entityType: 'work', entityId: 'w1', generation: 1, pageInstanceId: 'p-adopter' })
+    // The adopter's key goes first.
+    expect(await store.clearTombstone('d-p-dead', 'p-adopter')).toBe('kept')
+    unstick()
+    const [merged] = await mergeEmergencyEntries(env(storage, store))
+    expect(merged!.outcomes).toEqual(['suppressed'])
+    expect(await store.get('d-p-dead')).toBeNull()
+  })
+
   it('keeps a tombstone that answers two keys until both are gone', async () => {
     const store = createRecoveryStore({ indexedDB: createFakeIdb().factory })
     const { storage } = stuckStorage()
