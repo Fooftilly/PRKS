@@ -1024,6 +1024,9 @@ var prksEditorRecovery = (function(exports) {
 					q: m.q
 				});
 			},
+			unreserved: (m) => {
+				if (m.page === pageInstanceId && contestListener) contestListener();
+			},
 			"runtime!": onAnswer,
 			"page!": onAnswer,
 			"lineage!": onAnswer
@@ -1196,6 +1199,12 @@ var prksEditorRecovery = (function(exports) {
 			},
 			setContestListener(listener) {
 				contestListener = listener;
+			},
+			announceReservationRemoved(page) {
+				post({
+					t: "unreserved",
+					page
+				});
 			},
 			dispose() {
 				if (disposed) return;
@@ -1960,11 +1969,12 @@ var prksEditorRecovery = (function(exports) {
 			};
 			const reports = await mergeEmergencyEntries(env);
 			const claim = identity.current();
-			await releaseDeadReservations({
+			const removed = await releaseDeadReservations({
 				...env,
 				isPageGone: (id) => identity.isPageGone(id),
-				verifiedRuntimeId: claim && claim.verified !== "unverified" ? claim.runtimeId : null
+				verifiedRuntimeId: !definiteOnly && claim && claim.verified !== "unverified" ? claim.runtimeId : null
 			});
+			for (const key of removed) identity.announceReservationRemoved(key.slice(RESERVATION_KEY_PREFIX.length));
 			return reports;
 		}
 		function start() {

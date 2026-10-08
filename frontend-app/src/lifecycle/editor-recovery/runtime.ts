@@ -12,7 +12,7 @@
 import { mergeEmergencyEntries, releaseDeadReservations, type EmergencyStorage, type MergeReport } from './emergency'
 import { createPageIdentity, type IdentityEnv, type PageIdentity, type RuntimeClaim } from './identity'
 import { classifyLineage, type LineageClass } from './lineage'
-import type { DraftRecord } from './schema'
+import { RESERVATION_KEY_PREFIX, type DraftRecord } from './schema'
 import { createRecoveryStore, type RecoveryStore, type RecoveryStoreOptions } from './store'
 import { createWriterRegistry, type WriterRegistry, type WriterRegistryOptions } from './writer'
 
@@ -67,11 +67,15 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
     }
     const reports = await mergeEmergencyEntries(env)
     const claim = identity.current()
-    await releaseDeadReservations({
+    const removed = await releaseDeadReservations({
       ...env,
       isPageGone: (id: string) => identity.isPageGone(id),
-      verifiedRuntimeId: claim && claim.verified !== 'unverified' ? claim.runtimeId : null,
+      // Only right after this load's claim: a channel claim is the absence of
+      // an answer, and a later late answer demotes it anyway.
+      verifiedRuntimeId: !definiteOnly && claim && claim.verified !== 'unverified' ? claim.runtimeId : null,
     })
+    // A page taken for gone that is only busy or frozen writes it again.
+    for (const key of removed) identity.announceReservationRemoved(key.slice(RESERVATION_KEY_PREFIX.length))
     return reports
   }
 

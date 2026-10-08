@@ -22,6 +22,60 @@ function memoryStorage(): EmergencyStorage & { map: Map<string, string> } {
 const COPIED = 'r-' + 'c'.repeat(32)
 
 describe('editor recovery runtime', () => {
+  it('without Web Locks, a busy original writes its reservation again after a duplicate removed it', async () => {
+    const browser = createFakeBrowser()
+    const idb = createFakeIdb()
+    const local = memoryStorage()
+    // The original tab's channel, held back during a long task.
+    let busy = false
+    const held: Array<() => void> = []
+    const busyChannel = (name: string) => {
+      const real = browser.channelFor('original')(name)
+      const proxy = {
+        onmessage: null as ((event: { data: unknown }) => void) | null,
+        postMessage: (message: unknown) => real.postMessage(message),
+        close: () => real.close(),
+      }
+      real.onmessage = (event) => {
+        const deliver = () => proxy.onmessage?.(event)
+        if (busy) held.push(deliver)
+        else deliver()
+      }
+      return proxy
+    }
+    const original = createEditorRecoveryRuntime({
+      store: { indexedDB: idb.factory },
+      identity: { sessionStorage: browser.sessionStorageWith({ [RUNTIME_SESSION_KEY]: COPIED }), locks: null, createChannel: busyChannel, claimWaitMs: 20 },
+      writers: { scheduler: createManualScheduler(), window: null, document: null },
+      emergencyStorage: local,
+    })
+    await original.start()
+    const w = original.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE })
+    w.edit(1, 'still typing here')
+    const key = reservationKeyOf(original.identity.pageInstanceId)
+    expect(local.map.has(key)).toBe(true)
+    busy = true
+    // Duplicate tab: the copied id goes unanswered, so it reads as a reload of this tab.
+    const duplicate = createEditorRecoveryRuntime({
+      store: { indexedDB: idb.factory },
+      identity: { sessionStorage: browser.sessionStorageWith({ [RUNTIME_SESSION_KEY]: COPIED }), locks: null, createChannel: browser.channelFor('duplicate'), claimWaitMs: 20 },
+      writers: { window: null, document: null },
+      emergencyStorage: local,
+    })
+    expect((await duplicate.start()).claim.verified).toBe('channel')
+    expect(local.map.has(key)).toBe(false)
+    // The long task ends: the queued claim and removal notice arrive in order.
+    busy = false
+    held.splice(0).forEach((deliver) => deliver())
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(local.map.has(key)).toBe(true)
+    expect(w.heldByEmergency()).toBe(true)
+    expect(duplicate.identity.current()!.verified).toBe('unverified')
+    // Later scans never use the runtime tag.
+    await duplicate.scanEmergency()
+    expect(local.map.has(key)).toBe(true)
+  })
+
   it('without Web Locks, frees a crashed page\'s reservation when its tab reloads and claims the same runtime', async () => {
     const browser = createFakeBrowser()
     const idb = createFakeIdb()
@@ -54,6 +108,10 @@ describe('editor recovery runtime', () => {
     const reloaded = load('reloaded')
     expect((await reloaded.start()).claim.runtimeId).toBe(COPIED)
     expect(local.map.has(leaked)).toBe(false)
+    // A re-scan never uses the tag: by then a silent claim proves even less.
+    local.setItem(leaked, 'r-' + 'c'.repeat(32) + '\n' + 'ā'.repeat(10))
+    await reloaded.scanEmergency()
+    expect(local.map.has(leaked)).toBe(true)
   })
 
   it('recovers both duplicated tabs that started simultaneously with one copied runtime id', async () => {

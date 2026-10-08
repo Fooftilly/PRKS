@@ -146,6 +146,21 @@ describe('a late answer to a channel claim', () => {
   })
 })
 
+describe('reservation removal notice', () => {
+  it('reaches only the page whose reservation was removed', async () => {
+    const browser = createFakeBrowser()
+    const a = page(browser, 'a', 'channel')
+    const b = page(browser, 'b', 'channel')
+    const c = page(browser, 'c', 'channel')
+    const heard: string[] = []
+    a.identity.setContestListener(() => heard.push('a'))
+    c.identity.setContestListener(() => heard.push('c'))
+    b.identity.announceReservationRemoved(a.identity.pageInstanceId)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(heard).toEqual(['a'])
+  })
+})
+
 describe('runtime claim with neither', () => {
   it('uses the candidate unverified and cannot establish liveness', async () => {
     const browser = createFakeBrowser()

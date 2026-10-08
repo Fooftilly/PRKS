@@ -73,11 +73,14 @@ export interface PageIdentity {
   /** Answers other pages' `lineage?` queries; the writer registry installs it. */
   setLineageResponder(responder: ((draftId: string) => boolean) | null): void
   /**
-   * Called when another page claims this page's settled runtime id. That
-   * page may have answered late and taken the id, and may have removed this
-   * page's reservation; the writer registry writes it again.
+   * Called when this page's reservation may be gone: another page claimed
+   * this page's settled runtime id, or announced that it removed this page's
+   * reservation. The writer registry writes it again. A notice sent after the
+   * removal arrives after it, however late this page processes its messages.
    */
   setContestListener(listener: (() => void) | null): void
+  /** Tells a page that its reservation was removed, so a live one writes it again. */
+  announceReservationRemoved(pageInstanceId: string): void
   dispose(): void
 }
 
@@ -90,6 +93,7 @@ type Message =
   | { t: 'page!'; page: string; q: string }
   | { t: 'lineage?'; draftId: string; q: string }
   | { t: 'lineage!'; draftId: string; q: string }
+  | { t: 'unreserved'; page: string }
 
 const MAX_CLAIM_ROUNDS = 8
 
@@ -187,6 +191,9 @@ export function createPageIdentity(env: IdentityEnv = {}): PageIdentity {
     },
     'lineage?': (m) => {
       if (lineageResponder && lineageResponder(m.draftId)) post({ t: 'lineage!', draftId: m.draftId, q: m.q })
+    },
+    unreserved: (m) => {
+      if (m.page === pageInstanceId && contestListener) contestListener()
     },
     'runtime!': onAnswer,
     'page!': onAnswer,
@@ -348,6 +355,9 @@ export function createPageIdentity(env: IdentityEnv = {}): PageIdentity {
     },
     setContestListener(listener) {
       contestListener = listener
+    },
+    announceReservationRemoved(page) {
+      post({ t: 'unreserved', page })
     },
     dispose() {
       if (disposed) return
