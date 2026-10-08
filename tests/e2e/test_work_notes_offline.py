@@ -342,6 +342,14 @@ class _RecoveryPage(_WorkNotesPage):
             timeout=15000,
             message='the recovery record outlived the acknowledgement')
 
+    def wait_record_count(self, page, work, count):
+        wait_for_async(
+            page,
+            '([workId, n]) => (' + _RECOVERY_RECORDS + ')(workId).then(rows => rows.length === n)',
+            arg=[work, count],
+            timeout=15000,
+            message='the recovery records did not settle')
+
     def note_rows(self, page):
         return page.evaluate("""() => prksSync.store.listOperations().then(rows => rows
             .filter(r => r.operation === 'SET_WORK_RESEARCH_NOTE').map(r => r.payload.text))""")
@@ -557,6 +565,11 @@ class ResearchNotesTabCloseAndReviewTests(_RecoveryPage, unittest.TestCase):
             "() => !!prksGetFocusedTabContext().getResource('workNotesObserved')")
         return tab
 
+    def hold_saves(self, page):
+        # The tab closes before its 2 s semantic save, however slow the
+        # runner is: these tests are about the draft, not the save timing.
+        page.evaluate('() => { window.prksScheduleWorkResearchNotesSave = () => {}; }')
+
     def close_tab(self, page):
         # A user closing the tab: beforeunload runs, then the final pagehide.
         page.close(run_before_unload=True)
@@ -601,6 +614,7 @@ class ResearchNotesTabCloseAndReviewTests(_RecoveryPage, unittest.TestCase):
     def test_server_change_after_tab_close_needs_review_and_reconciles_explicitly(self):
         server, page, context = self.start()
         work = server.ids['work_a']
+        self.hold_saves(page)
         self.type_marker(page, ' Mine')
         self.wait_recorded(page, work, ' Mine')
         mine = self.records(page, work)[0]['body']
@@ -634,6 +648,8 @@ class ResearchNotesTabCloseAndReviewTests(_RecoveryPage, unittest.TestCase):
         work = server.ids['work_a']
         original = self.server_text(server, work)
         second = self.other_tab(context, page)
+        self.hold_saves(page)
+        self.hold_saves(second)
         self.type_marker(page, ' From tab one')
         self.type_marker(second, ' From tab two')
         self.wait_recorded(page, work, ' From tab one')
@@ -656,19 +672,19 @@ class ResearchNotesTabCloseAndReviewTests(_RecoveryPage, unittest.TestCase):
             "text => prksGetFocusedTabContext().getResource('workNotes')?.editor.value() === text", arg=chosen)
         self.notice(tab).filter(has_text='Unsaved Research Notes from an earlier session are available.').wait_for()
         self.wait_server_text(tab, work, chosen)
-        self.assertEqual(len(self.records(tab, work)), 1)
+        # The restored draft goes once its save is acknowledged; the other stays.
+        self.wait_record_count(tab, work, 1)
 
     def test_a_live_editor_in_another_tab_is_never_adopted(self):
         server, page, context = self.start()
         work = server.ids['work_a']
         original = self.server_text(server, work)
+        self.hold_saves(page)
         self.type_marker(page, ' Still typing')
         self.wait_recorded(page, work, ' Still typing')
         owners = self.owners(page, work)
         tab = self.new_tab(context, server)
-        # The new tab shows only what the server has (the first tab may have
-        # saved by now), never the live editor's draft through recovery.
-        self.assertIn(self.editor_text(tab), (original, original + ' Still typing'))
+        self.assertEqual(self.editor_text(tab), original)
         # Another live editor's text is that editor's: no notice, no adoption.
         self.assertEqual(self.notice(tab).count(), 0)
         self.assertEqual(self.owners(tab, work), owners)
@@ -678,6 +694,7 @@ class ResearchNotesTabCloseAndReviewTests(_RecoveryPage, unittest.TestCase):
         server, page, context = self.start(without_locks=True)
         work = server.ids['work_a']
         original = self.server_text(server, work)
+        self.hold_saves(page)
         self.type_marker(page, ' Before the crash')
         self.wait_recorded(page, work, ' Before the crash')
         owners = self.owners(page, work)
@@ -707,6 +724,8 @@ class ResearchNotesTabCloseAndReviewTests(_RecoveryPage, unittest.TestCase):
         work = server.ids['work_a']
         original = self.server_text(server, work)
         second = self.other_tab(context, page)
+        self.hold_saves(page)
+        self.hold_saves(second)
         self.type_marker(page, ' One')
         self.type_marker(second, ' Two')
         self.wait_recorded(page, work, ' One')
@@ -763,6 +782,7 @@ class ResearchNotesTabCloseAndReviewTests(_RecoveryPage, unittest.TestCase):
     def test_hiding_the_notice_or_closing_review_keeps_the_draft_and_discard_is_final(self):
         server, page, context = self.start()
         work = server.ids['work_a']
+        self.hold_saves(page)
         self.type_marker(page, ' Keep me')
         self.wait_recorded(page, work, ' Keep me')
         self.close_tab(page)
@@ -799,6 +819,7 @@ class ResearchNotesTabCloseAndReviewTests(_RecoveryPage, unittest.TestCase):
     def test_leaving_the_work_closes_review_without_acting(self):
         server, page, context = self.start()
         work = server.ids['work_a']
+        self.hold_saves(page)
         self.type_marker(page, ' Pending review')
         self.wait_recorded(page, work, ' Pending review')
         self.close_tab(page)
