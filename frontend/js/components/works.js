@@ -403,14 +403,19 @@ function prksResearchRecoveryOnSync(event) {
         const watches = prksResearchRecoveryAckWatch.get(op.op_id) || [];
         prksResearchRecoveryAckWatch.delete(op.op_id);
         watches.forEach(function (watched) {
-            const writer = watched.writer;
-            const clear = watched.text !== text ? Promise.resolve()
-                : writer ? writer.acknowledged(watched.generation, text)
-                    /* Only while the page it observed still owns it: never under a writer that adopted it since. */
-                    : recovery.rt.store.deleteIfAcknowledged(watched.draftId, watched.generation, text, watched.pageInstanceId);
-            void clear.catch(function () {}).then(function () {
-                if (writer) return writer.release();
-                return undefined;
+            watched.acknowledged = true;
+            /* An adoption still in flight settles first, so the writer it
+             * yields clears the lineage it now owns. */
+            void Promise.resolve(watched.adopting).then(function () {
+                const writer = watched.writer;
+                const clear = watched.text !== text ? Promise.resolve()
+                    : writer ? writer.acknowledged(watched.generation, text)
+                        /* Only while the page it observed still owns it: never under a writer that adopted it since. */
+                        : recovery.rt.store.deleteIfAcknowledged(watched.draftId, watched.generation, text, watched.pageInstanceId);
+                return clear.catch(function () {}).then(function () {
+                    if (writer) return writer.release();
+                    return undefined;
+                });
             }).catch(function () {});
         });
         prksWorkResearchDrafts.forEach(function (entry) {
@@ -515,13 +520,24 @@ async function prksRestoreResearchNotesRecoveryNow(ctx, work, attempt) {
     const otherDirty = Array.from(prksWorkResearchDrafts.values()).some(function (entry) {
         return entry.workId === id && entry.key !== key && entry.state !== 'committed';
     });
-    const plan = recovery.api.planResearchNotesRestore({
-        paneId: String(ctx.tabId == null ? '' : ctx.tabId),
-        candidates: candidates,
-        base: base,
-        queue: queue,
-        otherDirtySession: otherDirty,
-    });
+    const planWith = function (planBase) {
+        return recovery.api.planResearchNotesRestore({
+            paneId: String(ctx.tabId == null ? '' : ctx.tabId),
+            candidates: candidates,
+            base: planBase,
+            queue: queue,
+            otherDirtySession: otherDirty,
+        });
+    };
+    let plan = planWith(base);
+    /* The body and the revision were read separately. Before anything is
+     * cleared or restored on them, prove they are one server snapshot;
+     * otherwise every draft stays for review. */
+    if ((plan.cleanup.length || plan.restore) && !(await prksResearchRecoveryVerifyBase(id, base))) {
+        if (!current()) return null;
+        plan = planWith(Object.assign({}, base, { source: 'cache' }));
+    }
+    if (!current()) return null;
     for (const draftId of plan.cleanup) {
         const record = candidates.find(function (c) { return c.record.draftId === draftId; }).record;
         /* Only the generation it read, and only while no page has adopted it since. */
@@ -533,24 +549,53 @@ async function prksRestoreResearchNotesRecoveryNow(ctx, work, attempt) {
         const candidate = candidates.find(function (c) { return c.record.draftId === item.draftId; });
         const watches = prksResearchRecoveryAckWatch.get(item.opId) || [];
         if (watches.some(function (w) { return w.draftId === item.draftId; })) continue;
-        const watch = Object.assign({ writer: null, key: key, base: base, pipeline: candidate.record.pipeline }, item);
-        if (candidate.lineage === 'same-runtime-orphan' && candidate.record.owner.paneId === paneId) {
-            watch.writer = await rt.writers.adopt(candidate.record, { paneId: paneId });
-            if (watch.writer && !current()) {
-                void watch.writer.release().catch(function () {});
-                watch.writer = null;
-            }
-        }
-        /* Every lineage the row represents is cleared by its acknowledgement. */
+        const watch = Object.assign({ writer: null, adopting: null, acknowledged: false, key: key, base: base, pipeline: candidate.record.pipeline }, item);
+        /* Every lineage the row represents is cleared by its acknowledgement,
+         * so it is watched before adopting: an acknowledgement that lands
+         * while the adoption is pending still finds it. */
         watches.push(watch);
         prksResearchRecoveryAckWatch.set(item.opId, watches);
+        if (candidate.lineage === 'same-runtime-orphan' && candidate.record.owner.paneId === paneId) {
+            /* Assigned before the adoption starts, so no acknowledgement can miss it. */
+            watch.adopting = Promise.resolve().then(function () {
+                return rt.writers.adopt(candidate.record, { paneId: paneId });
+            }).then(function (writer) {
+                watch.writer = writer;
+                /* Stale mount: give the lineage back, unless the acknowledgement
+                 * already claimed this writer to clear it. */
+                if (writer && !watch.acknowledged && !current()) {
+                    watch.writer = null;
+                    /* The adoption made this page the owner: a later
+                     * acknowledgement clears it under that owner. */
+                    watch.pageInstanceId = rt.identity.pageInstanceId;
+                    void writer.release().catch(function () {});
+                }
+            }).catch(function () {});
+            await watch.adopting;
+        }
     }
     let restored = false;
     if (plan.restore) {
         const writer = await rt.writers.adopt(plan.restore.record, { paneId: paneId });
-        if (writer && !current()) {
-            /* Stale mount: the lineage stays this pane's orphan for the next one. */
+        /* The plan was made before adopting. Another pane may have saved,
+         * queued or started editing meanwhile; then the draft stays unapplied
+         * for review rather than being saved over a base it was not typed on. */
+        const changed = writer && current() ? await prksResearchRecoveryChangedSince(ctx, id, key, base, queue) : null;
+        if (writer && (!current() || changed)) {
+            /* Stale mount or moved on: the lineage stays this pane's orphan. */
             void writer.release().catch(function () {});
+            if (changed && current()) {
+                const record = plan.restore.record;
+                plan.review.push({
+                    draftId: record.draftId,
+                    reason: changed,
+                    lineage: 'same-runtime-orphan',
+                    generation: record.generation,
+                    bodyLength: record.bodyLength,
+                    paneId: record.owner.paneId,
+                    updatedAt: record.updatedAt,
+                });
+            }
         } else if (writer) {
             prksResearchRecoveryInstall(recovery.api, ctx, id, writer, plan.restore, base);
             restored = true;
@@ -560,6 +605,54 @@ async function prksRestoreResearchNotesRecoveryNow(ctx, work, attempt) {
         ctx.ui.researchNotesRecovery = { status: 'needs-review', workId: id, candidates: plan.review };
     }
     return { restored: restored, review: plan.review };
+}
+
+/**
+ * Whether the server holds `base.value` at `base.revision`. The revision was
+ * read after the body, so the body is read again and then the revision: when
+ * that revision still equals `base.revision`, the body read between the two
+ * is the note at that revision. Any failed or cached read is unverified.
+ */
+async function prksResearchRecoveryVerifyBase(id, base) {
+    if (!base || base.source !== 'server' || typeof prksOfflineReadEntity !== 'function' ||
+        typeof prksReadWorkNotesState !== 'function') {
+        return false;
+    }
+    try {
+        const work = await prksOfflineReadEntity('work', id, '/api/works/' + encodeURIComponent(id), {});
+        if (!work || work.source !== 'server' || !work.value) return false;
+        const body = typeof work.value.text_content === 'string' ? work.value.text_content : '';
+        if (body !== base.value) return false;
+        const state = await prksReadWorkNotesState(id);
+        return !!(state && state.source === 'server' && state.value &&
+            state.value.research_note_revision === base.revision);
+    } catch (_e) {
+        return false;
+    }
+}
+
+/**
+ * Why a restore planned on `base` and `queue` is no longer safe to apply, or
+ * null. The queue is re-read fail-closed; everything after that read is
+ * synchronous up to the install.
+ */
+async function prksResearchRecoveryChangedSince(ctx, id, key, base, queue) {
+    const rows = typeof prksReadPendingWorkNotesSnapshot === 'function' ? await prksReadPendingWorkNotesSnapshot() : null;
+    if (!rows || typeof prksWorkNoteOperations !== 'function') return 'queue-unknown';
+    const observed = prksResearchRecoveryObservedBase(ctx);
+    if (!observed || observed.value !== base.value || observed.revision !== base.revision ||
+        observed.source !== base.source) {
+        return 'base-advanced';
+    }
+    const now = prksWorkNoteOperations(rows, id, PRKS_RESEARCH_RECOVERY_KIND);
+    const sameQueue = now.length === queue.length && now.every(function (row, i) {
+        return row.op_id === queue[i].opId && row.payload && row.payload.text === queue[i].text;
+    });
+    if (!sameQueue) return 'foreign-queue';
+    const otherDirty = Array.from(prksWorkResearchDrafts.values()).some(function (entry) {
+        return entry.workId === id && entry.key !== key && entry.state !== 'committed';
+    });
+    return otherDirty ? 'dirty-session' : null;
 }
 
 function prksResearchRecoveryInstall(api, ctx, id, writer, restore, base) {

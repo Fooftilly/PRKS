@@ -60,6 +60,8 @@ type W = Record<string, unknown> & {
   prksResearchNotesTextForWork: (workId: string, serverText: string, ctx: Ctx) => string
   prksResetResearchDraftsForTest: () => void
   prksEnsureWorkNotesBase: (ctx: Ctx, work: object) => Promise<unknown>
+  prksRememberWorkNotesCanonical: (ctx: Ctx, work: object, source?: string) => unknown
+  prksBindWorkNotesSync: (ctx: Ctx) => void
   prksSetResearchRecoveryRestoreMsForTest: (ms: number | null) => void
   prksRestoreResearchNotesRecovery: (ctx: Ctx, work: object) => Promise<{ restored: boolean; review: Array<{ reason: string }> } | null>
 }
@@ -129,6 +131,8 @@ const sync = (() => {
 })()
 
 const server = { text: 'Saved note.', revision: 5, source: 'server' as 'server' | 'cache' }
+/** What the Work detail read returned: the server's body, or an older cached one. */
+const workRead = { text: null as string | null, source: 'server' as 'server' | 'cache' }
 
 /* ---- one page: runtime, identity and TabContext ---- */
 const browser = createFakeBrowser()
@@ -198,7 +202,10 @@ async function openWork(tabId = 'tab-1', workId = 'w1'): Promise<Ctx> {
   // The mount path starts the runtime (restore) before the editor exists.
   await page!.rt.start()
   await (window as unknown as { prksRefreshPendingWorkNotes: () => Promise<unknown> }).prksRefreshPendingWorkNotes()
-  await win.prksEnsureWorkNotesBase(ctx, { id: workId, text_content: server.text, private_notes: '' })
+  // As the Work route does: the Work body and where it was read from, then notes-state.
+  const body = workRead.text === null ? server.text : workRead.text
+  win.prksRememberWorkNotesCanonical(ctx, { id: workId, text_content: body, private_notes: '' }, workRead.source)
+  await win.prksEnsureWorkNotesBase(ctx, { id: workId, text_content: body, private_notes: '' })
   return ctx
 }
 
@@ -241,8 +248,10 @@ async function reload(): Promise<EditorRecoveryRuntime> {
 
 beforeAll(() => {
   win.prksSync = sync
-  win.prksOfflineReadEntity = async (_type: string, workId: string) => ({
-    value: { work_id: workId, research_note_revision: server.revision, private_note_revision: 0 },
+  win.prksOfflineReadEntity = async (type: string, workId: string) => ({
+    value: type === 'work'
+      ? { id: workId, text_content: server.text, private_notes: '' }
+      : { work_id: workId, research_note_revision: server.revision, private_note_revision: 0 },
     source: server.source,
     cachedAt: null,
   })
@@ -262,6 +271,8 @@ beforeEach(() => {
   server.text = 'Saved note.'
   server.revision = 5
   server.source = 'server'
+  workRead.text = null
+  workRead.source = 'server'
   startPage()
 })
 
@@ -675,6 +686,185 @@ describe('same-pane restore after reload', () => {
       page!.rt.scanEmergency = scan
       win.prksSetResearchRecoveryRestoreMsForTest(null)
     }
+  })
+
+  describe('#488 follow-up: Greptile findings', () => {
+    /** Restores with `hook` run inside the adoption, before or after the store adopts. */
+    async function restoreAdopting(ctx: Ctx, hook: () => unknown, when: 'before' | 'after' = 'before') {
+      const writers = page!.rt.writers
+      const adopt = writers.adopt.bind(writers)
+      writers.adopt = async (record, options) => {
+        writers.adopt = adopt
+        if (when === 'before') await hook()
+        const writer = await adopt(record, options)
+        if (when === 'after') await hook()
+        return writer
+      }
+      try {
+        return await win.prksRestoreResearchNotesRecovery(ctx, { id: 'w1' })
+      } finally {
+        writers.adopt = adopt
+      }
+    }
+
+    /** This pane queued a body, then the page reloaded: a represented same-pane orphan. */
+    async function queuedThenReloaded(): Promise<string> {
+      const ctx = await openWork()
+      type(ctx, 'Saved note. Queued')
+      const saved = await win.prksEnqueueWorkResearchNotesSave(ctx, 'w1')
+      await waitFor(async () => (await records())[0]?.pipeline?.state === 'queued', 'queued recorded')
+      await reload()
+      return saved.opId as string
+    }
+
+    function leaveWork(ctx: Ctx) {
+      ctx.beginRoute({ name: 'work', params: { workId: 'w2' } })
+      ctx.setEntity('work', { id: 'w2', text_content: '', private_notes: '' })
+    }
+
+    async function expectKept(body: string) {
+      await settle()
+      const kept = await records()
+      expect(kept).toHaveLength(1)
+      expect(await bodyOf(kept[0]!.draftId)).toBe(body)
+    }
+
+    /** The draft equals the note it was typed on, then the page reloads. */
+    async function revertedThenReloaded() {
+      const ctx = await openWork()
+      type(ctx, 'Saved note. Edited')
+      await type(ctx, 'Saved note.').recovery!.flush()
+      await reload()
+    }
+
+    it('keeps a draft equal to a cached Work body that the server has since replaced', async () => {
+      await revertedThenReloaded()
+      // Another device changed the note; this load paints the cached Work, then reaches notes-state online.
+      server.text = 'Another device wrote this.'
+      server.revision = 6
+      workRead.text = 'Saved note.'
+      workRead.source = 'cache'
+      const fresh = await openWork()
+      const result = await win.prksRestoreResearchNotesRecovery(fresh, { id: 'w1' })
+      expect(result).toMatchObject({ restored: false, review: [{ reason: 'base-unverified' }] })
+      await expectKept('Saved note.')
+      expect(sync.rows()).toEqual([])
+    })
+
+    it('keeps a draft equal to a server Work body read before another device saved', async () => {
+      await revertedThenReloaded()
+      // Work GET returns X at r5 from the server; another device saves Y (r6) before notes-state is read.
+      workRead.text = 'Saved note.'
+      server.text = 'Another device wrote this.'
+      server.revision = 6
+      const fresh = await openWork()
+      const result = await win.prksRestoreResearchNotesRecovery(fresh, { id: 'w1' })
+      expect(result).toMatchObject({ restored: false, review: [{ reason: 'base-unverified' }] })
+      await expectKept('Saved note.')
+      expect(sync.rows()).toEqual([])
+    })
+
+    it('does not restore on a base whose body and revision are not one server snapshot', async () => {
+      // Both loads join the older server body to the newer revision, so the record's base matches K.
+      server.text = 'Another device wrote this.'
+      server.revision = 6
+      workRead.text = 'Saved note.'
+      const ctx = await openWork()
+      await type(ctx, 'Saved note. Mine').recovery!.flush()
+      await reload()
+      const fresh = await openWork()
+      const result = await win.prksRestoreResearchNotesRecovery(fresh, { id: 'w1' })
+      expect(result).toMatchObject({ restored: false, review: [{ reason: 'base-unverified' }] })
+      expect(fresh.ui.workResearchNoteSession).toBeNull()
+      expect(sync.rows()).toEqual([])
+      await expectKept('Saved note. Mine')
+    })
+
+    it('treats a cached Work body as verified once its acknowledgement arrives', async () => {
+      workRead.source = 'cache'
+      const ctx = await openWork()
+      win.prksBindWorkNotesSync(ctx)
+      type(ctx, 'Saved note. A')
+      const saved = await win.prksEnqueueWorkResearchNotesSave(ctx, 'w1')
+      sync.ack(saved.opId as string, 6)
+      expect(ctx.getResource('workNotesObserved')).toMatchObject({ research: { value: 'Saved note. A', revision: 6, source: 'server' } })
+    })
+
+    it('does not apply a restored draft after another pane saved while it was being adopted', async () => {
+      const ctx = await typedThenReloaded('Saved note. Mine before reload')
+      win.prksBindWorkNotesSync(ctx)
+      const side = await openWork('tab-2')
+      const result = await restoreAdopting(ctx, async () => {
+        // The other pane edits, saves, and its row is acknowledged mid-adoption.
+        type(side, 'Saved note. Side pane saved')
+        const saved = await win.prksEnqueueWorkResearchNotesSave(side, 'w1')
+        sync.ack(saved.opId as string, 6)
+      })
+      expect(result).toMatchObject({ restored: false, review: [{ reason: 'base-advanced' }] })
+      expect(ctx.ui.workResearchNoteSession).toBeNull()
+      expect(server.text).toBe('Saved note. Side pane saved')
+      expect(sync.rows()).toEqual([])
+      await settle()
+      const mine = (await records()).filter((r) => r.owner.paneId === 'tab-1')
+      expect(mine).toHaveLength(1)
+      expect(await bodyOf(mine[0]!.draftId)).toBe('Saved note. Mine before reload')
+    })
+
+    it('does not apply a restored draft after a row was queued while it was being adopted', async () => {
+      const ctx = await typedThenReloaded('Saved note. Mine before reload')
+      const result = await restoreAdopting(ctx, () =>
+        sync.store.saveWorkNote('w1', 'SET_WORK_RESEARCH_NOTE', 'Saved note. Queued elsewhere', { value: server.text, revision: server.revision }))
+      expect(result).toMatchObject({ restored: false, review: [{ reason: 'foreign-queue' }] })
+      expect(ctx.ui.workResearchNoteSession).toBeNull()
+      expect(sync.rows().map((r) => r.payload.text)).toEqual(['Saved note. Queued elsewhere'])
+      // The lineage stays this pane's orphan, with no writer held.
+      expect(page!.rt.writers.writers()).toHaveLength(0)
+      await expectKept('Saved note. Mine before reload')
+    })
+
+    it('does not apply a restored draft after another pane started editing while it was being adopted', async () => {
+      const ctx = await typedThenReloaded('Saved note. Mine before reload')
+      const side = await openWork('tab-2')
+      const result = await restoreAdopting(ctx, () => type(side, 'Saved note. Side pane typing'))
+      expect(result).toMatchObject({ restored: false, review: [{ reason: 'dirty-session' }] })
+      expect(ctx.ui.workResearchNoteSession).toBeNull()
+    })
+
+    it('clears a represented draft whose row acknowledged while it was being adopted', async () => {
+      const opId = await queuedThenReloaded()
+      const fresh = await openWork()
+      expect(await restoreAdopting(fresh, () => sync.ack(opId, 6))).toMatchObject({ restored: false, review: [] })
+      await waitFor(async () => (await records()).length === 0, 'represented record cleared')
+      await waitFor(() => page!.rt.writers.writers().length === 0, 'adopted writer released')
+      // A later mount finds nothing left to report as live elsewhere.
+      const again = await openWork('tab-1')
+      expect(await win.prksRestoreResearchNotesRecovery(again, { id: 'w1' })).toBeNull()
+    })
+
+    it('a stale mount gives back a represented lineage even when its row acknowledged mid-adoption', async () => {
+      const opId = await queuedThenReloaded()
+      const fresh = await openWork()
+      const result = await restoreAdopting(fresh, () => {
+        sync.ack(opId, 6)
+        leaveWork(fresh)
+      })
+      expect(result).toMatchObject({ restored: false })
+      expect(fresh.ui.workResearchNoteSession).toBeNull()
+      await waitFor(async () => (await records()).length === 0, 'represented record cleared')
+      await waitFor(() => page!.rt.writers.writers().length === 0, 'adopted writer released')
+    })
+
+    it('clears a represented draft acknowledged after a stale mount released its adoption', async () => {
+      const opId = await queuedThenReloaded()
+      const fresh = await openWork()
+      // Adoption completes, then the mount is replaced before the row acknowledges.
+      expect(await restoreAdopting(fresh, () => leaveWork(fresh), 'after')).toMatchObject({ restored: false })
+      await settle()
+      expect(page!.rt.writers.writers()).toHaveLength(0)
+      expect(await records()).toHaveLength(1)
+      sync.ack(opId, 6)
+      await waitFor(async () => (await records()).length === 0, 'represented record cleared')
+    })
   })
 
   describe('#475 blocked body', () => {
