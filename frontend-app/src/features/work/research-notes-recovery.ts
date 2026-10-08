@@ -141,6 +141,12 @@ function actionsFor(ctx: RecoveryOwner, workId: string): ReviewActions {
 export function openResearchNotesRecoveryReview(ctx: RecoveryOwner, opener: HTMLElement | null = null): boolean {
   const workId = liveWorkId(ctx)
   if (!workId) return false
+  /* One Review at a time: an open one closes under its own policy (it may hold
+   * edited text and ask first), and Review is opened again once it is gone. */
+  if (openReview && openReview.requestClose) {
+    openReview.requestClose()
+    return false
+  }
   closeResearchNotesRecoveryReview()
   const live = ctx.getEntity ? ctx.getEntity('work') : null
   const title = live && typeof live.title === 'string' && live.title ? live.title : 'This Work'

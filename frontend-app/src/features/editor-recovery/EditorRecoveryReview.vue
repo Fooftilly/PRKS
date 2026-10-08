@@ -76,7 +76,11 @@ async function load(keepMessage = false): Promise<void> {
   const next = await props.actions.load().catch(() => null)
   if (disposed) return
   loading.value = false
+  const edited = comparing.value && chosenText.value !== composedFrom.value
   if (!next) {
+    // Nothing left to compare against, but the edited text is still the user's.
+    if (edited) leftover.value = chosenText.value
+    comparing.value = false
     unavailable.value = true
     details.value = null
     return
@@ -86,7 +90,7 @@ async function load(keepMessage = false): Promise<void> {
   // A refused Replace keeps the combined text while its draft can still be compared.
   const still = next.candidates.find((c) => c.draftId === selectedId.value)
   const keep = !!still && still.action === 'reconcile' && still.body === composedFrom.value
-  if (comparing.value && !keep && chosenText.value !== composedFrom.value) leftover.value = chosenText.value
+  if (edited && !keep) leftover.value = chosenText.value
   comparing.value = comparing.value && keep
   // Never pick a winner: the first row is shown, nothing is applied.
   if (!next.candidates.some((c) => c.draftId === selectedId.value)) {
@@ -94,8 +98,9 @@ async function load(keepMessage = false): Promise<void> {
   }
 }
 
-async function run(name: string, act: () => Promise<RecoveryActionResult>, closeOnSuccess: boolean): Promise<void> {
-  if (busy.value) return
+/** Resolves true when the action succeeded. */
+async function run(name: string, act: () => Promise<RecoveryActionResult>, closeOnSuccess: boolean): Promise<boolean> {
+  if (busy.value) return false
   busy.value = name
   message.value = ''
   let result: RecoveryActionResult
@@ -104,30 +109,35 @@ async function run(name: string, act: () => Promise<RecoveryActionResult>, close
   } catch {
     result = { ok: false, code: 'failed' }
   }
-  if (disposed) return
+  if (disposed) return false
   busy.value = null
   if (result.ok) {
     if (closeOnSuccess) {
       emit('close')
-      return
+      return true
     }
     await load()
-    return
+    return true
   }
   message.value = failureText(result.code)
   await load(true)
+  return false
 }
 
-function restore(): void {
+async function restore(): Promise<void> {
   const d = details.value
   const c = selected.value
-  if (!d || !c) return
+  if (!d || !c || busy.value) return
+  // Restoring closes Review: edited text left from a comparison goes with it.
+  if (!(await mayDropComposed().catch(() => false)) || disposed) return
   void run('restore', () => props.actions.restore(d, c), true)
 }
 
-function startCompare(): void {
+async function startCompare(): Promise<void> {
   const c = selected.value
-  if (!c || c.body === null) return
+  if (!c || c.body === null || busy.value) return
+  // A new comparison starts from the draft again: edited text left from the last one goes.
+  if (!(await mayDropComposed().catch(() => false)) || disposed) return
   chosenText.value = c.body
   composedFrom.value = c.body
   leftover.value = null
@@ -183,14 +193,23 @@ async function discard(): Promise<void> {
   const d = details.value
   const c = selected.value
   if (!d || !c || busy.value) return
+  const unknownOwner = c.lineage === 'unknown'
+    ? ' It may still be open in a tab that did not answer; discard it only if that tab is gone.'
+    : ''
   const ok = await props.actions.confirm({
     title: 'Discard this draft?',
-    message: `Its ${lengthText(c.length)} are removed from this device${composedEdited() ? ', and so is your edited text to keep' : ''}. The current note does not change.`,
+    message: `Its ${lengthText(c.length)} are removed from this device${composedEdited() ? ', and so is your edited text to keep' : ''}. The current note does not change.${unknownOwner}`,
     confirmLabel: 'Discard draft',
     danger: true,
   })
   if (!ok || disposed) return
-  void run('discard', () => props.actions.discard(d, c), false)
+  // Confirmed: the edited text goes with the draft, and the refresh must not keep it.
+  const edited = comparing.value && chosenText.value !== composedFrom.value ? chosenText.value : leftover.value
+  comparing.value = false
+  leftover.value = null
+  const done = await run('discard', () => props.actions.discard(d, c), false)
+  // Refused: nothing was discarded, so neither is the edited text.
+  if (!done && !disposed && edited !== null) leftover.value = edited
 }
 
 async function copy(key: string, text: string | null): Promise<void> {

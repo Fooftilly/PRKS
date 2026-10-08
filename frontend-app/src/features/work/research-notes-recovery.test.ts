@@ -89,6 +89,29 @@ describe('Research Notes recovery presenter', () => {
     expect(document.getElementById('editor-recovery-review-modal')).toBeNull()
   })
 
+  it('opening Review again asks the open one to close under its own policy', async () => {
+    const confirm = vi.fn(async () => false)
+    w.prksConfirmDialog = confirm
+    w.prksResearchNotesRecoveryDetails = vi.fn(async () => ({
+      workId: 'w1',
+      token: 't',
+      current: { text: 'x', revision: 5, source: 'server', queue: 'none', queued: 0, unsaved: false },
+      candidates: [{ expect: { draftId: 'd', pageInstanceId: 'p', generation: 1, status: 'active' }, draftId: 'd', lineage: 'dead-runtime', samePane: false, status: 'active', reason: 'base-advanced', action: 'reconcile', generation: 1, updatedAt: 1, length: 1, body: 'y', typedOnRevision: 4, pipelineState: 'drafting' }],
+    }))
+    const ctx = owner()
+    openResearchNotesRecoveryReview(ctx)
+    await flushPromises()
+    ;(document.querySelector('[data-prks-role="editor-recovery-compare-btn"]') as HTMLButtonElement).click()
+    await flushPromises()
+    const text = document.querySelector('[data-prks-role="editor-recovery-chosen-text"]') as HTMLTextAreaElement
+    text.value = 'y and x'
+    text.dispatchEvent(new Event('input'))
+    expect(openResearchNotesRecoveryReview(ctx)).toBe(false)
+    await flushPromises()
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect((document.querySelector('[data-prks-role="editor-recovery-chosen-text"]') as HTMLTextAreaElement).value).toBe('y and x')
+  })
+
   it('a dialog left open across a Work switch never acts, and the pane going away closes it', async () => {
     const restore = vi.fn(async () => ({ ok: true }))
     w.prksResearchNotesRecoveryRestore = restore
