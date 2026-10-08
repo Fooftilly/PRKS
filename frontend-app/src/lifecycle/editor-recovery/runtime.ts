@@ -31,7 +31,9 @@ export interface EditorRecoveryRuntime {
   start(): Promise<{ claim: RuntimeClaim; merged: MergeReport[] }>
   /**
    * Starts if needed, then merges emergency entries of pages that are dead now.
-   * Live pages' keys are left alone. Idempotent; scans run one at a time.
+   * Live pages' keys are left alone, and so are pages whose liveness cannot be
+   * established: only a later start() treats those as dead. Idempotent; scans
+   * run one at a time.
    */
   scanEmergency(): Promise<MergeReport[]>
   classify(record: Pick<DraftRecord, 'draftId' | 'owner'>, askingSession?: string | null): Promise<LineageClass>
@@ -48,25 +50,26 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
   let lastScan: Promise<unknown> = Promise.resolve()
 
   // Serialized so two scans never apply the same key's entries concurrently.
-  function merge(): Promise<MergeReport[]> {
-    const run = lastScan.then(runMerge)
+  function merge(definiteOnly: boolean): Promise<MergeReport[]> {
+    const run = lastScan.then(() => runMerge(definiteOnly))
     lastScan = run.catch(() => undefined)
     return run
   }
 
-  function runMerge(): Promise<MergeReport[]> {
+  function runMerge(definiteOnly: boolean): Promise<MergeReport[]> {
     if (!emergencyStorage) return Promise.resolve([])
     return mergeEmergencyEntries({
       storage: emergencyStorage,
       store,
       pageInstanceId: identity.pageInstanceId,
       isPageAlive: (id) => identity.isPageAlive(id),
+      definiteOnly,
     })
   }
 
   function start(): Promise<{ claim: RuntimeClaim; merged: MergeReport[] }> {
     if (started) return started
-    started = identity.claim().then(async (claim) => ({ claim, merged: await merge() }))
+    started = identity.claim().then(async (claim) => ({ claim, merged: await merge(false) }))
     return started
   }
 
@@ -77,7 +80,7 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
     start,
     scanEmergency() {
       if (!started) return start().then((result) => result.merged)
-      return started.then(() => merge())
+      return started.then(() => merge(true))
     },
     classify(record, askingSession = null) {
       return classifyLineage(record, { identity, localOwner: (id) => writers.ownerOf(id) }, askingSession)

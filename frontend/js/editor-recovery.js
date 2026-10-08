@@ -166,39 +166,67 @@ var prksEditorRecovery = (function(exports) {
 			return {
 				key,
 				pageInstanceId,
-				payload: parsePayload(raw, pageInstanceId)
+				payload: parsePayload(raw, pageInstanceId),
+				raw
 			};
 		});
 	}
-	async function mergeEmergencyEntries(env) {
-		const reports = [];
-		for (const stored of readEmergencyKeys(env.storage)) {
-			if (stored.pageInstanceId === env.pageInstanceId || !stored.payload) continue;
-			if (await env.isPageAlive(stored.pageInstanceId) === true) continue;
-			const outcomes = [];
-			const suppressed = [];
-			let complete = true;
-			for (const entry of stored.payload.entries) try {
-				const outcome = await env.store.applyEmergencyEntry(stored.payload, entry);
+	function readRaw(storage, key) {
+		try {
+			return storage.getItem(key);
+		} catch {
+			return;
+		}
+	}
+	async function mergeable(env, stored) {
+		if (stored.pageInstanceId === env.pageInstanceId || !stored.payload) return false;
+		if (env.definiteOnly && stored.payload.runtimeId === null) return false;
+		const alive = await env.isPageAlive(stored.pageInstanceId);
+		return env.definiteOnly ? alive === false : alive !== true;
+	}
+	/**
+	* Applies one key's entries, re-reading the key before each step: if its page
+	* rewrote it since the snapshot, the rest waits for a later scan and the key
+	* is kept, so a stale snapshot never recreates a draft or removes newer entries.
+	*/
+	async function mergeKey(env, stored, payload) {
+		const outcomes = [];
+		const suppressed = [];
+		let complete = true;
+		for (const entry of payload.entries) {
+			if (readRaw(env.storage, stored.key) !== stored.raw) {
+				complete = false;
+				break;
+			}
+			try {
+				const outcome = await env.store.applyEmergencyEntry(payload, entry);
 				outcomes.push(outcome);
 				if (outcome === "deferred") complete = false;
 				if (outcome === "suppressed") suppressed.push(entry.draftId);
 			} catch {
 				complete = false;
 			}
-			if (complete) try {
-				env.storage.removeItem(stored.key);
-			} catch {
-				complete = false;
-			}
-			if (complete && env.store.clearTombstone) for (const draftId of suppressed) try {
-				await env.store.clearTombstone(draftId, stored.pageInstanceId);
-			} catch {}
-			reports.push({
-				key: stored.key,
-				outcomes,
-				removed: complete
-			});
+		}
+		if (complete && readRaw(env.storage, stored.key) !== stored.raw) complete = false;
+		if (complete) try {
+			env.storage.removeItem(stored.key);
+		} catch {
+			complete = false;
+		}
+		if (complete && env.store.clearTombstone) for (const draftId of suppressed) try {
+			await env.store.clearTombstone(draftId, stored.pageInstanceId);
+		} catch {}
+		return {
+			key: stored.key,
+			outcomes,
+			removed: complete
+		};
+	}
+	async function mergeEmergencyEntries(env) {
+		const reports = [];
+		for (const stored of readEmergencyKeys(env.storage)) {
+			if (!await mergeable(env, stored)) continue;
+			reports.push(await mergeKey(env, stored, stored.payload));
 		}
 		return reports;
 	}
@@ -1762,25 +1790,26 @@ var prksEditorRecovery = (function(exports) {
 		});
 		let started = null;
 		let lastScan = Promise.resolve();
-		function merge() {
-			const run = lastScan.then(runMerge);
+		function merge(definiteOnly) {
+			const run = lastScan.then(() => runMerge(definiteOnly));
 			lastScan = run.catch(() => void 0);
 			return run;
 		}
-		function runMerge() {
+		function runMerge(definiteOnly) {
 			if (!emergencyStorage) return Promise.resolve([]);
 			return mergeEmergencyEntries({
 				storage: emergencyStorage,
 				store,
 				pageInstanceId: identity.pageInstanceId,
-				isPageAlive: (id) => identity.isPageAlive(id)
+				isPageAlive: (id) => identity.isPageAlive(id),
+				definiteOnly
 			});
 		}
 		function start() {
 			if (started) return started;
 			started = identity.claim().then(async (claim) => ({
 				claim,
-				merged: await merge()
+				merged: await merge(false)
 			}));
 			return started;
 		}
@@ -1791,7 +1820,7 @@ var prksEditorRecovery = (function(exports) {
 			start,
 			scanEmergency() {
 				if (!started) return start().then((result) => result.merged);
-				return started.then(() => merge());
+				return started.then(() => merge(true));
 			},
 			classify(record, askingSession = null) {
 				return classifyLineage(record, {

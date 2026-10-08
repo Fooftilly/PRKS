@@ -113,6 +113,43 @@ describe('mergeEmergencyEntries', () => {
     expect([...storage.map.keys()].sort()).toEqual([emergencyKeyOf('p-live'), emergencyKeyOf('p-me')])
   })
 
+  it('on a re-scan, merges only a definite dead page that had settled its claim', async () => {
+    const storage = memoryStorage()
+    for (const page of ['p-unknown', 'p-dead', 'p-unsettled']) writeEmergency(storage, emergencyKeyOf(page), payload(page))
+    const unsettled = payload('p-unsettled')
+    unsettled.runtimeId = null
+    writeEmergency(storage, emergencyKeyOf('p-unsettled'), unsettled)
+    const liveness: Record<string, boolean | null> = { 'p-unknown': null, 'p-dead': false, 'p-unsettled': false }
+    const { store, applied } = fakeStore()
+    const env = { storage, store, pageInstanceId: 'p-me', isPageAlive: async (id: string) => liveness[id] ?? null }
+    await mergeEmergencyEntries({ ...env, definiteOnly: true })
+    expect(applied).toEqual(['p-dead'])
+    // A later start still treats an unknown or unsettled page as a previous load.
+    await mergeEmergencyEntries(env)
+    expect(applied.sort()).toEqual(['p-dead', 'p-unknown', 'p-unsettled'])
+    expect(storage.map.size).toBe(0)
+  })
+
+  it('stops and keeps the key when its page rewrote it after the snapshot', async () => {
+    const storage = memoryStorage()
+    const two = payload('p-dead')
+    two.entries.push({ ...two.entries[0]!, draftId: 'd-second' })
+    writeEmergency(storage, emergencyKeyOf('p-dead'), two)
+    const newer = JSON.stringify(payload('p-dead', 'newer tail'))
+    const applied: string[] = []
+    const store: Pick<RecoveryStore, 'applyEmergencyEntry'> = {
+      applyEmergencyEntry: async (_p, entry) => {
+        applied.push(entry.draftId)
+        storage.setItem(emergencyKeyOf('p-dead'), newer)
+        return 'written'
+      },
+    }
+    const [report] = await mergeEmergencyEntries({ storage, store, pageInstanceId: 'p-me', isPageAlive: async () => false })
+    expect(applied).toHaveLength(1)
+    expect(report!.removed).toBe(false)
+    expect(storage.map.get(emergencyKeyOf('p-dead'))).toBe(newer)
+  })
+
   it('keeps a key when an entry could not be applied or is unreadable', async () => {
     const storage = memoryStorage()
     writeEmergency(storage, emergencyKeyOf('p-dead'), payload('p-dead'))
