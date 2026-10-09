@@ -508,22 +508,35 @@ describe('Folder Reminders sessions', () => {
     expect(session(ownerA)?.ownQueued).toBeNull()
   })
 
-  it('keeps at most 32 unsaved copies per pane, dropping the oldest', async () => {
+  it('never drops unsaved text, however many Folders a pane visits while saves fail', async () => {
     installShell()
     const { ownerA } = mountPair()
-    for (let i = 0; i < 40; i += 1) {
-      const id = 'F-' + i
-      server[id] = { private_notes: '', revision: 1 }
+    const ids = Array.from({ length: 40 }, (_, i) => 'F-' + i)
+    for (const id of ids) server[id] = { private_notes: '', revision: 1 }
+    queue.failNext(1000)
+    for (const id of ids) {
       await openFolder(ownerA, id)
       const { field } = mountCard(ownerA, id)
-      type(field, 'unsaved ' + i)
+      type(field, 'unsaved ' + id)
+      /* Leaving flushes; every write is refused. */
+      w.prksFlushPendingPrivateNotes(ownerA)
+      await settle()
     }
     await openFolder(ownerA, FA)
     mountCard(ownerA, FA)
-    const holds = Object.keys(ownerA.ui.folderPrivateNoteHolds || {})
-    expect(holds).toHaveLength(32)
-    expect(holds[0]).toBe('F-8')
-    expect(holds[31]).toBe('F-39')
+    expect(Object.keys(ownerA.ui.folderPrivateNoteHolds || {})).toEqual(ids)
+    expect(noteRows()).toEqual([])
+    /* The first Folder typed in still has its text, and saves it once writes work again. */
+    queue.failNext(0)
+    await openFolder(ownerA, 'F-0')
+    const first = mountCard(ownerA, 'F-0')
+    expect(first.field.value).toBe('unsaved F-0')
+    expect(session(ownerA)?.dirty).toBe(true)
+    w.prksFlushPendingPrivateNotes(ownerA)
+    await settle()
+    expect(noteRows().map((r) => [r.entity_id, r.payload.value])).toEqual([['F-0', 'unsaved F-0']])
+    expect(ownerA.ui.folderPrivateNoteHolds?.['F-0']).toBeUndefined()
+    expect(Object.keys(ownerA.ui.folderPrivateNoteHolds || {})).toHaveLength(39)
   })
 
   it('does not paint one pane\'s draft into another pane', async () => {
