@@ -710,6 +710,46 @@
         return text !== null ? text : fallback;
     }
 
+    /** Fail-closed read for recovery decisions: every queued row, or null when the queue could not be read. */
+    async function readPendingFolderNotesSnapshot() {
+        const runtime = root.prksSync;
+        if (!runtime || !runtime.store || typeof runtime.store.listOperations !== 'function') return null;
+        try {
+            const rows = await runtime.store.listOperations();
+            return Array.isArray(rows) ? rows : null;
+        } catch (_e) {
+            return null;
+        }
+    }
+
+    /**
+     * Whether the server holds `base.value` as the Folder's Reminders at the
+     * `private_notes` field revision `base.revision`. The body is read, then
+     * the field revision: when that revision still equals `base.revision`, the
+     * body read before it is the field at that revision (a later write would
+     * have advanced it). Any failed or cached read is unverified. This is the
+     * Folder field revision, never a Work note revision.
+     */
+    async function verifyFolderNoteBase(folderId, base) {
+        if (!base || base.source !== 'server' || typeof folderId !== 'string' || !folderId ||
+            typeof root.prksOfflineReadEntity !== 'function') {
+            return false;
+        }
+        try {
+            const folder = await root.prksOfflineReadEntity('folder', folderId,
+                '/api/folders/' + encodeURIComponent(folderId), {});
+            if (!folder || folder.source !== 'server' || !folder.value) return false;
+            const raw = folder.value[PRIVATE_NOTES_FIELD];
+            if ((raw == null ? '' : String(raw)) !== base.value) return false;
+            const state = await readFolderState(folderId);
+            const entry = state && state.source === 'server' && state.value && state.value.fields
+                ? state.value.fields[PRIVATE_NOTES_FIELD] : null;
+            return !!(entry && entry.revision === base.revision);
+        } catch (_e) {
+            return false;
+        }
+    }
+
     /**
      * One subscription per pane, tied to its route like the Work notes one:
      * acknowledgements patch the pane's Folder whether or not the Reminders
@@ -887,6 +927,8 @@
         prksAcceptFolderNoteAck: acceptFolderNoteAck,
         prksRefreshPendingFolderNotes: refreshPendingFolderNotes,
         prksPendingFolderNoteText: pendingFolderNoteText,
+        prksReadPendingFolderNotesSnapshot: readPendingFolderNotesSnapshot,
+        prksVerifyFolderNoteBase: verifyFolderNoteBase,
         prksBindFolderNotesSync: bindFolderNotesSync,
         prksDeleteFolderDurably: deleteFolderDurably,
         prksFolderCreateSyncHandler: createHandler,

@@ -1,5 +1,6 @@
 /**
- * Recovery presentation shared by the Work note editors (#466 slice 3, #474):
+ * Recovery presentation shared by the Work note editors (#466 slice 3, #474)
+ * and Folder Reminders (#534):
  * a pane notice per editor and one Review dialog for the page. The classic
  * adapter of each editor (`works.js` for Research Notes, `ui.js` for
  * Reminders, both over `work-note-recovery.js`) stays the authority: it builds
@@ -50,6 +51,10 @@ export interface RecoveryPresenterConfig {
   /** What the drafts are, e.g. "Research Notes" or "Reminders". */
   subject: string
   adapter: () => ClassicRecoveryAdapter
+  /** The pane entity the editor belongs to: 'work' (the default) or 'folder'. */
+  entityType?: string
+  /** That entity in words, e.g. "Work" (the default) or "Folder". */
+  entityLabel?: string
 }
 
 export interface RecoveryPresenter {
@@ -60,7 +65,7 @@ export interface RecoveryPresenter {
   update(ctx: RecoveryOwner): void
   /** The pane's editor is gone: its notice goes, and an open Review of it detaches or closes. */
   forget(ctx?: RecoveryOwner): void
-  /** Opens Review for the Work this pane shows. One Review at a time. */
+  /** Opens Review for the Work or Folder this pane shows. One Review at a time. */
   open(ctx: RecoveryOwner, opener?: HTMLElement | null): boolean
 }
 
@@ -69,6 +74,7 @@ interface OpenReview {
   host: HTMLElement
   ctx: RecoveryOwner
   tabId: string
+  entityType: string
   workId: string
   opener: HTMLElement | null
   /** The dialog's own close request, bound once it mounts. */
@@ -85,8 +91,8 @@ function tabKey(ctx: RecoveryOwner): string {
   return String(ctx && ctx.tabId != null ? ctx.tabId : '')
 }
 
-function liveWorkId(ctx: RecoveryOwner): string {
-  const live = ctx && !ctx.destroyed && ctx.getEntity ? ctx.getEntity('work') : null
+function liveEntityId(ctx: RecoveryOwner, entityType: string): string {
+  const live = ctx && !ctx.destroyed && ctx.getEntity ? ctx.getEntity(entityType) : null
   return live && live.id != null ? String(live.id) : ''
 }
 
@@ -119,7 +125,7 @@ export function closeRecoveryReview(modal?: Element | null): boolean {
   openReview = null
   render(null, open.host)
   open.host.remove()
-  if (!open.detached && liveWorkId(open.ctx) === open.workId) {
+  if (!open.detached && liveEntityId(open.ctx, open.entityType) === open.workId) {
     if (open.refresh) open.refresh()
     if (open.opener && open.opener.isConnected) open.opener.focus()
   }
@@ -141,6 +147,9 @@ export function requestRecoveryReviewClose(modal?: Element | null): boolean {
 
 export function createRecoveryPresenter(config: RecoveryPresenterConfig): RecoveryPresenter {
   const views = new Map<string, ShallowRef<RecoveryNoticeView | null>>()
+  const entityType = config.entityType || 'work'
+  const entityLabel = config.entityLabel || 'Work'
+  const liveId = (ctx: RecoveryOwner) => liveEntityId(ctx, entityType)
 
   function readView(ctx: RecoveryOwner): RecoveryNoticeView | null {
     const read = config.adapter().view
@@ -154,8 +163,8 @@ export function createRecoveryPresenter(config: RecoveryPresenterConfig): Recove
   function actionsFor(ctx: RecoveryOwner, workId: string, review: { detached: boolean }): ReviewActions {
     const api = config.adapter()
     const page = helpers()
-    // A dialog left open across a Work switch or pane change never acts.
-    const current = () => !review.detached && liveWorkId(ctx) === workId
+    // A dialog left open across a Work or Folder switch or pane change never acts.
+    const current = () => !review.detached && liveId(ctx) === workId
     return {
       async load() {
         if (!current() || !api.details) return null
@@ -210,7 +219,7 @@ export function createRecoveryPresenter(config: RecoveryPresenterConfig): Recove
       if (mine) detachOrCloseReview()
     },
     open(ctx, opener = null) {
-      const workId = liveWorkId(ctx)
+      const workId = liveId(ctx)
       if (!workId) return false
       /* One Review at a time: an open one closes under its own policy (it may hold
        * edited text and ask first), and Review is opened again once it is gone. */
@@ -219,8 +228,8 @@ export function createRecoveryPresenter(config: RecoveryPresenterConfig): Recove
         return false
       }
       closeRecoveryReview()
-      const live = ctx.getEntity ? ctx.getEntity('work') : null
-      const title = live && typeof live.title === 'string' && live.title ? live.title : 'This Work'
+      const live = ctx.getEntity ? ctx.getEntity(entityType) : null
+      const title = live && typeof live.title === 'string' && live.title ? live.title : `This ${entityLabel}`
       const host = document.createElement('div')
       host.setAttribute('data-prks-role', 'editor-recovery-review-host')
       document.body.appendChild(host)
@@ -229,6 +238,7 @@ export function createRecoveryPresenter(config: RecoveryPresenterConfig): Recove
         host,
         ctx,
         tabId: tabKey(ctx),
+        entityType,
         workId,
         opener,
         requestClose: null,
@@ -244,6 +254,7 @@ export function createRecoveryPresenter(config: RecoveryPresenterConfig): Recove
         h(EditorRecoveryReview, {
           subject: config.subject,
           entityTitle: title,
+          entityLabel,
           actions: actionsFor(ctx, workId, review),
           bindClose: (request: () => void) => {
             review.requestClose = request

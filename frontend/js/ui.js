@@ -2594,10 +2594,14 @@ function renderPrksPrivateNotesCard(entityType, entityId, initialText) {
     const text = prksPrivateNotesTextForEntity(entityType, entityId, initialText);
     const hintKey = entityType === 'work' ? 'notes-private-file' : 'notes-private-folder';
     const hintBtn = prksHintBtnHtml(hintKey, 'About reminders', 'prks-private-notes-card__hint-btn');
+    /* Folder Reminders recovery notice (#534): filled by the Vue presenter once bound. */
+    const recoveryHost = entityType === 'folder'
+        ? `<div data-prks-role="private-notes-recovery-host" data-prks-notes-id="${escapeHtml(String(entityId))}"></div>`
+        : '';
     const card = `
         <div class="doc-meta-card prks-private-notes-card">
             <h3 class="prks-private-notes-card__head"><span class="prks-private-notes-card__head-text">Reminders</span>${hintBtn}</h3>
-            <textarea
+            ${recoveryHost}<textarea
                 class="prks-private-notes-input"
                 id="prks-private-notes-${entityType}-${entityId}"
                 rows="4"
@@ -2610,6 +2614,24 @@ function renderPrksPrivateNotesCard(entityType, entityId, initialText) {
         </div>`;
     if (entityType !== 'work') return card;
     return `<div data-prks-role="work-private-notes-anchor">${card}</div>`;
+}
+
+/* The family's recovery hooks; the family is looked up when a hook runs. */
+function prksPrivateRecoveryHooks(entityType) {
+    const family = function () { return PRKS_PRIVATE_NOTE_FAMILIES[entityType]; };
+    return Object.freeze({
+        leave: function (session) { prksPrivateRecoveryLeave(family(), session); },
+        inherit: function (session) { prksPrivateRecoveryInherit(family(), session); },
+        drop: function (session) { prksPrivateRecoveryDrop(family(), session); },
+        edit: function (ctx, session) { prksPrivateRecoveryEdit(family(), ctx, session); },
+        beforeSave: function (session) { prksPrivateRecoveryBeforeSave(family(), session); },
+        queued: function (session, opId, generation, text, base) {
+            prksPrivateRecoveryQueued(family(), session, opId, generation, text, base);
+        },
+        settled: function (ctx, id, session, result, generation, text) {
+            prksPrivateRecoverySettled(family(), ctx, id, session, result, generation, text);
+        },
+    });
 }
 
 /*
@@ -2625,7 +2647,7 @@ function renderPrksPrivateNotesCard(entityType, entityId, initialText) {
  *
  * The family supplies what differs: the entity type and the field naming its
  * id on the session, the acknowledged base and the durable save, the pending
- * overlay, and the Work-only recovery hooks. A Folder's Reminders are the
+ * overlay, and the recovery kind. A Folder's Reminders are the
  * `private_notes` Folder field (folder-state.js), measured against that
  * field's revision; a Work's are the Work private note with its own revision.
  */
@@ -2652,19 +2674,7 @@ const PRKS_PRIVATE_NOTE_FAMILIES = Object.freeze({
         ok: function (code) { return code === 'saved'; },
         /* Work keeps its queued row on the recovery lineage (`recoveryQueued`). */
         tracksOwnQueued: false,
-        recovery: {
-            leave: function (session) { prksWorkPrivateRecoveryLeave(session); },
-            inherit: function (session) { prksWorkPrivateRecoveryInherit(session); },
-            drop: function (session) { prksWorkPrivateRecoveryDrop(session); },
-            edit: function (ctx, session) { prksWorkPrivateRecoveryEdit(ctx, session); },
-            beforeSave: function (session) { prksWorkPrivateRecoveryBeforeSave(session); },
-            queued: function (session, opId, generation, text, base) {
-                prksWorkPrivateRecoveryQueued(session, opId, generation, text, base);
-            },
-            settled: function (ctx, id, session, result, generation, text) {
-                prksWorkPrivateRecoverySettled(ctx, id, session, result, generation, text);
-            },
-        },
+        recovery: prksPrivateRecoveryHooks('work'),
     }),
     folder: Object.freeze({
         entityType: 'folder',
@@ -2686,7 +2696,7 @@ const PRKS_PRIVATE_NOTE_FAMILIES = Object.freeze({
         save: prksSaveFolderPrivateNoteForSession,
         ok: function (code) { return code === 'queued' || code === 'unchanged'; },
         tracksOwnQueued: true,
-        recovery: null,
+        recovery: prksPrivateRecoveryHooks('folder'),
     }),
 });
 
@@ -2893,78 +2903,139 @@ function prksFolderPrivateNoteAcknowledged(ctx, ack) {
 }
 
 /*
- * Browser-local recovery of Work Reminders text (#474), on the shared Work
- * note adapter (`work-note-recovery.js`) and the `prksEditorRecovery` runtime
- * the Research Notes editor uses: one recovery lineage per Reminders session,
- * written on every edit, before the 850 ms save debounce ends.
+ * Browser-local recovery of Reminders text, Work (#474) and Folder (#534), on
+ * the shared note adapter (`work-note-recovery.js`) and the
+ * `prksEditorRecovery` runtime the Research Notes editor uses: one recovery
+ * lineage per Reminders session, written on every edit, before the 850 ms
+ * save debounce ends.
  *
- * A Reminders session is the TabContext's one `workPrivateNoteSession` slot;
- * leaving the Work replaces it with a carried copy. The lineage follows the
- * text: a replaced session that still holds unsaved text keeps its writer
- * (in `prksWorkPrivateRecoverySessions`) until a carried session for the same
- * pane and Work inherits it (`recoveryHeir`), and a save the replaced session
+ * A Reminders session is the TabContext's one session slot of its family;
+ * leaving the entity replaces it with a carried copy. The lineage follows the
+ * text: a replaced session that still holds unsaved text keeps its writer (in
+ * its family's `sessions`) until a carried session for the same pane and
+ * entity inherits it (`recoveryHeir`), and a save the replaced session
  * started still reports to the session that now holds the writer. A clean
  * replaced session gives its lineage back.
+ *
+ * Folder Reminders are the Folder's `private_notes` field: their base is the
+ * pane's observed Folder field base (value, Folder field revision, source),
+ * their queued rows are SET_FOLDER_FIELD rows for that field, and their
+ * acknowledgement is matched by op id and exact text. A Folder field revision
+ * is never compared with a Work note revision: each kind reads its own.
  */
 const PRKS_PRIVATE_RECOVERY_KIND = 'work-private-note';
+const PRKS_FOLDER_PRIVATE_RECOVERY_KIND = 'folder-private-note';
 const PRKS_PRIVATE_NOTES_RESTORED_STATUS = 'Restored unsaved changes';
-const prksWorkPrivateRecoverySessions = new Set();
-let prksWorkPrivateNotesRecoveryAdapter = null;
+/* Per family: the sessions that left their pane's slot still holding a lineage, and the adapter. */
+const prksPrivateRecoveryState = {
+    work: { sessions: new Set(), adapter: null },
+    folder: { sessions: new Set(), adapter: null },
+};
+const prksWorkPrivateRecoverySessions = prksPrivateRecoveryState.work.sessions;
 
 function prksWorkPrivateNoteSessionKey(tabId, workId) {
-    return String(tabId == null ? '' : tabId) + '\0' + String(workId == null ? '' : workId);
+    return prksPrivateNoteSessionKey(PRKS_PRIVATE_NOTE_FAMILIES.work, tabId, workId);
 }
 
-/* The Reminders adapter, or null where the shared recovery module is not loaded. */
-function prksWorkPrivateNotesRecovery() {
-    if (prksWorkPrivateNotesRecoveryAdapter) return prksWorkPrivateNotesRecoveryAdapter;
-    if (typeof window.prksCreateWorkNoteRecovery !== 'function') return null;
-    prksWorkPrivateNotesRecoveryAdapter = window.prksCreateWorkNoteRecovery({
-        kind: PRKS_PRIVATE_RECOVERY_KIND,
-        operation: 'SET_WORK_PRIVATE_NOTE',
-        bodyField: 'private_notes',
-        revisionField: 'private_note_revision',
-        reportSlot: 'privateNotesRecovery',
-        entries: prksWorkPrivateRecoveryEntries,
-        key: function (ctx, id) { return prksWorkPrivateNoteSessionKey(ctx && ctx.tabId, id); },
-        entry: prksWorkPrivateRecoveryEntry,
-        text: function (session) { return String(session.draftText == null ? '' : session.draftText); },
-        hasSession: prksWorkPrivateRecoveryHasSession,
-        paintable: prksWorkPrivateNotesMayPaint,
-        target: prksWorkPrivateNotesRecoveryTarget,
-        shown: function (editor) { return String(editor.textarea.value); },
-        install: prksWorkPrivateRecoveryInstall,
-        takeOver: function (api, ctx, id, _editor, writer, restore, base) {
-            prksWorkPrivateRecoveryInstall(api, ctx, id, writer, restore, base);
+/* The family's Reminders kind: what differs between a Work and a Folder note. */
+function prksPrivateRecoveryKind(family) {
+    if (family.entityType === 'work') {
+        return {
+            kind: PRKS_PRIVATE_RECOVERY_KIND,
+            operation: 'SET_WORK_PRIVATE_NOTE',
+            bodyField: 'private_notes',
+            revisionField: 'private_note_revision',
+            reportSlot: 'privateNotesRecovery',
+            publish: function (ctx) {
+                if (typeof window.prksVueUpdateWorkPrivateNotesRecovery === 'function') window.prksVueUpdateWorkPrivateNotesRecovery(ctx);
+            },
+        };
+    }
+    return {
+        kind: PRKS_FOLDER_PRIVATE_RECOVERY_KIND,
+        operation: 'SET_FOLDER_FIELD',
+        entityType: 'folder',
+        reportSlot: 'folderPrivateNotesRecovery',
+        idOf: function (entry) { return entry ? entry.folderId : undefined; },
+        observed: function (owner) {
+            return typeof prksFolderNoteObserved === 'function' ? prksFolderNoteObserved(owner) : null;
         },
-        replace: prksWorkPrivateRecoveryReplaceText,
+        ack: function (event) {
+            const ack = typeof prksFolderPrivateNoteAck === 'function' ? prksFolderPrivateNoteAck(event) : null;
+            return ack ? { opId: ack.opId, entityId: ack.folderId, text: ack.text, stored: ack.stored, revision: ack.revision } : null;
+        },
+        queueRows: function (rows, id) {
+            if (typeof prksFolderPrivateNoteOperations !== 'function') return null;
+            return prksFolderPrivateNoteOperations(rows, String(id)).map(function (row) {
+                return { opId: row.op_id, text: row.payload && typeof row.payload.value === 'string' ? row.payload.value : '' };
+            });
+        },
+        readRows: function () {
+            return typeof prksReadPendingFolderNotesSnapshot === 'function' ? prksReadPendingFolderNotesSnapshot() : Promise.resolve(null);
+        },
+        refreshRows: function () {
+            return typeof prksRefreshPendingFolderNotes === 'function' ? prksRefreshPendingFolderNotes() : null;
+        },
+        verifyBase: function (id, base) {
+            return typeof prksVerifyFolderNoteBase === 'function' ? prksVerifyFolderNoteBase(id, base) : false;
+        },
+        unchanged: function (result) { return !!result && result.code === 'unchanged'; },
         publish: function (ctx) {
-            if (typeof window.prksVueUpdateWorkPrivateNotesRecovery === 'function') window.prksVueUpdateWorkPrivateNotesRecovery(ctx);
+            if (typeof window.prksVueUpdateFolderPrivateNotesRecovery === 'function') window.prksVueUpdateFolderPrivateNotesRecovery(ctx);
         },
+    };
+}
+
+/* The family's Reminders adapter, or null where the shared recovery module is not loaded. */
+function prksPrivateNotesRecovery(family) {
+    const state = family ? prksPrivateRecoveryState[family.entityType] : null;
+    if (!state) return null;
+    if (state.adapter) return state.adapter;
+    if (typeof window.prksCreateWorkNoteRecovery !== 'function') return null;
+    state.adapter = window.prksCreateWorkNoteRecovery(Object.assign(prksPrivateRecoveryKind(family), {
+        entries: function () { return prksPrivateRecoveryEntries(family); },
+        key: function (ctx, id) { return prksPrivateNoteSessionKey(family, ctx && ctx.tabId, id); },
+        entry: function (ctx, id) { return prksPrivateRecoveryEntry(family, ctx, id); },
+        text: function (session) { return String(session.draftText == null ? '' : session.draftText); },
+        hasSession: function (ctx, id) { return prksPrivateRecoveryHasSession(family, ctx, id); },
+        paintable: function (owner, id, generation) { return prksPrivateNotesMayPaint(family, owner, id, generation); },
+        target: function (ctx, id) { return prksPrivateNotesRecoveryTarget(family, ctx, id); },
+        shown: function (editor) { return String(editor.textarea.value); },
+        install: function (api, ctx, id, writer, restore, base) {
+            return prksPrivateRecoveryInstall(family, api, ctx, id, writer, restore, base);
+        },
+        takeOver: function (api, ctx, id, _editor, writer, restore, base) {
+            prksPrivateRecoveryInstall(family, api, ctx, id, writer, restore, base);
+        },
+        replace: function (ctx, id, editor, text) { return prksPrivateRecoveryReplaceText(family, ctx, id, editor, text); },
         owners: function (fn) {
             if (typeof prksForEachLiveTabContext !== 'function') return;
             prksForEachLiveTabContext(function (ctx) {
                 const editor = ctx && ctx.getResource ? ctx.getResource('privateNotesEditor') : null;
-                if (editor && editor.entityType === 'work') fn(ctx, editor.entityId);
+                if (editor && editor.entityType === family.entityType) fn(ctx, editor.entityId);
             });
         },
-        forget: prksWorkPrivateRecoveryDrop,
+        forget: function (session) { prksPrivateRecoveryDrop(family, session); },
         acknowledged: function (session, writer) {
             /* A replaced or closed pane's session whose text is now saved gives its lineage back. */
-            if (prksWorkPrivateRecoveryIsCurrent(session)) return;
+            if (prksPrivateRecoveryIsCurrent(family, session)) return;
             let clean = false;
             try { clean = writer.state() === 'clean'; } catch (_e) { /* best-effort */ }
-            if (clean) prksWorkPrivateRecoveryDrop(session);
+            if (clean) prksPrivateRecoveryDrop(family, session);
         },
-    });
-    return prksWorkPrivateNotesRecoveryAdapter;
+    }));
+    return state.adapter;
 }
 
-function prksWorkPrivateRecoveryEntries() {
-    const out = new Set(prksWorkPrivateRecoverySessions);
+function prksWorkPrivateNotesRecovery() {
+    return prksPrivateNotesRecovery(PRKS_PRIVATE_NOTE_FAMILIES.work);
+}
+
+function prksPrivateRecoveryEntries(family) {
+    const out = new Set(prksPrivateRecoveryState[family.entityType].sessions);
     if (typeof prksForEachLiveTabContext === 'function') {
         prksForEachLiveTabContext(function (ctx) {
-            const session = ctx && ctx.ui ? ctx.ui.workPrivateNoteSession : null;
+            const session = ctx && ctx.ui ? ctx.ui[family.sessionSlot] : null;
             if (session && session.key) out.add(session);
         });
     }
@@ -2972,104 +3043,105 @@ function prksWorkPrivateRecoveryEntries() {
 }
 
 /* Whether this session is still its pane's current Reminders slot. */
-function prksWorkPrivateRecoveryIsCurrent(session) {
+function prksPrivateRecoveryIsCurrent(family, session) {
     let current = false;
     if (!session || typeof prksForEachLiveTabContext !== 'function') return false;
     prksForEachLiveTabContext(function (ctx) {
-        if (ctx && ctx.ui && ctx.ui.workPrivateNoteSession === session) current = true;
+        if (ctx && ctx.ui && ctx.ui[family.sessionSlot] === session) current = true;
     });
     return current;
 }
 
-/* This pane's Reminders session for the Work: its current slot, else a replaced one still holding a lineage. */
-function prksWorkPrivateRecoveryEntry(ctx, id) {
-    const session = ctx && ctx.ui ? ctx.ui.workPrivateNoteSession : null;
-    if (session && String(session.workId) === String(id) && String(session.ownerTabId) === String(ctx.tabId)) return session;
-    const key = prksWorkPrivateNoteSessionKey(ctx && ctx.tabId, id);
+/* This pane's Reminders session for the entity: its current slot, else a replaced one still holding a lineage. */
+function prksPrivateRecoveryEntry(family, ctx, id) {
+    const session = ctx && ctx.ui ? ctx.ui[family.sessionSlot] : null;
+    if (session && String(session.entityId) === String(id) && String(session.ownerTabId) === String(ctx.tabId)) return session;
+    const key = prksPrivateNoteSessionKey(family, ctx && ctx.tabId, id);
     let found = null;
-    prksWorkPrivateRecoverySessions.forEach(function (s) {
+    prksPrivateRecoveryState[family.entityType].sessions.forEach(function (s) {
         if (s.key === key && s.recovery) found = s;
     });
     return found;
 }
 
-/* This pane already has text of its own for the Work (typed, carried or held): a restore only reports. */
-function prksWorkPrivateRecoveryHasSession(ctx, id) {
-    const key = prksWorkPrivateNoteSessionKey(ctx && ctx.tabId, id);
-    const holds = ctx && ctx.ui ? ctx.ui.workPrivateNoteHolds : null;
+/* This pane already has text of its own for the entity (typed, carried or held): a restore only reports. */
+function prksPrivateRecoveryHasSession(family, ctx, id) {
+    const key = prksPrivateNoteSessionKey(family, ctx && ctx.tabId, id);
+    const holds = ctx && ctx.ui ? ctx.ui[family.holdsSlot] : null;
     if (holds && Object.prototype.hasOwnProperty.call(holds, String(id))) return true;
     const own = function (s) {
-        return !!(s && s.key === key && (prksWorkPrivateNoteUnsaved(s) || s.recovery));
+        return !!(s && s.key === key && (prksPrivateNoteUnsaved(s) || s.recovery));
     };
-    if (own(ctx && ctx.ui ? ctx.ui.workPrivateNoteSession : null)) return true;
-    return Array.from(prksWorkPrivateRecoverySessions).some(own);
+    if (own(ctx && ctx.ui ? ctx.ui[family.sessionSlot] : null)) return true;
+    return Array.from(prksPrivateRecoveryState[family.entityType].sessions).some(own);
 }
 
-function prksWorkPrivateNotesMayPaint(owner, workId, generation) {
+function prksPrivateNotesMayPaint(family, owner, id, generation) {
     if (!owner || owner.destroyed) return false;
     if (typeof owner.isCurrent === 'function' && !owner.isCurrent(generation)) return false;
-    const live = owner.getEntity ? owner.getEntity('work') : null;
-    return !!(live && String(live.id) === String(workId || ''));
+    const live = owner.getEntity ? owner.getEntity(family.entityType) : null;
+    return !!(live && String(live.id) === String(id || ''));
 }
 
-/* The installed Reminders field of this pane for the Work, or null. */
-function prksWorkPrivateNotesRecoveryTarget(ctx, id) {
+/* The installed Reminders field of this pane for the entity, or null. */
+function prksPrivateNotesRecoveryTarget(family, ctx, id) {
     const editor = ctx && typeof ctx.getResource === 'function' ? ctx.getResource('privateNotesEditor') : null;
-    if (!editor || editor.entityType !== 'work' || editor.entityId !== String(id)) return null;
+    if (!editor || editor.entityType !== family.entityType || editor.entityId !== String(id)) return null;
     if (!editor.textarea || !editor.textarea.isConnected || !prksPrivateNotesOwnerCurrent(editor)) return null;
     return editor;
 }
 
 /* The session that holds the lineage this session's text belongs to. */
-function prksWorkPrivateRecoveryHolder(session) {
+function prksPrivateRecoveryHolder(session) {
     let s = session;
     for (let i = 0; s && !s.recovery && s.recoveryHeir && i < 32; i++) s = s.recoveryHeir;
     return s;
 }
 
-function prksWorkPrivateRecoveryEdit(ctx, session) {
-    const adapter = prksWorkPrivateNotesRecovery();
+function prksPrivateRecoveryEdit(family, ctx, session) {
+    const adapter = prksPrivateNotesRecovery(family);
     if (!adapter || !session) return;
     session.recoveryRestored = false;
     adapter.edit(ctx, session);
-    if (session.recovery) prksWorkPrivateRecoverySessions.add(session);
+    if (session.recovery) prksPrivateRecoveryState[family.entityType].sessions.add(session);
 }
 
-function prksWorkPrivateRecoveryBeforeSave(session) {
-    const adapter = prksWorkPrivateNotesRecovery();
-    const holder = prksWorkPrivateRecoveryHolder(session);
+function prksPrivateRecoveryBeforeSave(family, session) {
+    const adapter = prksPrivateNotesRecovery(family);
+    const holder = prksPrivateRecoveryHolder(session);
     if (!adapter || !holder || !holder.recovery) return;
     adapter.flush(holder);
     adapter.pipeline(holder, { state: 'saving' });
 }
 
-function prksWorkPrivateRecoveryQueued(session, opId, generation, text, base) {
-    const adapter = prksWorkPrivateNotesRecovery();
-    const holder = prksWorkPrivateRecoveryHolder(session);
+function prksPrivateRecoveryQueued(family, session, opId, generation, text, base) {
+    const adapter = prksPrivateNotesRecovery(family);
+    const holder = prksPrivateRecoveryHolder(session);
     if (adapter && holder) adapter.queued(holder, opId, generation, text, base);
 }
 
-function prksWorkPrivateRecoverySettled(ctx, id, session, result, generation, text) {
-    const adapter = prksWorkPrivateNotesRecovery();
-    const holder = prksWorkPrivateRecoveryHolder(session);
+function prksPrivateRecoverySettled(family, ctx, id, session, result, generation, text) {
+    const adapter = prksPrivateNotesRecovery(family);
+    const holder = prksPrivateRecoveryHolder(session);
     if (adapter && holder) adapter.settled(ctx, id, holder, result, { generation: generation, text: text });
 }
 
 /* The session leaves its pane's slot: unsaved text keeps its lineage for the carried copy. */
-function prksWorkPrivateRecoveryLeave(session) {
+function prksPrivateRecoveryLeave(family, session) {
     if (!session || !session.recovery) return;
-    if (prksWorkPrivateNoteUnsaved(session) || session.recoveryQueued) {
-        prksWorkPrivateRecoverySessions.add(session);
+    if (prksPrivateNoteUnsaved(session) || session.recoveryQueued) {
+        prksPrivateRecoveryState[family.entityType].sessions.add(session);
         return;
     }
-    prksWorkPrivateRecoveryDrop(session);
+    prksPrivateRecoveryDrop(family, session);
 }
 
-/* A carried session continues the lineage its pane left behind for this Work. */
-function prksWorkPrivateRecoveryInherit(session) {
+/* A carried session continues the lineage its pane left behind for this entity. */
+function prksPrivateRecoveryInherit(family, session) {
+    const sessions = prksPrivateRecoveryState[family.entityType].sessions;
     let from = null;
-    prksWorkPrivateRecoverySessions.forEach(function (s) {
-        if (s !== session && s.key === session.key && s.recovery && prksWorkPrivateNoteUnsaved(s)) from = s;
+    sessions.forEach(function (s) {
+        if (s !== session && s.key === session.key && s.recovery && prksPrivateNoteUnsaved(s)) from = s;
     });
     if (!from) return;
     ['recovery', 'recoveryBase', 'recoveryQueued', 'recoveryPipeline', 'recoveryPipelineStored',
@@ -3082,22 +3154,26 @@ function prksWorkPrivateRecoveryInherit(session) {
     session.editGeneration = Math.max(session.editGeneration, from.editGeneration);
     session.inheritedGeneration = session.editGeneration;
     from.recoveryHeir = session;
-    prksWorkPrivateRecoverySessions.delete(from);
-    prksWorkPrivateRecoverySessions.add(session);
+    sessions.delete(from);
+    sessions.add(session);
 }
 
 /* The session is done with its text: finish the last write and give the lineage back. */
-function prksWorkPrivateRecoveryDrop(session) {
+function prksPrivateRecoveryDrop(family, session) {
     if (!session) return;
-    prksWorkPrivateRecoverySessions.delete(session);
-    const adapter = prksWorkPrivateNotesRecovery();
+    prksPrivateRecoveryState[family.entityType].sessions.delete(session);
+    const adapter = prksPrivateNotesRecovery(family);
     if (adapter && session.recovery) adapter.release(session);
 }
 
+function prksWorkPrivateRecoveryDrop(session) {
+    prksPrivateRecoveryDrop(PRKS_PRIVATE_NOTE_FAMILIES.work, session);
+}
+
 /** A restore (on mount or from Review): this pane's session continues the recovered lineage. */
-function prksWorkPrivateRecoveryInstall(api, ctx, id, writer, restore, base) {
-    const adapter = prksWorkPrivateNotesRecovery();
-    const session = prksEnsureWorkPrivateNoteSession(ctx, id, restore.body);
+function prksPrivateRecoveryInstall(family, api, ctx, id, writer, restore, base) {
+    const adapter = prksPrivateNotesRecovery(family);
+    const session = prksEnsurePrivateNoteSession(family, ctx, id, restore.body);
     if (!adapter || !session) {
         void writer.release().catch(function () {});
         return null;
@@ -3123,17 +3199,21 @@ function prksWorkPrivateRecoveryInstall(api, ctx, id, writer, restore, base) {
         /* #475 provenance after reload: the queued predecessor's exact text. */
         ? { opId: restore.predecessor.opId, generation: 0, text: restore.predecessor.text }
         : null;
+    if (family.tracksOwnQueued) {
+        session.ownQueued = restore.predecessor
+            ? { opId: restore.predecessor.opId, generation: 0, text: restore.predecessor.text } : null;
+    }
     writer.setBase(adapter.draftBase(api, base));
     if (generation !== restore.record.generation) writer.edit(generation, restore.body);
     adapter.pipeline(session, { state: 'drafting' });
-    prksWorkPrivateRecoverySessions.add(session);
-    prksWorkPrivateNotesShowRestored(ctx, id, session);
+    prksPrivateRecoveryState[family.entityType].sessions.add(session);
+    prksPrivateNotesShowRestored(family, ctx, id, session);
     return session;
 }
 
 /* Paints restored text into the pane's field, says so, and sends it through the ordinary save. */
-function prksWorkPrivateNotesShowRestored(ctx, id, session) {
-    const editor = prksWorkPrivateNotesRecoveryTarget(ctx, id);
+function prksPrivateNotesShowRestored(family, ctx, id, session) {
+    const editor = prksPrivateNotesRecoveryTarget(family, ctx, id);
     session.statusText = PRKS_PRIVATE_NOTES_RESTORED_STATUS;
     if (editor) {
         editor.textarea.value = session.draftText;
@@ -3144,56 +3224,78 @@ function prksWorkPrivateNotesShowRestored(ctx, id, session) {
         return;
     }
     /* No field installed (another pane has the right panel): save from the session. */
-    const saver = prksWorkPrivateNoteSessionSaver(ctx, id);
-    if (saver) void prksEnqueueWorkPrivateNoteSave(saver);
+    const saver = prksPrivateNoteSessionSaver(family, ctx, id);
+    if (saver) void prksEnqueuePrivateNoteSave(family, saver);
 }
 
 /** Review chose `text` for this field: it saves through the ordinary path as this pane's edit. */
-function prksWorkPrivateRecoveryReplaceText(ctx, id, editor, text) {
+function prksPrivateRecoveryReplaceText(family, ctx, id, editor, text) {
     editor.textarea.value = text;
     ctx.clearTimer(editor.timerKey);
     prksPrivateNotesNoteEdit(editor);
-    const session = ctx.ui ? ctx.ui.workPrivateNoteSession : null;
-    return prksWorkPrivateRecoveryHolder(session) || null;
-}
-
-function prksRestoreWorkPrivateNoteRecovery(ctx, work, options) {
-    const adapter = prksWorkPrivateNotesRecovery();
-    return adapter ? adapter.restore(ctx, work, options) : Promise.resolve(null);
+    const session = ctx.ui ? ctx.ui[family.sessionSlot] : null;
+    return prksPrivateRecoveryHolder(session) || null;
 }
 
 const PRKS_PRIVATE_RECOVERY_UNAVAILABLE = { ok: false, code: 'unavailable' };
 
-window.prksRestoreWorkPrivateNoteRecovery = prksRestoreWorkPrivateNoteRecovery;
-window.prksWorkPrivateNotesRecoveryView = function (ctx) {
-    const adapter = prksWorkPrivateNotesRecovery();
-    return adapter ? adapter.view(ctx) : null;
-};
-window.prksWorkPrivateNotesRecoveryDetails = function (ctx, workId) {
-    const adapter = prksWorkPrivateNotesRecovery();
-    return adapter ? adapter.details(ctx, workId) : Promise.resolve(null);
-};
-window.prksWorkPrivateNotesRecoveryRestore = function (ctx, workId, token, expect) {
-    const adapter = prksWorkPrivateNotesRecovery();
-    return adapter ? adapter.restoreReviewed(ctx, workId, token, expect) : Promise.resolve(PRKS_PRIVATE_RECOVERY_UNAVAILABLE);
-};
-window.prksWorkPrivateNotesRecoveryReplace = function (ctx, workId, token, expect, text, shown) {
-    const adapter = prksWorkPrivateNotesRecovery();
-    return adapter ? adapter.replace(ctx, workId, token, expect, text, shown) : Promise.resolve(PRKS_PRIVATE_RECOVERY_UNAVAILABLE);
-};
-window.prksWorkPrivateNotesRecoveryDiscard = function (ctx, workId, token, expect) {
-    const adapter = prksWorkPrivateNotesRecovery();
-    return adapter ? adapter.discard(ctx, workId, token, expect) : Promise.resolve(PRKS_PRIVATE_RECOVERY_UNAVAILABLE);
-};
-window.prksRefreshWorkPrivateNotesRecovery = function (ctx, workId) {
-    const adapter = prksWorkPrivateNotesRecovery();
-    return adapter ? adapter.refresh(ctx, workId) : Promise.resolve(null);
-};
-window.prksSetWorkPrivateRecoveryRestoreMsForTest = function (ms) {
-    const adapter = prksWorkPrivateNotesRecovery();
-    if (adapter) adapter.setRestoreMsForTest(ms);
-};
+/* The pane bridges Review and the notice use, one set per family. */
+function prksPrivateRecoveryBridges(family, names) {
+    const adapter = function () { return prksPrivateNotesRecovery(family); };
+    window[names.restoreOnMount] = function (ctx, entity, options) {
+        const a = adapter();
+        return a ? a.restore(ctx, entity, options) : Promise.resolve(null);
+    };
+    window[names.view] = function (ctx) {
+        const a = adapter();
+        return a ? a.view(ctx) : null;
+    };
+    window[names.details] = function (ctx, id) {
+        const a = adapter();
+        return a ? a.details(ctx, id) : Promise.resolve(null);
+    };
+    window[names.restore] = function (ctx, id, token, expect) {
+        const a = adapter();
+        return a ? a.restoreReviewed(ctx, id, token, expect) : Promise.resolve(PRKS_PRIVATE_RECOVERY_UNAVAILABLE);
+    };
+    window[names.replace] = function (ctx, id, token, expect, text, shown) {
+        const a = adapter();
+        return a ? a.replace(ctx, id, token, expect, text, shown) : Promise.resolve(PRKS_PRIVATE_RECOVERY_UNAVAILABLE);
+    };
+    window[names.discard] = function (ctx, id, token, expect) {
+        const a = adapter();
+        return a ? a.discard(ctx, id, token, expect) : Promise.resolve(PRKS_PRIVATE_RECOVERY_UNAVAILABLE);
+    };
+    window[names.refresh] = function (ctx, id) {
+        const a = adapter();
+        return a ? a.refresh(ctx, id) : Promise.resolve(null);
+    };
+    window[names.restoreMsForTest] = function (ms) {
+        const a = adapter();
+        if (a) a.setRestoreMsForTest(ms);
+    };
+}
 
+prksPrivateRecoveryBridges(PRKS_PRIVATE_NOTE_FAMILIES.work, {
+    restoreOnMount: 'prksRestoreWorkPrivateNoteRecovery',
+    view: 'prksWorkPrivateNotesRecoveryView',
+    details: 'prksWorkPrivateNotesRecoveryDetails',
+    restore: 'prksWorkPrivateNotesRecoveryRestore',
+    replace: 'prksWorkPrivateNotesRecoveryReplace',
+    discard: 'prksWorkPrivateNotesRecoveryDiscard',
+    refresh: 'prksRefreshWorkPrivateNotesRecovery',
+    restoreMsForTest: 'prksSetWorkPrivateRecoveryRestoreMsForTest',
+});
+prksPrivateRecoveryBridges(PRKS_PRIVATE_NOTE_FAMILIES.folder, {
+    restoreOnMount: 'prksRestoreFolderPrivateNoteRecovery',
+    view: 'prksFolderPrivateNotesRecoveryView',
+    details: 'prksFolderPrivateNotesRecoveryDetails',
+    restore: 'prksFolderPrivateNotesRecoveryRestore',
+    replace: 'prksFolderPrivateNotesRecoveryReplace',
+    discard: 'prksFolderPrivateNotesRecoveryDiscard',
+    refresh: 'prksRefreshFolderPrivateNotesRecovery',
+    restoreMsForTest: 'prksSetFolderPrivateRecoveryRestoreMsForTest',
+});
 /**
  * Private notes liveness: the owner generation and entity still match, and
  * this exact editor is the installed `privateNotesEditor` slot. A
@@ -3726,6 +3828,9 @@ function initPrksPrivateNotesEditor(entityType, entityId, ownerCtx) {
         if (window.prksVuePresentWorkPrivateNotes(ctx, entityId)) return;
     }
     prksBindPrivateNotesField(entityType, entityId, ctx);
+    if (String(entityType) === 'folder' && typeof window.prksVuePresentFolderPrivateNotesRecovery === 'function') {
+        window.prksVuePresentFolderPrivateNotesRecovery(ctx, String(entityId));
+    }
 }
 
 window.prksBindPrivateNotesField = prksBindPrivateNotesField;
@@ -3733,9 +3838,12 @@ window.prksEnsureWorkPrivateNoteSession = prksEnsureWorkPrivateNoteSession;
 window.prksFlushPendingPrivateNotes = prksFlushPendingPrivateNotes;
 window.prksPrivateNotesTextForEntity = prksPrivateNotesTextForEntity;
 window.prksResetPrivateNoteDraftsForTest = function () {
-    prksWorkPrivateRecoverySessions.forEach(prksWorkPrivateRecoveryDrop);
-    prksWorkPrivateRecoverySessions.clear();
-    if (prksWorkPrivateNotesRecoveryAdapter) prksWorkPrivateNotesRecoveryAdapter.resetForTest();
+    Object.keys(prksPrivateRecoveryState).forEach(function (name) {
+        const state = prksPrivateRecoveryState[name];
+        state.sessions.forEach(function (session) { prksPrivateRecoveryDrop(PRKS_PRIVATE_NOTE_FAMILIES[name], session); });
+        state.sessions.clear();
+        if (state.adapter) state.adapter.resetForTest();
+    });
     if (typeof prksForEachLiveTabContext !== 'function') return;
     prksForEachLiveTabContext(function (ctx) {
         if (!ctx || !ctx.ui) return;
@@ -4083,6 +4191,7 @@ function updatePanelContent(tabId) {
     prksPrepareRightPanelReplace(focusedCtx);
     prksDismissWorkMetadataEditor();
     prksDismissWorkPanelRead();
+    if (typeof window.prksVueDismissFolderPrivateNotesRecovery === 'function') window.prksVueDismissFolderPrivateNotesRecovery();
     const focusedRoute = focusedCtx && (focusedCtx.lastResolvedRoute || focusedCtx.route);
     const focusedHash =
         (focusedRoute && (focusedRoute.hash || focusedRoute.canonicalHash)) || (window.location.hash || '');
