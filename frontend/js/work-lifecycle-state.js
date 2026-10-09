@@ -14,6 +14,15 @@
  *
  * Empty-ops Promise.race against the durable queue is forbidden: DELETE_WORK
  * intentionally retains the disposable cache until ACK.
+ *
+ * Browser-local note recovery drafts (#533) follow the same rule: a delete
+ * that is only requested keeps them, since the request cancels never-sent
+ * note rows and a draft may then be the only copy of that text if the delete
+ * later conflicts. They are removed once the deletion is confirmed: by its
+ * acknowledgement, by a never-sent creation folding away, or by the server
+ * answering "Work not found" for a Work this device holds drafts of (another
+ * device deleted it, or this device stopped between acknowledgement and
+ * cleanup).
  */
 (function (root) {
     'use strict';
@@ -109,8 +118,17 @@
         };
         void refresh();
         if (typeof root.prksSync.subscribe === 'function') {
-            root.prksSync.subscribe(function () { void refresh(); });
+            root.prksSync.subscribe(function (event) {
+                /* Only the acknowledgement confirms the deletion; the tab
+                 * that sends it hears it, whichever tab asked. */
+                if (event && event.acknowledged && event.operation === 'DELETE_WORK' &&
+                    event.op && event.op.entity_id) {
+                    void cleanupDeletedWorkRecovery(event.op.entity_id);
+                }
+                void refresh();
+            });
         }
+        armRecoverySweep();
         return true;
     }
 
@@ -179,6 +197,140 @@
         };
     }
 
+    const RECOVERY_KINDS = ['work-research-note', 'work-private-note'];
+    /* Works probed per page load; drafts of a Work that still exists are
+     * probed again on a later load. */
+    const SWEEP_MAX_WORKS = 8;
+    let sweepStarted = false;
+
+    function recoveryRuntime() {
+        const api = root.prksEditorRecovery;
+        if (!api || typeof api.runtime !== 'function') return null;
+        try {
+            const rt = api.runtime();
+            return rt && typeof rt.cleanupDeletedEntity === 'function' ? rt : null;
+        } catch (_e) {
+            return null;
+        }
+    }
+
+    /**
+     * Removes the recovery drafts of a Work whose deletion is confirmed. This
+     * page's note sessions of it that no pane shows give their lineages back
+     * first. Ownership-checked and generation-safe in the recovery runtime: a live
+     * editor's lineage is kept, and so is one adopted or written since it was
+     * read; one more pass reclassifies those. Never throws.
+     */
+    async function cleanupDeletedWorkRecovery(workId) {
+        /* No recovery database on this origin: no drafts, and none is created. */
+        if (!workId || await recoveryStorageExists() === false) return null;
+        const rt = recoveryRuntime();
+        if (!rt) return null;
+        const entity = { entityType: 'work', entityId: workId };
+        try {
+            if (typeof root.prksForgetDeletedWorkNotes === 'function') await root.prksForgetDeletedWorkNotes(workId);
+            const report = await rt.cleanupDeletedEntity(entity, RECOVERY_KINDS);
+            return report.changed.length ? await rt.cleanupDeletedEntity(entity, RECOVERY_KINDS) : report;
+        } catch (_e) {
+            /* Left in place: the next page load's sweep retries. */
+            return null;
+        }
+    }
+
+    /** Whether the recovery database exists; null where the browser cannot list databases. */
+    async function recoveryStorageExists() {
+        const api = root.prksEditorRecovery;
+        const factory = root.indexedDB;
+        if (!api || !factory || typeof factory.databases !== 'function') return null;
+        try {
+            return (await factory.databases()).some(function (db) {
+                return db && db.name === api.RECOVERY_DB_NAME;
+            });
+        } catch (_e) {
+            return null;
+        }
+    }
+
+    /** The server's own "Work not found" answer, never a transport failure or another 404. */
+    async function serverSaysWorkGone(workId) {
+        if (typeof root.prksRequest !== 'function') return false;
+        try {
+            const response = await root.prksRequest(
+                '/api/works/' + encodeURIComponent(workId) + '/notes-state', {},
+                { priority: 'background' });
+            if (!response || response.status !== 404) return false;
+            const body = await response.json();
+            return !!body && body.error === 'Work not found';
+        } catch (_e) {
+            return false;
+        }
+    }
+
+    /**
+     * Cleans the drafts of Works the server no longer has: deleted on another
+     * device, or deleted here with cleanup interrupted. A Work still waiting
+     * for its creation to reach the server is never probed, nor one whose
+     * drafts carry no base read for it; an unreadable queue probes nothing.
+     * Where the browser cannot list its databases, nothing is swept and only
+     * acknowledgements clean up. Returns the Work ids it cleaned.
+     */
+    async function sweepDeletedWorkRecovery() {
+        const sync = root.prksSync;
+        if (!sync || !sync.store || typeof sync.store.listOperations !== 'function') return [];
+        /* A page that never had a draft opens nothing: no database, no runtime. */
+        if (await recoveryStorageExists() !== true) return [];
+        const rt = recoveryRuntime();
+        if (!rt) return [];
+        let records;
+        let operations;
+        try {
+            records = await rt.store.listAll();
+            if (!records.length) return [];
+            operations = await sync.store.listOperations();
+        } catch (_e) {
+            return [];
+        }
+        const creating = new Set(pendingCreates(operations).concat((operations || []).filter(function (op) {
+            return op && op.operation === 'CREATE_WORK' && op.status === 'conflict';
+        })).map(function (op) { return op.entity_id; }));
+        const ids = [];
+        for (const record of records) {
+            if (!record || record.entityType !== 'work' || record.status === 'discarded' ||
+                RECOVERY_KINDS.indexOf(record.kind) === -1 || typeof record.entityId !== 'string') continue;
+            /* Only a draft typed on a note this device read for that Work
+             * proves the Work existed where "not found" now means deleted. */
+            const source = record.base && record.base.source;
+            if (source !== 'server' && source !== 'cache') continue;
+            if (creating.has(record.entityId) || ids.indexOf(record.entityId) !== -1) continue;
+            ids.push(record.entityId);
+        }
+        /* Random order, so Works that still exist never starve the rest. */
+        for (let i = ids.length - 1; i > 0; i -= 1) {
+            const j = Math.floor(Math.random() * (i + 1));
+            const t = ids[i]; ids[i] = ids[j]; ids[j] = t;
+        }
+        const cleaned = [];
+        for (const workId of ids.slice(0, SWEEP_MAX_WORKS)) {
+            if (!await serverSaysWorkGone(workId)) continue;
+            if (await cleanupDeletedWorkRecovery(workId)) cleaned.push(workId);
+        }
+        return cleaned;
+    }
+
+    /* Once per page load, after the server has first been observed reachable. */
+    function armRecoverySweep() {
+        if (sweepStarted || typeof root.prksOfflineRuntimeSubscribe !== 'function' ||
+            typeof root.prksOfflineRuntimeState !== 'function') return;
+        let unsubscribe = null;
+        const check = function () {
+            if (sweepStarted || root.prksOfflineRuntimeState() !== 'online') return;
+            sweepStarted = true;
+            if (typeof unsubscribe === 'function') unsubscribe();
+            void sweepDeletedWorkRecovery();
+        };
+        unsubscribe = root.prksOfflineRuntimeSubscribe(check);
+    }
+
     async function createWorkDurably(fields, options) {
         const sync = root.prksSync;
         if (!sync || !sync.store || typeof sync.store.createWork !== 'function') {
@@ -202,7 +354,12 @@
         }
         const op = await sync.store.deleteWork(workId);
         if (op && op.entity_id) noteLiveDelete(op.entity_id);
-        else clearLiveLifecycle(workId);
+        else {
+            clearLiveLifecycle(workId);
+            /* A creation that never left this device folded away: nothing
+             * can refuse this deletion any more. */
+            void cleanupDeletedWorkRecovery(workId);
+        }
         if (typeof sync.changed === 'function') sync.changed();
         return op;
     }
@@ -258,6 +415,8 @@
         prksResolveWorkLifecycle: resolveWorkLifecycle,
         prksApplyLiveWorkLifecycleFromOperations: applyLiveFromOperations,
         prksArmLiveWorkLifecycleHydration: armLiveHydration,
+        prksCleanupDeletedWorkRecovery: cleanupDeletedWorkRecovery,
+        prksSweepDeletedWorkRecovery: sweepDeletedWorkRecovery,
     });
 
     /* sync-runtime.js loads after this module; arm once it publishes prksSync. */

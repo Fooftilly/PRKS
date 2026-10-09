@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { EmergencyStorage } from './emergency'
-import { createEditorRecoveryRuntime } from './runtime'
-import { CLOSED_PAGE_KEY_PREFIX, EMERGENCY_KEY_PREFIX, RUNTIME_SESSION_KEY, UNKNOWN_BASE, reservationKeyOf } from './schema'
+import { createEditorRecoveryRuntime, type EditorRecoveryRuntime } from './runtime'
+import { CLOSED_PAGE_KEY_PREFIX, EMERGENCY_KEY_PREFIX, RUNTIME_SESSION_KEY, UNKNOWN_BASE, reservationKeyOf, type DraftKind } from './schema'
+import type { DraftWriter } from './writer'
 import { createFakeBrowser, memoryStorage } from './test-support/fake-env'
 import { createFakeIdb, createManualScheduler, settle } from './test-support/fake-idb'
 
@@ -439,5 +440,182 @@ describe('review actions', () => {
     expect(seen).toEqual(['unprotected'])
     rt.dispose()
     await settle()
+  })
+})
+
+describe('cleanupDeletedEntity (#533)', () => {
+  const W1 = { entityType: 'work' as const, entityId: 'w1' }
+  const KINDS = ['work-research-note', 'work-private-note'] as const
+
+  function setup(withoutLocks = false) {
+    const browser = createFakeBrowser()
+    const idb = createFakeIdb()
+    const local = memoryStorage()
+    const page = (name: string) => {
+      const locks = browser.locksFor(name)
+      const rt = createEditorRecoveryRuntime({
+        store: { indexedDB: idb.factory },
+        identity: {
+          sessionStorage: browser.sessionStorageWith(),
+          locks: withoutLocks ? null : locks,
+          createChannel: browser.channelFor(name),
+          claimWaitMs: 20,
+          localStorage: local,
+        },
+        writers: { scheduler: createManualScheduler(), window: null, document: null },
+        emergencyStorage: local,
+      })
+      return { rt, locks }
+    }
+    return { idb, local, page }
+  }
+
+  /** A page that wrote `text` for w1 and crashed: no pagehide, so without Web Locks its owner reads as unknown. */
+  async function crashedDraft(make: (name: string) => { rt: EditorRecoveryRuntime; locks: { releaseAll(): void } }, name: string, text: string, kind: DraftKind = 'work-private-note') {
+    const p = make(name)
+    await p.rt.start()
+    const w = p.rt.writers.openWriter({ kind, entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE })
+    w.edit(1, text)
+    await w.flush()
+    p.rt.identity.dispose()
+    p.locks.releaseAll()
+    await settle()
+    return { page: p, writer: w }
+  }
+
+  async function bodies(rt: EditorRecoveryRuntime): Promise<Array<[string, string | null]>> {
+    const rows = (await rt.store.listAll()).filter((r) => r.status !== 'discarded')
+    return Promise.all(rows.map(async (r) => [r.entityKey, (await rt.store.getBody(r.draftId))?.body ?? null] as [string, string | null]))
+  }
+
+  it('rejects a cleanup that read a lineage before another page adopted it, and keeps it for that live editor', async () => {
+    const { page } = setup()
+    await crashedDraft(page, 'gone', 'orphaned text')
+    const cleaner = page('cleaner').rt
+    const adopter = page('adopter').rt
+    await adopter.start()
+    const [record] = await adopter.store.listAll()
+    let adopted: DraftWriter | null = null
+    const discard = cleaner.store.discard
+    cleaner.store.discard = async (...args) => {
+      cleaner.store.discard = discard
+      adopted = await adopter.writers.adopt(record!, { paneId: 'tab-4' })
+      return discard(...args)
+    }
+    const report = await cleaner.cleanupDeletedEntity(W1, KINDS)
+    expect(adopted).not.toBeNull()
+    expect(report).toEqual({ removed: [], live: [], changed: [record!.draftId], suppressed: [] })
+    expect(await bodies(cleaner)).toEqual([['work-private-note:w1', 'orphaned text']])
+    // Retried: the adopter is now a live editor, so its lineage stays.
+    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toMatchObject({ removed: [], live: [record!.draftId] })
+    expect(await bodies(cleaner)).toHaveLength(1)
+  })
+
+  it('never removes a newer generation written after the cleanup read the older one; a retry reads it again', async () => {
+    const { page } = setup()
+    const { page: gone } = await crashedDraft(page, 'gone', 'older text')
+    const cleaner = page('cleaner').rt
+    await cleaner.start()
+    const [record] = await cleaner.store.listAll()
+    const discard = cleaner.store.discard
+    cleaner.store.discard = async (...args) => {
+      cleaner.store.discard = discard
+      // The dead page's tail lands first, as a merge of its emergency entry would.
+      const owner = record!.owner
+      expect(
+        await cleaner.store.applyEmergencyEntry(
+          { v: 1, pageInstanceId: owner.pageInstanceId, runtimeId: owner.runtimeId, at: 1, entries: [] },
+          { draftId: record!.draftId, kind: 'work-private-note', entityType: 'work', entityId: 'w1', generation: 2, committedGeneration: 1, body: 'newer text' },
+        ),
+      ).toBe('written')
+      return discard(...args)
+    }
+    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toMatchObject({ removed: [], changed: [record!.draftId] })
+    expect(await bodies(cleaner)).toEqual([['work-private-note:w1', 'newer text']])
+    expect(gone.rt.identity.pageInstanceId).toBe(record!.owner.pageInstanceId)
+    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toMatchObject({ removed: [record!.draftId], changed: [] })
+    expect(await bodies(cleaner)).toEqual([])
+  })
+
+  it('keeps a stale emergency key from bringing back a removed lineage, or creating one that never reached storage', async () => {
+    const { page, local } = setup(true)
+    // Already running when the other page crashes: it cannot tell that page from a frozen one.
+    const cleaner = page('cleaner').rt
+    await cleaner.start()
+    const { writer } = await crashedDraft(page, 'crashed', 'committed')
+    const crashedPage = (await cleaner.store.get(writer.draftId()!))!.owner.pageInstanceId
+    // Keys whose pages never settled a runtime id: no scan of a running page merges them.
+    const key = (pageInstanceId: string, entries: unknown[]) =>
+      local.setItem(EMERGENCY_KEY_PREFIX + pageInstanceId, JSON.stringify({ v: 1, pageInstanceId, runtimeId: null, at: 1, entries }))
+    const entry = (draftId: string, generation: number, committedGeneration: number, body: string, kind: DraftKind, pageInstanceId: string) => ({
+      draftId, kind, entityType: 'work', entityId: 'w1', generation, committedGeneration, body,
+      lineage: { createdAt: 1, owner: { runtimeId: null, pageInstanceId, paneId: 'tab-1' }, base: UNKNOWN_BASE },
+    })
+    // Generation 2 of the stored lineage, held only in the crashed page's key.
+    key(crashedPage, [entry(writer.draftId()!, 2, 1, 'typed after the commit', 'work-private-note', crashedPage)])
+    // A lineage whose first generation never reached IndexedDB.
+    key('p-lost', [entry('d-lost', 1, 0, 'only in localStorage', 'work-research-note', 'p-lost')])
+
+    const report = await cleaner.cleanupDeletedEntity(W1, KINDS)
+    expect(report).toEqual({ removed: [writer.draftId()], live: [], changed: [], suppressed: ['d-lost'] })
+    expect(await bodies(cleaner)).toEqual([])
+    // Each stays a tombstone while a key still lists it.
+    expect(await cleaner.store.get(writer.draftId()!)).toMatchObject({ status: 'discarded' })
+    expect(await cleaner.store.get('d-lost')).toMatchObject({ status: 'discarded' })
+    // A later load takes the silent pages for dead and merges their keys: nothing comes back.
+    const next = page('next').rt
+    const { merged } = await next.start()
+    expect(merged.flatMap((m) => m.outcomes)).toEqual(['suppressed', 'suppressed'])
+    expect(await bodies(next)).toEqual([])
+    expect([...local.map.keys()].filter((k) => k.startsWith(EMERGENCY_KEY_PREFIX))).toEqual([])
+    // With the keys gone, so are the tombstones.
+    expect(await next.store.listAll()).toEqual([])
+  })
+
+  it('leaves a live page\'s first generation in its emergency key alone', async () => {
+    const { page } = setup()
+    const live = page('live')
+    await live.rt.start()
+    const w = live.rt.writers.openWriter({ kind: 'work-private-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE })
+    w.edit(1, 'typing now')
+    expect(live.rt.writers.writeEmergencyNow()).toBe('written')
+    const cleaner = page('cleaner').rt
+    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [w.draftId()], changed: [], suppressed: [] })
+    expect(await cleaner.store.get(w.draftId()!)).toBeNull()
+    await w.flush()
+    expect(await bodies(cleaner)).toEqual([['work-private-note:w1', 'typing now']])
+  })
+
+  it('finishes an interrupted cleanup on retry, is idempotent, and never touches another Work or kind', async () => {
+    const { page, idb } = setup()
+    await crashedDraft(page, 'a', 'reminder of w1')
+    await crashedDraft(page, 'b', 'research of w1', 'work-research-note')
+    const other = page('other')
+    await other.rt.start()
+    for (const [kind, id] of [['work-private-note', 'w2'], ['folder-private-note', 'w1']] as const) {
+      const w = other.rt.writers.openWriter({ kind, entityType: kind === 'folder-private-note' ? 'folder' : 'work', entityId: id, paneId: 'tab-1', base: UNKNOWN_BASE })
+      w.edit(1, kind + ' ' + id)
+      await w.release()
+    }
+    other.rt.identity.dispose()
+    other.locks.releaseAll()
+    await settle()
+    const cleaner = page('cleaner').rt
+    let calls = 0
+    const discard = cleaner.store.discard
+    cleaner.store.discard = (...args) => {
+      // The second removal fails to commit, as a browser shutting down mid-cleanup would leave it.
+      if (++calls === 2) idb.failCommits = 1
+      return discard(...args)
+    }
+    await expect(cleaner.cleanupDeletedEntity(W1, KINDS)).rejects.toThrow()
+    expect(await bodies(cleaner)).toHaveLength(3)
+    const retried = await cleaner.cleanupDeletedEntity(W1, KINDS)
+    expect(retried.removed).toHaveLength(1)
+    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [], changed: [], suppressed: [] })
+    expect((await bodies(cleaner)).sort()).toEqual([
+      ['folder-private-note:w1', 'folder-private-note w1'],
+      ['work-private-note:w2', 'work-private-note w2'],
+    ])
   })
 })

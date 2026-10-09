@@ -12,7 +12,7 @@ thin reconnect conflict park, and browser-local recovery of Research Notes
 import os
 import unittest
 
-from backend import work_note_sync
+from backend import work_lifecycle_sync, work_note_sync
 from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
@@ -1042,3 +1042,103 @@ class WorkRemindersRecoveryTests(_RecoveryPage, unittest.TestCase):
         self.wait_server_reminder(page, work, original + ' Unprotected')
         warning.wait_for(state='detached')
         self.assertFalse(page.evaluate('() => window.prksEditorRecovery.runtime().writers.leaveGuardActive()'))
+
+
+_WORK_RECOVERY_RECORDS = """
+    (workId) => window.prksEditorRecovery.runtime().store.listAll()
+        .then(rows => rows.filter(r => r.entityId === workId).map(r => r.kind + ':' + r.status))
+"""
+
+
+class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
+    """#533: a Work delete keeps its recovery drafts while it is only requested,
+    and removes them once the server confirms the Work is gone."""
+
+    field = WorkRemindersRecoveryTests.field
+    status = WorkRemindersRecoveryTests.status
+    type_reminder = WorkRemindersRecoveryTests.type_reminder
+    hold_reminder_saves = WorkRemindersRecoveryTests.hold_reminder_saves
+    wait_reminder_recorded = WorkRemindersRecoveryTests.wait_reminder_recorded
+    close_tab = ResearchNotesTabCloseAndReviewTests.close_tab
+
+    def work_records(self, page, work):
+        return page.evaluate(_WORK_RECOVERY_RECORDS, work)
+
+    def open_delete_confirm(self, page):
+        o._open_details_drawer_if_tiled(page)
+        advanced = page.locator('.work-details-advanced')
+        if advanced.get_attribute('open') is None:
+            advanced.locator('summary').click()
+        page.locator('.delete-work-btn').click()
+        dialog = page.locator('#prks-modal-confirm:not(.hidden)', has_text='Delete file?')
+        dialog.wait_for()
+        return dialog
+
+    def delete_rows(self, page):
+        return page.evaluate("""() => prksSync.store.listOperations().then(rows => rows
+            .filter(r => r.operation === 'DELETE_WORK').map(r => ({ status: r.status, attempts: r.attempt_count })))""")
+
+    def test_reminders_typed_before_a_delete_stay_until_the_ack_then_are_removed(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        # Offline: the Reminders row the delete cancels was never sent, so the
+        # recovery draft is the only copy of that text until the server confirms.
+        self.offline(page, context)
+        self.type_reminder(page, server, ' Deleted reminder')
+        self.wait_reminder_recorded(page, work, ' Deleted reminder')
+
+        # Cancel deletes nothing.
+        dialog = self.open_delete_confirm(page)
+        self.assertIn('cannot be undone', dialog.inner_text())
+        self.assertIn('Once the deletion is confirmed, unsaved Research Notes and Reminders drafts', dialog.inner_text())
+        page.locator('#prks-modal-confirm-cancel').click()
+        dialog.wait_for(state='hidden')
+        self.assertEqual(self.delete_rows(page), [])
+        self.assertEqual(self.work_records(page, work), ['work-private-note:active'])
+
+        self.open_delete_confirm(page)
+        page.locator('#prks-modal-confirm-ok').click()
+        page.wait_for_function("() => location.hash === '#/folders'", timeout=15000)
+        wait_for_async(
+            page,
+            """() => prksSync.store.listOperations().then(rows =>
+                rows.length === 1 && rows[0].operation === 'DELETE_WORK' && rows[0].status === 'pending')""",
+            timeout=15000,
+            message='the delete request did not replace the unsent Reminders row')
+        # Requested, not acknowledged: the draft stays.
+        self.assertEqual(self.work_records(page, work), ['work-private-note:active'])
+        self.assertIsNotNone(self.db_for(server).get_work(work))
+
+        self.reconnect(page, context)
+        wait_for_async(page, "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+                       timeout=30000, message='the delete was never acknowledged')
+        self.assertIsNone(self.db_for(server).get_work(work))
+        wait_for_async(
+            page,
+            '(workId) => (' + _WORK_RECOVERY_RECORDS + ')(workId).then(rows => rows.length === 0)',
+            arg=work,
+            timeout=15000,
+            message='recovery drafts outlived the acknowledged delete')
+        self.assertEqual(page.evaluate(_RECOVERY_IDLE), {'pending': 0, 'guard': False, 'unloadListeners': False})
+
+    def test_drafts_of_a_work_deleted_elsewhere_are_removed_on_the_next_load(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.hold_reminder_saves(page)
+        self.type_reminder(page, server, ' Elsewhere')
+        self.wait_reminder_recorded(page, work, ' Elsewhere')
+        # Another device deletes the Work; this tab closes before its save.
+        with self.db_for(server).connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            work_lifecycle_sync.delete_work_record_on_conn(conn, work)
+        self.close_tab(page)
+        tab = context.new_page()
+        tab.on('dialog', lambda d: (self.dialogs.append(d.type), d.accept()))
+        tab.goto(server.origin + '/#/folders', wait_until='domcontentloaded')
+        tab.wait_for_selector('#sidebar')
+        wait_for_async(
+            tab,
+            '(workId) => (' + _WORK_RECOVERY_RECORDS + ')(workId).then(rows => rows.length === 0)',
+            arg=work,
+            timeout=20000,
+            message='the next load never cleaned drafts of a Work the server no longer has')

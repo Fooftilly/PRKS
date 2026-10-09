@@ -207,6 +207,10 @@ function prksResearchNotesRecovery() {
         takeOver: prksResearchNotesRecoveryTakeOver,
         replace: prksResearchNotesRecoveryReplaceText,
         publish: prksResearchNotesRecoveryPublish,
+        forget: function (entry) {
+            if (prksWorkResearchDrafts.get(entry.key) === entry) prksWorkResearchDrafts.delete(entry.key);
+            prksResearchRecoveryRelease(entry);
+        },
         owners: function (fn) {
             if (typeof prksForEachLiveTabContext !== 'function') return;
             prksForEachLiveTabContext(function (ctx) {
@@ -1048,7 +1052,9 @@ async function deleteWork(w_id, ownerCtx) {
     const generation = ctx && ctx.generation;
     const confirmed = await prksConfirmDestructive({
         title: 'Delete file?',
-        message: 'Are you sure you want to delete this file?',
+        /* #533: drafts are removed only once the server confirms the deletion. */
+        message: 'This permanently deletes the file and cannot be undone. Once the deletion is confirmed, ' +
+            'unsaved Research Notes and Reminders drafts kept for this file in this browser are removed too.',
         confirmLabel: 'Delete file',
     });
     if (!confirmed) return;

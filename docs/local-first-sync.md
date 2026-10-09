@@ -90,9 +90,18 @@ coordinator names no family: adding one is a registration.
   Only a lineage's owner page (a fresh `pageInstanceId` per load) writes it;
   generations are monotonic; adoption is compare-and-set. Records are deleted
   only on an exact acknowledgement (same generation, `===` body), proven
-  equality or explicit discard, never by age. Deleting a Work does not
-  touch them yet: its drafts stay orphaned in this browser (#533). A
-  discard whose emergency key could not be cleared leaves a bodyless
+  equality, explicit discard or a confirmed Work deletion, never by age.
+  A Work delete that is only requested keeps them (it cancels never-sent
+  note rows, so a draft can be the only copy if the delete then
+  conflicts); its acknowledgement, a never-sent creation folding away, or
+  the server's "Work not found" for a Work whose drafts carry a base read
+  for it (another device deleted it, or cleanup was interrupted; probed
+  once per page load, at most 8 Works, never a Work awaiting its creation)
+  removes both note kinds for that Work (#533). This page's note sessions
+  that no pane shows give their lineages back first; every other lineage
+  no live editor owns, unknown owners included, is removed by
+  compare-and-set on its owner page, generation and status, and a stale
+  emergency key's lineages are tombstoned. A discard whose emergency key could not be cleared leaves a bodyless
   tombstone until that key is gone, so the key cannot recreate the draft.
   A draft a merge created from another page's key carries that page's id
   until the key is removed; deleting it meanwhile leaves the same tombstone.

@@ -660,6 +660,15 @@ var prksEditorRecovery = (function(exports) {
 				});
 			});
 		}
+		function tombstoneIfAbsent(draftId, tombstone) {
+			return run("readwrite", (tx, done) => {
+				readRecord(tx, draftId, (record) => {
+					if (record) return done("kept");
+					tx.objectStore(DRAFTS_STORE).put(tombstoneRecord(draftId, tombstone, 0));
+					done("suppressed");
+				});
+			});
+		}
 		function applyEmergencyEntry(payload, entry) {
 			return run("readwrite", (tx, done) => {
 				readRecord(tx, entry.draftId, (record) => {
@@ -747,6 +756,7 @@ var prksEditorRecovery = (function(exports) {
 			deleteIfEqual,
 			discard,
 			clearTombstone,
+			tombstoneIfAbsent,
 			applyEmergencyEntry,
 			lastDurability: () => lastMode,
 			close() {
@@ -2350,21 +2360,100 @@ var prksEditorRecovery = (function(exports) {
 			}));
 			return started;
 		}
+		function scanEmergency() {
+			if (!started) return start().then((result) => result.merged);
+			return started.then(() => merge(true));
+		}
+		function classify(record, askingSession = null) {
+			return classifyLineage(record, {
+				identity,
+				localOwner: (id) => writers.ownerOf(id)
+			}, askingSession);
+		}
+		function discardReviewed(reviewed) {
+			const expected = {
+				pageInstanceId: reviewed.pageInstanceId,
+				generation: reviewed.generation,
+				status: reviewed.status
+			};
+			const listing = emergencyStorage ? listingPage(emergencyStorage, reviewed.draftId) : null;
+			const tombstone = listing ? {
+				kind: reviewed.kind,
+				entityType: reviewed.entityType,
+				entityId: reviewed.entityId,
+				generation: reviewed.generation,
+				pageInstanceId: listing
+			} : void 0;
+			return store.discard(reviewed.draftId, tombstone, expected);
+		}
+		async function cleanupDeletedEntity(entity, kinds) {
+			const report = {
+				removed: [],
+				live: [],
+				changed: [],
+				suppressed: []
+			};
+			await scanEmergency();
+			const keys = new Set(kinds.map((kind) => entityKeyOf(kind, entity.entityId)));
+			const ours = (kind, entityType, entityId) => entityType === entity.entityType && entityId === entity.entityId && keys.has(entityKeyOf(kind, entityId));
+			const records = (await store.listAll()).filter((r) => isSupportedRecord(r) && r.status !== "discarded" && ours(r.kind, r.entityType, r.entityId));
+			for (const record of records) {
+				const lineage = await classify(record);
+				if (lineage === "self-live" || lineage === "other-live") {
+					report.live.push(record.draftId);
+					continue;
+				}
+				const outcome = await discardReviewed({
+					draftId: record.draftId,
+					pageInstanceId: record.owner.pageInstanceId,
+					generation: record.generation,
+					status: record.status,
+					kind: record.kind,
+					entityType: record.entityType,
+					entityId: record.entityId
+				});
+				if (outcome === "deleted" || outcome === "missing") report.removed.push(record.draftId);
+				else if (outcome === "kept") report.changed.push(record.draftId);
+			}
+			if (!emergencyStorage) return report;
+			for (const stored of readEmergencyKeys(emergencyStorage)) {
+				const payload = stored.payload;
+				if (!payload) continue;
+				for (const entry of payload.entries) {
+					if (entry.committedGeneration !== 0 || entry.body === null || !ours(entry.kind, entry.entityType, entry.entityId)) continue;
+					const owner = {
+						runtimeId: payload.runtimeId,
+						pageInstanceId: stored.pageInstanceId,
+						paneId: "",
+						claimedAt: payload.at
+					};
+					const lineage = await classify({
+						draftId: entry.draftId,
+						owner
+					});
+					if (lineage === "self-live" || lineage === "other-live") {
+						report.live.push(entry.draftId);
+						continue;
+					}
+					const stone = {
+						kind: entry.kind,
+						entityType: entry.entityType,
+						entityId: entry.entityId,
+						generation: entry.generation,
+						pageInstanceId: stored.pageInstanceId
+					};
+					if (await store.tombstoneIfAbsent(entry.draftId, stone) === "suppressed") report.suppressed.push(entry.draftId);
+				}
+			}
+			return report;
+		}
 		return {
 			store,
 			identity,
 			writers,
 			start,
-			scanEmergency() {
-				if (!started) return start().then((result) => result.merged);
-				return started.then(() => merge(true));
-			},
-			classify(record, askingSession = null) {
-				return classifyLineage(record, {
-					identity,
-					localOwner: (id) => writers.ownerOf(id)
-				}, askingSession);
-			},
+			scanEmergency,
+			classify,
 			claimReviewed(reviewed, paneId) {
 				if (reviewed.status !== "active") return Promise.resolve({ outcome: "conflict" });
 				const claim = identity.current();
@@ -2376,22 +2465,8 @@ var prksEditorRecovery = (function(exports) {
 				};
 				return store.adopt(reviewed.draftId, reviewed.pageInstanceId, owner, reviewed.generation);
 			},
-			discardReviewed(reviewed) {
-				const expected = {
-					pageInstanceId: reviewed.pageInstanceId,
-					generation: reviewed.generation,
-					status: reviewed.status
-				};
-				const listing = emergencyStorage ? listingPage(emergencyStorage, reviewed.draftId) : null;
-				const tombstone = listing ? {
-					kind: reviewed.kind,
-					entityType: reviewed.entityType,
-					entityId: reviewed.entityId,
-					generation: reviewed.generation,
-					pageInstanceId: listing
-				} : void 0;
-				return store.discard(reviewed.draftId, tombstone, expected);
-			},
+			discardReviewed,
+			cleanupDeletedEntity,
 			onWriterEvent(listener) {
 				writerListeners.add(listener);
 				return () => {

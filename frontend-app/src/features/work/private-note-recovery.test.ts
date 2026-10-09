@@ -9,9 +9,10 @@ import ownerResourceSource from '../../../../frontend/js/owner-resource.js?raw'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
 import uiSource from '../../../../frontend/js/ui.js?raw'
 import workNotesStateSource from '../../../../frontend/js/work-notes-state.js?raw'
+import workLifecycleSource from '../../../../frontend/js/work-lifecycle-state.js?raw'
 import workNoteRecoverySource from '../../../../frontend/js/work-note-recovery.js?raw'
 import type { EditorRecoveryRuntime } from '../../lifecycle/editor-recovery/runtime'
-import { RUNTIME_SESSION_KEY, type DraftRecord } from '../../lifecycle/editor-recovery/schema'
+import { RUNTIME_SESSION_KEY, UNKNOWN_BASE, type DraftBase, type DraftRecord } from '../../lifecycle/editor-recovery/schema'
 import { createFakeBrowser } from '../../lifecycle/editor-recovery/test-support/fake-env'
 import { createFakeIdb, settle } from '../../lifecycle/editor-recovery/test-support/fake-idb'
 import { createNoteQueue, memoryStorage, startRecoveryPage, type RecoveryPage } from './test-support/work-note-harness'
@@ -74,6 +75,10 @@ type W = Record<string, unknown> & {
   prksWorkPrivateNotesRecoveryRestore: (ctx: Ctx, workId: string, token: string, expect: unknown) => Promise<{ ok: boolean; code?: string }>
   prksWorkPrivateNotesRecoveryReplace: (ctx: Ctx, workId: string, token: string, expect: unknown, text: string, shown: { text: string; revision: number | null }) => Promise<{ ok: boolean; code?: string }>
   prksWorkPrivateNotesRecoveryDiscard: (ctx: Ctx, workId: string, token: string, expect: unknown) => Promise<{ ok: boolean; code?: string }>
+  prksDeleteWorkDurably: (workId: string) => Promise<{ op_id: string } | null>
+  prksSweepDeletedWorkRecovery: () => Promise<string[]>
+  prksRequest?: (url: string) => Promise<{ status: number; json(): Promise<unknown> }>
+  indexedDB?: { databases(): Promise<Array<{ name: string }>> }
 }
 const win = window as unknown as W
 const KIND = 'work-private-note'
@@ -238,6 +243,7 @@ beforeAll(() => {
   win.eval(workNotesStateSource)
   win.eval(workNoteRecoverySource)
   win.eval(uiSource)
+  win.eval(workLifecycleSource)
 })
 
 beforeEach(() => {
@@ -599,5 +605,176 @@ describe('Work Reminders protection warning', () => {
     sync.ack('op-1', 6)
     await waitFor(() => win.prksWorkPrivateNotesRecoveryView(ctx) === null, 'warning cleared on ack')
     expect(page!.rt.writers.leaveGuardActive()).toBe(false)
+  })
+})
+
+describe('Work delete and recovery drafts (#533)', () => {
+  /** Typed on a note read from the server for that Work. */
+  const SERVER_BASE: DraftBase = { revision: 0, length: 0, fingerprint: '0'.repeat(32), source: 'server' }
+
+  /** A Research Notes draft of w1 that no editor holds any more. */
+  async function researchDraft(text: string, base = SERVER_BASE): Promise<string> {
+    await page!.rt.start()
+    const writer = page!.rt.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-9', base })
+    writer.edit(1, text)
+    await writer.flush()
+    await writer.release()
+    return writer.draftId()!
+  }
+
+  /** Reminders typed and queued, then the pane closes; the research draft beside it. */
+  async function draftsOfBothKinds() {
+    const { ctx, ta } = await openWork()
+    type(ctx, ta!, 'Saved reminder. Unsaved')
+    win.prksFlushPendingPrivateNotes(ctx)
+    await queuedAs('Saved reminder. Unsaved')
+    await researchDraft('Unsaved research')
+    win.prksDestroyAllTabContexts()
+    await settle()
+    expect((await records()).map((r) => r.kind).sort()).toEqual(['work-private-note', 'work-research-note'])
+  }
+
+  const deleteOp = () => sync.rows().find((r) => r.operation === 'DELETE_WORK')!.op_id
+
+  let responses: Record<string, { status: number; body: unknown }> = {}
+  const probed: string[] = []
+  beforeEach(() => {
+    responses = {}
+    probed.length = 0
+    // The sweep runs only where recovery storage exists; this page's is the fake one.
+    win.indexedDB = { databases: async () => [{ name: 'prks-editor-recovery-v1' }] }
+    win.prksRequest = async (url: string) => {
+      probed.push(url)
+      const answer = responses[url] || { status: 200, body: { work_id: 'w1', research_note_revision: 0, private_note_revision: 5 } }
+      return { status: answer.status, json: async () => answer.body }
+    }
+  })
+  afterEach(() => {
+    delete win.prksRequest
+    delete win.indexedDB
+  })
+  const goneOnServer = (workId = 'w1') => {
+    responses['/api/works/' + workId + '/notes-state'] = { status: 404, body: { error: 'Work not found' } }
+  }
+
+  it('keeps every draft while the delete is only requested, and removes both kinds once it is acknowledged', async () => {
+    await draftsOfBothKinds()
+    await win.prksDeleteWorkDurably('w1')
+    // The request cancelled the never-sent Reminders row: the draft is now its only copy.
+    expect(sync.rows().map((r) => r.operation)).toEqual(['DELETE_WORK'])
+    await settle()
+    expect(await records()).toHaveLength(2)
+    sync.ackDelete(deleteOp())
+    await waitFor(async () => (await records()).length === 0, 'both kinds removed on the acknowledgement')
+    expect(await page!.rt.store.listAll()).toEqual([])
+  })
+
+  it('keeps the drafts when the delete conflicts, and the surviving Work restores its Reminders', async () => {
+    await draftsOfBothKinds()
+    await win.prksDeleteWorkDurably('w1')
+    sync.conflict(deleteOp())
+    await settle()
+    expect(await records()).toHaveLength(2)
+    // Resolved by discarding the delete: the Work is still there and its draft comes back.
+    sync.reset()
+    await reload()
+    const { ta, result } = await openAndRestore()
+    expect(result).toMatchObject({ restored: true })
+    expect(ta!.value).toBe('Saved reminder. Unsaved')
+  })
+
+  it('never removes a draft a live editor owns, and cleans it once that tab is gone and the server says so', async () => {
+    const other = startRecoveryPage({ browser, name: 'other-tab', idb, session: browser.sessionStorageWith(), local, withoutLocks: false, background: true })
+    await other.rt.start()
+    const live = other.rt.writers.openWriter({ kind: KIND, entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: SERVER_BASE })
+    live.edit(1, 'Still typing in the other tab')
+    await live.flush()
+    await researchDraft('Unsaved research')
+    await win.prksDeleteWorkDurably('w1')
+    sync.ackDelete(deleteOp())
+    await waitFor(async () => (await records()).length === 1, 'the orphan removed')
+    const [kept] = await records()
+    expect(kept!.draftId).toBe(live.draftId())
+    // The other tab closes; this page later learns from the server that w1 is gone.
+    other.rt.dispose()
+    other.locks.releaseAll()
+    await settle()
+    goneOnServer()
+    expect(await win.prksSweepDeletedWorkRecovery()).toEqual(['w1'])
+    expect(await records()).toEqual([])
+  })
+
+  it('removes a crashed LAN tab\'s draft, whose owner cannot be proven gone, because the Work is', async () => {
+    withoutLocks = true
+    startPage()
+    const { ctx, ta } = await openWork()
+    await type(ctx, ta!, 'Saved reminder. Crashed').recovery!.flush()
+    await closeTabAndOpenAnother('crash')
+    await page!.rt.start()
+    const [record] = await records()
+    expect(await page!.rt.classify(record!)).toBe('unknown')
+    await win.prksDeleteWorkDurably('w1')
+    sync.ackDelete(deleteOp())
+    await waitFor(async () => (await records()).length === 0, 'unknown owner removed')
+  })
+
+  it('cleans drafts of a Work deleted on another device, and of one whose cleanup a shutdown interrupted', async () => {
+    await researchDraft('Deleted elsewhere')
+    const writer = page!.rt.writers.openWriter({ kind: KIND, entityType: 'work', entityId: 'w2', paneId: 'tab-2', base: SERVER_BASE })
+    writer.edit(1, 'Still exists')
+    await writer.flush()
+    await writer.release()
+    // Only the server's own "Work not found" counts: another 404 proves nothing.
+    responses['/api/works/w1/notes-state'] = { status: 404, body: { error: 'Not found' } }
+    expect(await win.prksSweepDeletedWorkRecovery()).toEqual([])
+    goneOnServer()
+    expect(await win.prksSweepDeletedWorkRecovery()).toEqual(['w1'])
+    expect((await records()).map((r) => r.entityId)).toEqual(['w2'])
+    expect(probed.sort()).toEqual(['/api/works/w1/notes-state', '/api/works/w1/notes-state', '/api/works/w2/notes-state', '/api/works/w2/notes-state'])
+  })
+
+  it('never asks about a Work its drafts carry no base for, nor where recovery storage does not exist', async () => {
+    await researchDraft('Typed with no base read', UNKNOWN_BASE)
+    goneOnServer()
+    expect(await win.prksSweepDeletedWorkRecovery()).toEqual([])
+    win.indexedDB = { databases: async () => [] }
+    expect(await win.prksSweepDeletedWorkRecovery()).toEqual([])
+    expect(probed).toEqual([])
+    expect(await records()).toHaveLength(1)
+  })
+
+  it('never probes a Work whose creation has not reached the server, and probes nothing when the queue is unreadable', async () => {
+    await researchDraft('Typed in a new Work')
+    goneOnServer()
+    sync.rows().push({
+      op_id: 'op-create', operation: 'CREATE_WORK', entity_type: 'work', entity_id: 'w1',
+      payload: { text: '' }, base_revision: null, status: 'pending', attempt_count: 1,
+    })
+    expect(await win.prksSweepDeletedWorkRecovery()).toEqual([])
+    sync.rows().find((r) => r.op_id === 'op-create')!.status = 'conflict'
+    expect(await win.prksSweepDeletedWorkRecovery()).toEqual([])
+    sync.reset()
+    const list = sync.store.listOperations
+    sync.store.listOperations = async () => { throw new Error('unreadable') }
+    try {
+      expect(await win.prksSweepDeletedWorkRecovery()).toEqual([])
+    } finally {
+      sync.store.listOperations = list
+    }
+    expect(probed).toEqual([])
+    expect(await records()).toHaveLength(1)
+  })
+
+  it('removes the drafts when deleting a Work whose creation never left this device', async () => {
+    await researchDraft('Typed in a new Work')
+    const store = sync.store as unknown as { deleteWork(id: string): Promise<unknown> }
+    const original = store.deleteWork
+    store.deleteWork = async () => null
+    try {
+      expect(await win.prksDeleteWorkDurably('w1')).toBeNull()
+    } finally {
+      store.deleteWork = original
+    }
+    await waitFor(async () => (await records()).length === 0, 'folded creation cleans up')
   })
 })
