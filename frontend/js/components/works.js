@@ -1052,9 +1052,12 @@ async function deleteWork(w_id, ownerCtx) {
     const generation = ctx && ctx.generation;
     const confirmed = await prksConfirmDestructive({
         title: 'Delete file?',
-        /* #533: drafts are removed only once the server confirms the deletion. */
-        message: 'This permanently deletes the file and cannot be undone. Once the deletion is confirmed, ' +
-            'unsaved Research Notes and Reminders drafts kept for this file in this browser are removed too.',
+        /* #533: drafts are removed only once the server confirms the deletion,
+         * and only where no tab may still hold them. */
+        message: 'This permanently deletes the file and cannot be undone, and unsaved Research Notes and ' +
+            'Reminders text for it can be lost. Once the deletion is confirmed, drafts this browser kept for ' +
+            'the file are removed where that is safe; a draft another open or unresponsive tab still holds ' +
+            'stays until it can be removed safely.',
         confirmLabel: 'Delete file',
     });
     if (!confirmed) return;

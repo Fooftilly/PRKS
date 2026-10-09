@@ -957,6 +957,18 @@ describe('Work delete and recovery drafts (#533)', () => {
     expect(marked().sort()).toEqual(['w1', 'w2'])
   })
 
+  it('keeps the mark while a pane still shows the Work, even one nobody has typed in yet', async () => {
+    await openWork()
+    mark()
+    goneOnServer()
+    expect(await win.prksRetryDeletedWorkRecovery()).toEqual(['w1'])
+    expect(marked()).toEqual(['w1'])
+    win.prksDestroyAllTabContexts()
+    await settle()
+    expect(await win.prksRetryDeletedWorkRecovery()).toEqual(['w1'])
+    expect(marked()).toEqual([])
+  })
+
   it('keeps the mark while a pane still showing the Work holds an edit not yet in storage', async () => {
     const { ctx, ta } = await openWork()
     type(ctx, ta!, 'Saved reminder. Typed within the debounce')
@@ -994,6 +1006,9 @@ describe('Work delete and recovery drafts (#533)', () => {
     await waitFor(async () => (await records()).length === 0, 'folded creation cleans up')
     // The mark stays for a later load: another tab may hold an edit not yet in storage.
     expect(marked()).toEqual(['w1'])
+    // The deleting pane navigates away; a later load clears the mark.
+    win.prksDestroyAllTabContexts()
+    await settle()
     goneOnServer()
     expect(await win.prksRetryDeletedWorkRecovery()).toEqual(['w1'])
     expect(marked()).toEqual([])

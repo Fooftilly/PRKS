@@ -235,32 +235,24 @@
                 });
             }
             const done = [];
-            let retained = 0;
             entriesArray().forEach(function (entry) {
-                if (!entry || String(entry.workId) !== id || !entry.recovery) return;
-                if (shown.has(String(entry.ownerTabId))) {
-                    retained += 1;
-                    return;
-                }
+                if (!entry || String(entry.workId) !== id || !entry.recovery || shown.has(String(entry.ownerTabId))) return;
                 const writer = entry.recovery;
                 K.forget(entry);
                 done.push(writer.release().catch(function () {}));
             });
             ackWatch.forEach(function (watches, opId) {
                 const kept = watches.filter(function (watch) {
-                    if (watch.workId !== id) return true;
-                    if (shown.has(watch.tabId)) {
-                        if (watch.writer) retained += 1;
-                        return true;
-                    }
+                    if (watch.workId !== id || shown.has(watch.tabId)) return true;
                     if (watch.writer) done.push(watch.writer.release().catch(function () {}));
                     return false;
                 });
                 if (kept.length) ackWatch.set(opId, kept);
                 else ackWatch.delete(opId);
             });
-            /* Resolves to the sessions a shown pane kept: they may still commit. */
-            return Promise.all(done).then(function () { return retained; });
+            /* Resolves to the panes that still mount this editor for the Work,
+             * typed in or not: each may yet commit an edit. */
+            return Promise.all(done).then(function () { return shown.size; });
         }
 
         /** Starts the recovery write before an ordinary save is queued. */
@@ -1112,8 +1104,9 @@
 
     root.prksCreateWorkNoteRecovery = create;
     /* #533: release every kind's sessions of a Work whose deletion is
-     * confirmed; resolves to { retained }, the sessions a pane still showing
-     * the Work kept (an adapter that failed counts as one). */
+     * confirmed; resolves to { retained }, the panes still mounting a note
+     * editor of the Work, which may yet type in it (an adapter that failed
+     * counts as one). */
     root.prksForgetDeletedWorkNotes = function (workId, options) {
         const evenShown = !!(options && options.evenShown);
         return Promise.all(adapters.map(function (adapter) {

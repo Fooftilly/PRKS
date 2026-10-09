@@ -213,7 +213,14 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
           continue
         }
         const stone = { kind: entry.kind, entityType: entry.entityType, entityId: entry.entityId, generation: entry.generation, pageInstanceId: stored.pageInstanceId }
-        if ((await store.tombstoneIfAbsent(entry.draftId, stone)) === 'suppressed') report.suppressed.push(entry.draftId)
+        if ((await store.tombstoneIfAbsent(entry.draftId, stone)) === 'suppressed') {
+          report.suppressed.push(entry.draftId)
+          continue
+        }
+        // A record of it landed after the listing (another tab merged the key): one more pass classifies it.
+        const landed = await store.get(entry.draftId)
+        if (landed && !isSupportedRecord(landed)) report.unsupported.push(entry.draftId)
+        else if (landed && landed.status !== 'discarded') report.changed.push(entry.draftId)
       }
     }
   }

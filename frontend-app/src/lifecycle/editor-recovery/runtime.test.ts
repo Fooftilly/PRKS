@@ -593,6 +593,27 @@ describe('cleanupDeletedEntity (#533)', () => {
     expect(await next.store.listAll()).toEqual([])
   })
 
+  it('reports an emergency-only lineage that another tab merged after the listing, so it is not taken as cleaned', async () => {
+    const { page, local } = setup()
+    const cleaner = page('cleaner').rt
+    await cleaner.start()
+    const payload = { v: 1, pageInstanceId: 'p-lost', runtimeId: null, at: 1, entries: [] }
+    const lost = {
+      draftId: 'd-lost', kind: 'work-research-note' as DraftKind, entityType: 'work' as const, entityId: 'w1', generation: 1, committedGeneration: 0, body: 'only in localStorage',
+      lineage: { createdAt: 1, owner: { runtimeId: null, pageInstanceId: 'p-lost', paneId: 'tab-1' }, base: UNKNOWN_BASE },
+    }
+    local.setItem(EMERGENCY_KEY_PREFIX + 'p-lost', JSON.stringify({ ...payload, entries: [lost] }))
+    const tombstone = cleaner.store.tombstoneIfAbsent
+    cleaner.store.tombstoneIfAbsent = async (...args) => {
+      // Another tab merges the key between this cleanup's listing and its tombstone.
+      expect(await cleaner.store.applyEmergencyEntry({ ...payload, entries: [lost] }, lost)).toBe('created')
+      cleaner.store.tombstoneIfAbsent = tombstone
+      return tombstone(...args)
+    }
+    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [], unknown: [], changed: ['d-lost'], unsupported: [], suppressed: [] })
+    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toMatchObject({ removed: ['d-lost'], changed: [] })
+  })
+
   it('keeps a frozen page\'s committed lineage: its page lock is held though it answers nothing', async () => {
     const { page } = setup()
     const frozen = { now: false }

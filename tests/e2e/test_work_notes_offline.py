@@ -1090,7 +1090,12 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
         # Cancel deletes nothing.
         dialog = self.open_delete_confirm(page)
         self.assertIn('cannot be undone', dialog.inner_text())
-        self.assertIn('Once the deletion is confirmed, unsaved Research Notes and Reminders drafts', dialog.inner_text())
+        # Says what cleanup can promise: removal where safe, not of every draft.
+        text = ' '.join(dialog.inner_text().split())
+        self.assertIn('unsaved Research Notes and Reminders text for it can be lost', text)
+        self.assertIn('are removed where that is safe', text)
+        self.assertIn('another open or unresponsive tab still holds stays until it can be removed safely', text)
+        self.assertNotIn('are removed too', text)
         page.locator('#prks-modal-confirm-cancel').click()
         dialog.wait_for(state='hidden')
         self.assertEqual(self.delete_rows(page), [])
