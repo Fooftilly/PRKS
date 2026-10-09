@@ -28,6 +28,73 @@ class FolderSyncFrontendTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn('checks passed', proc.stdout)
 
+    def test_private_note_save_contract_selftests(self):
+        """Folder Reminders recovery (#534) needs each save to name its exact
+        row and an acknowledgement it can match to one row and one text."""
+        proc = subprocess.run(
+            ['node', str(ROOT / 'tests' / 'browser' / 'run_folder_private_note_save_selftest.js')],
+            cwd=ROOT, capture_output=True, text=True, timeout=180)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn('folder private-note save checks passed', proc.stdout)
+
+    def test_private_notes_limit_and_canonical_form_match_the_server(self):
+        self.assertIn('const MAX_FOLDER_TEXT_BYTES = %d;' % folder_sync.MAX_TEXT_BYTES, self.state)
+        backend = (ROOT / 'backend' / 'folder_sync.py').read_text()
+        self.assertIn('text = ("" if value is None else str(value)).strip()', backend)
+        runtime = (FRONTEND / 'offline-runtime.js').read_text()
+        at = runtime.index('async function reconcileFolderField(')
+        body = runtime[at: runtime.index('\n        /**', at)]
+        self.assertIn("field === 'private_notes'", body)
+        self.assertIn('prksCanonicalFolderFieldValue(field, raw)', body)
+
+    def test_canonical_form_and_byte_limit_agree_with_the_server_for_every_character(self):
+        """The client states what the server stores (an acknowledgement's
+        `stored`, the cached body) and refuses what it would refuse. Python's
+        `str.strip()` and JavaScript's `trim()` drop different characters, so
+        both sides are run on the same inputs."""
+        samples = [
+            '\ufeffmemo', 'memo\u0085', '\u001cmemo\u001f', ' \u3000memo\u2029 ', '\u200bmemo\u200b',
+            '', '   ', 'a' * 4000, 'a' * 4001, '\u00e9' * 2000, '\u00e9' * 2000 + 'a',
+            '\u00e9' * 2000 + ' \u0085\u001f', '\ufeff' + 'a' * 3998, ' \u0085' + 'a' * 4000 + '\u3000',
+        ]
+        script = r"""
+            require('./frontend/js/folder-state.js');
+            const canonical = globalThis.prksCanonicalFolderFieldValue;
+            const limit = globalThis.PRKS_MAX_FOLDER_TEXT_BYTES;
+            const bytes = (t) => new TextEncoder().encode(t).length;
+            const input = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+            const stripped = [];
+            for (let cp = 0; cp <= 0x10ffff; cp++) {
+                if (cp >= 0xd800 && cp <= 0xdfff) continue;
+                const ch = String.fromCodePoint(cp);
+                if (canonical('private_notes', ch + 'x' + ch) === 'x') stripped.push(cp);
+            }
+            process.stdout.write(JSON.stringify({
+                stripped,
+                samples: input.map((t) => {
+                    const c = canonical('private_notes', t);
+                    return { canonical: c, tooLong: bytes(c) > limit };
+                }),
+            }));
+        """
+        import json
+        proc = subprocess.run(['node', '-e', script], cwd=ROOT, input=json.dumps(samples),
+                              capture_output=True, text=True, timeout=180)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        out = json.loads(proc.stdout)
+        server_space = [cp for cp in range(0x110000)
+                        if not 0xd800 <= cp <= 0xdfff and folder_sync.canonical_wire('private_notes', chr(cp) + 'x' + chr(cp)) == 'x']
+        self.assertEqual(out['stripped'], server_space)
+        for text, client in zip(samples, out['samples']):
+            with self.subTest(text=text[:12], length=len(text)):
+                self.assertEqual(client['canonical'], folder_sync.canonical_wire('private_notes', text))
+                try:
+                    folder_sync.validate_field_value('private_notes', text)
+                    refused = False
+                except folder_sync.FolderRuleError:
+                    refused = True
+                self.assertEqual(client['tooLong'], refused)
+
     def test_the_two_sides_synchronize_the_same_fields(self):
         client = js_string_list(self.store, 'const FOLDER_FIELDS =')
         self.assertEqual(sorted(client), sorted(folder_sync.FIELDS))

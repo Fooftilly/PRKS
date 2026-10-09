@@ -2320,8 +2320,13 @@
                             r.payload.field === field && r.status !== STATUS_ACKNOWLEDGED);
                         if (existing) {
                             if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
-                                throw localStoreError('scope_busy',
-                                    'This field is syncing or needs resolution.');
+                                /* Names the row holding the field, so a caller can
+                                 * tell one in flight from one that needs resolution. */
+                                throw Object.assign(localStoreError('scope_busy',
+                                    'This field is syncing or needs resolution.'), {
+                                    prksBusyOpId: existing.op_id,
+                                    prksBusyStatus: existing.status,
+                                });
                             }
                             if (existing.payload.value === desired) {
                                 written.push(existing);

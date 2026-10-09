@@ -415,6 +415,153 @@
         return written;
     }
 
+    /* ---- Folder private notes (Reminders): the save contract (#534) ----
+     *
+     * Folder Reminders are the `private_notes` FIELD of the Folder, saved as
+     * one SET_FOLDER_FIELD row against that field's own revision. Nothing
+     * here adds a note revision or an endpoint: the field revision IS the
+     * note's revision, and it is never a Work note revision.
+     *
+     * A recovery caller needs to know exactly which queued row holds which
+     * text, so the save answers with a code and the row, and never throws:
+     *
+     * - `queued`: `opId` is the unsettled row whose payload is exactly this
+     *   text (new, or the never-sent row that already held it). Queued is
+     *   never acknowledged; only that row's acknowledgement is.
+     * - `unchanged`: the text equals `observed.value`, so no row is needed
+     *   and none is left (a never-sent row holding other text was
+     *   withdrawn). It proves equality with the base the CALLER supplied
+     *   only: whether that base is acknowledged is the caller's to know.
+     * - `scope_busy`: a row for this field is in flight; `opId` names it.
+     * - `conflict`: a row for this field needs resolution; `opId` names it.
+     * - `unknown_base`: no acknowledged base to measure against.
+     * - `unproven`: the store accepted the save but returned no row holding
+     *   this exact text, so nothing can be said about what will acknowledge.
+     * - `too-long`, `invalid`, `unavailable`, `failed`: nothing was queued
+     *   (`failed` carries the store's code and message).
+     */
+
+    const PRIVATE_NOTES_FIELD = 'private_notes';
+    /* The server's limit for Folder text fields (backend/folder_sync.py). */
+    const MAX_FOLDER_TEXT_BYTES = 4000;
+
+    function utf8Bytes(text) {
+        return new TextEncoder().encode(text || '').length;
+    }
+
+    /*
+     * The characters Python's `str.strip()` drops (`str.isspace()`), which is
+     * what the server strips. JavaScript's `trim()` is a different set: it
+     * also drops U+FEFF and keeps U+001C..U+001F and U+0085, so it would
+     * mis-state what the server stores.
+     */
+    const PY_SPACE = '\t\n\u000b\u000c\r\u001c-\u001f \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000';
+    const PY_STRIP = new RegExp('^[' + PY_SPACE + ']+|[' + PY_SPACE + ']+$', 'g');
+
+    /**
+     * What the server stores for a field value (backend `canonical_wire`):
+     * surrounding whitespace, as Python's `str.strip()` defines it, is
+     * dropped, and an empty title is the placeholder. An acknowledged row's
+     * text is its payload; the server holds this.
+     */
+    function canonicalFieldValue(field, value) {
+        const text = String(value == null ? '' : value).replace(PY_STRIP, '');
+        return field === 'title' ? (text || DEFAULT_TITLE) : text;
+    }
+
+    function isPrivateNoteRow(op, folderId) {
+        return !!op && op.operation === 'SET_FOLDER_FIELD' && op.entity_type === 'folder' &&
+            (folderId == null || op.entity_id === folderId) &&
+            !!op.payload && op.payload.field === PRIVATE_NOTES_FIELD;
+    }
+
+    /** Unsettled `private_notes` rows of one Folder, oldest first. */
+    function privateNoteOperations(operations, folderId) {
+        return (operations || [])
+            .filter(op => isPrivateNoteRow(op, folderId) && op.status !== 'acknowledged')
+            .slice()
+            .sort((a, b) => (a.sequence || 0) - (b.sequence || 0));
+    }
+
+    function rowText(op) {
+        return op && op.payload && typeof op.payload.value === 'string' ? op.payload.value : null;
+    }
+
+    /**
+     * The acknowledgement of one Folder `private_notes` row, or null for any
+     * other event. `text` is the row's exact payload (what a draft generation
+     * is matched against); `stored` is what the server now holds at
+     * `revision`.
+     */
+    function privateNoteAck(event) {
+        const op = event && event.op;
+        const data = event && event.acknowledged;
+        if (!data || !isPrivateNoteRow(op, null) || typeof op.op_id !== 'string') return null;
+        if (data.code !== 'ACKNOWLEDGED' || data.folder_id !== op.entity_id ||
+            data.field !== PRIVATE_NOTES_FIELD) return null;
+        const text = rowText(op);
+        const revision = data.server_revision;
+        if (text === null || !Number.isSafeInteger(revision) || revision < 0) return null;
+        return {
+            folderId: op.entity_id,
+            opId: op.op_id,
+            text: text,
+            stored: canonicalFieldValue(PRIVATE_NOTES_FIELD, text),
+            revision: revision,
+            changed: data.changed === true,
+        };
+    }
+
+    function isObservedField(observed) {
+        return !!observed && typeof observed.value === 'string' &&
+            Number.isSafeInteger(observed.revision) && observed.revision >= 0;
+    }
+
+    async function saveFolderPrivateNoteDurably(folderId, text, observed) {
+        const runtime = root.prksSync;
+        if (!runtime || !runtime.store || typeof runtime.store.saveFolderFields !== 'function') {
+            return { code: 'unavailable', opId: null };
+        }
+        if (typeof folderId !== 'string' || !folderId || typeof text !== 'string') {
+            return { code: 'invalid', opId: null };
+        }
+        if (utf8Bytes(canonicalFieldValue(PRIVATE_NOTES_FIELD, text)) > MAX_FOLDER_TEXT_BYTES) {
+            return { code: 'too-long', opId: null };
+        }
+        if (!isObservedField(observed)) return { code: 'unknown_base', opId: null };
+        const base = { value: observed.value, revision: observed.revision };
+        let written;
+        try {
+            written = await runtime.store.saveFolderFields(folderId,
+                { private_notes: text }, { private_notes: base });
+        } catch (error) {
+            const storeCode = error && error.prksLocalStoreCode;
+            if (storeCode === 'scope_busy') {
+                const busyOpId = typeof error.prksBusyOpId === 'string' ? error.prksBusyOpId : null;
+                return {
+                    code: error.prksBusyStatus === 'conflict' ? 'conflict' : 'scope_busy',
+                    opId: busyOpId,
+                };
+            }
+            return {
+                code: 'failed', opId: null, storeCode: storeCode || null,
+                error: (error && error.message) || 'Store refused write.',
+            };
+        }
+        if (typeof runtime.changed === 'function') runtime.changed();
+        const rows = Array.isArray(written) ? written.filter(op => isPrivateNoteRow(op, folderId)) : [];
+        const exact = rows.find(op => rowText(op) === text && typeof op.op_id === 'string');
+        if (exact) {
+            /* `baseRevision` is the row's own: a never-sent row that already held
+             * this text keeps the revision it was queued on. */
+            return { code: 'queued', opId: exact.op_id, text: text, baseRevision: exact.base_revision };
+        }
+        if (!rows.length && text === base.value) {
+            return { code: 'unchanged', opId: null, text: text, baseRevision: base.revision };
+        }
+        return { code: 'unproven', opId: null };
+    }
+
     async function setWorkFolderDurably(workId, folderId, observed, localContext) {
         const runtime = sync();
         const op = await runtime.store.setWorkFolder(workId, folderId, observed, localContext);
@@ -555,6 +702,12 @@
         prksCreateFolderDurably: createFolderDurably,
         prksSaveFolderFieldsDurably: saveFolderFieldsDurably,
         prksSetWorkFolderDurably: setWorkFolderDurably,
+        PRKS_FOLDER_PRIVATE_NOTES_FIELD: PRIVATE_NOTES_FIELD,
+        PRKS_MAX_FOLDER_TEXT_BYTES: MAX_FOLDER_TEXT_BYTES,
+        prksCanonicalFolderFieldValue: canonicalFieldValue,
+        prksFolderPrivateNoteOperations: privateNoteOperations,
+        prksFolderPrivateNoteAck: privateNoteAck,
+        prksSaveFolderPrivateNoteDurably: saveFolderPrivateNoteDurably,
         prksDeleteFolderDurably: deleteFolderDurably,
         prksFolderCreateSyncHandler: createHandler,
         prksFolderFieldSyncHandler: fieldHandler,
