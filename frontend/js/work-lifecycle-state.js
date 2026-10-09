@@ -217,18 +217,21 @@
     /**
      * Removes the recovery drafts of a Work whose deletion is confirmed. This
      * page's note sessions of it that no pane shows give their lineages back
-     * first. Ownership-checked and generation-safe in the recovery runtime: a live
+     * first; with `evenShown`, also those a pane of this page still shows.
+     * Ownership-checked and generation-safe in the recovery runtime: a live
      * editor's lineage is kept, and so is one adopted or written since it was
      * read; one more pass reclassifies those. Never throws.
      */
-    async function cleanupDeletedWorkRecovery(workId) {
+    async function cleanupDeletedWorkRecovery(workId, options) {
         /* No recovery database on this origin: no drafts, and none is created. */
         if (!workId || await recoveryStorageExists() === false) return null;
         const rt = recoveryRuntime();
         if (!rt) return null;
         const entity = { entityType: 'work', entityId: workId };
         try {
-            if (typeof root.prksForgetDeletedWorkNotes === 'function') await root.prksForgetDeletedWorkNotes(workId);
+            if (typeof root.prksForgetDeletedWorkNotes === 'function') {
+                await root.prksForgetDeletedWorkNotes(workId, { evenShown: !!(options && options.evenShown) });
+            }
             const report = await rt.cleanupDeletedEntity(entity, RECOVERY_KINDS);
             return report.changed.length ? await rt.cleanupDeletedEntity(entity, RECOVERY_KINDS) : report;
         } catch (_e) {
@@ -266,7 +269,12 @@
         }
     }
 
-    /** Work ids whose drafts carry a base read for that Work, excluding Works awaiting creation. */
+    /**
+     * Work ids whose drafts carry a base read for that Work, or were typed on
+     * a creation of this device, excluding Works whose creation is still
+     * queued. A creation's draft is asked about once its row is gone: then the
+     * server either holds the Work or the creation folded away.
+     */
     function sweepCandidates(records, operations) {
         const creating = new Set(pendingCreates(operations).concat((operations || []).filter(function (op) {
             return op && op.operation === 'CREATE_WORK' && op.status === 'conflict';
@@ -275,10 +283,10 @@
         for (const record of records) {
             if (!record || record.entityType !== 'work' || record.status === 'discarded' ||
                 RECOVERY_KINDS.indexOf(record.kind) === -1 || typeof record.entityId !== 'string') continue;
-            /* Only a draft typed on a note this device read for that Work
-             * proves the Work existed where "not found" now means deleted. */
+            /* Only a draft typed on a note this device read for that Work, or
+             * on its own creation, says the Work is this server's to answer for. */
             const source = record.base && record.base.source;
-            if (source !== 'server' && source !== 'cache') continue;
+            if (source !== 'server' && source !== 'cache' && source !== 'pending-create') continue;
             if (creating.has(record.entityId) || ids.indexOf(record.entityId) !== -1) continue;
             ids.push(record.entityId);
         }
@@ -363,8 +371,9 @@
         else {
             clearLiveLifecycle(workId);
             /* A creation that never left this device folded away: nothing
-             * can refuse this deletion any more. */
-            void cleanupDeletedWorkRecovery(workId);
+             * can refuse this deletion, and no pane can ever save that Work,
+             * including the one that is deleting it and still shows it. */
+            void cleanupDeletedWorkRecovery(workId, { evenShown: true });
         }
         if (typeof sync.changed === 'function') sync.changed();
         return op;

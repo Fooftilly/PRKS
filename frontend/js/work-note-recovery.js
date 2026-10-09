@@ -222,14 +222,18 @@
          * shows any more can never be saved, and its row was cancelled with the
          * delete request, so no acknowledgement will ever release it: its lineage
          * is given back for the deletion's cleanup. A pane still showing the Work
-         * keeps its editor and lineage. Resolves once those last writes finished.
+         * keeps its editor and lineage, unless `evenShown`: a creation that never
+         * left this device folded away, so no pane of this page can ever save it.
+         * Resolves once those last writes finished.
          */
-        function forgetDeleted(workId) {
+        function forgetDeleted(workId, evenShown) {
             const id = String(workId);
             const shown = new Set();
-            K.owners(function (ctx, owned) {
-                if (ctx && String(owned) === id) shown.add(String(ctx.tabId));
-            });
+            if (!evenShown) {
+                K.owners(function (ctx, owned) {
+                    if (ctx && String(owned) === id) shown.add(String(ctx.tabId));
+                });
+            }
             const done = [];
             entriesArray().forEach(function (entry) {
                 if (!entry || String(entry.workId) !== id || !entry.recovery || shown.has(String(entry.ownerTabId))) return;
@@ -1098,10 +1102,11 @@
 
     root.prksCreateWorkNoteRecovery = create;
     /* #533: release every kind's sessions of a Work whose deletion is confirmed. */
-    root.prksForgetDeletedWorkNotes = function (workId) {
+    root.prksForgetDeletedWorkNotes = function (workId, options) {
+        const evenShown = !!(options && options.evenShown);
         return Promise.all(adapters.map(function (adapter) {
             try {
-                return adapter.forgetDeleted(workId);
+                return adapter.forgetDeleted(workId, evenShown);
             } catch (_e) {
                 return null;
             }

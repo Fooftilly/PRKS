@@ -765,8 +765,12 @@ describe('Work delete and recovery drafts (#533)', () => {
     expect(await records()).toHaveLength(1)
   })
 
-  it('removes the drafts when deleting a Work whose creation never left this device', async () => {
+  it('removes the drafts, even of the pane that deletes it, when a Work whose creation never left this device folds away', async () => {
+    // The deleting pane still shows the Work and its Reminders session, as Delete File in its own Details does.
+    const { ctx, ta } = await openWork()
+    await type(ctx, ta!, 'Saved reminder. Typed in a new Work').recovery!.flush()
     await researchDraft('Typed in a new Work')
+    expect(await records()).toHaveLength(2)
     const store = sync.store as unknown as { deleteWork(id: string): Promise<unknown> }
     const original = store.deleteWork
     store.deleteWork = async () => null
@@ -776,5 +780,21 @@ describe('Work delete and recovery drafts (#533)', () => {
       store.deleteWork = original
     }
     await waitFor(async () => (await records()).length === 0, 'folded creation cleans up')
+  })
+
+  it('asks about a draft typed on a creation of this device once that creation has left the queue', async () => {
+    const PENDING_CREATE: DraftBase = { revision: 0, length: 0, fingerprint: '0'.repeat(32), source: 'pending-create' }
+    await researchDraft('Typed in a new Work', PENDING_CREATE)
+    goneOnServer()
+    sync.rows().push({
+      op_id: 'op-create', operation: 'CREATE_WORK', entity_type: 'work', entity_id: 'w1',
+      payload: { text: '' }, base_revision: null, status: 'pending', attempt_count: 0,
+    })
+    expect(await win.prksSweepDeletedWorkRecovery()).toEqual([])
+    expect(probed).toEqual([])
+    // Another tab of this browser folded the creation away.
+    sync.reset()
+    expect(await win.prksSweepDeletedWorkRecovery()).toEqual(['w1'])
+    expect(await records()).toEqual([])
   })
 })

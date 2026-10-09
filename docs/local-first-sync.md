@@ -95,10 +95,12 @@ coordinator names no family: adding one is a registration.
   note rows, so a draft can be the only copy if the delete then
   conflicts); its acknowledgement, a never-sent creation folding away, or
   the server's "Work not found" for a Work whose drafts carry a base read
-  for it (another device deleted it, or cleanup was interrupted; probed
-  once per page load, at most 8 Works, never a Work awaiting its creation)
-  removes both note kinds for that Work (#533). This page's note sessions
-  that no pane shows give their lineages back first; every other lineage
+  for it or were typed on this device's own creation of it (another device
+  deleted it, cleanup was interrupted, or the creation folded away; probed
+  once per page load, at most 8 Works, never a Work whose creation is still
+  queued) removes both note kinds for that Work (#533). This page's note
+  sessions that no pane shows give their lineages back first (on a folded
+  creation, the deleting pane's own sessions too); every other lineage
   no live editor owns, unknown owners included, is removed by
   compare-and-set on its owner page, generation and status, and a stale
   emergency key's lineages are tombstoned. A discard whose emergency key could not be cleared leaves a bodyless
