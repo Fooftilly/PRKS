@@ -133,6 +133,7 @@
                 void refresh();
             });
         }
+        if (typeof root.addEventListener === 'function') root.addEventListener('storage', onDeletedWorksChanged);
         armRecoveryRetry();
         return true;
     }
@@ -205,13 +206,17 @@
     const RECOVERY_KINDS = ['work-research-note', 'work-private-note'];
     /* Works this device saw confirmed deleted (its own DELETE_WORK
      * acknowledged, or its own creation folded away) whose drafts are not
-     * all gone yet. Only this provenance authorizes a retry: a bare 404 from
-     * whatever library this origin serves now proves nothing about the one
-     * a draft was typed against. */
+     * all gone yet, as [{ id, tries }]. Only this provenance authorizes a
+     * retry: a bare 404 from whatever library this origin serves now proves
+     * nothing about the one a draft was typed against. */
     const DELETED_WORKS_KEY = 'prks.workRecoveryCleanup.v1';
     const DELETED_WORKS_MAX = 64;
     /* Works retried per page load; the rest wait for a later load. */
     const RETRY_MAX_WORKS = 8;
+    /* Page loads that retry one Work. A draft whose owner is never proven
+     * gone (a LAN tab that crashed) then stays, unreachable until drafts can
+     * be reviewed apart from their Work, instead of costing a probe per load. */
+    const RETRY_MAX_TRIES = 5;
     let retryStarted = false;
 
     function recoveryRuntime() {
@@ -228,27 +233,51 @@
     function readDeletedWorks() {
         try {
             const value = JSON.parse(root.localStorage.getItem(DELETED_WORKS_KEY) || '[]');
-            return Array.isArray(value) ? value.filter(function (id) { return typeof id === 'string' && !!id; }) : [];
+            return Array.isArray(value) ? value.filter(function (entry) {
+                return !!entry && typeof entry.id === 'string' && !!entry.id && typeof entry.tries === 'number';
+            }) : [];
         } catch (_e) {
             return [];
         }
     }
-    function writeDeletedWorks(ids) {
+    function writeDeletedWorks(entries) {
         try {
-            if (ids.length) root.localStorage.setItem(DELETED_WORKS_KEY, JSON.stringify(ids.slice(-DELETED_WORKS_MAX)));
+            if (entries.length) root.localStorage.setItem(DELETED_WORKS_KEY, JSON.stringify(entries.slice(-DELETED_WORKS_MAX)));
             else root.localStorage.removeItem(DELETED_WORKS_KEY);
         } catch (_e) {
             /* Storage unavailable: this load's cleanup still runs, only a retry is lost. */
         }
     }
     function markDeletedWork(workId) {
-        const ids = readDeletedWorks().filter(function (id) { return id !== workId; });
-        ids.push(workId);
-        writeDeletedWorks(ids);
+        const entries = readDeletedWorks().filter(function (entry) { return entry.id !== workId; });
+        entries.push({ id: workId, tries: 0 });
+        writeDeletedWorks(entries);
     }
     function unmarkDeletedWork(workId) {
-        const ids = readDeletedWorks();
-        if (ids.indexOf(workId) !== -1) writeDeletedWorks(ids.filter(function (id) { return id !== workId; }));
+        const entries = readDeletedWorks();
+        if (entries.some(function (entry) { return entry.id === workId; })) {
+            writeDeletedWorks(entries.filter(function (entry) { return entry.id !== workId; }));
+        }
+    }
+
+    /**
+     * Whether recovery storage may hold anything of `workId`, read without
+     * building the recovery runtime: false only when the database is known
+     * absent and no emergency key names the Work.
+     */
+    async function recoveryMayHold(workId) {
+        const api = root.prksEditorRecovery;
+        if (!api) return false;
+        if (await recoveryStorageExists() !== false) return true;
+        try {
+            return api.readEmergencyKeys(root.localStorage).some(function (stored) {
+                return !!stored.payload && stored.payload.entries.some(function (entry) {
+                    return entry.entityType === 'work' && entry.entityId === workId;
+                });
+            });
+        } catch (_e) {
+            return true;
+        }
     }
 
     /**
@@ -263,23 +292,21 @@
      */
     async function cleanupDeletedWorkRecovery(workId, options) {
         if (!workId) return null;
-        const rt = recoveryRuntime();
-        if (!rt) return null;
         const entity = { entityType: 'work', entityId: workId };
         try {
             /* Before anything else: a released writer may still commit its last
-             * generation, which the checks below must then see. */
+             * generation, which the check below must then see. */
             if (typeof root.prksForgetDeletedWorkNotes === 'function') {
                 await root.prksForgetDeletedWorkNotes(workId, { evenShown: !!(options && options.evenShown) });
             }
             /* No recovery database and no emergency key naming this Work: no
-             * drafts, and none is created. */
-            if (await recoveryStorageExists() === false && !emergencyDraftsOf(rt).some(function (draft) {
-                return draft.entityType === 'work' && draft.entityId === workId;
-            })) {
+             * drafts, and no runtime, database or channel is created. */
+            if (!await recoveryMayHold(workId)) {
                 unmarkDeletedWork(workId);
                 return { removed: [], live: [], unknown: [], changed: [], suppressed: [] };
             }
+            const rt = recoveryRuntime();
+            if (!rt) return null;
             let report = await rt.cleanupDeletedEntity(entity, RECOVERY_KINDS);
             if (report.changed.length) report = await rt.cleanupDeletedEntity(entity, RECOVERY_KINDS);
             if (!report.live.length && !report.unknown.length && !report.changed.length) unmarkDeletedWork(workId);
@@ -301,15 +328,6 @@
             });
         } catch (_e) {
             return null;
-        }
-    }
-
-    /** Drafts held only in emergency keys. */
-    function emergencyDraftsOf(rt) {
-        try {
-            return typeof rt.emergencyDrafts === 'function' ? rt.emergencyDrafts() : [];
-        } catch (_e) {
-            return [];
         }
     }
 
@@ -337,20 +355,41 @@
      * shutdown between the confirmation and the cleanup, a draft another tab
      * still held, or an owner not yet proven gone. Each retry also needs the
      * server's "Work not found"; a Work the server holds again (restored)
-     * keeps its drafts and loses its mark. Drafts of a Work this device never
-     * saw deleted are never removed here, whatever the server answers.
-     * Returns the Work ids it ran a cleanup for.
+     * keeps its drafts and loses its mark, and so does one already retried
+     * on RETRY_MAX_TRIES loads. Drafts of a Work this device never saw
+     * deleted are never removed here, whatever the server answers. Returns
+     * the Work ids it ran a cleanup for.
      */
     async function retryDeletedWorkRecovery() {
-        const ids = readDeletedWorks().slice(0, RETRY_MAX_WORKS);
         const cleaned = [];
-        for (const workId of ids) {
-            const answer = await workOnServer(workId);
-            if (answer === 'present') unmarkDeletedWork(workId);
+        for (const entry of readDeletedWorks().slice(0, RETRY_MAX_WORKS)) {
+            if (entry.tries >= RETRY_MAX_TRIES) {
+                unmarkDeletedWork(entry.id);
+                continue;
+            }
+            writeDeletedWorks(readDeletedWorks().map(function (current) {
+                return current.id === entry.id ? { id: current.id, tries: current.tries + 1 } : current;
+            }));
+            const answer = await workOnServer(entry.id);
+            if (answer === 'present') unmarkDeletedWork(entry.id);
             if (answer !== 'gone') continue;
-            if (await cleanupDeletedWorkRecovery(workId)) cleaned.push(workId);
+            if (await cleanupDeletedWorkRecovery(entry.id)) cleaned.push(entry.id);
         }
         return cleaned;
+    }
+
+    /* Only the tab holding the sync lock hears an acknowledgement; its mark
+     * reaches every other tab of this browser, which then gives back its own
+     * sessions of that Work and cleans what it may. */
+    function onDeletedWorksChanged(event) {
+        if (!event || event.key !== DELETED_WORKS_KEY || !event.newValue) return;
+        let before = [];
+        try {
+            before = (JSON.parse(event.oldValue || '[]') || []).map(function (entry) { return entry && entry.id; });
+        } catch (_e) { /* treat every id as new */ }
+        for (const entry of readDeletedWorks()) {
+            if (entry.tries === 0 && before.indexOf(entry.id) === -1) void cleanupDeletedWorkRecovery(entry.id);
+        }
     }
 
     /* Once per page load, after the server has first been observed reachable,

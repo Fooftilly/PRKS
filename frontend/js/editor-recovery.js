@@ -2478,20 +2478,6 @@ var prksEditorRecovery = (function(exports) {
 			},
 			discardReviewed,
 			cleanupDeletedEntity,
-			emergencyDrafts() {
-				if (!emergencyStorage) return [];
-				const drafts = [];
-				for (const stored of readEmergencyKeys(emergencyStorage)) for (const entry of stored.payload ? stored.payload.entries : []) {
-					if (!entry.lineage) continue;
-					drafts.push({
-						kind: entry.kind,
-						entityType: entry.entityType,
-						entityId: entry.entityId,
-						base: entry.lineage.base
-					});
-				}
-				return drafts;
-			},
 			onWriterEvent(listener) {
 				writerListeners.add(listener);
 				return () => {

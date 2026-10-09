@@ -16,7 +16,6 @@ import {
   RESERVATION_KEY_PREFIX,
   entityKeyOf,
   isSupportedRecord,
-  type DraftBase,
   type DraftEntityType,
   type DraftKind,
   type DraftOwner,
@@ -31,14 +30,6 @@ export interface ReviewedRecord {
   pageInstanceId: string
   generation: number
   status: DraftRecord['status']
-}
-
-/** A draft an emergency key holds, as a page that has not merged it sees it (#533). */
-export interface EmergencyDraft {
-  kind: DraftKind
-  entityType: DraftEntityType
-  entityId: string
-  base: DraftBase
 }
 
 /** What one cleanup of a deleted entity's drafts did (#533). */
@@ -105,12 +96,6 @@ export interface EditorRecoveryRuntime {
    * Idempotent: run it again to retry.
    */
   cleanupDeletedEntity(entity: { entityType: DraftEntityType; entityId: string }, kinds: readonly DraftKind[]): Promise<EntityCleanupReport>
-  /**
-   * The drafts emergency keys hold, read from localStorage only: no database
-   * is opened and nothing is merged. A tab that closed before its first
-   * IndexedDB commit left its draft only there.
-   */
-  emergencyDrafts(): EmergencyDraft[]
   /** Writer protection events (`unprotected`, `protected`, `ownership-lost`) for this page. */
   onWriterEvent(listener: (event: WriterEvent) => void): () => void
   dispose(): void
@@ -282,17 +267,6 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
     },
     discardReviewed,
     cleanupDeletedEntity,
-    emergencyDrafts() {
-      if (!emergencyStorage) return []
-      const drafts: EmergencyDraft[] = []
-      for (const stored of readEmergencyKeys(emergencyStorage)) {
-        for (const entry of stored.payload ? stored.payload.entries : []) {
-          if (!entry.lineage) continue
-          drafts.push({ kind: entry.kind, entityType: entry.entityType, entityId: entry.entityId, base: entry.lineage.base })
-        }
-      }
-      return drafts
-    },
     onWriterEvent(listener) {
       writerListeners.add(listener)
       return () => {

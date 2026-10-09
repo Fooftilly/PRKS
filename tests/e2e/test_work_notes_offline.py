@@ -1181,7 +1181,7 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
         # is still marked, and a tab that closed before its first IndexedDB commit left the draft
         # only in its emergency key.
         page.evaluate("""(workId) => {
-            localStorage.setItem('prks.workRecoveryCleanup.v1', JSON.stringify([workId]));
+            localStorage.setItem('prks.workRecoveryCleanup.v1', JSON.stringify([{ id: workId, tries: 0 }]));
             const pageInstanceId = 'p-closed-before-commit';
             localStorage.setItem('prks.editorRecovery.emergency.v1.' + pageInstanceId, JSON.stringify({
                 v: 1, pageInstanceId, runtimeId: null, at: Date.now(),

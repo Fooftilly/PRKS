@@ -656,7 +656,9 @@ describe('Work delete and recovery drafts (#533)', () => {
     delete win.prksRequest
     delete win.indexedDB
   })
-  const marked = () => JSON.parse(window.localStorage.getItem(DELETED_WORKS_KEY) || '[]') as string[]
+  const markedEntries = () => JSON.parse(window.localStorage.getItem(DELETED_WORKS_KEY) || '[]') as Array<{ id: string; tries: number }>
+  const marked = () => markedEntries().map((entry) => entry.id)
+  const mark = (tries = 0) => window.localStorage.setItem(DELETED_WORKS_KEY, JSON.stringify([{ id: 'w1', tries }]))
   const goneOnServer = (workId = 'w1') => {
     responses['/api/works/' + workId + '/notes-state'] = { status: 404, body: { error: 'Work not found' } }
   }
@@ -723,9 +725,16 @@ describe('Work delete and recovery drafts (#533)', () => {
     sync.ackDelete(deleteOp())
     expect(await win.prksCleanupDeletedWorkRecovery('w1')).toMatchObject({ removed: [], unknown: [record!.draftId] })
     goneOnServer()
-    expect(await win.prksRetryDeletedWorkRecovery()).toEqual(['w1'])
+    for (let load = 1; load <= 5; load++) {
+      expect(await win.prksRetryDeletedWorkRecovery()).toEqual(['w1'])
+      expect(markedEntries()).toEqual([{ id: 'w1', tries: load }])
+    }
+    // Retried on enough loads: the draft stays, the probing stops.
+    probed.length = 0
+    expect(await win.prksRetryDeletedWorkRecovery()).toEqual([])
+    expect(probed).toEqual([])
+    expect(marked()).toEqual([])
     expect((await records()).map((r) => r.draftId)).toEqual([record!.draftId])
-    expect(marked()).toEqual(['w1'])
   })
 
   it('never removes drafts of a Work this device did not see deleted, whatever the server answers', async () => {
@@ -762,7 +771,7 @@ describe('Work delete and recovery drafts (#533)', () => {
 
   it('keeps the drafts of a marked Work the server holds again, and forgets the mark', async () => {
     await researchDraft('Typed after a restore')
-    window.localStorage.setItem(DELETED_WORKS_KEY, JSON.stringify(['w1']))
+    mark()
     expect(await win.prksRetryDeletedWorkRecovery()).toEqual([])
     expect(await records()).toHaveLength(1)
     expect(marked()).toEqual([])
@@ -772,19 +781,53 @@ describe('Work delete and recovery drafts (#533)', () => {
     // The tab closed before its first IndexedDB commit: no database, only the key.
     win.indexedDB = { databases: async () => [] }
     const pageInstanceId = 'p-closed-early'
-    local.setItem(EMERGENCY_KEY_PREFIX + pageInstanceId, JSON.stringify({
+    const key = JSON.stringify({
       v: 1, pageInstanceId, runtimeId: null, at: 1,
       entries: [{
         draftId: 'd-early', kind: KIND, entityType: 'work', entityId: 'w1', generation: 1, committedGeneration: 0,
         body: 'Saved reminder. Closed early',
         lineage: { createdAt: 1, owner: { runtimeId: null, pageInstanceId, paneId: 'tab-1' }, base: SERVER_BASE },
       }],
-    }))
-    window.localStorage.setItem(DELETED_WORKS_KEY, JSON.stringify(['w1']))
+    })
+    // The page reads keys from its own localStorage before it builds a runtime; the runtime here reads `local`.
+    local.setItem(EMERGENCY_KEY_PREFIX + pageInstanceId, key)
+    window.localStorage.setItem(EMERGENCY_KEY_PREFIX + pageInstanceId, key)
+    mark()
     goneOnServer()
     expect(await win.prksRetryDeletedWorkRecovery()).toEqual(['w1'])
     expect((await records()).filter((r) => r.status !== 'discarded')).toEqual([])
     expect([...local.map.keys()].filter((k) => k.startsWith(EMERGENCY_KEY_PREFIX))).toEqual([])
+    expect(marked()).toEqual([])
+    window.localStorage.removeItem(EMERGENCY_KEY_PREFIX + pageInstanceId)
+  })
+
+  it('builds no recovery runtime for a confirmed delete when there is no database and no emergency key', async () => {
+    win.indexedDB = { databases: async () => [] }
+    const api = win.prksEditorRecovery as { runtime(): unknown }
+    const runtime = api.runtime
+    let built = 0
+    api.runtime = () => {
+      built += 1
+      return runtime()
+    }
+    try {
+      mark()
+      goneOnServer()
+      expect(await win.prksRetryDeletedWorkRecovery()).toEqual(['w1'])
+      expect(built).toBe(0)
+      expect(marked()).toEqual([])
+    } finally {
+      api.runtime = runtime
+    }
+  })
+
+  it('cleans in this tab when another tab hears the acknowledgement', async () => {
+    await draftsOfBothKinds()
+    // The leader tab marks the Work: this tab hears only the storage event.
+    const oldValue = window.localStorage.getItem(DELETED_WORKS_KEY)
+    mark()
+    window.dispatchEvent(new StorageEvent('storage', { key: DELETED_WORKS_KEY, oldValue, newValue: window.localStorage.getItem(DELETED_WORKS_KEY) }))
+    await waitFor(async () => (await records()).length === 0, 'cleaned on the other tab\'s mark')
     expect(marked()).toEqual([])
   })
 

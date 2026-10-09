@@ -96,10 +96,13 @@ coordinator names no family: adding one is a registration.
   conflicts); its acknowledgement or a never-sent creation folding away,
   both seen by this device, removes both note kinds for that Work (#533).
   The Work stays marked in localStorage (`prks.workRecoveryCleanup.v1`)
-  until nothing of it is left, so a later load retries after a shutdown or
-  once another tab lets go (at most 8 Works per load, each only on the
-  server's own "Work not found"; a Work the server holds again keeps its
-  drafts and loses its mark). A Work this device never saw deleted keeps
+  until nothing of it is left. The mark reaches this browser's other tabs,
+  which give back their own sessions of that Work and clean up too (only
+  the tab holding the sync lock hears the acknowledgement). A later load
+  retries after a shutdown or once another tab lets go: at most 8 Works per
+  load, each only on the server's own "Work not found", and each on at most
+  5 loads; a Work the server holds again keeps its drafts and loses its
+  mark. A Work this device never saw deleted keeps
   its drafts whatever the server answers: the library this origin serves
   now may not be the one they were typed against. This page's note
   sessions that no pane shows give their lineages back first (on a folded
@@ -109,9 +112,12 @@ coordinator names no family: adding one is a registration.
   compare-and-set on its owner page, generation and status; a stale
   emergency key's such lineages are tombstoned. A live or unknown owner
   keeps its lineage, because a frozen tab still holding the text looks the
-  same: a later load removes it once that page is proven gone. Without Web
-  Locks (LAN) a crashed tab is never proven gone, so its draft stays for
-  explicit Review and Discard. A discard whose emergency key could not be cleared leaves a bodyless
+  same: a later retry removes it once that page is proven gone. Without Web
+  Locks (LAN) a crashed tab is never proven gone, so its draft stays in
+  browser storage after its retries run out. Review and Discard are reached
+  only from that Work's own editor, so nothing in the UI reaches such a
+  draft until drafts can be reviewed apart from their Work (#466 Slice 5
+  Diagnostics). A discard whose emergency key could not be cleared leaves a bodyless
   tombstone until that key is gone, so the key cannot recreate the draft.
   A draft a merge created from another page's key carries that page's id
   until the key is removed; deleting it meanwhile leaves the same tombstone.
