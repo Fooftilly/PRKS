@@ -554,6 +554,40 @@ describe('Folder Reminders restore', () => {
     expect(field!.value).toBe(SAVED)
   })
 
+  it.each([
+    ['another open tab', false],
+    ['a duplicate of that tab, which copied its session id', true],
+  ])('never adopts Reminders a live tab is still writing, opened from %s', async (_how, duplicated) => {
+    // The first tab is still open and typing in Folder A's Reminders.
+    page!.rt.dispose()
+    page!.locks.releaseAll()
+    const copied = 'r-' + 'b'.repeat(32)
+    const first = startRecoveryPage({ browser, name: 'first-tab', idb, session: browser.sessionStorageWith({ [RUNTIME_SESSION_KEY]: copied }), local, withoutLocks: false, background: true })
+    await first.rt.start()
+    const api = win.prksEditorRecovery as { fingerprintText(text: string): string }
+    const live = first.rt.writers.openWriter({
+      kind: KIND, entityType: 'folder', entityId: FA, paneId: 'tab-1',
+      base: { revision: 5, length: SAVED.length, fingerprint: api.fingerprintText(SAVED), source: 'server' },
+    })
+    live.edit(1, 'Saved reminder. Still typing in the first tab')
+    await live.flush()
+    session = duplicated ? browser.sessionStorageWith({ [RUNTIME_SESSION_KEY]: copied }) : browser.sessionStorageWith()
+    startPage()
+    const { ctx, ta, result } = await openAndRestore()
+    expect(result!.restored).toBe(false)
+    expect(result!.review).toMatchObject([{ reason: 'live-elsewhere', lineage: 'other-live', action: null }])
+    expect(ta!.value).toBe(SAVED)
+    expect(sync.rows()).toEqual([])
+    // Review cannot take it either while that tab still owns it.
+    const details = (await win.prksFolderPrivateNotesRecoveryDetails(ctx, FA))!
+    expect(await win.prksFolderPrivateNotesRecoveryRestore(ctx, FA, details.token, details.candidates[0]!.expect))
+      .toMatchObject({ ok: false })
+    expect(ta!.value).toBe(SAVED)
+    expect(await bodyOf(live.draftId()!)).toBe('Saved reminder. Still typing in the first tab')
+    first.rt.dispose()
+    first.locks.releaseAll()
+  })
+
   it('never offers a Work Reminders draft with the same id as Folder Reminders, nor the reverse', async () => {
     await page!.rt.start()
     const writer = page!.rt.writers.openWriter({ kind: 'work-private-note', entityType: 'work', entityId: FA, paneId: 'tab-9' })
