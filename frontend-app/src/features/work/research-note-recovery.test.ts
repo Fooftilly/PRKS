@@ -11,22 +11,12 @@ import worksSource from '../../../../frontend/js/components/works.js?raw'
 import workNotesStateSource from '../../../../frontend/js/work-notes-state.js?raw'
 import workNoteRecoverySource from '../../../../frontend/js/work-note-recovery.js?raw'
 import * as recoveryApi from '../../lifecycle/editor-recovery-entry'
-import type { EmergencyStorage } from '../../lifecycle/editor-recovery/emergency'
 import type { EditorRecoveryRuntime } from '../../lifecycle/editor-recovery/runtime'
 import { RUNTIME_SESSION_KEY, UNKNOWN_BASE, type DraftRecord } from '../../lifecycle/editor-recovery/schema'
 import { createFakeBrowser } from '../../lifecycle/editor-recovery/test-support/fake-env'
 import { createFakeIdb, settle } from '../../lifecycle/editor-recovery/test-support/fake-idb'
+import { createNoteQueue, memoryStorage, startRecoveryPage, type RecoveryPage } from './test-support/work-note-harness'
 
-type Row = {
-  op_id: string
-  operation: string
-  entity_type: string
-  entity_id: string
-  payload: { text: string }
-  base_revision: number
-  status: string
-  attempt_count: number
-}
 
 type Entry = {
   text: string
@@ -69,70 +59,8 @@ type W = Record<string, unknown> & {
 }
 const win = window as unknown as W
 
-/* ---- a minimal durable queue with the store's coalescing and scope_busy rules ---- */
-const sync = (() => {
-  let rows: Row[] = []
-  let seq = 0
-  const listeners = new Set<(event: unknown) => void>()
-  const busy = (msg: string) => Object.assign(new Error(msg), { prksLocalStoreCode: 'scope_busy' })
-  const store = {
-    async saveWorkNote(workId: string, operation: string, text: string, observed: { value: string; revision: number }) {
-      const active = rows.filter((r) => r.entity_id === workId && r.operation === operation)
-      if (active.length > 1) throw busy('two rows')
-      const existing = active[0]
-      if (existing) {
-        if (existing.status !== 'pending' || existing.attempt_count > 0) throw busy('attempted')
-        if (existing.payload.text === text) return existing
-        rows = rows.filter((r) => r !== existing)
-      }
-      if (text === observed.value) return null
-      const row: Row = {
-        op_id: 'op-' + ++seq,
-        operation,
-        entity_type: 'work',
-        entity_id: workId,
-        payload: { text },
-        base_revision: observed.revision,
-        status: 'pending',
-        attempt_count: 0,
-      }
-      rows.push(row)
-      return row
-    },
-    async listOperations() {
-      return rows.map((r) => ({ ...r, payload: { ...r.payload } }))
-    },
-  }
-  const emit = (event: unknown) => listeners.forEach((fn) => fn(event))
-  return {
-    store,
-    subscribe(fn: (event: unknown) => void) {
-      listeners.add(fn)
-      return () => listeners.delete(fn)
-    },
-    changed() {
-      emit({})
-    },
-    rows: () => rows,
-    reset() {
-      rows = []
-      seq = 0
-    },
-    attempt(opId: string) {
-      const row = rows.find((r) => r.op_id === opId)!
-      row.attempt_count = 1
-    },
-    ack(opId: string, revision: number) {
-      const row = rows.find((r) => r.op_id === opId)!
-      rows = rows.filter((r) => r !== row)
-      server.text = row.payload.text
-      server.revision = revision
-      emit({ acknowledged: { code: 'ACKNOWLEDGED', server_revision: revision }, operation: row.operation, op: row })
-    },
-  }
-})()
-
 const server = { text: 'Saved note.', revision: 5, source: 'server' as 'server' | 'cache' }
+const sync = createNoteQueue(server)
 /** What the Work detail read returned: the server's body, or an older cached one. */
 const workRead = { text: null as string | null, source: 'server' as 'server' | 'cache' }
 
@@ -141,45 +69,14 @@ const browser = createFakeBrowser()
 let idb = createFakeIdb()
 let session = browser.sessionStorageWith({ [RUNTIME_SESSION_KEY]: 'r-' + 'a'.repeat(32) })
 let local = memoryStorage()
-let page: { rt: EditorRecoveryRuntime; locks: { releaseAll(): void }; window: EventTarget } | null = null
+let page: RecoveryPage | null = null
 let pageSeq = 0
 /** The LAN/HTTP deployment: no Web Locks, so a reload is recognized from the closed-page record. */
 let withoutLocks = false
 
-function memoryStorage(): EmergencyStorage & { map: Map<string, string> } {
-  const map = new Map<string, string>()
-  return {
-    map,
-    get length() {
-      return map.size
-    },
-    key: (i: number) => [...map.keys()][i] ?? null,
-    getItem: (k: string) => map.get(k) ?? null,
-    setItem: (k: string, v: string) => void map.set(k, v),
-    removeItem: (k: string) => void map.delete(k),
-  }
-}
-
 function startPage() {
-  const name = 'page-' + ++pageSeq
-  const locks = browser.locksFor(name)
-  const pageWindow = new EventTarget()
-  const rt = recoveryApi.createEditorRecoveryRuntime({
-    store: { indexedDB: idb.factory },
-    identity: {
-      sessionStorage: session,
-      locks: withoutLocks ? null : locks,
-      createChannel: browser.channelFor(name),
-      claimWaitMs: 20,
-      window: pageWindow,
-      localStorage: local,
-    },
-    writers: { window: null, document: null },
-    emergencyStorage: local,
-  })
-  page = { rt, locks, window: pageWindow }
-  win.prksEditorRecovery = { ...recoveryApi, runtime: () => rt }
-  return rt
+  page = startRecoveryPage({ browser, name: 'page-' + ++pageSeq, idb, session, local, withoutLocks })
+  return page.rt
 }
 
 function mount(tabId = 'tab-1', workId = 'w1'): Ctx {
@@ -269,22 +166,7 @@ async function closeTabAndOpenAnother(how: 'close' | 'crash' = 'close'): Promise
 
 /** Another page of the origin, alive, with its own runtime and writers. */
 function otherPage(name: string) {
-  const locks = browser.locksFor(name)
-  const pageWindow = new EventTarget()
-  const rt = recoveryApi.createEditorRecoveryRuntime({
-    store: { indexedDB: idb.factory },
-    identity: {
-      sessionStorage: browser.sessionStorageWith(),
-      locks: withoutLocks ? null : locks,
-      createChannel: browser.channelFor(name),
-      claimWaitMs: 20,
-      window: pageWindow,
-      localStorage: local,
-    },
-    writers: { window: null, document: null },
-    emergencyStorage: local,
-  })
-  return { rt, locks, window: pageWindow }
+  return startRecoveryPage({ browser, name, idb, session: browser.sessionStorageWith(), local, withoutLocks, background: true })
 }
 
 type Details = {

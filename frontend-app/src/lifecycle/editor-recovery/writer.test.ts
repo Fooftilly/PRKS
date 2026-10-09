@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { EmergencyStorage } from './emergency'
 import { RECOVERY_DB_NAME, BODIES_STORE, LARGE_BODY_CHARS, emergencyKeyOf, reservationKeyOf, type DraftBase, type DraftPipeline, type EmergencyPayload } from './schema'
 import { createRecoveryStore, type RecoveryStore, type WriteGenerationInput, type WriteOutcome } from './store'
+import { memoryStorage } from './test-support/fake-env'
 import { createFakeIdb, createManualScheduler, settle } from './test-support/fake-idb'
 import { createWriterRegistry, type DraftWriter, type WriterEvent, type WriterRegistry } from './writer'
 
@@ -20,20 +21,6 @@ function listenerTarget(visibilityState = 'visible') {
     fire(type: string, event: Partial<Event> = {}) {
       for (const fn of [...(listeners.get(type) ?? [])]) fn({ type, preventDefault() {}, ...event } as Event)
     },
-  }
-}
-
-function memoryStorage(): EmergencyStorage & { map: Map<string, string> } {
-  const map = new Map<string, string>()
-  return {
-    map,
-    get length() {
-      return map.size
-    },
-    key: (i: number) => [...map.keys()][i] ?? null,
-    getItem: (k: string) => map.get(k) ?? null,
-    setItem: (k: string, v: string) => void map.set(k, v),
-    removeItem: (k: string) => void map.delete(k),
   }
 }
 

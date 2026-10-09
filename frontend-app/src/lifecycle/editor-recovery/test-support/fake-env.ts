@@ -2,6 +2,7 @@
  * Fake Web Locks and BroadcastChannel for identity tests. One `browser`
  * models one origin: locks and channels are shared by every page created from it.
  */
+import type { EmergencyStorage } from '../emergency'
 import type { ChannelLike, LockManagerLike } from '../identity'
 
 export function createFakeBrowser() {
@@ -80,4 +81,19 @@ export function createFakeBrowser() {
   }
 
   return { held, locksFor, channelFor, sessionStorageWith }
+}
+
+/** An in-memory localStorage for the emergency entries and closed-page records. */
+export function memoryStorage(): EmergencyStorage & { map: Map<string, string> } {
+  const map = new Map<string, string>()
+  return {
+    map,
+    get length() {
+      return map.size
+    },
+    key: (i: number) => [...map.keys()][i] ?? null,
+    getItem: (k: string) => map.get(k) ?? null,
+    setItem: (k: string, v: string) => void map.set(k, v),
+    removeItem: (k: string) => void map.delete(k),
+  }
 }

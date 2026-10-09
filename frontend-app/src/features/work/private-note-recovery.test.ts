@@ -10,23 +10,11 @@ import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
 import uiSource from '../../../../frontend/js/ui.js?raw'
 import workNotesStateSource from '../../../../frontend/js/work-notes-state.js?raw'
 import workNoteRecoverySource from '../../../../frontend/js/work-note-recovery.js?raw'
-import * as recoveryApi from '../../lifecycle/editor-recovery-entry'
-import type { EmergencyStorage } from '../../lifecycle/editor-recovery/emergency'
 import type { EditorRecoveryRuntime } from '../../lifecycle/editor-recovery/runtime'
 import { RUNTIME_SESSION_KEY, type DraftRecord } from '../../lifecycle/editor-recovery/schema'
 import { createFakeBrowser } from '../../lifecycle/editor-recovery/test-support/fake-env'
 import { createFakeIdb, settle } from '../../lifecycle/editor-recovery/test-support/fake-idb'
-
-type Row = {
-  op_id: string
-  operation: string
-  entity_type: string
-  entity_id: string
-  payload: { text: string }
-  base_revision: number
-  status: string
-  attempt_count: number
-}
+import { createNoteQueue, memoryStorage, startRecoveryPage, type RecoveryPage } from './test-support/work-note-harness'
 
 type Session = {
   key: string
@@ -91,138 +79,23 @@ const win = window as unknown as W
 const KIND = 'work-private-note'
 const OP = 'SET_WORK_PRIVATE_NOTE'
 
-/* ---- a minimal durable queue with the store's coalescing and scope_busy rules ---- */
-const sync = (() => {
-  let rows: Row[] = []
-  let seq = 0
-  let failNext = 0
-  const listeners = new Set<(event: unknown) => void>()
-  const busy = (msg: string) => Object.assign(new Error(msg), { prksLocalStoreCode: 'scope_busy' })
-  const store = {
-    async saveWorkNote(workId: string, operation: string, text: string, observed: { value: string; revision: number }) {
-      if (failNext > 0) {
-        failNext -= 1
-        throw Object.assign(new Error('refused'), { prksLocalStoreCode: 'failed' })
-      }
-      const active = rows.filter((r) => r.entity_id === workId && r.operation === operation)
-      if (active.length > 1) throw busy('two rows')
-      const existing = active[0]
-      if (existing) {
-        if (existing.status !== 'pending' || existing.attempt_count > 0) throw busy('attempted')
-        if (existing.payload.text === text) return existing
-        rows = rows.filter((r) => r !== existing)
-      }
-      if (text === observed.value) return null
-      const row: Row = {
-        op_id: 'op-' + ++seq,
-        operation,
-        entity_type: 'work',
-        entity_id: workId,
-        payload: { text },
-        base_revision: observed.revision,
-        status: 'pending',
-        attempt_count: 0,
-      }
-      rows.push(row)
-      return row
-    },
-    async listOperations() {
-      return rows.map((r) => ({ ...r, payload: { ...r.payload } }))
-    },
-  }
-  const emit = (event: unknown) => listeners.forEach((fn) => fn(event))
-  return {
-    store,
-    subscribe(fn: (event: unknown) => void) {
-      listeners.add(fn)
-      return () => listeners.delete(fn)
-    },
-    changed() {
-      emit({})
-    },
-    rows: () => rows,
-    reset() {
-      rows = []
-      seq = 0
-      failNext = 0
-      listeners.clear()
-    },
-    failNext(n: number) {
-      failNext = n
-    },
-    attempt(opId: string) {
-      rows.find((r) => r.op_id === opId)!.attempt_count = 1
-    },
-    ack(opId: string, revision: number) {
-      const row = rows.find((r) => r.op_id === opId)!
-      rows = rows.filter((r) => r !== row)
-      server.text = row.payload.text
-      server.revision = revision
-      emit({ acknowledged: { code: 'ACKNOWLEDGED', server_revision: revision }, operation: row.operation, op: row })
-    },
-    /** Another tab or device queued a Reminders row for this Work. */
-    foreign(text: string) {
-      rows.push({
-        op_id: 'op-foreign-' + ++seq,
-        operation: OP,
-        entity_type: 'work',
-        entity_id: 'w1',
-        payload: { text },
-        base_revision: server.revision,
-        status: 'pending',
-        attempt_count: 0,
-      })
-    },
-  }
-})()
-
 const server = { text: 'Saved reminder.', revision: 5 }
+const sync = createNoteQueue(server)
 
 /* ---- one page: runtime, identity, TabContext and the right panel ---- */
 const browser = createFakeBrowser()
 let idb = createFakeIdb()
 let session = browser.sessionStorageWith({ [RUNTIME_SESSION_KEY]: 'r-' + 'a'.repeat(32) })
 let local = memoryStorage()
-let page: { rt: EditorRecoveryRuntime; locks: { releaseAll(): void }; window: EventTarget } | null = null
+let page: RecoveryPage | null = null
 let pageSeq = 0
 /** The LAN/HTTP deployment: no Web Locks, so a closed tab is recognized from its closed-page record. */
 let withoutLocks = false
 let focused = 'tab-1'
 
-function memoryStorage(): EmergencyStorage & { map: Map<string, string> } {
-  const map = new Map<string, string>()
-  return {
-    map,
-    get length() {
-      return map.size
-    },
-    key: (i: number) => [...map.keys()][i] ?? null,
-    getItem: (k: string) => map.get(k) ?? null,
-    setItem: (k: string, v: string) => void map.set(k, v),
-    removeItem: (k: string) => void map.delete(k),
-  }
-}
-
 function startPage() {
-  const name = 'page-' + ++pageSeq
-  const locks = browser.locksFor(name)
-  const pageWindow = new EventTarget()
-  const rt = recoveryApi.createEditorRecoveryRuntime({
-    store: { indexedDB: idb.factory },
-    identity: {
-      sessionStorage: session,
-      locks: withoutLocks ? null : locks,
-      createChannel: browser.channelFor(name),
-      claimWaitMs: 20,
-      window: pageWindow,
-      localStorage: local,
-    },
-    writers: { window: null, document: null },
-    emergencyStorage: local,
-  })
-  page = { rt, locks, window: pageWindow }
-  win.prksEditorRecovery = { ...recoveryApi, runtime: () => rt }
-  return rt
+  page = startRecoveryPage({ browser, name: 'page-' + ++pageSeq, idb, session, local, withoutLocks })
+  return page.rt
 }
 
 function work() {
@@ -506,24 +379,18 @@ describe('Work Reminders restore', () => {
     await waitFor(async () => (await records()).length === 0, 'cleared on acknowledgement')
   })
 
-  it('restores a closed tab\'s text in a new tab', async () => {
+  it.each([
+    ['with Web Locks', false],
+    ['without Web Locks, from the recorded final pagehide', true],
+  ])('restores a closed tab\'s text in a new tab %s', async (_how, lan) => {
+    withoutLocks = lan
+    startPage()
     const { ctx, ta } = await openWork()
     await type(ctx, ta!, 'Saved reminder. Closed tab').recovery!.flush()
     await closeTabAndOpenAnother()
     const { ta: field, result } = await openAndRestore()
     expect(result).toMatchObject({ restored: true })
     expect(field!.value).toBe('Saved reminder. Closed tab')
-  })
-
-  it('restores a closed tab\'s text without Web Locks from the recorded final pagehide', async () => {
-    withoutLocks = true
-    startPage()
-    const { ctx, ta } = await openWork()
-    await type(ctx, ta!, 'Saved reminder. Closed on the LAN').recovery!.flush()
-    await closeTabAndOpenAnother()
-    const { ta: field, result } = await openAndRestore()
-    expect(result).toMatchObject({ restored: true })
-    expect(field!.value).toBe('Saved reminder. Closed on the LAN')
   })
 
   it('offers a crashed LAN tab\'s draft for review only, and lets Discard remove it', async () => {
@@ -592,7 +459,7 @@ describe('Work Reminders restore', () => {
     const { ctx: fresh, ta: field } = await openAndRestore()
     const details = (await win.prksWorkPrivateNotesRecoveryDetails(fresh, 'w1'))!
     const target = details.candidates[0]!
-    during('claimReviewed', () => sync.foreign('Queued elsewhere.'))
+    during('claimReviewed', () => sync.foreign(OP, 'w1', 'Queued elsewhere.'))
     expect(await win.prksWorkPrivateNotesRecoveryReplace(fresh, 'w1', details.token, target.expect, 'Combined', { text: details.current.text, revision: 6 }))
       .toMatchObject({ ok: false, code: 'current-changed' })
     expect(field!.value).toBe('Changed on another device.')
@@ -603,7 +470,7 @@ describe('Work Reminders restore', () => {
     const { ctx, ta } = await openWork()
     await type(ctx, ta!, 'Saved reminder. Mine').recovery!.flush()
     await reload()
-    sync.foreign('Queued elsewhere.')
+    sync.foreign(OP, 'w1', 'Queued elsewhere.')
     const { ta: field, result } = await openAndRestore()
     expect(result).toMatchObject({ restored: false, review: [{ reason: 'foreign-queue', action: 'reconcile' }] })
     expect(field!.value).not.toBe('Saved reminder. Mine')
