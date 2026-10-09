@@ -90,6 +90,13 @@ CODEX_QUOTA = (
     "You have reached your Codex usage limits for code reviews. You can see your "
     "limits in the [Codex usage dashboard](https://chatgpt.com/codex/settings/usage)."
 )
+CODEX_COMPLETED_SUMMARY = (
+    "<!-- codex-pull-request-review-summary -->\n\n## Codex Review Summary\n\n"
+    "This comment shows the latest Codex review activity on this pull request.\n\n"
+    "| Review | Status | Commit | Review trigger |\n"
+    "| --- | --- | --- | --- |\n"
+    "| 📝 **Code Review** | ✅ **Completed** | `37cf59d` | Draft marked ready |"
+)
 QODO_NO_FINDINGS = (
     "## Code Review by Qodo\n\nGreat, no issues found!\n\n"
     "Qodo reviewed your code and found no material issues that require review"
@@ -97,6 +104,11 @@ QODO_NO_FINDINGS = (
 GREPTILE_CREDIT_LIMIT = (
     "Fooftilly has reached the 50-credit limit for trial accounts. "
     "To continue receiving code reviews, upgrade your plan."
+)
+GREPTILE_FREE_PLAN_CREDITS = (
+    "Your organization has used all 50 credits included in the free plan this billing "
+    "period. To keep receiving reviews, "
+    "[upgrade your plan](https://app.greptile.com/review/github)."
 )
 GREPTILE_TRIAL_ENDED = (
     "Your trial has ended. [Reactivate Greptile](https://app.greptile.com/-/pull-requests) "
@@ -126,6 +138,14 @@ CODERABBIT_NO_AUTO_REVIEW = (
     "required CI, and resolving merge conflicts\">Autopilot</strong>\n<!-- autopilot:end -->\n"
     "Thanks for using [CodeRabbit](https://coderabbit.ai)! It's free for OSS.\n"
     "<sub>Comment `@coderabbitai help` to get the list of available commands.</sub>"
+)
+
+CODERABBIT_BOT_AUTHOR_SKIPPED = (
+    "<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n"
+    "<!-- This is an auto-generated comment: skip review by coderabbit.ai -->\n\n"
+    "> [!IMPORTANT]\n> ## Review skipped\n> \n> Bot user detected.\n> \n"
+    "> To trigger a single review, invoke the `@coderabbitai review` command.\n"
+    "<!-- end of auto-generated comment: skip review by coderabbit.ai -->"
 )
 
 CODERABBIT_WALKTHROUGH = (
@@ -198,12 +218,15 @@ GENERIC_WORDS = (
 
 POSITIVE_CASES = {
     "codex-usage-limit": (_CODEX, CODEX_QUOTA),
+    "codex-completed-review-status": (_CODEX, CODEX_COMPLETED_SUMMARY),
     "qodo-no-findings": (_QODO, QODO_NO_FINDINGS),
     "greptile-credit-limit": (_GREPTILE, GREPTILE_CREDIT_LIMIT),
+    "greptile-free-plan-credits": (_GREPTILE, GREPTILE_FREE_PLAN_CREDITS),
     "greptile-trial-ended": (_GREPTILE, GREPTILE_TRIAL_ENDED),
     "sourcery-review-budget": (_SOURCERY, SOURCERY_BUDGET),
     "qodo-trial-expiring": (_QODO, QODO_TRIAL_EXPIRING),
     "coderabbit-auto-review-unavailable": (_CODERABBIT, CODERABBIT_NO_AUTO_REVIEW),
+    "coderabbit-bot-author-skipped": (_CODERABBIT, CODERABBIT_BOT_AUTHOR_SKIPPED),
     "coderabbit-review-limit": (_CODERABBIT, CODERABBIT_REVIEW_LIMIT),
 }
 
@@ -244,6 +267,8 @@ class NoiseClassifierTests(unittest.TestCase):
         cases = {
             "codex usage only": (_CODEX, "You have reached your Codex usage limits."),
             "codex reviews only": (_CODEX, "Codex finished its code reviews."),
+            "codex status marker only": (_CODEX, "<!-- codex-pull-request-review-summary -->"),
+            "codex completed only": (_CODEX, "✅ **Completed**"),
             "qodo great only": (_QODO, "Great, no issues found!"),
             "qodo reviewed only": (
                 _QODO,
@@ -251,11 +276,15 @@ class NoiseClassifierTests(unittest.TestCase):
             ),
             "greptile credit only": (_GREPTILE, "has reached the 50-credit limit for trial accounts"),
             "greptile continue only": (_GREPTILE, "To continue receiving code reviews, add a key."),
+            "greptile free plan only": (_GREPTILE, "Your organization has used all 50 credits included in the free plan"),
+            "greptile keep reviews only": (_GREPTILE, "To keep receiving reviews"),
             "greptile trial only": (_GREPTILE, "Your trial has ended."),
             "greptile reactivate only": (_GREPTILE, "Reactivate Greptile for this repository."),
             "sourcery budget only": (_SOURCERY, "You've used your own review budget."),
             "sourcery diff only": (_SOURCERY, "This PR has 900 diff characters."),
             "coderabbit auto only": (_CODERABBIT, "This repository does not receive automatic reviews."),
+            "coderabbit bot skip only": (_CODERABBIT, "## Review skipped"),
+            "coderabbit bot detected only": (_CODERABBIT, "Bot user detected."),
             "coderabbit stars only": (_CODERABBIT, "Repositories with fewer than 10 stars."),
             "coderabbit rate-limit marker only": (
                 _CODERABBIT,
@@ -274,6 +303,18 @@ class NoiseClassifierTests(unittest.TestCase):
     def test_substantive_reviews_stay_visible(self) -> None:
         cases = {
             "coderabbit walkthrough": (_CODERABBIT, CODERABBIT_WALKTHROUGH),
+            "coderabbit bot skip with walkthrough": (
+                _CODERABBIT, CODERABBIT_BOT_AUTHOR_SKIPPED + "\n## Walkthrough\nSubstantive changes."
+            ),
+            "codex summary with findings": (
+                _CODEX, CODEX_COMPLETED_SUMMARY + "\n## Findings\nA real issue was found."
+            ),
+            "codex summary with failed review": (
+                _CODEX, CODEX_COMPLETED_SUMMARY + "\n❌ **Failed** review"
+            ),
+            "greptile credit notice with substantive summary": (
+                _GREPTILE, GREPTILE_FREE_PLAN_CREDITS + "\n<!-- greptile_summary -->\nConfidence score: 5/5"
+            ),
             "coderabbit banner with walkthrough": (_CODERABBIT, CODERABBIT_BANNER_WITH_REVIEW),
             "coderabbit rate-limit notice with walkthrough": (
                 _CODERABBIT,
@@ -333,7 +374,7 @@ class NoiseRuleTableTests(unittest.TestCase):
         coderabbit = [r for r in self._rules() if r["login"] == _CODERABBIT]
         self.assertEqual(
             {r["rule"] for r in coderabbit},
-            {"coderabbit-auto-review-unavailable", "coderabbit-review-limit"},
+            {"coderabbit-auto-review-unavailable", "coderabbit-bot-author-skipped", "coderabbit-review-limit"},
         )
         for rule in coderabbit:
             self.assertTrue(rule["excluded"])
