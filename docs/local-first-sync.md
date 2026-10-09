@@ -178,6 +178,14 @@ coordinator names no family: adding one is a registration.
   `prksFolderPrivateNoteAck` matches an acknowledgement to one row and its
   exact payload text, and reports what the server stores (trimmed, as the
   acknowledgement reconciles into the cache).
+  Folder Reminders sessions are per pane like Work ones
+  (`ctx.ui.folderPrivateNoteSession`, the shared session lifecycle in
+  `ui.js`), and each pane observes its acknowledged `private_notes` base
+  (body from the Folder detail read before pending rows are overlaid,
+  revision from the Folder sync-state, and where both came from). A base is
+  `server` only when both halves are; an acknowledgement advances it, and
+  an older read never moves it back. A session's own queued row is cleared
+  only by that row's exact acknowledgement, never by another pane's.
 - A device ID is an identity for synchronization, never authentication or trust.
 - Editor state and observed projections belong to the Work's TabContext.
   The sync coordinator owns transport and retry policy, with one in-flight

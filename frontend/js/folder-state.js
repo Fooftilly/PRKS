@@ -553,6 +553,188 @@
         return { code: 'unproven', opId: null };
     }
 
+    /* ---- Folder Reminders: what each pane observed (#534) ----
+     *
+     * The acknowledged `private_notes` base a pane's Reminders are typed on:
+     * the body from the Folder detail read (`folderNotesCanonical`, captured
+     * before any pending overlay), joined with the field revision from the
+     * Folder's sync-state, and where both came from. Kept on the pane's
+     * TabContext (`folderNotesObserved`), refreshed by every Folder detail
+     * read and by this pane's acknowledgements; never by a pending row.
+     */
+
+    /* A base is server-verified only when its body and its revision both are. */
+    function noteBaseSource(stateSource, bodySource) {
+        if (stateSource === 'server' && bodySource === 'server') return 'server';
+        if (stateSource === 'pending-create' && bodySource === 'pending-create') return 'pending-create';
+        return stateSource === 'server' || stateSource === 'cache' ? 'cache' : 'unknown';
+    }
+
+    function canonicalNotesFrom(folder, source) {
+        if (!folder || typeof folder.id !== 'string') return null;
+        return {
+            id: folder.id,
+            private_notes: folder.private_notes == null ? '' : String(folder.private_notes),
+            source: typeof source === 'string' ? source : 'unknown',
+        };
+    }
+
+    /**
+     * The Folder detail this pane just read, before pending rows are overlaid.
+     * `source` is where it came from (server, cache, pending-create). A newer
+     * read always replaces the older one: it is the latest the page knows.
+     */
+    function rememberFolderNotesCanonical(ctx, folder, source) {
+        if (!ctx || typeof ctx.setResource !== 'function') return null;
+        const canonical = canonicalNotesFrom(folder, source);
+        if (!canonical) return null;
+        ctx.setResource('folderNotesCanonical', canonical);
+        return canonical;
+    }
+
+    function folderOf(ctx) {
+        const live = ctx && typeof ctx.getEntity === 'function' ? ctx.getEntity('folder') : null;
+        return live && typeof live.id === 'string' ? live : null;
+    }
+
+    function observedSlot(ctx) {
+        const slot = ctx && typeof ctx.getResource === 'function' ? ctx.getResource('folderNotesObserved') : null;
+        return slot && typeof slot.folderId === 'string' ? slot : null;
+    }
+
+    /* Publishes a base unless one already observed for this Folder is newer. */
+    function publishObserved(ctx, base) {
+        if (!ctx || typeof ctx.setResource !== 'function' || ctx.destroyed) return false;
+        const live = folderOf(ctx);
+        if (!live || live.id !== base.folderId) return false;
+        const existing = observedSlot(ctx);
+        if (existing && existing.folderId === base.folderId && existing.revision > base.revision) return false;
+        ctx.setResource('folderNotesObserved', base);
+        return true;
+    }
+
+    /**
+     * Joins the canonical body with the field revision. A Folder created on
+     * this device and never sent has revision 0 by construction. Returns the
+     * base, or null when either half is unknown: guessing a revision would
+     * overwrite another device's text. `publish: false` returns it without
+     * writing the pane (a save can outlive the Folder that started it).
+     */
+    async function ensureFolderNotesBase(ctx, folder, options) {
+        if (!ctx || !folder || typeof folder.id !== 'string') return null;
+        const folderId = folder.id;
+        const held = ctx.getResource ? ctx.getResource('folderNotesCanonical') : null;
+        const canonical = held && held.id === folderId ? held : canonicalNotesFrom(folder, 'unknown');
+        let revision = null;
+        let stateSource = 'unknown';
+        if (options && options.pendingCreate) {
+            revision = 0;
+            stateSource = 'pending-create';
+        } else {
+            let result = null;
+            try { result = await readFolderState(folderId); } catch (_e) { result = null; }
+            const entry = result && result.value && result.value.fields &&
+                result.value.fields[PRIVATE_NOTES_FIELD];
+            if (entry && Number.isSafeInteger(entry.revision) && entry.revision >= 0) {
+                revision = entry.revision;
+                stateSource = result.source === 'server' || result.source === 'cache' ? result.source : 'unknown';
+            }
+        }
+        if (revision === null) return null;
+        /* Read again after the await: an acknowledgement may have advanced it. */
+        const now = ctx.getResource ? ctx.getResource('folderNotesCanonical') : null;
+        const body = now && now.id === folderId ? now : canonical;
+        const base = {
+            folderId: folderId,
+            value: body.private_notes,
+            revision: revision,
+            source: noteBaseSource(stateSource, body.source),
+        };
+        if (!(options && options.publish === false)) publishObserved(ctx, base);
+        return base;
+    }
+
+    /** This pane's observed Reminders base for the Folder it shows, or null. */
+    function folderNoteObserved(ctx, folderId) {
+        const slot = observedSlot(ctx);
+        if (!slot) return null;
+        if (folderId != null && slot.folderId !== String(folderId)) return null;
+        const live = folderOf(ctx);
+        return live && live.id === slot.folderId ? slot : null;
+    }
+
+    /**
+     * An acknowledged Reminders row of the Folder this pane shows: what the
+     * server now stores becomes the pane's entity, canonical body and observed
+     * base. Any pane's or tab's row counts here: this is the note as the
+     * server holds it, not a claim about whose text it was.
+     */
+    function acceptFolderNoteAck(ctx, event) {
+        const ack = privateNoteAck(event);
+        if (!ack || !ctx || ctx.destroyed) return null;
+        const live = folderOf(ctx);
+        if (!live || live.id !== ack.folderId) return null;
+        const existing = observedSlot(ctx);
+        if (existing && existing.folderId === ack.folderId && existing.revision > ack.revision) return null;
+        live.private_notes = ack.stored;
+        const canonical = ctx.getResource ? ctx.getResource('folderNotesCanonical') : null;
+        if (canonical && canonical.id === ack.folderId) {
+            canonical.private_notes = ack.stored;
+            canonical.source = 'server';
+        }
+        publishObserved(ctx, { folderId: ack.folderId, value: ack.stored, revision: ack.revision, source: 'server' });
+        return ack;
+    }
+
+    /* RAM copy of the durable queue for synchronous paints (Work notes do the same). */
+    let pendingNoteRows = [];
+
+    async function refreshPendingFolderNotes() {
+        const runtime = root.prksSync;
+        if (!runtime || !runtime.store || typeof runtime.store.listOperations !== 'function') {
+            pendingNoteRows = [];
+            return pendingNoteRows;
+        }
+        try {
+            pendingNoteRows = privateNoteOperations(await runtime.store.listOperations(), null);
+        } catch (_e) {
+            pendingNoteRows = [];
+        }
+        return pendingNoteRows;
+    }
+
+    /** The newest unsettled Reminders text of a Folder, or `fallback`. */
+    function pendingFolderNoteText(folderId, fallback) {
+        const rows = privateNoteOperations(pendingNoteRows, folderId);
+        const text = rows.length ? rowText(rows[rows.length - 1]) : null;
+        return text !== null ? text : fallback;
+    }
+
+    /**
+     * One subscription per pane, tied to its route like the Work notes one:
+     * acknowledgements patch the pane's Folder whether or not the Reminders
+     * card is mounted, and `onAck(ctx, ack)` lets the pane's session see it.
+     */
+    const notesBoundOwners = new WeakSet();
+
+    function bindFolderNotesSync(ctx, onAck) {
+        if (!ctx || ctx.destroyed || typeof ctx.registerCleanup !== 'function') return;
+        if (notesBoundOwners.has(ctx)) return;
+        if (!root.prksSync || typeof root.prksSync.subscribe !== 'function') return;
+        const stop = root.prksSync.subscribe(function (event) {
+            const ack = event && event.acknowledged ? acceptFolderNoteAck(ctx, event) : null;
+            if (ack && typeof onAck === 'function') {
+                try { onAck(ctx, ack); } catch (_e) { /* the patch above already landed */ }
+            }
+            void refreshPendingFolderNotes();
+        });
+        notesBoundOwners.add(ctx);
+        ctx.registerCleanup(function () {
+            notesBoundOwners.delete(ctx);
+            if (typeof stop === 'function') stop();
+        });
+    }
+
     async function setWorkFolderDurably(workId, folderId, observed, localContext) {
         const runtime = sync();
         const op = await runtime.store.setWorkFolder(workId, folderId, observed, localContext);
@@ -699,6 +881,13 @@
         prksFolderPrivateNoteOperations: privateNoteOperations,
         prksFolderPrivateNoteAck: privateNoteAck,
         prksSaveFolderPrivateNoteDurably: saveFolderPrivateNoteDurably,
+        prksRememberFolderNotesCanonical: rememberFolderNotesCanonical,
+        prksEnsureFolderNotesBase: ensureFolderNotesBase,
+        prksFolderNoteObserved: folderNoteObserved,
+        prksAcceptFolderNoteAck: acceptFolderNoteAck,
+        prksRefreshPendingFolderNotes: refreshPendingFolderNotes,
+        prksPendingFolderNoteText: pendingFolderNoteText,
+        prksBindFolderNotesSync: bindFolderNotesSync,
         prksDeleteFolderDurably: deleteFolderDurably,
         prksFolderCreateSyncHandler: createHandler,
         prksFolderFieldSyncHandler: fieldHandler,

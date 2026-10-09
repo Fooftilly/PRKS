@@ -119,11 +119,21 @@ class FrontendOfflineNotesGuardTests(unittest.TestCase):
 
     def test_work_private_notes_save_is_durable(self):
         src = _read(_UI)
+        families = src[src.index("const PRKS_PRIVATE_NOTE_FAMILIES"):src.index("function prksPrivateNoteFamily(")]
+        work = families[families.index("work: Object.freeze({"):families.index("folder: Object.freeze({")]
+        self.assertIn("save: prksSaveWorkPrivateNoteForSession,", work)
+        start = src.index("async function prksSaveWorkPrivateNoteForSession(")
+        save = src[start : src.index("\n}\n", start)]
+        self.assertIn("prksSaveWorkNoteDurably", save)
         start = src.index("function prksEnqueueWorkPrivateNoteSave(")
-        body = src[start : src.index("function prksEnqueuePrivateNotesSave(", start)]
-        self.assertIn("prksSaveWorkNoteDurably", body)
-        self.assertNotIn("prksRequest(", body)
-        self.assertNotIn("prksOfflineMarkEntityChanged", body)
+        wrapper = src[start : src.index("function prksEnqueuePrivateNotesSave(", start)]
+        self.assertIn("prksEnqueuePrivateNoteSave(PRKS_PRIVATE_NOTE_FAMILIES.work, editor)", wrapper)
+        start = src.index("function prksEnqueuePrivateNoteSave(family, editor)")
+        body = src[start : src.index("function prksEnqueueWorkPrivateNoteSave(", start)]
+        self.assertIn("family.save(editor, entityId, content)", body)
+        for text in (save, body):
+            self.assertNotIn("prksRequest(", text)
+            self.assertNotIn("prksOfflineMarkEntityChanged", text)
         # Park-flush may still be syncing when a remounted draft is edited;
         # scope_busy must keep the draft dirty and schedule a retry.
         self.assertIn("scope_busy", body)
@@ -142,13 +152,23 @@ class FrontendOfflineNotesGuardTests(unittest.TestCase):
 
     def test_folder_private_notes_use_durable_set_folder_field(self):
         src = _read(_UI)
-        start = src.index("function prksEnqueuePrivateNotesSave(")
-        body = src[start : src.index("function prksFlushPendingPrivateNotes(", start)]
-        self.assertIn("patchFolder(", body)
+        families = src[src.index("const PRKS_PRIVATE_NOTE_FAMILIES"):src.index("function prksPrivateNoteFamily(")]
+        folder = families[families.index("folder: Object.freeze({"):]
+        self.assertIn("save: prksSaveFolderPrivateNoteForSession,", folder)
+        start = src.index("async function prksSaveFolderPrivateNoteForSession(")
+        body = src[start : src.index("\n}\n", start)]
+        self.assertIn("prksSaveFolderPrivateNoteDurably(", body)
         self.assertIn("private_notes", body)
         self.assertNotIn("/api/folders/", body)
         self.assertNotIn("prksRequest(", body)
         self.assertNotIn("Offline — notes are read-only", body)
+        # The durable save is the local store's SET_FOLDER_FIELD path for the one field.
+        state = _read(os.path.join(os.path.dirname(_UI), "folder-state.js"))
+        start = state.index("async function saveFolderPrivateNoteDurably(")
+        durable = state[start : state.index("\n    }\n", start)]
+        self.assertIn("runtime.store.saveFolderFields(", durable)
+        self.assertIn("PRIVATE_NOTES_FIELD", durable)
+        self.assertNotIn("prksRequest(", durable)
 
     def test_toolbar_class_list_still_names_mutating_actions(self):
         src = _read(_WORKS)

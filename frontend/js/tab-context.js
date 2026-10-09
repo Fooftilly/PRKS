@@ -65,6 +65,7 @@
             workMetaDraftWorkId: null,
             workMetaEditSession: 0,
             workPrivateNoteSession: null,
+            folderPrivateNoteSession: null,
             workResearchNoteSession: null,
             researchNotesHints: null,
         };

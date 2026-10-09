@@ -255,7 +255,7 @@ FEATURES = {
     },
     "notes": {
         "description": "Research Notes / Reminders offline (Work note aggregates)",
-        "selectors": ("tests.e2e.test_work_notes_offline",),
+        "selectors": ("tests.e2e.test_work_notes_offline", "tests.e2e.test_folder_reminders"),
     },
     "pdf-annotations": {
         "description": (
@@ -303,6 +303,7 @@ FEATURES = {
         "selectors": (
             "tests.e2e.test_folders_offline",
             "tests.e2e.test_folders_durable",
+            "tests.e2e.test_folder_reminders",
             "tests.e2e.test_library_nav_folders",
             "tests.e2e.test_folder_library_route_surface",
         ),
