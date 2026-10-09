@@ -30,7 +30,7 @@ function card(folderId = 'F-A') {
 const bridge = () => w as unknown as {
   prksVuePresentFolderPrivateNotesRecovery: (ctx: unknown, id: string) => boolean
   prksVueUpdateFolderPrivateNotesRecovery: (ctx: unknown) => void
-  prksVueDismissFolderPrivateNotesRecovery: () => void
+  prksVueForgetFolderPrivateNotesRecovery: () => void
 }
 
 afterEach(() => {
@@ -68,7 +68,7 @@ describe('Folder Reminders recovery presenter', () => {
     expect(bridge().prksVuePresentFolderPrivateNotesRecovery(ctx, 'F-A')).toBe(true)
     await flushPromises()
     expect(host.querySelector('[data-prks-role="editor-recovery-notice"]')).toBeTruthy()
-    bridge().prksVueDismissFolderPrivateNotesRecovery()
+    bridge().prksVueForgetFolderPrivateNotesRecovery()
     expect(host.querySelector('[data-prks-role="editor-recovery-notice"]')).toBeNull()
   })
 

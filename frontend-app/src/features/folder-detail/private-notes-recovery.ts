@@ -56,7 +56,7 @@ export function openFolderPrivateNotesRecoveryReview(ctx: RecoveryOwner, opener:
   return presenter.open(ctx, opener)
 }
 
-export function dismissFolderPrivateNotesRecovery(): void {
+export function forgetFolderPrivateNotesRecovery(): void {
   const was = mounted
   mounted = null
   if (!was) return
@@ -83,7 +83,7 @@ export function presentFolderPrivateNotesRecovery(ctx: RecoveryOwner, folderId: 
   const host = hostFor(String(folderId))
   if (!host) return false
   const tabId = String(ctx.tabId ?? '')
-  if (mounted && (mounted.host !== host || mounted.tabId !== tabId)) dismissFolderPrivateNotesRecovery()
+  if (mounted && (mounted.host !== host || mounted.tabId !== tabId)) forgetFolderPrivateNotesRecovery()
   render(h(FolderPrivateNotesRecovery, { owner: ctx }), host)
   mounted = { host, tabId }
   return true
@@ -91,7 +91,7 @@ export function presentFolderPrivateNotesRecovery(ctx: RecoveryOwner, folderId: 
 
 /** The adapter's state changed: repaint the pane's notice, or let go of a card the panel replaced. */
 export function updateFolderPrivateNotesRecovery(ctx: RecoveryOwner): void {
-  if (mounted && !mounted.host.isConnected) dismissFolderPrivateNotesRecovery()
+  if (mounted && !mounted.host.isConnected) forgetFolderPrivateNotesRecovery()
   presenter.update(ctx)
 }
 
@@ -99,14 +99,14 @@ export function registerFolderPrivateNotesRecoveryBridge(root: Window & typeof g
   const target = root as Window & {
     prksVuePresentFolderPrivateNotesRecovery?: (ctx: RecoveryOwner, folderId: string) => boolean
     prksVueUpdateFolderPrivateNotesRecovery?: (ctx: RecoveryOwner) => void
-    prksVueDismissFolderPrivateNotesRecovery?: () => void
+    prksVueForgetFolderPrivateNotesRecovery?: () => void
   }
   target.prksVuePresentFolderPrivateNotesRecovery = (ctx, folderId) => presentFolderPrivateNotesRecovery(ctx, folderId)
   target.prksVueUpdateFolderPrivateNotesRecovery = (ctx) => updateFolderPrivateNotesRecovery(ctx)
-  target.prksVueDismissFolderPrivateNotesRecovery = () => dismissFolderPrivateNotesRecovery()
+  target.prksVueForgetFolderPrivateNotesRecovery = () => forgetFolderPrivateNotesRecovery()
 }
 
 export function resetFolderPrivateNotesRecoveryForTests(): void {
-  dismissFolderPrivateNotesRecovery()
+  forgetFolderPrivateNotesRecovery()
   presenter.forget()
 }

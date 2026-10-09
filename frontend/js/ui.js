@@ -4203,7 +4203,7 @@ function updatePanelContent(tabId) {
     prksPrepareRightPanelReplace(focusedCtx);
     prksDismissWorkMetadataEditor();
     prksDismissWorkPanelRead();
-    if (typeof window.prksVueDismissFolderPrivateNotesRecovery === 'function') window.prksVueDismissFolderPrivateNotesRecovery();
+    if (typeof window.prksVueForgetFolderPrivateNotesRecovery === 'function') window.prksVueForgetFolderPrivateNotesRecovery();
     const focusedRoute = focusedCtx && (focusedCtx.lastResolvedRoute || focusedCtx.route);
     const focusedHash =
         (focusedRoute && (focusedRoute.hash || focusedRoute.canonicalHash)) || (window.location.hash || '');
