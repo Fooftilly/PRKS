@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { EmergencyStorage } from './emergency'
 import { createEditorRecoveryRuntime, type EditorRecoveryRuntime } from './runtime'
-import { CLOSED_PAGE_KEY_PREFIX, EMERGENCY_KEY_PREFIX, RUNTIME_SESSION_KEY, UNKNOWN_BASE, reservationKeyOf, type DraftKind } from './schema'
+import { CLOSED_PAGE_KEY_PREFIX, DRAFTS_STORE, EMERGENCY_KEY_PREFIX, RECOVERY_DB_NAME, RUNTIME_SESSION_KEY, UNKNOWN_BASE, reservationKeyOf, type DraftKind } from './schema'
 import type { DraftWriter } from './writer'
 import { createFakeBrowser, memoryStorage } from './test-support/fake-env'
 import { createFakeIdb, createManualScheduler, settle } from './test-support/fake-idb'
@@ -524,7 +524,7 @@ describe('cleanupDeletedEntity (#533)', () => {
     }
     const report = await cleaner.cleanupDeletedEntity(W1, KINDS)
     expect(adopted).not.toBeNull()
-    expect(report).toEqual({ removed: [], live: [], unknown: [], changed: [record!.draftId], suppressed: [] })
+    expect(report).toEqual({ removed: [], live: [], unknown: [], changed: [record!.draftId], unsupported: [], suppressed: [] })
     expect(await bodies(cleaner)).toEqual([['work-private-note:w1', 'orphaned text']])
     // Retried: the adopter is now a live editor, so its lineage stays.
     expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toMatchObject({ removed: [], live: [record!.draftId] })
@@ -578,7 +578,7 @@ describe('cleanupDeletedEntity (#533)', () => {
     key('p-lost', [entry('d-lost', 1, 0, 'only in localStorage', 'work-research-note', 'p-lost')])
 
     const report = await cleaner.cleanupDeletedEntity(W1, KINDS)
-    expect(report).toEqual({ removed: [writer.draftId()], live: [], unknown: [], changed: [], suppressed: ['d-lost'] })
+    expect(report).toEqual({ removed: [writer.draftId()], live: [], unknown: [], changed: [], unsupported: [], suppressed: ['d-lost'] })
     expect(await bodies(cleaner)).toEqual([])
     // Each stays a tombstone while a key still lists it.
     expect(await cleaner.store.get(writer.draftId()!)).toMatchObject({ status: 'discarded' })
@@ -605,7 +605,7 @@ describe('cleanupDeletedEntity (#533)', () => {
     frozen.now = true
     const cleaner = page('cleaner').rt
     expect(await cleaner.classify((await cleaner.store.get(w.draftId()!))!)).toBe('unknown')
-    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [], unknown: [w.draftId()], changed: [], suppressed: [] })
+    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [], unknown: [w.draftId()], changed: [], unsupported: [], suppressed: [] })
     expect(await bodies(cleaner)).toEqual([['work-private-note:w1', 'committed before the freeze']])
     // Resumed: the writer still owns its lineage and keeps it recoverable.
     frozen.now = false
@@ -624,6 +624,29 @@ describe('cleanupDeletedEntity (#533)', () => {
     expect(await bodies(cleaner)).toEqual([])
   })
 
+  it('keeps a record of the entity it cannot read, untouched, and reports it', async () => {
+    const { page, idb } = setup()
+    await crashedDraft(page, 'gone', 'written by a newer PRKS')
+    const cleaner = page('cleaner').rt
+    const [record] = await cleaner.store.listAll()
+    // A newer PRKS rewrote it with a schema this code does not know.
+    const db = await new Promise<IDBDatabase>((resolve) => {
+      const req = idb.factory.open(RECOVERY_DB_NAME, 1)
+      req.onsuccess = () => resolve(req.result)
+    })
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction([DRAFTS_STORE], 'readwrite')
+      tx.objectStore(DRAFTS_STORE).put({ ...record!, v: 99 })
+      tx.objectStore(DRAFTS_STORE).put({ draftId: 'd-garbled', v: 99 })
+      tx.oncomplete = () => resolve()
+    })
+    const report = await cleaner.cleanupDeletedEntity(W1, KINDS)
+    expect(report).toMatchObject({ removed: [], unsupported: [record!.draftId, 'd-garbled'] })
+    expect((await cleaner.store.get(record!.draftId))?.v).toBe(99)
+    // Another Work's newer record is none of this cleanup's business.
+    expect((await cleaner.cleanupDeletedEntity({ entityType: 'work', entityId: 'w2' }, KINDS)).unsupported).toEqual(['d-garbled'])
+  })
+
   it('leaves a live page\'s first generation in its emergency key alone', async () => {
     const { page } = setup()
     const live = page('live')
@@ -632,7 +655,7 @@ describe('cleanupDeletedEntity (#533)', () => {
     w.edit(1, 'typing now')
     expect(live.rt.writers.writeEmergencyNow()).toBe('written')
     const cleaner = page('cleaner').rt
-    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [w.draftId()], unknown: [], changed: [], suppressed: [] })
+    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [w.draftId()], unknown: [], changed: [], unsupported: [], suppressed: [] })
     expect(await cleaner.store.get(w.draftId()!)).toBeNull()
     await w.flush()
     expect(await bodies(cleaner)).toEqual([['work-private-note:w1', 'typing now']])
@@ -664,7 +687,7 @@ describe('cleanupDeletedEntity (#533)', () => {
     expect(await bodies(cleaner)).toHaveLength(3)
     const retried = await cleaner.cleanupDeletedEntity(W1, KINDS)
     expect(retried.removed).toHaveLength(1)
-    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [], unknown: [], changed: [], suppressed: [] })
+    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [], unknown: [], changed: [], unsupported: [], suppressed: [] })
     expect((await bodies(cleaner)).sort()).toEqual([
       ['folder-private-note:w1', 'folder-private-note w1'],
       ['work-private-note:w2', 'work-private-note w2'],

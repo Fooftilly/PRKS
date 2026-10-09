@@ -96,13 +96,17 @@ coordinator names no family: adding one is a registration.
   conflicts); its acknowledgement or a never-sent creation folding away,
   both seen by this device, removes both note kinds for that Work (#533).
   The Work stays marked in localStorage (`prks.workRecoveryCleanup.v1`)
-  until nothing of it is left. The mark reaches this browser's other tabs,
-  which give back their own sessions of that Work and clean up too (only
-  the tab holding the sync lock hears the acknowledgement). A later load
-  retries after a shutdown or once another tab lets go: at most 8 Works per
-  load, each only on the server's own "Work not found", and each on at most
-  5 loads; a Work the server holds again keeps its drafts and loses its
-  mark. A Work this device never saw deleted keeps
+  until nothing of it is left, readable or not (a record of a newer schema
+  keeps the mark). Only the tab holding the sync lock hears the
+  acknowledgement, so another tab still holding a draft of that Work keeps
+  it until its editor lets go and a later load retries; faster cross-tab
+  notice belongs to #476. A later load retries marked Works: at most 8 per
+  load, each attempted one moved behind the rest so none starves, each only
+  on the server's own "Work not found", and each on at most 5 loads; a
+  Work the server holds again keeps its drafts and loses its mark. At 64
+  marks the one retried the most gives way. Dropping a mark forfeits a
+  retry and never removes a draft; no draft is removed for its age or
+  count. A Work this device never saw deleted keeps
   its drafts whatever the server answers: the library this origin serves
   now may not be the one they were typed against. This page's note
   sessions that no pane shows give their lineages back first (on a folded

@@ -821,14 +821,54 @@ describe('Work delete and recovery drafts (#533)', () => {
     }
   })
 
-  it('cleans in this tab when another tab hears the acknowledgement', async () => {
+  it('keeps the mark while a record of the Work this code cannot read remains', async () => {
+    await researchDraft('Written by a newer PRKS')
+    const cleanup = page!.rt.cleanupDeletedEntity
+    page!.rt.cleanupDeletedEntity = async () =>
+      ({ removed: [], live: [], unknown: [], changed: [], unsupported: ['d-newer'], suppressed: [] })
+    try {
+      mark()
+      goneOnServer()
+      expect(await win.prksRetryDeletedWorkRecovery()).toEqual(['w1'])
+      expect(marked()).toEqual(['w1'])
+    } finally {
+      page!.rt.cleanupDeletedEntity = cleanup
+    }
+  })
+
+  it('gives every mark its turn: ones that do not clear move behind the rest', async () => {
+    await researchDraft('Interrupted cleanup')
+    // Eight marks ahead of w1 whose server never answers, so none of them clears.
+    const stuck = Array.from({ length: 8 }, (_, i) => 'stuck-' + i)
+    for (const id of stuck) responses['/api/works/' + id + '/notes-state'] = { status: 503, body: {} }
+    window.localStorage.setItem(DELETED_WORKS_KEY, JSON.stringify(stuck.map((id) => ({ id, tries: 0 })).concat([{ id: 'w1', tries: 0 }])))
+    goneOnServer()
+    expect(await win.prksRetryDeletedWorkRecovery()).toEqual([])
+    expect(marked()).toEqual(['w1'].concat(stuck))
+    expect(await win.prksRetryDeletedWorkRecovery()).toEqual(['w1'])
+    expect(await records()).toEqual([])
+    // The seven tried again rotated behind the one that waited.
+    expect(marked()).toEqual(['stuck-7'].concat(stuck.slice(0, 7)))
+  })
+
+  it('when full, lets the mark retried the most give way to a new one, and removes no draft for it', async () => {
     await draftsOfBothKinds()
-    // The leader tab marks the Work: this tab hears only the storage event.
-    const oldValue = window.localStorage.getItem(DELETED_WORKS_KEY)
-    mark()
-    window.dispatchEvent(new StorageEvent('storage', { key: DELETED_WORKS_KEY, oldValue, newValue: window.localStorage.getItem(DELETED_WORKS_KEY) }))
-    await waitFor(async () => (await records()).length === 0, 'cleaned on the other tab\'s mark')
-    expect(marked()).toEqual([])
+    const full = Array.from({ length: 64 }, (_, i) => ({ id: 'other-' + i, tries: i === 10 ? 4 : 1 }))
+    window.localStorage.setItem(DELETED_WORKS_KEY, JSON.stringify(full))
+    await win.prksDeleteWorkDurably('w1')
+    const cleanup = page!.rt.cleanupDeletedEntity
+    page!.rt.cleanupDeletedEntity = async () => {
+      page!.rt.cleanupDeletedEntity = cleanup
+      throw new Error('the browser shut down')
+    }
+    sync.ackDelete(deleteOp())
+    await waitFor(() => page!.rt.cleanupDeletedEntity === cleanup, 'cleanup attempted')
+    await settle()
+    const ids = marked()
+    expect(ids).toHaveLength(64)
+    expect(ids).not.toContain('other-10')
+    expect(ids[63]).toBe('w1')
+    expect(await records()).toHaveLength(2)
   })
 
   async function foldAway() {

@@ -133,7 +133,6 @@
                 void refresh();
             });
         }
-        if (typeof root.addEventListener === 'function') root.addEventListener('storage', onDeletedWorksChanged);
         armRecoveryRetry();
         return true;
     }
@@ -215,7 +214,8 @@
     const RETRY_MAX_WORKS = 8;
     /* Page loads that retry one Work. A draft whose owner is never proven
      * gone (a LAN tab that crashed) then stays, unreachable until drafts can
-     * be reviewed apart from their Work, instead of costing a probe per load. */
+     * be reviewed apart from their Work, instead of costing a probe per load.
+     * Only the mark goes; no draft is ever removed for its age or count. */
     const RETRY_MAX_TRIES = 5;
     let retryStarted = false;
 
@@ -242,16 +242,33 @@
     }
     function writeDeletedWorks(entries) {
         try {
-            if (entries.length) root.localStorage.setItem(DELETED_WORKS_KEY, JSON.stringify(entries.slice(-DELETED_WORKS_MAX)));
+            if (entries.length) root.localStorage.setItem(DELETED_WORKS_KEY, JSON.stringify(entries));
             else root.localStorage.removeItem(DELETED_WORKS_KEY);
         } catch (_e) {
             /* Storage unavailable: this load's cleanup still runs, only a retry is lost. */
         }
     }
+    /**
+     * Full at DELETED_WORKS_MAX: the mark retried the most (the oldest of
+     * those) gives way, the one least likely ever to clear. Dropping a mark
+     * forfeits a retry; it never removes a draft.
+     */
     function markDeletedWork(workId) {
         const entries = readDeletedWorks().filter(function (entry) { return entry.id !== workId; });
+        while (entries.length >= DELETED_WORKS_MAX) {
+            let evict = 0;
+            for (let i = 1; i < entries.length; i += 1) if (entries[i].tries > entries[evict].tries) evict = i;
+            entries.splice(evict, 1);
+        }
         entries.push({ id: workId, tries: 0 });
         writeDeletedWorks(entries);
+    }
+    /** Re-read first, so a mark another tab changed or cleared meanwhile is never brought back. */
+    function updateDeletedWork(workId, change) {
+        const entries = readDeletedWorks();
+        const index = entries.findIndex(function (entry) { return entry.id === workId; });
+        if (index === -1) return;
+        writeDeletedWorks(change(entries, index));
     }
     function unmarkDeletedWork(workId) {
         const entries = readDeletedWorks();
@@ -303,13 +320,15 @@
              * drafts, and no runtime, database or channel is created. */
             if (!await recoveryMayHold(workId)) {
                 unmarkDeletedWork(workId);
-                return { removed: [], live: [], unknown: [], changed: [], suppressed: [] };
+                return { removed: [], live: [], unknown: [], changed: [], unsupported: [], suppressed: [] };
             }
             const rt = recoveryRuntime();
             if (!rt) return null;
             let report = await rt.cleanupDeletedEntity(entity, RECOVERY_KINDS);
             if (report.changed.length) report = await rt.cleanupDeletedEntity(entity, RECOVERY_KINDS);
-            if (!report.live.length && !report.unknown.length && !report.changed.length) unmarkDeletedWork(workId);
+            /* Only when nothing of the Work is left, readable or not. */
+            if (!report.live.length && !report.unknown.length && !report.changed.length &&
+                !report.unsupported.length) unmarkDeletedWork(workId);
             return report;
         } catch (_e) {
             /* Left in place and still marked: a later load retries. */
@@ -367,29 +386,18 @@
                 unmarkDeletedWork(entry.id);
                 continue;
             }
-            writeDeletedWorks(readDeletedWorks().map(function (current) {
-                return current.id === entry.id ? { id: current.id, tries: current.tries + 1 } : current;
-            }));
+            /* Counted and moved to the back before the attempt, so a mark that
+             * does not clear never keeps the ones behind it from their turn. */
+            updateDeletedWork(entry.id, function (entries, index) {
+                const counted = { id: entry.id, tries: entries[index].tries + 1 };
+                return entries.slice(0, index).concat(entries.slice(index + 1), [counted]);
+            });
             const answer = await workOnServer(entry.id);
             if (answer === 'present') unmarkDeletedWork(entry.id);
             if (answer !== 'gone') continue;
             if (await cleanupDeletedWorkRecovery(entry.id)) cleaned.push(entry.id);
         }
         return cleaned;
-    }
-
-    /* Only the tab holding the sync lock hears an acknowledgement; its mark
-     * reaches every other tab of this browser, which then gives back its own
-     * sessions of that Work and cleans what it may. */
-    function onDeletedWorksChanged(event) {
-        if (!event || event.key !== DELETED_WORKS_KEY || !event.newValue) return;
-        let before = [];
-        try {
-            before = (JSON.parse(event.oldValue || '[]') || []).map(function (entry) { return entry && entry.id; });
-        } catch (_e) { /* treat every id as new */ }
-        for (const entry of readDeletedWorks()) {
-            if (entry.tries === 0 && before.indexOf(entry.id) === -1) void cleanupDeletedWorkRecovery(entry.id);
-        }
     }
 
     /* Once per page load, after the server has first been observed reachable,

@@ -2431,12 +2431,21 @@ var prksEditorRecovery = (function(exports) {
 				live: [],
 				unknown: [],
 				changed: [],
+				unsupported: [],
 				suppressed: []
 			};
 			await scanEmergency();
 			const keys = new Set(kinds.map((kind) => entityKeyOf(kind, entity.entityId)));
 			const ours = (kind, entityType, entityId) => entityType === entity.entityType && entityId === entity.entityId && keys.has(entityKeyOf(kind, entityId));
-			const records = (await store.listAll()).filter((r) => isSupportedRecord(r) && r.status !== "discarded" && ours(r.kind, r.entityType, r.entityId));
+			const records = [];
+			for (const row of await store.listAll()) {
+				if (isSupportedRecord(row)) {
+					if (row.status !== "discarded" && ours(row.kind, row.entityType, row.entityId)) records.push(row);
+					continue;
+				}
+				const r = row || {};
+				if (!(typeof r.entityType === "string" && typeof r.entityId === "string") || r.entityType === entity.entityType && r.entityId === entity.entityId) report.unsupported.push(typeof r.draftId === "string" ? r.draftId : "");
+			}
 			for (const record of records) {
 				const lineage = await classify(record);
 				if (!isAdoptable(lineage)) {

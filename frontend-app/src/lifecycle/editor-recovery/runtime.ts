@@ -45,6 +45,12 @@ export interface EntityCleanupReport {
   unknown: string[]
   /** Kept: its owner page, generation or status changed after it was read. */
   changed: string[]
+  /**
+   * Kept untouched: a record of this entity this code cannot read (a newer
+   * schema), or one whose entity cannot be told. Only a reader that
+   * understands it may remove it.
+   */
+  unsupported: string[]
   /** Lineages only an emergency key held, tombstoned so no merge creates them. */
   suppressed: string[]
 }
@@ -216,15 +222,24 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
     entity: { entityType: DraftEntityType; entityId: string },
     kinds: readonly DraftKind[],
   ): Promise<EntityCleanupReport> {
-    const report: EntityCleanupReport = { removed: [], live: [], unknown: [], changed: [], suppressed: [] }
+    const report: EntityCleanupReport = { removed: [], live: [], unknown: [], changed: [], unsupported: [], suppressed: [] }
     // A dead page's tail becomes a record first, so it is removed like any other.
     await scanEmergency()
     const keys = new Set(kinds.map((kind) => entityKeyOf(kind, entity.entityId)))
     const ours = (kind: DraftKind, entityType: DraftEntityType, entityId: string) =>
       entityType === entity.entityType && entityId === entity.entityId && keys.has(entityKeyOf(kind, entityId))
-    const records = (await store.listAll()).filter(
-      (r) => isSupportedRecord(r) && r.status !== 'discarded' && ours(r.kind, r.entityType, r.entityId),
-    )
+    const records: DraftRecord[] = []
+    for (const row of await store.listAll()) {
+      if (isSupportedRecord(row)) {
+        if (row.status !== 'discarded' && ours(row.kind, row.entityType, row.entityId)) records.push(row)
+        continue
+      }
+      const r = (row || {}) as Partial<Record<'draftId' | 'entityType' | 'entityId', unknown>>
+      const told = typeof r.entityType === 'string' && typeof r.entityId === 'string'
+      if (!told || (r.entityType === entity.entityType && r.entityId === entity.entityId)) {
+        report.unsupported.push(typeof r.draftId === 'string' ? r.draftId : '')
+      }
+    }
     for (const record of records) {
       const lineage = await classify(record)
       if (!isAdoptable(lineage)) {
