@@ -1141,6 +1141,37 @@ describe('tab-close recovery (slice 3)', () => {
     expect(sync.rows()).toEqual([])
   })
 
+  it('an explicit Discard removes an unknown owner\'s draft, but not once its owner answers as live', async () => {
+    withoutLocks = true
+    startPage()
+    const ctx = await openWork()
+    await type(ctx, 'Saved note. Crashed one').recovery!.flush()
+    await closeTabAndOpenAnother('crash')
+    const first = await openWork()
+    await type(first, 'Saved note. Crashed two').recovery!.flush()
+    await closeTabAndOpenAnother('crash')
+    const { ctx: fresh } = await openAndRestore()
+    const details = await review().details(fresh, 'w1')
+    expect(details!.candidates.map((c) => c.lineage)).toEqual(['unknown', 'unknown'])
+    const [one, two] = details!.candidates
+    // Ownership is checked again at the action: an owner that answers now is live.
+    const classify = page!.rt.classify.bind(page!.rt)
+    page!.rt.classify = async () => {
+      page!.rt.classify = classify
+      return 'other-live'
+    }
+    expect(await review().discard(fresh, 'w1', details!.token, one!.expect)).toMatchObject({ ok: false, code: 'changed' })
+    expect(await bodyOf(one!.draftId)).toBe(one!.body)
+    // Still unknown: the user's confirmed choice removes exactly that draft.
+    expect(await review().discard(fresh, 'w1', details!.token, one!.expect)).toEqual({ ok: true })
+    expect((await records()).map((r) => r.draftId)).toEqual([two!.draftId])
+    // A stale expectation (the generation it showed) is refused.
+    expect(await review().discard(fresh, 'w1', details!.token, { ...two!.expect, generation: two!.expect.generation + 1 }))
+      .toMatchObject({ ok: false, code: 'changed' })
+    expect(await bodyOf(two!.draftId)).toBe(two!.body)
+    expect(sync.rows()).toEqual([])
+  })
+
   it('keeps an unknown owner\'s draft even when it equals the saved note', async () => {
     withoutLocks = true
     startPage()

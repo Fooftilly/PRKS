@@ -193,12 +193,14 @@ async function discard(): Promise<void> {
   const d = details.value
   const c = selected.value
   if (!d || !c || busy.value) return
-  const unknownOwner = c.lineage === 'unknown'
-    ? ' It may still be open in a tab that did not answer; discard it only if that tab is gone.'
-    : ''
+  const alsoEdited = composedEdited() ? ' Your edited text to keep is discarded with it.' : ''
+  // Its owner could not be proven gone: say exactly what may be lost. Cancel stays the safe default.
+  const message = c.lineage === 'unknown'
+    ? `This draft may belong to another browser tab that is still open or temporarily unresponsive. Discarding it will permanently remove its recovery copy (${lengthText(c.length)}). If that tab contains unsaved changes, those changes could be lost. Only discard this draft if you are certain you no longer need it.${alsoEdited}`
+    : `Its ${lengthText(c.length)} are removed from this device${composedEdited() ? ', and so is your edited text to keep' : ''}. The current note does not change.`
   const ok = await props.actions.confirm({
     title: 'Discard this draft?',
-    message: `Its ${lengthText(c.length)} are removed from this device${composedEdited() ? ', and so is your edited text to keep' : ''}. The current note does not change.${unknownOwner}`,
+    message,
     confirmLabel: 'Discard draft',
     danger: true,
   })

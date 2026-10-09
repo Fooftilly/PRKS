@@ -286,12 +286,32 @@ describe('EditorRecoveryReview', () => {
     wrapper.unmount()
   })
 
-  it('warns before discarding a draft whose tab may still be open', async () => {
-    const a = actions({}, [details([candidate({ lineage: 'unknown', reason: 'ownership-unknown', action: null })]), details([])])
+  it('warns before discarding a draft whose tab may still be open, and cancelling keeps it', async () => {
+    const confirm = vi.fn(async () => false)
+    const a = actions({ confirm }, [details([candidate({ lineage: 'unknown', reason: 'ownership-unknown', action: null })]), details([])])
     const wrapper = await open(a)
     await wrapper.get('[data-prks-role="editor-recovery-discard"]').trigger('click')
     await flushPromises()
-    expect(a.confirm).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('discard it only if that tab is gone') }))
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({
+      confirmLabel: 'Discard draft',
+      danger: true,
+      message: expect.stringContaining('This draft may belong to another browser tab that is still open or temporarily unresponsive.'),
+    }))
+    expect(a.discard).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-prks-role="editor-recovery-candidate"]').exists()).toBe(true)
+    confirm.mockResolvedValue(true)
+    await wrapper.get('[data-prks-role="editor-recovery-discard"]').trigger('click')
+    await flushPromises()
+    expect(a.calls).toEqual(['discard'])
+    wrapper.unmount()
+  })
+
+  it('keeps the plain discard confirmation for a draft from a tab known to be closed', async () => {
+    const a = actions({}, [details([candidate()]), details([])])
+    const wrapper = await open(a)
+    await wrapper.get('[data-prks-role="editor-recovery-discard"]').trigger('click')
+    await flushPromises()
+    expect(a.confirm).toHaveBeenCalledWith(expect.objectContaining({ message: expect.not.stringContaining('may belong to another browser tab') }))
     wrapper.unmount()
   })
 
