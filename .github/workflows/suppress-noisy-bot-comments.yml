@@ -71,6 +71,15 @@ env:
         ]
       },
       {
+        rule: "greptile-free-plan-credits",
+        login: "greptile-apps[bot]",
+        fragments: [
+          "Your organization has used all 50 credits included in the free plan",
+          "To keep receiving reviews"
+        ],
+        excluded: ["<!-- greptile_summary -->", "confidence score", "## findings", "### findings", "potential issue", "walkthrough"]
+      },
+      {
         rule: "sourcery-review-budget",
         login: "sourcery-ai[bot]",
         fragments: ["used your own review budget", "diff characters"]
@@ -96,6 +105,28 @@ env:
         fragments: ["<!-- qodo:trial-expiring -->"]
       },
       # Non-review status noise
+      {
+        # Codex's completed activity table does not contain review findings.
+        rule: "codex-completed-review-status",
+        login: "chatgpt-codex-connector[bot]",
+        fragments: [
+          "<!-- codex-pull-request-review-summary -->",
+          "This comment shows the latest Codex review activity on this pull request.",
+          "✅ **Completed**"
+        ],
+        # Preserve a mixed status/finding comment or a failed review.
+        excluded: ["❌", "⚠️", "## findings", "### findings", "p0 badge", "p1 badge", "p2 badge", "p3 badge"]
+      },
+      {
+        rule: "coderabbit-bot-author-skipped",
+        login: "coderabbitai[bot]",
+        fragments: [
+          "<!-- This is an auto-generated comment: skip review by coderabbit.ai -->",
+          "## Review skipped",
+          "Bot user detected."
+        ],
+        excluded: $coderabbit_review_markers
+      },
       {
         rule: "coderabbit-auto-review-unavailable",
         login: "coderabbitai[bot]",
