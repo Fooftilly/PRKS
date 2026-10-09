@@ -660,6 +660,15 @@ var prksEditorRecovery = (function(exports) {
 				});
 			});
 		}
+		function tombstoneIfAbsent(draftId, tombstone) {
+			return run("readwrite", (tx, done) => {
+				readRecord(tx, draftId, (record) => {
+					if (record) return done("kept");
+					tx.objectStore(DRAFTS_STORE).put(tombstoneRecord(draftId, tombstone, 0));
+					done("suppressed");
+				});
+			});
+		}
 		function applyEmergencyEntry(payload, entry) {
 			return run("readwrite", (tx, done) => {
 				readRecord(tx, entry.draftId, (record) => {
@@ -747,6 +756,7 @@ var prksEditorRecovery = (function(exports) {
 			deleteIfEqual,
 			discard,
 			clearTombstone,
+			tombstoneIfAbsent,
 			applyEmergencyEntry,
 			lastDurability: () => lastMode,
 			close() {
@@ -837,6 +847,26 @@ var prksEditorRecovery = (function(exports) {
 			return null;
 		}
 	}
+	/**
+	* Whether a key this code cannot parse may still hold text a later read or a
+	* newer bundle recovers: its read failed, it is an envelope of a newer
+	* schema, or its only unreadable entries are of a draft kind this bundle does
+	* not know. A malformed, older or mismatched key holds nothing any bundle can
+	* merge; it names no entity, and it is left in place untouched.
+	*/
+	function mayHoldUnreadable(stored) {
+		if (stored.payload) return false;
+		if (stored.readFailed) return true;
+		if (stored.raw === null) return false;
+		try {
+			const value = JSON.parse(stored.raw);
+			if (!value || typeof value !== "object" || typeof value.v !== "number") return false;
+			if (value.v > 1) return true;
+			return value.v === 1 && value.pageInstanceId === stored.pageInstanceId && Array.isArray(value.entries) && value.entries.every((entry) => isEntry(entry) || !!entry && typeof entry === "object" && typeof entry.kind === "string" && !isDraftKind(entry.kind));
+		} catch {
+			return false;
+		}
+	}
 	/** Blocked storage can throw on enumeration or reads: that leaves the emergency layer empty, never failing startup. */
 	function readEmergencyKeys(storage) {
 		const keys = [];
@@ -851,14 +881,18 @@ var prksEditorRecovery = (function(exports) {
 		return keys.map((key) => {
 			const pageInstanceId = key.slice(EMERGENCY_KEY_PREFIX.length);
 			let raw = null;
+			let readFailed = false;
 			try {
 				raw = storage.getItem(key);
-			} catch {}
+			} catch {
+				readFailed = true;
+			}
 			return {
 				key,
 				pageInstanceId,
 				payload: parsePayload(raw, pageInstanceId),
-				raw
+				raw,
+				readFailed
 			};
 		});
 	}
@@ -2297,6 +2331,9 @@ var prksEditorRecovery = (function(exports) {
 	* no consumer, so the page holds no lock, channel or listener until a
 	* consumer asks for the runtime.
 	*/
+	function keptFor(lineage, report) {
+		return lineage === "unknown" ? report.unknown : report.live;
+	}
 	function createEditorRecoveryRuntime(options = {}) {
 		const store = createRecoveryStore(options.store);
 		const identity = createPageIdentity(options.identity);
@@ -2350,21 +2387,127 @@ var prksEditorRecovery = (function(exports) {
 			}));
 			return started;
 		}
+		function scanEmergency() {
+			if (!started) return start().then((result) => result.merged);
+			return started.then(() => merge(true));
+		}
+		function classify(record, askingSession = null) {
+			return classifyLineage(record, {
+				identity,
+				localOwner: (id) => writers.ownerOf(id)
+			}, askingSession);
+		}
+		function discardReviewed(reviewed) {
+			const expected = {
+				pageInstanceId: reviewed.pageInstanceId,
+				generation: reviewed.generation,
+				status: reviewed.status
+			};
+			const listing = emergencyStorage ? listingPage(emergencyStorage, reviewed.draftId) : null;
+			const tombstone = listing ? {
+				kind: reviewed.kind,
+				entityType: reviewed.entityType,
+				entityId: reviewed.entityId,
+				generation: reviewed.generation,
+				pageInstanceId: listing
+			} : void 0;
+			return store.discard(reviewed.draftId, tombstone, expected);
+		}
+		/**
+		* A first generation that never reached IndexedDB exists only in a key
+		* that no scan merged: tombstoned only when its page is proven gone.
+		*/
+		async function suppressEmergencyOnly(ours, report) {
+			if (!emergencyStorage) return;
+			for (const stored of readEmergencyKeys(emergencyStorage)) {
+				const payload = stored.payload;
+				if (!payload) {
+					if (mayHoldUnreadable(stored)) report.unsupported.push(stored.key);
+					continue;
+				}
+				for (const entry of payload.entries) {
+					if (entry.committedGeneration !== 0 || entry.body === null || !ours(entry.kind, entry.entityType, entry.entityId)) continue;
+					const owner = {
+						runtimeId: payload.runtimeId,
+						pageInstanceId: stored.pageInstanceId,
+						paneId: "",
+						claimedAt: payload.at
+					};
+					const lineage = await classify({
+						draftId: entry.draftId,
+						owner
+					});
+					if (!isAdoptable(lineage)) {
+						keptFor(lineage, report).push(entry.draftId);
+						continue;
+					}
+					const stone = {
+						kind: entry.kind,
+						entityType: entry.entityType,
+						entityId: entry.entityId,
+						generation: entry.generation,
+						pageInstanceId: stored.pageInstanceId
+					};
+					if (await store.tombstoneIfAbsent(entry.draftId, stone) === "suppressed") {
+						report.suppressed.push(entry.draftId);
+						continue;
+					}
+					const landed = await store.get(entry.draftId);
+					if (landed && !isSupportedRecord(landed)) report.unsupported.push(entry.draftId);
+					else if (landed && landed.status !== "discarded") report.changed.push(entry.draftId);
+				}
+			}
+		}
+		async function cleanupDeletedEntity(entity, kinds) {
+			const report = {
+				removed: [],
+				live: [],
+				unknown: [],
+				changed: [],
+				unsupported: [],
+				suppressed: []
+			};
+			await scanEmergency();
+			const keys = new Set(kinds.map((kind) => entityKeyOf(kind, entity.entityId)));
+			const ours = (kind, entityType, entityId) => entityType === entity.entityType && entityId === entity.entityId && keys.has(entityKeyOf(kind, entityId));
+			const records = [];
+			for (const row of await store.listAll()) {
+				if (isSupportedRecord(row)) {
+					if (row.status !== "discarded" && ours(row.kind, row.entityType, row.entityId)) records.push(row);
+					continue;
+				}
+				const r = row || {};
+				if (!(typeof r.entityType === "string" && typeof r.entityId === "string") || r.entityType === entity.entityType && r.entityId === entity.entityId) report.unsupported.push(typeof r.draftId === "string" ? r.draftId : "");
+			}
+			for (const record of records) {
+				const lineage = await classify(record);
+				if (!isAdoptable(lineage)) {
+					keptFor(lineage, report).push(record.draftId);
+					continue;
+				}
+				const outcome = await discardReviewed({
+					draftId: record.draftId,
+					pageInstanceId: record.owner.pageInstanceId,
+					generation: record.generation,
+					status: record.status,
+					kind: record.kind,
+					entityType: record.entityType,
+					entityId: record.entityId
+				});
+				if (outcome === "deleted" || outcome === "missing") report.removed.push(record.draftId);
+				else if (outcome === "kept") report.changed.push(record.draftId);
+				else report.unsupported.push(record.draftId);
+			}
+			await suppressEmergencyOnly(ours, report);
+			return report;
+		}
 		return {
 			store,
 			identity,
 			writers,
 			start,
-			scanEmergency() {
-				if (!started) return start().then((result) => result.merged);
-				return started.then(() => merge(true));
-			},
-			classify(record, askingSession = null) {
-				return classifyLineage(record, {
-					identity,
-					localOwner: (id) => writers.ownerOf(id)
-				}, askingSession);
-			},
+			scanEmergency,
+			classify,
 			claimReviewed(reviewed, paneId) {
 				if (reviewed.status !== "active") return Promise.resolve({ outcome: "conflict" });
 				const claim = identity.current();
@@ -2376,22 +2519,8 @@ var prksEditorRecovery = (function(exports) {
 				};
 				return store.adopt(reviewed.draftId, reviewed.pageInstanceId, owner, reviewed.generation);
 			},
-			discardReviewed(reviewed) {
-				const expected = {
-					pageInstanceId: reviewed.pageInstanceId,
-					generation: reviewed.generation,
-					status: reviewed.status
-				};
-				const listing = emergencyStorage ? listingPage(emergencyStorage, reviewed.draftId) : null;
-				const tombstone = listing ? {
-					kind: reviewed.kind,
-					entityType: reviewed.entityType,
-					entityId: reviewed.entityId,
-					generation: reviewed.generation,
-					pageInstanceId: listing
-				} : void 0;
-				return store.discard(reviewed.draftId, tombstone, expected);
-			},
+			discardReviewed,
+			cleanupDeletedEntity,
 			onWriterEvent(listener) {
 				writerListeners.add(listener);
 				return () => {
@@ -2638,6 +2767,7 @@ var prksEditorRecovery = (function(exports) {
 	exports.isAdoptable = isAdoptable;
 	exports.isDraftKind = isDraftKind;
 	exports.isSupportedRecord = isSupportedRecord;
+	exports.mayHoldUnreadable = mayHoldUnreadable;
 	exports.mergeEmergencyEntries = mergeEmergencyEntries;
 	exports.mintId = mintId;
 	exports.planEmergency = planEmergency;

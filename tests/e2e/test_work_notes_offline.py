@@ -12,7 +12,7 @@ thin reconnect conflict park, and browser-local recovery of Research Notes
 import os
 import unittest
 
-from backend import work_note_sync
+from backend import work_lifecycle_sync, work_note_sync
 from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
@@ -1042,3 +1042,204 @@ class WorkRemindersRecoveryTests(_RecoveryPage, unittest.TestCase):
         self.wait_server_reminder(page, work, original + ' Unprotected')
         warning.wait_for(state='detached')
         self.assertFalse(page.evaluate('() => window.prksEditorRecovery.runtime().writers.leaveGuardActive()'))
+
+
+_WORK_RECOVERY_RECORDS = """
+    (workId) => window.prksEditorRecovery.runtime().store.listAll()
+        .then(rows => rows.filter(r => r.entityId === workId).map(r => r.kind + ':' + r.status))
+"""
+
+
+class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
+    """#533: a Work delete keeps its recovery drafts while it is only requested,
+    and removes them once the server confirms the Work is gone."""
+
+    field = WorkRemindersRecoveryTests.field
+    status = WorkRemindersRecoveryTests.status
+    type_reminder = WorkRemindersRecoveryTests.type_reminder
+    hold_reminder_saves = WorkRemindersRecoveryTests.hold_reminder_saves
+    wait_reminder_recorded = WorkRemindersRecoveryTests.wait_reminder_recorded
+    close_tab = ResearchNotesTabCloseAndReviewTests.close_tab
+
+    def work_records(self, page, work):
+        return page.evaluate(_WORK_RECOVERY_RECORDS, work)
+
+    def open_delete_confirm(self, page):
+        o._open_details_drawer_if_tiled(page)
+        advanced = page.locator('.work-details-advanced')
+        if advanced.get_attribute('open') is None:
+            advanced.locator('summary').click()
+        page.locator('.delete-work-btn').click()
+        dialog = page.locator('#prks-modal-confirm:not(.hidden)', has_text='Delete file?')
+        dialog.wait_for()
+        return dialog
+
+    def delete_rows(self, page):
+        return page.evaluate("""() => prksSync.store.listOperations().then(rows => rows
+            .filter(r => r.operation === 'DELETE_WORK').map(r => ({ status: r.status, attempts: r.attempt_count })))""")
+
+    def test_reminders_typed_before_a_delete_stay_until_the_ack_then_are_removed(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        # Offline: the Reminders row the delete cancels was never sent, so the
+        # recovery draft is the only copy of that text until the server confirms.
+        self.offline(page, context)
+        self.type_reminder(page, server, ' Deleted reminder')
+        self.wait_reminder_recorded(page, work, ' Deleted reminder')
+
+        # Cancel deletes nothing.
+        dialog = self.open_delete_confirm(page)
+        self.assertIn('cannot be undone', dialog.inner_text())
+        # Says what cleanup can promise: removal where safe, not of every draft.
+        text = ' '.join(dialog.inner_text().split())
+        self.assertIn('unsaved Research Notes and Reminders text for it can be lost', text)
+        self.assertIn('are removed where that is safe', text)
+        self.assertIn('another open or unresponsive tab still holds stays until it can be removed safely', text)
+        self.assertNotIn('are removed too', text)
+        page.locator('#prks-modal-confirm-cancel').click()
+        dialog.wait_for(state='hidden')
+        self.assertEqual(self.delete_rows(page), [])
+        self.assertEqual(self.work_records(page, work), ['work-private-note:active'])
+
+        self.open_delete_confirm(page)
+        page.locator('#prks-modal-confirm-ok').click()
+        page.wait_for_function("() => location.hash === '#/folders'", timeout=15000)
+        wait_for_async(
+            page,
+            """() => prksSync.store.listOperations().then(rows =>
+                rows.length === 1 && rows[0].operation === 'DELETE_WORK' && rows[0].status === 'pending')""",
+            timeout=15000,
+            message='the delete request did not replace the unsent Reminders row')
+        # Requested, not acknowledged: the draft stays.
+        self.assertEqual(self.work_records(page, work), ['work-private-note:active'])
+        self.assertIsNotNone(self.db_for(server).get_work(work))
+
+        self.reconnect(page, context)
+        wait_for_async(page, "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+                       timeout=30000, message='the delete was never acknowledged')
+        self.assertIsNone(self.db_for(server).get_work(work))
+        wait_for_async(
+            page,
+            '(workId) => (' + _WORK_RECOVERY_RECORDS + ')(workId).then(rows => rows.length === 0)',
+            arg=work,
+            timeout=15000,
+            message='recovery drafts outlived the acknowledged delete')
+        self.assertEqual(page.evaluate(_RECOVERY_IDLE), {'pending': 0, 'guard': False, 'unloadListeners': False})
+        # Only a later load, finding nothing of the Work left, clears its mark.
+        mark = "(workId) => localStorage.getItem('prks.workRecoveryCleanup.v1.' + workId)"
+        self.assertIsNotNone(page.evaluate(mark, work))
+        page.reload()
+        page.wait_for_function(
+            "(workId) => localStorage.getItem('prks.workRecoveryCleanup.v1.' + workId) === null",
+            arg=work, timeout=20000)
+
+    def test_drafts_of_a_never_synced_work_deleted_from_its_own_pane_are_removed(self):
+        server, page, context = self.start()
+        # The video viewer is loaded on first use; a browser that has used it can open one offline.
+        page.evaluate("() => import('/js/components/works-video.js').then(() => true)")
+        # Offline, so the creation is never sent and the delete folds it away.
+        self.offline(page, context)
+        page.locator('#prks-ribbon-new-file').click()
+        page.wait_for_selector('#work-modal:not(.hidden):not([inert])')
+        page.locator('.prks-kind-toggle__btn[data-kind="video"]').click()
+        page.wait_for_selector('#work-video-url-row:not(.hidden)')
+        page.locator('#work-video-url').fill('https://www.youtube.com/watch?v=e2e0000533')
+        page.locator('#work-title').fill('Never synced')
+        page.locator('#save-work-btn').click()
+        # The page starts on the seeded Work; wait for the new one.
+        page.wait_for_function(
+            "(seeded) => location.hash.indexOf('#/works/') === 0 && location.hash.indexOf(seeded) === -1",
+            arg=server.ids['work_a'], timeout=20000)
+        work = page.evaluate("() => decodeURIComponent(location.hash.slice('#/works/'.length).split(/[/?]/)[0])")
+        field = page.locator('#prks-private-notes-work-' + work)
+        field.click()
+        page.keyboard.press('Control+End')
+        page.keyboard.type(' Typed before it ever synced')
+        page.locator('#prks-private-notes-status-work-' + work).filter(has_text='Drafting').wait_for()
+        self.wait_reminder_recorded(page, work, ' Typed before it ever synced')
+        self.assertEqual(self.work_records(page, work), ['work-private-note:active'])
+        self.assertEqual(page.evaluate("""() => prksSync.store.listOperations().then(rows => rows
+            .filter(r => r.operation === 'CREATE_WORK').map(r => r.attempt_count))"""), [0])
+
+        # Delete File from this Work's own Details. Its navigation away is held, so the
+        # cleanup runs while this pane still shows the Work and holds its Reminders session.
+        page.evaluate("""() => {
+            const navigate = window.prksNavigate;
+            window.prksNavigate = function () {
+                window.prksNavigate = navigate;
+                const self = this, args = arguments;
+                window.__prksReleaseNavigation = () => navigate.apply(self, args);
+            };
+        }""")
+        self.open_delete_confirm(page)
+        page.locator('#prks-modal-confirm-ok').click()
+        page.wait_for_function('() => typeof window.__prksReleaseNavigation === "function"', timeout=15000)
+        wait_for_async(
+            page,
+            '(workId) => (' + _WORK_RECOVERY_RECORDS + ')(workId).then(rows => rows.length === 0)',
+            arg=work, timeout=15000, message='drafts of a folded creation outlived its deletion')
+        self.assertEqual(field.count(), 1)
+        page.evaluate('() => window.__prksReleaseNavigation()')
+        page.wait_for_function("() => location.hash === '#/folders'", timeout=15000)
+        self.assertEqual(self.work_records(page, work), [])
+        self.assertEqual(page.evaluate('() => prksSync.store.listOperations().then(rows => rows.length)'), 0)
+        self.assertEqual(page.evaluate(_RECOVERY_IDLE), {'pending': 0, 'guard': False, 'unloadListeners': False})
+
+    def test_an_acknowledged_delete_interrupted_before_cleanup_is_retried_on_a_folders_load(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        # The delete was acknowledged here, but the browser stopped before the cleanup: the Work
+        # is still marked, and a tab that closed before its first IndexedDB commit left the draft
+        # only in its emergency key.
+        page.evaluate("""(workId) => {
+            localStorage.setItem('prks.workRecoveryCleanup.v1.' + workId, JSON.stringify({ marked: 1, tried: 0 }));
+            const pageInstanceId = 'p-closed-before-commit';
+            localStorage.setItem('prks.editorRecovery.emergency.v1.' + pageInstanceId, JSON.stringify({
+                v: 1, pageInstanceId, runtimeId: null, at: Date.now(),
+                entries: [{
+                    draftId: 'd-closed-before-commit', kind: 'work-private-note', entityType: 'work', entityId: workId,
+                    generation: 1, committedGeneration: 0, body: 'Only in the emergency key',
+                    lineage: { createdAt: Date.now(), owner: { runtimeId: null, pageInstanceId, paneId: 'tab-1' },
+                               base: { revision: 0, length: 0, fingerprint: null, source: 'server' } },
+                }],
+            }));
+        }""", work)
+        with self.db_for(server).connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            work_lifecycle_sync.delete_work_record_on_conn(conn, work)
+        self.close_tab(page)
+        tab = context.new_page()
+        tab.on('dialog', lambda d: (self.dialogs.append(d.type), d.accept()))
+        tab.goto(server.origin + '/#/folders', wait_until='domcontentloaded')
+        tab.wait_for_selector('#sidebar')
+        wait_for_async(
+            tab,
+            """(workId) => window.prksEditorRecovery.runtime().store.listAll().then(rows =>
+                Object.keys(localStorage).every(k => k.indexOf('prks.editorRecovery.emergency.v1.p-closed-before-commit') !== 0) &&
+                rows.every(r => r.entityId !== workId || r.status === 'discarded'))""",
+            arg=work,
+            timeout=20000,
+            message='a draft only an emergency key held outlived its acknowledged delete')
+        self.assertIsNone(tab.evaluate("(workId) => localStorage.getItem('prks.workRecoveryCleanup.v1.' + workId)", work))
+
+    def test_drafts_of_a_work_missing_on_the_server_are_kept_on_the_next_load(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.hold_reminder_saves(page)
+        self.type_reminder(page, server, ' Elsewhere')
+        self.wait_reminder_recorded(page, work, ' Elsewhere')
+        # The server no longer has the Work (deleted elsewhere, or another library on this
+        # origin); this tab closes before its save. This device never saw it deleted.
+        with self.db_for(server).connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            work_lifecycle_sync.delete_work_record_on_conn(conn, work)
+        self.close_tab(page)
+        tab = context.new_page()
+        tab.on('dialog', lambda d: (self.dialogs.append(d.type), d.accept()))
+        probes = []
+        tab.on('request', lambda r: probes.append(r.url) if '/notes-state' in r.url else None)
+        tab.goto(server.origin + '/#/folders', wait_until='domcontentloaded')
+        tab.wait_for_selector('#sidebar')
+        tab.wait_for_function("() => window.prksOfflineRuntimeState && window.prksOfflineRuntimeState() === 'online'", timeout=20000)
+        self.assertEqual(tab.evaluate(_WORK_RECOVERY_RECORDS, work), ['work-private-note:active'])
+        self.assertEqual(probes, [])

@@ -16,9 +16,10 @@ export type NoteRow = {
   entity_type: string
   entity_id: string
   payload: { text: string }
-  base_revision: number
+  base_revision: number | null
   status: string
   attempt_count: number
+  depends_on?: string[]
 }
 
 export type NoteServer = { text: string; revision: number }
@@ -63,6 +64,27 @@ export function createNoteQueue(server: NoteServer) {
     async listOperations() {
       return rows.map((r) => ({ ...r, payload: { ...r.payload } }))
     },
+    /** The local store's DELETE_WORK request: never-sent rows naming the Work are cancelled, sent ones waited for. */
+    async deleteWork(workId: string) {
+      const mine = rows.filter((r) => r.entity_id === workId)
+      const already = mine.find((r) => r.operation === 'DELETE_WORK')
+      if (already) return already
+      const neverSent = (r: NoteRow) => r.status === 'pending' && !r.attempt_count
+      rows = rows.filter((r) => !(r.entity_id === workId && neverSent(r)))
+      const row: NoteRow = {
+        op_id: 'op-' + ++seq,
+        operation: 'DELETE_WORK',
+        entity_type: 'work',
+        entity_id: workId,
+        payload: { text: '' },
+        base_revision: null,
+        status: 'pending',
+        attempt_count: 0,
+        depends_on: mine.filter((r) => !neverSent(r)).map((r) => r.op_id),
+      }
+      rows.push(row)
+      return row
+    },
   }
   const emit = (event: unknown) => listeners.forEach((fn) => fn(event))
   return {
@@ -93,6 +115,17 @@ export function createNoteQueue(server: NoteServer) {
       server.text = row.payload.text
       server.revision = revision
       emit({ acknowledged: { code: 'ACKNOWLEDGED', server_revision: revision }, operation: row.operation, op: row })
+    },
+    /** The server acknowledged a DELETE_WORK row: the Work is gone. */
+    ackDelete(opId: string) {
+      const row = rows.find((r) => r.op_id === opId)!
+      rows = rows.filter((r) => r !== row)
+      emit({ acknowledged: { code: 'ACKNOWLEDGED', work_id: row.entity_id, changed: true }, operation: row.operation, op: row })
+    },
+    /** A row the server refused, or whose prerequisite it refused: kept for the user to resolve. */
+    conflict(opId: string) {
+      rows.find((r) => r.op_id === opId)!.status = 'conflict'
+      emit({})
     },
     /** Another tab or device queued a row for this Work. */
     foreign(operation: string, workId: string, text: string) {

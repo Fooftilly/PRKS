@@ -44,7 +44,8 @@
  * - replace(ctx, id, target, text): put chosen text in as an edit and save it,
  *   returning the session entry that now holds it;
  * - publish(ctx): repaint the pane's notice; owners(fn): fn(ctx, workId) for
- *   every pane that mounts this editor.
+ *   every pane that mounts this editor;
+ * - forget(entry): drop a session entry of a deleted Work and release its writer.
  */
 (function (root) {
     'use strict';
@@ -102,6 +103,9 @@
     function paneOf(ctx) {
         return String(ctx && ctx.tabId != null ? ctx.tabId : '');
     }
+
+    /* Every adapter built on this page, so a confirmed Work deletion reaches each kind. */
+    const adapters = [];
 
     function create(K) {
         /* Represented drafts (already the exact body of a queued row): op id -> list,
@@ -211,6 +215,44 @@
             if (!writer) return;
             entry.recovery = null;
             void writer.release().catch(function () {});
+        }
+
+        /**
+         * The Work's deletion is confirmed (#533). A session of it that no pane
+         * shows any more can never be saved, and its row was cancelled with the
+         * delete request, so no acknowledgement will ever release it: its lineage
+         * is given back for the deletion's cleanup. A pane still showing the Work
+         * keeps its editor and lineage, unless `evenShown`: a creation that never
+         * left this device folded away, so no pane of this page can ever save it.
+         * Resolves once those last writes finished.
+         */
+        function forgetDeleted(workId, evenShown) {
+            const id = String(workId);
+            const shown = new Set();
+            if (!evenShown) {
+                K.owners(function (ctx, owned) {
+                    if (ctx && String(owned) === id) shown.add(String(ctx.tabId));
+                });
+            }
+            const done = [];
+            entriesArray().forEach(function (entry) {
+                if (!entry || String(entry.workId) !== id || !entry.recovery || shown.has(String(entry.ownerTabId))) return;
+                const writer = entry.recovery;
+                K.forget(entry);
+                done.push(writer.release().catch(function () {}));
+            });
+            ackWatch.forEach(function (watches, opId) {
+                const kept = watches.filter(function (watch) {
+                    if (watch.workId !== id || shown.has(watch.tabId)) return true;
+                    if (watch.writer) done.push(watch.writer.release().catch(function () {}));
+                    return false;
+                });
+                if (kept.length) ackWatch.set(opId, kept);
+                else ackWatch.delete(opId);
+            });
+            /* Resolves to the panes that still mount this editor for the Work,
+             * typed in or not: each may yet commit an edit. */
+            return Promise.all(done).then(function () { return shown.size; });
         }
 
         /** Starts the recovery write before an ordinary save is queued. */
@@ -543,7 +585,10 @@
                 const candidate = candidates.find(function (c) { return c.record.draftId === item.draftId; });
                 const watches = ackWatch.get(item.opId) || [];
                 if (watches.some(function (w) { return w.draftId === item.draftId; })) continue;
-                const watch = Object.assign({ writer: null, adopting: null, acknowledged: false, key: key, base: base, pipeline: candidate.record.pipeline }, item);
+                const watch = Object.assign({
+                    writer: null, adopting: null, acknowledged: false, key: key, base: base,
+                    pipeline: candidate.record.pipeline, workId: String(id), tabId: String(ctx.tabId),
+                }, item);
                 /* Every lineage the row represents is cleared by its acknowledgement,
                  * so it is watched before adopting: an acknowledgement that lands
                  * while the adoption is pending still finds it. */
@@ -995,7 +1040,7 @@
             return run(ctx, workId, function () { return null; });
         }
 
-        return {
+        const adapter = {
             kind: K.kind,
             observedBase: observedBase,
             draftBase: draftBase,
@@ -1003,6 +1048,7 @@
             stateOf: stateOf,
             edit: edit,
             release: release,
+            forgetDeleted: forgetDeleted,
             flush: flush,
             queued: queued,
             settled: settled,
@@ -1052,7 +1098,25 @@
                 chain = Promise.resolve(null);
             },
         };
+        adapters.push(adapter);
+        return adapter;
     }
 
     root.prksCreateWorkNoteRecovery = create;
+    /* #533: release every kind's sessions of a Work whose deletion is
+     * confirmed; resolves to { retained }, the panes still mounting a note
+     * editor of the Work, which may yet type in it (an adapter that failed
+     * counts as one). */
+    root.prksForgetDeletedWorkNotes = function (workId, options) {
+        const evenShown = !!(options && options.evenShown);
+        return Promise.all(adapters.map(function (adapter) {
+            try {
+                return adapter.forgetDeleted(workId, evenShown).catch(function () { return 1; });
+            } catch (_e) {
+                return 1;
+            }
+        })).then(function (counts) {
+            return { retained: counts.reduce(function (sum, count) { return sum + count; }, 0) };
+        });
+    };
 })(typeof window === 'undefined' ? globalThis : window);

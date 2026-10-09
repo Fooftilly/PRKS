@@ -169,6 +169,12 @@ export interface RecoveryStore {
    * record loses its `emergencySource` mark. Anything else is kept.
    */
   clearTombstone(draftId: string, pageInstanceId: string): Promise<DeleteOutcome>
+  /**
+   * Leaves a `discarded` tombstone for a lineage only an emergency key holds,
+   * so no merge ever creates it (#533). `kept` when any record of that id
+   * exists by then: a lineage someone wrote meanwhile is never replaced.
+   */
+  tombstoneIfAbsent(draftId: string, tombstone: DiscardTombstone): Promise<'suppressed' | 'kept'>
   /** Applies one emergency entry from a page that is no longer alive (§6 merge rules). */
   applyEmergencyEntry(payload: EmergencyPayload, entry: EmergencyEntry): Promise<EmergencyOutcome>
   /** Durability mode the most recent write transaction actually used. */
@@ -580,6 +586,16 @@ export function createRecoveryStore(options: RecoveryStoreOptions = {}): Recover
     })
   }
 
+  function tombstoneIfAbsent(draftId: string, tombstone: DiscardTombstone): Promise<'suppressed' | 'kept'> {
+    return run<'suppressed' | 'kept'>('readwrite', (tx, done) => {
+      readRecord(tx, draftId, (record) => {
+        if (record) return done('kept')
+        tx.objectStore(DRAFTS_STORE).put(tombstoneRecord(draftId, tombstone, 0))
+        done('suppressed')
+      })
+    })
+  }
+
   function applyEmergencyEntry(payload: EmergencyPayload, entry: EmergencyEntry): Promise<EmergencyOutcome> {
     return run<EmergencyOutcome>('readwrite', (tx, done) => {
       readRecord(tx, entry.draftId, (record) => {
@@ -669,6 +685,7 @@ export function createRecoveryStore(options: RecoveryStoreOptions = {}): Recover
     deleteIfEqual,
     discard,
     clearTombstone,
+    tombstoneIfAbsent,
     applyEmergencyEntry,
     lastDurability: () => lastMode,
     close() {

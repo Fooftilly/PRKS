@@ -90,9 +90,44 @@ coordinator names no family: adding one is a registration.
   Only a lineage's owner page (a fresh `pageInstanceId` per load) writes it;
   generations are monotonic; adoption is compare-and-set. Records are deleted
   only on an exact acknowledgement (same generation, `===` body), proven
-  equality or explicit discard, never by age. Deleting a Work does not
-  touch them yet: its drafts stay orphaned in this browser (#533). A
-  discard whose emergency key could not be cleared leaves a bodyless
+  equality, explicit discard or a confirmed Work deletion, never by age.
+  A Work delete that is only requested keeps them (it cancels never-sent
+  note rows, so a draft can be the only copy if the delete then
+  conflicts); its acknowledgement or a never-sent creation folding away,
+  both seen by this device, removes both note kinds for that Work (#533).
+  The Work stays marked in localStorage (one key per Work,
+  `prks.workRecoveryCleanup.v1.<workId>`, so tabs never overwrite each
+  other's marks) until a later load's retry finds nothing of it left,
+  readable or not (a record or emergency key of a newer schema, or a key
+  whose read failed or whose only unreadable entries are of a draft kind a
+  newer bundle added, keeps the mark; a malformed, older or mismatched key,
+  which no bundle can merge, names no Work and is left in place), and no pane
+  of that page still shows it: right after the confirmation another tab may
+  hold an edit not yet in storage. Only the tab holding the sync
+  lock hears the acknowledgement, so another tab still holding a draft of
+  that Work keeps it until its editor lets go and a later load retries;
+  faster cross-tab notice belongs to #476. A later load retries marked
+  Works: at most 8 per load, the least recently tried first so none
+  starves, each only on the server's own "Work not found"; a Work the
+  server holds again keeps its drafts and loses its mark. An inconclusive
+  retry (no answer, an owner still live or not proven gone) keeps the
+  mark, however often it happens; no mark or draft is dropped for its age
+  or count. A Work this device never saw deleted keeps
+  its drafts whatever the server answers: the library this origin serves
+  now may not be the one they were typed against. This page's note
+  sessions that no pane shows give their lineages back first (on a folded
+  creation, the deleting pane's own sessions too). Only a lineage whose
+  owner is this page without a writer, or a page proven gone (its page
+  lock released or its final `pagehide` recorded), is removed, by
+  compare-and-set on its owner page, generation and status; a stale
+  emergency key's such lineages are tombstoned. A live or unknown owner
+  keeps its lineage, because a frozen tab still holding the text looks the
+  same: a later retry removes it once that page is proven gone. Without Web
+  Locks (LAN) a crashed tab is never proven gone, so its draft and its
+  Work's mark stay, costing one probe on the loads that reach it. Review
+  and Discard are reached only from that Work's own editor, so nothing in the UI reaches such a
+  draft until drafts can be reviewed apart from their Work (#466 Slice 5
+  Diagnostics). A discard whose emergency key could not be cleared leaves a bodyless
   tombstone until that key is gone, so the key cannot recreate the draft.
   A draft a merge created from another page's key carries that page's id
   until the key is removed; deleting it meanwhile leaves the same tombstone.

@@ -2838,6 +2838,7 @@ function prksWorkPrivateNotesRecovery() {
                 if (editor && editor.entityType === 'work') fn(ctx, editor.entityId);
             });
         },
+        forget: prksWorkPrivateRecoveryDrop,
         acknowledged: function (session, writer) {
             /* A replaced or closed pane's session whose text is now saved gives its lineage back. */
             if (prksWorkPrivateRecoveryIsCurrent(session)) return;

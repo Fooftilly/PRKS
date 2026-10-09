@@ -80,6 +80,8 @@ export interface StoredEmergency {
   payload: EmergencyPayload | null
   /** The stored text the payload was parsed from; a merge re-checks it before every step. */
   raw: string | null
+  /** The key was listed but reading it threw: whatever it holds is unknown, not absent. */
+  readFailed?: boolean
 }
 
 function isEntry(value: unknown): value is EmergencyEntry {
@@ -108,6 +110,32 @@ function parsePayload(raw: string | null, pageInstanceId: string): EmergencyPayl
   }
 }
 
+/**
+ * Whether a key this code cannot parse may still hold text a later read or a
+ * newer bundle recovers: its read failed, it is an envelope of a newer
+ * schema, or its only unreadable entries are of a draft kind this bundle does
+ * not know. A malformed, older or mismatched key holds nothing any bundle can
+ * merge; it names no entity, and it is left in place untouched.
+ */
+export function mayHoldUnreadable(stored: StoredEmergency): boolean {
+  if (stored.payload) return false
+  if (stored.readFailed) return true
+  if (stored.raw === null) return false
+  try {
+    const value = JSON.parse(stored.raw) as { v?: unknown; pageInstanceId?: unknown; entries?: unknown } | null
+    if (!value || typeof value !== 'object' || typeof value.v !== 'number') return false
+    if (value.v > EMERGENCY_VERSION) return true
+    // The envelope version stays when a newer bundle adds a draft kind: an entry of a kind this
+    // bundle does not know is that bundle's to merge, as an unknown record kind is its to read.
+    return value.v === EMERGENCY_VERSION && value.pageInstanceId === stored.pageInstanceId &&
+      Array.isArray(value.entries) && value.entries.every((entry: unknown) => isEntry(entry) ||
+        (!!entry && typeof entry === 'object' && typeof (entry as { kind?: unknown }).kind === 'string' &&
+          !isDraftKind((entry as { kind: unknown }).kind)))
+  } catch {
+    return false
+  }
+}
+
 /** Blocked storage can throw on enumeration or reads: that leaves the emergency layer empty, never failing startup. */
 export function readEmergencyKeys(storage: EmergencyStorage): StoredEmergency[] {
   const keys: string[] = []
@@ -122,12 +150,14 @@ export function readEmergencyKeys(storage: EmergencyStorage): StoredEmergency[] 
   return keys.map((key) => {
     const pageInstanceId = key.slice(EMERGENCY_KEY_PREFIX.length)
     let raw: string | null = null
+    let readFailed = false
     try {
       raw = storage.getItem(key)
     } catch {
       /* unreadable now: kept for a later page */
+      readFailed = true
     }
-    return { key, pageInstanceId, payload: parsePayload(raw, pageInstanceId), raw }
+    return { key, pageInstanceId, payload: parsePayload(raw, pageInstanceId), raw, readFailed }
   })
 }
 
