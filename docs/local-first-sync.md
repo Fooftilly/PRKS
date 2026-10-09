@@ -168,8 +168,16 @@ coordinator names no family: adding one is a registration.
   no blocked state: text typed behind its own sent predecessor waits for it
   through the existing scope_busy retry. A queued Reminders row is not a
   saved note: the record and the leave guard stay until its acknowledgement.
-  Folder private notes have no recovery yet; their save path returns no
-  queued row to verify against (#534).
+  Folder private notes have no recovery yet (#534). Their save contract is
+  in place: `prksSaveFolderPrivateNoteDurably` (`folder-state.js`) saves
+  only the `private_notes` field against that field's own revision (the
+  Folder field revision, never a Work note revision) and answers with a
+  code and the exact queued row (`queued` + `opId`, `unchanged`,
+  `scope_busy` or `conflict` naming the row that holds the field,
+  `unknown_base`, `unproven`, `too-long`, `failed`), never a throw.
+  `prksFolderPrivateNoteAck` matches an acknowledgement to one row and its
+  exact payload text, and reports what the server stores (trimmed, as the
+  acknowledgement reconciles into the cache).
 - A device ID is an identity for synchronization, never authentication or trust.
 - Editor state and observed projections belong to the Work's TabContext.
   The sync coordinator owns transport and retry policy, with one in-flight

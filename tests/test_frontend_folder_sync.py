@@ -28,6 +28,25 @@ class FolderSyncFrontendTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn('checks passed', proc.stdout)
 
+    def test_private_note_save_contract_selftests(self):
+        """Folder Reminders recovery (#534) needs each save to name its exact
+        row and an acknowledgement it can match to one row and one text."""
+        proc = subprocess.run(
+            ['node', str(ROOT / 'tests' / 'browser' / 'run_folder_private_note_save_selftest.js')],
+            cwd=ROOT, capture_output=True, text=True, timeout=180)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn('folder private-note save checks passed', proc.stdout)
+
+    def test_private_notes_limit_and_canonical_form_match_the_server(self):
+        self.assertIn('const MAX_FOLDER_TEXT_BYTES = %d;' % folder_sync.MAX_TEXT_BYTES, self.state)
+        backend = (ROOT / 'backend' / 'folder_sync.py').read_text()
+        self.assertIn('text = ("" if value is None else str(value)).strip()', backend)
+        runtime = (FRONTEND / 'offline-runtime.js').read_text()
+        at = runtime.index('async function reconcileFolderField(')
+        body = runtime[at: runtime.index('\n        /**', at)]
+        self.assertIn("field === 'private_notes'", body)
+        self.assertIn('prksCanonicalFolderFieldValue(field, raw)', body)
+
     def test_the_two_sides_synchronize_the_same_fields(self):
         client = js_string_list(self.store, 'const FOLDER_FIELDS =')
         self.assertEqual(sorted(client), sorted(folder_sync.FIELDS))

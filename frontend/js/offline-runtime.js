@@ -1425,7 +1425,12 @@
             if (!root.prksIsSupportedFolderField ||
                 !root.prksIsSupportedFolderField(field)) return false;
             const raw = String((op && op.payload && op.payload.value) || '');
-            const value = field === 'parent_id' ? (raw || null) : raw;
+            /* Reminders are cached as the server stores them (trimmed): a
+             * recovery base read from this cache is compared exactly with the
+             * server's body (#534). */
+            const value = field === 'parent_id' ? (raw || null)
+                : field === 'private_notes' && typeof root.prksCanonicalFolderFieldValue === 'function'
+                    ? root.prksCanonicalFolderFieldValue(field, raw) : raw;
             await patchEntity('folder-state', id, function (state) {
                 if (typeof root.prksIsFolderStateShape === 'function' &&
                     !root.prksIsFolderStateShape(state, id)) return null;
