@@ -93,13 +93,15 @@ coordinator names no family: adding one is a registration.
   equality, explicit discard or a confirmed Work deletion, never by age.
   A Work delete that is only requested keeps them (it cancels never-sent
   note rows, so a draft can be the only copy if the delete then
-  conflicts); its acknowledgement, a never-sent creation folding away, or
-  the server's "Work not found" for a Work whose drafts carry a base read
-  for it or were typed on this device's own creation of it (another device
-  deleted it, cleanup was interrupted, or the creation folded away; probed
-  once per page load, at most 8 Works, never a Work whose creation is still
-  queued; drafts held only in an emergency key count, database or not)
-  removes both note kinds for that Work (#533). This page's note
+  conflicts); its acknowledgement or a never-sent creation folding away,
+  both seen by this device, removes both note kinds for that Work (#533).
+  The Work stays marked in localStorage (`prks.workRecoveryCleanup.v1`)
+  until nothing of it is left, so a later load retries after a shutdown or
+  once another tab lets go (at most 8 Works per load, each only on the
+  server's own "Work not found"; a Work the server holds again keeps its
+  drafts and loses its mark). A Work this device never saw deleted keeps
+  its drafts whatever the server answers: the library this origin serves
+  now may not be the one they were typed against. This page's note
   sessions that no pane shows give their lineages back first (on a folded
   creation, the deleting pane's own sessions too). Only a lineage whose
   owner is this page without a writer, or a page proven gone (its page

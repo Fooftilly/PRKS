@@ -18,12 +18,15 @@
  * Browser-local note recovery drafts (#533) follow the same rule: a delete
  * that is only requested keeps them, since the request cancels never-sent
  * note rows and a draft may then be the only copy of that text if the delete
- * later conflicts. They are removed once the deletion is confirmed: by its
- * acknowledgement, by a never-sent creation folding away, or by the server
- * answering "Work not found" for a Work this device holds drafts of (another
- * device deleted it, or this device stopped between acknowledgement and
- * cleanup). A draft whose owner tab is not proven gone stays: a frozen tab
- * still holding the text cannot be told from a crashed one.
+ * later conflicts. They are removed once this device sees the deletion
+ * confirmed: by its acknowledgement, or by a never-sent creation folding
+ * away. The Work is marked in localStorage until nothing of it is left, so a
+ * later load retries after a shutdown, or once another tab's draft is
+ * released; each retry also needs the server's "Work not found". A Work
+ * deleted elsewhere keeps its drafts: a 404 from the library this origin
+ * serves now proves nothing about the one they were typed against. A draft
+ * whose owner tab is not proven gone stays: a frozen tab still holding the
+ * text cannot be told from a crashed one.
  */
 (function (root) {
     'use strict';
@@ -124,12 +127,13 @@
                  * that sends it hears it, whichever tab asked. */
                 if (event && event.acknowledged && event.operation === 'DELETE_WORK' &&
                     event.op && event.op.entity_id) {
+                    markDeletedWork(event.op.entity_id);
                     void cleanupDeletedWorkRecovery(event.op.entity_id);
                 }
                 void refresh();
             });
         }
-        armRecoverySweep();
+        armRecoveryRetry();
         return true;
     }
 
@@ -199,10 +203,16 @@
     }
 
     const RECOVERY_KINDS = ['work-research-note', 'work-private-note'];
-    /* Works probed per page load; drafts of a Work that still exists are
-     * probed again on a later load. */
-    const SWEEP_MAX_WORKS = 8;
-    let sweepStarted = false;
+    /* Works this device saw confirmed deleted (its own DELETE_WORK
+     * acknowledged, or its own creation folded away) whose drafts are not
+     * all gone yet. Only this provenance authorizes a retry: a bare 404 from
+     * whatever library this origin serves now proves nothing about the one
+     * a draft was typed against. */
+    const DELETED_WORKS_KEY = 'prks.workRecoveryCleanup.v1';
+    const DELETED_WORKS_MAX = 64;
+    /* Works retried per page load; the rest wait for a later load. */
+    const RETRY_MAX_WORKS = 8;
+    let retryStarted = false;
 
     function recoveryRuntime() {
         const api = root.prksEditorRecovery;
@@ -215,32 +225,67 @@
         }
     }
 
+    function readDeletedWorks() {
+        try {
+            const value = JSON.parse(root.localStorage.getItem(DELETED_WORKS_KEY) || '[]');
+            return Array.isArray(value) ? value.filter(function (id) { return typeof id === 'string' && !!id; }) : [];
+        } catch (_e) {
+            return [];
+        }
+    }
+    function writeDeletedWorks(ids) {
+        try {
+            if (ids.length) root.localStorage.setItem(DELETED_WORKS_KEY, JSON.stringify(ids.slice(-DELETED_WORKS_MAX)));
+            else root.localStorage.removeItem(DELETED_WORKS_KEY);
+        } catch (_e) {
+            /* Storage unavailable: this load's cleanup still runs, only a retry is lost. */
+        }
+    }
+    function markDeletedWork(workId) {
+        const ids = readDeletedWorks().filter(function (id) { return id !== workId; });
+        ids.push(workId);
+        writeDeletedWorks(ids);
+    }
+    function unmarkDeletedWork(workId) {
+        const ids = readDeletedWorks();
+        if (ids.indexOf(workId) !== -1) writeDeletedWorks(ids.filter(function (id) { return id !== workId; }));
+    }
+
     /**
      * Removes the recovery drafts of a Work whose deletion is confirmed. This
      * page's note sessions of it that no pane shows give their lineages back
      * first; with `evenShown`, also those a pane of this page still shows.
      * Ownership-checked and generation-safe in the recovery runtime: a live
-     * editor's lineage is kept, and so is one adopted or written since it was
-     * read; one more pass reclassifies those. Never throws.
+     * editor's lineage is kept, and so is one whose owner page is not proven
+     * gone or that was adopted or written since it was read; one more pass
+     * reclassifies those. The Work stays marked until nothing of it is left,
+     * so a later load retries. Never throws.
      */
     async function cleanupDeletedWorkRecovery(workId, options) {
         if (!workId) return null;
         const rt = recoveryRuntime();
         if (!rt) return null;
-        /* No recovery database and no emergency key naming this Work: no
-         * drafts, and none is created. */
-        if (await recoveryStorageExists() === false && !emergencyDraftsOf(rt).some(function (draft) {
-            return draft.entityType === 'work' && draft.entityId === workId;
-        })) return null;
         const entity = { entityType: 'work', entityId: workId };
         try {
+            /* Before anything else: a released writer may still commit its last
+             * generation, which the checks below must then see. */
             if (typeof root.prksForgetDeletedWorkNotes === 'function') {
                 await root.prksForgetDeletedWorkNotes(workId, { evenShown: !!(options && options.evenShown) });
             }
-            const report = await rt.cleanupDeletedEntity(entity, RECOVERY_KINDS);
-            return report.changed.length ? await rt.cleanupDeletedEntity(entity, RECOVERY_KINDS) : report;
+            /* No recovery database and no emergency key naming this Work: no
+             * drafts, and none is created. */
+            if (await recoveryStorageExists() === false && !emergencyDraftsOf(rt).some(function (draft) {
+                return draft.entityType === 'work' && draft.entityId === workId;
+            })) {
+                unmarkDeletedWork(workId);
+                return { removed: [], live: [], unknown: [], changed: [], suppressed: [] };
+            }
+            let report = await rt.cleanupDeletedEntity(entity, RECOVERY_KINDS);
+            if (report.changed.length) report = await rt.cleanupDeletedEntity(entity, RECOVERY_KINDS);
+            if (!report.live.length && !report.unknown.length && !report.changed.length) unmarkDeletedWork(workId);
+            return report;
         } catch (_e) {
-            /* Left in place: the next page load's sweep retries. */
+            /* Left in place and still marked: a later load retries. */
             return null;
         }
     }
@@ -259,28 +304,7 @@
         }
     }
 
-    /** The server's own "Work not found" answer, never a transport failure or another 404. */
-    async function serverSaysWorkGone(workId) {
-        if (typeof root.prksRequest !== 'function') return false;
-        try {
-            const response = await root.prksRequest(
-                '/api/works/' + encodeURIComponent(workId) + '/notes-state', {},
-                { priority: 'background' });
-            if (!response || response.status !== 404) return false;
-            const body = await response.json();
-            return !!body && body.error === 'Work not found';
-        } catch (_e) {
-            return false;
-        }
-    }
-
-    /**
-     * Work ids whose drafts carry a base read for that Work, or were typed on
-     * a creation of this device, excluding Works whose creation is still
-     * queued. A creation's draft is asked about once its row is gone: then the
-     * server either holds the Work or the creation folded away.
-     */
-    /** Drafts held only in emergency keys, shaped like records for `sweepCandidates`. */
+    /** Drafts held only in emergency keys. */
     function emergencyDraftsOf(rt) {
         try {
             return typeof rt.emergencyDrafts === 'function' ? rt.emergencyDrafts() : [];
@@ -289,76 +313,57 @@
         }
     }
 
-    function sweepCandidates(records, operations) {
-        const creating = new Set(pendingCreates(operations).concat((operations || []).filter(function (op) {
-            return op && op.operation === 'CREATE_WORK' && op.status === 'conflict';
-        })).map(function (op) { return op.entity_id; }));
-        const ids = [];
-        for (const record of records) {
-            if (!record || record.entityType !== 'work' || record.status === 'discarded' ||
-                RECOVERY_KINDS.indexOf(record.kind) === -1 || typeof record.entityId !== 'string') continue;
-            /* Only a draft typed on a note this device read for that Work, or
-             * on its own creation, says the Work is this server's to answer for. */
-            const source = record.base && record.base.source;
-            if (source !== 'server' && source !== 'cache' && source !== 'pending-create') continue;
-            if (creating.has(record.entityId) || ids.indexOf(record.entityId) !== -1) continue;
-            ids.push(record.entityId);
+    /**
+     * 'gone' only on the server's own "Work not found"; 'present' when it
+     * answers for the Work; 'unknown' on anything else (offline, another 404).
+     */
+    async function workOnServer(workId) {
+        if (typeof root.prksRequest !== 'function') return 'unknown';
+        try {
+            const response = await root.prksRequest(
+                '/api/works/' + encodeURIComponent(workId) + '/notes-state', {},
+                { priority: 'background' });
+            if (response && response.status >= 200 && response.status < 300) return 'present';
+            if (!response || response.status !== 404) return 'unknown';
+            const body = await response.json();
+            return !!body && body.error === 'Work not found' ? 'gone' : 'unknown';
+        } catch (_e) {
+            return 'unknown';
         }
-        return ids;
     }
 
     /**
-     * Cleans the drafts of Works the server no longer has: deleted on another
-     * device, or deleted here with cleanup interrupted. A Work still waiting
-     * for its creation to reach the server is never probed, nor one whose
-     * drafts carry no base read for it; an unreadable queue probes nothing.
-     * Where the browser cannot list its databases, nothing is swept and only
-     * acknowledgements clean up. Returns the Work ids it cleaned.
+     * Retries the cleanup of Works this device saw confirmed deleted: a
+     * shutdown between the confirmation and the cleanup, a draft another tab
+     * still held, or an owner not yet proven gone. Each retry also needs the
+     * server's "Work not found"; a Work the server holds again (restored)
+     * keeps its drafts and loses its mark. Drafts of a Work this device never
+     * saw deleted are never removed here, whatever the server answers.
+     * Returns the Work ids it ran a cleanup for.
      */
-    async function sweepDeletedWorkRecovery() {
-        const sync = root.prksSync;
-        if (!sync || !sync.store || typeof sync.store.listOperations !== 'function') return [];
-        const rt = recoveryRuntime();
-        if (!rt) return [];
-        /* A draft whose tab closed before its first IndexedDB commit is only
-         * in an emergency key, so those are read before anything is picked. */
-        const emergency = emergencyDraftsOf(rt);
-        /* A page that never had a draft opens nothing: no database, no runtime. */
-        const stored = await recoveryStorageExists() === true;
-        if (!stored && !emergency.length) return [];
-        let records;
-        let operations;
-        try {
-            records = (stored ? await rt.store.listAll() : []).concat(emergency);
-            if (!records.length) return [];
-            operations = await sync.store.listOperations();
-        } catch (_e) {
-            return [];
-        }
-        const ids = sweepCandidates(records, operations);
-        /* Random order, so Works that still exist never starve the rest. */
-        for (let i = ids.length - 1; i > 0; i -= 1) {
-            const j = Math.floor(Math.random() * (i + 1));
-            const t = ids[i]; ids[i] = ids[j]; ids[j] = t;
-        }
+    async function retryDeletedWorkRecovery() {
+        const ids = readDeletedWorks().slice(0, RETRY_MAX_WORKS);
         const cleaned = [];
-        for (const workId of ids.slice(0, SWEEP_MAX_WORKS)) {
-            if (!await serverSaysWorkGone(workId)) continue;
+        for (const workId of ids) {
+            const answer = await workOnServer(workId);
+            if (answer === 'present') unmarkDeletedWork(workId);
+            if (answer !== 'gone') continue;
             if (await cleanupDeletedWorkRecovery(workId)) cleaned.push(workId);
         }
         return cleaned;
     }
 
-    /* Once per page load, after the server has first been observed reachable. */
-    function armRecoverySweep() {
-        if (sweepStarted || typeof root.prksOfflineRuntimeSubscribe !== 'function' ||
+    /* Once per page load, after the server has first been observed reachable,
+     * and only when a confirmed deletion is still marked. */
+    function armRecoveryRetry() {
+        if (retryStarted || !readDeletedWorks().length || typeof root.prksOfflineRuntimeSubscribe !== 'function' ||
             typeof root.prksOfflineRuntimeState !== 'function') return;
         let unsubscribe = null;
         const check = function () {
-            if (sweepStarted || root.prksOfflineRuntimeState() !== 'online') return;
-            sweepStarted = true;
+            if (retryStarted || root.prksOfflineRuntimeState() !== 'online') return;
+            retryStarted = true;
             if (typeof unsubscribe === 'function') unsubscribe();
-            void sweepDeletedWorkRecovery();
+            void retryDeletedWorkRecovery();
         };
         unsubscribe = root.prksOfflineRuntimeSubscribe(check);
     }
@@ -391,6 +396,7 @@
             /* A creation that never left this device folded away: nothing
              * can refuse this deletion, and no pane can ever save that Work,
              * including the one that is deleting it and still shows it. */
+            markDeletedWork(workId);
             void cleanupDeletedWorkRecovery(workId, { evenShown: true });
         }
         if (typeof sync.changed === 'function') sync.changed();
@@ -449,7 +455,7 @@
         prksApplyLiveWorkLifecycleFromOperations: applyLiveFromOperations,
         prksArmLiveWorkLifecycleHydration: armLiveHydration,
         prksCleanupDeletedWorkRecovery: cleanupDeletedWorkRecovery,
-        prksSweepDeletedWorkRecovery: sweepDeletedWorkRecovery,
+        prksRetryDeletedWorkRecovery: retryDeletedWorkRecovery,
     });
 
     /* sync-runtime.js loads after this module; arm once it publishes prksSync. */
