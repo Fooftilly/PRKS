@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createPageIdentity, type IdentityEnv } from './identity'
-import { CLOSED_PAGES_LOCAL_KEPT, CLOSED_PAGES_LOCAL_KEY, PAGE_LOCK_PREFIX, RUNTIME_LOCK_PREFIX, RUNTIME_SESSION_KEY } from './schema'
+import { CLOSED_PAGES_LOCAL_KEPT, CLOSED_PAGE_KEY_PREFIX, PAGE_LOCK_PREFIX, RUNTIME_LOCK_PREFIX, RUNTIME_SESSION_KEY } from './schema'
 import { createFakeBrowser } from './test-support/fake-env'
 
 const COPIED = 'r-' + 'a'.repeat(32)
@@ -224,6 +224,23 @@ describe('closed-page record', () => {
     expect(closing.wasPageClosed(closing.pageInstanceId)).toBe(false)
   })
 
+  it('keeps each closing page\'s record under its own key, so tabs closing together never drop one', async () => {
+    const browser = createFakeBrowser()
+    const local = browser.sessionStorageWith()
+    const firstWin = events()
+    const first = createPageIdentity({ sessionStorage: browser.sessionStorageWith(), localStorage: local, window: firstWin, locks: null, createChannel: null })
+    const secondWin = events()
+    const second = createPageIdentity({ sessionStorage: browser.sessionStorageWith(), localStorage: local, window: secondWin, locks: null, createChannel: null })
+    await Promise.all([first.claim(), second.claim()])
+    const reader = createPageIdentity({ sessionStorage: browser.sessionStorageWith(), localStorage: local, window: events(), locks: null, createChannel: null })
+    firstWin.fire('pagehide', { persisted: false })
+    secondWin.fire('pagehide', { persisted: false })
+    expect(local.values.has(CLOSED_PAGE_KEY_PREFIX + first.pageInstanceId)).toBe(true)
+    expect(local.values.has(CLOSED_PAGE_KEY_PREFIX + second.pageInstanceId)).toBe(true)
+    expect(reader.wasPageClosed(first.pageInstanceId)).toBe(true)
+    expect(reader.wasPageClosed(second.pageInstanceId)).toBe(true)
+  })
+
   it('keeps a bounded record and survives a refused write', async () => {
     const browser = createFakeBrowser()
     const local = browser.sessionStorageWith()
@@ -235,7 +252,11 @@ describe('closed-page record', () => {
       win.fire('pagehide', { persisted: false })
       ids.push(page.pageInstanceId)
     }
-    expect((JSON.parse(local.getItem(CLOSED_PAGES_LOCAL_KEY) as string) as string[]).length).toBe(CLOSED_PAGES_LOCAL_KEPT)
+    expect([...local.values.keys()].filter((k) => k.startsWith(CLOSED_PAGE_KEY_PREFIX)).length).toBe(CLOSED_PAGES_LOCAL_KEPT)
+    // The oldest records go; the newest stay.
+    const reader = createPageIdentity({ sessionStorage: browser.sessionStorageWith(), localStorage: local, window: events(), locks: null, createChannel: null })
+    expect(reader.wasPageClosed(ids[0]!)).toBe(false)
+    expect(reader.wasPageClosed(ids[ids.length - 1]!)).toBe(true)
     const refusing = { getItem: () => null, setItem: () => { throw new Error('QuotaExceededError') } }
     const win = events()
     const page = createPageIdentity({ sessionStorage: browser.sessionStorageWith(), localStorage: refusing, window: win, locks: null, createChannel: null })

@@ -392,8 +392,8 @@ function prksResearchRecoverySettled(owner, id, entry, result, saved) {
 }
 
 /** One page-level subscription: acknowledgements and conflicts of queued Research Notes rows. */
-/* `CLOSED_PAGES_LOCAL_KEY` in editor-recovery/schema.ts: another tab's final pagehide. */
-const PRKS_RESEARCH_RECOVERY_CLOSED_PAGES_KEY = 'prks.editorRecovery.closedPages.v1';
+/* `CLOSED_PAGE_KEY_PREFIX` in editor-recovery/schema.ts: another tab's final pagehide, one key per page. */
+const PRKS_RESEARCH_RECOVERY_CLOSED_PAGE_PREFIX = 'prks.editorRecovery.closedPage.v1.';
 let prksResearchRecoveryStopClosedPages = null;
 const PRKS_RESEARCH_RECOVERY_CLOSED_RESCAN_MS = [1000, 4000];
 
@@ -412,7 +412,7 @@ function prksResearchRecoveryWatchClosedPages() {
         });
     };
     const onStorage = function (event) {
-        if (!event || event.key !== PRKS_RESEARCH_RECOVERY_CLOSED_PAGES_KEY) return;
+        if (!event || typeof event.key !== 'string' || event.key.indexOf(PRKS_RESEARCH_RECOVERY_CLOSED_PAGE_PREFIX) !== 0 || event.newValue === null) return;
         /*
          * The record is written during the closing page's final pagehide, while
          * it may still answer pings; until it stops, its draft reads as live.

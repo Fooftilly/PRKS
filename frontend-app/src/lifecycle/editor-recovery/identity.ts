@@ -25,7 +25,7 @@ import {
   CLAIM_WAIT_MS,
   CLOSED_PAGES_KEPT,
   CLOSED_PAGES_LOCAL_KEPT,
-  CLOSED_PAGES_LOCAL_KEY,
+  CLOSED_PAGE_KEY_PREFIX,
   CLOSED_PAGES_SESSION_KEY,
   PAGE_LOCK_PREFIX,
   RECOVERY_CHANNEL,
@@ -51,10 +51,13 @@ export interface PageEventTarget {
   removeEventListener(type: string, listener: (event: Event) => void): void
 }
 
+/** Pruning old close records needs the enumerating calls; without them records are only added. */
+export type ClosedPageStorage = Pick<Storage, 'getItem' | 'setItem'> & Partial<Pick<Storage, 'removeItem' | 'key' | 'length'>>
+
 export interface IdentityEnv {
   sessionStorage?: Pick<Storage, 'getItem' | 'setItem'> | null
   /** Where a final `pagehide` is recorded for every tab to read; the global localStorage by default. */
-  localStorage?: Pick<Storage, 'getItem' | 'setItem'> | null
+  localStorage?: ClosedPageStorage | null
   /** Where `pagehide` / `pageshow` fire; the global window by default. */
   window?: PageEventTarget | null
   locks?: LockManagerLike | null
@@ -143,7 +146,7 @@ function defaultSession(): Pick<Storage, 'getItem' | 'setItem'> | null {
   }
 }
 
-function defaultLocal(): Pick<Storage, 'getItem' | 'setItem'> | null {
+function defaultLocal(): ClosedPageStorage | null {
   try {
     return typeof localStorage !== 'undefined' ? localStorage : null
   } catch {
@@ -347,11 +350,30 @@ export function createPageIdentity(env: IdentityEnv = {}): PageIdentity {
     writeClosedPages([...closedPages().filter((id) => id !== pageInstanceId), pageInstanceId])
     try {
       if (!local) return
-      const list = readIdList(local, CLOSED_PAGES_LOCAL_KEY).filter((id) => id !== pageInstanceId)
-      list.push(pageInstanceId)
-      local.setItem(CLOSED_PAGES_LOCAL_KEY, JSON.stringify(list.slice(-CLOSED_PAGES_LOCAL_KEPT)))
+      // Its own key: a tab closing at the same moment never overwrites it.
+      local.setItem(CLOSED_PAGE_KEY_PREFIX + pageInstanceId, String(Date.now()))
     } catch {
       /* without the record this page's drafts are offered for review, not adoption */
+      return
+    }
+    pruneClosedPages()
+  }
+
+  /** Keeps the newest close records; an older page's drafts are then offered for review. */
+  function pruneClosedPages(): void {
+    try {
+      if (!local || !local.key || !local.removeItem || typeof local.length !== 'number') return
+      const records: Array<{ key: string; at: number }> = []
+      for (let i = 0; i < local.length; i++) {
+        const key = local.key(i)
+        if (!key || !key.startsWith(CLOSED_PAGE_KEY_PREFIX)) continue
+        records.push({ key, at: Number(local.getItem(key)) || 0 })
+      }
+      if (records.length <= CLOSED_PAGES_LOCAL_KEPT) return
+      records.sort((a, b) => a.at - b.at)
+      for (const record of records.slice(0, records.length - CLOSED_PAGES_LOCAL_KEPT)) local.removeItem(record.key)
+    } catch {
+      /* a later close prunes again */
     }
   }
 
@@ -447,7 +469,12 @@ export function createPageIdentity(env: IdentityEnv = {}): PageIdentity {
       return id !== pageInstanceId && closedPages().includes(id)
     },
     wasPageClosed(id) {
-      return id !== pageInstanceId && readIdList(local, CLOSED_PAGES_LOCAL_KEY).includes(id)
+      if (id === pageInstanceId || !local) return false
+      try {
+        return local.getItem(CLOSED_PAGE_KEY_PREFIX + id) !== null
+      } catch {
+        return false
+      }
     },
     dispose() {
       if (disposed) return

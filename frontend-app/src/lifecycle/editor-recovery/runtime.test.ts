@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { EmergencyStorage } from './emergency'
 import { createEditorRecoveryRuntime } from './runtime'
-import { CLOSED_PAGES_LOCAL_KEY, EMERGENCY_KEY_PREFIX, RUNTIME_SESSION_KEY, UNKNOWN_BASE, reservationKeyOf } from './schema'
+import { CLOSED_PAGE_KEY_PREFIX, EMERGENCY_KEY_PREFIX, RUNTIME_SESSION_KEY, UNKNOWN_BASE, reservationKeyOf } from './schema'
 import { createFakeBrowser } from './test-support/fake-env'
 import { createFakeIdb, createManualScheduler, settle } from './test-support/fake-idb'
 
@@ -263,7 +263,7 @@ describe('editor recovery runtime', () => {
     // Silence alone is not proof: the key stays.
     expect(await b.scanEmergency()).toEqual([])
     expect(local.map.has(key)).toBe(true)
-    local.setItem(CLOSED_PAGES_LOCAL_KEY, JSON.stringify([a.identity.pageInstanceId]))
+    local.setItem(CLOSED_PAGE_KEY_PREFIX + a.identity.pageInstanceId, '1')
     const merged = await b.scanEmergency()
     expect(merged.map((m) => [m.key, m.outcomes, m.removed])).toEqual([[key, ['created'], true]])
     const [row] = await b.store.listByEntity('work-research-note', 'w1')

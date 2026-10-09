@@ -38,9 +38,11 @@ export const CLOSED_PAGES_KEPT = 8
  * Pages of any tab that ran a final `pagehide` (not into the back/forward
  * cache), newest last: positive evidence that the page is gone where Web
  * Locks cannot prove it (LAN/HTTP). A page that crashed or was discarded
- * never records itself, so its drafts stay `unknown`.
+ * never records itself, so its drafts stay `unknown`. One key per page,
+ * valued with its close time: tabs closing together never overwrite each
+ * other's record. The oldest beyond the bound are pruned.
  */
-export const CLOSED_PAGES_LOCAL_KEY = 'prks.editorRecovery.closedPages.v1'
+export const CLOSED_PAGE_KEY_PREFIX = 'prks.editorRecovery.closedPage.v1.'
 export const CLOSED_PAGES_LOCAL_KEPT = 64
 /**
  * One key per draft whose stored generation the server already superseded

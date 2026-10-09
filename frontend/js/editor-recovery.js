@@ -179,9 +179,11 @@ var prksEditorRecovery = (function(exports) {
 	* Pages of any tab that ran a final `pagehide` (not into the back/forward
 	* cache), newest last: positive evidence that the page is gone where Web
 	* Locks cannot prove it (LAN/HTTP). A page that crashed or was discarded
-	* never records itself, so its drafts stay `unknown`.
+	* never records itself, so its drafts stay `unknown`. One key per page,
+	* valued with its close time: tabs closing together never overwrite each
+	* other's record. The oldest beyond the bound are pruned.
 	*/
-	var CLOSED_PAGES_LOCAL_KEY = "prks.editorRecovery.closedPages.v1";
+	var CLOSED_PAGE_KEY_PREFIX = "prks.editorRecovery.closedPage.v1.";
 	var CLOSED_PAGES_LOCAL_KEPT = 64;
 	/**
 	* One key per draft whose stored generation the server already superseded
@@ -1209,9 +1211,28 @@ var prksEditorRecovery = (function(exports) {
 			writeClosedPages([...closedPages().filter((id) => id !== pageInstanceId), pageInstanceId]);
 			try {
 				if (!local) return;
-				const list = readIdList(local, CLOSED_PAGES_LOCAL_KEY).filter((id) => id !== pageInstanceId);
-				list.push(pageInstanceId);
-				local.setItem(CLOSED_PAGES_LOCAL_KEY, JSON.stringify(list.slice(-64)));
+				local.setItem(CLOSED_PAGE_KEY_PREFIX + pageInstanceId, String(Date.now()));
+			} catch {
+				return;
+			}
+			pruneClosedPages();
+		}
+		/** Keeps the newest close records; an older page's drafts are then offered for review. */
+		function pruneClosedPages() {
+			try {
+				if (!local || !local.key || !local.removeItem || typeof local.length !== "number") return;
+				const records = [];
+				for (let i = 0; i < local.length; i++) {
+					const key = local.key(i);
+					if (!key || !key.startsWith("prks.editorRecovery.closedPage.v1.")) continue;
+					records.push({
+						key,
+						at: Number(local.getItem(key)) || 0
+					});
+				}
+				if (records.length <= 64) return;
+				records.sort((a, b) => a.at - b.at);
+				for (const record of records.slice(0, records.length - 64)) local.removeItem(record.key);
 			} catch {}
 		}
 		function onPageShow(event) {
@@ -1317,7 +1338,12 @@ var prksEditorRecovery = (function(exports) {
 				return id !== pageInstanceId && closedPages().includes(id);
 			},
 			wasPageClosed(id) {
-				return id !== pageInstanceId && readIdList(local, "prks.editorRecovery.closedPages.v1").includes(id);
+				if (id === pageInstanceId || !local) return false;
+				try {
+					return local.getItem(CLOSED_PAGE_KEY_PREFIX + id) !== null;
+				} catch {
+					return false;
+				}
 			},
 			dispose() {
 				if (disposed) return;
@@ -2566,8 +2592,8 @@ var prksEditorRecovery = (function(exports) {
 	exports.CLAIM_WAIT_MS = CLAIM_WAIT_MS;
 	exports.CLOSED_PAGES_KEPT = CLOSED_PAGES_KEPT;
 	exports.CLOSED_PAGES_LOCAL_KEPT = CLOSED_PAGES_LOCAL_KEPT;
-	exports.CLOSED_PAGES_LOCAL_KEY = CLOSED_PAGES_LOCAL_KEY;
 	exports.CLOSED_PAGES_SESSION_KEY = CLOSED_PAGES_SESSION_KEY;
+	exports.CLOSED_PAGE_KEY_PREFIX = CLOSED_PAGE_KEY_PREFIX;
 	exports.DRAFTS_STORE = DRAFTS_STORE;
 	exports.EMERGENCY_BODY_CHARS = EMERGENCY_BODY_CHARS;
 	exports.EMERGENCY_ENTRY_OVERHEAD_CHARS = EMERGENCY_ENTRY_OVERHEAD_CHARS;
