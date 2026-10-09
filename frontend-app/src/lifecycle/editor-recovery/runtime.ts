@@ -257,6 +257,8 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
       })
       if (outcome === 'deleted' || outcome === 'missing') report.removed.push(record.draftId)
       else if (outcome === 'kept') report.changed.push(record.draftId)
+      // Rewritten meanwhile by a newer schema: left alone and reported like any unreadable row.
+      else report.unsupported.push(record.draftId)
     }
     await suppressEmergencyOnly(ours, report)
     return report

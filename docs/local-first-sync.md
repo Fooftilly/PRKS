@@ -97,9 +97,10 @@ coordinator names no family: adding one is a registration.
   both seen by this device, removes both note kinds for that Work (#533).
   The Work stays marked in localStorage (one key per Work,
   `prks.workRecoveryCleanup.v1.<workId>`, so tabs never overwrite each
-  other's marks) until nothing of it is left, readable or not (a record of
-  a newer schema keeps the mark), and while a pane of the page still shows
-  it (its session may yet commit an edit). Only the tab holding the sync
+  other's marks) until a later load's retry finds nothing of it left,
+  readable or not (a record of a newer schema keeps the mark), and no pane
+  of that page still shows it: right after the confirmation another tab may
+  hold an edit not yet in storage. Only the tab holding the sync
   lock hears the acknowledgement, so another tab still holding a draft of
   that Work keeps it until its editor lets go and a later load retries;
   faster cross-tab notice belongs to #476. A later load retries marked

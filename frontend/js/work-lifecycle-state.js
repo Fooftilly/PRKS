@@ -20,9 +20,10 @@
  * note rows and a draft may then be the only copy of that text if the delete
  * later conflicts. They are removed once this device sees the deletion
  * confirmed: by its acknowledgement, or by a never-sent creation folding
- * away. The Work is marked in localStorage until nothing of it is left, so a
- * later load retries after a shutdown, or once another tab's draft is
- * released; each retry also needs the server's "Work not found". A Work
+ * away. The Work stays marked in localStorage until a later load's retry
+ * finds nothing of it left, so a shutdown, another tab's draft or an edit
+ * another tab had not stored yet is retried; each retry also needs the
+ * server's "Work not found". A Work
  * deleted elsewhere keeps its drafts: a 404 from the library this origin
  * serves now proves nothing about the one they were typed against. A draft
  * whose owner tab is not proven gone stays, and its Work stays marked: a
@@ -314,8 +315,8 @@
      * Ownership-checked and generation-safe in the recovery runtime: a live
      * editor's lineage is kept, and so is one whose owner page is not proven
      * gone or that was adopted or written since it was read; one more pass
-     * reclassifies those. The Work stays marked until nothing of it is left,
-     * so a later load retries. Never throws.
+     * reclassifies those. The Work stays marked until a later load's retry
+     * (`retry`) finds nothing of it left. Never throws.
      */
     async function cleanupDeletedWorkRecovery(workId, options) {
         if (!workId) return null;
@@ -329,10 +330,12 @@
                     evenShown: !!(options && options.evenShown),
                 })).retained;
             }
-            /* A pane of this page still shows the Work: its session may yet
-             * commit an edit (one within the debounce is not in storage), so
-             * the mark stays for a load after that editor exits. */
-            const keepMark = retained > 0;
+            /* Only a later load's retry clears the mark: right after the
+             * confirmation, another tab's editor of this Work may hold an edit
+             * not yet in storage that nothing here can see. So does a pane of
+             * this page that still shows the Work, so its mark stays even
+             * then, until a load after that editor exits. */
+            const keepMark = !(options && options.retry) || retained > 0;
             /* No recovery database and no emergency key naming this Work: no
              * drafts, and no runtime, database or channel is created. */
             if (!await recoveryMayHold(workId)) {
@@ -407,7 +410,7 @@
             const answer = await workOnServer(mark.id);
             if (answer === 'present') unmarkDeletedWork(mark.id);
             if (answer !== 'gone') continue;
-            if (await cleanupDeletedWorkRecovery(mark.id)) cleaned.push(mark.id);
+            if (await cleanupDeletedWorkRecovery(mark.id, { retry: true })) cleaned.push(mark.id);
         }
         return cleaned;
     }

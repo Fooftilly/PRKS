@@ -1120,7 +1120,13 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
             timeout=15000,
             message='recovery drafts outlived the acknowledged delete')
         self.assertEqual(page.evaluate(_RECOVERY_IDLE), {'pending': 0, 'guard': False, 'unloadListeners': False})
-        self.assertIsNone(page.evaluate("(workId) => localStorage.getItem('prks.workRecoveryCleanup.v1.' + workId)", work))
+        # Only a later load, finding nothing of the Work left, clears its mark.
+        mark = "(workId) => localStorage.getItem('prks.workRecoveryCleanup.v1.' + workId)"
+        self.assertIsNotNone(page.evaluate(mark, work))
+        page.reload()
+        page.wait_for_function(
+            "(workId) => localStorage.getItem('prks.workRecoveryCleanup.v1.' + workId) === null",
+            arg=work, timeout=20000)
 
     def test_drafts_of_a_never_synced_work_deleted_from_its_own_pane_are_removed(self):
         server, page, context = self.start()

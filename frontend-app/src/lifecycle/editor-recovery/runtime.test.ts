@@ -661,6 +661,15 @@ describe('cleanupDeletedEntity (#533)', () => {
     expect(await bodies(cleaner)).toEqual([['work-private-note:w1', 'typing now']])
   })
 
+  it('reports a record a newer schema rewrote between the listing and its removal as unsupported', async () => {
+    const { page } = setup()
+    await crashedDraft(page, 'a', 'reminder of w1')
+    const cleaner = page('cleaner').rt
+    const draftId = (await cleaner.store.listAll())[0]!.draftId
+    cleaner.store.discard = async () => 'unsupported'
+    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [], unknown: [], changed: [], unsupported: [draftId], suppressed: [] })
+  })
+
   it('finishes an interrupted cleanup on retry, is idempotent, and never touches another Work or kind', async () => {
     const { page, idb } = setup()
     await crashedDraft(page, 'a', 'reminder of w1')

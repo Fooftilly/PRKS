@@ -2463,6 +2463,7 @@ var prksEditorRecovery = (function(exports) {
 				});
 				if (outcome === "deleted" || outcome === "missing") report.removed.push(record.draftId);
 				else if (outcome === "kept") report.changed.push(record.draftId);
+				else report.unsupported.push(record.draftId);
 			}
 			await suppressEmergencyOnly(ours, report);
 			return report;

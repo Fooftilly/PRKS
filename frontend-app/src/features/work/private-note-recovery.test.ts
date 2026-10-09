@@ -683,6 +683,33 @@ describe('Work delete and recovery drafts (#533)', () => {
     sync.ackDelete(deleteOp())
     await waitFor(async () => (await records()).length === 0, 'both kinds removed on the acknowledgement')
     expect(await page!.rt.store.listAll()).toEqual([])
+    // Only a later load's retry, finding nothing left, clears the mark.
+    expect(marked()).toEqual(['w1'])
+    goneOnServer()
+    expect(await win.prksRetryDeletedWorkRecovery()).toEqual(['w1'])
+    expect(marked()).toEqual([])
+  })
+
+  it('keeps the mark after the acknowledgement while another tab may hold an edit not yet stored', async () => {
+    await draftsOfBothKinds()
+    await win.prksDeleteWorkDurably('w1')
+    sync.ackDelete(deleteOp())
+    await waitFor(async () => (await records()).length === 0, 'both kinds removed on the acknowledgement')
+    // The other tab's debounce lands its first generation after the cleanup looked.
+    const other = startRecoveryPage({ browser, name: 'other-tab', idb, session: browser.sessionStorageWith(), local, withoutLocks: false, background: true })
+    await other.rt.start()
+    const late = other.rt.writers.openWriter({ kind: KIND, entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: SERVER_BASE })
+    late.edit(1, 'Typed in the other tab just before the acknowledgement')
+    await late.flush()
+    expect(marked()).toEqual(['w1'])
+    // That tab closes; a later load removes the draft.
+    other.rt.dispose()
+    other.locks.releaseAll()
+    await settle()
+    goneOnServer()
+    expect(await win.prksRetryDeletedWorkRecovery()).toEqual(['w1'])
+    expect(await records()).toEqual([])
+    expect(marked()).toEqual([])
   })
 
   it('keeps the drafts when the delete conflicts, and the surviving Work restores its Reminders', async () => {
@@ -965,17 +992,27 @@ describe('Work delete and recovery drafts (#533)', () => {
     expect(await records()).toHaveLength(2)
     await foldAway()
     await waitFor(async () => (await records()).length === 0, 'folded creation cleans up')
+    // The mark stays for a later load: another tab may hold an edit not yet in storage.
+    expect(marked()).toEqual(['w1'])
+    goneOnServer()
+    expect(await win.prksRetryDeletedWorkRecovery()).toEqual(['w1'])
     expect(marked()).toEqual([])
   })
 
   it('releases an edit not yet in storage before it decides the folded Work has no drafts', async () => {
     // Nothing reached IndexedDB yet: the database appears only once a writer commits.
-    win.indexedDB = { databases: async () => ((await page!.rt.store.listAll()).length ? [{ name: 'prks-editor-recovery-v1' }] : []) }
+    let gated = false
+    win.indexedDB = {
+      databases: async () => {
+        gated = true
+        return (await page!.rt.store.listAll()).length ? [{ name: 'prks-editor-recovery-v1' }] : []
+      },
+    }
     const { ctx, ta } = await openWork()
     type(ctx, ta!, 'Saved reminder. Typed within the debounce')
     expect(await records()).toEqual([])
     await foldAway()
-    await waitFor(async () => marked().length === 0, 'folded creation cleanup finished')
+    await waitFor(() => gated, 'folded creation cleanup checked for recovery storage')
     // Whatever writer is left settles its edit; none may land a draft of the deleted Work.
     await waitFor(() => page!.rt.writers.writers().every((w) => w.state() !== 'pending'), 'writers idle')
     await settle()
