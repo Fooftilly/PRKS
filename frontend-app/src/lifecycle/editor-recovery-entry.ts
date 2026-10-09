@@ -12,7 +12,7 @@ export { createRecoveryStore, RecoveryStoreError, forkedDraftId } from './editor
 export { createPageIdentity } from './editor-recovery/identity'
 export { classifyLineage, isAdoptable } from './editor-recovery/lineage'
 export { createWriterRegistry } from './editor-recovery/writer'
-export { planEmergency, readEmergencyKeys, mergeEmergencyEntries } from './editor-recovery/emergency'
+export { planEmergency, readEmergencyKeys, mergeEmergencyEntries, mayHoldUnreadable } from './editor-recovery/emergency'
 export { planResearchNotesRestore } from './editor-recovery/research-notes'
 export { createEditorRecoveryRuntime }
 

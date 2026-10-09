@@ -9,7 +9,7 @@
  * consumer asks for the runtime.
  */
 
-import { mergeEmergencyEntries, readEmergencyKeys, releaseDeadReservations, type EmergencyStorage, type MergeReport } from './emergency'
+import { mayHoldUnreadable, mergeEmergencyEntries, readEmergencyKeys, releaseDeadReservations, type EmergencyStorage, type MergeReport } from './emergency'
 import { createPageIdentity, type IdentityEnv, type PageIdentity, type RuntimeClaim } from './identity'
 import { classifyLineage, isAdoptable, type LineageClass } from './lineage'
 import {
@@ -204,8 +204,8 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
     for (const stored of readEmergencyKeys(emergencyStorage)) {
       const payload = stored.payload
       if (!payload) {
-        // A key this code cannot read (a newer schema) may hold this entity: left alone and reported.
-        if (stored.raw !== null) report.unsupported.push(stored.key)
+        // A key a later read or a newer bundle may still recover could hold this entity: left alone and reported.
+        if (mayHoldUnreadable(stored)) report.unsupported.push(stored.key)
         continue
       }
       for (const entry of payload.entries) {

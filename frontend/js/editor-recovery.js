@@ -847,6 +847,23 @@ var prksEditorRecovery = (function(exports) {
 			return null;
 		}
 	}
+	/**
+	* Whether a key this code cannot parse may still hold text a later read or a
+	* newer bundle recovers: its read failed, or it is an envelope of a newer
+	* schema. A malformed, older or mismatched key holds nothing any bundle can
+	* merge; it names no entity, and it is left in place untouched.
+	*/
+	function mayHoldUnreadable(stored) {
+		if (stored.payload) return false;
+		if (stored.readFailed) return true;
+		if (stored.raw === null) return false;
+		try {
+			const value = JSON.parse(stored.raw);
+			return !!value && typeof value === "object" && typeof value.v === "number" && value.v > 1;
+		} catch {
+			return false;
+		}
+	}
 	/** Blocked storage can throw on enumeration or reads: that leaves the emergency layer empty, never failing startup. */
 	function readEmergencyKeys(storage) {
 		const keys = [];
@@ -861,14 +878,18 @@ var prksEditorRecovery = (function(exports) {
 		return keys.map((key) => {
 			const pageInstanceId = key.slice(EMERGENCY_KEY_PREFIX.length);
 			let raw = null;
+			let readFailed = false;
 			try {
 				raw = storage.getItem(key);
-			} catch {}
+			} catch {
+				readFailed = true;
+			}
 			return {
 				key,
 				pageInstanceId,
 				payload: parsePayload(raw, pageInstanceId),
-				raw
+				raw,
+				readFailed
 			};
 		});
 	}
@@ -2398,7 +2419,7 @@ var prksEditorRecovery = (function(exports) {
 			for (const stored of readEmergencyKeys(emergencyStorage)) {
 				const payload = stored.payload;
 				if (!payload) {
-					if (stored.raw !== null) report.unsupported.push(stored.key);
+					if (mayHoldUnreadable(stored)) report.unsupported.push(stored.key);
 					continue;
 				}
 				for (const entry of payload.entries) {
@@ -2743,6 +2764,7 @@ var prksEditorRecovery = (function(exports) {
 	exports.isAdoptable = isAdoptable;
 	exports.isDraftKind = isDraftKind;
 	exports.isSupportedRecord = isSupportedRecord;
+	exports.mayHoldUnreadable = mayHoldUnreadable;
 	exports.mergeEmergencyEntries = mergeEmergencyEntries;
 	exports.mintId = mintId;
 	exports.planEmergency = planEmergency;

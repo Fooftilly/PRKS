@@ -98,7 +98,7 @@
       "runtime_files": [
         {
           "path": "/js/editor-recovery.js",
-          "sha256": "d4012fa4a9af983658362b51fb57e9c85862f13113db8b1bd986feb16bcff8e2"
+          "sha256": "c3c01cb6456906141cd04fcf9b19a65e640de6788c93409acabbb39a5ef6e1ab"
         }
       ],
       "source_category": "frontend-app:editor-recovery",

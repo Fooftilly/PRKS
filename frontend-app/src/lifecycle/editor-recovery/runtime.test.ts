@@ -593,15 +593,19 @@ describe('cleanupDeletedEntity (#533)', () => {
     expect(await next.store.listAll()).toEqual([])
   })
 
-  it('reports an emergency key it cannot read and leaves it in place', async () => {
+  it('reports an emergency key of a newer schema, ignores a malformed one, and leaves both in place', async () => {
     const { page, local } = setup()
     const cleaner = page('cleaner').rt
     await cleaner.start()
     const key = EMERGENCY_KEY_PREFIX + 'p-newer'
     const newer = JSON.stringify({ v: 99, pageInstanceId: 'p-newer', entries: [] })
     local.setItem(key, newer)
+    // Malformed: no bundle can ever merge it, so it names nothing, and it is left in place too.
+    const broken = EMERGENCY_KEY_PREFIX + 'p-broken'
+    local.setItem(broken, '{"v": 1, "entr')
     expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [], unknown: [], changed: [], unsupported: [key], suppressed: [] })
     expect(local.getItem(key)).toBe(newer)
+    expect(local.getItem(broken)).toBe('{"v": 1, "entr')
   })
 
   it('reports an emergency-only lineage that another tab merged after the listing, so it is not taken as cleaned', async () => {

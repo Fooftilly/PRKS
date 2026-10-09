@@ -98,7 +98,9 @@ coordinator names no family: adding one is a registration.
   The Work stays marked in localStorage (one key per Work,
   `prks.workRecoveryCleanup.v1.<workId>`, so tabs never overwrite each
   other's marks) until a later load's retry finds nothing of it left,
-  readable or not (a record or emergency key of a newer schema keeps the mark), and no pane
+  readable or not (a record or emergency key of a newer schema, or a key
+  whose read failed, keeps the mark; a malformed, older or mismatched key,
+  which no bundle can merge, names no Work and is left in place), and no pane
   of that page still shows it: right after the confirmation another tab may
   hold an edit not yet in storage. Only the tab holding the sync
   lock hears the acknowledgement, so another tab still holding a draft of

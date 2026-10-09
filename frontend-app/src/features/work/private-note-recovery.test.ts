@@ -872,29 +872,53 @@ describe('Work delete and recovery drafts (#533)', () => {
     window.localStorage.removeItem(EMERGENCY_KEY_PREFIX + pageInstanceId)
   })
 
+  /** Emergency keys this code cannot parse: the ones a later read or a newer bundle may recover keep the mark. */
+  const unreadableKeys = [
+    { name: 'of a newer schema', raw: JSON.stringify({ v: 99, pageInstanceId: 'p-odd', entries: [] }), keeps: true },
+    { name: 'whose read fails', raw: JSON.stringify({ v: 1, pageInstanceId: 'p-odd', entries: [] }), failRead: true, keeps: true },
+    { name: 'of malformed JSON', raw: '{"v": 1, "entr', keeps: false },
+    { name: 'of an older schema', raw: JSON.stringify({ v: 0, pageInstanceId: 'p-odd', entries: [] }), keeps: false },
+    { name: 'naming another page', raw: JSON.stringify({ v: 1, pageInstanceId: 'p-other', entries: [] }), keeps: false },
+  ]
   for (const database of [false, true]) {
-    it(`keeps the mark while an emergency key this code cannot read remains, ${database ? 'with' : 'without'} a recovery database`, async () => {
-      if (!database) win.indexedDB = { databases: async () => [] }
-      const key = EMERGENCY_KEY_PREFIX + 'p-newer'
-      const newer = JSON.stringify({ v: 99, pageInstanceId: 'p-newer', entries: [] })
-      local.setItem(key, newer)
-      window.localStorage.setItem(key, newer)
-      try {
-        mark()
-        goneOnServer()
-        expect(await win.prksRetryDeletedWorkRecovery()).toEqual(['w1'])
-        expect(marked()).toEqual(['w1'])
-        expect(local.getItem(key)).toBe(newer)
-        // A bundle that reads it merges it; the next retry then finishes.
-        local.removeItem(key)
-        window.localStorage.removeItem(key)
-        expect(await win.prksRetryDeletedWorkRecovery()).toEqual(['w1'])
-        expect(marked()).toEqual([])
-      } finally {
-        local.removeItem(key)
-        window.localStorage.removeItem(key)
-      }
-    })
+    for (const odd of unreadableKeys) {
+      it(`${odd.keeps ? 'keeps' : 'does not keep'} the mark for an emergency key ${odd.name}, ${database ? 'with' : 'without'} a recovery database`, async () => {
+        if (!database) win.indexedDB = { databases: async () => [] }
+        const key = EMERGENCY_KEY_PREFIX + 'p-odd'
+        local.setItem(key, odd.raw)
+        window.localStorage.setItem(key, odd.raw)
+        const failing = { now: !!odd.failRead }
+        // The page's own localStorage (jsdom: patched on the prototype) and the runtime's.
+        const readers = [local, Storage.prototype] as Array<{ getItem(k: string): string | null }>
+        const originals = readers.map((storage) => storage.getItem)
+        readers.forEach((storage, i) => {
+          storage.getItem = function (this: unknown, k: string) {
+            if (failing.now && k === key) throw new Error('storage is busy')
+            return originals[i]!.call(this, k)
+          }
+        })
+        try {
+          mark()
+          goneOnServer()
+          expect(await win.prksRetryDeletedWorkRecovery()).toEqual(['w1'])
+          expect(marked()).toEqual(odd.keeps ? ['w1'] : [])
+          // Never removed or rewritten for this.
+          failing.now = false
+          expect(local.getItem(key)).toBe(odd.raw)
+          if (odd.keeps) {
+            // Once a later read or a newer bundle has merged it, the next retry finishes.
+            local.removeItem(key)
+            window.localStorage.removeItem(key)
+            expect(await win.prksRetryDeletedWorkRecovery()).toEqual(['w1'])
+            expect(marked()).toEqual([])
+          }
+        } finally {
+          readers.forEach((storage, i) => { storage.getItem = originals[i]! })
+          local.removeItem(key)
+          window.localStorage.removeItem(key)
+        }
+      })
+    }
   }
 
   it('builds no recovery runtime for a confirmed delete when there is no database and no emergency key', async () => {
