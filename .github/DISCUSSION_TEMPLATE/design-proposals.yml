@@ -1,0 +1,56 @@
+title: "[Proposal] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this discussion to compare design alternatives before implementation is approved.
+        A proposal is not authorization to create implementation PRs or change the roadmap.
+        Use synthetic examples; do not disclose real library content or security vulnerabilities.
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: What decision or improvement are you proposing?
+      placeholder: "One concrete sentence"
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Problem and motivation
+      description: Explain the user need, limitation, or opportunity, supported by evidence where possible.
+      placeholder: "Current behavior, impact, and why it matters"
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and trade-offs
+      description: Include the smallest viable option and the option of doing nothing where relevant.
+      placeholder: |
+        Option A — advantages / drawbacks
+        Option B — advantages / drawbacks
+        No change — consequences
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Invariants and architectural constraints
+      description: What must be preserved (privacy, offline/durability, API, storage, data migration, accessibility)?
+    validations:
+      required: false
+  - type: textarea
+    id: references
+    attributes:
+      label: Related roadmap issues, PRs, and documents
+      description: Link canonical issues and documentation; call out potential overlap or dependencies.
+    validations:
+      required: false
+  - type: textarea
+    id: open_questions
+    attributes:
+      label: Questions to resolve before implementation
+      description: List decisions that require maintainer input.
+    validations:
+      required: false
