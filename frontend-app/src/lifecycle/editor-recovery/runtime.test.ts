@@ -451,14 +451,34 @@ describe('cleanupDeletedEntity (#533)', () => {
     const browser = createFakeBrowser()
     const idb = createFakeIdb()
     const local = memoryStorage()
-    const page = (name: string) => {
+    const page = (name: string, frozen?: { now: boolean }) => {
       const locks = browser.locksFor(name)
+      const open = browser.channelFor(name)
+      // A frozen page keeps its page lock but hears nothing, so it answers nothing.
+      const createChannel = (channelName: string) => {
+        const channel = open(channelName)
+        if (!frozen) return channel
+        let handler: ((event: { data: unknown }) => void) | null = null
+        channel.onmessage = (event) => {
+          if (!frozen.now) handler?.(event)
+        }
+        return {
+          get onmessage() {
+            return handler
+          },
+          set onmessage(next) {
+            handler = next
+          },
+          postMessage: (message: unknown) => channel.postMessage(message),
+          close: () => channel.close(),
+        }
+      }
       const rt = createEditorRecoveryRuntime({
         store: { indexedDB: idb.factory },
         identity: {
           sessionStorage: browser.sessionStorageWith(),
           locks: withoutLocks ? null : locks,
-          createChannel: browser.channelFor(name),
+          createChannel,
           claimWaitMs: 20,
           localStorage: local,
         },
@@ -470,7 +490,7 @@ describe('cleanupDeletedEntity (#533)', () => {
     return { idb, local, page }
   }
 
-  /** A page that wrote `text` for w1 and crashed: no pagehide, so without Web Locks its owner reads as unknown. */
+  /** A page that wrote `text` for w1 and crashed: no pagehide, but its page lock is released (proven gone). */
   async function crashedDraft(make: (name: string) => { rt: EditorRecoveryRuntime; locks: { releaseAll(): void } }, name: string, text: string, kind: DraftKind = 'work-private-note') {
     const p = make(name)
     await p.rt.start()
@@ -504,7 +524,7 @@ describe('cleanupDeletedEntity (#533)', () => {
     }
     const report = await cleaner.cleanupDeletedEntity(W1, KINDS)
     expect(adopted).not.toBeNull()
-    expect(report).toEqual({ removed: [], live: [], changed: [record!.draftId], suppressed: [] })
+    expect(report).toEqual({ removed: [], live: [], unknown: [], changed: [record!.draftId], suppressed: [] })
     expect(await bodies(cleaner)).toEqual([['work-private-note:w1', 'orphaned text']])
     // Retried: the adopter is now a live editor, so its lineage stays.
     expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toMatchObject({ removed: [], live: [record!.draftId] })
@@ -538,10 +558,11 @@ describe('cleanupDeletedEntity (#533)', () => {
   })
 
   it('keeps a stale emergency key from bringing back a removed lineage, or creating one that never reached storage', async () => {
-    const { page, local } = setup(true)
-    // Already running when the other page crashes: it cannot tell that page from a frozen one.
+    const { page, local } = setup()
+    // Already running when the other page crashes, so its start() merged nothing of that page.
     const cleaner = page('cleaner').rt
     await cleaner.start()
+    // Its page lock is gone: proven closed.
     const { writer } = await crashedDraft(page, 'crashed', 'committed')
     const crashedPage = (await cleaner.store.get(writer.draftId()!))!.owner.pageInstanceId
     // Keys whose pages never settled a runtime id: no scan of a running page merges them.
@@ -557,7 +578,7 @@ describe('cleanupDeletedEntity (#533)', () => {
     key('p-lost', [entry('d-lost', 1, 0, 'only in localStorage', 'work-research-note', 'p-lost')])
 
     const report = await cleaner.cleanupDeletedEntity(W1, KINDS)
-    expect(report).toEqual({ removed: [writer.draftId()], live: [], changed: [], suppressed: ['d-lost'] })
+    expect(report).toEqual({ removed: [writer.draftId()], live: [], unknown: [], changed: [], suppressed: ['d-lost'] })
     expect(await bodies(cleaner)).toEqual([])
     // Each stays a tombstone while a key still lists it.
     expect(await cleaner.store.get(writer.draftId()!)).toMatchObject({ status: 'discarded' })
@@ -572,6 +593,37 @@ describe('cleanupDeletedEntity (#533)', () => {
     expect(await next.store.listAll()).toEqual([])
   })
 
+  it('keeps a frozen page\'s committed lineage: its page lock is held though it answers nothing', async () => {
+    const { page } = setup()
+    const frozen = { now: false }
+    const live = page('frozen', frozen)
+    await live.rt.start()
+    const w = live.rt.writers.openWriter({ kind: 'work-private-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE })
+    w.edit(1, 'committed before the freeze')
+    await w.flush()
+    expect(live.rt.writers.leaveGuardActive()).toBe(false)
+    frozen.now = true
+    const cleaner = page('cleaner').rt
+    expect(await cleaner.classify((await cleaner.store.get(w.draftId()!))!)).toBe('unknown')
+    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [], unknown: [w.draftId()], changed: [], suppressed: [] })
+    expect(await bodies(cleaner)).toEqual([['work-private-note:w1', 'committed before the freeze']])
+    // Resumed: the writer still owns its lineage and keeps it recoverable.
+    frozen.now = false
+    const events: string[] = []
+    live.rt.onWriterEvent((event) => events.push(event.type))
+    w.edit(2, 'typed after resuming')
+    await w.flush()
+    expect(events).not.toContain('ownership-lost')
+    expect(await bodies(cleaner)).toEqual([['work-private-note:w1', 'typed after resuming']])
+    // Once its page is proven gone, the next cleanup removes it.
+    await w.release()
+    live.rt.identity.dispose()
+    live.locks.releaseAll()
+    await settle()
+    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toMatchObject({ removed: [w.draftId()], unknown: [] })
+    expect(await bodies(cleaner)).toEqual([])
+  })
+
   it('leaves a live page\'s first generation in its emergency key alone', async () => {
     const { page } = setup()
     const live = page('live')
@@ -580,7 +632,7 @@ describe('cleanupDeletedEntity (#533)', () => {
     w.edit(1, 'typing now')
     expect(live.rt.writers.writeEmergencyNow()).toBe('written')
     const cleaner = page('cleaner').rt
-    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [w.draftId()], changed: [], suppressed: [] })
+    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [w.draftId()], unknown: [], changed: [], suppressed: [] })
     expect(await cleaner.store.get(w.draftId()!)).toBeNull()
     await w.flush()
     expect(await bodies(cleaner)).toEqual([['work-private-note:w1', 'typing now']])
@@ -612,7 +664,7 @@ describe('cleanupDeletedEntity (#533)', () => {
     expect(await bodies(cleaner)).toHaveLength(3)
     const retried = await cleaner.cleanupDeletedEntity(W1, KINDS)
     expect(retried.removed).toHaveLength(1)
-    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [], changed: [], suppressed: [] })
+    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [], unknown: [], changed: [], suppressed: [] })
     expect((await bodies(cleaner)).sort()).toEqual([
       ['folder-private-note:w1', 'folder-private-note w1'],
       ['work-private-note:w2', 'work-private-note w2'],

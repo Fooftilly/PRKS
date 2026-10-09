@@ -22,7 +22,8 @@
  * acknowledgement, by a never-sent creation folding away, or by the server
  * answering "Work not found" for a Work this device holds drafts of (another
  * device deleted it, or this device stopped between acknowledgement and
- * cleanup).
+ * cleanup). A draft whose owner tab is not proven gone stays: a frozen tab
+ * still holding the text cannot be told from a crashed one.
  */
 (function (root) {
     'use strict';
@@ -223,10 +224,14 @@
      * read; one more pass reclassifies those. Never throws.
      */
     async function cleanupDeletedWorkRecovery(workId, options) {
-        /* No recovery database on this origin: no drafts, and none is created. */
-        if (!workId || await recoveryStorageExists() === false) return null;
+        if (!workId) return null;
         const rt = recoveryRuntime();
         if (!rt) return null;
+        /* No recovery database and no emergency key naming this Work: no
+         * drafts, and none is created. */
+        if (await recoveryStorageExists() === false && !emergencyDraftsOf(rt).some(function (draft) {
+            return draft.entityType === 'work' && draft.entityId === workId;
+        })) return null;
         const entity = { entityType: 'work', entityId: workId };
         try {
             if (typeof root.prksForgetDeletedWorkNotes === 'function') {
@@ -275,6 +280,15 @@
      * queued. A creation's draft is asked about once its row is gone: then the
      * server either holds the Work or the creation folded away.
      */
+    /** Drafts held only in emergency keys, shaped like records for `sweepCandidates`. */
+    function emergencyDraftsOf(rt) {
+        try {
+            return typeof rt.emergencyDrafts === 'function' ? rt.emergencyDrafts() : [];
+        } catch (_e) {
+            return [];
+        }
+    }
+
     function sweepCandidates(records, operations) {
         const creating = new Set(pendingCreates(operations).concat((operations || []).filter(function (op) {
             return op && op.operation === 'CREATE_WORK' && op.status === 'conflict';
@@ -304,14 +318,18 @@
     async function sweepDeletedWorkRecovery() {
         const sync = root.prksSync;
         if (!sync || !sync.store || typeof sync.store.listOperations !== 'function') return [];
-        /* A page that never had a draft opens nothing: no database, no runtime. */
-        if (await recoveryStorageExists() !== true) return [];
         const rt = recoveryRuntime();
         if (!rt) return [];
+        /* A draft whose tab closed before its first IndexedDB commit is only
+         * in an emergency key, so those are read before anything is picked. */
+        const emergency = emergencyDraftsOf(rt);
+        /* A page that never had a draft opens nothing: no database, no runtime. */
+        const stored = await recoveryStorageExists() === true;
+        if (!stored && !emergency.length) return [];
         let records;
         let operations;
         try {
-            records = await rt.store.listAll();
+            records = (stored ? await rt.store.listAll() : []).concat(emergency);
             if (!records.length) return [];
             operations = await sync.store.listOperations();
         } catch (_e) {

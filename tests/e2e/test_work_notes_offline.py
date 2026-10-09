@@ -1121,6 +1121,91 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
             message='recovery drafts outlived the acknowledged delete')
         self.assertEqual(page.evaluate(_RECOVERY_IDLE), {'pending': 0, 'guard': False, 'unloadListeners': False})
 
+    def test_drafts_of_a_never_synced_work_deleted_from_its_own_pane_are_removed(self):
+        server, page, context = self.start()
+        # The video viewer is loaded on first use; a browser that has used it can open one offline.
+        page.evaluate("() => import('/js/components/works-video.js').then(() => true)")
+        # Offline, so the creation is never sent and the delete folds it away.
+        self.offline(page, context)
+        page.locator('#prks-ribbon-new-file').click()
+        page.wait_for_selector('#work-modal:not(.hidden):not([inert])')
+        page.locator('.prks-kind-toggle__btn[data-kind="video"]').click()
+        page.wait_for_selector('#work-video-url-row:not(.hidden)')
+        page.locator('#work-video-url').fill('https://www.youtube.com/watch?v=e2e0000533')
+        page.locator('#work-title').fill('Never synced')
+        page.locator('#save-work-btn').click()
+        # The page starts on the seeded Work; wait for the new one.
+        page.wait_for_function(
+            "(seeded) => location.hash.indexOf('#/works/') === 0 && location.hash.indexOf(seeded) === -1",
+            arg=server.ids['work_a'], timeout=20000)
+        work = page.evaluate("() => decodeURIComponent(location.hash.slice('#/works/'.length).split(/[/?]/)[0])")
+        field = page.locator('#prks-private-notes-work-' + work)
+        field.click()
+        page.keyboard.press('Control+End')
+        page.keyboard.type(' Typed before it ever synced')
+        page.locator('#prks-private-notes-status-work-' + work).filter(has_text='Drafting').wait_for()
+        self.wait_reminder_recorded(page, work, ' Typed before it ever synced')
+        self.assertEqual(self.work_records(page, work), ['work-private-note:active'])
+        self.assertEqual(page.evaluate("""() => prksSync.store.listOperations().then(rows => rows
+            .filter(r => r.operation === 'CREATE_WORK').map(r => r.attempt_count))"""), [0])
+
+        # Delete File from this Work's own Details. Its navigation away is held, so the
+        # cleanup runs while this pane still shows the Work and holds its Reminders session.
+        page.evaluate("""() => {
+            const navigate = window.prksNavigate;
+            window.prksNavigate = function () {
+                window.prksNavigate = navigate;
+                const self = this, args = arguments;
+                window.__prksReleaseNavigation = () => navigate.apply(self, args);
+            };
+        }""")
+        self.open_delete_confirm(page)
+        page.locator('#prks-modal-confirm-ok').click()
+        page.wait_for_function('() => typeof window.__prksReleaseNavigation === "function"', timeout=15000)
+        wait_for_async(
+            page,
+            '(workId) => (' + _WORK_RECOVERY_RECORDS + ')(workId).then(rows => rows.length === 0)',
+            arg=work, timeout=15000, message='drafts of a folded creation outlived its deletion')
+        self.assertEqual(field.count(), 1)
+        page.evaluate('() => window.__prksReleaseNavigation()')
+        page.wait_for_function("() => location.hash === '#/folders'", timeout=15000)
+        self.assertEqual(self.work_records(page, work), [])
+        self.assertEqual(page.evaluate('() => prksSync.store.listOperations().then(rows => rows.length)'), 0)
+        self.assertEqual(page.evaluate(_RECOVERY_IDLE), {'pending': 0, 'guard': False, 'unloadListeners': False})
+
+    def test_a_draft_only_in_a_closed_tabs_emergency_key_is_removed_on_a_folders_load(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        # A tab that closed before its first IndexedDB commit left the draft only in its emergency key.
+        page.evaluate("""(workId) => {
+            const pageInstanceId = 'p-closed-before-commit';
+            localStorage.setItem('prks.editorRecovery.emergency.v1.' + pageInstanceId, JSON.stringify({
+                v: 1, pageInstanceId, runtimeId: null, at: Date.now(),
+                entries: [{
+                    draftId: 'd-closed-before-commit', kind: 'work-private-note', entityType: 'work', entityId: workId,
+                    generation: 1, committedGeneration: 0, body: 'Only in the emergency key',
+                    lineage: { createdAt: Date.now(), owner: { runtimeId: null, pageInstanceId, paneId: 'tab-1' },
+                               base: { revision: 0, length: 0, fingerprint: null, source: 'server' } },
+                }],
+            }));
+        }""", work)
+        with self.db_for(server).connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            work_lifecycle_sync.delete_work_record_on_conn(conn, work)
+        self.close_tab(page)
+        tab = context.new_page()
+        tab.on('dialog', lambda d: (self.dialogs.append(d.type), d.accept()))
+        tab.goto(server.origin + '/#/folders', wait_until='domcontentloaded')
+        tab.wait_for_selector('#sidebar')
+        wait_for_async(
+            tab,
+            """(workId) => window.prksEditorRecovery.runtime().store.listAll().then(rows =>
+                Object.keys(localStorage).every(k => k.indexOf('prks.editorRecovery.emergency.v1.p-closed-before-commit') !== 0) &&
+                rows.every(r => r.entityId !== workId || r.status === 'discarded'))""",
+            arg=work,
+            timeout=20000,
+            message='a draft only an emergency key held outlived the Work the server no longer has')
+
     def test_drafts_of_a_work_deleted_elsewhere_are_removed_on_the_next_load(self):
         server, page, context = self.start()
         work = server.ids['work_a']

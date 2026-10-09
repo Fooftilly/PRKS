@@ -12,7 +12,7 @@ import workNotesStateSource from '../../../../frontend/js/work-notes-state.js?ra
 import workLifecycleSource from '../../../../frontend/js/work-lifecycle-state.js?raw'
 import workNoteRecoverySource from '../../../../frontend/js/work-note-recovery.js?raw'
 import type { EditorRecoveryRuntime } from '../../lifecycle/editor-recovery/runtime'
-import { RUNTIME_SESSION_KEY, UNKNOWN_BASE, type DraftBase, type DraftRecord } from '../../lifecycle/editor-recovery/schema'
+import { EMERGENCY_KEY_PREFIX, RUNTIME_SESSION_KEY, UNKNOWN_BASE, type DraftBase, type DraftRecord } from '../../lifecycle/editor-recovery/schema'
 import { createFakeBrowser } from '../../lifecycle/editor-recovery/test-support/fake-env'
 import { createFakeIdb, settle } from '../../lifecycle/editor-recovery/test-support/fake-idb'
 import { createNoteQueue, memoryStorage, startRecoveryPage, type RecoveryPage } from './test-support/work-note-harness'
@@ -77,6 +77,7 @@ type W = Record<string, unknown> & {
   prksWorkPrivateNotesRecoveryDiscard: (ctx: Ctx, workId: string, token: string, expect: unknown) => Promise<{ ok: boolean; code?: string }>
   prksDeleteWorkDurably: (workId: string) => Promise<{ op_id: string } | null>
   prksSweepDeletedWorkRecovery: () => Promise<string[]>
+  prksCleanupDeletedWorkRecovery: (workId: string) => Promise<{ removed: string[]; unknown: string[] } | null>
   prksRequest?: (url: string) => Promise<{ status: number; json(): Promise<unknown> }>
   indexedDB?: { databases(): Promise<Array<{ name: string }>> }
 }
@@ -704,7 +705,7 @@ describe('Work delete and recovery drafts (#533)', () => {
     expect(await records()).toEqual([])
   })
 
-  it('removes a crashed LAN tab\'s draft, whose owner cannot be proven gone, because the Work is', async () => {
+  it('keeps a crashed LAN tab\'s draft after the delete: a frozen tab still editing it looks the same', async () => {
     withoutLocks = true
     startPage()
     const { ctx, ta } = await openWork()
@@ -715,7 +716,10 @@ describe('Work delete and recovery drafts (#533)', () => {
     expect(await page!.rt.classify(record!)).toBe('unknown')
     await win.prksDeleteWorkDurably('w1')
     sync.ackDelete(deleteOp())
-    await waitFor(async () => (await records()).length === 0, 'unknown owner removed')
+    expect(await win.prksCleanupDeletedWorkRecovery('w1')).toMatchObject({ removed: [], unknown: [record!.draftId] })
+    goneOnServer()
+    expect(await win.prksSweepDeletedWorkRecovery()).toEqual(['w1'])
+    expect((await records()).map((r) => r.draftId)).toEqual([record!.draftId])
   })
 
   it('cleans drafts of a Work deleted on another device, and of one whose cleanup a shutdown interrupted', async () => {
@@ -731,6 +735,26 @@ describe('Work delete and recovery drafts (#533)', () => {
     expect(await win.prksSweepDeletedWorkRecovery()).toEqual(['w1'])
     expect((await records()).map((r) => r.entityId)).toEqual(['w2'])
     expect(probed.sort()).toEqual(['/api/works/w1/notes-state', '/api/works/w1/notes-state', '/api/works/w2/notes-state', '/api/works/w2/notes-state'])
+  })
+
+  it('finds a draft held only in a closed tab\'s emergency key, with no recovery database yet', async () => {
+    // The tab closed before its first IndexedDB commit: no database, only the key.
+    win.indexedDB = { databases: async () => [] }
+    const pageInstanceId = 'p-closed-early'
+    local.setItem(EMERGENCY_KEY_PREFIX + pageInstanceId, JSON.stringify({
+      v: 1, pageInstanceId, runtimeId: null, at: 1,
+      entries: [{
+        draftId: 'd-early', kind: KIND, entityType: 'work', entityId: 'w1', generation: 1, committedGeneration: 0,
+        body: 'Saved reminder. Closed early',
+        lineage: { createdAt: 1, owner: { runtimeId: null, pageInstanceId, paneId: 'tab-1' }, base: SERVER_BASE },
+      }],
+    }))
+    expect(await win.prksSweepDeletedWorkRecovery()).toEqual([])
+    expect(probed).toEqual(['/api/works/w1/notes-state'])
+    goneOnServer()
+    expect(await win.prksSweepDeletedWorkRecovery()).toEqual(['w1'])
+    expect((await records()).filter((r) => r.status !== 'discarded')).toEqual([])
+    expect([...local.map.keys()].filter((k) => k.startsWith(EMERGENCY_KEY_PREFIX))).toEqual([])
   })
 
   it('never asks about a Work its drafts carry no base for, nor where recovery storage does not exist', async () => {

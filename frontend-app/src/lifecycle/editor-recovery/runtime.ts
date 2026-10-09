@@ -11,11 +11,12 @@
 
 import { mergeEmergencyEntries, readEmergencyKeys, releaseDeadReservations, type EmergencyStorage, type MergeReport } from './emergency'
 import { createPageIdentity, type IdentityEnv, type PageIdentity, type RuntimeClaim } from './identity'
-import { classifyLineage, type LineageClass } from './lineage'
+import { classifyLineage, isAdoptable, type LineageClass } from './lineage'
 import {
   RESERVATION_KEY_PREFIX,
   entityKeyOf,
   isSupportedRecord,
+  type DraftBase,
   type DraftEntityType,
   type DraftKind,
   type DraftOwner,
@@ -32,12 +33,25 @@ export interface ReviewedRecord {
   status: DraftRecord['status']
 }
 
+/** A draft an emergency key holds, as a page that has not merged it sees it (#533). */
+export interface EmergencyDraft {
+  kind: DraftKind
+  entityType: DraftEntityType
+  entityId: string
+  base: DraftBase
+}
+
 /** What one cleanup of a deleted entity's drafts did (#533). */
 export interface EntityCleanupReport {
   /** Removed, or replaced by a tombstone that a stale emergency key still needs. */
   removed: string[]
   /** Kept: a live editor in this or another page owns the lineage. */
   live: string[]
+  /**
+   * Kept: its owner page is not proven gone (it holds its page lock, or is
+   * frozen, busy or unreachable without one), so it may still be editing.
+   */
+  unknown: string[]
   /** Kept: its owner page, generation or status changed after it was read. */
   changed: string[]
   /** Lineages only an emergency key held, tombstoned so no merge creates them. */
@@ -81,16 +95,29 @@ export interface EditorRecoveryRuntime {
   /**
    * Removes the drafts of an entity the server has confirmed deleted (#533),
    * for each of `kinds`. Merges dead pages' emergency entries first, then
-   * removes every lineage no live editor owns, unknown owners included
-   * because the entity itself is gone, each by compare-and-set on the owner
-   * page, generation and status it was classified with: a lineage adopted or
-   * written since is kept. A stale emergency key's lineages are tombstoned so
-   * no later merge brings them back. Idempotent: run it again to retry.
+   * removes only lineages whose owner is this page without a writer or a page
+   * proven gone (`isAdoptable`), each by compare-and-set on the owner page,
+   * generation and status it was classified with: a lineage adopted or
+   * written since is kept. A live or unknown owner keeps its lineage, since
+   * a frozen editor still holding the text cannot be told from a dead one; a
+   * later run removes it once its page is proven gone. A stale emergency
+   * key's lineages are tombstoned so no later merge brings them back.
+   * Idempotent: run it again to retry.
    */
   cleanupDeletedEntity(entity: { entityType: DraftEntityType; entityId: string }, kinds: readonly DraftKind[]): Promise<EntityCleanupReport>
+  /**
+   * The drafts emergency keys hold, read from localStorage only: no database
+   * is opened and nothing is merged. A tab that closed before its first
+   * IndexedDB commit left its draft only there.
+   */
+  emergencyDrafts(): EmergencyDraft[]
   /** Writer protection events (`unprotected`, `protected`, `ownership-lost`) for this page. */
   onWriterEvent(listener: (event: WriterEvent) => void): () => void
   dispose(): void
+}
+
+function keptFor(lineage: LineageClass, report: EntityCleanupReport): string[] {
+  return lineage === 'unknown' ? report.unknown : report.live
 }
 
 export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOptions = {}): EditorRecoveryRuntime {
@@ -175,9 +202,8 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
   }
 
   /**
-   * A first generation that never reached IndexedDB exists only in a key a
-   * page still alive, or not provably gone, left behind: tombstoned unless
-   * a live editor owns it.
+   * A first generation that never reached IndexedDB exists only in a key
+   * that no scan merged: tombstoned only when its page is proven gone.
    */
   async function suppressEmergencyOnly(
     ours: (kind: DraftKind, entityType: DraftEntityType, entityId: string) => boolean,
@@ -191,8 +217,8 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
         if (entry.committedGeneration !== 0 || entry.body === null || !ours(entry.kind, entry.entityType, entry.entityId)) continue
         const owner: DraftOwner = { runtimeId: payload.runtimeId, pageInstanceId: stored.pageInstanceId, paneId: '', claimedAt: payload.at }
         const lineage = await classify({ draftId: entry.draftId, owner })
-        if (lineage === 'self-live' || lineage === 'other-live') {
-          report.live.push(entry.draftId)
+        if (!isAdoptable(lineage)) {
+          keptFor(lineage, report).push(entry.draftId)
           continue
         }
         const stone = { kind: entry.kind, entityType: entry.entityType, entityId: entry.entityId, generation: entry.generation, pageInstanceId: stored.pageInstanceId }
@@ -205,7 +231,7 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
     entity: { entityType: DraftEntityType; entityId: string },
     kinds: readonly DraftKind[],
   ): Promise<EntityCleanupReport> {
-    const report: EntityCleanupReport = { removed: [], live: [], changed: [], suppressed: [] }
+    const report: EntityCleanupReport = { removed: [], live: [], unknown: [], changed: [], suppressed: [] }
     // A dead page's tail becomes a record first, so it is removed like any other.
     await scanEmergency()
     const keys = new Set(kinds.map((kind) => entityKeyOf(kind, entity.entityId)))
@@ -216,8 +242,8 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
     )
     for (const record of records) {
       const lineage = await classify(record)
-      if (lineage === 'self-live' || lineage === 'other-live') {
-        report.live.push(record.draftId)
+      if (!isAdoptable(lineage)) {
+        keptFor(lineage, report).push(record.draftId)
         continue
       }
       const outcome = await discardReviewed({
@@ -256,6 +282,17 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
     },
     discardReviewed,
     cleanupDeletedEntity,
+    emergencyDrafts() {
+      if (!emergencyStorage) return []
+      const drafts: EmergencyDraft[] = []
+      for (const stored of readEmergencyKeys(emergencyStorage)) {
+        for (const entry of stored.payload ? stored.payload.entries : []) {
+          if (!entry.lineage) continue
+          drafts.push({ kind: entry.kind, entityType: entry.entityType, entityId: entry.entityId, base: entry.lineage.base })
+        }
+      }
+      return drafts
+    },
     onWriterEvent(listener) {
       writerListeners.add(listener)
       return () => {

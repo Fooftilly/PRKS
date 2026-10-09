@@ -2307,6 +2307,9 @@ var prksEditorRecovery = (function(exports) {
 	* no consumer, so the page holds no lock, channel or listener until a
 	* consumer asks for the runtime.
 	*/
+	function keptFor(lineage, report) {
+		return lineage === "unknown" ? report.unknown : report.live;
+	}
 	function createEditorRecoveryRuntime(options = {}) {
 		const store = createRecoveryStore(options.store);
 		const identity = createPageIdentity(options.identity);
@@ -2387,9 +2390,8 @@ var prksEditorRecovery = (function(exports) {
 			return store.discard(reviewed.draftId, tombstone, expected);
 		}
 		/**
-		* A first generation that never reached IndexedDB exists only in a key a
-		* page still alive, or not provably gone, left behind: tombstoned unless
-		* a live editor owns it.
+		* A first generation that never reached IndexedDB exists only in a key
+		* that no scan merged: tombstoned only when its page is proven gone.
 		*/
 		async function suppressEmergencyOnly(ours, report) {
 			if (!emergencyStorage) return;
@@ -2408,8 +2410,8 @@ var prksEditorRecovery = (function(exports) {
 						draftId: entry.draftId,
 						owner
 					});
-					if (lineage === "self-live" || lineage === "other-live") {
-						report.live.push(entry.draftId);
+					if (!isAdoptable(lineage)) {
+						keptFor(lineage, report).push(entry.draftId);
 						continue;
 					}
 					const stone = {
@@ -2427,6 +2429,7 @@ var prksEditorRecovery = (function(exports) {
 			const report = {
 				removed: [],
 				live: [],
+				unknown: [],
 				changed: [],
 				suppressed: []
 			};
@@ -2436,8 +2439,8 @@ var prksEditorRecovery = (function(exports) {
 			const records = (await store.listAll()).filter((r) => isSupportedRecord(r) && r.status !== "discarded" && ours(r.kind, r.entityType, r.entityId));
 			for (const record of records) {
 				const lineage = await classify(record);
-				if (lineage === "self-live" || lineage === "other-live") {
-					report.live.push(record.draftId);
+				if (!isAdoptable(lineage)) {
+					keptFor(lineage, report).push(record.draftId);
 					continue;
 				}
 				const outcome = await discardReviewed({
@@ -2475,6 +2478,20 @@ var prksEditorRecovery = (function(exports) {
 			},
 			discardReviewed,
 			cleanupDeletedEntity,
+			emergencyDrafts() {
+				if (!emergencyStorage) return [];
+				const drafts = [];
+				for (const stored of readEmergencyKeys(emergencyStorage)) for (const entry of stored.payload ? stored.payload.entries : []) {
+					if (!entry.lineage) continue;
+					drafts.push({
+						kind: entry.kind,
+						entityType: entry.entityType,
+						entityId: entry.entityId,
+						base: entry.lineage.base
+					});
+				}
+				return drafts;
+			},
 			onWriterEvent(listener) {
 				writerListeners.add(listener);
 				return () => {

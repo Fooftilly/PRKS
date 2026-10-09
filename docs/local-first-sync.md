@@ -98,12 +98,18 @@ coordinator names no family: adding one is a registration.
   for it or were typed on this device's own creation of it (another device
   deleted it, cleanup was interrupted, or the creation folded away; probed
   once per page load, at most 8 Works, never a Work whose creation is still
-  queued) removes both note kinds for that Work (#533). This page's note
+  queued; drafts held only in an emergency key count, database or not)
+  removes both note kinds for that Work (#533). This page's note
   sessions that no pane shows give their lineages back first (on a folded
-  creation, the deleting pane's own sessions too); every other lineage
-  no live editor owns, unknown owners included, is removed by
-  compare-and-set on its owner page, generation and status, and a stale
-  emergency key's lineages are tombstoned. A discard whose emergency key could not be cleared leaves a bodyless
+  creation, the deleting pane's own sessions too). Only a lineage whose
+  owner is this page without a writer, or a page proven gone (its page
+  lock released or its final `pagehide` recorded), is removed, by
+  compare-and-set on its owner page, generation and status; a stale
+  emergency key's such lineages are tombstoned. A live or unknown owner
+  keeps its lineage, because a frozen tab still holding the text looks the
+  same: a later load removes it once that page is proven gone. Without Web
+  Locks (LAN) a crashed tab is never proven gone, so its draft stays for
+  explicit Review and Discard. A discard whose emergency key could not be cleared leaves a bodyless
   tombstone until that key is gone, so the key cannot recreate the draft.
   A draft a merge created from another page's key carries that page's id
   until the key is removed; deleting it meanwhile leaves the same tombstone.
