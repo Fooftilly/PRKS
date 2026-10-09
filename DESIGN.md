@@ -719,6 +719,8 @@ Browser recovery copies of Research Notes (#466) surface through two pieces, bot
 
 Incomplete drafts are labelled “Incomplete” and offer only Copy and Discard. A stale action (another tab took the draft, or the note changed) is refused with an inline message and the dialog refreshes.
 
+Work Reminders (#474) use the same notice and Review dialog, configured with the subject “Reminders”. The notice sits in the Reminders card between its heading and the field, with the same dense row and tones; Review names Reminders in its title and texts. Only one Review is open per page, whichever editor opened it. Folder Reminders have no recovery notice (#534).
+
 ### Main/Secondary divider
 
 The root split between Main and Secondary is workspace-owned canonical preference: one normalized ratio (`mainSplitRatio`, default `0.58`, meaning Main width / usable split width, usable width excluding the separator track). Workspace Persistence v1 stores that preferred ratio (and each nested split node's preferred ratio) in browser `localStorage`. Constrained/effective ratios applied by ResizeObserver are not stored. The preference follows workspace *roles*, not tab identity — Make Main, adding/removing Secondary panes, Hide/Show split, and the narrow responsive fallback all preserve the current ratio unchanged.

@@ -2,22 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { EmergencyStorage } from './emergency'
 import { createEditorRecoveryRuntime } from './runtime'
 import { CLOSED_PAGE_KEY_PREFIX, EMERGENCY_KEY_PREFIX, RUNTIME_SESSION_KEY, UNKNOWN_BASE, reservationKeyOf } from './schema'
-import { createFakeBrowser } from './test-support/fake-env'
+import { createFakeBrowser, memoryStorage } from './test-support/fake-env'
 import { createFakeIdb, createManualScheduler, settle } from './test-support/fake-idb'
-
-function memoryStorage(): EmergencyStorage & { map: Map<string, string> } {
-  const map = new Map<string, string>()
-  return {
-    map,
-    get length() {
-      return map.size
-    },
-    key: (i: number) => [...map.keys()][i] ?? null,
-    getItem: (k: string) => map.get(k) ?? null,
-    setItem: (k: string, v: string) => void map.set(k, v),
-    removeItem: (k: string) => void map.delete(k),
-  }
-}
 
 const COPIED = 'r-' + 'c'.repeat(32)
 

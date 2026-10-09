@@ -699,6 +699,13 @@ class AffectedMappingTests(unittest.TestCase):
                 self.assertIn("tabs", features)
         self.assertIn("tests.e2e.test_editor_recovery_store", policy.FEATURES["offline"]["selectors"])
 
+    def test_shared_note_recovery_paths_select_offline_and_notes_tests(self):
+        features = policy.classify_affected_path("frontend/js/work-note-recovery.js")["features"]
+        self.assertIn("offline", features)
+        self.assertIn("notes", features)
+        presenter = "frontend-app/src/features/editor-recovery/recovery-presenter.ts"
+        self.assertIn("offline", policy.classify_affected_path(presenter)["features"])
+
     def test_select_affected_unions_features_and_explains(self):
         plan = policy.select_affected(
             FAKE_IDS,

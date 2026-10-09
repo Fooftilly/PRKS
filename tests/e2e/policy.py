@@ -515,6 +515,7 @@ AFFECTED_RULES = (
         "name": "notes",
         "paths": (
             "frontend/js/work-notes-state.js",
+            "frontend/js/work-note-recovery.js",
             "backend/work_note_sync.py",
         ),
         "features": ("notes",),
@@ -562,8 +563,10 @@ AFFECTED_RULES = (
         "name": "editor-recovery",
         "paths": (
             "frontend/js/editor-recovery.js",
+            "frontend/js/work-note-recovery.js",
             "frontend-app/src/lifecycle/editor-recovery/**",
             "frontend-app/src/lifecycle/editor-recovery-entry.ts",
+            "frontend-app/src/features/editor-recovery/**",
             "frontend-app/scripts/build-editor-recovery.mjs",
         ),
         "features": ("offline",),
