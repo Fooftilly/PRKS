@@ -449,14 +449,23 @@
         return new TextEncoder().encode(text || '').length;
     }
 
+    /*
+     * The characters Python's `str.strip()` drops (`str.isspace()`), which is
+     * what the server strips. JavaScript's `trim()` is a different set: it
+     * also drops U+FEFF and keeps U+001C..U+001F and U+0085, so it would
+     * mis-state what the server stores.
+     */
+    const PY_SPACE = '\t\n\u000b\u000c\r\u001c-\u001f \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000';
+    const PY_STRIP = new RegExp('^[' + PY_SPACE + ']+|[' + PY_SPACE + ']+$', 'g');
+
     /**
      * What the server stores for a field value (backend `canonical_wire`):
-     * surrounding whitespace is dropped, and an empty title is the
-     * placeholder. An acknowledged row's text is its payload; the server holds
-     * this.
+     * surrounding whitespace, as Python's `str.strip()` defines it, is
+     * dropped, and an empty title is the placeholder. An acknowledged row's
+     * text is its payload; the server holds this.
      */
     function canonicalFieldValue(field, value) {
-        const text = String(value == null ? '' : value).trim();
+        const text = String(value == null ? '' : value).replace(PY_STRIP, '');
         return field === 'title' ? (text || DEFAULT_TITLE) : text;
     }
 
