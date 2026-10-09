@@ -100,7 +100,29 @@ coordinator names no family: adding one is a registration.
   when the server's acknowledged note is the one it was typed on (or this
   pane's own queued predecessor, #475 rules); every other draft is kept,
   not enqueued and not applied. A recovery commit means recoverable, never
-  saved.
+  saved. Slice 3 extends automatic restore to one complete draft from a
+  closed tab or another pane of this tab, under the same base and queue
+  rules and only when no other lineage is live. A closed tab is proven by
+  its lock disappearing or its final-pagehide record in `localStorage`
+  (needed on LAN, where Web Locks are absent); a crashed LAN tab stays
+  unknown and is review-only. A tab that is already open re-scans when
+  another tab's final-pagehide record appears; that record also lets it
+  merge a close-time emergency entry written before the closing tab's
+  runtime claim settled. Everything else appears in the Notes pane's
+  recovery notice and Review dialog, where restoring adopts by
+  compare-and-set and reconciling is an explicit confirmed replace; nothing
+  is enqueued until the user chooses. Review's Restore and Replace pass the
+  same checks as the automatic restore (#490): Restore needs a base proven
+  one server snapshot, and both re-read the queue, base and other panes
+  after the asynchronous adoption or claim before applying anything.
+  When the server acknowledges text recovery storage never took, the older
+  stored generation is superseded and removed; if storage refuses that
+  removal, it is recorded in `localStorage`
+  (one `prks.editorRecovery.superseded.v1.<draftId>` key per draft, so tabs
+  never overwrite each other's marks), never adopted or restored by this
+  or any other page (an already open tab reads the record again before it
+  adopts), and removed once storage accepts it. If `localStorage` refuses
+  that mark too, the page keeps its leave guard until the removal lands.
 - A device ID is an identity for synchronization, never authentication or trust.
 - Editor state and observed projections belong to the Work's TabContext.
   The sync coordinator owns transport and retry policy, with one in-flight

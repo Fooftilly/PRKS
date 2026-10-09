@@ -280,16 +280,12 @@ _RECOVERY_IDLE = """
 """
 
 
-class ResearchNotesRecoveryTests(_WorkNotesPage, unittest.TestCase):
-    """#466 slice 2: Research Notes text typed inside the 2 s save debounce
-    survives a reload in the same pane, without a prompt, and then saves
-    through the ordinary queue. Anything that could overwrite newer text is
-    kept for review instead."""
-
+class _RecoveryPage(_WorkNotesPage):
     def start(self, without_locks=False):
         server, page, context = super().start(without_locks=without_locks)
         self.dialogs = []
-        page.on('dialog', lambda d: (self.dialogs.append(d.type), d.accept()))
+        self._dialog_handler = lambda d: (self.dialogs.append(d.type), d.accept())
+        page.on('dialog', self._dialog_handler)
         self.addCleanup(lambda: self.assertEqual(self.dialogs, [], 'no leave prompt for an ordinary note'))
         page.wait_for_function(
             "() => !!prksGetFocusedTabContext().getResource('workNotesObserved')")
@@ -346,12 +342,34 @@ class ResearchNotesRecoveryTests(_WorkNotesPage, unittest.TestCase):
             timeout=15000,
             message='the recovery record outlived the acknowledgement')
 
+    def wait_record_count(self, page, work, count):
+        wait_for_async(
+            page,
+            '([workId, n]) => (' + _RECOVERY_RECORDS + ')(workId).then(rows => rows.length === n)',
+            arg=[work, count],
+            timeout=15000,
+            message='the recovery records did not settle')
+
     def note_rows(self, page):
         return page.evaluate("""() => prksSync.store.listOperations().then(rows => rows
             .filter(r => r.operation === 'SET_WORK_RESEARCH_NOTE').map(r => r.payload.text))""")
 
     def recovery_notice(self, page):
         return page.evaluate("() => prksGetFocusedTabContext().ui.researchNotesRecovery || null")
+
+    def notice(self, page):
+        return page.locator('[data-prks-role="editor-recovery-drafts"]')
+
+    def open_review(self, page):
+        self.notice(page).locator('[data-prks-role="editor-recovery-open-review"]').click()
+        dialog = page.locator('[data-prks-role="editor-recovery-review"]')
+        dialog.wait_for()
+        dialog.locator('[data-prks-role="editor-recovery-candidate"], [data-prks-role="editor-recovery-empty"]').first.wait_for()
+        return dialog
+
+    def close_review(self, page):
+        page.locator('[data-prks-role="editor-recovery-cancel"]').click()
+        page.locator('[data-prks-role="editor-recovery-review"]').wait_for(state='detached')
 
     def assert_restored_and_saved(self, server, page, work, expected):
         page.wait_for_function(
@@ -362,6 +380,13 @@ class ResearchNotesRecoveryTests(_WorkNotesPage, unittest.TestCase):
         self.wait_no_records(page, work)
         page.locator('[data-prks-role="editor-status"]', has_text='All changes saved').wait_for()
         self.assertEqual(page.evaluate(_RECOVERY_IDLE), {'pending': 0, 'guard': False, 'unloadListeners': False})
+
+
+class ResearchNotesRecoveryTests(_RecoveryPage, unittest.TestCase):
+    """#466 slice 2: Research Notes text typed inside the 2 s save debounce
+    survives a reload in the same pane, without a prompt, and then saves
+    through the ordinary queue. Anything that could overwrite newer text is
+    kept for review instead."""
 
     def test_reload_within_500_ms_restores_the_exact_newest_text_and_saves_it(self):
         server, page, context = self.start()
@@ -441,6 +466,13 @@ class ResearchNotesRecoveryTests(_WorkNotesPage, unittest.TestCase):
         self.assertEqual([c['reason'] for c in self.recovery_notice(page)['candidates']], ['base-unverified'])
         self.assertEqual(self.editor_text(page), original)
         self.assertEqual(self.note_rows(page), [])
+        # Review never claims the cached note was checked, and offers only a comparison.
+        dialog = self.open_review(page)
+        dialog.locator('[data-prks-role="editor-recovery-current"]', has_text='not checked with the server').wait_for()
+        self.assertEqual(dialog.locator('[data-prks-role="editor-recovery-restore"]').count(), 0)
+        self.assertEqual(dialog.locator('[data-prks-role="editor-recovery-compare-btn"]').count(), 1)
+        self.close_review(page)
+        self.assertEqual(len(self.records(page, work)), 1)
         self.reconnect(page, context)
         page.reload(wait_until='domcontentloaded')
         page.wait_for_selector('.CodeMirror')
@@ -506,3 +538,316 @@ class ResearchNotesRecoveryTests(_WorkNotesPage, unittest.TestCase):
         self.assertEqual(len({r['draftId'] for r in records}), 2)
         self.assertEqual(len({r['owner']['pageInstanceId'] for r in records}), 2)
         self.assertEqual(sorted(r['body'][-13:] for r in records), sorted([' From tab one', ' From tab two']))
+
+
+_WITHOUT_RECOVERY_STORAGE = """
+    (() => {
+        const open = IDBFactory.prototype.open;
+        IDBFactory.prototype.open = function (name) {
+            if (name === 'prks-editor-recovery-v1') throw new DOMException('Recovery storage refused', 'QuotaExceededError');
+            return open.apply(this, arguments);
+        };
+    })();
+"""
+
+
+class ResearchNotesTabCloseAndReviewTests(_RecoveryPage, unittest.TestCase):
+    """#466 slice 3: text from a browser tab that was closed is recovered in a
+    new tab when nothing can be overwritten; everything else is a notice and
+    a Review dialog, where nothing changes until the user chooses."""
+
+    def new_tab(self, context, server):
+        tab = context.new_page()
+        tab.on('dialog', lambda d: (self.dialogs.append(d.type), d.accept()))
+        tab.goto(server.origin + '/#/works/' + server.ids['work_a'], wait_until='domcontentloaded')
+        tab.wait_for_selector('.CodeMirror')
+        tab.wait_for_function(
+            "() => !!prksGetFocusedTabContext().getResource('workNotesObserved')")
+        return tab
+
+    def hold_saves(self, page):
+        # The tab closes before its 2 s semantic save, however slow the
+        # runner is: these tests are about the draft, not the save timing.
+        page.evaluate('() => { window.prksScheduleWorkResearchNotesSave = () => {}; }')
+
+    def close_tab(self, page):
+        # A user closing the tab: beforeunload runs, then the final pagehide.
+        page.close(run_before_unload=True)
+
+    def other_tab(self, context, page):
+        tab = context.new_page()
+        tab.on('dialog', lambda d: (self.dialogs.append(d.type), d.accept()))
+        tab.goto(page.url, wait_until='domcontentloaded')
+        tab.wait_for_selector('.CodeMirror')
+        tab.wait_for_function(
+            "() => !!prksGetFocusedTabContext().getResource('workNotesObserved')")
+        return tab
+
+    def owners(self, page, work):
+        return sorted(r['owner']['pageInstanceId'] for r in self.records(page, work))
+
+    def test_tab_closed_within_500_ms_is_recovered_in_a_new_tab(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        original = self.server_text(server, work)
+        self.type_marker(page, ' Closed tab')
+        # prks-allow-wait-for-timeout: the contract is "close the tab within 500 ms of the last keystroke"
+        page.wait_for_timeout(150)
+        self.close_tab(page)
+        tab = self.new_tab(context, server)
+        tab.locator('[data-prks-role="editor-status"]', has_text='Restored unsaved changes').wait_for()
+        self.assertEqual(self.notice(tab).count(), 0)
+        self.assert_restored_and_saved(server, tab, work, original + ' Closed tab')
+
+    def test_tab_closed_on_the_lan_without_web_locks_is_recovered(self):
+        server, page, context = self.start(without_locks=True)
+        work = server.ids['work_a']
+        original = self.server_text(server, work)
+        self.type_marker(page, ' Closed on the LAN')
+        # prks-allow-wait-for-timeout: the contract is "close the tab within 500 ms of the last keystroke"
+        page.wait_for_timeout(400)
+        self.close_tab(page)
+        tab = self.new_tab(context, server)
+        self.assertFalse(tab.evaluate('() => !!navigator.locks'))
+        self.assert_restored_and_saved(server, tab, work, original + ' Closed on the LAN')
+
+    def test_server_change_after_tab_close_needs_review_and_reconciles_explicitly(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.hold_saves(page)
+        self.type_marker(page, ' Mine')
+        self.wait_recorded(page, work, ' Mine')
+        mine = self.records(page, work)[0]['body']
+        self.close_tab(page)
+        work_note_sync.set_research_note(self.db_for(server), work, 'Another device wrote this.')
+        tab = self.new_tab(context, server)
+        self.notice(tab).wait_for()
+        self.assertIn('Unsaved Research Notes from an earlier session are available.', self.notice(tab).inner_text())
+        self.assertEqual(self.editor_text(tab), 'Another device wrote this.')
+        self.assertEqual(self.note_rows(tab), [])
+        dialog = self.open_review(tab)
+        dialog.locator('[data-prks-role="editor-recovery-reason"]', has_text='The note changed after this text was typed').wait_for()
+        self.assertEqual(dialog.locator('[data-prks-role="editor-recovery-origin"]').inner_text(), 'A browser tab that was closed')
+        self.assertEqual(dialog.locator('[data-prks-role="editor-recovery-restore"]').count(), 0)
+        dialog.locator('[data-prks-role="editor-recovery-compare-btn"]').click()
+        self.assertEqual(dialog.locator('[data-prks-role="editor-recovery-current-text"]').input_value(), 'Another device wrote this.')
+        self.assertEqual(dialog.locator('[data-prks-role="editor-recovery-chosen-text"]').input_value(), mine)
+        chosen = 'Another device wrote this. ' + mine
+        dialog.locator('[data-prks-role="editor-recovery-chosen-text"]').fill(chosen)
+        # Nothing is written before the explicit, confirmed choice.
+        self.assertEqual(self.note_rows(tab), [])
+        # Escape asks before the combined text is dropped; Keep editing keeps it.
+        tab.keyboard.press('Escape')
+        tab.locator('#prks-modal-confirm-title', has_text='Discard the combined text?').wait_for()
+        tab.locator('#prks-modal-confirm-cancel').click()
+        tab.locator('#prks-modal-confirm').wait_for(state='hidden')
+        self.assertEqual(dialog.locator('[data-prks-role="editor-recovery-chosen-text"]').input_value(), chosen)
+        dialog.locator('[data-prks-role="editor-recovery-replace"]').click()
+        tab.locator('#prks-modal-confirm-ok').click()
+        tab.locator('[data-prks-role="editor-recovery-review"]').wait_for(state='detached')
+        self.wait_server_text(tab, work, chosen)
+        self.wait_no_records(tab, work)
+        self.assertEqual(self.notice(tab).count(), 0)
+
+    def test_two_closed_tabs_show_both_drafts_and_apply_neither(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        original = self.server_text(server, work)
+        second = self.other_tab(context, page)
+        self.hold_saves(page)
+        self.hold_saves(second)
+        self.type_marker(page, ' From tab one')
+        self.type_marker(second, ' From tab two')
+        self.wait_recorded(page, work, ' From tab one')
+        self.wait_recorded(page, work, ' From tab two')
+        self.close_tab(page)
+        self.close_tab(second)
+        tab = self.new_tab(context, server)
+        self.notice(tab).wait_for()
+        self.assertIn('2 unsaved Research Notes drafts', self.notice(tab).inner_text())
+        self.assertEqual(self.editor_text(tab), original)
+        self.assertEqual(self.note_rows(tab), [])
+        dialog = self.open_review(tab)
+        self.assertEqual(dialog.locator('[data-prks-role="editor-recovery-candidate"]').count(), 2)
+        # Choosing one restores exactly that one; the other stays for review.
+        dialog.locator('[data-prks-role="editor-recovery-candidate"]').filter(has=tab.locator('input')).nth(1).click()
+        chosen = dialog.locator('[data-prks-role="editor-recovery-text"]').input_value()
+        dialog.locator('[data-prks-role="editor-recovery-restore"]').click()
+        dialog.wait_for(state='detached')
+        tab.wait_for_function(
+            "text => prksGetFocusedTabContext().getResource('workNotes')?.editor.value() === text", arg=chosen)
+        self.notice(tab).filter(has_text='Unsaved Research Notes from an earlier session are available.').wait_for()
+        self.wait_server_text(tab, work, chosen)
+        # The restored draft goes once its save is acknowledged; the other stays.
+        self.wait_record_count(tab, work, 1)
+
+    def test_a_tab_already_open_learns_of_a_draft_another_tab_left_on_close(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        original = self.server_text(server, work)
+        survivor = self.other_tab(context, page)
+        self.hold_saves(page)
+        self.type_marker(page, ' Left behind')
+        self.wait_recorded(page, work, ' Left behind')
+        self.assertEqual(self.notice(survivor).count(), 0)
+        self.close_tab(page)
+        # No remount: the open pane re-plans when the other tab's close is recorded.
+        self.notice(survivor).wait_for()
+        self.assertEqual(self.editor_text(survivor), original)
+        self.assertEqual(self.note_rows(survivor), [])
+
+    def test_a_live_editor_in_another_tab_is_never_adopted(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        original = self.server_text(server, work)
+        self.hold_saves(page)
+        self.type_marker(page, ' Still typing')
+        self.wait_recorded(page, work, ' Still typing')
+        owners = self.owners(page, work)
+        tab = self.new_tab(context, server)
+        self.assertEqual(self.editor_text(tab), original)
+        # Another live editor's text is that editor's: no notice, no adoption.
+        self.assertEqual(self.notice(tab).count(), 0)
+        self.assertEqual(self.owners(tab, work), owners)
+        self.assertTrue(self.editor_text(page).endswith(' Still typing'))
+
+    def test_a_crashed_lan_tab_is_offered_for_review_only(self):
+        server, page, context = self.start(without_locks=True)
+        work = server.ids['work_a']
+        original = self.server_text(server, work)
+        self.hold_saves(page)
+        self.type_marker(page, ' Before the crash')
+        self.wait_recorded(page, work, ' Before the crash')
+        owners = self.owners(page, work)
+        # No final pagehide and no Web Locks: nothing proves the page is gone.
+        from playwright.sync_api import Error as PlaywrightError
+        # Wait for the renderer to be gone before opening the next tab, so the
+        # new tab never lands in the dying process.
+        with page.expect_event('crash', timeout=15000):
+            try:
+                page.goto('chrome://crash', timeout=5000)
+            except PlaywrightError:
+                pass
+        tab = self.new_tab(context, server)
+        self.notice(tab).wait_for()
+        self.assertEqual(self.editor_text(tab), original)
+        dialog = self.open_review(tab)
+        self.assertEqual(dialog.locator('[data-prks-role="editor-recovery-origin"]').inner_text(), 'Another tab that may still be open')
+        self.assertEqual(dialog.locator('[data-prks-role="editor-recovery-restore"]').count(), 0)
+        self.assertEqual(dialog.locator('[data-prks-role="editor-recovery-compare-btn"]').count(), 0)
+        self.assertTrue(dialog.locator('[data-prks-role="editor-recovery-text"]').input_value().endswith(' Before the crash'))
+        self.close_review(tab)
+        self.assertEqual(self.owners(tab, work), owners)
+        self.assertEqual(self.note_rows(tab), [])
+
+    def test_an_ownership_change_while_review_is_open_is_refused(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        original = self.server_text(server, work)
+        second = self.other_tab(context, page)
+        self.hold_saves(page)
+        self.hold_saves(second)
+        self.type_marker(page, ' One')
+        self.type_marker(second, ' Two')
+        self.wait_recorded(page, work, ' One')
+        self.wait_recorded(page, work, ' Two')
+        self.close_tab(page)
+        self.close_tab(second)
+        tab = self.new_tab(context, server)
+        dialog = self.open_review(tab)
+        draft = dialog.locator('[data-prks-role="editor-recovery-candidate"]').first.get_attribute('data-draft-id')
+        # Another tab adopts the shown draft while Review is open.
+        tab.evaluate(
+            """async (draftId) => {
+                const store = window.prksEditorRecovery.runtime().store;
+                const record = await store.get(draftId);
+                await store.adopt(draftId, record.owner.pageInstanceId,
+                    { runtimeId: null, pageInstanceId: 'p-another-tab', paneId: 'tab-x', claimedAt: Date.now() });
+            }""",
+            draft)
+        dialog.locator('[data-prks-role="editor-recovery-restore"]').click()
+        dialog.locator('[data-prks-role="editor-recovery-message"]', has_text='This draft changed').wait_for()
+        self.assertEqual(self.editor_text(tab), original)
+        self.assertIn('p-another-tab', self.owners(tab, work))
+        self.assertEqual(self.note_rows(tab), [])
+
+    def test_storage_failure_warns_and_keeps_the_leave_guard_until_saved(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        original = self.server_text(server, work)
+        context.add_init_script(_WITHOUT_RECOVERY_STORAGE)
+        page.reload(wait_until='domcontentloaded')
+        page.wait_for_selector('.CodeMirror')
+        page.wait_for_function(
+            "() => !!prksGetFocusedTabContext().getResource('workNotesObserved')")
+        page.route('**/api/sync/operations', lambda route: route.abort('connectionrefused'))
+        self.type_marker(page, ' Unprotected')
+        warning = page.locator('[data-prks-role="editor-recovery-unprotected"]')
+        warning.wait_for()
+        self.assertIn('Not protected if the browser closes', warning.inner_text())
+        self.assertTrue(page.evaluate('() => window.prksEditorRecovery.runtime().writers.leaveGuardActive()'))
+        # Leaving now asks first.
+        page.remove_listener('dialog', self._dialog_handler)
+        with page.expect_event('dialog', timeout=10000) as prompt:
+            page.close(run_before_unload=True)
+        self.assertEqual(prompt.value.type, 'beforeunload')
+        prompt.value.dismiss()
+        self.assertFalse(page.is_closed())
+        page.unroute('**/api/sync/operations')
+        page.evaluate('() => prksSync.wake()')
+        self.wait_server_text(page, work, original + ' Unprotected')
+        warning.wait_for(state='detached')
+        self.assertFalse(page.evaluate('() => window.prksEditorRecovery.runtime().writers.leaveGuardActive()'))
+
+    def test_hiding_the_notice_or_closing_review_keeps_the_draft_and_discard_is_final(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.hold_saves(page)
+        self.type_marker(page, ' Keep me')
+        self.wait_recorded(page, work, ' Keep me')
+        self.close_tab(page)
+        work_note_sync.set_research_note(self.db_for(server), work, 'Another device wrote this.')
+        tab = self.new_tab(context, server)
+        self.notice(tab).wait_for()
+        self.notice(tab).locator('[data-prks-role="editor-recovery-hide"]').click()
+        self.notice(tab).wait_for(state='detached')
+        self.assertEqual(len(self.records(tab, work)), 1)
+        # Back on the next mount; Escape and Close change nothing.
+        tab.reload(wait_until='domcontentloaded')
+        tab.wait_for_selector('.CodeMirror')
+        self.notice(tab).wait_for()
+        self.open_review(tab)
+        tab.keyboard.press('Escape')
+        tab.locator('[data-prks-role="editor-recovery-review"]').wait_for(state='detached')
+        self.assertEqual(len(self.records(tab, work)), 1)
+        dialog = self.open_review(tab)
+        dialog.locator('[data-prks-role="editor-recovery-discard"]').click()
+        tab.locator('#prks-modal-confirm-ok').click()
+        dialog.locator('[data-prks-role="editor-recovery-empty"]').wait_for()
+        self.close_review(tab)
+        self.notice(tab).wait_for(state='detached')
+        self.wait_no_records(tab, work)
+        tab.reload(wait_until='domcontentloaded')
+        tab.wait_for_selector('.CodeMirror')
+        tab.wait_for_function(
+            "() => !!prksGetFocusedTabContext().getResource('workNotesObserved')")
+        self.assertEqual(self.notice(tab).count(), 0)
+        self.assertEqual(self.records(tab, work), [])
+        self.assertEqual(self.editor_text(tab), 'Another device wrote this.')
+        self.assertEqual(self.server_text(server, work), 'Another device wrote this.')
+
+    def test_leaving_the_work_closes_review_without_acting(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.hold_saves(page)
+        self.type_marker(page, ' Pending review')
+        self.wait_recorded(page, work, ' Pending review')
+        self.close_tab(page)
+        work_note_sync.set_research_note(self.db_for(server), work, 'Another device wrote this.')
+        tab = self.new_tab(context, server)
+        self.open_review(tab)
+        tab.evaluate("() => { location.hash = '#/folders'; }")
+        tab.wait_for_function("() => location.hash === '#/folders'")
+        tab.locator('[data-prks-role="editor-recovery-review"]').wait_for(state='detached')
+        self.assertEqual(len(self.records(tab, work)), 1)
+        self.assertEqual(self.note_rows(tab), [])

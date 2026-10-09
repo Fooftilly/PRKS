@@ -145,6 +145,12 @@ export interface MergeEnv {
    * settled its claim (and so held its page lock) counts as dead.
    */
   definiteOnly?: boolean
+  /**
+   * Positive record that a page ran its final `pagehide`. On a re-scan it
+   * stands in for a definite answer, settled claim or not, so a tab that
+   * closed during its claim is merged unless it still answers as alive.
+   */
+  wasPageClosed?(pageInstanceId: string): boolean
 }
 
 export interface MergeReport {
@@ -163,9 +169,10 @@ function readRaw(storage: EmergencyStorage, key: string): string | null | undefi
 
 async function mergeable(env: MergeEnv, stored: StoredEmergency): Promise<boolean> {
   if (stored.pageInstanceId === env.pageInstanceId || !stored.payload) return false
-  if (env.definiteOnly && stored.payload.runtimeId === null) return false
+  const closed = env.definiteOnly && env.wasPageClosed ? env.wasPageClosed(stored.pageInstanceId) : false
+  if (env.definiteOnly && !closed && stored.payload.runtimeId === null) return false
   const alive = await env.isPageAlive(stored.pageInstanceId)
-  return env.definiteOnly ? alive === false : alive !== true
+  return env.definiteOnly && !closed ? alive === false : alive !== true
 }
 
 /**

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createPageIdentity, type IdentityEnv } from './identity'
-import { PAGE_LOCK_PREFIX, RUNTIME_LOCK_PREFIX, RUNTIME_SESSION_KEY } from './schema'
+import { CLOSED_PAGES_LOCAL_KEPT, CLOSED_PAGE_KEY_PREFIX, PAGE_LOCK_PREFIX, RUNTIME_LOCK_PREFIX, RUNTIME_SESSION_KEY } from './schema'
 import { createFakeBrowser } from './test-support/fake-env'
 
 const COPIED = 'r-' + 'a'.repeat(32)
@@ -186,6 +186,83 @@ describe('closed-page record', () => {
     expect(duplicate.wasClosedInThisTab(before.pageInstanceId)).toBe(false)
     win.fire('pageshow', { persisted: true })
     expect(after.wasClosedInThisTab(before.pageInstanceId)).toBe(false)
+  })
+
+  it('never lists a page of this tab that went into the back/forward cache', async () => {
+    const browser = createFakeBrowser()
+    const session = browser.sessionStorageWith()
+    const win = events()
+    const cached = createPageIdentity({ sessionStorage: session, window: win, locks: null, createChannel: null })
+    await cached.claim()
+    win.fire('pagehide', { persisted: true })
+    // The tab opens PRKS again while the old page is frozen in the cache.
+    const next = createPageIdentity({ sessionStorage: session, window: events(), locks: null, createChannel: null })
+    expect(next.wasClosedInThisTab(cached.pageInstanceId)).toBe(false)
+    // It comes back, and later closes for real.
+    win.fire('pageshow', { persisted: true })
+    win.fire('pagehide', { persisted: false })
+    expect(next.wasClosedInThisTab(cached.pageInstanceId)).toBe(true)
+  })
+
+  it('records a final pagehide in localStorage for every tab, but not one into the back/forward cache', async () => {
+    const browser = createFakeBrowser()
+    const local = browser.sessionStorageWith()
+    const cachedWin = events()
+    const cached = createPageIdentity({ sessionStorage: browser.sessionStorageWith(), localStorage: local, window: cachedWin, locks: null, createChannel: null })
+    const closingWin = events()
+    const closing = createPageIdentity({ sessionStorage: browser.sessionStorageWith(), localStorage: local, window: closingWin, locks: null, createChannel: null })
+    await Promise.all([cached.claim(), closing.claim()])
+    // Another tab of the origin: its own sessionStorage, the shared localStorage.
+    const reader = createPageIdentity({ sessionStorage: browser.sessionStorageWith(), localStorage: local, window: events(), locks: null, createChannel: null })
+    expect(reader.wasPageClosed(closing.pageInstanceId)).toBe(false)
+    cachedWin.fire('pagehide', { persisted: true })
+    closingWin.fire('pagehide', { persisted: false })
+    expect(reader.wasPageClosed(cached.pageInstanceId)).toBe(false)
+    expect(reader.wasPageClosed(closing.pageInstanceId)).toBe(true)
+    expect(reader.wasClosedInThisTab(closing.pageInstanceId)).toBe(false)
+    // A page never counts itself as closed.
+    expect(closing.wasPageClosed(closing.pageInstanceId)).toBe(false)
+  })
+
+  it('keeps each closing page\'s record under its own key, so tabs closing together never drop one', async () => {
+    const browser = createFakeBrowser()
+    const local = browser.sessionStorageWith()
+    const firstWin = events()
+    const first = createPageIdentity({ sessionStorage: browser.sessionStorageWith(), localStorage: local, window: firstWin, locks: null, createChannel: null })
+    const secondWin = events()
+    const second = createPageIdentity({ sessionStorage: browser.sessionStorageWith(), localStorage: local, window: secondWin, locks: null, createChannel: null })
+    await Promise.all([first.claim(), second.claim()])
+    const reader = createPageIdentity({ sessionStorage: browser.sessionStorageWith(), localStorage: local, window: events(), locks: null, createChannel: null })
+    firstWin.fire('pagehide', { persisted: false })
+    secondWin.fire('pagehide', { persisted: false })
+    expect(local.values.has(CLOSED_PAGE_KEY_PREFIX + first.pageInstanceId)).toBe(true)
+    expect(local.values.has(CLOSED_PAGE_KEY_PREFIX + second.pageInstanceId)).toBe(true)
+    expect(reader.wasPageClosed(first.pageInstanceId)).toBe(true)
+    expect(reader.wasPageClosed(second.pageInstanceId)).toBe(true)
+  })
+
+  it('keeps a bounded record and survives a refused write', async () => {
+    const browser = createFakeBrowser()
+    const local = browser.sessionStorageWith()
+    const ids: string[] = []
+    for (let i = 0; i < CLOSED_PAGES_LOCAL_KEPT + 3; i++) {
+      const win = events()
+      const page = createPageIdentity({ sessionStorage: browser.sessionStorageWith(), localStorage: local, window: win, locks: null, createChannel: null })
+      await page.claim()
+      win.fire('pagehide', { persisted: false })
+      ids.push(page.pageInstanceId)
+    }
+    expect([...local.values.keys()].filter((k) => k.startsWith(CLOSED_PAGE_KEY_PREFIX)).length).toBe(CLOSED_PAGES_LOCAL_KEPT)
+    // The oldest records go; the newest stay.
+    const reader = createPageIdentity({ sessionStorage: browser.sessionStorageWith(), localStorage: local, window: events(), locks: null, createChannel: null })
+    expect(reader.wasPageClosed(ids[0]!)).toBe(false)
+    expect(reader.wasPageClosed(ids[ids.length - 1]!)).toBe(true)
+    const refusing = { getItem: () => null, setItem: () => { throw new Error('QuotaExceededError') } }
+    const win = events()
+    const page = createPageIdentity({ sessionStorage: browser.sessionStorageWith(), localStorage: refusing, window: win, locks: null, createChannel: null })
+    await page.claim()
+    expect(() => win.fire('pagehide', { persisted: false })).not.toThrow()
+    expect(page.wasPageClosed(ids[ids.length - 1]!)).toBe(false)
   })
 })
 

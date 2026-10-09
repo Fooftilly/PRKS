@@ -34,6 +34,7 @@ import {
   MAX_WRITE_WAIT_MS,
   RETRY_FIRST_MS,
   RETRY_MAX_MS,
+  SUPERSEDED_KEY_PREFIX,
   UNKNOWN_BASE,
   emergencyKeyOf,
   reservationKeyOf,
@@ -199,6 +200,119 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
   const tombstoned = new Set<string>()
   let refreshingEmergency = false
   let disposed = false
+  /**
+   * Stored generations known to be superseded by the server, still waiting
+   * for their removal: never adopted, so never restored. A removal storage
+   * refused is also written to localStorage, so a later page honours it and
+   * finishes the removal.
+   */
+  const superseded = new Map<string, number>()
+  /**
+   * Superseded generations whose mark localStorage refused: only this page
+   * knows to suppress them, so leaving stays guarded until the delete lands.
+   */
+  const unrecorded = new Set<string>()
+
+  interface SupersededMark {
+    draftId: string
+    pageInstanceId: string
+    generation: number
+  }
+
+  function parseSupersededMark(draftId: string, raw: string | null): SupersededMark | null {
+    if (!raw) return null
+    try {
+      const value: unknown = JSON.parse(raw)
+      if (!value || typeof value !== 'object') return null
+      const { pageInstanceId, generation } = value as { pageInstanceId?: unknown; generation?: unknown }
+      if (typeof pageInstanceId !== 'string' || typeof generation !== 'number' || !Number.isSafeInteger(generation) || generation <= 0) return null
+      return { draftId, pageInstanceId, generation }
+    } catch {
+      return null
+    }
+  }
+
+  function readSupersededMark(draftId: string): SupersededMark | null {
+    try {
+      return storage ? parseSupersededMark(draftId, storage.getItem(SUPERSEDED_KEY_PREFIX + draftId)) : null
+    } catch {
+      return null
+    }
+  }
+
+  function readSupersededMarks(): SupersededMark[] {
+    const marks: SupersededMark[] = []
+    try {
+      if (!storage) return marks
+      const ids: string[] = []
+      for (let i = 0; i < storage.length; i++) {
+        const key = storage.key(i)
+        if (key && key.startsWith(SUPERSEDED_KEY_PREFIX)) ids.push(key.slice(SUPERSEDED_KEY_PREFIX.length))
+      }
+      for (const id of ids) {
+        const mark = readSupersededMark(id)
+        if (mark) marks.push(mark)
+      }
+    } catch {
+      // Unreadable storage: nothing to honour beyond this page's own map.
+    }
+    return marks
+  }
+
+  function markSuperseded(mark: SupersededMark): void {
+    superseded.set(mark.draftId, Math.max(mark.generation, superseded.get(mark.draftId) || 0))
+    const prior = readSupersededMark(mark.draftId)
+    if (prior && prior.generation >= mark.generation) return
+    try {
+      if (!storage) throw new Error('no localStorage')
+      storage.setItem(SUPERSEDED_KEY_PREFIX + mark.draftId, JSON.stringify({ pageInstanceId: mark.pageInstanceId, generation: mark.generation }))
+    } catch {
+      // Only this page can suppress it now: guard leaving until it is deleted.
+      unrecorded.add(mark.draftId)
+      changed()
+    }
+  }
+
+  function unmarkSuperseded(draftId: string, generation: number): void {
+    if ((superseded.get(draftId) || 0) <= generation) superseded.delete(draftId)
+    if (unrecorded.delete(draftId)) changed()
+    const mark = readSupersededMark(draftId)
+    if (!mark || mark.generation > generation) return
+    try {
+      if (storage) storage.removeItem(SUPERSEDED_KEY_PREFIX + draftId)
+    } catch {
+      // Left for a later sweep, which finds the record gone and clears it.
+    }
+  }
+
+  /**
+   * Removes one superseded generation by exact owner, generation and status.
+   * Resolves true when it is gone or no longer that generation (someone else
+   * owns it now); throws while storage refuses.
+   */
+  async function removeSupersededRecord(mark: SupersededMark): Promise<void> {
+    superseded.set(mark.draftId, Math.max(mark.generation, superseded.get(mark.draftId) || 0))
+    await store.discard(mark.draftId, undefined, { pageInstanceId: mark.pageInstanceId, generation: mark.generation, status: 'active' })
+    unmarkSuperseded(mark.draftId, mark.generation)
+  }
+
+  /** Startup: finish the removals an earlier page could not, retrying with backoff. */
+  function sweepSuperseded(marks: SupersededMark[], delay: number): void {
+    if (!marks.length || disposed) return
+    void Promise.all(
+      marks.map((mark) =>
+        removeSupersededRecord(mark).then(
+          () => null,
+          () => mark,
+        ),
+      ),
+    ).then((results) => {
+      const left = results.filter((m): m is SupersededMark => m !== null)
+      if (!left.length || disposed) return
+      const next = delay ? Math.min(delay * 2, RETRY_MAX_MS) : RETRY_FIRST_MS
+      scheduler.set(() => sweepSuperseded(left, next), next)
+    }).catch(() => undefined)
+  }
 
   function onBeforeUnload(event: Event): void {
     event.preventDefault()
@@ -245,7 +359,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     if (disposed) return
     const pending = pendingWriters()
     planHeld(pending)
-    setGuard(pending.some((w) => w.needsLeaveGuard()))
+    setGuard(pending.some((w) => w.needsLeaveGuard()) || unrecorded.size > 0)
     setEmergencyListeners(pending.length > 0)
     refreshEmergencyKey(pending)
   }
@@ -456,6 +570,8 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     private nextTaskTimer: unknown = null
     private retryTimer: unknown = null
     private retryDelay = 0
+    /** Retries removing a stored generation the server already superseded. */
+    private cleanupTimer: unknown = null
     private released = false
     private readonly cleared = new Set<string>()
 
@@ -744,7 +860,34 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       else if (this.inFlight) await this.inFlight
       const draftId = this.lineageId
       if (!draftId) return 'none'
-      const outcome = await store.deleteIfAcknowledged(draftId, generation, body)
+      let outcome: DeleteOutcome
+      try {
+        outcome = await store.deleteIfAcknowledged(draftId, generation, body)
+      } catch (error) {
+        if (!this.ackedUncommitted(draftId, generation, body)) throw error
+        outcome = 'kept'
+      }
+      if (outcome !== 'deleted' && this.ackedUncommitted(draftId, generation, body)) {
+        // Recovery storage never took this exact generation, but the server
+        // now holds it: nothing is left to protect, so the warning and the
+        // leave guard end. The stored older generation of this lineage is
+        // superseded by it and goes too, while this page still owns it.
+        const stored = this.lineageStored ? this.committed : 0
+        this.clearTimers()
+        this.clearRetry()
+        this.latest = null
+        this.cleared.add(draftId)
+        this.lineageId = null
+        this.lineageStored = false
+        this.committed = 0
+        this.failedGeneration = 0
+        this.retryDelay = 0
+        this.status = 'clean'
+        changed()
+        if (stored) await this.removeSuperseded(draftId, stored, 0)
+        else await this.tombstoneIfListed(draftId)
+        return 'deleted'
+      }
       if (outcome === 'deleted' && this.lineageId === draftId) {
         this.cleared.add(draftId)
         if (this.latest) {
@@ -759,6 +902,38 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       }
       if (outcome === 'deleted') await this.tombstoneIfListed(draftId)
       return outcome
+    }
+
+    /**
+     * Removes this page's stored older generation once the server holds a newer
+     * one. A store that refuses is retried in the background with backoff,
+     * without the leave guard: the text is already on the server.
+     */
+    private async removeSuperseded(draftId: string, generation: number, delay: number): Promise<void> {
+      // Until it is gone, it is never adopted again: it is not unsaved text.
+      // Recorded before the delete starts, where a later page can see it: a
+      // reload can abort the delete before it settles. Cleared once it lands.
+      const mark = { draftId, pageInstanceId: identity.pageInstanceId, generation }
+      if (delay === 0) markSuperseded(mark)
+      try {
+        await removeSupersededRecord(mark)
+      } catch {
+        // Retried here for as long as this page lives: a released pane leaves
+        // the record behind.
+        if (disposed) return
+        const next = delay ? Math.min(delay * 2, RETRY_MAX_MS) : RETRY_FIRST_MS
+        this.cleanupTimer = scheduler.set(() => {
+          this.cleanupTimer = null
+          this.removeSuperseded(draftId, generation, next).catch(() => undefined)
+        }, next)
+        return
+      }
+      await this.tombstoneIfListed(draftId)
+    }
+
+    /** The newest generation, never committed to recovery storage, is exactly what was acknowledged. */
+    private ackedUncommitted(draftId: string, generation: number, body: string): boolean {
+      return this.lineageId === draftId && !!this.latest && this.latest.generation === generation && this.latest.body === body && !this.inFlight
     }
 
     async discard(): Promise<void> {
@@ -830,6 +1005,8 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       this.released = true
       this.clearTimers()
       this.clearRetry()
+      if (this.cleanupTimer !== null) scheduler.clear(this.cleanupTimer)
+      this.cleanupTimer = null
     }
   }
 
@@ -849,6 +1026,16 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     // One live writer per lineage on this page: a second adoption of the same
     // draft, concurrent or after the first, is refused.
     if (disposed || adopting.has(record.draftId) || ownerOf(record.draftId) !== null) return null
+    // Another page may have marked it after this one started: read the marks again.
+    if (!superseded.has(record.draftId)) {
+      const mark = readSupersededMark(record.draftId)
+      if (mark) {
+        superseded.set(mark.draftId, mark.generation)
+        // Finish the removal here too: the page that marked it may be gone.
+        sweepSuperseded([mark], 0)
+      }
+    }
+    if ((superseded.get(record.draftId) || 0) >= record.generation) return null
     adopting.add(record.draftId)
     try {
       return await adoptReserved(record, input)
@@ -874,12 +1061,16 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       pageInstanceId: identity.pageInstanceId,
       paneId: input.paneId,
       claimedAt: now(),
-    })
+    }, record.generation)
     if (result.outcome !== 'ok' || disposed) return null
     writer.adoptRecord(result.record)
     live.add(writer)
     return writer
   }
+
+  // Before anything can adopt: an earlier page's superseded generations are
+  // never restored, and their removal resumes here.
+  sweepSuperseded(readSupersededMarks(), 0)
 
   return {
     openWriter,

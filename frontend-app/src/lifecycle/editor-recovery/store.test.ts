@@ -106,6 +106,30 @@ describe('recovery store', () => {
     expect(await store.writeGeneration({ draftId: 'd-a', pageInstanceId: 'p-dead', generation: 4, body: 'late' })).toBe('not-owner')
   })
 
+  it('refuses an adoption decided on an older generation', async () => {
+    const { store } = setup()
+    await seed(store, 'd-a', 'p-dead', 3)
+    expect(await store.writeGeneration({ draftId: 'd-a', pageInstanceId: 'p-dead', generation: 4, body: 'newer' })).toBe('ok')
+    expect((await store.adopt('d-a', 'p-dead', owner('p-me'), 3)).outcome).toBe('conflict')
+    expect((await store.get('d-a'))?.owner.pageInstanceId).toBe('p-dead')
+    expect((await store.adopt('d-a', 'p-dead', owner('p-me'), 4)).outcome).toBe('ok')
+  })
+
+  it('discards a reviewed record only while it is exactly what was reviewed', async () => {
+    const { store } = setup()
+    await seed(store, 'd-a', 'p-dead', 3, 'reviewed')
+    const reviewed = { pageInstanceId: 'p-dead', generation: 3, status: 'active' as const }
+    // Adopted meanwhile, or extended meanwhile: kept.
+    await store.adopt('d-a', 'p-dead', owner('p-other'))
+    expect(await store.discard('d-a', undefined, reviewed)).toBe('kept')
+    expect(await store.discard('d-a', undefined, { ...reviewed, pageInstanceId: 'p-other', generation: 2 })).toBe('kept')
+    expect(await store.discard('d-a', undefined, { ...reviewed, pageInstanceId: 'p-other', status: 'tail-missing' })).toBe('kept')
+    expect(await store.getBody('d-a')).toMatchObject({ body: 'reviewed' })
+    expect(await store.discard('d-a', undefined, { ...reviewed, pageInstanceId: 'p-other' })).toBe('deleted')
+    expect(await store.get('d-a')).toBeNull()
+    expect(await store.discard('d-a', undefined, reviewed)).toBe('missing')
+  })
+
   it('clears on acknowledgement only for the exact generation and body', async () => {
     const { store } = setup()
     await seed(store, 'd-a', 'p-a', 2, 'acked body')

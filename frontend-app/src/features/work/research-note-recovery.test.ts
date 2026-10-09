@@ -12,7 +12,7 @@ import workNotesStateSource from '../../../../frontend/js/work-notes-state.js?ra
 import * as recoveryApi from '../../lifecycle/editor-recovery-entry'
 import type { EmergencyStorage } from '../../lifecycle/editor-recovery/emergency'
 import type { EditorRecoveryRuntime } from '../../lifecycle/editor-recovery/runtime'
-import { RUNTIME_SESSION_KEY, type DraftRecord } from '../../lifecycle/editor-recovery/schema'
+import { RUNTIME_SESSION_KEY, UNKNOWN_BASE, type DraftRecord } from '../../lifecycle/editor-recovery/schema'
 import { createFakeBrowser } from '../../lifecycle/editor-recovery/test-support/fake-env'
 import { createFakeIdb, settle } from '../../lifecycle/editor-recovery/test-support/fake-idb'
 
@@ -64,6 +64,7 @@ type W = Record<string, unknown> & {
   prksBindWorkNotesSync: (ctx: Ctx) => void
   prksSetResearchRecoveryRestoreMsForTest: (ms: number | null) => void
   prksRestoreResearchNotesRecovery: (ctx: Ctx, work: object) => Promise<{ restored: boolean; review: Array<{ reason: string }> } | null>
+  prksRefreshResearchNotesRecovery: (ctx: Ctx, workId: string) => Promise<unknown>
 }
 const win = window as unknown as W
 
@@ -170,6 +171,7 @@ function startPage() {
       createChannel: browser.channelFor(name),
       claimWaitMs: 20,
       window: pageWindow,
+      localStorage: local,
     },
     writers: { window: null, document: null },
     emergencyStorage: local,
@@ -244,6 +246,75 @@ async function reload(): Promise<EditorRecoveryRuntime> {
   document.body.innerHTML = ''
   await settle()
   return startPage()
+}
+
+/** The tab closes (a final pagehide) and the Work is opened again in a new tab. */
+async function closeTabAndOpenAnother(how: 'close' | 'crash' = 'close'): Promise<EditorRecoveryRuntime> {
+  if (how === 'close') {
+    page!.rt.writers.writeEmergencyNow()
+    page!.window.dispatchEvent(new Event('pagehide'))
+  }
+  page!.rt.dispose()
+  // The browser drops a closed or crashed page's locks either way.
+  page!.locks.releaseAll()
+  win.prksResetResearchDraftsForTest()
+  win.prksDestroyAllTabContexts()
+  document.body.innerHTML = ''
+  await settle()
+  // A new tab: its own sessionStorage, so no runtime id and no closed-page list.
+  session = browser.sessionStorageWith()
+  return startPage()
+}
+
+/** Another page of the origin, alive, with its own runtime and writers. */
+function otherPage(name: string) {
+  const locks = browser.locksFor(name)
+  const pageWindow = new EventTarget()
+  const rt = recoveryApi.createEditorRecoveryRuntime({
+    store: { indexedDB: idb.factory },
+    identity: {
+      sessionStorage: browser.sessionStorageWith(),
+      locks: withoutLocks ? null : locks,
+      createChannel: browser.channelFor(name),
+      claimWaitMs: 20,
+      window: pageWindow,
+      localStorage: local,
+    },
+    writers: { window: null, document: null },
+    emergencyStorage: local,
+  })
+  return { rt, locks, window: pageWindow }
+}
+
+type Details = {
+  token: string
+  current: { text: string; revision: number | null; source: string; queue: string }
+  candidates: Array<{ draftId: string; lineage: string; reason: string; action: string | null; body: string | null; status: string; expect: { draftId: string; pageInstanceId: string; generation: number; status: string } }>
+}
+type Review = {
+  details: (ctx: Ctx, workId: string) => Promise<Details | null>
+  restore: (ctx: Ctx, workId: string, token: string, expect: unknown) => Promise<{ ok: boolean; code?: string }>
+  replace: (ctx: Ctx, workId: string, token: string, expect: unknown, text: string, shown: { text: string; revision: number | null }) => Promise<{ ok: boolean; code?: string }>
+  discard: (ctx: Ctx, workId: string, token: string, expect: unknown) => Promise<{ ok: boolean; code?: string }>
+  view: (ctx: Ctx) => { drafts: number; incomplete: number; unprotected: string | null } | null
+}
+function review(): Review {
+  const w = window as unknown as Record<string, unknown>
+  return {
+    details: w.prksResearchNotesRecoveryDetails as Review['details'],
+    restore: w.prksResearchNotesRecoveryRestore as Review['restore'],
+    replace: w.prksResearchNotesRecoveryReplace as Review['replace'],
+    discard: w.prksResearchNotesRecoveryDiscard as Review['discard'],
+    view: w.prksResearchNotesRecoveryView as Review['view'],
+  }
+}
+
+/** Mount as the Work route does: restore, then the editor reads the session text. */
+async function openAndRestore(tabId = 'tab-1') {
+  const ctx = await openWork(tabId)
+  const result = await win.prksRestoreResearchNotesRecovery(ctx, { id: 'w1' })
+  const notes = attachEditor(ctx)
+  return { ctx, result, notes }
 }
 
 beforeAll(() => {
@@ -518,15 +589,16 @@ describe('same-pane restore after reload', () => {
     expect(await records()).toHaveLength(1)
   })
 
-  it('does not restore another pane\'s draft into this pane', async () => {
+  it('restores the draft of a pane that no longer exists into the pane that opens the Work', async () => {
     const side = await openWork('tab-2')
     const entry = type(side, 'Saved note. Side pane')
     await entry.recovery!.flush()
     await reload()
     const main = await openWork('tab-1')
     const result = await win.prksRestoreResearchNotesRecovery(main, { id: 'w1' })
-    expect(result).toMatchObject({ restored: false, review: [{ reason: 'other-source' }] })
-    expect(win.prksResearchNotesTextForWork('w1', server.text, main)).toBe('Saved note.')
+    expect(result).toMatchObject({ restored: true, review: [] })
+    expect(win.prksResearchNotesTextForWork('w1', server.text, main)).toBe('Saved note. Side pane')
+    expect(sync.rows()).toEqual([])
   })
 
   it('does not restore while two drafts exist for the Work', async () => {
@@ -682,8 +754,45 @@ describe('same-pane restore after reload', () => {
       expect(win.prksResearchNotesTextForWork('w1', server.text, stuckMain)).toBe('Saved note.')
       const [w1After] = (await records()).filter((r) => r.entityId === 'w1')
       expect(w1After!.owner.pageInstanceId).toBe(w1Before!.owner.pageInstanceId)
+      // Out of time, but not out of reach: the notice still lists the draft, unchecked.
+      expect(review().view(stuckMain)).toMatchObject({ drafts: 1 })
+      expect(stuckMain.ui.researchNotesRecovery).toMatchObject({ candidates: [{ reason: 'ownership-unknown', action: null }] })
     } finally {
       page!.rt.scanEmergency = scan
+      win.prksSetResearchRecoveryRestoreMsForTest(null)
+    }
+  })
+
+  it('a restore that runs out of time while adopting keeps the unchecked notice', async () => {
+    const ctx = await openWork()
+    await type(ctx, 'Saved note. Slow adopt').recovery!.flush()
+    await reload()
+    const fresh = await openWork()
+    win.prksSetResearchRecoveryRestoreMsForTest(50)
+    const writers = page!.rt.writers
+    const adopt = writers.adopt.bind(writers)
+    let release!: () => void
+    const hung = new Promise<void>((resolve) => (release = resolve))
+    let adopting = false
+    writers.adopt = async (record, options) => {
+      writers.adopt = adopt
+      adopting = true
+      await hung
+      return adopt(record, options)
+    }
+    try {
+      expect(await win.prksRestoreResearchNotesRecovery(fresh, { id: 'w1' })).toBeNull()
+      expect(adopting).toBe(true)
+      await waitFor(() => !!fresh.ui.researchNotesRecovery, 'unchecked notice')
+      // The abandoned run finishes late: it gives the draft back and leaves the notice alone.
+      release()
+      await settle()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(fresh.ui.workResearchNoteSession).toBeNull()
+      expect(review().view(fresh)).toMatchObject({ drafts: 1 })
+      expect(fresh.ui.researchNotesRecovery).toMatchObject({ candidates: [{ reason: 'ownership-unknown', action: null }] })
+    } finally {
+      writers.adopt = adopt
       win.prksSetResearchRecoveryRestoreMsForTest(null)
     }
   })
@@ -933,5 +1042,523 @@ describe('same-pane restore after reload', () => {
       expect(result).toMatchObject({ restored: false, review: [{ reason: 'base-advanced' }] })
       expect(sync.rows()).toEqual([])
     })
+  })
+})
+
+describe('tab-close recovery (slice 3)', () => {
+  it('restores the exact text of a closed tab in a new tab, then saves it normally', async () => {
+    const ctx = await openWork()
+    type(ctx, 'Saved note. Closed within 500 ms')
+    // Closed before the idle write: only the emergency entry holds it.
+    await closeTabAndOpenAnother()
+    const { ctx: fresh, result, notes } = await openAndRestore()
+    expect(result).toMatchObject({ restored: true, review: [] })
+    expect(notes.editor.value()).toBe('Saved note. Closed within 500 ms')
+    expect(fresh.ui.researchNotesRecovery).toBeNull()
+    expect(sync.rows()).toEqual([])
+    const saved = await win.prksEnqueueWorkResearchNotesSave(fresh, 'w1')
+    expect(sync.rows().map((r) => r.payload.text)).toEqual(['Saved note. Closed within 500 ms'])
+    sync.ack(saved.opId as string, 6)
+    await waitFor(async () => (await records()).length === 0, 'restored record cleared on ack')
+  })
+
+  it('restores a closed tab\'s text without Web Locks from the page\'s recorded final pagehide', async () => {
+    withoutLocks = true
+    startPage()
+    const ctx = await openWork()
+    await type(ctx, 'Saved note. Closed on the LAN').recovery!.flush()
+    await closeTabAndOpenAnother()
+    const { result, notes } = await openAndRestore()
+    expect(page!.rt.identity.current()!.verified).toBe('channel')
+    expect(result).toMatchObject({ restored: true })
+    expect(notes.editor.value()).toBe('Saved note. Closed on the LAN')
+  })
+
+  it('without Web Locks, a pane already open finds the text of a tab closed before its runtime claim settled', async () => {
+    withoutLocks = true
+    startPage()
+    const { ctx } = await openAndRestore()
+    expect(review().view(ctx)).toBeNull()
+    // Another tab on the same Work types and closes during its 20 ms claim.
+    const other = otherPage('closing-tab')
+    void other.rt.start()
+    other.rt.writers
+      .openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-9', base: UNKNOWN_BASE })
+      .edit(1, 'Saved note. Typed while claiming')
+    expect(other.rt.writers.writeEmergencyNow()).toBe('written')
+    expect(other.rt.identity.current()).toBeNull()
+    other.window.dispatchEvent(new Event('pagehide'))
+    other.rt.dispose()
+    await settle()
+    // The closed-pages notification re-plans the open pane for review; no remount.
+    await win.prksRefreshResearchNotesRecovery(ctx, 'w1')
+    expect(review().view(ctx)).toMatchObject({ drafts: 1 })
+    const details = await review().details(ctx, 'w1')
+    expect(details!.candidates).toMatchObject([{ lineage: 'dead-runtime', body: 'Saved note. Typed while claiming' }])
+  })
+
+  it('lists every draft of many closed LAN tabs within the restore budget', async () => {
+    withoutLocks = true
+    startPage()
+    const count = 9
+    for (let i = 0; i < count; i++) {
+      const ctx = await openWork()
+      await type(ctx, `Saved note. LAN tab ${i}`).recovery!.flush()
+      await closeTabAndOpenAnother()
+    }
+    win.prksSetResearchRecoveryRestoreMsForTest(2000)
+    try {
+      const started = Date.now()
+      const { ctx, result } = await openAndRestore()
+      expect(result).toMatchObject({ restored: false })
+      expect(result!.review).toHaveLength(count)
+      expect(review().view(ctx)).toMatchObject({ drafts: count })
+      // The owner checks run side by side, not one after another.
+      expect(Date.now() - started).toBeLessThan(2000)
+    } finally {
+      win.prksSetResearchRecoveryRestoreMsForTest(null)
+    }
+  }, 20000)
+
+  it('never adopts a crashed LAN tab\'s draft: silence is not proof, so it is offered for review only', async () => {
+    withoutLocks = true
+    startPage()
+    const ctx = await openWork()
+    await type(ctx, 'Saved note.').recovery!.flush()
+    await type(ctx, 'Saved note. Crashed').recovery!.flush()
+    await closeTabAndOpenAnother('crash')
+    const [before] = await records()
+    const { ctx: fresh, result, notes } = await openAndRestore()
+    expect(result).toMatchObject({ restored: false, review: [{ reason: 'ownership-unknown', lineage: 'unknown', action: null }] })
+    expect(notes.editor.value()).toBe('Saved note.')
+    expect(review().view(fresh)).toMatchObject({ drafts: 1, incomplete: 0 })
+    const details = await review().details(fresh, 'w1')
+    expect(details!.candidates).toMatchObject([{ lineage: 'unknown', action: null, body: 'Saved note. Crashed' }])
+    // No adoption and no cleanup, whatever is asked.
+    expect(await review().restore(fresh, 'w1', details!.token, details!.candidates[0]!.expect)).toMatchObject({ ok: false, code: 'changed' })
+    const [after] = await records()
+    expect(after!.owner).toEqual(before!.owner)
+    expect(sync.rows()).toEqual([])
+  })
+
+  it('an explicit Discard removes an unknown owner\'s draft, but not once its owner answers as live', async () => {
+    withoutLocks = true
+    startPage()
+    const ctx = await openWork()
+    await type(ctx, 'Saved note. Crashed one').recovery!.flush()
+    await closeTabAndOpenAnother('crash')
+    const first = await openWork()
+    await type(first, 'Saved note. Crashed two').recovery!.flush()
+    await closeTabAndOpenAnother('crash')
+    const { ctx: fresh } = await openAndRestore()
+    const details = await review().details(fresh, 'w1')
+    expect(details!.candidates.map((c) => c.lineage)).toEqual(['unknown', 'unknown'])
+    const [one, two] = details!.candidates
+    // Ownership is checked again at the action: an owner that answers now is live.
+    const classify = page!.rt.classify.bind(page!.rt)
+    page!.rt.classify = async () => {
+      page!.rt.classify = classify
+      return 'other-live'
+    }
+    expect(await review().discard(fresh, 'w1', details!.token, one!.expect)).toMatchObject({ ok: false, code: 'changed' })
+    expect(await bodyOf(one!.draftId)).toBe(one!.body)
+    // Still unknown: the user's confirmed choice removes exactly that draft.
+    expect(await review().discard(fresh, 'w1', details!.token, one!.expect)).toEqual({ ok: true })
+    expect((await records()).map((r) => r.draftId)).toEqual([two!.draftId])
+    // A stale expectation (the generation it showed) is refused.
+    expect(await review().discard(fresh, 'w1', details!.token, { ...two!.expect, generation: two!.expect.generation + 1 }))
+      .toMatchObject({ ok: false, code: 'changed' })
+    expect(await bodyOf(two!.draftId)).toBe(two!.body)
+    expect(sync.rows()).toEqual([])
+  })
+
+  it('keeps an unknown owner\'s draft even when it equals the saved note', async () => {
+    withoutLocks = true
+    startPage()
+    const ctx = await openWork()
+    await type(ctx, 'Saved note. X').recovery!.flush()
+    await type(ctx, 'Saved note.').recovery!.flush()
+    await closeTabAndOpenAnother('crash')
+    await openAndRestore()
+    await settle()
+    expect(await records()).toHaveLength(1)
+  })
+
+  it('never adopts the draft of an editor that is live in another tab', async () => {
+    const other = otherPage('live-tab')
+    await other.rt.start()
+    const writer = other.rt.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1' })
+    writer.edit(1, 'Saved note. Typing in another tab')
+    await writer.flush()
+    const { ctx, result, notes } = await openAndRestore()
+    expect(result).toMatchObject({ restored: false, review: [{ reason: 'live-elsewhere' }] })
+    // Not a recovery: no notice, no text offered.
+    expect(review().view(ctx)).toBeNull()
+    const details = await review().details(ctx, 'w1')
+    expect(details!.candidates).toMatchObject([{ lineage: 'other-live', body: null, action: null }])
+    expect(await review().discard(ctx, 'w1', details!.token, details!.candidates[0]!.expect)).toMatchObject({ ok: false, code: 'changed' })
+    expect(notes.editor.value()).toBe('Saved note.')
+    expect((await records())[0]!.owner.pageInstanceId).toBe(other.rt.identity.pageInstanceId)
+    other.rt.dispose()
+    other.locks.releaseAll()
+  })
+})
+
+describe('Review (slice 3)', () => {
+  async function twoClosedTabs() {
+    const ctx = await openWork()
+    await type(ctx, 'Saved note. First tab').recovery!.flush()
+    await closeTabAndOpenAnother()
+    const second = await openWork()
+    await type(second, 'Saved note. Second tab').recovery!.flush()
+    await closeTabAndOpenAnother()
+    return openAndRestore()
+  }
+
+  it('shows every draft of two closed tabs and applies none', async () => {
+    const { ctx, result, notes } = await twoClosedTabs()
+    expect(result!.restored).toBe(false)
+    expect(result!.review.map((r) => r.reason)).toEqual(['multiple-drafts', 'multiple-drafts'])
+    expect(notes.editor.value()).toBe('Saved note.')
+    expect(review().view(ctx)).toMatchObject({ drafts: 2, incomplete: 0, unprotected: null })
+    const details = await review().details(ctx, 'w1')
+    expect(details!.current).toMatchObject({ text: 'Saved note.', revision: 5, source: 'server', queue: 'none' })
+    expect(details!.candidates.map((c) => [c.lineage, c.action, c.body]).sort()).toEqual([
+      ['dead-runtime', 'restore', 'Saved note. First tab'],
+      ['dead-runtime', 'restore', 'Saved note. Second tab'],
+    ])
+    expect(sync.rows()).toEqual([])
+  })
+
+  it('restores the chosen draft for editing; the other one stays, now only as a comparison', async () => {
+    const { ctx, notes } = await twoClosedTabs()
+    const details = await review().details(ctx, 'w1')
+    const chosen = details!.candidates.find((c) => c.body === 'Saved note. Second tab')!
+    expect(await review().restore(ctx, 'w1', details!.token, chosen.expect)).toEqual({ ok: true })
+    expect(notes.editor.value()).toBe('Saved note. Second tab')
+    // jsdom keeps innerText as a plain property.
+    expect((ctx.root.querySelector('[data-prks-role="editor-status"]') as HTMLElement).innerText).toBe('Restored unsaved changes')
+    expect(review().view(ctx)).toMatchObject({ drafts: 1 })
+    const after = await review().details(ctx, 'w1')
+    // The restored draft is this editor's own lineage now: what it shows, not a draft to review.
+    expect(after!.candidates).toMatchObject([{ body: 'Saved note. First tab', action: 'reconcile', reason: 'editor-dirty' }])
+    expect(after!.candidates.some((c) => c.lineage === 'self-live')).toBe(false)
+    expect(sync.rows()).toEqual([])
+  })
+
+  describe('with the #490 checks', () => {
+    /** Runs `hook` inside the next adoption or claim, before the store takes the record. */
+    function during(name: 'adopt' | 'claimReviewed', hook: () => unknown) {
+      const target = (name === 'adopt' ? page!.rt.writers : page!.rt) as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>
+      const original = target[name]!.bind(target)
+      target[name] = async (...args: unknown[]) => {
+        target[name] = original
+        await hook()
+        return original(...args)
+      }
+    }
+    const foreign = () =>
+      sync.store.saveWorkNote('w1', 'SET_WORK_RESEARCH_NOTE', 'Saved note. Queued elsewhere', { value: server.text, revision: server.revision })
+
+    it('offers no restore when the note body and revision are not one server snapshot', async () => {
+      const { ctx, notes } = await twoClosedTabs()
+      // Same revision, other body: the observed base cannot be proven.
+      server.text = 'Saved note, changed without a new revision.'
+      const details = await review().details(ctx, 'w1')
+      expect(details!.current.source).toBe('cache')
+      expect(details!.candidates.map((c) => c.action)).toEqual(['reconcile', 'reconcile'])
+      expect(await review().restore(ctx, 'w1', details!.token, details!.candidates[0]!.expect)).toMatchObject({ ok: false, code: 'changed' })
+      expect(notes.editor.value()).toBe('Saved note.')
+      expect(await records()).toHaveLength(2)
+      expect(sync.rows()).toEqual([])
+    })
+
+    it('does not apply a restore when a row was queued while adopting', async () => {
+      const { ctx, notes } = await twoClosedTabs()
+      const details = await review().details(ctx, 'w1')
+      const target = details!.candidates[0]!
+      during('adopt', foreign)
+      expect(await review().restore(ctx, 'w1', details!.token, target.expect)).toMatchObject({ ok: false, code: 'changed' })
+      expect(notes.editor.value()).toBe('Saved note.')
+      expect(ctx.ui.workResearchNoteSession).toBeNull()
+      expect(sync.rows().map((r) => r.payload.text)).toEqual(['Saved note. Queued elsewhere'])
+      expect(await bodyOf(target.draftId)).toBe(target.body)
+    })
+
+    it('does not replace the note when a row was queued while claiming', async () => {
+      const { ctx, notes } = await twoClosedTabs()
+      const details = await review().details(ctx, 'w1')
+      const target = details!.candidates[0]!
+      during('claimReviewed', foreign)
+      expect(await review().replace(ctx, 'w1', details!.token, target.expect, 'Combined', { text: 'Saved note.', revision: 5 }))
+        .toMatchObject({ ok: false, code: 'current-changed' })
+      expect(notes.editor.value()).toBe('Saved note.')
+      expect(sync.rows().map((r) => r.payload.text)).toEqual(['Saved note. Queued elsewhere'])
+      // Claimed but not applied: still listed, with its text.
+      expect(await bodyOf(target.draftId)).toBe(target.body)
+    })
+
+    it('does not replace a note with no observed base when a row was queued while claiming', async () => {
+      const ctx = await openWork()
+      await type(ctx, 'Saved note. First tab').recovery!.flush()
+      await closeTabAndOpenAnother()
+      const second = await openWork()
+      await type(second, 'Saved note. Second tab').recovery!.flush()
+      await closeTabAndOpenAnother()
+      // Notes-state carries no revision: this pane never observes a base.
+      server.revision = null as unknown as number
+      const { ctx: fresh, notes } = await openAndRestore()
+      expect(fresh.getResource('workNotesObserved')).toBeFalsy()
+      const details = await review().details(fresh, 'w1')
+      const target = details!.candidates[0]!
+      expect(target.action).toBe('reconcile')
+      during('claimReviewed', foreign)
+      expect(await review().replace(fresh, 'w1', details!.token, target.expect, 'Combined', { text: 'Saved note.', revision: null }))
+        .toMatchObject({ ok: false, code: 'current-changed' })
+      expect(notes.editor.value()).toBe('Saved note.')
+      expect(sync.rows().map((r) => r.payload.text)).toEqual(['Saved note. Queued elsewhere'])
+      expect(await bodyOf(target.draftId)).toBe(target.body)
+    })
+
+    /** Another device saves: the server moves on and this page hears nothing. */
+    const remote = () => {
+      server.text = 'Saved elsewhere.'
+      server.revision = 6
+    }
+
+    it('does not apply a restore when another device saved while adopting', async () => {
+      const { ctx, notes } = await twoClosedTabs()
+      const details = await review().details(ctx, 'w1')
+      const target = details!.candidates[0]!
+      during('adopt', remote)
+      expect(await review().restore(ctx, 'w1', details!.token, target.expect)).toMatchObject({ ok: false, code: 'changed' })
+      expect(notes.editor.value()).toBe('Saved note.')
+      expect(ctx.ui.workResearchNoteSession).toBeNull()
+      expect(sync.rows()).toEqual([])
+      expect(await bodyOf(target.draftId)).toBe(target.body)
+    })
+
+    it('does not replace the note when another device saved while claiming', async () => {
+      const { ctx, notes } = await twoClosedTabs()
+      const details = await review().details(ctx, 'w1')
+      const target = details!.candidates[0]!
+      during('claimReviewed', remote)
+      expect(await review().replace(ctx, 'w1', details!.token, target.expect, 'Combined', { text: 'Saved note.', revision: 5 }))
+        .toMatchObject({ ok: false, code: 'current-changed' })
+      expect(notes.editor.value()).toBe('Saved note.')
+      expect(sync.rows()).toEqual([])
+      expect(await bodyOf(target.draftId)).toBe(target.body)
+    })
+
+    it('keeps an automatic restore for review when another device saved while adopting', async () => {
+      const ctx = await openWork()
+      await type(ctx, 'Saved note. Closed tab').recovery!.flush()
+      await closeTabAndOpenAnother()
+      during('adopt', remote)
+      const { ctx: fresh, result, notes } = await openAndRestore()
+      expect(result).toMatchObject({ restored: false, review: [{ reason: 'base-advanced', action: 'reconcile' }] })
+      expect(notes.editor.value()).not.toContain('Closed tab')
+      expect(fresh.ui.workResearchNoteSession).toBeNull()
+      expect(sync.rows()).toEqual([])
+    })
+
+    it('keeps the reviewed draft when the replacement text gets no recovery copy', async () => {
+      const { ctx, notes } = await twoClosedTabs()
+      const details = await review().details(ctx, 'w1')
+      const target = details!.candidates[0]!
+      // The claim commits; the replacement's recovery write is refused.
+      const claim = page!.rt.claimReviewed.bind(page!.rt)
+      page!.rt.claimReviewed = async (...args: Parameters<typeof claim>) => {
+        const outcome = await claim(...args)
+        // Exactly the replacement's write: a discard after it would succeed.
+        idb.failCommits = 1
+        return outcome
+      }
+      expect(await review().replace(ctx, 'w1', details!.token, target.expect, 'Combined', { text: 'Saved note.', revision: 5 })).toEqual({ ok: true })
+      expect(notes.editor.value()).toBe('Combined')
+      idb.failCommits = 0
+      await settle()
+      expect(await bodyOf(target.draftId)).toBe(target.body)
+    })
+  })
+
+  it('never shows a draft\'s text when another tab adopts it while the text is being read', async () => {
+    const { ctx } = await twoClosedTabs()
+    const [first] = await records()
+    const other = otherPage('adopter')
+    await other.rt.start()
+    let adopted = false
+    const store = page!.rt.store
+    const getBody = store.getBody.bind(store)
+    store.getBody = async (draftId: string) => {
+      const row = await getBody(draftId)
+      if (!adopted && draftId === first!.draftId) {
+        adopted = true
+        expect(await other.rt.writers.adopt((await store.get(draftId))!, { paneId: 'tab-9' })).toBeTruthy()
+      }
+      return row
+    }
+    try {
+      const details = await review().details(ctx, 'w1')
+      expect(adopted).toBe(true)
+      // Listed as the other tab's, without its text and with nothing to apply.
+      expect(details!.candidates.find((c) => c.draftId === first!.draftId)).toMatchObject({ lineage: 'other-live', body: null, action: null })
+    } finally {
+      store.getBody = getBody
+      other.rt.dispose()
+      other.locks.releaseAll()
+    }
+  })
+
+  it('refuses an action decided before the owner changed, and changes nothing', async () => {
+    const { ctx, notes } = await twoClosedTabs()
+    const details = await review().details(ctx, 'w1')
+    const target = details!.candidates[0]!
+    // Another tab adopts it while this Review is open.
+    const other = otherPage('adopter')
+    await other.rt.start()
+    const record = (await page!.rt.store.get(target.draftId))!
+    expect(await other.rt.writers.adopt(record, { paneId: 'tab-9' })).toBeTruthy()
+    for (const act of [
+      () => review().restore(ctx, 'w1', details!.token, target.expect),
+      () => review().replace(ctx, 'w1', details!.token, target.expect, 'x', { text: 'Saved note.', revision: 5 }),
+      () => review().discard(ctx, 'w1', details!.token, target.expect),
+    ]) {
+      expect(await act()).toMatchObject({ ok: false, code: 'changed' })
+    }
+    expect(notes.editor.value()).toBe('Saved note.')
+    expect((await page!.rt.store.get(target.draftId))!.owner.pageInstanceId).toBe(other.rt.identity.pageInstanceId)
+    expect(await bodyOf(target.draftId)).toBe(target.body)
+    other.rt.dispose()
+    other.locks.releaseAll()
+  })
+
+  it('refuses a stale dialog after a Work switch or a new editor session', async () => {
+    const { ctx, notes } = await twoClosedTabs()
+    const details = await review().details(ctx, 'w1')
+    const target = details!.candidates[0]!
+    // The pane now shows another Work.
+    ctx.setEntity('work', { id: 'w2', text_content: '', private_notes: '' })
+    expect(await review().restore(ctx, 'w1', details!.token, target.expect)).toMatchObject({ ok: false, code: 'stale' })
+    // Back on the Work, but in a new editor session.
+    ctx.setEntity('work', { id: 'w1', text_content: server.text, private_notes: '' })
+    attachEditor(ctx)
+    expect(await review().discard(ctx, 'w1', details!.token, target.expect)).toMatchObject({ ok: false, code: 'stale' })
+    expect(await records()).toHaveLength(2)
+    expect(notes.editor.value()).toBe('Saved note.')
+  })
+
+  it('reconciles a draft typed on an older note only by an explicit choice against the shown note', async () => {
+    const ctx = await openWork()
+    await type(ctx, 'Saved note. Mine').recovery!.flush()
+    await closeTabAndOpenAnother()
+    server.text = 'Another device wrote this.'
+    server.revision = 6
+    const { ctx: fresh, result, notes } = await openAndRestore()
+    expect(result).toMatchObject({ restored: false, review: [{ reason: 'base-advanced', action: 'reconcile' }] })
+    expect(notes.editor.value()).toBe('Another device wrote this.')
+    const details = await review().details(fresh, 'w1')
+    const draft = details!.candidates[0]!
+    expect(draft).toMatchObject({ reason: 'base-advanced', action: 'reconcile', body: 'Saved note. Mine' })
+    expect(await review().restore(fresh, 'w1', details!.token, draft.expect)).toMatchObject({ ok: false, code: 'changed' })
+    // The note moved on again while comparing: nothing is written.
+    expect(await review().replace(fresh, 'w1', details!.token, draft.expect, 'Combined', { text: 'Older text', revision: 6 }))
+      .toMatchObject({ ok: false, code: 'current-changed' })
+    expect(sync.rows()).toEqual([])
+    expect(await records()).toHaveLength(1)
+    const chosen = 'Another device wrote this. Saved note. Mine'
+    expect(await review().replace(fresh, 'w1', details!.token, draft.expect, chosen, { text: details!.current.text, revision: 6 })).toEqual({ ok: true })
+    expect(notes.editor.value()).toBe(chosen)
+    await waitFor(async () => !(await records()).some((r) => r.draftId === draft.draftId), 'reviewed record removed')
+    // The chosen text saves through the ordinary path as this pane's edit.
+    const saved = await win.prksEnqueueWorkResearchNotesSave(fresh, 'w1')
+    expect(sync.rows()).toMatchObject([{ payload: { text: chosen }, base_revision: 6 }])
+    sync.ack(saved.opId as string, 7)
+    await waitFor(async () => (await records()).length === 0, 'chosen text cleared on ack')
+    expect(review().view(fresh)).toBeNull()
+  })
+
+  it('never replaces a foreign queued row on its own', async () => {
+    const ctx = await openWork()
+    await type(ctx, 'Saved note. Closed tab').recovery!.flush()
+    await closeTabAndOpenAnother()
+    await sync.store.saveWorkNote('w1', 'SET_WORK_RESEARCH_NOTE', 'Saved note. Foreign', { value: server.text, revision: server.revision })
+    const { ctx: fresh, result } = await openAndRestore()
+    expect(result).toMatchObject({ restored: false, review: [{ reason: 'foreign-queue', action: 'reconcile' }] })
+    expect(sync.rows().map((r) => r.payload.text)).toEqual(['Saved note. Foreign'])
+    const details = await review().details(fresh, 'w1')
+    expect(details!.current.queue).toBe('queued')
+  })
+
+  it('shows an incomplete draft as incomplete, offers copy and discard only, and never enqueues it', async () => {
+    const ctx = await openWork()
+    await type(ctx, 'Saved note. Older part').recovery!.flush()
+    await closeTabAndOpenAnother()
+    const [stored] = await records()
+    await page!.rt.store.applyEmergencyEntry(
+      { v: 1, pageInstanceId: stored!.owner.pageInstanceId, runtimeId: stored!.owner.runtimeId, at: Date.now(), entries: [] },
+      { draftId: stored!.draftId, kind: 'work-research-note', entityType: 'work', entityId: 'w1', generation: stored!.generation + 1, committedGeneration: stored!.generation, body: null },
+    )
+    const { ctx: fresh, result, notes } = await openAndRestore()
+    expect(result).toMatchObject({ restored: false, review: [{ reason: 'tail-missing', action: null }] })
+    expect(review().view(fresh)).toMatchObject({ drafts: 1, incomplete: 1 })
+    const details = await review().details(fresh, 'w1')
+    const draft = details!.candidates[0]!
+    expect(draft).toMatchObject({ status: 'tail-missing', action: null, body: 'Saved note. Older part' })
+    expect(await review().restore(fresh, 'w1', details!.token, draft.expect)).toMatchObject({ ok: false })
+    expect(notes.editor.value()).toBe('Saved note.')
+    expect(sync.rows()).toEqual([])
+    expect(await review().discard(fresh, 'w1', details!.token, draft.expect)).toEqual({ ok: true })
+    expect(await records()).toEqual([])
+    expect(review().view(fresh)).toBeNull()
+  })
+
+  it('discards only the chosen draft; closing Review or hiding the notice keeps every record', async () => {
+    const { ctx } = await twoClosedTabs()
+    const details = await review().details(ctx, 'w1')
+    // Reading details changes nothing.
+    expect(await records()).toHaveLength(2)
+    const target = details!.candidates[0]!
+    expect(await review().discard(ctx, 'w1', details!.token, target.expect)).toEqual({ ok: true })
+    const left = await records()
+    expect(left.map((r) => r.draftId)).toEqual(details!.candidates.slice(1).map((c) => c.draftId))
+    expect(review().view(ctx)).toMatchObject({ drafts: 1 })
+  })
+})
+
+describe('protection warning (slice 3)', () => {
+  it('warns while recovery storage refuses the newest text, and stops once the server holds it', async () => {
+    const { ctx } = await openAndRestore()
+    idb.failCommits = 1000
+    const entry = type(ctx, 'Saved note. Unprotected')
+    await entry.recovery!.flush()
+    expect(entry.recovery!.state()).toBe('unprotected')
+    expect(review().view(ctx)).toMatchObject({ drafts: 0, unprotected: 'quota' })
+    expect(page!.rt.writers.leaveGuardActive()).toBe(true)
+    const saved = await win.prksEnqueueWorkResearchNotesSave(ctx, 'w1')
+    sync.ack(saved.opId as string, 6)
+    await waitFor(() => review().view(ctx) === null, 'warning cleared on ack')
+    expect(page!.rt.writers.leaveGuardActive()).toBe(false)
+  })
+
+  it('repaints the warning away when the text returns to the saved note with nothing to queue', async () => {
+    const { ctx } = await openAndRestore()
+    const w = win as unknown as Record<string, unknown>
+    const painted: unknown[] = []
+    w.prksVueUpdateResearchNotesRecovery = (owner: Ctx) => painted.push(review().view(owner))
+    try {
+      idb.failCommits = 1000
+      const entry = type(ctx, 'Saved note. Unprotected')
+      await entry.recovery!.flush()
+      expect(painted.at(-1)).toMatchObject({ unprotected: 'quota' })
+      // A -> B -> A: the save is a no-op, so no queued row acknowledges it.
+      type(ctx, 'Saved note.')
+      const saved = await win.prksEnqueueWorkResearchNotesSave(ctx, 'w1')
+      expect(saved.opId).toBeFalsy()
+      await waitFor(() => painted.at(-1) === null, 'warning repainted away')
+      expect(page!.rt.writers.leaveGuardActive()).toBe(false)
+    } finally {
+      delete w.prksVueUpdateResearchNotesRecovery
+    }
   })
 })

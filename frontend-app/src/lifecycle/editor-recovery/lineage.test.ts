@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { PageIdentity, RuntimeClaim } from './identity'
+import type { RuntimeClaim } from './identity'
 import { classifyLineage, isAdoptable, type LineageProbe } from './lineage'
 import type { DraftOwner } from './schema'
 
@@ -11,16 +11,22 @@ interface World {
   local: Map<string, string>
   canProbe: boolean
   closedInTab: Set<string>
+  /** Pages that recorded a final pagehide in localStorage. */
+  closed: Set<string>
+  /** Web Locks prove the page gone (no page lock held); false without locks. */
+  locksProveGone: boolean
 }
 
 function probeFor(world: World): LineageProbe {
-  const identity: Pick<PageIdentity, 'pageInstanceId' | 'current' | 'isPageAlive' | 'isRuntimeAlive' | 'isLineageLiveElsewhere' | 'wasClosedInThisTab'> = {
+  const identity: LineageProbe['identity'] = {
     pageInstanceId: 'p-me',
     current: () => world.claim,
     isPageAlive: async (id) => (world.canProbe ? world.alivePages.has(id) : null),
     isRuntimeAlive: async (id) => (world.canProbe ? world.aliveRuntimes.has(id) : null),
     isLineageLiveElsewhere: async (id) => (world.canProbe ? world.liveElsewhere.has(id) : null),
     wasClosedInThisTab: (id) => world.closedInTab.has(id),
+    wasPageClosed: (id) => world.closed.has(id),
+    isPageGone: async (id) => world.locksProveGone && !world.alivePages.has(id),
   }
   return { identity, localOwner: (id) => world.local.get(id) ?? null }
 }
@@ -34,6 +40,8 @@ function world(partial: Partial<World> = {}): World {
     local: new Map(),
     canProbe: true,
     closedInTab: new Set(),
+    closed: new Set(),
+    locksProveGone: true,
     ...partial,
   }
 }
@@ -44,6 +52,34 @@ const record = (owner: Partial<DraftOwner>) => ({
 })
 
 describe('classifyLineage', () => {
+  it('sends the page and runtime pings only with local proof the page is gone, and together', async () => {
+    const sent: string[] = []
+    const pending: Array<() => void> = []
+    const w = world({ locksProveGone: false })
+    const probe = probeFor(w)
+    const ping = (name: string) => () => {
+      sent.push(name)
+      return new Promise<boolean>((resolve) => pending.push(() => resolve(false)))
+    }
+    probe.identity.isPageAlive = ping('page')
+    probe.identity.isRuntimeAlive = ping('runtime')
+    probe.identity.isLineageLiveElsewhere = ping('lineage')
+    // No proof: unknown after the lineage ping alone.
+    const unproven = classifyLineage(record({}), probe)
+    await Promise.resolve()
+    expect(sent).toEqual(['lineage'])
+    pending.splice(0).forEach((resolve) => resolve())
+    expect(await unproven).toBe('unknown')
+    // A recorded final pagehide: all three pings are in flight at once.
+    sent.length = 0
+    w.closed.add('p-other')
+    const proven = classifyLineage(record({}), probe)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(sent.sort()).toEqual(['lineage', 'page', 'runtime'])
+    pending.splice(0).forEach((resolve) => resolve())
+    expect(await proven).toBe('dead-runtime')
+  })
+
   it('self-live and other-live for writers in this page', async () => {
     const w = world({ local: new Map([['d-1', 's-a']]) })
     expect(await classifyLineage(record({ pageInstanceId: 'p-me' }), probeFor(w), 's-a')).toBe('self-live')
@@ -70,10 +106,27 @@ describe('classifyLineage', () => {
     expect(await classifyLineage(record({}), probeFor(w))).toBe('other-live')
   })
 
-  it('dead-runtime when neither the owner page nor runtime is alive', async () => {
+  it('dead-runtime when neither the owner page nor runtime is alive and Web Locks prove the page gone', async () => {
     const lineageClass = await classifyLineage(record({}), probeFor(world()))
     expect(lineageClass).toBe('dead-runtime')
     expect(isAdoptable(lineageClass)).toBe(true)
+  })
+
+  it('without Web Locks, silence is not proof: dead-runtime only when the page recorded its final pagehide', async () => {
+    // A tab closed on the LAN: no locks, nobody answers the pings.
+    const w = world({ claim: { runtimeId: 'r-me', verified: 'channel' }, locksProveGone: false })
+    expect(await classifyLineage(record({}), probeFor(w))).toBe('unknown')
+    w.closed.add('p-other')
+    expect(await classifyLineage(record({}), probeFor(w))).toBe('dead-runtime')
+    // A recorded close never outweighs an answer.
+    w.alivePages.add('p-other')
+    expect(await classifyLineage(record({}), probeFor(w))).toBe('unknown')
+    w.alivePages.delete('p-other')
+    w.aliveRuntimes.add('r-other')
+    expect(await classifyLineage(record({}), probeFor(w))).toBe('unknown')
+    w.aliveRuntimes.delete('r-other')
+    w.liveElsewhere.add('d-1')
+    expect(await classifyLineage(record({}), probeFor(w))).toBe('other-live')
   })
 
   it('unknown when the owner runtime lives on without a writer, or nothing can be probed', async () => {

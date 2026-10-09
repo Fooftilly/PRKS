@@ -15,11 +15,17 @@
  * - with neither, the candidate is used `unverified`.
  * A loser mints a new candidate and claims again. Liveness questions about
  * other pages use held locks where available and channel pings otherwise.
+ *
+ * A missed ping never proves a page is gone. What does: a page lock no
+ * longer held, or the page's own record of its final `pagehide` in
+ * localStorage (`wasPageClosed`), which every tab of the origin can read.
  */
 
 import {
   CLAIM_WAIT_MS,
   CLOSED_PAGES_KEPT,
+  CLOSED_PAGES_LOCAL_KEPT,
+  CLOSED_PAGE_KEY_PREFIX,
   CLOSED_PAGES_SESSION_KEY,
   PAGE_LOCK_PREFIX,
   RECOVERY_CHANNEL,
@@ -45,8 +51,13 @@ export interface PageEventTarget {
   removeEventListener(type: string, listener: (event: Event) => void): void
 }
 
+/** Pruning old close records needs the enumerating calls; without them records are only added. */
+export type ClosedPageStorage = Pick<Storage, 'getItem' | 'setItem'> & Partial<Pick<Storage, 'removeItem' | 'key' | 'length'>>
+
 export interface IdentityEnv {
   sessionStorage?: Pick<Storage, 'getItem' | 'setItem'> | null
+  /** Where a final `pagehide` is recorded for every tab to read; the global localStorage by default. */
+  localStorage?: ClosedPageStorage | null
   /** Where `pagehide` / `pageshow` fire; the global window by default. */
   window?: PageEventTarget | null
   locks?: LockManagerLike | null
@@ -82,6 +93,12 @@ export interface PageIdentity {
    * closed: it ran `pagehide` and recorded itself in this tab's sessionStorage.
    */
   wasClosedInThisTab(pageInstanceId: string): boolean
+  /**
+   * Positive evidence that a page of any tab is gone: it ran a final
+   * `pagehide` (not into the back/forward cache) and recorded it in
+   * localStorage. A crashed or discarded page has no record.
+   */
+  wasPageClosed(pageInstanceId: string): boolean
   /** Does another page report a live writer for this lineage? */
   isLineageLiveElsewhere(draftId: string): Promise<boolean | null>
   /** Answers other pages' `lineage?` queries; the writer registry installs it. */
@@ -129,9 +146,28 @@ function defaultSession(): Pick<Storage, 'getItem' | 'setItem'> | null {
   }
 }
 
+function defaultLocal(): ClosedPageStorage | null {
+  try {
+    return typeof localStorage !== 'undefined' ? localStorage : null
+  } catch {
+    return null
+  }
+}
+
+function readIdList(storage: Pick<Storage, 'getItem'> | null, key: string): string[] {
+  try {
+    const raw = storage ? storage.getItem(key) : null
+    const list: unknown = raw ? JSON.parse(raw) : []
+    return Array.isArray(list) ? list.filter((id): id is string => typeof id === 'string') : []
+  } catch {
+    return []
+  }
+}
+
 export function createPageIdentity(env: IdentityEnv = {}): PageIdentity {
   const random = env.random || globalThis.crypto
   const session = env.sessionStorage === undefined ? defaultSession() : env.sessionStorage
+  const local = env.localStorage === undefined ? defaultLocal() : env.localStorage
   const locks = env.locks === undefined ? defaultLocks() : env.locks
   const makeChannel = env.createChannel === undefined ? defaultChannel() : env.createChannel
   const later = env.setTimeout || ((fn: () => void, ms: number) => setTimeout(fn, ms))
@@ -296,13 +332,7 @@ export function createPageIdentity(env: IdentityEnv = {}): PageIdentity {
   }
 
   function closedPages(): string[] {
-    try {
-      const raw = session ? session.getItem(CLOSED_PAGES_SESSION_KEY) : null
-      const list: unknown = raw ? JSON.parse(raw) : []
-      return Array.isArray(list) ? list.filter((id): id is string => typeof id === 'string') : []
-    } catch {
-      return []
-    }
+    return readIdList(session, CLOSED_PAGES_SESSION_KEY)
   }
 
   function writeClosedPages(list: string[]): void {
@@ -313,8 +343,38 @@ export function createPageIdentity(env: IdentityEnv = {}): PageIdentity {
     }
   }
 
-  function onPageHide(): void {
+  function onPageHide(event: Event): void {
+    // Into the back/forward cache the page may come back: no proof for this
+    // tab's next page or for other tabs, so neither record is written.
+    if ((event as PageTransitionEvent).persisted) return
     writeClosedPages([...closedPages().filter((id) => id !== pageInstanceId), pageInstanceId])
+    try {
+      if (!local) return
+      // Its own key: a tab closing at the same moment never overwrites it.
+      local.setItem(CLOSED_PAGE_KEY_PREFIX + pageInstanceId, String(Date.now()))
+    } catch {
+      /* without the record this page's drafts are offered for review, not adoption */
+      return
+    }
+    pruneClosedPages()
+  }
+
+  /** Keeps the newest close records; an older page's drafts are then offered for review. */
+  function pruneClosedPages(): void {
+    try {
+      if (!local || !local.key || !local.removeItem || typeof local.length !== 'number') return
+      const records: Array<{ key: string; at: number }> = []
+      for (let i = 0; i < local.length; i++) {
+        const key = local.key(i)
+        if (!key || !key.startsWith(CLOSED_PAGE_KEY_PREFIX)) continue
+        records.push({ key, at: Number(local.getItem(key)) || 0 })
+      }
+      if (records.length <= CLOSED_PAGES_LOCAL_KEPT) return
+      records.sort((a, b) => a.at - b.at)
+      for (const record of records.slice(0, records.length - CLOSED_PAGES_LOCAL_KEPT)) local.removeItem(record.key)
+    } catch {
+      /* a later close prunes again */
+    }
   }
 
   function onPageShow(event: Event): void {
@@ -407,6 +467,14 @@ export function createPageIdentity(env: IdentityEnv = {}): PageIdentity {
     },
     wasClosedInThisTab(id) {
       return id !== pageInstanceId && closedPages().includes(id)
+    },
+    wasPageClosed(id) {
+      if (id === pageInstanceId || !local) return false
+      try {
+        return local.getItem(CLOSED_PAGE_KEY_PREFIX + id) !== null
+      } catch {
+        return false
+      }
     },
     dispose() {
       if (disposed) return

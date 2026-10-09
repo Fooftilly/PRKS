@@ -13,7 +13,11 @@
  *   tab) and, for a channel claim, that earlier load recorded its close in
  *   this tab's sessionStorage and no page answers for a live writer.
  *   Adoptable. Never hidden just because its runtime is alive.
- * - `dead-runtime`: the owner page and runtime are both not alive. Adoptable.
+ * - `dead-runtime`: the owner page and runtime both do not answer, and the
+ *   page is proven gone: its page lock is no longer held, or it recorded its
+ *   final `pagehide` in localStorage. A missed BroadcastChannel answer alone
+ *   is never proof: a frozen, busy or crashed-and-unrecorded page misses it
+ *   too. Adoptable.
  * - `unknown`: anything that cannot be established. Offered for review only.
  *
  * The pane id is never used: it is a hint, not an identity.
@@ -25,7 +29,8 @@ import type { DraftRecord } from './schema'
 export type LineageClass = 'self-live' | 'other-live' | 'same-runtime-orphan' | 'dead-runtime' | 'unknown'
 
 export interface LineageProbe {
-  identity: Pick<PageIdentity, 'pageInstanceId' | 'current' | 'isPageAlive' | 'isRuntimeAlive' | 'isLineageLiveElsewhere' | 'wasClosedInThisTab'>
+  identity: Pick<PageIdentity, 'pageInstanceId' | 'current' | 'isPageAlive' | 'isRuntimeAlive' | 'isLineageLiveElsewhere' | 'wasClosedInThisTab'> &
+    Partial<Pick<PageIdentity, 'isPageGone' | 'wasPageClosed'>>
   /** Session key of the writer in this page that owns `draftId`, or null. */
   localOwner(draftId: string): string | null
 }
@@ -57,9 +62,18 @@ export async function classifyLineage(
     return claim.verified === 'channel' && identity.wasClosedInThisTab(owner.pageInstanceId) ? 'same-runtime-orphan' : 'unknown'
   }
 
-  if ((await identity.isLineageLiveElsewhere(record.draftId)) === true) return 'other-live'
-  const pageAlive = await identity.isPageAlive(owner.pageInstanceId)
-  const runtimeAlive = owner.runtimeId ? await identity.isRuntimeAlive(owner.runtimeId) : false
-  if (pageAlive === false && runtimeAlive === false) return 'dead-runtime'
-  return 'unknown'
+  // Local evidence first: without proof the page is gone the answer is at
+  // best 'unknown', so the page and runtime pings are not worth waiting for.
+  const gone =
+    (identity.wasPageClosed ? identity.wasPageClosed(owner.pageInstanceId) : false) ||
+    (identity.isPageGone ? await identity.isPageGone(owner.pageInstanceId) : false)
+  // The pings wait on silence, so they run together rather than one by one.
+  const [liveElsewhere, pageAlive, runtimeAlive] = await Promise.all([
+    identity.isLineageLiveElsewhere(record.draftId),
+    gone ? identity.isPageAlive(owner.pageInstanceId) : Promise.resolve(null),
+    gone && owner.runtimeId ? identity.isRuntimeAlive(owner.runtimeId) : Promise.resolve(false),
+  ])
+  if (liveElsewhere === true) return 'other-live'
+  if (!gone || pageAlive !== false || runtimeAlive !== false) return 'unknown'
+  return 'dead-runtime'
 }

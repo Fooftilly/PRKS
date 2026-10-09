@@ -44,8 +44,12 @@ function setup(options: { gate?: boolean; storage?: EmergencyStorage | null; pag
   const realStore = createRecoveryStore({ indexedDB: idb.factory })
   const calls: WriteGenerationInput[] = []
   const gates: Array<() => void> = []
+  const hooks: { discard: RecoveryStore['discard'] | null } = { discard: null }
   const store: RecoveryStore = {
     ...realStore,
+    discard(...args) {
+      return hooks.discard ? hooks.discard(...args) : realStore.discard(...args)
+    },
     writeGeneration(input) {
       calls.push(input)
       if (!options.gate) return realStore.writeGeneration(input)
@@ -80,7 +84,7 @@ function setup(options: { gate?: boolean; storage?: EmergencyStorage | null; pag
     if (gate) gate()
     await settle()
   }
-  return { idb, store: realStore, calls, scheduler, win, doc, storage, events, registry, open, releaseGate }
+  return { idb, store: realStore, hooks, calls, scheduler, win, doc, storage, events, registry, open, releaseGate }
 }
 
 /** INV-DRAFT-1: every pending generation is committed, held by the emergency plan, or leave-guarded. */
@@ -607,6 +611,259 @@ describe('release after a failed write', () => {
 })
 
 describe('acknowledgement', () => {
+  it('ends the warning and the guard when the server acknowledges a generation storage refused', async () => {
+    const t = setup()
+    const w = t.open()
+    w.edit(1, 'stored')
+    await w.flush()
+    const id = w.draftId() as string
+    t.idb.failCommits = 100
+    w.edit(2, 'stored, then refused')
+    await w.flush()
+    expect(w.state()).toBe('unprotected')
+    expect(t.registry.leaveGuardActive()).toBe(true)
+    // Another body is not this generation: still unprotected.
+    await expect(w.acknowledged(2, 'stored, then refuseD')).rejects.toThrow()
+    expect(w.state()).toBe('unprotected')
+    t.idb.failCommits = 0
+    expect(await w.acknowledged(2, 'stored, then refused')).toBe('deleted')
+    expect(w.state()).toBe('clean')
+    expect(t.registry.leaveGuardActive()).toBe(false)
+    // The superseded older generation of the same lineage goes with it.
+    expect(await t.store.get(id)).toBeNull()
+    expect(t.scheduler.pending()).toBe(0)
+  })
+
+  it('retries removing the superseded generation in the background when storage still refuses', async () => {
+    const t = setup()
+    const w = t.open()
+    w.edit(1, 'stored')
+    await w.flush()
+    const id = w.draftId() as string
+    t.idb.failCommits = 100
+    w.edit(2, 'stored, then refused')
+    await w.flush()
+    expect(await w.acknowledged(2, 'stored, then refused')).toBe('deleted')
+    expect(w.state()).toBe('clean')
+    expect(t.registry.leaveGuardActive()).toBe(false)
+    // Still refused: the older record stays for now, with a cleanup retry.
+    expect(t.scheduler.pending()).toBe(1)
+    t.idb.failCommits = 0
+    t.scheduler.advance(60_000)
+    await settle()
+    expect(await t.store.get(id)).toBeNull()
+    expect(t.scheduler.pending()).toBe(0)
+    expect(t.registry.leaveGuardActive()).toBe(false)
+  })
+
+  it('keeps removing the superseded generation after the editor is released, and never adopts it meanwhile', async () => {
+    const t = setup()
+    const w = t.open()
+    w.edit(1, 'stored B')
+    await w.flush()
+    const id = w.draftId() as string
+    t.idb.failCommits = 100
+    w.edit(2, 'reverted to A')
+    await w.flush()
+    expect(await w.acknowledged(2, 'reverted to A')).toBe('deleted')
+    // The pane goes away while storage still refuses the removal.
+    await w.release()
+    expect(t.registry.writers()).toHaveLength(0)
+    const stale = (await t.store.get(id))!
+    expect(stale.generation).toBe(1)
+    // A later mount on this page must not take the superseded text for a draft.
+    expect(await t.registry.adopt(stale, { paneId: 'tab-2', sessionKey: 's-later' })).toBeNull()
+    t.idb.failCommits = 0
+    t.scheduler.advance(60_000)
+    await settle()
+    expect(await t.store.get(id)).toBeNull()
+    expect(t.scheduler.pending()).toBe(0)
+  })
+
+  it('a later page never adopts a generation the server superseded, and finishes removing it', async () => {
+    const t = setup()
+    const w = t.open()
+    w.edit(1, 'stored B')
+    await w.flush()
+    const id = w.draftId() as string
+    t.idb.failCommits = 100
+    w.edit(2, 'reverted to A')
+    await w.flush()
+    expect(await w.acknowledged(2, 'reverted to A')).toBe('deleted')
+    // The page reloads before any retry lands.
+    t.registry.dispose()
+    expect(t.storage.getItem('prks.editorRecovery.superseded.v1.' + id)).toContain('p-me')
+    const scheduler = createManualScheduler()
+    const next = createWriterRegistry({
+      store: t.store,
+      identity: { pageInstanceId: 'p-next', current: () => ({ runtimeId: 'r-next', verified: 'lock' }), setLineageResponder() {} },
+      scheduler,
+      now: scheduler.now,
+      window: listenerTarget(),
+      document: listenerTarget('hidden'),
+      emergencyStorage: t.storage,
+    })
+    await settle()
+    const stale = (await t.store.get(id))!
+    expect(stale.generation).toBe(1)
+    expect(await next.adopt(stale, { paneId: 'tab-1', sessionKey: 's-next' })).toBeNull()
+    t.idb.failCommits = 0
+    scheduler.advance(60_000)
+    await settle()
+    expect(await t.store.get(id)).toBeNull()
+    expect(t.storage.getItem('prks.editorRecovery.superseded.v1.' + id)).toBeNull()
+    next.dispose()
+  })
+
+  it('a tab that was already open never adopts a generation another page marked superseded, and finishes removing it', async () => {
+    const t = setup()
+    // Tab B is open before tab A marks anything.
+    const scheduler = createManualScheduler()
+    const already = createWriterRegistry({
+      store: t.store,
+      identity: { pageInstanceId: 'p-open', current: () => ({ runtimeId: 'r-open', verified: 'lock' }), setLineageResponder() {} },
+      scheduler,
+      now: scheduler.now,
+      window: listenerTarget(),
+      document: listenerTarget('hidden'),
+      emergencyStorage: t.storage,
+    })
+    const w = t.open()
+    w.edit(1, 'stored B')
+    await w.flush()
+    const id = w.draftId() as string
+    t.idb.failCommits = 100
+    w.edit(2, 'reverted to A')
+    await w.flush()
+    expect(await w.acknowledged(2, 'reverted to A')).toBe('deleted')
+    // Tab A closes before its retry lands; tab B re-plans the closed tab's draft.
+    t.registry.dispose()
+    const stale = (await t.store.get(id))!
+    expect(stale.generation).toBe(1)
+    expect(await already.adopt(stale, { paneId: 'tab-1', sessionKey: 's-open' })).toBeNull()
+    t.idb.failCommits = 0
+    scheduler.advance(60_000)
+    await settle()
+    expect(await t.store.get(id)).toBeNull()
+    expect(t.storage.getItem('prks.editorRecovery.superseded.v1.' + id)).toBeNull()
+    already.dispose()
+  })
+
+  it('keeps each tab\'s superseded mark under its own key, so no tab drops another\'s', async () => {
+    const t = setup()
+    const scheduler = createManualScheduler()
+    const other = createWriterRegistry({
+      store: t.store,
+      identity: { pageInstanceId: 'p-other', current: () => ({ runtimeId: 'r-other', verified: 'lock' }), setLineageResponder() {} },
+      scheduler,
+      now: scheduler.now,
+      window: listenerTarget(),
+      document: listenerTarget('hidden'),
+      emergencyStorage: t.storage,
+    })
+    const mine = t.open()
+    const theirs = other.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w2', paneId: 'tab-9', sessionKey: 's-9', base: BASE })
+    mine.edit(1, 'stored B')
+    theirs.edit(1, 'stored D')
+    await Promise.all([mine.flush(), theirs.flush()])
+    const mineId = mine.draftId() as string
+    const theirsId = theirs.draftId() as string
+    t.idb.failCommits = 100
+    mine.edit(2, 'reverted to A')
+    theirs.edit(2, 'reverted to C')
+    await Promise.all([mine.flush(), theirs.flush()])
+    expect(await mine.acknowledged(2, 'reverted to A')).toBe('deleted')
+    expect(await theirs.acknowledged(2, 'reverted to C')).toBe('deleted')
+    expect(t.storage.getItem('prks.editorRecovery.superseded.v1.' + mineId)).toContain('p-me')
+    expect(t.storage.getItem('prks.editorRecovery.superseded.v1.' + theirsId)).toContain('p-other')
+    t.idb.failCommits = 0
+    t.scheduler.advance(60_000)
+    await settle()
+    // Mine is gone; theirs still waits for its own page's retry.
+    expect(t.storage.getItem('prks.editorRecovery.superseded.v1.' + mineId)).toBeNull()
+    expect(t.storage.getItem('prks.editorRecovery.superseded.v1.' + theirsId)).toContain('p-other')
+    other.dispose()
+  })
+
+  it('marks a superseded generation before its delete starts, so a reload mid-delete still never restores it', async () => {
+    const t = setup()
+    const w = t.open()
+    w.edit(1, 'stored B')
+    await w.flush()
+    const id = w.draftId() as string
+    t.idb.failCommits = 100
+    w.edit(2, 'reverted to A')
+    await w.flush()
+    // The delete is still pending when the page goes away.
+    let markedWhileDeleting: string | null = null
+    t.hooks.discard = () => {
+      markedWhileDeleting = t.storage.getItem('prks.editorRecovery.superseded.v1.' + id)
+      return new Promise(() => {})
+    }
+    void w.acknowledged(2, 'reverted to A')
+    await settle()
+    expect(markedWhileDeleting).toContain('p-me')
+    t.hooks.discard = null
+    t.registry.dispose()
+    t.idb.failCommits = 0
+    const stale = (await t.store.get(id))!
+    const scheduler = createManualScheduler()
+    const next = createWriterRegistry({
+      store: t.store,
+      identity: { pageInstanceId: 'p-next', current: () => ({ runtimeId: 'r-next', verified: 'lock' }), setLineageResponder() {} },
+      scheduler,
+      now: scheduler.now,
+      window: listenerTarget(),
+      document: listenerTarget('hidden'),
+      emergencyStorage: t.storage,
+    })
+    expect(await next.adopt(stale, { paneId: 'tab-1', sessionKey: 's-next' })).toBeNull()
+    await settle()
+    expect(await t.store.get(id)).toBeNull()
+    expect(t.storage.getItem('prks.editorRecovery.superseded.v1.' + id)).toBeNull()
+    next.dispose()
+  })
+
+  it('keeps leaving guarded while a superseded generation has neither a mark nor a delete', async () => {
+    const storage = memoryStorage()
+    const setItem = storage.setItem
+    storage.setItem = (k: string, v: string) => {
+      if (k.startsWith('prks.editorRecovery.superseded.v1.')) throw new Error('QuotaExceededError')
+      setItem(k, v)
+    }
+    const t = setup({ storage })
+    const w = t.open()
+    w.edit(1, 'stored B')
+    await w.flush()
+    const id = w.draftId() as string
+    t.idb.failCommits = 100
+    w.edit(2, 'reverted to A')
+    await w.flush()
+    expect(await w.acknowledged(2, 'reverted to A')).toBe('deleted')
+    expect(w.state()).toBe('clean')
+    // Only this page can suppress the older text: a reload now could restore it.
+    expect(t.registry.leaveGuardActive()).toBe(true)
+    await w.release()
+    expect(t.registry.leaveGuardActive()).toBe(true)
+    t.idb.failCommits = 0
+    t.scheduler.advance(60_000)
+    await settle()
+    expect(await t.store.get(id)).toBeNull()
+    expect(t.registry.leaveGuardActive()).toBe(false)
+  })
+
+  it('ends the warning when recovery storage cannot be opened at all', async () => {
+    const t = setup()
+    const w = t.open()
+    t.idb.failCommits = 100
+    w.edit(1, 'never stored')
+    await w.flush()
+    expect(w.state()).toBe('unprotected')
+    expect(await w.acknowledged(1, 'never stored')).toBe('deleted')
+    expect(w.state()).toBe('clean')
+    expect(t.registry.leaveGuardActive()).toBe(false)
+  })
+
   it('clears only the exact acknowledged generation and body', async () => {
     const t = setup()
     const w = t.open()

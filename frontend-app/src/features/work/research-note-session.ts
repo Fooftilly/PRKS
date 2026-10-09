@@ -4,6 +4,7 @@
  */
 import { h, render } from 'vue'
 import WorkResearchNotes from './WorkResearchNotes.vue'
+import { forgetResearchNotesRecovery, openResearchNotesRecoveryReview, researchNotesRecoveryView } from './research-notes-recovery'
 
 export interface WorkResearchNoteOwner {
   tabId?: unknown
@@ -23,7 +24,10 @@ interface MountedNotes {
 const mountedByTab = new Map<string, MountedNotes>()
 
 function unmountRecord(record: MountedNotes | undefined): void {
-  if (record && record.anchor.isConnected) render(null, record.anchor)
+  if (!record) return
+  // Review belongs to the editor session it was opened for.
+  forgetResearchNotesRecovery({ tabId: record.tabId })
+  if (record.anchor.isConnected) render(null, record.anchor)
 }
 
 export function dismissWorkResearchNotes(ctx?: { tabId?: unknown }): void {
@@ -75,6 +79,10 @@ export function presentWorkResearchNotes(
     h(WorkResearchNotes, {
       initialText: String(initialText == null ? '' : initialText),
       editorRegionId,
+      recovery: researchNotesRecoveryView(ctx),
+      onReviewRecovery: (opener: HTMLElement | null) => {
+        openResearchNotesRecoveryReview(ctx, opener)
+      },
     }),
     anchor,
   )

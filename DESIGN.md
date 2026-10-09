@@ -709,6 +709,16 @@ Tiling:
 - stacked mode has no visible tile chrome, and no separator
 - at most 4 TabContexts are ever mounted at once (1 Main + 3 Secondary); the cap is enforced predictably (see below), not silently
 
+### Research Notes recovery
+
+Browser recovery copies of Research Notes (#466) surface through two pieces, both inside the Work's Notes pane and both built from existing primitives:
+
+- **Recovery notice** (`.editor-recovery-notice`): one compact row above the editor. `PrksInlineMessage` text plus a secondary `Review` button and a quiet `Hide` button. It counts unsaved drafts from other tabs or sessions, says how many are incomplete, and says when changes are waiting to sync. It never says “saved” and never shows the text of an editor that is still open elsewhere. Hiding it is per mount and never discards; it comes back on the next mount while drafts remain. It is hidden while the Notes pane is collapsed.
+- **Not protected warning**: the same row in `--warning` tone, “Not protected if the browser closes: …”, naming why, when this tab cannot write its recovery copy (storage full or unavailable). The leave prompt stays active until the text reaches the server.
+- **Review dialog** (`#editor-recovery-review-modal`, `.editor-recovery-review`): a standard modal (shared scrim, header close, Escape through the modal lifecycle). A list of drafts on the left, details on the right; single column on narrow widths. Each draft shows Work, last typed time, origin, complete or incomplete, length, why it was not restored automatically, the current server state, and pending sync. Actions: `Restore for editing` (primary, only when the draft can be adopted), `Compare with current note` (shows the current note and an editable “Text to keep”; applying it is an explicit confirmed `Replace note with this text`, a danger button because it replaces the current note), `Copy text`, `Discard draft` (quiet danger, destructive confirm with Cancel focused; for a draft whose owning tab could not be proven gone, the confirmation says that tab may still be open and its unsaved changes could be lost, and ownership is checked again before deleting), and `Close`. Once the text to keep has been edited, `Close`, `Back`, Escape and the backdrop ask before dropping it (`Discard text` / `Keep editing`), and a refused Replace keeps it while the draft can still be compared; when the refresh ends the comparison, a warning row keeps the edited text copyable until Review closes. If the editor itself goes away (browser Back, a route or pane change), a Review holding edited text stays open but disconnected: nothing in it can act, the edited text stays copyable, and closing still asks; any other Review closes with its editor. There is no “Save” action: restoring only puts text back in the editor, and the normal save path sends it.
+
+Incomplete drafts are labelled “Incomplete” and offer only Copy and Discard. A stale action (another tab took the draft, or the note changed) is refused with an inline message and the dialog refreshes.
+
 ### Main/Secondary divider
 
 The root split between Main and Secondary is workspace-owned canonical preference: one normalized ratio (`mainSplitRatio`, default `0.58`, meaning Main width / usable split width, usable width excluding the separator track). Workspace Persistence v1 stores that preferred ratio (and each nested split node's preferred ratio) in browser `localStorage`. Constrained/effective ratios applied by ResizeObserver are not stored. The preference follows workspace *roles*, not tab identity — Make Main, adding/removing Secondary panes, Hide/Show split, and the narrow responsive fallback all preserve the current ratio unchanged.
@@ -865,7 +875,7 @@ Rules:
 
 An empty state contains at most: optional icon, short heading, short explanation, one primary or secondary action. Avoid giant illustration-driven empty pages. Keep them compact.
 
-`.prks-inline-message` remains valid for compact in-flow messages (form feedback, “not found”). Prefer `.prks-state` when the message *is* the page content.
+`.prks-inline-message` remains valid for compact in-flow messages (form feedback, “not found”). Prefer `.prks-state` when the message *is* the page content. Tones: neutral (default), `--error` (danger text), and `--warning` (warning text) for a calm in-flow caution such as Research Notes “Not protected if the browser closes”. `PrksInlineMessage` exposes these as `tone`.
 
 ### Dialogs
 

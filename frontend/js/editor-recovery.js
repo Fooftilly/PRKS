@@ -175,6 +175,23 @@ var prksEditorRecovery = (function(exports) {
 	*/
 	var CLOSED_PAGES_SESSION_KEY = "prks.editorRecovery.closed.v1";
 	var CLOSED_PAGES_KEPT = 8;
+	/**
+	* Pages of any tab that ran a final `pagehide` (not into the back/forward
+	* cache), newest last: positive evidence that the page is gone where Web
+	* Locks cannot prove it (LAN/HTTP). A page that crashed or was discarded
+	* never records itself, so its drafts stay `unknown`. One key per page,
+	* valued with its close time: tabs closing together never overwrite each
+	* other's record. The oldest beyond the bound are pruned.
+	*/
+	var CLOSED_PAGE_KEY_PREFIX = "prks.editorRecovery.closedPage.v1.";
+	var CLOSED_PAGES_LOCAL_KEPT = 64;
+	/**
+	* One key per draft whose stored generation the server already superseded
+	* and whose removal recovery storage refused: `{ pageInstanceId, generation }`.
+	* Kept outside recovery storage, so every page still never restores it and
+	* finishes the removal. One key per draft: no tab rewrites another's mark.
+	*/
+	var SUPERSEDED_KEY_PREFIX = "prks.editorRecovery.superseded.v1.";
 	var RECOVERY_CHANNEL = "prks-editor-recovery-v1";
 	var RUNTIME_LOCK_PREFIX = "prks-editor-recovery-runtime:";
 	var PAGE_LOCK_PREFIX = "prks-editor-recovery-page:";
@@ -515,13 +532,14 @@ var prksEditorRecovery = (function(exports) {
 				});
 			});
 		}
-		function adopt(draftId, expectedPageInstanceId, owner) {
+		function adopt(draftId, expectedPageInstanceId, owner, expectedGeneration) {
 			return run("readwrite", (tx, done) => {
 				readRecord(tx, draftId, (record) => {
 					if (!record) return done({ outcome: "missing" });
 					if (!isSupportedRecord(record)) return done({ outcome: "unsupported" });
 					if (record.status === "discarded") return done({ outcome: "missing" });
 					if (record.owner.pageInstanceId !== expectedPageInstanceId) return done({ outcome: "conflict" });
+					if (expectedGeneration !== void 0 && record.generation !== expectedGeneration) return done({ outcome: "conflict" });
 					const next = {
 						...record,
 						owner: { ...owner },
@@ -597,10 +615,14 @@ var prksEditorRecovery = (function(exports) {
 				status: "discarded"
 			};
 		}
-		function discard(draftId, tombstone) {
+		function discard(draftId, tombstone, expected) {
 			return run("readwrite", (tx, done) => {
 				readRecord(tx, draftId, (record) => {
 					if (record && !isSupportedRecord(record)) return done("unsupported");
+					if (expected) {
+						if (!record || record.status === "discarded") return done("missing");
+						if (record.owner.pageInstanceId !== expected.pageInstanceId || record.generation !== expected.generation || record.status !== expected.status) return done("kept");
+					}
 					if (!tombstone) {
 						if (!record) return done("missing");
 						retire(tx, record);
@@ -849,9 +871,10 @@ var prksEditorRecovery = (function(exports) {
 	}
 	async function mergeable(env, stored) {
 		if (stored.pageInstanceId === env.pageInstanceId || !stored.payload) return false;
-		if (env.definiteOnly && stored.payload.runtimeId === null) return false;
+		const closed = env.definiteOnly && env.wasPageClosed ? env.wasPageClosed(stored.pageInstanceId) : false;
+		if (env.definiteOnly && !closed && stored.payload.runtimeId === null) return false;
 		const alive = await env.isPageAlive(stored.pageInstanceId);
-		return env.definiteOnly ? alive === false : alive !== true;
+		return env.definiteOnly && !closed ? alive === false : alive !== true;
 	}
 	/**
 	* Applies one key's entries, re-reading the key before each step: if its page
@@ -960,6 +983,10 @@ var prksEditorRecovery = (function(exports) {
 	* - with neither, the candidate is used `unverified`.
 	* A loser mints a new candidate and claims again. Liveness questions about
 	* other pages use held locks where available and channel pings otherwise.
+	*
+	* A missed ping never proves a page is gone. What does: a page lock no
+	* longer held, or the page's own record of its final `pagehide` in
+	* localStorage (`wasPageClosed`), which every tab of the origin can read.
 	*/
 	var MAX_CLAIM_ROUNDS = 8;
 	function defaultChannel() {
@@ -977,9 +1004,26 @@ var prksEditorRecovery = (function(exports) {
 			return null;
 		}
 	}
+	function defaultLocal() {
+		try {
+			return typeof localStorage !== "undefined" ? localStorage : null;
+		} catch {
+			return null;
+		}
+	}
+	function readIdList(storage, key) {
+		try {
+			const raw = storage ? storage.getItem(key) : null;
+			const list = raw ? JSON.parse(raw) : [];
+			return Array.isArray(list) ? list.filter((id) => typeof id === "string") : [];
+		} catch {
+			return [];
+		}
+	}
 	function createPageIdentity(env = {}) {
 		const random = env.random || globalThis.crypto;
 		const session = env.sessionStorage === void 0 ? defaultSession() : env.sessionStorage;
+		const local = env.localStorage === void 0 ? defaultLocal() : env.localStorage;
 		const locks = env.locks === void 0 ? defaultLocks() : env.locks;
 		const makeChannel = env.createChannel === void 0 ? defaultChannel() : env.createChannel;
 		const later = env.setTimeout || ((fn, ms) => setTimeout(fn, ms));
@@ -1155,21 +1199,41 @@ var prksEditorRecovery = (function(exports) {
 			};
 		}
 		function closedPages() {
-			try {
-				const raw = session ? session.getItem(CLOSED_PAGES_SESSION_KEY) : null;
-				const list = raw ? JSON.parse(raw) : [];
-				return Array.isArray(list) ? list.filter((id) => typeof id === "string") : [];
-			} catch {
-				return [];
-			}
+			return readIdList(session, CLOSED_PAGES_SESSION_KEY);
 		}
 		function writeClosedPages(list) {
 			try {
 				if (session) session.setItem(CLOSED_PAGES_SESSION_KEY, JSON.stringify(list.slice(-8)));
 			} catch {}
 		}
-		function onPageHide() {
+		function onPageHide(event) {
+			if (event.persisted) return;
 			writeClosedPages([...closedPages().filter((id) => id !== pageInstanceId), pageInstanceId]);
+			try {
+				if (!local) return;
+				local.setItem(CLOSED_PAGE_KEY_PREFIX + pageInstanceId, String(Date.now()));
+			} catch {
+				return;
+			}
+			pruneClosedPages();
+		}
+		/** Keeps the newest close records; an older page's drafts are then offered for review. */
+		function pruneClosedPages() {
+			try {
+				if (!local || !local.key || !local.removeItem || typeof local.length !== "number") return;
+				const records = [];
+				for (let i = 0; i < local.length; i++) {
+					const key = local.key(i);
+					if (!key || !key.startsWith("prks.editorRecovery.closedPage.v1.")) continue;
+					records.push({
+						key,
+						at: Number(local.getItem(key)) || 0
+					});
+				}
+				if (records.length <= 64) return;
+				records.sort((a, b) => a.at - b.at);
+				for (const record of records.slice(0, records.length - 64)) local.removeItem(record.key);
+			} catch {}
 		}
 		function onPageShow(event) {
 			if (event.persisted) writeClosedPages(closedPages().filter((id) => id !== pageInstanceId));
@@ -1273,6 +1337,14 @@ var prksEditorRecovery = (function(exports) {
 			wasClosedInThisTab(id) {
 				return id !== pageInstanceId && closedPages().includes(id);
 			},
+			wasPageClosed(id) {
+				if (id === pageInstanceId || !local) return false;
+				try {
+					return local.getItem(CLOSED_PAGE_KEY_PREFIX + id) !== null;
+				} catch {
+					return false;
+				}
+			},
 			dispose() {
 				if (disposed) return;
 				disposed = true;
@@ -1311,11 +1383,15 @@ var prksEditorRecovery = (function(exports) {
 			if (await identity.isLineageLiveElsewhere(record.draftId) === true) return "other-live";
 			return claim.verified === "channel" && identity.wasClosedInThisTab(owner.pageInstanceId) ? "same-runtime-orphan" : "unknown";
 		}
-		if (await identity.isLineageLiveElsewhere(record.draftId) === true) return "other-live";
-		const pageAlive = await identity.isPageAlive(owner.pageInstanceId);
-		const runtimeAlive = owner.runtimeId ? await identity.isRuntimeAlive(owner.runtimeId) : false;
-		if (pageAlive === false && runtimeAlive === false) return "dead-runtime";
-		return "unknown";
+		const gone = (identity.wasPageClosed ? identity.wasPageClosed(owner.pageInstanceId) : false) || (identity.isPageGone ? await identity.isPageGone(owner.pageInstanceId) : false);
+		const [liveElsewhere, pageAlive, runtimeAlive] = await Promise.all([
+			identity.isLineageLiveElsewhere(record.draftId),
+			gone ? identity.isPageAlive(owner.pageInstanceId) : Promise.resolve(null),
+			gone && owner.runtimeId ? identity.isRuntimeAlive(owner.runtimeId) : Promise.resolve(false)
+		]);
+		if (liveElsewhere === true) return "other-live";
+		if (!gone || pageAlive !== false || runtimeAlive !== false) return "unknown";
+		return "dead-runtime";
 	}
 	//#endregion
 	//#region src/lifecycle/editor-recovery/writer.ts
@@ -1396,6 +1472,105 @@ var prksEditorRecovery = (function(exports) {
 		const tombstoned = /* @__PURE__ */ new Set();
 		let refreshingEmergency = false;
 		let disposed = false;
+		/**
+		* Stored generations known to be superseded by the server, still waiting
+		* for their removal: never adopted, so never restored. A removal storage
+		* refused is also written to localStorage, so a later page honours it and
+		* finishes the removal.
+		*/
+		const superseded = /* @__PURE__ */ new Map();
+		/**
+		* Superseded generations whose mark localStorage refused: only this page
+		* knows to suppress them, so leaving stays guarded until the delete lands.
+		*/
+		const unrecorded = /* @__PURE__ */ new Set();
+		function parseSupersededMark(draftId, raw) {
+			if (!raw) return null;
+			try {
+				const value = JSON.parse(raw);
+				if (!value || typeof value !== "object") return null;
+				const { pageInstanceId, generation } = value;
+				if (typeof pageInstanceId !== "string" || typeof generation !== "number" || !Number.isSafeInteger(generation) || generation <= 0) return null;
+				return {
+					draftId,
+					pageInstanceId,
+					generation
+				};
+			} catch {
+				return null;
+			}
+		}
+		function readSupersededMark(draftId) {
+			try {
+				return storage ? parseSupersededMark(draftId, storage.getItem(SUPERSEDED_KEY_PREFIX + draftId)) : null;
+			} catch {
+				return null;
+			}
+		}
+		function readSupersededMarks() {
+			const marks = [];
+			try {
+				if (!storage) return marks;
+				const ids = [];
+				for (let i = 0; i < storage.length; i++) {
+					const key = storage.key(i);
+					if (key && key.startsWith("prks.editorRecovery.superseded.v1.")) ids.push(key.slice(SUPERSEDED_KEY_PREFIX.length));
+				}
+				for (const id of ids) {
+					const mark = readSupersededMark(id);
+					if (mark) marks.push(mark);
+				}
+			} catch {}
+			return marks;
+		}
+		function markSuperseded(mark) {
+			superseded.set(mark.draftId, Math.max(mark.generation, superseded.get(mark.draftId) || 0));
+			const prior = readSupersededMark(mark.draftId);
+			if (prior && prior.generation >= mark.generation) return;
+			try {
+				if (!storage) throw new Error("no localStorage");
+				storage.setItem(SUPERSEDED_KEY_PREFIX + mark.draftId, JSON.stringify({
+					pageInstanceId: mark.pageInstanceId,
+					generation: mark.generation
+				}));
+			} catch {
+				unrecorded.add(mark.draftId);
+				changed();
+			}
+		}
+		function unmarkSuperseded(draftId, generation) {
+			if ((superseded.get(draftId) || 0) <= generation) superseded.delete(draftId);
+			if (unrecorded.delete(draftId)) changed();
+			const mark = readSupersededMark(draftId);
+			if (!mark || mark.generation > generation) return;
+			try {
+				if (storage) storage.removeItem(SUPERSEDED_KEY_PREFIX + draftId);
+			} catch {}
+		}
+		/**
+		* Removes one superseded generation by exact owner, generation and status.
+		* Resolves true when it is gone or no longer that generation (someone else
+		* owns it now); throws while storage refuses.
+		*/
+		async function removeSupersededRecord(mark) {
+			superseded.set(mark.draftId, Math.max(mark.generation, superseded.get(mark.draftId) || 0));
+			await store.discard(mark.draftId, void 0, {
+				pageInstanceId: mark.pageInstanceId,
+				generation: mark.generation,
+				status: "active"
+			});
+			unmarkSuperseded(mark.draftId, mark.generation);
+		}
+		/** Startup: finish the removals an earlier page could not, retrying with backoff. */
+		function sweepSuperseded(marks, delay) {
+			if (!marks.length || disposed) return;
+			Promise.all(marks.map((mark) => removeSupersededRecord(mark).then(() => null, () => mark))).then((results) => {
+				const left = results.filter((m) => m !== null);
+				if (!left.length || disposed) return;
+				const next = delay ? Math.min(delay * 2, RETRY_MAX_MS) : RETRY_FIRST_MS;
+				scheduler.set(() => sweepSuperseded(left, next), next);
+			}).catch(() => void 0);
+		}
 		function onBeforeUnload(event) {
 			event.preventDefault();
 			event.returnValue = "";
@@ -1438,7 +1613,7 @@ var prksEditorRecovery = (function(exports) {
 			if (disposed) return;
 			const pending = pendingWriters();
 			planHeld(pending);
-			setGuard(pending.some((w) => w.needsLeaveGuard()));
+			setGuard(pending.some((w) => w.needsLeaveGuard()) || unrecorded.size > 0);
 			setEmergencyListeners(pending.length > 0);
 			refreshEmergencyKey(pending);
 		}
@@ -1615,6 +1790,8 @@ var prksEditorRecovery = (function(exports) {
 			nextTaskTimer = null;
 			retryTimer = null;
 			retryDelay = 0;
+			/** Retries removing a stored generation the server already superseded. */
+			cleanupTimer = null;
 			released = false;
 			cleared = /* @__PURE__ */ new Set();
 			constructor(input) {
@@ -1891,7 +2068,30 @@ var prksEditorRecovery = (function(exports) {
 				else if (this.inFlight) await this.inFlight;
 				const draftId = this.lineageId;
 				if (!draftId) return "none";
-				const outcome = await store.deleteIfAcknowledged(draftId, generation, body);
+				let outcome;
+				try {
+					outcome = await store.deleteIfAcknowledged(draftId, generation, body);
+				} catch (error) {
+					if (!this.ackedUncommitted(draftId, generation, body)) throw error;
+					outcome = "kept";
+				}
+				if (outcome !== "deleted" && this.ackedUncommitted(draftId, generation, body)) {
+					const stored = this.lineageStored ? this.committed : 0;
+					this.clearTimers();
+					this.clearRetry();
+					this.latest = null;
+					this.cleared.add(draftId);
+					this.lineageId = null;
+					this.lineageStored = false;
+					this.committed = 0;
+					this.failedGeneration = 0;
+					this.retryDelay = 0;
+					this.status = "clean";
+					changed();
+					if (stored) await this.removeSuperseded(draftId, stored, 0);
+					else await this.tombstoneIfListed(draftId);
+					return "deleted";
+				}
 				if (outcome === "deleted" && this.lineageId === draftId) {
 					this.cleared.add(draftId);
 					if (this.latest) this.startLineage();
@@ -1905,6 +2105,35 @@ var prksEditorRecovery = (function(exports) {
 				}
 				if (outcome === "deleted") await this.tombstoneIfListed(draftId);
 				return outcome;
+			}
+			/**
+			* Removes this page's stored older generation once the server holds a newer
+			* one. A store that refuses is retried in the background with backoff,
+			* without the leave guard: the text is already on the server.
+			*/
+			async removeSuperseded(draftId, generation, delay) {
+				const mark = {
+					draftId,
+					pageInstanceId: identity.pageInstanceId,
+					generation
+				};
+				if (delay === 0) markSuperseded(mark);
+				try {
+					await removeSupersededRecord(mark);
+				} catch {
+					if (disposed) return;
+					const next = delay ? Math.min(delay * 2, RETRY_MAX_MS) : RETRY_FIRST_MS;
+					this.cleanupTimer = scheduler.set(() => {
+						this.cleanupTimer = null;
+						this.removeSuperseded(draftId, generation, next).catch(() => void 0);
+					}, next);
+					return;
+				}
+				await this.tombstoneIfListed(draftId);
+			}
+			/** The newest generation, never committed to recovery storage, is exactly what was acknowledged. */
+			ackedUncommitted(draftId, generation, body) {
+				return this.lineageId === draftId && !!this.latest && this.latest.generation === generation && this.latest.body === body && !this.inFlight;
 			}
 			async discard() {
 				this.clearTimers();
@@ -1971,6 +2200,8 @@ var prksEditorRecovery = (function(exports) {
 				this.released = true;
 				this.clearTimers();
 				this.clearRetry();
+				if (this.cleanupTimer !== null) scheduler.clear(this.cleanupTimer);
+				this.cleanupTimer = null;
 			}
 		}
 		function openWriter(input) {
@@ -1982,6 +2213,14 @@ var prksEditorRecovery = (function(exports) {
 		const adopting = /* @__PURE__ */ new Set();
 		async function adopt(record, input) {
 			if (disposed || adopting.has(record.draftId) || ownerOf(record.draftId) !== null) return null;
+			if (!superseded.has(record.draftId)) {
+				const mark = readSupersededMark(record.draftId);
+				if (mark) {
+					superseded.set(mark.draftId, mark.generation);
+					sweepSuperseded([mark], 0);
+				}
+			}
+			if ((superseded.get(record.draftId) || 0) >= record.generation) return null;
 			adopting.add(record.draftId);
 			try {
 				return await adoptReserved(record, input);
@@ -2003,12 +2242,13 @@ var prksEditorRecovery = (function(exports) {
 				pageInstanceId: identity.pageInstanceId,
 				paneId: input.paneId,
 				claimedAt: now()
-			});
+			}, record.generation);
 			if (result.outcome !== "ok" || disposed) return null;
 			writer.adoptRecord(result.record);
 			live.add(writer);
 			return writer;
 		}
+		sweepSuperseded(readSupersededMarks(), 0);
 		return {
 			openWriter,
 			adopt,
@@ -2061,11 +2301,19 @@ var prksEditorRecovery = (function(exports) {
 		const store = createRecoveryStore(options.store);
 		const identity = createPageIdentity(options.identity);
 		const emergencyStorage = options.emergencyStorage !== void 0 ? options.emergencyStorage : options.writers?.emergencyStorage ?? defaultLocalStorage();
+		const writerListeners = /* @__PURE__ */ new Set();
+		const ownEvent = options.writers?.onEvent;
 		const writers = createWriterRegistry({
 			...options.writers,
 			store,
 			identity,
-			emergencyStorage
+			emergencyStorage,
+			onEvent(event) {
+				if (ownEvent) ownEvent(event);
+				for (const listener of [...writerListeners]) try {
+					listener(event);
+				} catch {}
+			}
 		});
 		let started = null;
 		let lastScan = Promise.resolve();
@@ -2081,6 +2329,7 @@ var prksEditorRecovery = (function(exports) {
 				store,
 				pageInstanceId: identity.pageInstanceId,
 				isPageAlive: (id) => identity.isPageAlive(id),
+				wasPageClosed: (id) => identity.wasPageClosed(id),
 				definiteOnly
 			};
 			const reports = await mergeEmergencyEntries(env);
@@ -2116,12 +2365,51 @@ var prksEditorRecovery = (function(exports) {
 					localOwner: (id) => writers.ownerOf(id)
 				}, askingSession);
 			},
+			claimReviewed(reviewed, paneId) {
+				if (reviewed.status !== "active") return Promise.resolve({ outcome: "conflict" });
+				const claim = identity.current();
+				const owner = {
+					runtimeId: claim ? claim.runtimeId : null,
+					pageInstanceId: identity.pageInstanceId,
+					paneId,
+					claimedAt: Date.now()
+				};
+				return store.adopt(reviewed.draftId, reviewed.pageInstanceId, owner, reviewed.generation);
+			},
+			discardReviewed(reviewed) {
+				const expected = {
+					pageInstanceId: reviewed.pageInstanceId,
+					generation: reviewed.generation,
+					status: reviewed.status
+				};
+				const listing = emergencyStorage ? listingPage(emergencyStorage, reviewed.draftId) : null;
+				const tombstone = listing ? {
+					kind: reviewed.kind,
+					entityType: reviewed.entityType,
+					entityId: reviewed.entityId,
+					generation: reviewed.generation,
+					pageInstanceId: listing
+				} : void 0;
+				return store.discard(reviewed.draftId, tombstone, expected);
+			},
+			onWriterEvent(listener) {
+				writerListeners.add(listener);
+				return () => {
+					writerListeners.delete(listener);
+				};
+			},
 			dispose() {
+				writerListeners.clear();
 				writers.dispose();
 				identity.dispose();
 				store.close();
 			}
 		};
+	}
+	/** The page whose emergency key still lists `draftId` (or its fork), if any. */
+	function listingPage(storage, draftId) {
+		for (const stored of readEmergencyKeys(storage)) if ((stored.payload ? stored.payload.entries : []).some((entry) => entry.draftId === draftId || forkedDraftId(entry.draftId, entry.generation) === draftId)) return stored.pageInstanceId;
+		return null;
 	}
 	function defaultLocalStorage() {
 		try {
@@ -2133,7 +2421,7 @@ var prksEditorRecovery = (function(exports) {
 	//#endregion
 	//#region src/lifecycle/editor-recovery/research-notes.ts
 	/**
-	* Research Notes same-pane restore decision (#466 slice 2).
+	* Research Notes restore decision (#466 slices 2 and 3).
 	*
 	* A pure function over what the mount path already knows: the recovery
 	* records for one Work with their lineage class and stored body, the
@@ -2142,24 +2430,17 @@ var prksEditorRecovery = (function(exports) {
 	* the plan.
 	*
 	* Automatic restore is allowed only when it cannot overwrite anything:
-	* exactly one candidate, written by this pane before reload, typed on exactly
-	* the acknowledged body the server still holds, or on a body this lineage
-	* itself queued from that same base (the #475 own-predecessor rule). Every
-	* other candidate is kept untouched and reported for review (slice 3).
+	* exactly one candidate, from a lineage no live editor can own (this tab
+	* before reload, another pane of this tab, or a tab proven closed), typed on
+	* exactly the acknowledged body the server still holds, or on a body this
+	* lineage itself queued from that same base (the #475 own-predecessor rule).
+	* Every other candidate is kept untouched and reported for review, with the
+	* one action a user may take on it there: restore it as it is, reconcile it
+	* against the current note first, or neither (inspect and copy only).
 	*/
 	function planResearchNotesRestore(input) {
-		const print = input.fingerprint || fingerprintText;
+		const print = memoized(input.fingerprint || fingerprintText);
 		const K = input.base;
-		let kPrint = null;
-		const kIdentity = () => {
-			if (!K) return null;
-			if (kPrint === null) kPrint = print(K.value);
-			return {
-				revision: K.revision,
-				length: K.value.length,
-				fingerprint: kPrint
-			};
-		};
 		const plan = {
 			cleanup: [],
 			represented: [],
@@ -2173,7 +2454,9 @@ var prksEditorRecovery = (function(exports) {
 			generation: c.record.generation,
 			bodyLength: c.record.bodyLength,
 			paneId: c.record.owner.paneId,
-			updatedAt: c.record.updatedAt
+			updatedAt: c.record.updatedAt,
+			status: c.record.status,
+			action: actionFor(c, input, print)
 		});
 		const queue = input.queue;
 		let liveElsewhere = false;
@@ -2221,55 +2504,82 @@ var prksEditorRecovery = (function(exports) {
 		}
 		if (!remaining.length) return plan;
 		const c = remaining[0];
+		const judged = judge(c, input, liveElsewhere, print);
+		if ("reason" in judged) review(c, judged.reason);
+		else plan.restore = judged;
+		return plan;
+	}
+	/** Fingerprints the note once however many candidates are judged against it. */
+	function memoized(print) {
+		const seen = /* @__PURE__ */ new Map();
+		return (text) => {
+			let value = seen.get(text);
+			if (value === void 0) {
+				value = print(text);
+				if (seen.size > 8) seen.clear();
+				seen.set(text, value);
+			}
+			return value;
+		};
+	}
+	/** One remaining candidate on its own: restorable as it is, or why not. */
+	function judge(c, input, liveElsewhere, print) {
 		const reason = blockingReason(c, input, liveElsewhere);
-		if (reason) {
-			review(c, reason);
-			return plan;
-		}
+		if (reason) return { reason };
+		const K = input.base;
+		const queue = input.queue;
 		const record = c.record;
 		const pipeline = record.pipeline;
 		const own = pipeline ? pipeline.ownQueued : null;
-		const k = kIdentity();
+		const k = K ? {
+			revision: K.revision,
+			length: K.value.length,
+			fingerprint: print(K.value)
+		} : null;
 		let predecessor = null;
-		if (!queue) {
-			review(c, "queue-unknown");
-			return plan;
-		}
+		if (!queue) return { reason: "queue-unknown" };
 		if (queue.length) {
 			const row = queue.length === 1 ? queue[0] : null;
-			if (!own || !row || row.opId !== own.opId || row.text.length !== own.textLength || print(row.text) !== own.textFingerprint) {
-				review(c, "foreign-queue");
-				return plan;
-			}
+			if (!own || !row || row.opId !== own.opId || row.text.length !== own.textLength || print(row.text) !== own.textFingerprint) return { reason: "foreign-queue" };
 			predecessor = row;
 		}
 		const blockedBase = pipeline && pipeline.state === "blocked" ? pipeline.blockedBase : null;
 		const typedOn = blockedBase || record.base;
 		const unchanged = sameBaseIdentity(record.base, k) || !!blockedBase && sameBaseIdentity(blockedBase, k);
 		if (predecessor) {
-			if (!unchanged || !own || !sameBaseIdentity(own.base, k)) {
-				review(c, "base-advanced");
-				return plan;
-			}
+			if (!unchanged || !own || !sameBaseIdentity(own.base, k)) return { reason: "base-advanced" };
 		} else if (!unchanged) {
-			if (!(!!own && !!K && !!k && sameBaseIdentity(own.base, typedOn) && typedOn.revision !== null && K.revision > typedOn.revision && k.length === own.textLength && k.fingerprint === own.textFingerprint)) {
-				review(c, "base-advanced");
-				return plan;
-			}
+			if (!(!!own && !!K && !!k && sameBaseIdentity(own.base, typedOn) && typedOn.revision !== null && K.revision > typedOn.revision && k.length === own.textLength && k.fingerprint === own.textFingerprint)) return { reason: "base-advanced" };
 		}
-		plan.restore = {
+		return {
 			record,
 			body: c.body,
 			state: predecessor && pipeline && pipeline.state === "blocked" ? "blocked" : "drafting",
 			predecessor
 		};
-		return plan;
+	}
+	/** Reasons a reviewer can still act on by comparing with the current note first. */
+	var RECONCILABLE = /* @__PURE__ */ new Set([
+		"base-advanced",
+		"foreign-queue",
+		"base-unverified"
+	]);
+	function actionFor(c, input, print) {
+		if (c.record.status !== "active" || c.body === null) return null;
+		if (c.lineage !== "same-runtime-orphan" && c.lineage !== "dead-runtime") return null;
+		if (!input.queue) return null;
+		const judged = judge(c, {
+			...input,
+			editorDirty: false
+		}, false, print);
+		if (!("reason" in judged)) return input.editorDirty ? "reconcile" : "restore";
+		return RECONCILABLE.has(judged.reason) ? "reconcile" : null;
 	}
 	function blockingReason(c, input, liveElsewhere) {
-		if (liveElsewhere) return "live-elsewhere";
-		if (c.lineage === "unknown") return "ownership-unknown";
-		if (c.lineage !== "same-runtime-orphan" || c.record.owner.paneId !== input.paneId) return "other-source";
+		if (liveElsewhere) return "other-draft-live";
+		if (c.lineage !== "same-runtime-orphan" && c.lineage !== "dead-runtime") return "ownership-unknown";
 		if (input.otherDirtySession) return "dirty-session";
+		if (input.editorDirty) return "editor-dirty";
 		if (!input.base || input.base.source !== "server") return "base-unverified";
 		if (c.record.base.source === "unknown" || c.record.base.revision === null) return "base-unverified";
 		return null;
@@ -2291,7 +2601,9 @@ var prksEditorRecovery = (function(exports) {
 	exports.BODIES_STORE = BODIES_STORE;
 	exports.CLAIM_WAIT_MS = CLAIM_WAIT_MS;
 	exports.CLOSED_PAGES_KEPT = CLOSED_PAGES_KEPT;
+	exports.CLOSED_PAGES_LOCAL_KEPT = CLOSED_PAGES_LOCAL_KEPT;
 	exports.CLOSED_PAGES_SESSION_KEY = CLOSED_PAGES_SESSION_KEY;
+	exports.CLOSED_PAGE_KEY_PREFIX = CLOSED_PAGE_KEY_PREFIX;
 	exports.DRAFTS_STORE = DRAFTS_STORE;
 	exports.EMERGENCY_BODY_CHARS = EMERGENCY_BODY_CHARS;
 	exports.EMERGENCY_ENTRY_OVERHEAD_CHARS = EMERGENCY_ENTRY_OVERHEAD_CHARS;
@@ -2312,6 +2624,7 @@ var prksEditorRecovery = (function(exports) {
 	exports.RUNTIME_LOCK_PREFIX = RUNTIME_LOCK_PREFIX;
 	exports.RUNTIME_SESSION_KEY = RUNTIME_SESSION_KEY;
 	exports.RecoveryStoreError = RecoveryStoreError;
+	exports.SUPERSEDED_KEY_PREFIX = SUPERSEDED_KEY_PREFIX;
 	exports.UNKNOWN_BASE = UNKNOWN_BASE;
 	exports.classifyLineage = classifyLineage;
 	exports.createEditorRecoveryRuntime = createEditorRecoveryRuntime;

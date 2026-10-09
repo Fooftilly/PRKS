@@ -121,12 +121,27 @@ export interface DiscardTombstone {
   pageInstanceId: string
 }
 
+/**
+ * A discard chosen from a review of one exact record: `kept` unless the
+ * stored record still has this owner page, generation and status, so an
+ * action decided on stale information never removes newer text.
+ */
+export interface DiscardExpectation {
+  pageInstanceId: string
+  generation: number
+  status: DraftRecord['status']
+}
+
 export interface RecoveryStore {
   writeGeneration(input: WriteGenerationInput): Promise<WriteOutcome>
   /** Owner-checked metadata update in one transaction; `missing` for an absent or discarded record. */
   updateLineage(input: UpdateLineageInput): Promise<WriteOutcome>
-  /** Compare-and-set ownership: succeeds only if the stored owner page is still `expectedPageInstanceId`. */
-  adopt(draftId: string, expectedPageInstanceId: string, owner: DraftOwner): Promise<AdoptOutcome>
+  /**
+   * Compare-and-set ownership: succeeds only if the stored owner page is still
+   * `expectedPageInstanceId` and, when given, the stored generation is still
+   * `expectedGeneration` (the body the caller read is the newest).
+   */
+  adopt(draftId: string, expectedPageInstanceId: string, owner: DraftOwner, expectedGeneration?: number): Promise<AdoptOutcome>
   get(draftId: string): Promise<DraftRecord | null>
   getBody(draftId: string): Promise<DraftBodyRow | null>
   listByEntity(kind: DraftKind, entityId: string): Promise<DraftRecord[]>
@@ -146,7 +161,7 @@ export interface RecoveryStore {
    * removes it later. Every delete (discard or acknowledgement) of a record
    * with an `emergencySource` leaves such a tombstone for that page.
    */
-  discard(draftId: string, tombstone?: DiscardTombstone): Promise<DeleteOutcome>
+  discard(draftId: string, tombstone?: DiscardTombstone, expected?: DiscardExpectation): Promise<DeleteOutcome>
   /**
    * Called once that page's emergency key is gone: drops what answered that
    * key. A tombstone answering only that page is deleted; one also answering
@@ -431,13 +446,14 @@ export function createRecoveryStore(options: RecoveryStoreOptions = {}): Recover
     })
   }
 
-  function adopt(draftId: string, expectedPageInstanceId: string, owner: DraftOwner): Promise<AdoptOutcome> {
+  function adopt(draftId: string, expectedPageInstanceId: string, owner: DraftOwner, expectedGeneration?: number): Promise<AdoptOutcome> {
     return run<AdoptOutcome>('readwrite', (tx, done) => {
       readRecord(tx, draftId, (record) => {
         if (!record) return done({ outcome: 'missing' })
         if (!isSupportedRecord(record)) return done({ outcome: 'unsupported' })
         if (record.status === 'discarded') return done({ outcome: 'missing' })
         if (record.owner.pageInstanceId !== expectedPageInstanceId) return done({ outcome: 'conflict' })
+        if (expectedGeneration !== undefined && record.generation !== expectedGeneration) return done({ outcome: 'conflict' })
         const next: DraftRecord = { ...record, owner: { ...owner }, updatedAt: now() }
         tx.objectStore(DRAFTS_STORE).put(next)
         done({ outcome: 'ok', record: next })
@@ -507,10 +523,20 @@ export function createRecoveryStore(options: RecoveryStoreOptions = {}): Recover
     return { ...newRecord(draftId, lineage, Math.max(tombstone.generation, storedGeneration), 0), status: 'discarded' }
   }
 
-  function discard(draftId: string, tombstone?: DiscardTombstone): Promise<DeleteOutcome> {
+  function discard(draftId: string, tombstone?: DiscardTombstone, expected?: DiscardExpectation): Promise<DeleteOutcome> {
     return run<DeleteOutcome>('readwrite', (tx, done) => {
       readRecord(tx, draftId, (record) => {
         if (record && !isSupportedRecord(record)) return done('unsupported')
+        if (expected) {
+          if (!record || record.status === 'discarded') return done('missing')
+          if (
+            record.owner.pageInstanceId !== expected.pageInstanceId ||
+            record.generation !== expected.generation ||
+            record.status !== expected.status
+          ) {
+            return done('kept')
+          }
+        }
         if (!tombstone) {
           if (!record) return done('missing')
           retire(tx, record)

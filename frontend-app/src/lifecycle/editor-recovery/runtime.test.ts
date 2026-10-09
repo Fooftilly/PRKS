@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { EmergencyStorage } from './emergency'
 import { createEditorRecoveryRuntime } from './runtime'
-import { EMERGENCY_KEY_PREFIX, RUNTIME_SESSION_KEY, UNKNOWN_BASE, reservationKeyOf } from './schema'
+import { CLOSED_PAGE_KEY_PREFIX, EMERGENCY_KEY_PREFIX, RUNTIME_SESSION_KEY, UNKNOWN_BASE, reservationKeyOf } from './schema'
 import { createFakeBrowser } from './test-support/fake-env'
 import { createFakeIdb, createManualScheduler, settle } from './test-support/fake-idb'
 
@@ -238,6 +238,76 @@ describe('editor recovery runtime', () => {
     expect(await b.rt.scanEmergency()).toEqual([])
   })
 
+  it('without Web Locks, picks up a tab that closed during its claim once its final pagehide is recorded', async () => {
+    const browser = createFakeBrowser()
+    const idb = createFakeIdb()
+    const local = memoryStorage()
+    const make = (name: string) =>
+      createEditorRecoveryRuntime({
+        store: { indexedDB: idb.factory },
+        identity: { sessionStorage: browser.sessionStorageWith(), locks: null, createChannel: browser.channelFor(name), claimWaitMs: 20, localStorage: local },
+        writers: { scheduler: createManualScheduler(), window: null, document: null },
+        emergencyStorage: local,
+      })
+    const b = make('b')
+    await b.start()
+    const a = make('a')
+    // Typed and closed before its runtime claim settled: the payload carries no runtime id.
+    void a.start()
+    a.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE }).edit(1, 'closed while claiming')
+    expect(a.writers.writeEmergencyNow()).toBe('written')
+    const key = EMERGENCY_KEY_PREFIX + a.identity.pageInstanceId
+    expect(JSON.parse(local.map.get(key)!).runtimeId).toBeNull()
+    a.identity.dispose()
+    await settle()
+    // Silence alone is not proof: the key stays.
+    expect(await b.scanEmergency()).toEqual([])
+    expect(local.map.has(key)).toBe(true)
+    local.setItem(CLOSED_PAGE_KEY_PREFIX + a.identity.pageInstanceId, '1')
+    const merged = await b.scanEmergency()
+    expect(merged.map((m) => [m.key, m.outcomes, m.removed])).toEqual([[key, ['created'], true]])
+    const [row] = await b.store.listByEntity('work-research-note', 'w1')
+    expect((await b.store.getBody(row!.draftId))?.body).toBe('closed while claiming')
+  })
+
+  it('without Web Locks, never takes a page of this tab frozen in the back/forward cache for an orphan', async () => {
+    const browser = createFakeBrowser()
+    const idb = createFakeIdb()
+    const local = memoryStorage()
+    const session = browser.sessionStorageWith()
+    const events = () => {
+      const target = new EventTarget()
+      return {
+        target,
+        fire: (type: string, persisted: boolean) => target.dispatchEvent(Object.assign(new Event(type), { persisted })),
+      }
+    }
+    const make = (name: string, win: EventTarget) =>
+      createEditorRecoveryRuntime({
+        store: { indexedDB: idb.factory },
+        identity: { sessionStorage: session, locks: null, createChannel: browser.channelFor(name), claimWaitMs: 20, localStorage: local, window: win },
+        writers: { scheduler: createManualScheduler(), window: null, document: null },
+        emergencyStorage: local,
+      })
+    const aWin = events()
+    const a = make('a', aWin.target)
+    await a.start()
+    const w = a.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE })
+    w.edit(1, 'still in the cache')
+    await w.flush()
+    const [record] = await a.store.listByEntity('work-research-note', 'w1')
+    // Into the cache, then frozen: it answers nothing.
+    aWin.fire('pagehide', true)
+    a.identity.dispose()
+    await settle()
+    // The same tab opens PRKS again: it inherits the runtime id and verifies it by silence.
+    const b = make('b', events().target)
+    const { claim } = await b.start()
+    expect(claim).toMatchObject({ runtimeId: record!.owner.runtimeId, verified: 'channel' })
+    expect(await b.classify(record!)).toBe('unknown')
+    expect(b.identity.wasPageClosed(record!.owner.pageInstanceId)).toBe(false)
+  })
+
   it('scanEmergency starts the runtime when nothing has yet', async () => {
     const browser = createFakeBrowser()
     const rt = createEditorRecoveryRuntime({
@@ -302,5 +372,86 @@ describe('editor recovery runtime', () => {
     expect(await b.rt.store.listAll()).toEqual([])
     expect(local.map.has(key)).toBe(false)
     expect(await b.rt.scanEmergency()).toEqual([])
+  })
+})
+
+describe('review actions', () => {
+  function runtimeOn(idb: ReturnType<typeof createFakeIdb>, local: EmergencyStorage, name: string) {
+    const browser = createFakeBrowser()
+    return createEditorRecoveryRuntime({
+      store: { indexedDB: idb.factory },
+      identity: { sessionStorage: browser.sessionStorageWith(), locks: null, createChannel: browser.channelFor(name), claimWaitMs: 5, localStorage: local },
+      writers: { window: null, document: null },
+      emergencyStorage: local,
+    })
+  }
+
+  it('leaves a tombstone when a stale emergency key still lists the discarded draft, so a merge never brings it back', async () => {
+    const idb = createFakeIdb()
+    const local = memoryStorage()
+    const rt = runtimeOn(idb, local, 'reviewer')
+    await rt.start()
+    const draftId = 'd-' + 'e'.repeat(32)
+    const lineage = { createdAt: 1, owner: { runtimeId: null, pageInstanceId: 'p-gone', paneId: 'tab-1' }, base: UNKNOWN_BASE }
+    expect(await rt.store.writeGeneration({
+      draftId, pageInstanceId: 'p-gone', generation: 2, body: 'reviewed text',
+      create: { kind: 'work-research-note', entityType: 'work', entityId: 'w1', owner: { ...lineage.owner, claimedAt: 1 }, base: UNKNOWN_BASE },
+    })).toBe('ok')
+    // The gone page's key could not be removed and still lists the lineage at generation 1.
+    const payload = { v: 1, pageInstanceId: 'p-gone', runtimeId: null, at: 1, entries: [
+      { draftId, kind: 'work-research-note' as const, entityType: 'work' as const, entityId: 'w1', generation: 1, committedGeneration: 0, body: 'older text', lineage },
+    ] }
+    local.setItem(EMERGENCY_KEY_PREFIX + 'p-gone', JSON.stringify(payload))
+    const reviewed = { draftId, pageInstanceId: 'p-gone', generation: 2, status: 'active' as const, kind: 'work-research-note' as const, entityType: 'work' as const, entityId: 'w1' }
+    // A stale review (older generation) removes nothing.
+    expect(await rt.discardReviewed({ ...reviewed, generation: 1 })).toBe('kept')
+    expect(await rt.discardReviewed(reviewed)).toBe('deleted')
+    expect(await rt.store.get(draftId)).toMatchObject({ status: 'discarded' })
+    expect(await rt.store.getBody(draftId)).toBeNull()
+    expect(await rt.store.applyEmergencyEntry(payload, payload.entries[0]!)).toBe('suppressed')
+    expect((await rt.store.listByEntity('work-research-note', 'w1')).filter((r) => r.status !== 'discarded')).toEqual([])
+    rt.dispose()
+  })
+
+  it('claims a reviewed record by compare-and-set on its owner and generation', async () => {
+    const idb = createFakeIdb()
+    const local = memoryStorage()
+    const rt = runtimeOn(idb, local, 'claimer')
+    await rt.start()
+    const draftId = 'd-' + 'f'.repeat(32)
+    await rt.store.writeGeneration({
+      draftId, pageInstanceId: 'p-gone', generation: 3, body: 'text',
+      create: { kind: 'work-research-note', entityType: 'work', entityId: 'w1', owner: { runtimeId: null, pageInstanceId: 'p-gone', paneId: 'tab-1', claimedAt: 1 }, base: UNKNOWN_BASE },
+    })
+    const reviewed = { draftId, pageInstanceId: 'p-gone', generation: 3, status: 'active' as const }
+    expect((await rt.claimReviewed({ ...reviewed, generation: 2 }, 'tab-1')).outcome).toBe('conflict')
+    expect((await rt.claimReviewed({ ...reviewed, status: 'tail-missing' }, 'tab-1')).outcome).toBe('conflict')
+    expect((await rt.claimReviewed(reviewed, 'tab-1')).outcome).toBe('ok')
+    expect((await rt.store.get(draftId))!.owner.pageInstanceId).toBe(rt.identity.pageInstanceId)
+    // A second claim from the same review is now stale.
+    expect((await rt.claimReviewed(reviewed, 'tab-1')).outcome).toBe('conflict')
+    rt.dispose()
+  })
+
+  it('fans writer protection events out to every listener until it unsubscribes', async () => {
+    const idb = createFakeIdb()
+    const rt = runtimeOn(idb, memoryStorage(), 'events')
+    await rt.start()
+    const seen: string[] = []
+    const stop = rt.onWriterEvent((event) => seen.push(event.type))
+    rt.onWriterEvent(() => {
+      throw new Error('a broken listener')
+    })
+    idb.failCommits = 5
+    const w = rt.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE })
+    w.edit(1, 'text')
+    await w.flush()
+    expect(seen).toEqual(['unprotected'])
+    stop()
+    idb.failCommits = 0
+    await w.flush()
+    expect(seen).toEqual(['unprotected'])
+    rt.dispose()
+    await settle()
   })
 })
