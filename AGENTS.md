@@ -17,6 +17,7 @@ PRKS keeps detailed rules close to the code they govern so agents do not need un
 - `DESIGN.md`: canonical UI/interaction design authority. For UI work, read the relevant sections for the affected component rather than loading the whole document by default.
 - `docs/agent-context/sync-map.md`: routing map for the large local-first/offline specifications.
 - `docs/agent-workflows/cursor-projects.md`: recommended Cursor Projects delegation workflow; reference it for project/coordinator operation rather than treating it as an always-on engineering rule.
+- `docs/agent-workflows/github-discussions.md`: decision/proposal discussion lifecycle, maintainer approval boundary, duplicate investigation coordination, and issue handoff; load it when opening, assessing, or converting a GitHub Discussion, not for unrelated code tasks.
 
 Nested `AGENTS.md` files refine these root rules for their directory scope.
 When both apply, Cursor's more-specific nested instructions take precedence.
