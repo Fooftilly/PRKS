@@ -498,6 +498,23 @@ describe('Work Reminders restore', () => {
     expect(await records()).toHaveLength(1)
   })
 
+  it('lists the earlier draft for review when the user types while the restore is adopting it', async () => {
+    const { ctx, ta } = await openWork()
+    await type(ctx, ta!, 'Saved reminder. Earlier').recovery!.flush()
+    await reload()
+    const { ctx: fresh, ta: field } = await openWork()
+    during('adopt', () => {
+      type(fresh, field!, 'Saved reminder. Typed now')
+    })
+    const result = await win.prksRestoreWorkPrivateNoteRecovery(fresh, work())
+    expect(result).toMatchObject({ restored: false })
+    expect(result!.review).toHaveLength(1)
+    expect(field!.value).toBe('Saved reminder. Typed now')
+    expect(win.prksWorkPrivateNotesRecoveryView(fresh)).toMatchObject({ drafts: 1 })
+    const bodies = await Promise.all((await records()).map((r) => bodyOf(r.draftId)))
+    expect(bodies).toContain('Saved reminder. Earlier')
+  })
+
   it('does not replace the note when a row was queued while claiming', async () => {
     const { ctx, ta } = await openWork()
     await type(ctx, ta!, 'Saved reminder. Mine').recovery!.flush()

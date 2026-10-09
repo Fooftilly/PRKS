@@ -480,17 +480,24 @@
             const key = K.key(ctx, id);
             /* A live session in this pane is the authority for its text: report only. */
             const refreshing = !!(options && options.reviewOnly);
-            const reviewOnly = refreshing || K.hasSession(ctx, id);
+            const reviewOnly = refreshing || !!(options && options.typed) || K.hasSession(ctx, id);
             const current = function () {
                 return !(attempt && attempt.abandoned) && K.paintable(ctx, id, refreshing ? undefined : generation) &&
                     (reviewOnly || !K.hasSession(ctx, id));
+            };
+            /* Typing in this pane while the restore waited only rules out applying a
+             * draft: the drafts are planned again for review, so none goes unlisted. */
+            const bail = function () {
+                const typed = !reviewOnly && !(attempt && attempt.abandoned) && K.paintable(ctx, id, generation) &&
+                    K.hasSession(ctx, id);
+                return typed ? restoreNow(ctx, work, attempt, Object.assign({}, options, { typed: true })) : null;
             };
             if (!current()) return null;
             const rt = r.rt;
             listen();
             await rt.scanEmergency();
             const records = await rt.store.listByEntity(K.kind, id);
-            if (!current()) return null;
+            if (!current()) return bail();
             if (!records.length) {
                 report(ctx, id, []);
                 return null;
@@ -502,7 +509,7 @@
                 return candidateOf(rt, record, asking);
             }));
             const queue = await readQueue(id);
-            if (!current()) return null;
+            if (!current()) return bail();
             const base = observedBase(ctx);
             const dirtyElsewhere = otherDirty(id, key);
             const planWith = function (planBase) {
@@ -521,10 +528,10 @@
              * cleared or restored on them, prove they are one server snapshot;
              * otherwise every draft stays for review. */
             if ((plan.cleanup.length || plan.restore) && !(await verifyBase(id, base))) {
-                if (!current()) return null;
+                if (!current()) return bail();
                 plan = planWith(Object.assign({}, base, { source: 'cache' }));
             }
-            if (!current()) return null;
+            if (!current()) return bail();
             for (const draftId of plan.cleanup) {
                 const record = candidates.find(function (c) { return c.record.draftId === draftId; }).record;
                 /* Only the generation it read, and only while no page has adopted it since. */
@@ -571,6 +578,7 @@
                 if (writer && (!current() || changed)) {
                     /* Stale mount or moved on: the lineage stays this pane's orphan. */
                     void writer.release().catch(function () {});
+                    if (!current()) return bail();
                     if (changed && current()) {
                         const record = plan.restore.record;
                         plan.review.push({
