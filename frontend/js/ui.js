@@ -2878,13 +2878,25 @@ function prksBindFolderPrivateNotesSync(ctx) {
  */
 function prksOpenFolderPrivateNotes(ctx, read, source) {
     if (!ctx || !read) return Promise.resolve(null);
+    const generation = ctx.generation;
     if (typeof prksRememberFolderNotesCanonical === 'function') prksRememberFolderNotesCanonical(ctx, read, source);
     prksBindFolderPrivateNotesSync(ctx);
     return Promise.all([
         typeof prksEnsureFolderNotesBase === 'function'
             ? prksEnsureFolderNotesBase(ctx, read, { pendingCreate: source === 'pending-create' }) : null,
         PRKS_PRIVATE_NOTE_FAMILIES.folder.refreshPending(),
-    ]).then(function (out) { return out[0]; }).catch(function () { return null; });
+    ]).then(function (out) {
+        /* Browser-local recovery: this pane's own unsaved Reminders from before a
+         * reload come back on that base, only where that cannot overwrite
+         * anything; any other draft is offered for Review. The field is already
+         * painted, and a restore that applies fills it only while it is clean. */
+        const live = ctx.getEntity ? ctx.getEntity('folder') : null;
+        if (!ctx.destroyed && ctx.generation === generation && live && String(live.id) === String(read.id) &&
+            typeof window.prksRestoreFolderPrivateNoteRecovery === 'function') {
+            void window.prksRestoreFolderPrivateNoteRecovery(ctx, live).catch(function () { return null; });
+        }
+        return out[0];
+    }).catch(function () { return null; });
 }
 
 /**
