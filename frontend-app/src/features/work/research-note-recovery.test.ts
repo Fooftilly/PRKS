@@ -1360,6 +1360,34 @@ describe('Review (slice 3)', () => {
     })
   })
 
+  it('never shows a draft\'s text when another tab adopts it while the text is being read', async () => {
+    const { ctx } = await twoClosedTabs()
+    const [first] = await records()
+    const other = otherPage('adopter')
+    await other.rt.start()
+    let adopted = false
+    const store = page!.rt.store
+    const getBody = store.getBody.bind(store)
+    store.getBody = async (draftId: string) => {
+      const row = await getBody(draftId)
+      if (!adopted && draftId === first!.draftId) {
+        adopted = true
+        expect(await other.rt.writers.adopt((await store.get(draftId))!, { paneId: 'tab-9' })).toBeTruthy()
+      }
+      return row
+    }
+    try {
+      const details = await review().details(ctx, 'w1')
+      expect(adopted).toBe(true)
+      // Listed as the other tab's, without its text and with nothing to apply.
+      expect(details!.candidates.find((c) => c.draftId === first!.draftId)).toMatchObject({ lineage: 'other-live', body: null, action: null })
+    } finally {
+      store.getBody = getBody
+      other.rt.dispose()
+      other.locks.releaseAll()
+    }
+  })
+
   it('refuses an action decided before the owner changed, and changes nothing', async () => {
     const { ctx, notes } = await twoClosedTabs()
     const details = await review().details(ctx, 'w1')

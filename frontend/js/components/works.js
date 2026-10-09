@@ -588,8 +588,20 @@ async function prksResearchRecoveryCandidate(rt, record, askingSession) {
     if (lineage !== 'self-live' && lineage !== 'other-live') {
         const row = await rt.store.getBody(record.draftId);
         body = row && row.generation === record.generation ? row.body : null;
+        /* Classified before the body read: if the record moved meanwhile (another
+         * tab or pane adopted it), its text is not shown on the old answer. */
+        const now = body === null ? record : await rt.store.get(record.draftId);
+        if (!prksResearchRecoverySameOwner(record, now)) {
+            return { record: now || record, body: null, lineage: now ? await rt.classify(now, askingSession) : lineage };
+        }
     }
     return { record: record, body: body, lineage: lineage };
+}
+
+function prksResearchRecoverySameOwner(a, b) {
+    return !!(a && b && a.generation === b.generation && a.status === b.status && a.owner && b.owner &&
+        a.owner.pageInstanceId === b.owner.pageInstanceId && a.owner.paneId === b.owner.paneId &&
+        a.owner.claimedAt === b.owner.claimedAt && a.owner.runtimeId === b.owner.runtimeId);
 }
 
 async function prksRestoreResearchNotesRecoveryNow(ctx, work, attempt, options) {
