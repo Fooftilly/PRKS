@@ -676,6 +676,41 @@ describe('acknowledgement', () => {
     expect(t.scheduler.pending()).toBe(0)
   })
 
+  it('a later page never adopts a generation the server superseded, and finishes removing it', async () => {
+    const t = setup()
+    const w = t.open()
+    w.edit(1, 'stored B')
+    await w.flush()
+    const id = w.draftId() as string
+    t.idb.failCommits = 100
+    w.edit(2, 'reverted to A')
+    await w.flush()
+    expect(await w.acknowledged(2, 'reverted to A')).toBe('deleted')
+    // The page reloads before any retry lands.
+    t.registry.dispose()
+    expect(t.storage.getItem('prks.editorRecovery.superseded.v1')).toContain(id)
+    const scheduler = createManualScheduler()
+    const next = createWriterRegistry({
+      store: t.store,
+      identity: { pageInstanceId: 'p-next', current: () => ({ runtimeId: 'r-next', verified: 'lock' }), setLineageResponder() {} },
+      scheduler,
+      now: scheduler.now,
+      window: listenerTarget(),
+      document: listenerTarget('hidden'),
+      emergencyStorage: t.storage,
+    })
+    await settle()
+    const stale = (await t.store.get(id))!
+    expect(stale.generation).toBe(1)
+    expect(await next.adopt(stale, { paneId: 'tab-1', sessionKey: 's-next' })).toBeNull()
+    t.idb.failCommits = 0
+    scheduler.advance(60_000)
+    await settle()
+    expect(await t.store.get(id)).toBeNull()
+    expect(t.storage.getItem('prks.editorRecovery.superseded.v1')).toBeNull()
+    next.dispose()
+  })
+
   it('ends the warning when recovery storage cannot be opened at all', async () => {
     const t = setup()
     const w = t.open()

@@ -42,6 +42,14 @@ export const CLOSED_PAGES_KEPT = 8
  */
 export const CLOSED_PAGES_LOCAL_KEY = 'prks.editorRecovery.closedPages.v1'
 export const CLOSED_PAGES_LOCAL_KEPT = 64
+/**
+ * Stored generations the server already superseded whose removal recovery
+ * storage refused, newest last: `{ draftId, pageInstanceId, generation }`.
+ * Kept outside recovery storage, so a later page still never restores them
+ * and finishes the removal.
+ */
+export const SUPERSEDED_LOCAL_KEY = 'prks.editorRecovery.superseded.v1'
+export const SUPERSEDED_LOCAL_KEPT = 64
 export const RECOVERY_CHANNEL = 'prks-editor-recovery-v1'
 export const RUNTIME_LOCK_PREFIX = 'prks-editor-recovery-runtime:'
 export const PAGE_LOCK_PREFIX = 'prks-editor-recovery-page:'

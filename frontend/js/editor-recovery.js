@@ -183,6 +183,14 @@ var prksEditorRecovery = (function(exports) {
 	*/
 	var CLOSED_PAGES_LOCAL_KEY = "prks.editorRecovery.closedPages.v1";
 	var CLOSED_PAGES_LOCAL_KEPT = 64;
+	/**
+	* Stored generations the server already superseded whose removal recovery
+	* storage refused, newest last: `{ draftId, pageInstanceId, generation }`.
+	* Kept outside recovery storage, so a later page still never restores them
+	* and finishes the removal.
+	*/
+	var SUPERSEDED_LOCAL_KEY = "prks.editorRecovery.superseded.v1";
+	var SUPERSEDED_LOCAL_KEPT = 64;
 	var RECOVERY_CHANNEL = "prks-editor-recovery-v1";
 	var RUNTIME_LOCK_PREFIX = "prks-editor-recovery-runtime:";
 	var PAGE_LOCK_PREFIX = "prks-editor-recovery-page:";
@@ -1440,10 +1448,63 @@ var prksEditorRecovery = (function(exports) {
 		let refreshingEmergency = false;
 		let disposed = false;
 		/**
-		* Stored generations this page knows the server superseded, still waiting
-		* for their background removal: never adopted, so never restored.
+		* Stored generations known to be superseded by the server, still waiting
+		* for their removal: never adopted, so never restored. A removal storage
+		* refused is also written to localStorage, so a later page honours it and
+		* finishes the removal.
 		*/
 		const superseded = /* @__PURE__ */ new Map();
+		function readSupersededMarks() {
+			try {
+				const raw = storage ? storage.getItem(SUPERSEDED_LOCAL_KEY) : null;
+				const list = raw ? JSON.parse(raw) : [];
+				if (!Array.isArray(list)) return [];
+				return list.filter((m) => !!m && typeof m.draftId === "string" && typeof m.pageInstanceId === "string" && Number.isSafeInteger(m.generation) && m.generation > 0);
+			} catch {
+				return [];
+			}
+		}
+		function writeSupersededMarks(list) {
+			try {
+				if (!storage) return;
+				if (list.length) storage.setItem(SUPERSEDED_LOCAL_KEY, JSON.stringify(list.slice(-64)));
+				else storage.removeItem(SUPERSEDED_LOCAL_KEY);
+			} catch {}
+		}
+		function markSuperseded(mark) {
+			superseded.set(mark.draftId, Math.max(mark.generation, superseded.get(mark.draftId) || 0));
+			writeSupersededMarks([...readSupersededMarks().filter((m) => m.draftId !== mark.draftId), mark]);
+		}
+		function unmarkSuperseded(draftId, generation) {
+			if ((superseded.get(draftId) || 0) <= generation) superseded.delete(draftId);
+			const list = readSupersededMarks();
+			const rest = list.filter((m) => !(m.draftId === draftId && m.generation <= generation));
+			if (rest.length !== list.length) writeSupersededMarks(rest);
+		}
+		/**
+		* Removes one superseded generation by exact owner, generation and status.
+		* Resolves true when it is gone or no longer that generation (someone else
+		* owns it now); throws while storage refuses.
+		*/
+		async function removeSupersededRecord(mark) {
+			superseded.set(mark.draftId, Math.max(mark.generation, superseded.get(mark.draftId) || 0));
+			await store.discard(mark.draftId, void 0, {
+				pageInstanceId: mark.pageInstanceId,
+				generation: mark.generation,
+				status: "active"
+			});
+			unmarkSuperseded(mark.draftId, mark.generation);
+		}
+		/** Startup: finish the removals an earlier page could not, retrying with backoff. */
+		function sweepSuperseded(marks, delay) {
+			if (!marks.length || disposed) return;
+			Promise.all(marks.map((mark) => removeSupersededRecord(mark).then(() => null, () => mark))).then((results) => {
+				const left = results.filter((m) => m !== null);
+				if (!left.length || disposed) return;
+				const next = delay ? Math.min(delay * 2, RETRY_MAX_MS) : RETRY_FIRST_MS;
+				scheduler.set(() => sweepSuperseded(left, next), next);
+			});
+		}
 		function onBeforeUnload(event) {
 			event.preventDefault();
 			event.returnValue = "";
@@ -1985,14 +2046,15 @@ var prksEditorRecovery = (function(exports) {
 			* without the leave guard: the text is already on the server.
 			*/
 			async removeSuperseded(draftId, generation, delay) {
-				superseded.set(draftId, Math.max(generation, superseded.get(draftId) || 0));
+				const mark = {
+					draftId,
+					pageInstanceId: identity.pageInstanceId,
+					generation
+				};
 				try {
-					await store.discard(draftId, void 0, {
-						pageInstanceId: identity.pageInstanceId,
-						generation,
-						status: "active"
-					});
+					await removeSupersededRecord(mark);
 				} catch {
+					if (delay === 0) markSuperseded(mark);
 					if (disposed) return;
 					const next = delay ? Math.min(delay * 2, RETRY_MAX_MS) : RETRY_FIRST_MS;
 					this.cleanupTimer = scheduler.set(() => {
@@ -2001,7 +2063,6 @@ var prksEditorRecovery = (function(exports) {
 					}, next);
 					return;
 				}
-				if ((superseded.get(draftId) || 0) <= generation) superseded.delete(draftId);
 				await this.tombstoneIfListed(draftId);
 			}
 			/** The newest generation, never committed to recovery storage, is exactly what was acknowledged. */
@@ -2114,6 +2175,7 @@ var prksEditorRecovery = (function(exports) {
 			live.add(writer);
 			return writer;
 		}
+		sweepSuperseded(readSupersededMarks(), 0);
 		return {
 			openWriter,
 			adopt,
@@ -2489,6 +2551,8 @@ var prksEditorRecovery = (function(exports) {
 	exports.RUNTIME_LOCK_PREFIX = RUNTIME_LOCK_PREFIX;
 	exports.RUNTIME_SESSION_KEY = RUNTIME_SESSION_KEY;
 	exports.RecoveryStoreError = RecoveryStoreError;
+	exports.SUPERSEDED_LOCAL_KEPT = SUPERSEDED_LOCAL_KEPT;
+	exports.SUPERSEDED_LOCAL_KEY = SUPERSEDED_LOCAL_KEY;
 	exports.UNKNOWN_BASE = UNKNOWN_BASE;
 	exports.classifyLineage = classifyLineage;
 	exports.createEditorRecoveryRuntime = createEditorRecoveryRuntime;

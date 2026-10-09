@@ -115,6 +115,11 @@ coordinator names no family: adding one is a registration.
   same checks as the automatic restore (#490): Restore needs a base proven
   one server snapshot, and both re-read the queue, base and other panes
   after the asynchronous adoption or claim before applying anything.
+  When the server acknowledges text recovery storage never took, the older
+  stored generation is superseded and removed; if storage refuses that
+  removal, it is recorded in `localStorage`
+  (`prks.editorRecovery.superseded.v1`), never adopted or restored by this
+  or a later page, and removed once storage accepts it.
 - A device ID is an identity for synchronization, never authentication or trust.
 - Editor state and observed projections belong to the Work's TabContext.
   The sync coordinator owns transport and retry policy, with one in-flight
