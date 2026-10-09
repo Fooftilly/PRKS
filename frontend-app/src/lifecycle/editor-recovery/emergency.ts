@@ -112,8 +112,9 @@ function parsePayload(raw: string | null, pageInstanceId: string): EmergencyPayl
 
 /**
  * Whether a key this code cannot parse may still hold text a later read or a
- * newer bundle recovers: its read failed, or it is an envelope of a newer
- * schema. A malformed, older or mismatched key holds nothing any bundle can
+ * newer bundle recovers: its read failed, it is an envelope of a newer
+ * schema, or its only unreadable entries are of a draft kind this bundle does
+ * not know. A malformed, older or mismatched key holds nothing any bundle can
  * merge; it names no entity, and it is left in place untouched.
  */
 export function mayHoldUnreadable(stored: StoredEmergency): boolean {
@@ -121,8 +122,15 @@ export function mayHoldUnreadable(stored: StoredEmergency): boolean {
   if (stored.readFailed) return true
   if (stored.raw === null) return false
   try {
-    const value = JSON.parse(stored.raw) as { v?: unknown } | null
-    return !!value && typeof value === 'object' && typeof value.v === 'number' && value.v > EMERGENCY_VERSION
+    const value = JSON.parse(stored.raw) as { v?: unknown; pageInstanceId?: unknown; entries?: unknown } | null
+    if (!value || typeof value !== 'object' || typeof value.v !== 'number') return false
+    if (value.v > EMERGENCY_VERSION) return true
+    // The envelope version stays when a newer bundle adds a draft kind: an entry of a kind this
+    // bundle does not know is that bundle's to merge, as an unknown record kind is its to read.
+    return value.v === EMERGENCY_VERSION && value.pageInstanceId === stored.pageInstanceId &&
+      Array.isArray(value.entries) && value.entries.every((entry: unknown) => isEntry(entry) ||
+        (!!entry && typeof entry === 'object' && typeof (entry as { kind?: unknown }).kind === 'string' &&
+          !isDraftKind((entry as { kind: unknown }).kind)))
   } catch {
     return false
   }

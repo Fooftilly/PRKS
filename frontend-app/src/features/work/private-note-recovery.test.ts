@@ -876,6 +876,22 @@ describe('Work delete and recovery drafts (#533)', () => {
   const unreadableKeys = [
     { name: 'of a newer schema', raw: JSON.stringify({ v: 99, pageInstanceId: 'p-odd', entries: [] }), keeps: true },
     { name: 'whose read fails', raw: JSON.stringify({ v: 1, pageInstanceId: 'p-odd', entries: [] }), failRead: true, keeps: true },
+    {
+      name: 'holding a draft kind a newer bundle added',
+      raw: JSON.stringify({
+        v: 1, pageInstanceId: 'p-odd', runtimeId: null, at: 1,
+        entries: [{
+          draftId: 'd-new-kind', kind: 'folder-reminder', entityType: 'work', entityId: 'w1', generation: 1, committedGeneration: 0,
+          body: 'Typed in a newer bundle', lineage: { createdAt: 1, owner: { runtimeId: null, pageInstanceId: 'p-odd', paneId: 'tab-1' }, base: SERVER_BASE },
+        }],
+      }),
+      keeps: true,
+    },
+    {
+      name: 'holding a broken entry of a known kind',
+      raw: JSON.stringify({ v: 1, pageInstanceId: 'p-odd', runtimeId: null, at: 1, entries: [{ draftId: 'd-broken', kind: KIND }] }),
+      keeps: false,
+    },
     { name: 'of malformed JSON', raw: '{"v": 1, "entr', keeps: false },
     { name: 'of an older schema', raw: JSON.stringify({ v: 0, pageInstanceId: 'p-odd', entries: [] }), keeps: false },
     { name: 'naming another page', raw: JSON.stringify({ v: 1, pageInstanceId: 'p-other', entries: [] }), keeps: false },

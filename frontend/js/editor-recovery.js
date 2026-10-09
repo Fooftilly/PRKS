@@ -849,8 +849,9 @@ var prksEditorRecovery = (function(exports) {
 	}
 	/**
 	* Whether a key this code cannot parse may still hold text a later read or a
-	* newer bundle recovers: its read failed, or it is an envelope of a newer
-	* schema. A malformed, older or mismatched key holds nothing any bundle can
+	* newer bundle recovers: its read failed, it is an envelope of a newer
+	* schema, or its only unreadable entries are of a draft kind this bundle does
+	* not know. A malformed, older or mismatched key holds nothing any bundle can
 	* merge; it names no entity, and it is left in place untouched.
 	*/
 	function mayHoldUnreadable(stored) {
@@ -859,7 +860,9 @@ var prksEditorRecovery = (function(exports) {
 		if (stored.raw === null) return false;
 		try {
 			const value = JSON.parse(stored.raw);
-			return !!value && typeof value === "object" && typeof value.v === "number" && value.v > 1;
+			if (!value || typeof value !== "object" || typeof value.v !== "number") return false;
+			if (value.v > 1) return true;
+			return value.v === 1 && value.pageInstanceId === stored.pageInstanceId && Array.isArray(value.entries) && value.entries.every((entry) => isEntry(entry) || !!entry && typeof entry === "object" && typeof entry.kind === "string" && !isDraftKind(entry.kind));
 		} catch {
 			return false;
 		}
