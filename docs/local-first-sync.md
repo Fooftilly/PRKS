@@ -121,7 +121,8 @@ coordinator names no family: adding one is a registration.
   (one `prks.editorRecovery.superseded.v1.<draftId>` key per draft, so tabs
   never overwrite each other's marks), never adopted or restored by this
   or any other page (an already open tab reads the record again before it
-  adopts), and removed once storage accepts it.
+  adopts), and removed once storage accepts it. If `localStorage` refuses
+  that mark too, the page keeps its leave guard until the removal lands.
 - A device ID is an identity for synchronization, never authentication or trust.
 - Editor state and observed projections belong to the Work's TabContext.
   The sync coordinator owns transport and retry policy, with one in-flight

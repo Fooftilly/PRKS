@@ -207,6 +207,11 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
    * finishes the removal.
    */
   const superseded = new Map<string, number>()
+  /**
+   * Superseded generations whose mark localStorage refused: only this page
+   * knows to suppress them, so leaving stays guarded until the delete lands.
+   */
+  const unrecorded = new Set<string>()
 
   interface SupersededMark {
     draftId: string
@@ -259,14 +264,18 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     const prior = readSupersededMark(mark.draftId)
     if (prior && prior.generation >= mark.generation) return
     try {
-      if (storage) storage.setItem(SUPERSEDED_KEY_PREFIX + mark.draftId, JSON.stringify({ pageInstanceId: mark.pageInstanceId, generation: mark.generation }))
+      if (!storage) throw new Error('no localStorage')
+      storage.setItem(SUPERSEDED_KEY_PREFIX + mark.draftId, JSON.stringify({ pageInstanceId: mark.pageInstanceId, generation: mark.generation }))
     } catch {
-      // The in-memory refusal still holds for this page.
+      // Only this page can suppress it now: guard leaving until it is deleted.
+      unrecorded.add(mark.draftId)
+      changed()
     }
   }
 
   function unmarkSuperseded(draftId: string, generation: number): void {
     if ((superseded.get(draftId) || 0) <= generation) superseded.delete(draftId)
+    if (unrecorded.delete(draftId)) changed()
     const mark = readSupersededMark(draftId)
     if (!mark || mark.generation > generation) return
     try {
@@ -350,7 +359,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     if (disposed) return
     const pending = pendingWriters()
     planHeld(pending)
-    setGuard(pending.some((w) => w.needsLeaveGuard()))
+    setGuard(pending.some((w) => w.needsLeaveGuard()) || unrecorded.size > 0)
     setEmergencyListeners(pending.length > 0)
     refreshEmergencyKey(pending)
   }

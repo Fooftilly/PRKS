@@ -824,6 +824,34 @@ describe('acknowledgement', () => {
     next.dispose()
   })
 
+  it('keeps leaving guarded while a superseded generation has neither a mark nor a delete', async () => {
+    const storage = memoryStorage()
+    const setItem = storage.setItem
+    storage.setItem = (k: string, v: string) => {
+      if (k.startsWith('prks.editorRecovery.superseded.v1.')) throw new Error('QuotaExceededError')
+      setItem(k, v)
+    }
+    const t = setup({ storage })
+    const w = t.open()
+    w.edit(1, 'stored B')
+    await w.flush()
+    const id = w.draftId() as string
+    t.idb.failCommits = 100
+    w.edit(2, 'reverted to A')
+    await w.flush()
+    expect(await w.acknowledged(2, 'reverted to A')).toBe('deleted')
+    expect(w.state()).toBe('clean')
+    // Only this page can suppress the older text: a reload now could restore it.
+    expect(t.registry.leaveGuardActive()).toBe(true)
+    await w.release()
+    expect(t.registry.leaveGuardActive()).toBe(true)
+    t.idb.failCommits = 0
+    t.scheduler.advance(60_000)
+    await settle()
+    expect(await t.store.get(id)).toBeNull()
+    expect(t.registry.leaveGuardActive()).toBe(false)
+  })
+
   it('ends the warning when recovery storage cannot be opened at all', async () => {
     const t = setup()
     const w = t.open()

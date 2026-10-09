@@ -1479,6 +1479,11 @@ var prksEditorRecovery = (function(exports) {
 		* finishes the removal.
 		*/
 		const superseded = /* @__PURE__ */ new Map();
+		/**
+		* Superseded generations whose mark localStorage refused: only this page
+		* knows to suppress them, so leaving stays guarded until the delete lands.
+		*/
+		const unrecorded = /* @__PURE__ */ new Set();
 		function parseSupersededMark(draftId, raw) {
 			if (!raw) return null;
 			try {
@@ -1523,14 +1528,19 @@ var prksEditorRecovery = (function(exports) {
 			const prior = readSupersededMark(mark.draftId);
 			if (prior && prior.generation >= mark.generation) return;
 			try {
-				if (storage) storage.setItem(SUPERSEDED_KEY_PREFIX + mark.draftId, JSON.stringify({
+				if (!storage) throw new Error("no localStorage");
+				storage.setItem(SUPERSEDED_KEY_PREFIX + mark.draftId, JSON.stringify({
 					pageInstanceId: mark.pageInstanceId,
 					generation: mark.generation
 				}));
-			} catch {}
+			} catch {
+				unrecorded.add(mark.draftId);
+				changed();
+			}
 		}
 		function unmarkSuperseded(draftId, generation) {
 			if ((superseded.get(draftId) || 0) <= generation) superseded.delete(draftId);
+			if (unrecorded.delete(draftId)) changed();
 			const mark = readSupersededMark(draftId);
 			if (!mark || mark.generation > generation) return;
 			try {
@@ -1603,7 +1613,7 @@ var prksEditorRecovery = (function(exports) {
 			if (disposed) return;
 			const pending = pendingWriters();
 			planHeld(pending);
-			setGuard(pending.some((w) => w.needsLeaveGuard()));
+			setGuard(pending.some((w) => w.needsLeaveGuard()) || unrecorded.size > 0);
 			setEmergencyListeners(pending.length > 0);
 			refreshEmergencyKey(pending);
 		}
