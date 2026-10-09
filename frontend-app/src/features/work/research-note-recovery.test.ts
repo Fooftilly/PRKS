@@ -1298,6 +1298,28 @@ describe('Review (slice 3)', () => {
       expect(await bodyOf(target.draftId)).toBe(target.body)
     })
 
+    it('does not replace a note with no observed base when a row was queued while claiming', async () => {
+      const ctx = await openWork()
+      await type(ctx, 'Saved note. First tab').recovery!.flush()
+      await closeTabAndOpenAnother()
+      const second = await openWork()
+      await type(second, 'Saved note. Second tab').recovery!.flush()
+      await closeTabAndOpenAnother()
+      // Notes-state carries no revision: this pane never observes a base.
+      server.revision = null as unknown as number
+      const { ctx: fresh, notes } = await openAndRestore()
+      expect(fresh.getResource('workNotesObserved')).toBeFalsy()
+      const details = await review().details(fresh, 'w1')
+      const target = details!.candidates[0]!
+      expect(target.action).toBe('reconcile')
+      during('claimReviewed', foreign)
+      expect(await review().replace(fresh, 'w1', details!.token, target.expect, 'Combined', { text: 'Saved note.', revision: null }))
+        .toMatchObject({ ok: false, code: 'current-changed' })
+      expect(notes.editor.value()).toBe('Saved note.')
+      expect(sync.rows().map((r) => r.payload.text)).toEqual(['Saved note. Queued elsewhere'])
+      expect(await bodyOf(target.draftId)).toBe(target.body)
+    })
+
     /** Another device saves: the server moves on and this page hears nothing. */
     const remote = () => {
       server.text = 'Saved elsewhere.'

@@ -392,8 +392,6 @@ function prksResearchRecoverySettled(owner, id, entry, result, saved) {
 }
 
 /** One page-level subscription: acknowledgements and conflicts of queued Research Notes rows. */
-/* `CLOSED_PAGE_KEY_PREFIX` in editor-recovery/schema.ts: another tab's final pagehide, one key per page. */
-const PRKS_RESEARCH_RECOVERY_CLOSED_PAGE_PREFIX = 'prks.editorRecovery.closedPage.v1.';
 let prksResearchRecoveryStopClosedPages = null;
 const PRKS_RESEARCH_RECOVERY_CLOSED_RESCAN_MS = [1000, 4000];
 
@@ -401,8 +399,10 @@ const PRKS_RESEARCH_RECOVERY_CLOSED_RESCAN_MS = [1000, 4000];
  * Another tab closed: a draft it left on a Work already open here can now be
  * reviewed, so every mounted Research Notes pane re-plans for review only.
  */
-function prksResearchRecoveryWatchClosedPages() {
-    if (prksResearchRecoveryStopClosedPages || typeof window.addEventListener !== 'function') return;
+function prksResearchRecoveryWatchClosedPages(recovery) {
+    /* Another tab's final pagehide writes one key per page under this prefix (editor-recovery/schema.ts). */
+    const prefix = recovery.api.CLOSED_PAGE_KEY_PREFIX;
+    if (prksResearchRecoveryStopClosedPages || typeof prefix !== 'string' || typeof window.addEventListener !== 'function') return;
     let timers = [];
     const refreshAll = function () {
         if (typeof prksForEachLiveTabContext !== 'function') return;
@@ -412,7 +412,7 @@ function prksResearchRecoveryWatchClosedPages() {
         });
     };
     const onStorage = function (event) {
-        if (!event || typeof event.key !== 'string' || event.key.indexOf(PRKS_RESEARCH_RECOVERY_CLOSED_PAGE_PREFIX) !== 0 || event.newValue === null) return;
+        if (!event || typeof event.key !== 'string' || event.key.indexOf(prefix) !== 0 || event.newValue === null) return;
         /*
          * The record is written during the closing page's final pagehide, while
          * it may still answer pings; until it stops, its draft reads as live.
@@ -434,7 +434,7 @@ function prksResearchRecoveryWatchClosedPages() {
 function prksResearchRecoveryListen() {
     const recovery = prksResearchRecovery();
     if (recovery) prksResearchRecoveryWatchWriters(recovery);
-    if (recovery) prksResearchRecoveryWatchClosedPages();
+    if (recovery) prksResearchRecoveryWatchClosedPages(recovery);
     if (prksResearchRecoveryStopSync || !window.prksSync || typeof window.prksSync.subscribe !== 'function') return;
     prksResearchRecoveryStopSync = window.prksSync.subscribe(prksResearchRecoveryOnSync);
 }
@@ -773,8 +773,10 @@ async function prksResearchRecoveryChangedSince(ctx, id, key, base, queue, verif
     const rows = typeof prksReadPendingWorkNotesSnapshot === 'function' ? await prksReadPendingWorkNotesSnapshot() : null;
     if (!rows || !queue || typeof prksWorkNoteOperations !== 'function') return 'queue-unknown';
     const observed = prksResearchRecoveryObservedBase(ctx);
-    if (!base) return observed ? 'base-advanced' : null;
-    if (!observed || observed.value !== base.value || observed.revision !== base.revision ||
+    /* No base was observed at plan time: one appearing since is an advance; the queue and other panes still count. */
+    if (!base) {
+        if (observed) return 'base-advanced';
+    } else if (!observed || observed.value !== base.value || observed.revision !== base.revision ||
         observed.source !== base.source) {
         return 'base-advanced';
     }

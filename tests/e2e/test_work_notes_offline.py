@@ -788,11 +788,10 @@ class ResearchNotesTabCloseAndReviewTests(_RecoveryPage, unittest.TestCase):
         self.assertTrue(page.evaluate('() => window.prksEditorRecovery.runtime().writers.leaveGuardActive()'))
         # Leaving now asks first.
         page.remove_listener('dialog', self._dialog_handler)
-        seen = []
-        page.once('dialog', lambda d: (seen.append(d.type), d.dismiss()))
-        page.close(run_before_unload=True)
-        page.wait_for_function('() => true')
-        self.assertEqual(seen, ['beforeunload'])
+        with page.expect_event('dialog', timeout=10000) as prompt:
+            page.close(run_before_unload=True)
+        self.assertEqual(prompt.value.type, 'beforeunload')
+        prompt.value.dismiss()
         self.assertFalse(page.is_closed())
         page.unroute('**/api/sync/operations')
         page.evaluate('() => prksSync.wake()')
