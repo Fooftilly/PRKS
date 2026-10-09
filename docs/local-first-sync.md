@@ -176,7 +176,8 @@ coordinator names no family: adding one is a registration.
   `scope_busy` or `conflict` naming the row that holds the field,
   `unknown_base`, `unproven`, `too-long`, `failed`), never a throw.
   `prksFolderPrivateNoteAck` matches an acknowledgement to one row and its
-  exact payload text, and reports what the server stores (trimmed, as the
+  exact payload text, and reports what the server stores (stripped as
+  Python's `str.strip()` strips, not `trim()`, as the
   acknowledgement reconciles into the cache).
 - A device ID is an identity for synchronization, never authentication or trust.
 - Editor state and observed projections belong to the Work's TabContext.
