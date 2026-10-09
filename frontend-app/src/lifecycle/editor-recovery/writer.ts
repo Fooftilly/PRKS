@@ -199,6 +199,11 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
   const tombstoned = new Set<string>()
   let refreshingEmergency = false
   let disposed = false
+  /**
+   * Stored generations this page knows the server superseded, still waiting
+   * for their background removal: never adopted, so never restored.
+   */
+  const superseded = new Map<string, number>()
 
   function onBeforeUnload(event: Event): void {
     event.preventDefault()
@@ -796,10 +801,14 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
      * without the leave guard: the text is already on the server.
      */
     private async removeSuperseded(draftId: string, generation: number, delay: number): Promise<void> {
+      // Until it is gone, this page never adopts it again: it is not unsaved text.
+      superseded.set(draftId, Math.max(generation, superseded.get(draftId) || 0))
       try {
         await store.discard(draftId, undefined, { pageInstanceId: identity.pageInstanceId, generation, status: 'active' })
       } catch {
-        if (disposed || this.released) return
+        // The retry outlives this editor session: a released pane leaves the
+        // record behind, and a later mount must not take it for a draft.
+        if (disposed) return
         const next = delay ? Math.min(delay * 2, RETRY_MAX_MS) : RETRY_FIRST_MS
         this.cleanupTimer = scheduler.set(() => {
           this.cleanupTimer = null
@@ -807,6 +816,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
         }, next)
         return
       }
+      if ((superseded.get(draftId) || 0) <= generation) superseded.delete(draftId)
       await this.tombstoneIfListed(draftId)
     }
 
@@ -905,6 +915,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     // One live writer per lineage on this page: a second adoption of the same
     // draft, concurrent or after the first, is refused.
     if (disposed || adopting.has(record.draftId) || ownerOf(record.draftId) !== null) return null
+    if ((superseded.get(record.draftId) || 0) >= record.generation) return null
     adopting.add(record.draftId)
     try {
       return await adoptReserved(record, input)

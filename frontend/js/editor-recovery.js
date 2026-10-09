@@ -1439,6 +1439,11 @@ var prksEditorRecovery = (function(exports) {
 		const tombstoned = /* @__PURE__ */ new Set();
 		let refreshingEmergency = false;
 		let disposed = false;
+		/**
+		* Stored generations this page knows the server superseded, still waiting
+		* for their background removal: never adopted, so never restored.
+		*/
+		const superseded = /* @__PURE__ */ new Map();
 		function onBeforeUnload(event) {
 			event.preventDefault();
 			event.returnValue = "";
@@ -1980,6 +1985,7 @@ var prksEditorRecovery = (function(exports) {
 			* without the leave guard: the text is already on the server.
 			*/
 			async removeSuperseded(draftId, generation, delay) {
+				superseded.set(draftId, Math.max(generation, superseded.get(draftId) || 0));
 				try {
 					await store.discard(draftId, void 0, {
 						pageInstanceId: identity.pageInstanceId,
@@ -1987,7 +1993,7 @@ var prksEditorRecovery = (function(exports) {
 						status: "active"
 					});
 				} catch {
-					if (disposed || this.released) return;
+					if (disposed) return;
 					const next = delay ? Math.min(delay * 2, RETRY_MAX_MS) : RETRY_FIRST_MS;
 					this.cleanupTimer = scheduler.set(() => {
 						this.cleanupTimer = null;
@@ -1995,6 +2001,7 @@ var prksEditorRecovery = (function(exports) {
 					}, next);
 					return;
 				}
+				if ((superseded.get(draftId) || 0) <= generation) superseded.delete(draftId);
 				await this.tombstoneIfListed(draftId);
 			}
 			/** The newest generation, never committed to recovery storage, is exactly what was acknowledged. */
@@ -2079,6 +2086,7 @@ var prksEditorRecovery = (function(exports) {
 		const adopting = /* @__PURE__ */ new Set();
 		async function adopt(record, input) {
 			if (disposed || adopting.has(record.draftId) || ownerOf(record.draftId) !== null) return null;
+			if ((superseded.get(record.draftId) || 0) >= record.generation) return null;
 			adopting.add(record.draftId);
 			try {
 				return await adoptReserved(record, input);

@@ -652,6 +652,30 @@ describe('acknowledgement', () => {
     expect(t.registry.leaveGuardActive()).toBe(false)
   })
 
+  it('keeps removing the superseded generation after the editor is released, and never adopts it meanwhile', async () => {
+    const t = setup()
+    const w = t.open()
+    w.edit(1, 'stored B')
+    await w.flush()
+    const id = w.draftId() as string
+    t.idb.failCommits = 100
+    w.edit(2, 'reverted to A')
+    await w.flush()
+    expect(await w.acknowledged(2, 'reverted to A')).toBe('deleted')
+    // The pane goes away while storage still refuses the removal.
+    await w.release()
+    expect(t.registry.writers()).toHaveLength(0)
+    const stale = (await t.store.get(id))!
+    expect(stale.generation).toBe(1)
+    // A later mount on this page must not take the superseded text for a draft.
+    expect(await t.registry.adopt(stale, { paneId: 'tab-2', sessionKey: 's-later' })).toBeNull()
+    t.idb.failCommits = 0
+    t.scheduler.advance(60_000)
+    await settle()
+    expect(await t.store.get(id)).toBeNull()
+    expect(t.scheduler.pending()).toBe(0)
+  })
+
   it('ends the warning when recovery storage cannot be opened at all', async () => {
     const t = setup()
     const w = t.open()

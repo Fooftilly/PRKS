@@ -38,6 +38,11 @@ const props = defineProps<{
   actions: ReviewActions
   /** Receives this dialog's close request, for Escape. */
   bindClose?: (request: () => void) => void
+  /**
+   * Receives this dialog's detach: the editor it was opened for is gone. It
+   * returns true when the dialog stays open because it holds edited text.
+   */
+  bindDetach?: (detach: () => boolean) => void
 }>()
 
 const emit = defineEmits<{
@@ -243,6 +248,22 @@ async function close(): Promise<void> {
 
 /** Escape reaches Review through the page's modal lifecycle, under the same policy. */
 props.bindClose?.(() => void close())
+
+/**
+ * The editor went away (route change, pane replaced). Nothing can act any
+ * more, but edited text to keep is the user's only copy: it stays, to copy,
+ * and closing still asks first.
+ */
+function detach(): boolean {
+  if (!composedEdited()) return false
+  if (comparing.value && chosenText.value !== composedFrom.value) leftover.value = chosenText.value
+  comparing.value = false
+  details.value = null
+  loading.value = false
+  unavailable.value = true
+  return true
+}
+props.bindDetach?.(detach)
 
 onMounted(() => {
   void load().then(() => nextTick(() => dialog.value?.focus()))

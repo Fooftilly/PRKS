@@ -55,6 +55,10 @@ interface OpenReview {
   opener: HTMLElement | null
   /** The dialog's own close request, bound once it mounts. */
   requestClose: (() => void) | null
+  /** The dialog's detach, bound once it mounts. */
+  detach: (() => boolean) | null
+  /** The editor it was opened for is gone: it never acts again. */
+  detached: boolean
 }
 let openReview: OpenReview | null = null
 
@@ -92,11 +96,23 @@ export function updateResearchNotesRecovery(ctx: RecoveryOwner): void {
 export function forgetResearchNotesRecovery(ctx?: RecoveryOwner): void {
   if (ctx) {
     views.delete(tabKey(ctx))
-    if (openReview && openReview.tabId === tabKey(ctx)) closeResearchNotesRecoveryReview()
+    if (openReview && openReview.tabId === tabKey(ctx)) detachOrCloseReview()
     return
   }
   views.clear()
-  closeResearchNotesRecoveryReview()
+  detachOrCloseReview()
+}
+
+/**
+ * The open Review's editor is gone. A route change cannot wait for a
+ * confirmation, so a Review holding edited text to keep stays open, detached,
+ * with that text to copy; any other Review closes.
+ */
+function detachOrCloseReview(): void {
+  const open = openReview
+  if (!open) return
+  open.detached = true
+  if (!(open.detach && open.detach())) closeResearchNotesRecoveryReview()
 }
 
 function liveWorkId(ctx: RecoveryOwner): string {
@@ -106,10 +122,10 @@ function liveWorkId(ctx: RecoveryOwner): string {
 
 const unavailable: RecoveryActionResult = { ok: false, code: 'unavailable' }
 
-function actionsFor(ctx: RecoveryOwner, workId: string): ReviewActions {
+function actionsFor(ctx: RecoveryOwner, workId: string, review: { detached: boolean }): ReviewActions {
   const api = classic()
   // A dialog left open across a Work switch or pane change never acts.
-  const current = () => liveWorkId(ctx) === workId
+  const current = () => !review.detached && liveWorkId(ctx) === workId
   return {
     async load() {
       if (!current() || !api.prksResearchNotesRecoveryDetails) return null
@@ -153,15 +169,18 @@ export function openResearchNotesRecoveryReview(ctx: RecoveryOwner, opener: HTML
   const host = document.createElement('div')
   host.setAttribute('data-prks-role', 'editor-recovery-review-host')
   document.body.appendChild(host)
-  const review: OpenReview = { host, ctx, tabId: tabKey(ctx), workId, opener, requestClose: null }
+  const review: OpenReview = { host, ctx, tabId: tabKey(ctx), workId, opener, requestClose: null, detach: null, detached: false }
   openReview = review
   render(
     h(EditorRecoveryReview, {
       subject: SUBJECT,
       entityTitle: title,
-      actions: actionsFor(ctx, workId),
+      actions: actionsFor(ctx, workId, review),
       bindClose: (request: () => void) => {
         review.requestClose = request
+      },
+      bindDetach: (detach: () => boolean) => {
+        review.detach = detach
       },
       onClose: () => closeResearchNotesRecoveryReview(),
     }),
@@ -181,7 +200,7 @@ export function closeResearchNotesRecoveryReview(modal?: Element | null): boolea
   openReview = null
   render(null, open.host)
   open.host.remove()
-  if (liveWorkId(open.ctx) === open.workId) {
+  if (!open.detached && liveWorkId(open.ctx) === open.workId) {
     const refresh = classic().prksRefreshResearchNotesRecovery
     if (refresh) void refresh(open.ctx, open.workId).catch(() => undefined)
     if (open.opener && open.opener.isConnected) open.opener.focus()
