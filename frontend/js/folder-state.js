@@ -778,8 +778,11 @@
             typeof root.prksOfflineReadEntity !== 'function') {
             return false;
         }
+        /* Each read is its own request: one joined to an earlier flight would
+         * not be on the stated side of the body. */
+        const fresh = { requestPolicy: { dedupe: false } };
         const atBase = async function () {
-            const state = await readFolderState(folderId);
+            const state = await readFolderState(folderId, fresh);
             const entry = state && state.source === 'server' && state.value && state.value.fields
                 ? state.value.fields[PRIVATE_NOTES_FIELD] : null;
             return !!(entry && entry.revision === base.revision);
@@ -787,7 +790,7 @@
         try {
             if (!await atBase()) return false;
             const folder = await root.prksOfflineReadEntity('folder', folderId,
-                '/api/folders/' + encodeURIComponent(folderId), {});
+                '/api/folders/' + encodeURIComponent(folderId), fresh);
             if (!folder || folder.source !== 'server' || !folder.value) return false;
             const raw = folder.value[PRIVATE_NOTES_FIELD];
             if ((raw == null ? '' : String(raw)) !== base.value) return false;
