@@ -347,17 +347,52 @@ describe('Work Reminders edits reach the recovery writer', () => {
     await waitFor(async () => (await records()).length === 0, 'cleared')
   })
 
-  it('settles a carried session that saw no new edit when the save it carried across a switch lands', async () => {
+  /** A edit -> its save starts -> B -> A, before that save settles. */
+  async function switchAwayAndBackDuringSave(text: string) {
     const { ctx, ta } = await openWork()
-    type(ctx, ta!, 'Saved reminder. In flight')
+    type(ctx, ta!, text)
     win.prksFlushPendingPrivateNotes(ctx)
-    // A -> B -> A before the save settles; nothing is typed after returning.
     win.prksEnsureWorkPrivateNoteSession(ctx, 'w2', '')
     const back = win.prksEnsureWorkPrivateNoteSession(ctx, 'w1', server.text)!
-    expect(back.draftText).toBe('Saved reminder. In flight')
+    expect(back.draftText).toBe(text)
+    const field = bindField(ctx)
+    expect(field.value).toBe(text)
+    return { ctx, back, field }
+  }
+
+  it('settles a carried session that saw no new edit when the save it carried lands, with no duplicate save on leave', async () => {
+    const { ctx, back, field } = await switchAwayAndBackDuringSave('Saved reminder. In flight')
     await waitFor(() => !back.dirty && back.state === 'committed', 'carried session settled by the save it carried')
-    sync.ack(await queuedAs('Saved reminder. In flight'), 6)
+    expect(editorOf(ctx)!.dirty).toBe(false)
+    expect(field.value).toBe('Saved reminder. In flight')
+    const opId = await queuedAs('Saved reminder. In flight')
+    // Leaving the Work enqueues nothing more.
+    win.prksFlushPendingPrivateNotes(ctx)
+    win.prksEnsureWorkPrivateNoteSession(ctx, 'w2', '')
+    await settle()
+    expect(sync.rows().map((r) => r.op_id)).toEqual([opId])
+    sync.ack(opId, 6)
     await waitFor(async () => (await records()).length === 0, 'cleared on acknowledgement')
+  })
+
+  it('keeps a carried session dirty and protected when it was edited after returning, and saves the newer text', async () => {
+    const { ctx, back, field } = await switchAwayAndBackDuringSave('Saved reminder. In flight')
+    const s = type(ctx, field, 'Saved reminder. In flight, then more')
+    expect(s).toBe(back)
+    await s.recovery!.flush()
+    const opId = await queuedAs('Saved reminder. In flight')
+    await settle()
+    expect(back.dirty).toBe(true)
+    expect(back.state).toBe('drafting')
+    expect(editorOf(ctx)!.dirty).toBe(true)
+    const [kept] = await records()
+    expect(await bodyOf(kept!.draftId)).toBe('Saved reminder. In flight, then more')
+    sync.ack(opId, 6)
+    await settle()
+    expect(await records()).toHaveLength(1)
+    win.prksFlushPendingPrivateNotes(ctx)
+    sync.ack(await queuedAs('Saved reminder. In flight, then more'), 7)
+    await waitFor(async () => (await records()).length === 0, 'cleared once the newer text is acknowledged')
   })
 
   it('keeps the lineage when the right panel moves to another pane and back', async () => {
