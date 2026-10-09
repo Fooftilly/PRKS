@@ -635,7 +635,7 @@ describe('Work delete and recovery drafts (#533)', () => {
     expect((await records()).map((r) => r.kind).sort()).toEqual(['work-private-note', 'work-research-note'])
   }
 
-  const DELETED_WORKS_KEY = 'prks.workRecoveryCleanup.v1'
+  const DELETED_WORK_PREFIX = 'prks.workRecoveryCleanup.v1.'
   const deleteOp = () => sync.rows().find((r) => r.operation === 'DELETE_WORK')!.op_id
 
   let responses: Record<string, { status: number; body: unknown }> = {}
@@ -643,7 +643,7 @@ describe('Work delete and recovery drafts (#533)', () => {
   beforeEach(() => {
     responses = {}
     probed.length = 0
-    window.localStorage.removeItem(DELETED_WORKS_KEY)
+    for (const id of markedEntries().map((entry) => entry.id)) window.localStorage.removeItem(DELETED_WORK_PREFIX + id)
     // Cleanup runs only where recovery storage exists; this page's is the fake one.
     win.indexedDB = { databases: async () => [{ name: 'prks-editor-recovery-v1' }] }
     win.prksRequest = async (url: string) => {
@@ -656,9 +656,19 @@ describe('Work delete and recovery drafts (#533)', () => {
     delete win.prksRequest
     delete win.indexedDB
   })
-  const markedEntries = () => JSON.parse(window.localStorage.getItem(DELETED_WORKS_KEY) || '[]') as Array<{ id: string; tries: number }>
+  /** Marked Works in retry order: the least recently tried first, then the earliest marked. */
+  function markedEntries(): Array<{ id: string; marked: number; tried: number }> {
+    const entries = []
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i)!
+      if (!key.startsWith(DELETED_WORK_PREFIX)) continue
+      entries.push({ id: key.slice(DELETED_WORK_PREFIX.length), ...JSON.parse(window.localStorage.getItem(key)!) })
+    }
+    return entries.sort((a, b) => a.tried - b.tried || a.marked - b.marked || a.id.localeCompare(b.id))
+  }
   const marked = () => markedEntries().map((entry) => entry.id)
-  const mark = (tries = 0) => window.localStorage.setItem(DELETED_WORKS_KEY, JSON.stringify([{ id: 'w1', tries }]))
+  const mark = (id = 'w1', marked = 1) =>
+    window.localStorage.setItem(DELETED_WORK_PREFIX + id, JSON.stringify({ marked, tried: 0 }))
   const goneOnServer = (workId = 'w1') => {
     responses['/api/works/' + workId + '/notes-state'] = { status: 404, body: { error: 'Work not found' } }
   }
@@ -725,16 +735,50 @@ describe('Work delete and recovery drafts (#533)', () => {
     sync.ackDelete(deleteOp())
     expect(await win.prksCleanupDeletedWorkRecovery('w1')).toMatchObject({ removed: [], unknown: [record!.draftId] })
     goneOnServer()
+    // However often it is retried, the draft and the mark both stay: one probe per load.
+    for (let load = 1; load <= 6; load++) {
+      probed.length = 0
+      expect(await win.prksRetryDeletedWorkRecovery()).toEqual(['w1'])
+      expect(probed).toEqual(['/api/works/w1/notes-state'])
+      expect(marked()).toEqual(['w1'])
+    }
+    expect((await records()).map((r) => r.draftId)).toEqual([record!.draftId])
+  })
+
+  it('keeps the mark through any number of retries the server does not answer, and cleans on the first "Work not found"', async () => {
+    await researchDraft('Waiting for the server')
+    mark()
+    responses['/api/works/w1/notes-state'] = { status: 503, body: {} }
+    for (let load = 1; load <= 5; load++) {
+      expect(await win.prksRetryDeletedWorkRecovery()).toEqual([])
+      expect(marked()).toEqual(['w1'])
+    }
+    expect(await records()).toHaveLength(1)
+    goneOnServer()
+    expect(await win.prksRetryDeletedWorkRecovery()).toEqual(['w1'])
+    expect(await records()).toEqual([])
+    expect(marked()).toEqual([])
+  })
+
+  it('keeps the mark while another tab holds the draft through many retries, and cleans once that tab is gone', async () => {
+    const other = startRecoveryPage({ browser, name: 'other-tab', idb, session: browser.sessionStorageWith(), local, withoutLocks: false, background: true })
+    await other.rt.start()
+    const live = other.rt.writers.openWriter({ kind: KIND, entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: SERVER_BASE })
+    live.edit(1, 'Still open in the other tab')
+    await live.flush()
+    mark()
+    goneOnServer()
     for (let load = 1; load <= 5; load++) {
       expect(await win.prksRetryDeletedWorkRecovery()).toEqual(['w1'])
-      expect(markedEntries()).toEqual([{ id: 'w1', tries: load }])
+      expect(marked()).toEqual(['w1'])
+      expect(await records()).toHaveLength(1)
     }
-    // Retried on enough loads: the draft stays, the probing stops.
-    probed.length = 0
-    expect(await win.prksRetryDeletedWorkRecovery()).toEqual([])
-    expect(probed).toEqual([])
+    other.rt.dispose()
+    other.locks.releaseAll()
+    await settle()
+    expect(await win.prksRetryDeletedWorkRecovery()).toEqual(['w1'])
+    expect(await records()).toEqual([])
     expect(marked()).toEqual([])
-    expect((await records()).map((r) => r.draftId)).toEqual([record!.draftId])
   })
 
   it('never removes drafts of a Work this device did not see deleted, whatever the server answers', async () => {
@@ -841,20 +885,20 @@ describe('Work delete and recovery drafts (#533)', () => {
     // Eight marks ahead of w1 whose server never answers, so none of them clears.
     const stuck = Array.from({ length: 8 }, (_, i) => 'stuck-' + i)
     for (const id of stuck) responses['/api/works/' + id + '/notes-state'] = { status: 503, body: {} }
-    window.localStorage.setItem(DELETED_WORKS_KEY, JSON.stringify(stuck.map((id) => ({ id, tries: 0 })).concat([{ id: 'w1', tries: 0 }])))
+    stuck.forEach((id, i) => mark(id, i + 1))
+    mark('w1', 9)
     goneOnServer()
     expect(await win.prksRetryDeletedWorkRecovery()).toEqual([])
     expect(marked()).toEqual(['w1'].concat(stuck))
     expect(await win.prksRetryDeletedWorkRecovery()).toEqual(['w1'])
     expect(await records()).toEqual([])
-    // The seven tried again rotated behind the one that waited.
+    // The seven tried again went behind the one that waited.
     expect(marked()).toEqual(['stuck-7'].concat(stuck.slice(0, 7)))
   })
 
-  it('when full, lets the mark retried the most give way to a new one, and removes no draft for it', async () => {
+  it('keeps every mark, however many there are, and removes no draft for any of them', async () => {
     await draftsOfBothKinds()
-    const full = Array.from({ length: 64 }, (_, i) => ({ id: 'other-' + i, tries: i === 10 ? 4 : 1 }))
-    window.localStorage.setItem(DELETED_WORKS_KEY, JSON.stringify(full))
+    for (let i = 0; i < 64; i++) mark('other-' + i)
     await win.prksDeleteWorkDurably('w1')
     const cleanup = page!.rt.cleanupDeletedEntity
     page!.rt.cleanupDeletedEntity = async () => {
@@ -865,10 +909,41 @@ describe('Work delete and recovery drafts (#533)', () => {
     await waitFor(() => page!.rt.cleanupDeletedEntity === cleanup, 'cleanup attempted')
     await settle()
     const ids = marked()
-    expect(ids).toHaveLength(64)
-    expect(ids).not.toContain('other-10')
-    expect(ids[63]).toBe('w1')
+    expect(ids).toHaveLength(65)
+    expect(ids).toContain('w1')
     expect(await records()).toHaveLength(2)
+  })
+
+  it('never loses a mark another tab writes or brings back one it clears while a retry runs', async () => {
+    mark('w1', 1)
+    mark('w3', 2)
+    responses['/api/works/w3/notes-state'] = { status: 503, body: {} }
+    const request = win.prksRequest
+    win.prksRequest = async () => {
+      // Another tab: confirms the delete of w2 and finishes cleaning w3.
+      mark('w2', 3)
+      window.localStorage.removeItem(DELETED_WORK_PREFIX + 'w3')
+      win.prksRequest = request
+      return { status: 503, json: async () => ({}) }
+    }
+    expect(await win.prksRetryDeletedWorkRecovery()).toEqual([])
+    expect(marked().sort()).toEqual(['w1', 'w2'])
+  })
+
+  it('keeps the mark while a pane still showing the Work holds an edit not yet in storage', async () => {
+    const { ctx, ta } = await openWork()
+    type(ctx, ta!, 'Saved reminder. Typed within the debounce')
+    expect(await records()).toEqual([])
+    mark()
+    await win.prksCleanupDeletedWorkRecovery('w1')
+    expect(marked()).toEqual(['w1'])
+    // The pane closes; its draft is then an orphan a later load removes.
+    win.prksDestroyAllTabContexts()
+    await settle()
+    goneOnServer()
+    expect(await win.prksRetryDeletedWorkRecovery()).toEqual(['w1'])
+    expect((await records()).filter((r) => r.status !== 'discarded')).toEqual([])
+    expect(marked()).toEqual([])
   })
 
   async function foldAway() {

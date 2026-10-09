@@ -235,22 +235,32 @@
                 });
             }
             const done = [];
+            let retained = 0;
             entriesArray().forEach(function (entry) {
-                if (!entry || String(entry.workId) !== id || !entry.recovery || shown.has(String(entry.ownerTabId))) return;
+                if (!entry || String(entry.workId) !== id || !entry.recovery) return;
+                if (shown.has(String(entry.ownerTabId))) {
+                    retained += 1;
+                    return;
+                }
                 const writer = entry.recovery;
                 K.forget(entry);
                 done.push(writer.release().catch(function () {}));
             });
             ackWatch.forEach(function (watches, opId) {
                 const kept = watches.filter(function (watch) {
-                    if (watch.workId !== id || shown.has(watch.tabId)) return true;
+                    if (watch.workId !== id) return true;
+                    if (shown.has(watch.tabId)) {
+                        if (watch.writer) retained += 1;
+                        return true;
+                    }
                     if (watch.writer) done.push(watch.writer.release().catch(function () {}));
                     return false;
                 });
                 if (kept.length) ackWatch.set(opId, kept);
                 else ackWatch.delete(opId);
             });
-            return Promise.all(done);
+            /* Resolves to the sessions a shown pane kept: they may still commit. */
+            return Promise.all(done).then(function () { return retained; });
         }
 
         /** Starts the recovery write before an ordinary save is queued. */
@@ -1101,15 +1111,19 @@
     }
 
     root.prksCreateWorkNoteRecovery = create;
-    /* #533: release every kind's sessions of a Work whose deletion is confirmed. */
+    /* #533: release every kind's sessions of a Work whose deletion is
+     * confirmed; resolves to { retained }, the sessions a pane still showing
+     * the Work kept (an adapter that failed counts as one). */
     root.prksForgetDeletedWorkNotes = function (workId, options) {
         const evenShown = !!(options && options.evenShown);
         return Promise.all(adapters.map(function (adapter) {
             try {
-                return adapter.forgetDeleted(workId, evenShown);
+                return adapter.forgetDeleted(workId, evenShown).catch(function () { return 1; });
             } catch (_e) {
-                return null;
+                return 1;
             }
-        }));
+        })).then(function (counts) {
+            return { retained: counts.reduce(function (sum, count) { return sum + count; }, 0) };
+        });
     };
 })(typeof window === 'undefined' ? globalThis : window);

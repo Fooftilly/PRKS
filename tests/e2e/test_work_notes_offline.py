@@ -1120,7 +1120,7 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
             timeout=15000,
             message='recovery drafts outlived the acknowledged delete')
         self.assertEqual(page.evaluate(_RECOVERY_IDLE), {'pending': 0, 'guard': False, 'unloadListeners': False})
-        self.assertIsNone(page.evaluate("() => localStorage.getItem('prks.workRecoveryCleanup.v1')"))
+        self.assertIsNone(page.evaluate("(workId) => localStorage.getItem('prks.workRecoveryCleanup.v1.' + workId)", work))
 
     def test_drafts_of_a_never_synced_work_deleted_from_its_own_pane_are_removed(self):
         server, page, context = self.start()
@@ -1181,7 +1181,7 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
         # is still marked, and a tab that closed before its first IndexedDB commit left the draft
         # only in its emergency key.
         page.evaluate("""(workId) => {
-            localStorage.setItem('prks.workRecoveryCleanup.v1', JSON.stringify([{ id: workId, tries: 0 }]));
+            localStorage.setItem('prks.workRecoveryCleanup.v1.' + workId, JSON.stringify({ marked: 1, tried: 0 }));
             const pageInstanceId = 'p-closed-before-commit';
             localStorage.setItem('prks.editorRecovery.emergency.v1.' + pageInstanceId, JSON.stringify({
                 v: 1, pageInstanceId, runtimeId: null, at: Date.now(),
@@ -1209,7 +1209,7 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
             arg=work,
             timeout=20000,
             message='a draft only an emergency key held outlived its acknowledged delete')
-        self.assertIsNone(tab.evaluate("() => localStorage.getItem('prks.workRecoveryCleanup.v1')"))
+        self.assertIsNone(tab.evaluate("(workId) => localStorage.getItem('prks.workRecoveryCleanup.v1.' + workId)", work))
 
     def test_drafts_of_a_work_missing_on_the_server_are_kept_on_the_next_load(self):
         server, page, context = self.start()
