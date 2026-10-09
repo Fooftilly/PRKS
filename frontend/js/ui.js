@@ -606,7 +606,7 @@ const PRKS_STANDALONE_PAGE_MODAL_CLOSERS = {
     'tags-page-alias-modal': 'prksCloseTagsAliasModal',
     'tags-page-merge-modal': 'prksCloseTagsMergeModal',
     'publishers-page-alias-modal': 'prksVueClosePublishersAliasModal',
-    'editor-recovery-review-modal': 'prksVueCloseResearchNotesRecoveryReview',
+    'editor-recovery-review-modal': 'prksVueCloseRecoveryReview',
 };
 
 function prksCloseStandalonePageModal(modal) {
@@ -2719,10 +2719,12 @@ function prksEnsureWorkPrivateNoteSession(ctx, workId, initialText) {
      * TabContext only. A flushed durable note stays shared Work state. */
     if (existing && String(existing.ownerTabId) === String(ctx.tabId)) {
         prksRememberUnsavedWorkPrivateNote(ctx, existing);
+        prksWorkPrivateRecoveryLeave(existing);
     }
     const remembered = prksTakeRememberedWorkPrivateNote(ctx, workId);
     const carried = remembered != null;
     const session = {
+        key: prksWorkPrivateNoteSessionKey(ctx.tabId, workId),
         workId: String(workId),
         ownerTabId: String(ctx.tabId),
         ownerGeneration: ctx.generation,
@@ -2741,6 +2743,7 @@ function prksEnsureWorkPrivateNoteSession(ctx, workId, initialText) {
         updatedAt: Date.now(),
     };
     ctx.ui.workPrivateNoteSession = session;
+    if (carried) prksWorkPrivateRecoveryInherit(session);
     return session;
 }
 
@@ -2757,6 +2760,7 @@ function prksWorkPrivateNoteText(ctx, entityId, serverText) {
      * on the overlay lets the next Reminders paint show the stale text. */
     if (session.state === 'committed' && !session.promise && session.draftText === server) {
         session.retired = true;
+        prksWorkPrivateRecoveryDrop(session);
         return acknowledged;
     }
     return session.draftText;
@@ -2777,6 +2781,305 @@ function prksPrivateNotesTextForEntity(entityType, entityId, serverText) {
     }
     return entry.draftText;
 }
+
+/*
+ * Browser-local recovery of Work Reminders text (#474), on the shared Work
+ * note adapter (`work-note-recovery.js`) and the `prksEditorRecovery` runtime
+ * the Research Notes editor uses: one recovery lineage per Reminders session,
+ * written on every edit, before the 850 ms save debounce ends.
+ *
+ * A Reminders session is the TabContext's one `workPrivateNoteSession` slot;
+ * leaving the Work replaces it with a carried copy. The lineage follows the
+ * text: a replaced session that still holds unsaved text keeps its writer
+ * (in `prksWorkPrivateRecoverySessions`) until a carried session for the same
+ * pane and Work inherits it (`recoveryHeir`), and a save the replaced session
+ * started still reports to the session that now holds the writer. A clean
+ * replaced session gives its lineage back.
+ */
+const PRKS_PRIVATE_RECOVERY_KIND = 'work-private-note';
+const PRKS_PRIVATE_NOTES_RESTORED_STATUS = 'Restored unsaved changes';
+const prksWorkPrivateRecoverySessions = new Set();
+let prksWorkPrivateNotesRecoveryAdapter = null;
+
+function prksWorkPrivateNoteSessionKey(tabId, workId) {
+    return String(tabId == null ? '' : tabId) + '\0' + String(workId == null ? '' : workId);
+}
+
+/* The Reminders adapter, or null where the shared recovery module is not loaded. */
+function prksWorkPrivateNotesRecovery() {
+    if (prksWorkPrivateNotesRecoveryAdapter) return prksWorkPrivateNotesRecoveryAdapter;
+    if (typeof window.prksCreateWorkNoteRecovery !== 'function') return null;
+    prksWorkPrivateNotesRecoveryAdapter = window.prksCreateWorkNoteRecovery({
+        kind: PRKS_PRIVATE_RECOVERY_KIND,
+        operation: 'SET_WORK_PRIVATE_NOTE',
+        bodyField: 'private_notes',
+        revisionField: 'private_note_revision',
+        reportSlot: 'privateNotesRecovery',
+        entries: prksWorkPrivateRecoveryEntries,
+        key: function (ctx, id) { return prksWorkPrivateNoteSessionKey(ctx && ctx.tabId, id); },
+        entry: prksWorkPrivateRecoveryEntry,
+        text: function (session) { return String(session.draftText == null ? '' : session.draftText); },
+        hasSession: prksWorkPrivateRecoveryHasSession,
+        paintable: prksWorkPrivateNotesMayPaint,
+        target: prksWorkPrivateNotesRecoveryTarget,
+        shown: function (editor) { return String(editor.textarea.value); },
+        install: prksWorkPrivateRecoveryInstall,
+        takeOver: function (api, ctx, id, _editor, writer, restore, base) {
+            prksWorkPrivateRecoveryInstall(api, ctx, id, writer, restore, base);
+        },
+        replace: prksWorkPrivateRecoveryReplaceText,
+        publish: function (ctx) {
+            if (typeof window.prksVueUpdateWorkPrivateNotesRecovery === 'function') window.prksVueUpdateWorkPrivateNotesRecovery(ctx);
+        },
+        owners: function (fn) {
+            if (typeof prksForEachLiveTabContext !== 'function') return;
+            prksForEachLiveTabContext(function (ctx) {
+                const editor = ctx && ctx.getResource ? ctx.getResource('privateNotesEditor') : null;
+                if (editor && editor.entityType === 'work') fn(ctx, editor.entityId);
+            });
+        },
+        acknowledged: function (session, writer) {
+            /* A replaced or closed pane's session whose text is now saved gives its lineage back. */
+            if (prksWorkPrivateRecoveryIsCurrent(session)) return;
+            let clean = false;
+            try { clean = writer.state() === 'clean'; } catch (_e) { /* best-effort */ }
+            if (clean) prksWorkPrivateRecoveryDrop(session);
+        },
+    });
+    return prksWorkPrivateNotesRecoveryAdapter;
+}
+
+function prksWorkPrivateRecoveryEntries() {
+    const out = new Set(prksWorkPrivateRecoverySessions);
+    if (typeof prksForEachLiveTabContext === 'function') {
+        prksForEachLiveTabContext(function (ctx) {
+            const session = ctx && ctx.ui ? ctx.ui.workPrivateNoteSession : null;
+            if (session && session.key) out.add(session);
+        });
+    }
+    return out;
+}
+
+/* Whether this session is still its pane's current Reminders slot. */
+function prksWorkPrivateRecoveryIsCurrent(session) {
+    let current = false;
+    if (!session || typeof prksForEachLiveTabContext !== 'function') return false;
+    prksForEachLiveTabContext(function (ctx) {
+        if (ctx && ctx.ui && ctx.ui.workPrivateNoteSession === session) current = true;
+    });
+    return current;
+}
+
+/* This pane's Reminders session for the Work: its current slot, else a replaced one still holding a lineage. */
+function prksWorkPrivateRecoveryEntry(ctx, id) {
+    const session = ctx && ctx.ui ? ctx.ui.workPrivateNoteSession : null;
+    if (session && String(session.workId) === String(id) && String(session.ownerTabId) === String(ctx.tabId)) return session;
+    const key = prksWorkPrivateNoteSessionKey(ctx && ctx.tabId, id);
+    let found = null;
+    prksWorkPrivateRecoverySessions.forEach(function (s) {
+        if (s.key === key && s.recovery) found = s;
+    });
+    return found;
+}
+
+/* This pane already has text of its own for the Work (typed, carried or held): a restore only reports. */
+function prksWorkPrivateRecoveryHasSession(ctx, id) {
+    const key = prksWorkPrivateNoteSessionKey(ctx && ctx.tabId, id);
+    const holds = ctx && ctx.ui ? ctx.ui.workPrivateNoteHolds : null;
+    if (holds && Object.prototype.hasOwnProperty.call(holds, String(id))) return true;
+    const own = function (s) {
+        return !!(s && s.key === key && (prksWorkPrivateNoteUnsaved(s) || s.recovery));
+    };
+    if (own(ctx && ctx.ui ? ctx.ui.workPrivateNoteSession : null)) return true;
+    return Array.from(prksWorkPrivateRecoverySessions).some(own);
+}
+
+function prksWorkPrivateNotesMayPaint(owner, workId, generation) {
+    if (!owner || owner.destroyed) return false;
+    if (typeof owner.isCurrent === 'function' && !owner.isCurrent(generation)) return false;
+    const live = owner.getEntity ? owner.getEntity('work') : null;
+    return !!(live && String(live.id) === String(workId || ''));
+}
+
+/* The installed Reminders field of this pane for the Work, or null. */
+function prksWorkPrivateNotesRecoveryTarget(ctx, id) {
+    const editor = ctx && typeof ctx.getResource === 'function' ? ctx.getResource('privateNotesEditor') : null;
+    if (!editor || editor.entityType !== 'work' || editor.entityId !== String(id)) return null;
+    if (!editor.textarea || !editor.textarea.isConnected || !prksPrivateNotesOwnerCurrent(editor)) return null;
+    return editor;
+}
+
+/* The session that holds the lineage this session's text belongs to. */
+function prksWorkPrivateRecoveryHolder(session) {
+    let s = session;
+    for (let i = 0; s && !s.recovery && s.recoveryHeir && i < 32; i++) s = s.recoveryHeir;
+    return s;
+}
+
+function prksWorkPrivateRecoveryEdit(ctx, session) {
+    const adapter = prksWorkPrivateNotesRecovery();
+    if (!adapter || !session) return;
+    session.recoveryRestored = false;
+    adapter.edit(ctx, session);
+    if (session.recovery) prksWorkPrivateRecoverySessions.add(session);
+}
+
+function prksWorkPrivateRecoveryBeforeSave(session) {
+    const adapter = prksWorkPrivateNotesRecovery();
+    const holder = prksWorkPrivateRecoveryHolder(session);
+    if (!adapter || !holder || !holder.recovery) return;
+    adapter.flush(holder);
+    adapter.pipeline(holder, { state: 'saving' });
+}
+
+function prksWorkPrivateRecoveryQueued(session, opId, generation, text, base) {
+    const adapter = prksWorkPrivateNotesRecovery();
+    const holder = prksWorkPrivateRecoveryHolder(session);
+    if (adapter && holder) adapter.queued(holder, opId, generation, text, base);
+}
+
+function prksWorkPrivateRecoverySettled(ctx, id, session, result, generation, text) {
+    const adapter = prksWorkPrivateNotesRecovery();
+    const holder = prksWorkPrivateRecoveryHolder(session);
+    if (adapter && holder) adapter.settled(ctx, id, holder, result, { generation: generation, text: text });
+}
+
+/* The session leaves its pane's slot: unsaved text keeps its lineage for the carried copy. */
+function prksWorkPrivateRecoveryLeave(session) {
+    if (!session || !session.recovery) return;
+    if (prksWorkPrivateNoteUnsaved(session) || session.recoveryQueued) {
+        prksWorkPrivateRecoverySessions.add(session);
+        return;
+    }
+    prksWorkPrivateRecoveryDrop(session);
+}
+
+/* A carried session continues the lineage its pane left behind for this Work. */
+function prksWorkPrivateRecoveryInherit(session) {
+    let from = null;
+    prksWorkPrivateRecoverySessions.forEach(function (s) {
+        if (s !== session && s.key === session.key && s.recovery && prksWorkPrivateNoteUnsaved(s)) from = s;
+    });
+    if (!from) return;
+    ['recovery', 'recoveryBase', 'recoveryQueued', 'recoveryPipeline', 'recoveryPipelineStored',
+        'recoveryConflictOpId', 'recoveryUnprotectedCode'].forEach(function (field) {
+        session[field] = from[field];
+        from[field] = field === 'recoveryPipelineStored' ? false : null;
+    });
+    /* Generations continue the lineage, so the writer keeps accepting edits. */
+    session.editGeneration = Math.max(session.editGeneration, from.editGeneration);
+    from.recoveryHeir = session;
+    prksWorkPrivateRecoverySessions.delete(from);
+    prksWorkPrivateRecoverySessions.add(session);
+}
+
+/* The session is done with its text: finish the last write and give the lineage back. */
+function prksWorkPrivateRecoveryDrop(session) {
+    if (!session) return;
+    prksWorkPrivateRecoverySessions.delete(session);
+    const adapter = prksWorkPrivateNotesRecovery();
+    if (adapter && session.recovery) adapter.release(session);
+}
+
+/** A restore (on mount or from Review): this pane's session continues the recovered lineage. */
+function prksWorkPrivateRecoveryInstall(api, ctx, id, writer, restore, base) {
+    const adapter = prksWorkPrivateNotesRecovery();
+    const session = prksEnsureWorkPrivateNoteSession(ctx, id, restore.body);
+    if (!adapter || !session) {
+        void writer.release().catch(function () {});
+        return null;
+    }
+    if (session.recovery && session.recovery !== writer) adapter.release(session);
+    /* A session that already saved here numbers past its earlier saves. */
+    const generation = Math.max(restore.record.generation, session.latestSaveEditGeneration + 1);
+    session.draftText = restore.body;
+    session.editGeneration = generation;
+    /* Reminders have no blocked state: a save behind its own sent predecessor
+     * waits for it through the scope_busy retry, then saves on its acknowledgement. */
+    session.state = 'drafting';
+    session.dirty = true;
+    session.retired = false;
+    session.saveError = false;
+    session.updatedAt = Date.now();
+    session.recovery = writer;
+    session.recoveryBase = base;
+    session.recoveryRestored = true;
+    session.recoveryPipeline = restore.record.pipeline;
+    session.recoveryPipelineStored = true;
+    session.recoveryQueued = restore.predecessor
+        /* #475 provenance after reload: the queued predecessor's exact text. */
+        ? { opId: restore.predecessor.opId, generation: 0, text: restore.predecessor.text }
+        : null;
+    writer.setBase(adapter.draftBase(api, base));
+    if (generation !== restore.record.generation) writer.edit(generation, restore.body);
+    adapter.pipeline(session, { state: 'drafting' });
+    prksWorkPrivateRecoverySessions.add(session);
+    prksWorkPrivateNotesShowRestored(ctx, id, session);
+    return session;
+}
+
+/* Paints restored text into the pane's field, says so, and sends it through the ordinary save. */
+function prksWorkPrivateNotesShowRestored(ctx, id, session) {
+    const editor = prksWorkPrivateNotesRecoveryTarget(ctx, id);
+    session.statusText = PRKS_PRIVATE_NOTES_RESTORED_STATUS;
+    if (editor) {
+        editor.textarea.value = session.draftText;
+        editor.dirty = true;
+        prksPrivateNotesSetStatus(editor, PRKS_PRIVATE_NOTES_RESTORED_STATUS);
+        ctx.clearTimer(editor.timerKey);
+        prksPrivateNotesArmSave(editor);
+        return;
+    }
+    /* No field installed (another pane has the right panel): save from the session. */
+    const saver = prksWorkPrivateNoteSessionSaver(ctx, id);
+    if (saver) void prksEnqueueWorkPrivateNoteSave(saver);
+}
+
+/** Review chose `text` for this field: it saves through the ordinary path as this pane's edit. */
+function prksWorkPrivateRecoveryReplaceText(ctx, id, editor, text) {
+    editor.textarea.value = text;
+    ctx.clearTimer(editor.timerKey);
+    prksPrivateNotesNoteEdit(editor);
+    const session = ctx.ui ? ctx.ui.workPrivateNoteSession : null;
+    return prksWorkPrivateRecoveryHolder(session) || null;
+}
+
+function prksRestoreWorkPrivateNoteRecovery(ctx, work, options) {
+    const adapter = prksWorkPrivateNotesRecovery();
+    return adapter ? adapter.restore(ctx, work, options) : Promise.resolve(null);
+}
+
+const PRKS_PRIVATE_RECOVERY_UNAVAILABLE = { ok: false, code: 'unavailable' };
+
+window.prksRestoreWorkPrivateNoteRecovery = prksRestoreWorkPrivateNoteRecovery;
+window.prksWorkPrivateNotesRecoveryView = function (ctx) {
+    const adapter = prksWorkPrivateNotesRecovery();
+    return adapter ? adapter.view(ctx) : null;
+};
+window.prksWorkPrivateNotesRecoveryDetails = function (ctx, workId) {
+    const adapter = prksWorkPrivateNotesRecovery();
+    return adapter ? adapter.details(ctx, workId) : Promise.resolve(null);
+};
+window.prksWorkPrivateNotesRecoveryRestore = function (ctx, workId, token, expect) {
+    const adapter = prksWorkPrivateNotesRecovery();
+    return adapter ? adapter.restoreReviewed(ctx, workId, token, expect) : Promise.resolve(PRKS_PRIVATE_RECOVERY_UNAVAILABLE);
+};
+window.prksWorkPrivateNotesRecoveryReplace = function (ctx, workId, token, expect, text, shown) {
+    const adapter = prksWorkPrivateNotesRecovery();
+    return adapter ? adapter.replace(ctx, workId, token, expect, text, shown) : Promise.resolve(PRKS_PRIVATE_RECOVERY_UNAVAILABLE);
+};
+window.prksWorkPrivateNotesRecoveryDiscard = function (ctx, workId, token, expect) {
+    const adapter = prksWorkPrivateNotesRecovery();
+    return adapter ? adapter.discard(ctx, workId, token, expect) : Promise.resolve(PRKS_PRIVATE_RECOVERY_UNAVAILABLE);
+};
+window.prksRefreshWorkPrivateNotesRecovery = function (ctx, workId) {
+    const adapter = prksWorkPrivateNotesRecovery();
+    return adapter ? adapter.refresh(ctx, workId) : Promise.resolve(null);
+};
+window.prksSetWorkPrivateRecoveryRestoreMsForTest = function (ms) {
+    const adapter = prksWorkPrivateNotesRecovery();
+    if (adapter) adapter.setRestoreMsForTest(ms);
+};
 
 /**
  * Private notes liveness: the owner generation and entity still match, and
@@ -2970,6 +3273,7 @@ function prksEnqueueWorkPrivateNoteSave(editor) {
         session.draftText = String(editor.textarea.value);
     }
     const content = String(session.draftText);
+    const savedGeneration = session.editGeneration;
     editor.dirty = false;
     session.dirty = false;
     session.saveSequence += 1;
@@ -2981,6 +3285,9 @@ function prksEnqueueWorkPrivateNoteSave(editor) {
     session.retired = false;
     session.updatedAt = Date.now();
     prksPrivateNotesSetStatus(editor, 'Saving…');
+    /* The queue never holds a body newer than recovery storage. */
+    prksWorkPrivateRecoveryBeforeSave(session);
+    let usedBase = null;
     /* prksSaveWorkNoteDurably wakes sync before this completion settles the UI. */
     const promise = (async function () {
         if (typeof prksEnsureWorkNotesBase === 'function' &&
@@ -2996,6 +3303,7 @@ function prksEnqueueWorkPrivateNoteSave(editor) {
             ? prksWorkNoteObserved(editor.ctx, 'work-private-note')
             : null;
         if (typeof prksSaveWorkNoteDurably !== 'function') return { code: 'unavailable' };
+        usedBase = observed ? { value: observed.value, revision: observed.revision } : null;
         return prksSaveWorkNoteDurably(entityId, 'work-private-note', content, observed);
     })();
     session.promise = promise;
@@ -3003,6 +3311,8 @@ function prksEnqueueWorkPrivateNoteSave(editor) {
         .then(async function (result) {
             const code = result && result.code;
             const ok = code === 'saved';
+            /* Recorded whether or not a newer save has taken over: a newer body was typed on it. */
+            if (ok && result.opId) prksWorkPrivateRecoveryQueued(session, result.opId, savedGeneration, content, usedBase);
             if (ok && typeof prksRefreshPendingWorkNotes === 'function') {
                 await prksRefreshPendingWorkNotes();
             }
@@ -3017,6 +3327,7 @@ function prksEnqueueWorkPrivateNoteSave(editor) {
                 session.dirty = true;
                 session.updatedAt = Date.now();
                 editor.dirty = true;
+                prksWorkPrivateRecoverySettled(editor.ctx, entityId, session, result, savedGeneration, content);
                 if (prksPrivateNotesOwnerCurrent(editor)) {
                     const liveEditor = editor.ctx.getResource ? editor.ctx.getResource('privateNotesEditor') : null;
                     if (liveEditor === editor) {
@@ -3030,6 +3341,7 @@ function prksEnqueueWorkPrivateNoteSave(editor) {
             session.state = hasNewerDraft ? 'drafting' : !ok ? 'error' : 'committed';
             session.dirty = hasNewerDraft;
             session.updatedAt = Date.now();
+            prksWorkPrivateRecoverySettled(editor.ctx, entityId, session, result, savedGeneration, content);
             if (ok && !hasNewerDraft) {
                 prksReconcileSavedWorkPrivateNote(editor.ctx, session, entityId, content);
             }
@@ -3062,6 +3374,7 @@ function prksEnqueueWorkPrivateNoteSave(editor) {
             session.state = hasNewerDraft ? 'drafting' : 'error';
             session.dirty = hasNewerDraft;
             session.updatedAt = Date.now();
+            prksWorkPrivateRecoverySettled(editor.ctx, entityId, session, { code: 'failed' }, savedGeneration, content);
             if (prksPrivateNotesOwnerCurrent(editor)) {
                 prksPrivateNotesSetStatus(editor, hasNewerDraft ? 'Drafting…' : 'Could not save');
             }
@@ -3187,6 +3500,45 @@ function prksPrivateNotesEditorKey(entityType, entityId, ctx) {
     return prksPrivateNoteKey(entityType, entityId);
 }
 
+/** The field's text is a new edit: record it on the draft and arm the ordinary save. */
+function prksPrivateNotesNoteEdit(editor) {
+    const ctx = editor.ctx;
+    const ta = editor.textarea;
+    if (editor.entityType === 'work') {
+        const liveSession = prksEnsureWorkPrivateNoteSession(ctx, editor.entityId, ta.value);
+        if (liveSession) {
+            liveSession.draftText = String(ta.value);
+            liveSession.editGeneration += 1;
+            liveSession.state = 'drafting';
+            liveSession.saveError = false;
+            liveSession.retired = false;
+            liveSession.dirty = true;
+            liveSession.updatedAt = Date.now();
+            /* Every generation reaches recovery storage before the save debounce ends (#474). */
+            prksWorkPrivateRecoveryEdit(ctx, liveSession);
+        }
+    } else {
+        const draft = prksPrivateNoteDraft(editor.entityType, editor.entityId, ta.value);
+        draft.draftText = ta.value;
+        draft.editGeneration += 1;
+        draft.state = 'drafting';
+        draft.saveError = false;
+        draft.updatedAt = Date.now();
+    }
+    editor.dirty = true;
+    prksPrivateNotesSetStatus(editor, 'Drafting…');
+    prksPrivateNotesArmSave(editor);
+}
+
+function prksPrivateNotesArmSave(editor) {
+    const ctx = editor.ctx;
+    const timer = window.setTimeout(function () {
+        if (ctx.timers && ctx.timers.get(editor.timerKey) === timer) ctx.clearTimer(editor.timerKey);
+        if (editor.dirty) prksEnqueuePrivateNotesSave(editor);
+    }, 850);
+    ctx.setTimer(editor.timerKey, timer);
+}
+
 /**
  * Binds the Reminders field in the shared right panel as the owner's
  * `privateNotesEditor` session. The session is non-suspendable: warm park
@@ -3232,32 +3584,7 @@ function prksBindPrivateNotesField(entityType, entityId, ownerCtx) {
             : !!(entry && entry.state === 'drafting'),
     };
     const schedule = function () {
-        if (String(entityType) === 'work') {
-            const liveSession = prksEnsureWorkPrivateNoteSession(ctx, entityId, ta.value);
-            if (liveSession) {
-                liveSession.draftText = String(ta.value);
-                liveSession.editGeneration += 1;
-                liveSession.state = 'drafting';
-                liveSession.saveError = false;
-                liveSession.retired = false;
-                liveSession.dirty = true;
-                liveSession.updatedAt = Date.now();
-            }
-        } else {
-            const draft = prksPrivateNoteDraft(entityType, entityId, ta.value);
-            draft.draftText = ta.value;
-            draft.editGeneration += 1;
-            draft.state = 'drafting';
-            draft.saveError = false;
-            draft.updatedAt = Date.now();
-        }
-        editor.dirty = true;
-        prksPrivateNotesSetStatus(editor, 'Drafting…');
-        const timer = window.setTimeout(function () {
-            if (ctx.timers && ctx.timers.get(editor.timerKey) === timer) ctx.clearTimer(editor.timerKey);
-            if (editor.dirty) prksEnqueuePrivateNotesSave(editor);
-        }, 850);
-        ctx.setTimer(editor.timerKey, timer);
+        prksPrivateNotesNoteEdit(editor);
     };
     const blur = function () {
         if (!editor.dirty) return;
@@ -3316,6 +3643,9 @@ window.prksFlushPendingPrivateNotes = prksFlushPendingPrivateNotes;
 window.prksPrivateNotesTextForEntity = prksPrivateNotesTextForEntity;
 window.prksResetPrivateNoteDraftsForTest = function () {
     prksPrivateNoteDrafts.clear();
+    prksWorkPrivateRecoverySessions.forEach(prksWorkPrivateRecoveryDrop);
+    prksWorkPrivateRecoverySessions.clear();
+    if (prksWorkPrivateNotesRecoveryAdapter) prksWorkPrivateNotesRecoveryAdapter.resetForTest();
     if (typeof prksForEachLiveTabContext !== 'function') return;
     prksForEachLiveTabContext(function (ctx) {
         if (ctx && ctx.ui) {

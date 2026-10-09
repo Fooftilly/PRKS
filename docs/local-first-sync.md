@@ -90,7 +90,8 @@ coordinator names no family: adding one is a registration.
   Only a lineage's owner page (a fresh `pageInstanceId` per load) writes it;
   generations are monotonic; adoption is compare-and-set. Records are deleted
   only on an exact acknowledgement (same generation, `===` body), proven
-  equality, explicit discard, or a confirmed Work delete, never by age. A
+  equality or explicit discard, never by age. Deleting a Work does not
+  touch them yet: its drafts stay orphaned in this browser (#533). A
   discard whose emergency key could not be cleared leaves a bodyless
   tombstone until that key is gone, so the key cannot recreate the draft.
   A draft a merge created from another page's key carries that page's id
@@ -123,6 +124,17 @@ coordinator names no family: adding one is a registration.
   or any other page (an already open tab reads the record again before it
   adopts), and removed once storage accepts it. If `localStorage` refuses
   that mark too, the page keeps its leave guard until the removal lands.
+  Work Reminders (#474, slice 4) use the same runtime through the shared
+  adapter `frontend/js/work-note-recovery.js` (kind `work-private-note`),
+  with the same restore, Review, acknowledgement and superseded rules. The
+  Reminders session in `ui.js` reports every edit before the 850 ms save
+  debounce, and its lineage follows the session across a Work switch, a
+  right-panel owner change, warm or cold park and re-tile. Reminders have
+  no blocked state: text typed behind its own sent predecessor waits for it
+  through the existing scope_busy retry. A queued Reminders row is not a
+  saved note: the record and the leave guard stay until its acknowledgement.
+  Folder private notes have no recovery yet; their save path returns no
+  queued row to verify against (#534).
 - A device ID is an identity for synchronization, never authentication or trust.
 - Editor state and observed projections belong to the Work's TabContext.
   The sync coordinator owns transport and retry policy, with one in-flight

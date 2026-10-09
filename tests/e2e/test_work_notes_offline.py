@@ -7,7 +7,7 @@ Deterministic cancel / private-fence / compact-conflict shape contracts live in
 Node (`run_work_note_sync_selftest.js`) and Python (`test_work_note_sync.py`).
 This module keeps the Chromium boundaries: real editor reload/remount and a
 thin reconnect conflict park, and browser-local recovery of Research Notes
-text across a reload (#466 slice 2).
+(#466 slices 2-3) and Work Reminders (#474) text across a reload or a closed tab.
 """
 import os
 import unittest
@@ -851,3 +851,194 @@ class ResearchNotesTabCloseAndReviewTests(_RecoveryPage, unittest.TestCase):
         tab.locator('[data-prks-role="editor-recovery-review"]').wait_for(state='detached')
         self.assertEqual(len(self.records(tab, work)), 1)
         self.assertEqual(self.note_rows(tab), [])
+
+
+_REMINDER_RECORDS = _RECOVERY_RECORDS.replace("'work-research-note'", "'work-private-note'")
+
+
+class WorkRemindersRecoveryTests(_RecoveryPage, unittest.TestCase):
+    """#474 slice 4: Work Reminders text typed inside the 850 ms save debounce
+    survives a reload or a closed tab on the same recovery runtime as Research
+    Notes, and an unsafe draft is a notice in the Reminders card."""
+
+    new_tab = ResearchNotesTabCloseAndReviewTests.new_tab
+    close_tab = ResearchNotesTabCloseAndReviewTests.close_tab
+
+    def field(self, page, server):
+        return page.locator('#prks-private-notes-work-' + server.ids['work_a'])
+
+    def status(self, page, server):
+        return page.locator('#prks-private-notes-status-work-' + server.ids['work_a'])
+
+    def type_reminder(self, page, server, marker):
+        field = self.field(page, server)
+        field.click()
+        page.keyboard.press('Control+End')
+        page.keyboard.type(marker)
+        self.status(page, server).filter(has_text='Drafting').wait_for()
+
+    def hold_reminder_saves(self, page):
+        # The tab closes before its 850 ms save, however slow the runner is.
+        page.evaluate('() => { window.prksPrivateNotesArmSave = () => {}; }')
+
+    def reminder_records(self, page, work):
+        return page.evaluate(_REMINDER_RECORDS, work)
+
+    def wait_reminder_recorded(self, page, work, marker):
+        wait_for_async(
+            page,
+            '([workId, marker]) => (' + _REMINDER_RECORDS + ')(workId).then(rows => rows.some(r => (r.body || "").endsWith(marker)))',
+            arg=[work, marker],
+            timeout=5000,
+            message='the Reminders edit never reached recovery storage')
+
+    def wait_no_reminder_records(self, page, work):
+        wait_for_async(
+            page,
+            '(workId) => (' + _REMINDER_RECORDS + ')(workId).then(rows => rows.length === 0)',
+            arg=work,
+            timeout=15000,
+            message='the Reminders recovery record outlived the acknowledgement')
+
+    def reminder_rows(self, page):
+        return page.evaluate("""() => prksSync.store.listOperations().then(rows => rows
+            .filter(r => r.operation === 'SET_WORK_PRIVATE_NOTE').map(r => r.payload.text))""")
+
+    def server_reminder(self, server, work):
+        return self.db_for(server).get_work(work)['private_notes'] or ''
+
+    def set_server_reminder(self, server, work, text):
+        with self.db_for(server).connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            work_note_sync.set_private_note_on_conn(conn, work, text)
+
+    def wait_server_reminder(self, page, work, text):
+        wait_for_async(
+            page,
+            """([id, text]) => fetch('/api/works/' + encodeURIComponent(id), { cache: 'no-store' })
+                .then(r => r.json()).then(w => (w.private_notes || '') === text)""",
+            arg=[work, text],
+            timeout=30000,
+            message='the server never received the Reminders text')
+
+    def reminders_notice(self, page):
+        return page.locator('.prks-private-notes-card [data-prks-role="editor-recovery-drafts"]')
+
+    def open_reminders_review(self, page):
+        self.reminders_notice(page).locator('[data-prks-role="editor-recovery-open-review"]').click()
+        dialog = page.locator('[data-prks-role="editor-recovery-review"]')
+        dialog.wait_for()
+        dialog.locator('[data-prks-role="editor-recovery-candidate"], [data-prks-role="editor-recovery-empty"]').first.wait_for()
+        return dialog
+
+    def assert_reminder_restored_and_saved(self, server, page, work, expected):
+        page.wait_for_function(
+            "([sel, text]) => (document.querySelector(sel) || {}).value === text",
+            arg=['#prks-private-notes-work-' + work, expected])
+        self.assertEqual(self.reminders_notice(page).count(), 0)
+        self.wait_server_reminder(page, work, expected)
+        self.wait_no_reminder_records(page, work)
+        self.assertEqual(page.evaluate(_RECOVERY_IDLE), {'pending': 0, 'guard': False, 'unloadListeners': False})
+
+    def test_reminders_reload_within_500_ms_restores_the_exact_text_and_saves_it(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        original = self.server_reminder(server, work)
+        self.type_reminder(page, server, ' Reminder 500')
+        self.wait_reminder_recorded(page, work, ' Reminder 500')
+        # Recoverable is not saved: nothing is queued inside the debounce.
+        self.assertEqual(self.reminder_rows(page), [])
+        self.leave_after(page, 150)
+        self.status(page, server).filter(has_text='Restored unsaved changes').wait_for()
+        self.assert_reminder_restored_and_saved(server, page, work, original + ' Reminder 500')
+
+    def test_reminders_tab_closed_within_500_ms_is_recovered_in_a_new_tab(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        original = self.server_reminder(server, work)
+        self.type_reminder(page, server, ' Closed reminder')
+        # prks-allow-wait-for-timeout: the contract is "close the tab within 500 ms of the last keystroke"
+        page.wait_for_timeout(150)
+        self.close_tab(page)
+        tab = self.new_tab(context, server)
+        self.assert_reminder_restored_and_saved(server, tab, work, original + ' Closed reminder')
+
+    def test_reminders_tab_closed_on_the_lan_without_web_locks_is_recovered(self):
+        server, page, context = self.start(without_locks=True)
+        work = server.ids['work_a']
+        original = self.server_reminder(server, work)
+        self.type_reminder(page, server, ' LAN reminder')
+        # prks-allow-wait-for-timeout: the contract is "close the tab within 500 ms of the last keystroke"
+        page.wait_for_timeout(400)
+        self.close_tab(page)
+        tab = self.new_tab(context, server)
+        self.assertFalse(tab.evaluate('() => !!navigator.locks'))
+        self.assert_reminder_restored_and_saved(server, tab, work, original + ' LAN reminder')
+
+    def test_reminders_changed_elsewhere_after_close_needs_review_and_is_never_applied(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.hold_reminder_saves(page)
+        self.type_reminder(page, server, ' Mine')
+        self.wait_reminder_recorded(page, work, ' Mine')
+        self.close_tab(page)
+        self.set_server_reminder(server, work, 'Another device wrote this reminder.')
+        tab = self.new_tab(context, server)
+        self.reminders_notice(tab).wait_for()
+        self.assertEqual(self.field(tab, server).input_value(), 'Another device wrote this reminder.')
+        dialog = self.open_reminders_review(tab)
+        self.assertIn('Reminders', dialog.inner_text())
+        self.assertTrue(dialog.locator('[data-prks-role="editor-recovery-text"]').input_value().endswith(' Mine'))
+        self.assertEqual(self.reminder_rows(tab), [])
+        dialog.locator('[data-prks-role="editor-recovery-discard"]').click()
+        tab.locator('#prks-modal-confirm-ok').click()
+        dialog.locator('[data-prks-role="editor-recovery-empty"]').wait_for()
+        self.close_review(tab)
+        self.wait_no_reminder_records(tab, work)
+        self.assertEqual(self.server_reminder(server, work), 'Another device wrote this reminder.')
+
+    def test_a_crashed_lan_tab_reminder_is_offered_for_review_only(self):
+        server, page, context = self.start(without_locks=True)
+        work = server.ids['work_a']
+        original = self.server_reminder(server, work)
+        self.hold_reminder_saves(page)
+        self.type_reminder(page, server, ' Before the crash')
+        self.wait_reminder_recorded(page, work, ' Before the crash')
+        from playwright.sync_api import Error as PlaywrightError
+        with page.expect_event('crash', timeout=15000):
+            try:
+                page.goto('chrome://crash', timeout=5000)
+            except PlaywrightError:
+                pass
+        tab = self.new_tab(context, server)
+        self.reminders_notice(tab).wait_for()
+        self.assertEqual(self.field(tab, server).input_value(), original)
+        dialog = self.open_reminders_review(tab)
+        self.assertEqual(dialog.locator('[data-prks-role="editor-recovery-origin"]').inner_text(), 'Another tab that may still be open')
+        self.assertEqual(dialog.locator('[data-prks-role="editor-recovery-restore"]').count(), 0)
+        self.close_review(tab)
+        self.assertEqual(len(self.reminder_records(tab, work)), 1)
+        self.assertEqual(self.reminder_rows(tab), [])
+
+    def test_reminders_storage_failure_warns_and_keeps_the_leave_guard_until_saved(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        original = self.server_reminder(server, work)
+        context.add_init_script(_WITHOUT_RECOVERY_STORAGE)
+        page.reload(wait_until='domcontentloaded')
+        page.wait_for_selector('.CodeMirror')
+        self.field(page, server).wait_for()
+        page.route('**/api/sync/operations', lambda route: route.abort('connectionrefused'))
+        self.type_reminder(page, server, ' Unprotected')
+        warning = page.locator('.prks-private-notes-card [data-prks-role="editor-recovery-unprotected"]')
+        warning.wait_for()
+        self.assertTrue(page.evaluate('() => window.prksEditorRecovery.runtime().writers.leaveGuardActive()'))
+        # Queued is not saved: the guard holds while the row cannot be sent.
+        wait_for_async(page, "() => prksSync.store.listOperations().then(rows => rows.some(r => r.operation === 'SET_WORK_PRIVATE_NOTE'))",
+                       timeout=10000, message='the Reminders save never queued')
+        self.assertTrue(page.evaluate('() => window.prksEditorRecovery.runtime().writers.leaveGuardActive()'))
+        page.unroute('**/api/sync/operations')
+        page.evaluate('() => prksSync.wake()')
+        self.wait_server_reminder(page, work, original + ' Unprotected')
+        warning.wait_for(state='detached')
+        self.assertFalse(page.evaluate('() => window.prksEditorRecovery.runtime().writers.leaveGuardActive()'))

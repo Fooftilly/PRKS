@@ -26,7 +26,7 @@ function owner(workId = 'w1') {
 afterEach(() => {
   forgetResearchNotesRecovery()
   closeResearchNotesRecoveryReview()
-  for (const key of ['prksResearchNotesRecoveryView', 'prksResearchNotesRecoveryDetails', 'prksRefreshResearchNotesRecovery', 'prksResearchNotesRecoveryRestore', 'prksConfirmDialog', 'prksVueCloseResearchNotesRecoveryReview', 'prksVueUpdateResearchNotesRecovery']) delete w[key]
+  for (const key of ['prksResearchNotesRecoveryView', 'prksResearchNotesRecoveryDetails', 'prksRefreshResearchNotesRecovery', 'prksResearchNotesRecoveryRestore', 'prksConfirmDialog', 'prksVueCloseRecoveryReview', 'prksVueUpdateResearchNotesRecovery']) delete w[key]
   document.body.innerHTML = ''
 })
 
@@ -71,7 +71,7 @@ describe('Research Notes recovery presenter', () => {
       candidates: [{ expect: { draftId: 'd', pageInstanceId: 'p', generation: 1, status: 'active' }, draftId: 'd', lineage: 'dead-runtime', samePane: false, status: 'active', reason: 'base-advanced', action: 'reconcile', generation: 1, updatedAt: 1, length: 1, body: 'y', typedOnRevision: 4, pipelineState: 'drafting' }],
     }))
     registerResearchNotesRecoveryBridge(window)
-    const escape = w.prksVueCloseResearchNotesRecoveryReview as (modal?: Element | null) => boolean
+    const escape = w.prksVueCloseRecoveryReview as (modal?: Element | null) => boolean
     openResearchNotesRecoveryReview(owner())
     await flushPromises()
     ;(document.querySelector('[data-prks-role="editor-recovery-compare-btn"]') as HTMLButtonElement).click()
@@ -128,7 +128,7 @@ describe('Research Notes recovery presenter', () => {
     }))
     w.prksResearchNotesRecoveryDetails = details
     registerResearchNotesRecoveryBridge(window)
-    const escape = w.prksVueCloseResearchNotesRecoveryReview as (modal?: Element | null) => boolean
+    const escape = w.prksVueCloseRecoveryReview as (modal?: Element | null) => boolean
     const ctx = owner()
     openResearchNotesRecoveryReview(ctx)
     await flushPromises()

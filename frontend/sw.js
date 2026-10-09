@@ -25,7 +25,7 @@
     // frontend/js/editor-recovery.js, or
     // frontend/js/route-model.js) retires old
     // shell/static caches.
-    const DEPENDENCY_REVISION = '5f3278705864';
+    const DEPENDENCY_REVISION = '1d655202c55c';
     const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
     const PDF_CACHE = 'prks-pdf-v1';
@@ -134,6 +134,7 @@
         '/js/work-metadata-state.js',
         '/js/work-source-state.js',
         '/js/work-notes-state.js',
+        '/js/work-note-recovery.js',
         '/js/work-role-state.js',
     '/js/work-role-editor.js',
     '/js/person-state.js',

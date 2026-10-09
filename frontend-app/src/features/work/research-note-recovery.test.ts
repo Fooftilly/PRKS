@@ -9,6 +9,7 @@ import ownerResourceSource from '../../../../frontend/js/owner-resource.js?raw'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
 import worksSource from '../../../../frontend/js/components/works.js?raw'
 import workNotesStateSource from '../../../../frontend/js/work-notes-state.js?raw'
+import workNoteRecoverySource from '../../../../frontend/js/work-note-recovery.js?raw'
 import * as recoveryApi from '../../lifecycle/editor-recovery-entry'
 import type { EmergencyStorage } from '../../lifecycle/editor-recovery/emergency'
 import type { EditorRecoveryRuntime } from '../../lifecycle/editor-recovery/runtime'
@@ -330,6 +331,7 @@ beforeAll(() => {
   win.eval(ownerResourceSource)
   win.eval(tabContextSource)
   win.eval(workNotesStateSource)
+  win.eval(workNoteRecoverySource)
   win.eval(worksSource)
 })
 

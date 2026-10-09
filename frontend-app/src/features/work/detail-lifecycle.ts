@@ -287,6 +287,11 @@ export async function mountWorkDetail(
           await restoreNotes(ctx as never, current as never)
           if (!isCurrent()) return
         }
+        /* Work Reminders (#474) restore on the same base, without holding up the
+         * Research Notes editor: the Reminders field is already painted, and a
+         * restore that applies fills it only while it is still clean. */
+        const restoreReminders = classic('prksRestoreWorkPrivateNoteRecovery')
+        if (restoreReminders) void Promise.resolve(restoreReminders(ctx as never, current as never)).catch(() => undefined)
         const readNotes = classic('prksResearchNotesTextForWork')
         const notesText = readNotes
           ? String(readNotes(current.id as never, current.text_content as never, ctx as never) || '')
