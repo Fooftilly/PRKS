@@ -158,7 +158,10 @@ class FrontendOfflineNotesGuardTests(unittest.TestCase):
         start = src.index("async function prksSaveFolderPrivateNoteForSession(")
         body = src[start : src.index("\n}\n", start)]
         self.assertIn("prksSaveFolderPrivateNoteDurably(", body)
-        self.assertIn("private_notes", body)
+        # The base is the pane's observed snapshot, never the stored Folder,
+        # whose body may be newer than the text the pane shows (#534).
+        self.assertIn("prksFolderNoteObserved(", body)
+        self.assertNotIn("prksAcknowledgedFolderBase(", body)
         self.assertNotIn("/api/folders/", body)
         self.assertNotIn("prksRequest(", body)
         self.assertNotIn("Offline — notes are read-only", body)

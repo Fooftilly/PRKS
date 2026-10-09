@@ -3407,11 +3407,8 @@ async function prksSaveFolderPrivateNoteForSession(editor, entityId, content) {
         observed = await prksEnsureFolderNotesBase(ctx, held || live,
             { pendingCreate: !!(held && held.source === 'pending-create') });
     }
-    if (!observed && typeof prksAcknowledgedFolderBase === 'function') {
-        const ops = typeof prksDurableOperationsOrNone === 'function' ? await prksDurableOperationsOrNone() : [];
-        const all = await prksAcknowledgedFolderBase(String(entityId), ops);
-        observed = all && all.private_notes ? all.private_notes : null;
-    }
+    /* No fallback to the stored Folder: its body may be newer than the text
+     * this pane shows, and saving against it would replace that newer text. */
     const base = observed ? { value: observed.value, revision: observed.revision } : null;
     return { result: await prksSaveFolderPrivateNoteDurably(String(entityId), content, base), base: base };
 }

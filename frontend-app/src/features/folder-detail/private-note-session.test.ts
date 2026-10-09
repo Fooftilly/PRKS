@@ -88,13 +88,23 @@ function stateOf(id: string) {
   }
 }
 
+/* When each cached copy was taken; a server read is taken now. */
+let clock = 100
+let cachedAt = { state: 10, body: 20 }
+/* Runs between the revision read and the body read that follows it. */
+let betweenReads: (() => void) | null = null
+
 function installEnvironment() {
   w.prksOfflineReadEntity = async (kind: string, id: string) => {
     if (kind === 'folder-state') {
       if (reads.state === 'unavailable') return { value: null, source: 'unavailable', cachedAt: null }
-      return { value: stateOf(id), source: reads.state, cachedAt: null }
+      const read = { value: stateOf(id), source: reads.state, cachedAt: reads.state === 'server' ? ++clock : cachedAt.state }
+      const hook = betweenReads
+      betweenReads = null
+      if (hook) hook()
+      return read
     }
-    return { value: folder(id), source: reads.body, cachedAt: null }
+    return { value: folder(id), source: reads.body, cachedAt: reads.body === 'server' ? ++clock : cachedAt.body }
   }
   w.prksOfflineInvalidateEntity = async () => true
   w.prksDurableOperationsOrNone = async () => queue.store.listOperations()
@@ -166,6 +176,8 @@ beforeEach(async () => {
   }
   queue = createFolderQueue(server)
   reads = { state: 'server', body: 'server' }
+  cachedAt = { state: 10, body: 20 }
+  betweenReads = null
   installEnvironment()
   await w.prksRefreshPendingFolderNotes()
 })
@@ -199,6 +211,51 @@ describe('Folder Reminders observed base', () => {
     reads = { state: 'unavailable', body: 'server' }
     await openFolder(ownerA, FA)
     expect(w.prksFolderNoteObserved(ownerA, FA)).toBeNull()
+  })
+
+  it('has no base when the server changed after the pane read the body, and queues nothing over it', async () => {
+    installShell()
+    const { ownerA } = mountPair()
+    ownerA.beginRoute()
+    const read = folder(FA)
+    ownerA.setEntity('folder', { ...read })
+    w.prksRememberFolderNotesCanonical(ownerA, read, 'server')
+    /* Another device saves before this page reads the field revision. */
+    server[FA] = { private_notes: 'Saved on another device', revision: 5 }
+    expect(await w.prksEnsureFolderNotesBase(ownerA, read)).toBeNull()
+    expect(w.prksFolderNoteObserved(ownerA, FA)).toBeNull()
+    const { field, status } = mountCard(ownerA, FA)
+    expect(field.value).toBe('Server A')
+    type(field, 'Server A, edited')
+    w.prksFlushPendingPrivateNotes(ownerA)
+    await settle()
+    expect(noteRows()).toEqual([])
+    expect(status.textContent).toBe('Reminders cannot be saved yet — open this folder while connected once')
+    expect(server[FA]!.private_notes).toBe('Saved on another device')
+  })
+
+  it('has no base when the server changes between the revision and the body read', async () => {
+    installShell()
+    const { ownerA } = mountPair()
+    betweenReads = () => { server[FA] = { private_notes: 'Saved on another device', revision: 5 } }
+    await openFolder(ownerA, FA)
+    expect(w.prksFolderNoteObserved(ownerA, FA)).toBeNull()
+  })
+
+  it.each([
+    ['a server revision with a cached body taken before it', { state: 'server', body: 'cache' }, { state: 10, body: 20 }, null],
+    ['a cached revision with a cached body taken before it', { state: 'cache', body: 'cache' }, { state: 30, body: 20 }, null],
+    ['a cached revision with a cached body taken after it', { state: 'cache', body: 'cache' }, { state: 10, body: 20 }, 'cache'],
+    ['a cached revision with a server body read after it', { state: 'cache', body: 'server' }, { state: 10, body: 20 }, 'cache'],
+  ] as const)('with %s, the base is %s', async (_how, from, times, expected) => {
+    installShell()
+    const { ownerA } = mountPair()
+    reads = { ...from }
+    cachedAt = { ...times }
+    await openFolder(ownerA, FA, from.body)
+    const observed = w.prksFolderNoteObserved(ownerA, FA)
+    if (expected === null) expect(observed).toBeNull()
+    else expect(observed).toEqual({ folderId: FA, value: 'Server A', revision: 4, source: expected })
   })
 
   it('a pending creation is revision 0 by construction', async () => {
