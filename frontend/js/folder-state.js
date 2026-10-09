@@ -627,7 +627,11 @@
         try {
             const result = await root.prksOfflineReadEntity('folder', folderId,
                 '/api/folders/' + encodeURIComponent(folderId),
-                { validate: v => !!(v && typeof v === 'object' && v.id === folderId) });
+                {
+                    validate: v => !!(v && typeof v === 'object' && v.id === folderId),
+                    /* A GET already in flight was sent before the revision read. */
+                    requestPolicy: { dedupe: false },
+                });
             const value = result && result.value;
             if (!value || value.id !== folderId) return null;
             return { value: value, source: result.source, cachedAt: result.cachedAt };
