@@ -174,6 +174,33 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
     return store.discard(reviewed.draftId, tombstone, expected)
   }
 
+  /**
+   * A first generation that never reached IndexedDB exists only in a key a
+   * page still alive, or not provably gone, left behind: tombstoned unless
+   * a live editor owns it.
+   */
+  async function suppressEmergencyOnly(
+    ours: (kind: DraftKind, entityType: DraftEntityType, entityId: string) => boolean,
+    report: EntityCleanupReport,
+  ): Promise<void> {
+    if (!emergencyStorage) return
+    for (const stored of readEmergencyKeys(emergencyStorage)) {
+      const payload = stored.payload
+      if (!payload) continue
+      for (const entry of payload.entries) {
+        if (entry.committedGeneration !== 0 || entry.body === null || !ours(entry.kind, entry.entityType, entry.entityId)) continue
+        const owner: DraftOwner = { runtimeId: payload.runtimeId, pageInstanceId: stored.pageInstanceId, paneId: '', claimedAt: payload.at }
+        const lineage = await classify({ draftId: entry.draftId, owner })
+        if (lineage === 'self-live' || lineage === 'other-live') {
+          report.live.push(entry.draftId)
+          continue
+        }
+        const stone = { kind: entry.kind, entityType: entry.entityType, entityId: entry.entityId, generation: entry.generation, pageInstanceId: stored.pageInstanceId }
+        if ((await store.tombstoneIfAbsent(entry.draftId, stone)) === 'suppressed') report.suppressed.push(entry.draftId)
+      }
+    }
+  }
+
   async function cleanupDeletedEntity(
     entity: { entityType: DraftEntityType; entityId: string },
     kinds: readonly DraftKind[],
@@ -205,24 +232,7 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
       if (outcome === 'deleted' || outcome === 'missing') report.removed.push(record.draftId)
       else if (outcome === 'kept') report.changed.push(record.draftId)
     }
-    if (!emergencyStorage) return report
-    // A first generation that never reached IndexedDB exists only in a key a
-    // page still alive, or not provably gone, left behind.
-    for (const stored of readEmergencyKeys(emergencyStorage)) {
-      const payload = stored.payload
-      if (!payload) continue
-      for (const entry of payload.entries) {
-        if (entry.committedGeneration !== 0 || entry.body === null || !ours(entry.kind, entry.entityType, entry.entityId)) continue
-        const owner: DraftOwner = { runtimeId: payload.runtimeId, pageInstanceId: stored.pageInstanceId, paneId: '', claimedAt: payload.at }
-        const lineage = await classify({ draftId: entry.draftId, owner })
-        if (lineage === 'self-live' || lineage === 'other-live') {
-          report.live.push(entry.draftId)
-          continue
-        }
-        const stone = { kind: entry.kind, entityType: entry.entityType, entityId: entry.entityId, generation: entry.generation, pageInstanceId: stored.pageInstanceId }
-        if ((await store.tombstoneIfAbsent(entry.draftId, stone)) === 'suppressed') report.suppressed.push(entry.draftId)
-      }
-    }
+    await suppressEmergencyOnly(ours, report)
     return report
   }
 

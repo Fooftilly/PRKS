@@ -266,6 +266,25 @@
         }
     }
 
+    /** Work ids whose drafts carry a base read for that Work, excluding Works awaiting creation. */
+    function sweepCandidates(records, operations) {
+        const creating = new Set(pendingCreates(operations).concat((operations || []).filter(function (op) {
+            return op && op.operation === 'CREATE_WORK' && op.status === 'conflict';
+        })).map(function (op) { return op.entity_id; }));
+        const ids = [];
+        for (const record of records) {
+            if (!record || record.entityType !== 'work' || record.status === 'discarded' ||
+                RECOVERY_KINDS.indexOf(record.kind) === -1 || typeof record.entityId !== 'string') continue;
+            /* Only a draft typed on a note this device read for that Work
+             * proves the Work existed where "not found" now means deleted. */
+            const source = record.base && record.base.source;
+            if (source !== 'server' && source !== 'cache') continue;
+            if (creating.has(record.entityId) || ids.indexOf(record.entityId) !== -1) continue;
+            ids.push(record.entityId);
+        }
+        return ids;
+    }
+
     /**
      * Cleans the drafts of Works the server no longer has: deleted on another
      * device, or deleted here with cleanup interrupted. A Work still waiting
@@ -290,20 +309,7 @@
         } catch (_e) {
             return [];
         }
-        const creating = new Set(pendingCreates(operations).concat((operations || []).filter(function (op) {
-            return op && op.operation === 'CREATE_WORK' && op.status === 'conflict';
-        })).map(function (op) { return op.entity_id; }));
-        const ids = [];
-        for (const record of records) {
-            if (!record || record.entityType !== 'work' || record.status === 'discarded' ||
-                RECOVERY_KINDS.indexOf(record.kind) === -1 || typeof record.entityId !== 'string') continue;
-            /* Only a draft typed on a note this device read for that Work
-             * proves the Work existed where "not found" now means deleted. */
-            const source = record.base && record.base.source;
-            if (source !== 'server' && source !== 'cache') continue;
-            if (creating.has(record.entityId) || ids.indexOf(record.entityId) !== -1) continue;
-            ids.push(record.entityId);
-        }
+        const ids = sweepCandidates(records, operations);
         /* Random order, so Works that still exist never starve the rest. */
         for (let i = ids.length - 1; i > 0; i -= 1) {
             const j = Math.floor(Math.random() * (i + 1));

@@ -2386,36 +2386,13 @@ var prksEditorRecovery = (function(exports) {
 			} : void 0;
 			return store.discard(reviewed.draftId, tombstone, expected);
 		}
-		async function cleanupDeletedEntity(entity, kinds) {
-			const report = {
-				removed: [],
-				live: [],
-				changed: [],
-				suppressed: []
-			};
-			await scanEmergency();
-			const keys = new Set(kinds.map((kind) => entityKeyOf(kind, entity.entityId)));
-			const ours = (kind, entityType, entityId) => entityType === entity.entityType && entityId === entity.entityId && keys.has(entityKeyOf(kind, entityId));
-			const records = (await store.listAll()).filter((r) => isSupportedRecord(r) && r.status !== "discarded" && ours(r.kind, r.entityType, r.entityId));
-			for (const record of records) {
-				const lineage = await classify(record);
-				if (lineage === "self-live" || lineage === "other-live") {
-					report.live.push(record.draftId);
-					continue;
-				}
-				const outcome = await discardReviewed({
-					draftId: record.draftId,
-					pageInstanceId: record.owner.pageInstanceId,
-					generation: record.generation,
-					status: record.status,
-					kind: record.kind,
-					entityType: record.entityType,
-					entityId: record.entityId
-				});
-				if (outcome === "deleted" || outcome === "missing") report.removed.push(record.draftId);
-				else if (outcome === "kept") report.changed.push(record.draftId);
-			}
-			if (!emergencyStorage) return report;
+		/**
+		* A first generation that never reached IndexedDB exists only in a key a
+		* page still alive, or not provably gone, left behind: tombstoned unless
+		* a live editor owns it.
+		*/
+		async function suppressEmergencyOnly(ours, report) {
+			if (!emergencyStorage) return;
 			for (const stored of readEmergencyKeys(emergencyStorage)) {
 				const payload = stored.payload;
 				if (!payload) continue;
@@ -2445,6 +2422,37 @@ var prksEditorRecovery = (function(exports) {
 					if (await store.tombstoneIfAbsent(entry.draftId, stone) === "suppressed") report.suppressed.push(entry.draftId);
 				}
 			}
+		}
+		async function cleanupDeletedEntity(entity, kinds) {
+			const report = {
+				removed: [],
+				live: [],
+				changed: [],
+				suppressed: []
+			};
+			await scanEmergency();
+			const keys = new Set(kinds.map((kind) => entityKeyOf(kind, entity.entityId)));
+			const ours = (kind, entityType, entityId) => entityType === entity.entityType && entityId === entity.entityId && keys.has(entityKeyOf(kind, entityId));
+			const records = (await store.listAll()).filter((r) => isSupportedRecord(r) && r.status !== "discarded" && ours(r.kind, r.entityType, r.entityId));
+			for (const record of records) {
+				const lineage = await classify(record);
+				if (lineage === "self-live" || lineage === "other-live") {
+					report.live.push(record.draftId);
+					continue;
+				}
+				const outcome = await discardReviewed({
+					draftId: record.draftId,
+					pageInstanceId: record.owner.pageInstanceId,
+					generation: record.generation,
+					status: record.status,
+					kind: record.kind,
+					entityType: record.entityType,
+					entityId: record.entityId
+				});
+				if (outcome === "deleted" || outcome === "missing") report.removed.push(record.draftId);
+				else if (outcome === "kept") report.changed.push(record.draftId);
+			}
+			await suppressEmergencyOnly(ours, report);
 			return report;
 		}
 		return {
