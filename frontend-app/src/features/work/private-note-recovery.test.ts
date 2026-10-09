@@ -347,6 +347,19 @@ describe('Work Reminders edits reach the recovery writer', () => {
     await waitFor(async () => (await records()).length === 0, 'cleared')
   })
 
+  it('settles a carried session that saw no new edit when the save it carried across a switch lands', async () => {
+    const { ctx, ta } = await openWork()
+    type(ctx, ta!, 'Saved reminder. In flight')
+    win.prksFlushPendingPrivateNotes(ctx)
+    // A -> B -> A before the save settles; nothing is typed after returning.
+    win.prksEnsureWorkPrivateNoteSession(ctx, 'w2', '')
+    const back = win.prksEnsureWorkPrivateNoteSession(ctx, 'w1', server.text)!
+    expect(back.draftText).toBe('Saved reminder. In flight')
+    await waitFor(() => !back.dirty && back.state === 'committed', 'carried session settled by the save it carried')
+    sync.ack(await queuedAs('Saved reminder. In flight'), 6)
+    await waitFor(async () => (await records()).length === 0, 'cleared on acknowledgement')
+  })
+
   it('keeps the lineage when the right panel moves to another pane and back', async () => {
     const { ctx, ta } = await openWork()
     const s = type(ctx, ta!, 'Saved reminder. Unfocused')

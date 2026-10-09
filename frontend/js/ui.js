@@ -2698,7 +2698,7 @@ function prksReconcileSavedWorkPrivateNote(ctx, settledSession, workId, content)
      * session is a later generation's copy and still looks dirty. */
     if (!current || current === settledSession) return;
     if (String(current.workId) !== key || String(current.ownerTabId) !== String(ctx.tabId)) return;
-    if (current.promise || current.editGeneration > 0) return;
+    if (current.promise || current.editGeneration > (current.inheritedGeneration || 0)) return;
     if (String(current.draftText) !== saved) return;
     current.dirty = false;
     current.state = 'committed';
@@ -2966,8 +2966,10 @@ function prksWorkPrivateRecoveryInherit(session) {
         session[field] = from[field];
         from[field] = field === 'recoveryPipelineStored' ? false : null;
     });
-    /* Generations continue the lineage, so the writer keeps accepting edits. */
+    /* Generations continue the lineage, so the writer keeps accepting edits.
+     * Only an edit past the inherited generation is new to this session. */
     session.editGeneration = Math.max(session.editGeneration, from.editGeneration);
+    session.inheritedGeneration = session.editGeneration;
     from.recoveryHeir = session;
     prksWorkPrivateRecoverySessions.delete(from);
     prksWorkPrivateRecoverySessions.add(session);
