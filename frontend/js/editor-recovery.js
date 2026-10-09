@@ -184,13 +184,12 @@ var prksEditorRecovery = (function(exports) {
 	var CLOSED_PAGES_LOCAL_KEY = "prks.editorRecovery.closedPages.v1";
 	var CLOSED_PAGES_LOCAL_KEPT = 64;
 	/**
-	* Stored generations the server already superseded whose removal recovery
-	* storage refused, newest last: `{ draftId, pageInstanceId, generation }`.
-	* Kept outside recovery storage, so a later page still never restores them
-	* and finishes the removal.
+	* One key per draft whose stored generation the server already superseded
+	* and whose removal recovery storage refused: `{ pageInstanceId, generation }`.
+	* Kept outside recovery storage, so every page still never restores it and
+	* finishes the removal. One key per draft: no tab rewrites another's mark.
 	*/
-	var SUPERSEDED_LOCAL_KEY = "prks.editorRecovery.superseded.v1";
-	var SUPERSEDED_LOCAL_KEPT = 64;
+	var SUPERSEDED_KEY_PREFIX = "prks.editorRecovery.superseded.v1.";
 	var RECOVERY_CHANNEL = "prks-editor-recovery-v1";
 	var RUNTIME_LOCK_PREFIX = "prks-editor-recovery-runtime:";
 	var PAGE_LOCK_PREFIX = "prks-editor-recovery-page:";
@@ -1454,32 +1453,63 @@ var prksEditorRecovery = (function(exports) {
 		* finishes the removal.
 		*/
 		const superseded = /* @__PURE__ */ new Map();
-		function readSupersededMarks() {
+		function parseSupersededMark(draftId, raw) {
+			if (!raw) return null;
 			try {
-				const raw = storage ? storage.getItem(SUPERSEDED_LOCAL_KEY) : null;
-				const list = raw ? JSON.parse(raw) : [];
-				if (!Array.isArray(list)) return [];
-				return list.filter((m) => !!m && typeof m.draftId === "string" && typeof m.pageInstanceId === "string" && Number.isSafeInteger(m.generation) && m.generation > 0);
+				const value = JSON.parse(raw);
+				if (!value || typeof value !== "object") return null;
+				const { pageInstanceId, generation } = value;
+				if (typeof pageInstanceId !== "string" || typeof generation !== "number" || !Number.isSafeInteger(generation) || generation <= 0) return null;
+				return {
+					draftId,
+					pageInstanceId,
+					generation
+				};
 			} catch {
-				return [];
+				return null;
 			}
 		}
-		function writeSupersededMarks(list) {
+		function readSupersededMark(draftId) {
 			try {
-				if (!storage) return;
-				if (list.length) storage.setItem(SUPERSEDED_LOCAL_KEY, JSON.stringify(list.slice(-64)));
-				else storage.removeItem(SUPERSEDED_LOCAL_KEY);
+				return storage ? parseSupersededMark(draftId, storage.getItem(SUPERSEDED_KEY_PREFIX + draftId)) : null;
+			} catch {
+				return null;
+			}
+		}
+		function readSupersededMarks() {
+			const marks = [];
+			try {
+				if (!storage) return marks;
+				const ids = [];
+				for (let i = 0; i < storage.length; i++) {
+					const key = storage.key(i);
+					if (key && key.startsWith("prks.editorRecovery.superseded.v1.")) ids.push(key.slice(SUPERSEDED_KEY_PREFIX.length));
+				}
+				for (const id of ids) {
+					const mark = readSupersededMark(id);
+					if (mark) marks.push(mark);
+				}
 			} catch {}
+			return marks;
 		}
 		function markSuperseded(mark) {
 			superseded.set(mark.draftId, Math.max(mark.generation, superseded.get(mark.draftId) || 0));
-			writeSupersededMarks([...readSupersededMarks().filter((m) => m.draftId !== mark.draftId), mark]);
+			const prior = readSupersededMark(mark.draftId);
+			if (prior && prior.generation >= mark.generation) return;
+			try {
+				if (storage) storage.setItem(SUPERSEDED_KEY_PREFIX + mark.draftId, JSON.stringify({
+					pageInstanceId: mark.pageInstanceId,
+					generation: mark.generation
+				}));
+			} catch {}
 		}
 		function unmarkSuperseded(draftId, generation) {
 			if ((superseded.get(draftId) || 0) <= generation) superseded.delete(draftId);
-			const list = readSupersededMarks();
-			const rest = list.filter((m) => !(m.draftId === draftId && m.generation <= generation));
-			if (rest.length !== list.length) writeSupersededMarks(rest);
+			const mark = readSupersededMark(draftId);
+			if (!mark || mark.generation > generation) return;
+			try {
+				if (storage) storage.removeItem(SUPERSEDED_KEY_PREFIX + draftId);
+			} catch {}
 		}
 		/**
 		* Removes one superseded generation by exact owner, generation and status.
@@ -2148,7 +2178,7 @@ var prksEditorRecovery = (function(exports) {
 		async function adopt(record, input) {
 			if (disposed || adopting.has(record.draftId) || ownerOf(record.draftId) !== null) return null;
 			if (!superseded.has(record.draftId)) {
-				const mark = readSupersededMarks().find((m) => m.draftId === record.draftId);
+				const mark = readSupersededMark(record.draftId);
 				if (mark) {
 					superseded.set(mark.draftId, mark.generation);
 					sweepSuperseded([mark], 0);
@@ -2558,8 +2588,7 @@ var prksEditorRecovery = (function(exports) {
 	exports.RUNTIME_LOCK_PREFIX = RUNTIME_LOCK_PREFIX;
 	exports.RUNTIME_SESSION_KEY = RUNTIME_SESSION_KEY;
 	exports.RecoveryStoreError = RecoveryStoreError;
-	exports.SUPERSEDED_LOCAL_KEPT = SUPERSEDED_LOCAL_KEPT;
-	exports.SUPERSEDED_LOCAL_KEY = SUPERSEDED_LOCAL_KEY;
+	exports.SUPERSEDED_KEY_PREFIX = SUPERSEDED_KEY_PREFIX;
 	exports.UNKNOWN_BASE = UNKNOWN_BASE;
 	exports.classifyLineage = classifyLineage;
 	exports.createEditorRecoveryRuntime = createEditorRecoveryRuntime;

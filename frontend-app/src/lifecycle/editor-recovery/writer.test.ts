@@ -688,7 +688,7 @@ describe('acknowledgement', () => {
     expect(await w.acknowledged(2, 'reverted to A')).toBe('deleted')
     // The page reloads before any retry lands.
     t.registry.dispose()
-    expect(t.storage.getItem('prks.editorRecovery.superseded.v1')).toContain(id)
+    expect(t.storage.getItem('prks.editorRecovery.superseded.v1.' + id)).toContain('p-me')
     const scheduler = createManualScheduler()
     const next = createWriterRegistry({
       store: t.store,
@@ -707,7 +707,7 @@ describe('acknowledgement', () => {
     scheduler.advance(60_000)
     await settle()
     expect(await t.store.get(id)).toBeNull()
-    expect(t.storage.getItem('prks.editorRecovery.superseded.v1')).toBeNull()
+    expect(t.storage.getItem('prks.editorRecovery.superseded.v1.' + id)).toBeNull()
     next.dispose()
   })
 
@@ -741,8 +741,44 @@ describe('acknowledgement', () => {
     scheduler.advance(60_000)
     await settle()
     expect(await t.store.get(id)).toBeNull()
-    expect(t.storage.getItem('prks.editorRecovery.superseded.v1')).toBeNull()
+    expect(t.storage.getItem('prks.editorRecovery.superseded.v1.' + id)).toBeNull()
     already.dispose()
+  })
+
+  it('keeps each tab\'s superseded mark under its own key, so no tab drops another\'s', async () => {
+    const t = setup()
+    const scheduler = createManualScheduler()
+    const other = createWriterRegistry({
+      store: t.store,
+      identity: { pageInstanceId: 'p-other', current: () => ({ runtimeId: 'r-other', verified: 'lock' }), setLineageResponder() {} },
+      scheduler,
+      now: scheduler.now,
+      window: listenerTarget(),
+      document: listenerTarget('hidden'),
+      emergencyStorage: t.storage,
+    })
+    const mine = t.open()
+    const theirs = other.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w2', paneId: 'tab-9', sessionKey: 's-9', base: BASE })
+    mine.edit(1, 'stored B')
+    theirs.edit(1, 'stored D')
+    await Promise.all([mine.flush(), theirs.flush()])
+    const mineId = mine.draftId() as string
+    const theirsId = theirs.draftId() as string
+    t.idb.failCommits = 100
+    mine.edit(2, 'reverted to A')
+    theirs.edit(2, 'reverted to C')
+    await Promise.all([mine.flush(), theirs.flush()])
+    expect(await mine.acknowledged(2, 'reverted to A')).toBe('deleted')
+    expect(await theirs.acknowledged(2, 'reverted to C')).toBe('deleted')
+    expect(t.storage.getItem('prks.editorRecovery.superseded.v1.' + mineId)).toContain('p-me')
+    expect(t.storage.getItem('prks.editorRecovery.superseded.v1.' + theirsId)).toContain('p-other')
+    t.idb.failCommits = 0
+    t.scheduler.advance(60_000)
+    await settle()
+    // Mine is gone; theirs still waits for its own page's retry.
+    expect(t.storage.getItem('prks.editorRecovery.superseded.v1.' + mineId)).toBeNull()
+    expect(t.storage.getItem('prks.editorRecovery.superseded.v1.' + theirsId)).toContain('p-other')
+    other.dispose()
   })
 
   it('ends the warning when recovery storage cannot be opened at all', async () => {

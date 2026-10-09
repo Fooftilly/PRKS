@@ -34,8 +34,7 @@ import {
   MAX_WRITE_WAIT_MS,
   RETRY_FIRST_MS,
   RETRY_MAX_MS,
-  SUPERSEDED_LOCAL_KEPT,
-  SUPERSEDED_LOCAL_KEY,
+  SUPERSEDED_KEY_PREFIX,
   UNKNOWN_BASE,
   emergencyKeyOf,
   reservationKeyOf,
@@ -215,41 +214,66 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     generation: number
   }
 
-  function readSupersededMarks(): SupersededMark[] {
+  function parseSupersededMark(draftId: string, raw: string | null): SupersededMark | null {
+    if (!raw) return null
     try {
-      const raw = storage ? storage.getItem(SUPERSEDED_LOCAL_KEY) : null
-      const list: unknown = raw ? JSON.parse(raw) : []
-      if (!Array.isArray(list)) return []
-      return list.filter(
-        (m): m is SupersededMark =>
-          !!m && typeof m.draftId === 'string' && typeof m.pageInstanceId === 'string' && Number.isSafeInteger(m.generation) && m.generation > 0,
-      )
+      const value: unknown = JSON.parse(raw)
+      if (!value || typeof value !== 'object') return null
+      const { pageInstanceId, generation } = value as { pageInstanceId?: unknown; generation?: unknown }
+      if (typeof pageInstanceId !== 'string' || typeof generation !== 'number' || !Number.isSafeInteger(generation) || generation <= 0) return null
+      return { draftId, pageInstanceId, generation }
     } catch {
-      return []
+      return null
     }
   }
 
-  function writeSupersededMarks(list: SupersededMark[]): void {
+  function readSupersededMark(draftId: string): SupersededMark | null {
     try {
-      if (!storage) return
-      if (list.length) storage.setItem(SUPERSEDED_LOCAL_KEY, JSON.stringify(list.slice(-SUPERSEDED_LOCAL_KEPT)))
-      else storage.removeItem(SUPERSEDED_LOCAL_KEY)
+      return storage ? parseSupersededMark(draftId, storage.getItem(SUPERSEDED_KEY_PREFIX + draftId)) : null
+    } catch {
+      return null
+    }
+  }
+
+  function readSupersededMarks(): SupersededMark[] {
+    const marks: SupersededMark[] = []
+    try {
+      if (!storage) return marks
+      const ids: string[] = []
+      for (let i = 0; i < storage.length; i++) {
+        const key = storage.key(i)
+        if (key && key.startsWith(SUPERSEDED_KEY_PREFIX)) ids.push(key.slice(SUPERSEDED_KEY_PREFIX.length))
+      }
+      for (const id of ids) {
+        const mark = readSupersededMark(id)
+        if (mark) marks.push(mark)
+      }
+    } catch {
+      // Unreadable storage: nothing to honour beyond this page's own map.
+    }
+    return marks
+  }
+
+  function markSuperseded(mark: SupersededMark): void {
+    superseded.set(mark.draftId, Math.max(mark.generation, superseded.get(mark.draftId) || 0))
+    const prior = readSupersededMark(mark.draftId)
+    if (prior && prior.generation >= mark.generation) return
+    try {
+      if (storage) storage.setItem(SUPERSEDED_KEY_PREFIX + mark.draftId, JSON.stringify({ pageInstanceId: mark.pageInstanceId, generation: mark.generation }))
     } catch {
       // The in-memory refusal still holds for this page.
     }
   }
 
-  function markSuperseded(mark: SupersededMark): void {
-    superseded.set(mark.draftId, Math.max(mark.generation, superseded.get(mark.draftId) || 0))
-    const rest = readSupersededMarks().filter((m) => m.draftId !== mark.draftId)
-    writeSupersededMarks([...rest, mark])
-  }
-
   function unmarkSuperseded(draftId: string, generation: number): void {
     if ((superseded.get(draftId) || 0) <= generation) superseded.delete(draftId)
-    const list = readSupersededMarks()
-    const rest = list.filter((m) => !(m.draftId === draftId && m.generation <= generation))
-    if (rest.length !== list.length) writeSupersededMarks(rest)
+    const mark = readSupersededMark(draftId)
+    if (!mark || mark.generation > generation) return
+    try {
+      if (storage) storage.removeItem(SUPERSEDED_KEY_PREFIX + draftId)
+    } catch {
+      // Left for a later sweep, which finds the record gone and clears it.
+    }
   }
 
   /**
@@ -993,7 +1017,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     if (disposed || adopting.has(record.draftId) || ownerOf(record.draftId) !== null) return null
     // Another page may have marked it after this one started: read the marks again.
     if (!superseded.has(record.draftId)) {
-      const mark = readSupersededMarks().find((m) => m.draftId === record.draftId)
+      const mark = readSupersededMark(record.draftId)
       if (mark) {
         superseded.set(mark.draftId, mark.generation)
         // Finish the removal here too: the page that marked it may be gone.

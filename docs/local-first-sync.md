@@ -118,7 +118,8 @@ coordinator names no family: adding one is a registration.
   When the server acknowledges text recovery storage never took, the older
   stored generation is superseded and removed; if storage refuses that
   removal, it is recorded in `localStorage`
-  (`prks.editorRecovery.superseded.v1`), never adopted or restored by this
+  (one `prks.editorRecovery.superseded.v1.<draftId>` key per draft, so tabs
+  never overwrite each other's marks), never adopted or restored by this
   or any other page (an already open tab reads the record again before it
   adopts), and removed once storage accepts it.
 - A device ID is an identity for synchronization, never authentication or trust.
