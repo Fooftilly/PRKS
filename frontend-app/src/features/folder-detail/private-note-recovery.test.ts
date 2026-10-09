@@ -249,10 +249,11 @@ function stateOf(id: string) {
 beforeAll(() => {
   win.prksSync = sync
   win.prksWorkspaceSnapshot = () => ({ focusedTabId: focused, mainTabId: 'tab-1' })
+  let clock = 0
   win.prksOfflineReadEntity = async (kind: string, id: string) => ({
     value: kind === 'folder-state' ? stateOf(id) : folder(id),
     source: 'server',
-    cachedAt: null,
+    cachedAt: ++clock,
   })
   win.prksOfflineInvalidateEntity = async () => undefined
   win.eval(ownerResourceSource)
@@ -586,6 +587,26 @@ describe('Folder Reminders restore', () => {
     expect(await bodyOf(live.draftId()!)).toBe('Saved reminder. Still typing in the first tab')
     first.rt.dispose()
     first.locks.releaseAll()
+  })
+
+  it('verifies a base only when no write lands while its body is read', async () => {
+    const verify = win.prksVerifyFolderNoteBase as (id: string, base: unknown) => Promise<boolean>
+    const base = { value: SAVED, revision: 6, source: 'server' }
+    server[FA] = { private_notes: SAVED, revision: 6 }
+    expect(await verify(FA, base)).toBe(true)
+    // The body is read at revision 5; a write of other text lands as revision 6 right after.
+    server[FA] = { private_notes: SAVED, revision: 5 }
+    const read = win.prksOfflineReadEntity as (kind: string, id: string, ...rest: unknown[]) => Promise<unknown>
+    win.prksOfflineReadEntity = async (kind: string, id: string, ...rest: unknown[]) => {
+      const out = await read(kind, id, ...rest)
+      if (kind === 'folder') server[FA] = { private_notes: 'Written on another device', revision: 6 }
+      return out
+    }
+    try {
+      expect(await verify(FA, base)).toBe(false)
+    } finally {
+      win.prksOfflineReadEntity = read
+    }
   })
 
   it('never offers a Work Reminders draft with the same id as Folder Reminders, nor the reverse', async () => {

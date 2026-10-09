@@ -622,12 +622,34 @@
         return true;
     }
 
+    /* The Folder body as stored or cached now, with when that copy was taken. */
+    async function readFolderBody(folderId) {
+        try {
+            const result = await root.prksOfflineReadEntity('folder', folderId,
+                '/api/folders/' + encodeURIComponent(folderId),
+                { validate: v => !!(v && typeof v === 'object' && v.id === folderId) });
+            const value = result && result.value;
+            if (!value || value.id !== folderId) return null;
+            return { value: value, source: result.source, cachedAt: result.cachedAt };
+        } catch (_e) {
+            return null;
+        }
+    }
+
     /**
-     * Joins the canonical body with the field revision. A Folder created on
-     * this device and never sent has revision 0 by construction. Returns the
-     * base, or null when either half is unknown: guessing a revision would
-     * overwrite another device's text. `publish: false` returns it without
-     * writing the pane (a save can outlive the Folder that started it).
+     * Joins the body the pane shows with the field revision, as one snapshot.
+     * The detail and the revision are separate reads, so the body is read
+     * again after the revision: a copy taken at or after the revision is the
+     * value at that revision or a later one. A later one only makes the save
+     * conflict, never overwrite. The base stands only when that copy is what
+     * the pane shows; otherwise the pane shows older text than the revision
+     * says, and saving it would replace a newer Reminder it never saw.
+     *
+     * A Folder created on this device and never sent has revision 0 by
+     * construction. Returns the base, or null when it cannot be proven:
+     * guessing would overwrite another device's text. `publish: false`
+     * returns it without writing the pane (a save can outlive the Folder that
+     * started it).
      */
     async function ensureFolderNotesBase(ctx, folder, options) {
         if (!ctx || !folder || typeof folder.id !== 'string') return null;
@@ -636,6 +658,7 @@
         const canonical = held && held.id === folderId ? held : canonicalNotesFrom(folder, 'unknown');
         let revision = null;
         let stateSource = 'unknown';
+        let bodySource = canonical.source;
         if (options && options.pendingCreate) {
             revision = 0;
             stateSource = 'pending-create';
@@ -644,20 +667,27 @@
             try { result = await readFolderState(folderId); } catch (_e) { result = null; }
             const entry = result && result.value && result.value.fields &&
                 result.value.fields[PRIVATE_NOTES_FIELD];
-            if (entry && Number.isSafeInteger(entry.revision) && entry.revision >= 0) {
-                revision = entry.revision;
-                stateSource = result.source === 'server' || result.source === 'cache' ? result.source : 'unknown';
-            }
+            if (!entry || !Number.isSafeInteger(entry.revision) || entry.revision < 0) return null;
+            if (result.source !== 'server' && result.source !== 'cache') return null;
+            const after = await readFolderBody(folderId);
+            if (!after || !Number.isFinite(after.cachedAt) || !Number.isFinite(result.cachedAt) ||
+                after.cachedAt < result.cachedAt) return null;
+            const fresh = canonicalNotesFrom(after.value, after.source);
+            const shown = ctx.getResource ? ctx.getResource('folderNotesCanonical') : null;
+            const body = shown && shown.id === folderId ? shown : canonical;
+            if (fresh.private_notes !== body.private_notes) return null;
+            revision = entry.revision;
+            stateSource = result.source;
+            if (after.source !== 'server') bodySource = 'cache';
         }
-        if (revision === null) return null;
-        /* Read again after the await: an acknowledgement may have advanced it. */
+        /* Read again after the awaits: an acknowledgement may have advanced it. */
         const now = ctx.getResource ? ctx.getResource('folderNotesCanonical') : null;
         const body = now && now.id === folderId ? now : canonical;
         const base = {
             folderId: folderId,
             value: body.private_notes,
             revision: revision,
-            source: noteBaseSource(stateSource, body.source),
+            source: noteBaseSource(stateSource, bodySource === 'cache' ? 'cache' : body.source),
         };
         if (!(options && options.publish === false)) publishObserved(ctx, base);
         return base;
@@ -733,27 +763,31 @@
 
     /**
      * Whether the server holds `base.value` as the Folder's Reminders at the
-     * `private_notes` field revision `base.revision`. The body is read, then
-     * the field revision: when that revision still equals `base.revision`, the
-     * body read before it is the field at that revision (a later write would
-     * have advanced it). Any failed or cached read is unverified. This is the
-     * Folder field revision, never a Work note revision.
+     * `private_notes` field revision `base.revision`. The field revision is
+     * read on both sides of the body: when both reads equal `base.revision`,
+     * no write landed in between, so the body is the field at that revision.
+     * Any failed or cached read is unverified. This is the Folder field
+     * revision, never a Work note revision.
      */
     async function verifyFolderNoteBase(folderId, base) {
         if (!base || base.source !== 'server' || typeof folderId !== 'string' || !folderId ||
             typeof root.prksOfflineReadEntity !== 'function') {
             return false;
         }
+        const atBase = async function () {
+            const state = await readFolderState(folderId);
+            const entry = state && state.source === 'server' && state.value && state.value.fields
+                ? state.value.fields[PRIVATE_NOTES_FIELD] : null;
+            return !!(entry && entry.revision === base.revision);
+        };
         try {
+            if (!await atBase()) return false;
             const folder = await root.prksOfflineReadEntity('folder', folderId,
                 '/api/folders/' + encodeURIComponent(folderId), {});
             if (!folder || folder.source !== 'server' || !folder.value) return false;
             const raw = folder.value[PRIVATE_NOTES_FIELD];
             if ((raw == null ? '' : String(raw)) !== base.value) return false;
-            const state = await readFolderState(folderId);
-            const entry = state && state.source === 'server' && state.value && state.value.fields
-                ? state.value.fields[PRIVATE_NOTES_FIELD] : null;
-            return !!(entry && entry.revision === base.revision);
+            return await atBase();
         } catch (_e) {
             return false;
         }

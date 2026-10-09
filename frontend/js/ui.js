@@ -2657,8 +2657,6 @@ const PRKS_PRIVATE_NOTE_FAMILIES = Object.freeze({
         idField: 'workId',
         sessionSlot: 'workPrivateNoteSession',
         holdsSlot: 'workPrivateNoteHolds',
-        /* Unbounded as before: a hold is taken back when the pane returns, and a Work hold also keeps a recovery lineage. */
-        holdsMax: Infinity,
         unknownBaseStatus: 'Reminders cannot be saved yet — open this file while connected once',
         pendingText: function (id, fallback) {
             return typeof prksPendingWorkNoteText === 'function'
@@ -2681,8 +2679,6 @@ const PRKS_PRIVATE_NOTE_FAMILIES = Object.freeze({
         idField: 'folderId',
         sessionSlot: 'folderPrivateNoteSession',
         holdsSlot: 'folderPrivateNoteHolds',
-        /* A pane visiting many Folders keeps at most this many unsaved copies; the oldest goes first. */
-        holdsMax: 32,
         unknownBaseStatus: 'Reminders cannot be saved yet — open this folder while connected once',
         pendingText: function (id, fallback) {
             return typeof prksPendingFolderNoteText === 'function' ? prksPendingFolderNoteText(id, fallback) : fallback;
@@ -2744,13 +2740,11 @@ function prksRememberUnsavedPrivateNote(family, ctx, session) {
     if (!ctx || !ctx.ui || !prksPrivateNoteUnsaved(session)) return;
     if (String(session.ownerTabId) !== String(ctx.tabId)) return;
     if (!ctx.ui[family.holdsSlot]) ctx.ui[family.holdsSlot] = Object.create(null);
-    const holds = ctx.ui[family.holdsSlot];
-    const key = String(session.entityId);
-    /* Re-inserted so the newest hold is last; the oldest is dropped past the bound. */
-    delete holds[key];
-    holds[key] = String(session.draftText || '');
-    const keys = Object.keys(holds);
-    for (let i = 0; i < keys.length - family.holdsMax; i += 1) delete holds[keys[i]];
+    /* A hold is text no durable row holds yet, so it is never evicted: it
+     * leaves only when the pane takes it back or its exact text is saved.
+     * The holds stay bounded by the entities with unsaved text, not by the
+     * entities a pane visited. */
+    ctx.ui[family.holdsSlot][String(session.entityId)] = String(session.draftText || '');
 }
 
 function prksTakeRememberedPrivateNote(family, ctx, id) {
@@ -3527,11 +3521,8 @@ async function prksSaveFolderPrivateNoteForSession(editor, entityId, content) {
         observed = await prksEnsureFolderNotesBase(ctx, held || live,
             { pendingCreate: !!(held && held.source === 'pending-create') });
     }
-    if (!observed && typeof prksAcknowledgedFolderBase === 'function') {
-        const ops = typeof prksDurableOperationsOrNone === 'function' ? await prksDurableOperationsOrNone() : [];
-        const all = await prksAcknowledgedFolderBase(String(entityId), ops);
-        observed = all && all.private_notes ? all.private_notes : null;
-    }
+    /* No fallback to the stored Folder: its body may be newer than the text
+     * this pane shows, and saving against it would replace that newer text. */
     const base = observed ? { value: observed.value, revision: observed.revision } : null;
     return { result: await prksSaveFolderPrivateNoteDurably(String(entityId), content, base), base: base };
 }
