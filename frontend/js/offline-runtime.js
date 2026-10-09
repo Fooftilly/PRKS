@@ -244,7 +244,13 @@
                 const err = new Error('No request implementation configured.');
                 throw err;
             }
-            const res = await requestImpl(path, { signal: opts && opts.signal });
+            /* `requestPolicy` reaches the request coordinator unchanged; a
+             * caller that must read after an earlier answer passes
+             * `{ dedupe: false }` so it never joins a flight already started. */
+            const init = { signal: opts && opts.signal };
+            const res = await (opts && opts.requestPolicy
+                ? requestImpl(path, init, opts.requestPolicy)
+                : requestImpl(path, init));
             if (!res || !res.ok) {
                 const err = new Error('Request failed (' + (res ? res.status : 0) + ')');
                 err.isPrksDomainError = true;
