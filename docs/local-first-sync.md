@@ -119,7 +119,8 @@ coordinator names no family: adding one is a registration.
   stored generation is superseded and removed; if storage refuses that
   removal, it is recorded in `localStorage`
   (`prks.editorRecovery.superseded.v1`), never adopted or restored by this
-  or a later page, and removed once storage accepts it.
+  or any other page (an already open tab reads the record again before it
+  adopts), and removed once storage accepts it.
 - A device ID is an identity for synchronization, never authentication or trust.
 - Editor state and observed projections belong to the Work's TabContext.
   The sync coordinator owns transport and retry policy, with one in-flight

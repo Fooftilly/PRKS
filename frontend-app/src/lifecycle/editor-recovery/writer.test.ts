@@ -711,6 +711,40 @@ describe('acknowledgement', () => {
     next.dispose()
   })
 
+  it('a tab that was already open never adopts a generation another page marked superseded, and finishes removing it', async () => {
+    const t = setup()
+    // Tab B is open before tab A marks anything.
+    const scheduler = createManualScheduler()
+    const already = createWriterRegistry({
+      store: t.store,
+      identity: { pageInstanceId: 'p-open', current: () => ({ runtimeId: 'r-open', verified: 'lock' }), setLineageResponder() {} },
+      scheduler,
+      now: scheduler.now,
+      window: listenerTarget(),
+      document: listenerTarget('hidden'),
+      emergencyStorage: t.storage,
+    })
+    const w = t.open()
+    w.edit(1, 'stored B')
+    await w.flush()
+    const id = w.draftId() as string
+    t.idb.failCommits = 100
+    w.edit(2, 'reverted to A')
+    await w.flush()
+    expect(await w.acknowledged(2, 'reverted to A')).toBe('deleted')
+    // Tab A closes before its retry lands; tab B re-plans the closed tab's draft.
+    t.registry.dispose()
+    const stale = (await t.store.get(id))!
+    expect(stale.generation).toBe(1)
+    expect(await already.adopt(stale, { paneId: 'tab-1', sessionKey: 's-open' })).toBeNull()
+    t.idb.failCommits = 0
+    scheduler.advance(60_000)
+    await settle()
+    expect(await t.store.get(id)).toBeNull()
+    expect(t.storage.getItem('prks.editorRecovery.superseded.v1')).toBeNull()
+    already.dispose()
+  })
+
   it('ends the warning when recovery storage cannot be opened at all', async () => {
     const t = setup()
     const w = t.open()

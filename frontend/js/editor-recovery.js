@@ -2147,6 +2147,13 @@ var prksEditorRecovery = (function(exports) {
 		const adopting = /* @__PURE__ */ new Set();
 		async function adopt(record, input) {
 			if (disposed || adopting.has(record.draftId) || ownerOf(record.draftId) !== null) return null;
+			if (!superseded.has(record.draftId)) {
+				const mark = readSupersededMarks().find((m) => m.draftId === record.draftId);
+				if (mark) {
+					superseded.set(mark.draftId, mark.generation);
+					sweepSuperseded([mark], 0);
+				}
+			}
 			if ((superseded.get(record.draftId) || 0) >= record.generation) return null;
 			adopting.add(record.draftId);
 			try {

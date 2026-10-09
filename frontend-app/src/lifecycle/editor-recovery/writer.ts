@@ -991,6 +991,15 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     // One live writer per lineage on this page: a second adoption of the same
     // draft, concurrent or after the first, is refused.
     if (disposed || adopting.has(record.draftId) || ownerOf(record.draftId) !== null) return null
+    // Another page may have marked it after this one started: read the marks again.
+    if (!superseded.has(record.draftId)) {
+      const mark = readSupersededMarks().find((m) => m.draftId === record.draftId)
+      if (mark) {
+        superseded.set(mark.draftId, mark.generation)
+        // Finish the removal here too: the page that marked it may be gone.
+        sweepSuperseded([mark], 0)
+      }
+    }
     if ((superseded.get(record.draftId) || 0) >= record.generation) return null
     adopting.add(record.draftId)
     try {
