@@ -44,8 +44,12 @@ function setup(options: { gate?: boolean; storage?: EmergencyStorage | null; pag
   const realStore = createRecoveryStore({ indexedDB: idb.factory })
   const calls: WriteGenerationInput[] = []
   const gates: Array<() => void> = []
+  const hooks: { discard: RecoveryStore['discard'] | null } = { discard: null }
   const store: RecoveryStore = {
     ...realStore,
+    discard(...args) {
+      return hooks.discard ? hooks.discard(...args) : realStore.discard(...args)
+    },
     writeGeneration(input) {
       calls.push(input)
       if (!options.gate) return realStore.writeGeneration(input)
@@ -80,7 +84,7 @@ function setup(options: { gate?: boolean; storage?: EmergencyStorage | null; pag
     if (gate) gate()
     await settle()
   }
-  return { idb, store: realStore, calls, scheduler, win, doc, storage, events, registry, open, releaseGate }
+  return { idb, store: realStore, hooks, calls, scheduler, win, doc, storage, events, registry, open, releaseGate }
 }
 
 /** INV-DRAFT-1: every pending generation is committed, held by the emergency plan, or leave-guarded. */
@@ -779,6 +783,45 @@ describe('acknowledgement', () => {
     expect(t.storage.getItem('prks.editorRecovery.superseded.v1.' + mineId)).toBeNull()
     expect(t.storage.getItem('prks.editorRecovery.superseded.v1.' + theirsId)).toContain('p-other')
     other.dispose()
+  })
+
+  it('marks a superseded generation before its delete starts, so a reload mid-delete still never restores it', async () => {
+    const t = setup()
+    const w = t.open()
+    w.edit(1, 'stored B')
+    await w.flush()
+    const id = w.draftId() as string
+    t.idb.failCommits = 100
+    w.edit(2, 'reverted to A')
+    await w.flush()
+    // The delete is still pending when the page goes away.
+    let markedWhileDeleting: string | null = null
+    t.hooks.discard = () => {
+      markedWhileDeleting = t.storage.getItem('prks.editorRecovery.superseded.v1.' + id)
+      return new Promise(() => {})
+    }
+    void w.acknowledged(2, 'reverted to A')
+    await settle()
+    expect(markedWhileDeleting).toContain('p-me')
+    t.hooks.discard = null
+    t.registry.dispose()
+    t.idb.failCommits = 0
+    const stale = (await t.store.get(id))!
+    const scheduler = createManualScheduler()
+    const next = createWriterRegistry({
+      store: t.store,
+      identity: { pageInstanceId: 'p-next', current: () => ({ runtimeId: 'r-next', verified: 'lock' }), setLineageResponder() {} },
+      scheduler,
+      now: scheduler.now,
+      window: listenerTarget(),
+      document: listenerTarget('hidden'),
+      emergencyStorage: t.storage,
+    })
+    expect(await next.adopt(stale, { paneId: 'tab-1', sessionKey: 's-next' })).toBeNull()
+    await settle()
+    expect(await t.store.get(id)).toBeNull()
+    expect(t.storage.getItem('prks.editorRecovery.superseded.v1.' + id)).toBeNull()
+    next.dispose()
   })
 
   it('ends the warning when recovery storage cannot be opened at all', async () => {

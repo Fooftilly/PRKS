@@ -302,7 +302,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       if (!left.length || disposed) return
       const next = delay ? Math.min(delay * 2, RETRY_MAX_MS) : RETRY_FIRST_MS
       scheduler.set(() => sweepSuperseded(left, next), next)
-    })
+    }).catch(() => undefined)
   }
 
   function onBeforeUnload(event: Event): void {
@@ -902,13 +902,15 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
      */
     private async removeSuperseded(draftId: string, generation: number, delay: number): Promise<void> {
       // Until it is gone, it is never adopted again: it is not unsaved text.
+      // Recorded before the delete starts, where a later page can see it: a
+      // reload can abort the delete before it settles. Cleared once it lands.
       const mark = { draftId, pageInstanceId: identity.pageInstanceId, generation }
+      if (delay === 0) markSuperseded(mark)
       try {
         await removeSupersededRecord(mark)
       } catch {
-        // Recorded where a later page can see it, and retried here for as long
-        // as this page lives: a released pane leaves the record behind.
-        if (delay === 0) markSuperseded(mark)
+        // Retried here for as long as this page lives: a released pane leaves
+        // the record behind.
         if (disposed) return
         const next = delay ? Math.min(delay * 2, RETRY_MAX_MS) : RETRY_FIRST_MS
         this.cleanupTimer = scheduler.set(() => {

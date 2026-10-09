@@ -1533,7 +1533,7 @@ var prksEditorRecovery = (function(exports) {
 				if (!left.length || disposed) return;
 				const next = delay ? Math.min(delay * 2, RETRY_MAX_MS) : RETRY_FIRST_MS;
 				scheduler.set(() => sweepSuperseded(left, next), next);
-			});
+			}).catch(() => void 0);
 		}
 		function onBeforeUnload(event) {
 			event.preventDefault();
@@ -2081,10 +2081,10 @@ var prksEditorRecovery = (function(exports) {
 					pageInstanceId: identity.pageInstanceId,
 					generation
 				};
+				if (delay === 0) markSuperseded(mark);
 				try {
 					await removeSupersededRecord(mark);
 				} catch {
-					if (delay === 0) markSuperseded(mark);
 					if (disposed) return;
 					const next = delay ? Math.min(delay * 2, RETRY_MAX_MS) : RETRY_FIRST_MS;
 					this.cleanupTimer = scheduler.set(() => {
