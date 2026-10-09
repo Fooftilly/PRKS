@@ -109,10 +109,11 @@ async function otherFieldsAreNeitherSentNorBlocking() {
     assert.equal(note.base_revision, 5, "Reminders carry their own field revision, not the title's");
     assert.deepEqual(note.payload, { field: "private_notes", value: "Call the printer" });
     const kept = all.filter(r => r.op_id !== saved.opId).map(r => [r.op_id, r.payload.field, r.payload.value]);
-    assert.deepEqual(kept.sort(), [
-        [title.op_id, "title", "Drafts 2"],
+    const byField = (a, b) => a[1].localeCompare(b[1]);
+    assert.deepEqual(kept.sort(byField), [
         [description.op_id, "description", "WIP"],
-    ].sort(), "the title and description rows are untouched");
+        [title.op_id, "title", "Drafts 2"],
+    ], "the title and description rows are untouched");
     assert.deepEqual(globalThis.prksFolderPrivateNoteOperations(all, FOLDER).map(r => r.op_id),
         [saved.opId], "only the Reminders row is a Reminders row");
 }
