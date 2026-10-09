@@ -291,7 +291,7 @@
     /**
      * Whether recovery storage may hold anything of `workId`, read without
      * building the recovery runtime: false only when the database is known
-     * absent and no emergency key names the Work.
+     * absent and no emergency key names the Work or is unreadable.
      */
     async function recoveryMayHold(workId) {
         const api = root.prksEditorRecovery;
@@ -299,7 +299,9 @@
         if (await recoveryStorageExists() !== false) return true;
         try {
             return api.readEmergencyKeys(root.localStorage).some(function (stored) {
-                return !!stored.payload && stored.payload.entries.some(function (entry) {
+                /* A key this code cannot read (a newer schema) may name the Work. */
+                if (!stored.payload) return stored.raw !== null;
+                return stored.payload.entries.some(function (entry) {
                     return entry.entityType === 'work' && entry.entityId === workId;
                 });
             });

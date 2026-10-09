@@ -872,6 +872,31 @@ describe('Work delete and recovery drafts (#533)', () => {
     window.localStorage.removeItem(EMERGENCY_KEY_PREFIX + pageInstanceId)
   })
 
+  for (const database of [false, true]) {
+    it(`keeps the mark while an emergency key this code cannot read remains, ${database ? 'with' : 'without'} a recovery database`, async () => {
+      if (!database) win.indexedDB = { databases: async () => [] }
+      const key = EMERGENCY_KEY_PREFIX + 'p-newer'
+      const newer = JSON.stringify({ v: 99, pageInstanceId: 'p-newer', entries: [] })
+      local.setItem(key, newer)
+      window.localStorage.setItem(key, newer)
+      try {
+        mark()
+        goneOnServer()
+        expect(await win.prksRetryDeletedWorkRecovery()).toEqual(['w1'])
+        expect(marked()).toEqual(['w1'])
+        expect(local.getItem(key)).toBe(newer)
+        // A bundle that reads it merges it; the next retry then finishes.
+        local.removeItem(key)
+        window.localStorage.removeItem(key)
+        expect(await win.prksRetryDeletedWorkRecovery()).toEqual(['w1'])
+        expect(marked()).toEqual([])
+      } finally {
+        local.removeItem(key)
+        window.localStorage.removeItem(key)
+      }
+    })
+  }
+
   it('builds no recovery runtime for a confirmed delete when there is no database and no emergency key', async () => {
     win.indexedDB = { databases: async () => [] }
     const api = win.prksEditorRecovery as { runtime(): unknown }

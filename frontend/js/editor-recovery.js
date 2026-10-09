@@ -2397,7 +2397,10 @@ var prksEditorRecovery = (function(exports) {
 			if (!emergencyStorage) return;
 			for (const stored of readEmergencyKeys(emergencyStorage)) {
 				const payload = stored.payload;
-				if (!payload) continue;
+				if (!payload) {
+					if (stored.raw !== null) report.unsupported.push(stored.key);
+					continue;
+				}
 				for (const entry of payload.entries) {
 					if (entry.committedGeneration !== 0 || entry.body === null || !ours(entry.kind, entry.entityType, entry.entityId)) continue;
 					const owner = {

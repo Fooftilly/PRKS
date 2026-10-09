@@ -203,7 +203,11 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
     if (!emergencyStorage) return
     for (const stored of readEmergencyKeys(emergencyStorage)) {
       const payload = stored.payload
-      if (!payload) continue
+      if (!payload) {
+        // A key this code cannot read (a newer schema) may hold this entity: left alone and reported.
+        if (stored.raw !== null) report.unsupported.push(stored.key)
+        continue
+      }
       for (const entry of payload.entries) {
         if (entry.committedGeneration !== 0 || entry.body === null || !ours(entry.kind, entry.entityType, entry.entityId)) continue
         const owner: DraftOwner = { runtimeId: payload.runtimeId, pageInstanceId: stored.pageInstanceId, paneId: '', claimedAt: payload.at }
