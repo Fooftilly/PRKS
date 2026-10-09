@@ -176,7 +176,8 @@ coordinator names no family: adding one is a registration.
   `scope_busy` or `conflict` naming the row that holds the field,
   `unknown_base`, `unproven`, `too-long`, `failed`), never a throw.
   `prksFolderPrivateNoteAck` matches an acknowledgement to one row and its
-  exact payload text, and reports what the server stores (trimmed, as the
+  exact payload text, and reports what the server stores (stripped as
+  Python's `str.strip()` strips, not `trim()`, as the
   acknowledgement reconciles into the cache).
   Folder Reminders sessions are per pane like Work ones
   (`ctx.ui.folderPrivateNoteSession`, the shared session lifecycle in
