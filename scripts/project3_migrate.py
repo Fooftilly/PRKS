@@ -185,6 +185,8 @@ def load_plan(path: Path, stage: str, raw: Optional[bytes] = None) -> dict:
         for field in item.get("set", {}):
             if field not in ("Status", "Roadmap Stage"):
                 raise MigrationError(f"#{item['number']}: field {field!r} is not writable by this tool")
+        if not isinstance(item.get("approved", True), bool):
+            raise MigrationError(f"#{item['number']}: approved must be JSON true or false, got {item['approved']!r}")
         _check_guards(item, stage)
     return data
 
@@ -451,6 +453,8 @@ def verify_added(project: Project, plan_items: dict, records: list, checkpoint: 
     The repair is a write like any other, so the item's presence, archive
     flag and GitHub state are re-checked right before it; if any changed
     during the settle wait, nothing is written and the item is reported.
+    An added item is checkpointed as done only here, once it verifies, so a
+    run that stops before or during verification re-plans it from live data.
     """
     for rec in records:
         if rec["outcome"] not in ("changed", "repaired") or rec["item"] not in checkpoint.added:
@@ -460,7 +464,6 @@ def verify_added(project: Project, plan_items: dict, records: list, checkpoint: 
         reason = _unsafe_to_touch(item, fresh)
         if reason:
             rec.update(outcome="verify-failed", detail=f"after settling: {reason}; not touched")
-            checkpoint.done.discard(rec["item"])
             continue
         values = fresh["values"] if fresh else {}
         if _late_native_inbox(rec["item"], item, values, checkpoint):
@@ -469,14 +472,14 @@ def verify_added(project: Project, plan_items: dict, records: list, checkpoint: 
             after = _unsafe_to_touch(item, fresh)
             if after:   # changed between the check and the repair write
                 rec.update(outcome="verify-failed", detail=f"after settling: {after} while the repair was written; check this item by hand")
-                checkpoint.done.discard(rec["item"])
                 continue
             values = fresh["values"] if fresh else {}
             rec["detail"] = "late native Inbox written over"
         wrong = {f: values.get(f) for f, t in item.get("set", {}).items() if values.get(f) != t}
         if wrong:
             rec.update(outcome="verify-failed", detail=f"after settling: {wrong}; left as is")
-            checkpoint.done.discard(rec["item"])
+            continue
+        checkpoint.done.add(rec["item"])
 
 
 def plan_sha256(path: Path) -> str:
@@ -504,7 +507,8 @@ def _run_items(project: Project, plan: dict, stage: str, ck: Checkpoint, apply: 
             rec.update(outcome="failed", detail=f"{type(exc).__name__}: {exc}")
             failed = True
             continue
-        if rec["outcome"] in ("changed", "repaired"):
+        # Added items wait for verify_added: they are done only once verified.
+        if rec["outcome"] in ("changed", "repaired") and rec["item"] not in ck.added:
             ck.done.add(rec["item"])
             ck.save()
     return records, failed

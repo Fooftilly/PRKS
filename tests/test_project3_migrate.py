@@ -372,6 +372,11 @@ class Backfill(Base):
         row = {"number": 500, "type": "Issue", "expected_before": {"Status": None}, "set": {"Status": "Inbox"}}
         self._refused_before_any_call("backfill", row, "state")
 
+    def test_approved_must_be_a_json_boolean(self):
+        for value in ("false", "no", 0, None):
+            with self.subTest(value=value):
+                self._refused_before_any_call("migrate-existing", epic(approved=value), "approved must be JSON true or false")
+
     def test_held_and_no_op_rows_need_no_guards(self):
         held = {"number": 39, "type": "Issue", "set": {"Status": "Done"}, "approved": False}
         no_op = {"number": 40, "type": "Issue", "set": {}}
@@ -544,6 +549,34 @@ class NativeWorkflowRaces(Base):
         self.assertIn("GitHub state changed to OPEN while the repair was written", r["items"][0]["detail"])
         self.assertFalse(r["ok"])
         self.assertNotIn("Issue#181", json.loads((self.tmp / "ck.json").read_text())["done"])
+
+    def test_an_added_item_stays_pending_when_verification_aborts(self):
+        self.api.add_content("Issue", 181, state="CLOSED")
+        original = pm.Project.refresh
+        settled = []
+
+        def outage_after_settling(project, item_id):
+            if settled:   # the verification read, after the write succeeded
+                raise pm.MigrationError("GraphQL error: simulated outage")
+            return original(project, item_id)
+
+        def reopen_while_settling():
+            settled.append(True)
+            self.api.content[181]["state"] = "OPEN"
+        self.api.pending.append(reopen_while_settling)
+        with unittest.mock.patch.object(pm.Project, "refresh", outage_after_settling):
+            r = self.run_stage("backfill", [research()], apply=True)
+        self.assertEqual(r["counts"], {"changed": 1})
+        self.assertFalse(r["ok"])
+        self.assertNotIn("Issue#181", json.loads((self.tmp / "ck.json").read_text())["done"])
+        r = self.run_stage("backfill", [research()], apply=True)
+        self.assertEqual(r["counts"], {"drift": 1})   # re-planned from live data, not "checkpointed"
+        self.assertFalse(r["ok"])
+
+    def test_an_added_item_is_done_once_it_verifies(self):
+        self.api.add_content("Issue", 181, state="CLOSED")
+        self.run_stage("backfill", [research()], apply=True)
+        self.assertEqual(json.loads((self.tmp / "ck.json").read_text())["done"], ["Issue#181"])
 
     def test_a_person_changing_an_added_item_while_settling_is_reported_not_overwritten(self):
         self.api.add_content("Issue", 181, state="CLOSED")
