@@ -95,8 +95,11 @@ let cachedAt = { state: 10, body: 20 }
 /* Runs between the revision read and the body read that follows it. */
 let betweenReads: (() => void) | null = null
 
+/* The options each Folder body read was made with. */
+let bodyReads: unknown[] = []
+
 function installEnvironment() {
-  w.prksOfflineReadEntity = async (kind: string, id: string) => {
+  w.prksOfflineReadEntity = async (kind: string, id: string, _url: string, options?: unknown) => {
     if (kind === 'folder-state') {
       if (reads.state === 'unavailable') return { value: null, source: 'unavailable', cachedAt: null }
       const read = { value: stateOf(id), source: reads.state, cachedAt: reads.state === 'server' ? ++clock : cachedAt.state }
@@ -105,6 +108,7 @@ function installEnvironment() {
       if (hook) hook()
       return read
     }
+    bodyReads.push(options)
     return { value: folder(id), source: reads.body, cachedAt: reads.body === 'server' ? ++clock : cachedAt.body }
   }
   w.prksOfflineInvalidateEntity = async () => true
@@ -179,6 +183,7 @@ beforeEach(async () => {
   reads = { state: 'server', body: 'server' }
   cachedAt = { state: 10, body: 20 }
   betweenReads = null
+  bodyReads = []
   installEnvironment()
   await w.prksRefreshPendingFolderNotes()
 })
@@ -204,6 +209,32 @@ describe('Folder Reminders observed base', () => {
     reads = { state: 'server', body: 'server' }
     await openFolder(ownerA, FA, 'cache')
     expect(w.prksFolderNoteObserved(ownerA, FA)?.source).toBe('cache')
+  })
+
+  it('re-reads the body as its own request, fenced by the Folder domain like the route read', async () => {
+    installShell()
+    const { ownerA } = mountPair()
+    await openFolder(ownerA, FA)
+    expect(bodyReads).toHaveLength(1)
+    expect(bodyReads[0]).toMatchObject({ domain: 'folders', requestPolicy: { dedupe: false } })
+  })
+
+  it('an unreadable queue keeps the pending text it already knew', async () => {
+    installShell()
+    const { ownerA } = mountPair()
+    await openFolder(ownerA, FA)
+    queue.foreign(FA, 'private_notes', 'Queued offline', 4)
+    await w.prksRefreshPendingFolderNotes()
+    const listOperations = queue.store.listOperations
+    queue.store.listOperations = async () => { throw new Error('IndexedDB unavailable') }
+    try {
+      await w.prksRefreshPendingFolderNotes()
+      const { field } = mountCard(ownerA, FA)
+      await settle()
+      expect(field.value).toBe('Queued offline')
+    } finally {
+      queue.store.listOperations = listOperations
+    }
   })
 
   it('has no base when the revision is unknown, and never guesses one', async () => {

@@ -629,6 +629,9 @@
                 '/api/folders/' + encodeURIComponent(folderId),
                 {
                     validate: v => !!(v && typeof v === 'object' && v.id === folderId),
+                    /* Fenced like the route's Folder read: a completion older
+                     * than a Folder mutation's sweep never repopulates the cache. */
+                    domain: 'folders',
                     /* A GET already in flight was sent before the revision read. */
                     requestPolicy: { dedupe: false },
                 });
@@ -741,7 +744,8 @@
         try {
             pendingNoteRows = privateNoteOperations(await runtime.store.listOperations(), null);
         } catch (_e) {
-            pendingNoteRows = [];
+            /* An unreadable queue is not an empty one: keep the last rows read,
+             * so a paint never hides unsynchronized text it already knew. */
         }
         return pendingNoteRows;
     }
