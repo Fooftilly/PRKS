@@ -573,6 +573,18 @@ class NativeWorkflowRaces(Base):
         self.assertEqual(r["counts"], {"drift": 1})   # re-planned from live data, not "checkpointed"
         self.assertFalse(r["ok"])
 
+    def test_a_rerun_repair_that_fails_verification_is_re_planned_next_time(self):
+        self.api.add_content("Issue", 181, state="CLOSED")
+        self.run_stage("backfill", [research()], apply=True)
+        self.api.items["I181"]["values"]["Status"] = "Inbox"   # late native Inbox
+        self.api.pending.append(lambda: self.api.content[181].update(state="OPEN"))   # reopened while settling
+        r = self.run_stage("backfill", [research()], apply=True)
+        self.assertEqual(r["counts"], {"verify-failed": 1})
+        self.assertNotIn("Issue#181", json.loads((self.tmp / "ck.json").read_text())["done"])
+        r = self.run_stage("backfill", [research()], apply=True)
+        self.assertEqual(r["counts"], {"drift": 1})   # not "checkpointed"
+        self.assertFalse(r["ok"])
+
     def test_an_added_item_is_done_once_it_verifies(self):
         self.api.add_content("Issue", 181, state="CLOSED")
         self.run_stage("backfill", [research()], apply=True)

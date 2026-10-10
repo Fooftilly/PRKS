@@ -507,9 +507,13 @@ def _run_items(project: Project, plan: dict, stage: str, ck: Checkpoint, apply: 
             rec.update(outcome="failed", detail=f"{type(exc).__name__}: {exc}")
             failed = True
             continue
-        # Added items wait for verify_added: they are done only once verified.
-        if rec["outcome"] in ("changed", "repaired") and rec["item"] not in ck.added:
-            ck.done.add(rec["item"])
+        if rec["outcome"] in ("changed", "repaired"):
+            # An added item (a first add, or a rerun's repair of one already
+            # done) is done only once verify_added confirms it.
+            if rec["item"] in ck.added:
+                ck.done.discard(rec["item"])
+            else:
+                ck.done.add(rec["item"])
             ck.save()
     return records, failed
 
