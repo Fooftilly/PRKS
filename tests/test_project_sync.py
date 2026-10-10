@@ -671,6 +671,28 @@ class RaceTests(unittest.TestCase):
         self.assertEqual(audit.outcome, "corrected")
         self.assertEqual(board.pr_status, "Changes requested")
 
+    def test_close_during_the_corrective_write_still_ends_in_done(self):
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.request_changes("2026-10-10T10:00:00Z")
+        board.flush_native()
+        board.request_review("2026-10-10T11:00:00Z")
+
+        def close_now():
+            board.merge(merged=False)
+            board.flush_native()  # native Done lands before the corrective write
+
+        def review_now():
+            board.request_changes("2026-10-10T12:00:00Z")
+            board.flush_native()
+            board.before_set = close_now
+
+        board.before_set = review_now
+        audit = sync(board, "review_requested")
+        self.assertEqual(audit.outcome, "corrected")
+        self.assertIn("closed during the write", audit.reason)
+        self.assertEqual(board.pr_status, "Done")
+
     def test_delayed_draft_conversion_cannot_erase_newer_changes_requested(self):
         # T1 converted to draft (its run is delayed); T2 a reviewer still asks
         # for changes and the native rule lands; T3 the T1 run executes.

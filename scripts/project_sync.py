@@ -412,7 +412,8 @@ def _verify(
 
     A merge or close sets Done. For ``review_requested`` and
     ``converted_to_draft``, a changes-requested review submitted during the
-    write restores Changes requested. A newer review event after a
+    write restores Changes requested, and a merge or close during that
+    corrective write still ends in Done. A newer review event after a
     ``review_changed`` write needs no repair here: its own run is queued
     behind this one and applies next.
     """
@@ -428,6 +429,15 @@ def _verify(
             name = config.statuses[repair[0]]
             api.set_status(project.id, after.item.id, project.field_id, project.options[name])
             audit.steps.append(f"set {name}")
+            if repair[0] != "done":
+                # The PR may have closed during the corrective write too, and
+                # later runs skip a closed PR, so check once more.
+                final = api.load_pr(config, event.number, project.id)
+                if final.state != OPEN and final.item is not None and _status_of(final) == name:
+                    done = config.statuses["done"]
+                    api.set_status(project.id, final.item.id, project.field_id, project.options[done])
+                    audit.steps.append(f"set {done}")
+                    return _finish(audit, "corrected", f"the PR was {final.state.lower()} during the write", done)
             return _finish(audit, "corrected", repair[1], name)
     if status != target_name:
         return _finish(audit, "superseded", f"another writer set {status!r} after this run", status)
