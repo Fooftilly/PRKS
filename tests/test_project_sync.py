@@ -391,6 +391,62 @@ class ChangesRequestedTests(unittest.TestCase):
         self.assertEqual(sync(board, "review_requested").outcome, "updated")
         self.assertEqual(board.pr_status, "Review")
 
+    def test_a_request_without_a_change_request_keeps_a_hand_set_status(self):
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.person_sets("Changes requested", at="2026-10-10T11:00:00Z")
+        board.request_review("2026-10-10T12:00:00Z", reviewer="bob")
+        audit = sync(board, "review_requested")
+        self.assertEqual(audit.outcome, "skipped")
+        self.assertIn("no re-request of a reviewer who requested changes", audit.reason)
+        self.assertEqual(board.pr_status, "Changes requested")
+
+    def test_requesting_someone_else_after_an_answered_request_keeps_a_hand_set_status(self):
+        # Alice's change request was answered at T2; a person sets Changes
+        # requested at T3; requesting Bob at T4 is unrelated.
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.submit_changes_review("2026-10-10T10:00:00Z", reviewer="alice")
+        board.request_review("2026-10-10T11:00:00Z", reviewer="alice")
+        board.person_sets("Changes requested", at="2026-10-10T12:00:00Z")
+        board.request_review("2026-10-10T13:00:00Z", reviewer="bob")
+        self.assertEqual(sync(board, "review_requested").outcome, "skipped")
+        self.assertEqual(board.pr_status, "Changes requested")
+
+    def test_a_delayed_re_request_run_keeps_a_later_hand_set_status(self):
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.submit_changes_review("2026-10-10T10:00:00Z")
+        board.request_review("2026-10-10T11:00:00Z")
+        board.person_sets("Changes requested", at="2026-10-10T12:00:00Z")
+        self.assertEqual(sync(board, "review_requested").outcome, "skipped")
+        self.assertEqual(board.pr_status, "Changes requested")
+
+    def test_re_requesting_the_reviewer_after_the_status_was_set_releases_it(self):
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.submit_changes_review("2026-10-10T10:00:00Z")
+        board.person_sets("Changes requested", at="2026-10-10T10:00:05Z")  # the review's own run
+        board.request_review("2026-10-10T11:00:00Z")
+        audit = sync(board, "review_requested")
+        self.assertEqual(audit.outcome, "updated")
+        self.assertIn("alice was requested again", audit.reason)
+        self.assertEqual(board.pr_status, "Review")
+
+    def test_a_delayed_draft_conversion_run_keeps_a_later_hand_set_status(self):
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.convert_to_draft("2026-10-10T11:00:00Z")
+        board.person_sets("Changes requested", at="2026-10-10T12:00:00Z")
+        audit = sync(board, "converted_to_draft")
+        self.assertEqual(audit.outcome, "skipped")
+        self.assertIn("set after the latest conversion to draft", audit.reason)
+        self.assertEqual(board.pr_status, "Changes requested")
+        # A conversion after the Status was set still applies.
+        board.convert_to_draft("2026-10-10T13:00:00Z")
+        self.assertEqual(sync(board, "converted_to_draft").outcome, "updated")
+        self.assertEqual(board.pr_status, "In Progress")
+
     def test_every_reviewer_must_be_re_requested(self):
         board = FakeBoard(draft=False)
         board.native_auto_add()

@@ -8,8 +8,10 @@ submitted or dismissed review, and covers only the PR rows owned by
 
 * ``opened``             -> In Progress (draft) or Review, from empty or Inbox
 * ``ready_for_review``   -> Review, from empty, Inbox, Ready or In Progress
-* ``converted_to_draft`` -> In Progress, from Review or Changes requested
-* ``review_requested``   -> Review, from Changes requested
+* ``converted_to_draft`` -> In Progress, from Review or Changes requested, when
+  the conversion is newer than the current Status
+* ``review_requested``   -> Review, from Changes requested, only for a re-request
+  of a reviewer who requested changes, made after that Status was set
 * ``review_changed``     -> Changes requested, from empty, In Progress or Review,
   while a review is unanswered; otherwise In Progress (draft) or Review, from
   Changes requested, once a change request was dismissed or withdrawn by an
@@ -307,6 +309,28 @@ def decide(config: Config, action: str, pr: PullRequest) -> tuple[Optional[str],
         return target, "already set"
     if current not in allowed:
         return None, f"current Status {pr.item.status if pr.item else None!r} is not one `{action}` may change"
+    if action == "converted_to_draft" and pr.item is not None and pr.item.status_updated_at:
+        # A delayed run must not undo a Status set after the conversion.
+        if not _after(pr.last_converted_to_draft_at, pr.item.status_updated_at):
+            return None, "stale event: the current Status was set after the latest conversion to draft"
+    if action == "review_requested":
+        # Only a re-request of a reviewer whose change request stands, made
+        # after Changes requested was set, releases it. A request of anyone
+        # else, or one older than the Status (a delayed run, or a Status set
+        # by hand later), leaves it alone.
+        assert pr.item is not None
+        since = pr.item.status_updated_at
+        released = sorted(
+            {
+                who
+                for who, asked in pr.review_requests
+                for by, at in pr.changes_requested
+                if who == by and _after(asked, at) and (since is None or _after(asked, since))
+            }
+        )
+        if not released:
+            return None, "no re-request of a reviewer who requested changes is newer than the current Status"
+        return target, f"{', '.join(released)} was requested again, so `{action}` moves the PR to {config.statuses[target]}"
     if outstanding:
         return target, f"a changes-requested review is still outstanding, so `{action}` sets {config.statuses[target]}"
     return target, f"`{action}` moves the PR to {config.statuses[target]}"
