@@ -1,0 +1,46 @@
+name: Project sync
+
+run-name: "Project sync: PR #${{ github.event.pull_request.number }} ${{ github.event.action }}"
+
+# Sets the Project #3 Status of a pull request for the four transitions owned
+# by project-sync in docs/agent-workflows/project-3.md (section 6), and adds a
+# missing PR item. Dry-run unless the repository variable PROJECT_SYNC_MODE is
+# exactly "apply". It never checks out or runs pull-request code, never
+# merges or approves, and never reads CI results.
+on:
+  pull_request_target:
+    types: [opened, ready_for_review, converted_to_draft, review_requested]
+
+permissions: {}
+
+# One run at a time per PR, in order. The default queue keeps only the newest
+# pending run; queue: max keeps up to 100, so no event is dropped. Each run
+# re-reads the PR and its item, so a late run cannot undo a newer state.
+concurrency:
+  group: project-sync-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  sync:
+    if: github.repository == 'Fooftilly/PRKS'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+      # The default branch, never the PR head: only trusted code runs here.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Sync PR status
+        env:
+          PROJECT_SYNC_TOKEN: ${{ secrets.PROJECT_SYNC_TOKEN }}
+          PROJECT_SYNC_MODE: ${{ vars.PROJECT_SYNC_MODE }}
+          EVENT_ACTION: ${{ github.event.action }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_REPOSITORY: ${{ github.repository }}
+        run: python3 scripts/project_sync.py
