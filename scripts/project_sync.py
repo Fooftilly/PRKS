@@ -2,17 +2,22 @@
 """Keep a pull request's Project #3 Status in step with its review lifecycle.
 
 Runs from ``.github/workflows/project-sync.yml`` on four ``pull_request_target``
-actions and covers only the PR rows owned by ``project-sync`` in
+actions, plus ``changes_requested`` relayed through ``workflow_run`` from a
+submitted review, and covers only the PR rows owned by ``project-sync`` in
 ``docs/agent-workflows/project-3.md`` section 6:
 
 * ``opened``             -> In Progress (draft) or Review, from empty or Inbox
 * ``ready_for_review``   -> Review, from empty, Inbox, Ready or In Progress
 * ``converted_to_draft`` -> In Progress, from Review or Changes requested
 * ``review_requested``   -> Review, from Changes requested
+* ``changes_requested``  -> Changes requested, from empty, In Progress or Review
 
 ``converted_to_draft`` and ``review_requested`` also apply only when the
 latest such event on the PR is newer than the latest changes-requested
 review, so a delayed run never hides newer requested changes.
+``changes_requested`` applies only when the latest changes-requested review is
+newer than both, so a delayed review run never undoes a newer re-review
+request or conversion to draft.
 
 Any other current Status, Blocked and Done included, is left alone. The event
 only says which rule to consider: the PR's draft and open state are re-read
@@ -52,6 +57,11 @@ RULES: dict[str, tuple[Optional[str], Optional[str], frozenset[Optional[str]]]] 
     "ready_for_review": (None, "review", frozenset({None, "inbox", "ready", "in_progress"})),
     "converted_to_draft": ("in_progress", None, frozenset({"review", "changes_requested"})),
     "review_requested": (None, "review", frozenset({"changes_requested"})),
+    "changes_requested": (
+        "changes_requested",
+        "changes_requested",
+        frozenset({None, "in_progress", "review"}),
+    ),
 }
 
 _REPO_RE = re.compile(r"^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$")
@@ -203,9 +213,20 @@ def event_is_current(action: str, pr: PullRequest) -> tuple[bool, str]:
     """The event counts only if no changes were requested at or after it.
 
     A delayed run must not hide a newer changes-requested review, so with no
-    recorded event, or an equal or newer review, it fails closed. Other
-    actions are not ordered against reviews.
+    recorded event, or an equal or newer review, it fails closed. In the other
+    direction, ``changes_requested`` counts only if its review is newer than
+    the latest review request and conversion to draft. ``opened`` and
+    ``ready_for_review`` are not ordered against reviews.
     """
+    if action == "changes_requested":
+        changes = _time(pr.last_changes_requested_at)
+        if changes is None:
+            return False, "no changes-requested review is recorded on the PR"
+        for attribute, label in ORDERED_ACTIONS.values():
+            happened = _time(getattr(pr, attribute))
+            if happened is not None and happened >= changes:
+                return False, f"stale event: a {label} followed the latest changes-requested review"
+        return True, ""
     if action not in ORDERED_ACTIONS:
         return True, ""
     attribute, label = ORDERED_ACTIONS[action]
@@ -315,8 +336,11 @@ def _verify(
 ) -> Audit:
     """Re-read after writing; repair a state change that landed during the write.
 
-    A merge or close sets Done. For the ordered actions, a changes-requested
-    review submitted during the write restores Changes requested.
+    A merge or close sets Done. For ``review_requested`` and
+    ``converted_to_draft``, a changes-requested review submitted during the
+    write restores Changes requested. A newer event after a
+    ``changes_requested`` write needs no repair here: its own run is queued
+    behind this one and applies next.
     """
     after = api.load_pr(config, event.number, project.id)
     status = _status_of(after)
@@ -324,7 +348,7 @@ def _verify(
         repair: Optional[tuple[str, str]] = None
         if after.state != OPEN:
             repair = ("done", f"the PR was {after.state.lower()} during the write")
-        elif not event_is_current(event.action, after)[0]:
+        elif event.action in ORDERED_ACTIONS and not event_is_current(event.action, after)[0]:
             repair = ("changes_requested", "changes were requested during the write")
         if repair:
             name = config.statuses[repair[0]]

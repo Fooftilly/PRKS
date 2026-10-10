@@ -1,0 +1,21 @@
+name: Project sync review signal
+
+# Relays a submitted changes-requested review to project-sync (#441). A
+# pull_request_review run uses the PR's own copy of this file and gets no
+# write access, so it holds no secret, checks nothing out and writes nothing.
+# Its completion triggers the workflow_run job in project-sync.yml, which
+# runs from the default branch, re-reads the PR and decides on its own.
+on:
+  pull_request_review:
+    types: [submitted]
+
+permissions: {}
+
+jobs:
+  signal:
+    if: github.event.review.state == 'changes_requested'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      - name: Record the review
+        run: echo "A changes-requested review was submitted; project-sync re-reads the PR."

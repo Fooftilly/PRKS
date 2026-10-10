@@ -22,6 +22,7 @@ from typing import Callable, Optional
 _ROOT = Path(__file__).resolve().parents[1]
 _SCRIPT = _ROOT / "scripts" / "project_sync.py"
 _WORKFLOW = _ROOT / ".github" / "workflows" / "project-sync.yml"
+_SIGNAL = _ROOT / ".github" / "workflows" / "project-sync-review.yml"
 _CONFIG = _ROOT / ".github" / "project-sync.json"
 
 _spec = importlib.util.spec_from_file_location("project_sync", _SCRIPT)
@@ -86,10 +87,19 @@ class FakeBoard:
         self.converted_to_draft_at = at
 
     def request_changes(self, at: str) -> None:
-        """A reviewer submits a changes-requested review; native rule queued."""
+        """A changes-requested review whose Changes requested write is queued.
+
+        The queued write stands for any other writer of that Status (a
+        person, or the review's own project-sync run), so tests can land it
+        mid-run.
+        """
         self.changes_requested_at = at
         if PR_ID in self.items:
             self.pending_native.append((PR_ID, CONFIG.statuses["changes_requested"]))
+
+    def submit_changes_review(self, at: str) -> None:
+        """A changes-requested review with no native rule: only the time is recorded."""
+        self.changes_requested_at = at
 
     def flush_native(self) -> None:
         while self.pending_native:
@@ -215,7 +225,13 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(board.pr_status, "In Progress")
 
     def test_blocked_and_done_are_never_left(self):
-        for action, draft in (("opened", True), ("ready_for_review", False), ("converted_to_draft", True), ("review_requested", False)):
+        for action, draft in (
+            ("opened", True),
+            ("ready_for_review", False),
+            ("converted_to_draft", True),
+            ("review_requested", False),
+            ("changes_requested", False),
+        ):
             for status in ("Blocked", "Done"):
                 board = FakeBoard(draft=draft)
                 board.native_auto_add()
@@ -269,6 +285,124 @@ class LifecycleTests(unittest.TestCase):
         board.items[PR_ID]["archived"] = True
         self.assertEqual(sync(board, "opened").outcome, "skipped")
         self.assertEqual(board.mutations, [])
+
+
+class ChangesRequestedTests(unittest.TestCase):
+    """The native "Code changes requested" rule is off; project-sync owns it."""
+
+    def test_moves_review_in_progress_or_empty_to_changes_requested(self):
+        for start, draft in ((None, False), ("In Progress", True), ("Review", False)):
+            board = FakeBoard(draft=draft)
+            board.native_auto_add()
+            if start:
+                board.person_sets(start)
+            board.submit_changes_review("2026-10-10T12:00:00Z")
+            audit = sync(board, "changes_requested")
+            self.assertEqual(audit.outcome, "updated", start)
+            self.assertEqual(board.pr_status, "Changes requested")
+
+    def test_never_moves_blocked_done_inbox_or_ready(self):
+        for start in ("Blocked", "Done", "Inbox", "Ready"):
+            board = FakeBoard(draft=False)
+            board.native_auto_add()
+            board.person_sets(start)
+            board.submit_changes_review("2026-10-10T12:00:00Z")
+            self.assertEqual(sync(board, "changes_requested").outcome, "skipped", start)
+            self.assertEqual(board.pr_status, start)
+            self.assertFalse([m for m in board.mutations if m[0] == "set"])
+
+    def test_without_a_recorded_review_fails_closed(self):
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.person_sets("Review")
+        audit = sync(board, "changes_requested")
+        self.assertEqual(audit.outcome, "skipped")
+        self.assertIn("no changes-requested review", audit.reason)
+        self.assertEqual(board.pr_status, "Review")
+
+    def test_delayed_review_run_cannot_undo_a_newer_review_request(self):
+        # T1 changes requested (its run is delayed); T2 re-review requested and
+        # its run moves the PR to Review; T3 the T1 run executes.
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.person_sets("Changes requested")
+        board.submit_changes_review("2026-10-10T11:00:00Z")
+        board.request_review("2026-10-10T12:00:00Z")
+        self.assertEqual(sync(board, "review_requested").outcome, "updated")
+        audit = sync(board, "changes_requested")
+        self.assertEqual(audit.outcome, "skipped")
+        self.assertIn("review request followed", audit.reason)
+        self.assertEqual(board.pr_status, "Review")
+
+    def test_delayed_review_run_cannot_undo_a_newer_draft_conversion(self):
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.person_sets("Review")
+        board.submit_changes_review("2026-10-10T11:00:00Z")
+        board.convert_to_draft("2026-10-10T12:00:00Z")
+        self.assertEqual(sync(board, "converted_to_draft").outcome, "updated")
+        self.assertEqual(sync(board, "changes_requested").outcome, "skipped")
+        self.assertEqual(board.pr_status, "In Progress")
+
+    def test_review_at_the_same_instant_as_a_request_fails_closed(self):
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.person_sets("Review")
+        board.request_review("2026-10-10T12:00:00Z")
+        board.submit_changes_review("2026-10-10T12:00:00Z")
+        self.assertEqual(sync(board, "changes_requested").outcome, "skipped")
+        self.assertEqual(board.pr_status, "Review")
+
+    def test_review_run_after_the_re_review_run_in_either_order_ends_right(self):
+        # Changes at T1, re-review at T2: whichever run executes first, the
+        # PR ends in Review. Changes at T2 after a re-review at T1: it ends
+        # in Changes requested.
+        for first in ("changes_requested", "review_requested"):
+            board = FakeBoard(draft=False)
+            board.native_auto_add()
+            board.person_sets("Review")
+            board.submit_changes_review("2026-10-10T11:00:00Z")
+            board.request_review("2026-10-10T12:00:00Z")
+            second = "review_requested" if first == "changes_requested" else "changes_requested"
+            sync(board, first)
+            sync(board, second)
+            self.assertEqual(board.pr_status, "Review", first)
+        for first in ("changes_requested", "review_requested"):
+            board = FakeBoard(draft=False)
+            board.native_auto_add()
+            board.person_sets("Changes requested")
+            board.request_review("2026-10-10T11:00:00Z")
+            board.submit_changes_review("2026-10-10T12:00:00Z")
+            second = "review_requested" if first == "changes_requested" else "changes_requested"
+            sync(board, first)
+            sync(board, second)
+            self.assertEqual(board.pr_status, "Changes requested", first)
+
+    def test_adds_a_missing_item_and_sets_changes_requested(self):
+        board = FakeBoard(draft=False)
+        board.submit_changes_review("2026-10-10T12:00:00Z")
+        audit = sync(board, "changes_requested")
+        self.assertTrue(audit.item_added)
+        self.assertEqual(board.pr_status, "Changes requested")
+
+    def test_merge_during_the_write_ends_in_done(self):
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.person_sets("Review")
+        board.submit_changes_review("2026-10-10T12:00:00Z")
+        board.after_set = board.merge
+        self.assertEqual(sync(board, "changes_requested").outcome, "corrected")
+        self.assertEqual(board.pr_status, "Done")
+
+    def test_closed_pr_is_skipped(self):
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.person_sets("Review")
+        board.submit_changes_review("2026-10-10T12:00:00Z")
+        board.merge(merged=False)
+        board.flush_native()
+        self.assertEqual(sync(board, "changes_requested").outcome, "skipped")
+        self.assertEqual(board.pr_status, "Done")
 
 
 class RaceTests(unittest.TestCase):
@@ -646,10 +780,32 @@ class WorkflowShapeTests(unittest.TestCase):
     def setUpClass(cls):
         cls.text = _WORKFLOW.read_text()
 
-    def test_triggers_only_on_the_four_pr_actions(self):
+    def test_triggers_only_on_the_four_pr_actions_and_the_review_signal(self):
         self.assertRegex(self.text, r"(?m)^  pull_request_target:\n    types: \[opened, ready_for_review, converted_to_draft, review_requested\]$")
-        for trigger in ("pull_request:", "workflow_run:", "push:", "pull_request_review:", "schedule:", "workflow_dispatch:"):
+        self.assertIn(
+            "  workflow_run:\n    workflows: [Project sync review signal]\n    types: [completed]\n", self.text
+        )
+        for trigger in ("pull_request:", "push:", "pull_request_review:", "schedule:", "workflow_dispatch:"):
             self.assertNotIn(f"\n  {trigger}", self.text)
+
+    def test_a_relayed_review_needs_a_successful_signal_for_a_pr_in_this_repository(self):
+        job_if = self.text.split("    if: >-\n", 1)[1].split("    runs-on:", 1)[0]
+        for condition in (
+            "github.repository == 'Fooftilly/PRKS'",
+            "github.event.workflow_run.event == 'pull_request_review'",
+            "github.event.workflow_run.conclusion == 'success'",
+            "github.event.workflow_run.head_repository.full_name == github.repository",
+            "github.event.workflow_run.pull_requests[0].number",
+        ):
+            self.assertIn(condition, job_if)
+        self.assertIn(
+            "EVENT_ACTION: ${{ github.event_name == 'workflow_run' && 'changes_requested' || github.event.action }}",
+            self.text,
+        )
+        self.assertIn(
+            "PR_NUMBER: ${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number }}",
+            self.text,
+        )
 
     def test_least_privilege(self):
         self.assertIn("\npermissions: {}\n", self.text)
@@ -661,10 +817,13 @@ class WorkflowShapeTests(unittest.TestCase):
         self.assertNotRegex(self.text, r"(?m)^ +ref:")
         self.assertIn("persist-credentials: false", self.text)
         self.assertNotIn("github.event.pull_request.head", self.text)
+        self.assertNotIn("workflow_run.head_sha", self.text)
+        self.assertNotIn("workflow_run.head_branch", self.text)
 
     def test_runs_are_serialized_per_pr_and_queued(self):
         self.assertIn(
-            "concurrency:\n  group: project-sync-pr-${{ github.event.pull_request.number }}\n"
+            "concurrency:\n  group: project-sync-pr-${{ github.event.pull_request.number"
+            " || github.event.workflow_run.pull_requests[0].number || github.run_id }}\n"
             "  cancel-in-progress: false\n  queue: max\n",
             self.text,
         )
@@ -678,7 +837,36 @@ class WorkflowShapeTests(unittest.TestCase):
             self.assertNotIn("${{", block)
 
     def test_repository_guard(self):
-        self.assertIn("if: github.repository == 'Fooftilly/PRKS'", self.text)
+        self.assertIn("      github.repository == 'Fooftilly/PRKS' &&\n", self.text)
+
+
+class SignalWorkflowShapeTests(unittest.TestCase):
+    """The unprivileged relay: it runs the PR's copy of its file, so it must hold nothing."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.text = _SIGNAL.read_text()
+
+    def test_name_matches_the_workflow_run_trigger(self):
+        self.assertTrue(self.text.startswith("name: Project sync review signal\n"))
+
+    def test_triggers_only_on_submitted_reviews(self):
+        self.assertIn("on:\n  pull_request_review:\n    types: [submitted]\n\n", self.text)
+
+    def test_holds_no_permission_secret_or_checkout(self):
+        self.assertIn("\npermissions: {}\n", self.text)
+        self.assertNotRegex(self.text, r"(?m)^ +[a-z-]+: (read|write)$")
+        for forbidden in ("secrets.", "vars.", "actions/checkout", "github.token", "upload-artifact"):
+            self.assertNotIn(forbidden, self.text)
+
+    def test_only_a_changes_requested_review_completes_successfully(self):
+        # A job-level condition skips the whole run for other reviews, so
+        # project-sync (which requires a successful run) is not started.
+        self.assertIn("    if: github.event.review.state == 'changes_requested'\n", self.text)
+
+    def test_no_expressions_in_run_blocks(self):
+        for block in re.findall(r"(?ms)^ +run: (.*?)(?=^ +- |\Z)", self.text):
+            self.assertNotIn("${{", block)
 
 
 if __name__ == "__main__":

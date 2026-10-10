@@ -1,15 +1,23 @@
 name: Project sync
 
-run-name: "Project sync: PR #${{ github.event.pull_request.number }} ${{ github.event.action }}"
+run-name: "Project sync: ${{ github.event_name == 'workflow_run' && 'changes requested' || github.event.action }}"
 
-# Sets the Project #3 Status of a pull request for the four transitions owned
-# by project-sync in docs/agent-workflows/project-3.md (section 6), and adds a
+# Sets the Project #3 Status of a pull request for the transitions owned by
+# project-sync in docs/agent-workflows/project-3.md (section 6), and adds a
 # missing PR item. Dry-run unless the repository variable PROJECT_SYNC_MODE is
 # exactly "apply". It never checks out or runs pull-request code, never
 # merges or approves, and never reads CI results.
+#
+# A changes-requested review has no pull_request_target action, so the
+# unprivileged "Project sync review signal" workflow relays it: workflow_run
+# always runs this file from the default branch, with the PR number taken
+# from GitHub's own record of that run, never from its output.
 on:
   pull_request_target:
     types: [opened, ready_for_review, converted_to_draft, review_requested]
+  workflow_run:
+    workflows: [Project sync review signal]
+    types: [completed]
 
 permissions: {}
 
@@ -17,13 +25,21 @@ permissions: {}
 # pending run; queue: max keeps up to 100, so no event is dropped. Each run
 # re-reads the PR and its item, so a late run cannot undo a newer state.
 concurrency:
-  group: project-sync-pr-${{ github.event.pull_request.number }}
+  group: project-sync-pr-${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.run_id }}
   cancel-in-progress: false
   queue: max
 
 jobs:
   sync:
-    if: github.repository == 'Fooftilly/PRKS'
+    # A relayed review counts only from a successful signal run for a PR in
+    # this repository. Fork PRs carry no PR number here and are not relayed.
+    if: >-
+      github.repository == 'Fooftilly/PRKS' &&
+      (github.event_name == 'pull_request_target' ||
+      (github.event.workflow_run.event == 'pull_request_review' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.pull_requests[0].number))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -31,7 +47,8 @@ jobs:
 
     steps:
       # No ref: under pull_request_target this checks out the base branch
-      # commit, never the PR head, so only trusted code runs here.
+      # commit and under workflow_run the default branch, never the PR head,
+      # so only trusted code runs here.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -40,7 +57,7 @@ jobs:
         env:
           PROJECT_SYNC_TOKEN: ${{ secrets.PROJECT_SYNC_TOKEN }}
           PROJECT_SYNC_MODE: ${{ vars.PROJECT_SYNC_MODE }}
-          EVENT_ACTION: ${{ github.event.action }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_ACTION: ${{ github.event_name == 'workflow_run' && 'changes_requested' || github.event.action }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number }}
           EVENT_REPOSITORY: ${{ github.repository }}
         run: python3 scripts/project_sync.py
