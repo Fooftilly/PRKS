@@ -91,14 +91,27 @@ class MigrationError(Exception):
 Transport = Callable[[str, dict], dict]
 
 
+def _https_only_opener() -> urllib.request.OpenerDirector:
+    """An opener that can speak only HTTPS (through the environment's proxy,
+    if any): unlike urlopen, it has no file:// or ftp:// handler."""
+    opener = urllib.request.OpenerDirector()
+    for handler in (urllib.request.ProxyHandler(), urllib.request.HTTPSHandler(),
+                    urllib.request.HTTPDefaultErrorHandler(), urllib.request.HTTPErrorProcessor(),
+                    urllib.request.UnknownHandler()):
+        opener.add_handler(handler)
+    return opener
+
+
 def http_transport(token: str) -> Transport:
+    opener = _https_only_opener()
+
     def send(query: str, variables: dict) -> dict:
         req = urllib.request.Request(
             "https://api.github.com/graphql",
             data=json.dumps({"query": query, "variables": variables}).encode(),
             headers={"Authorization": f"bearer {token}", "Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310  # nosec B310 - fixed https URL
+        with opener.open(req, timeout=60) as resp:
             body = json.loads(resp.read().decode())
         if body.get("errors"):
             raise MigrationError("GraphQL error: " + "; ".join(e.get("message", "?") for e in body["errors"]))
@@ -384,11 +397,23 @@ def _set(project: Project, item_id: str, field: str, target: str) -> None:
                        {"project": PROJECT_ID, "item": item_id, "field": f["id"], "option": f["options"][target]})
 
 
+def _record_added(key: str, checkpoint: Checkpoint) -> None:
+    """Record a backfill item as added before its add is sent: if the add
+    commits but its response is lost, a rerun still treats the item as added,
+    so it is verified after settling and a late native Inbox on it stays
+    repairable. An item native auto-add put there first is covered the same way."""
+    if key not in checkpoint.added:
+        checkpoint.added.add(key)
+        checkpoint.save()
+
+
 def apply_item(project: Project, item: dict, rec: dict, stage: str, checkpoint: Checkpoint) -> None:
     """Write one item. Every field is re-checked against a fresh read first."""
     gql = project.gql
     key = rec["item"]
     live = project.items.get((item["type"], item["number"]))
+    if stage == "backfill":
+        _record_added(key, checkpoint)
     if rec.get("add"):
         owner, name = REPOSITORY.split("/")
         content = gql.query(CONTENT_Q, {"owner": owner, "name": name, "number": item["number"]})["repository"]["issueOrPullRequest"]
@@ -399,8 +424,6 @@ def apply_item(project: Project, item: dict, rec: dict, stage: str, checkpoint: 
             return
         # Returns the existing item if native auto-add got there first.
         item_id = gql.mutate("addProjectV2ItemById", ADD_M, {"project": PROJECT_ID, "content": content["id"]})["addProjectV2ItemById"]["item"]["id"]
-        checkpoint.added.add(key)
-        checkpoint.save()
     else:
         item_id = live["id"]
     rec["item_id"] = item_id

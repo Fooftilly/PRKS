@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 import unittest.mock
+import urllib.error
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -585,6 +586,30 @@ class NativeWorkflowRaces(Base):
         self.assertEqual(r["counts"], {"drift": 1})   # not "checkpointed"
         self.assertFalse(r["ok"])
 
+    def test_an_add_whose_response_was_lost_is_still_verified_and_repaired(self):
+        self.api.item_added = "late"
+        self.api.add_content("Issue", 181, state="CLOSED")
+        original = self.api._mutation
+
+        def add_commits_then_response_is_lost(query, variables):
+            result = original(query, variables)
+            if "addProjectV2ItemById" in query:
+                self.api._mutation = original
+                raise pm.MigrationError("connection reset after the add was sent")
+            return result
+        self.api._mutation = add_commits_then_response_is_lost
+        r = self.run_stage("backfill", [research()], apply=True)
+        self.assertEqual(r["counts"], {"failed": 1})
+        self.assertIn("I181", self.api.items)   # the add did commit
+        r = self.run_stage("backfill", [research()], apply=True)   # the retry sees an existing item
+        self.assertEqual(r["counts"], {"changed": 1})
+        self.assertTrue(r["ok"])
+        self.assertEqual(self.api.items["I181"]["values"], {"Status": "Done"})   # late Inbox written over
+        self.api.items["I181"]["values"]["Status"] = "Inbox"   # an even later native Inbox
+        r = self.run_stage("backfill", [research()], apply=True)
+        self.assertEqual(r["counts"], {"repaired": 1})
+        self.assertEqual(self.api.items["I181"]["values"], {"Status": "Done"})
+
     def test_an_added_item_is_done_once_it_verifies(self):
         self.api.add_content("Issue", 181, state="CLOSED")
         self.run_stage("backfill", [research()], apply=True)
@@ -709,6 +734,12 @@ class NeverMutations(unittest.TestCase):
         self.assertEqual(re.findall(r"https://[^\s\"']+", text), ["https://api.github.com/graphql"])
         for bad in ("PROJECT_SYNC", "actions/variables", "actions/secrets", "updateRepository", "createIssue", "updateIssue("):
             self.assertNotIn(bad, text)
+
+    def test_the_http_opener_refuses_every_scheme_but_https(self):
+        opener = pm._https_only_opener()
+        for url in ("file:///etc/passwd", "ftp://example.com/x", "http://example.com/"):
+            with self.subTest(url=url), self.assertRaisesRegex(urllib.error.URLError, "unknown url type"):
+                opener.open(url, timeout=1)
 
     def test_graphql_wrapper_refuses_other_mutations(self):
         gql = pm.GraphQL(lambda q, v: {}, allow_mutations=True)
