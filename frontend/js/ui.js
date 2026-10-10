@@ -2932,7 +2932,10 @@ function prksFolderNoteBaseShows(folderId, observed) {
 
 function prksFolderEditBaseFrom(folderId, observed, start) {
     const known = !!(observed && typeof observed.value === 'string' && Number.isSafeInteger(observed.revision));
-    if (known && (start == null || prksFolderNoteBaseShows(folderId, observed) === start)) {
+    /* Compared as the server stores them: an acknowledged base is the
+     * stripped text, the field keeps the whitespace that was typed. */
+    if (known && (start == null ||
+        prksCanonicalFolderNote(prksFolderNoteBaseShows(folderId, observed)) === prksCanonicalFolderNote(start))) {
         const shown = start == null ? prksFolderNoteBaseShows(folderId, observed) : start;
         return { value: observed.value, revision: observed.revision, source: observed.source || 'unknown', start: shown };
     }
