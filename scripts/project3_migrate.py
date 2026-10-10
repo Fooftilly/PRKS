@@ -68,7 +68,7 @@ _DOCS = Path(__file__).resolve().parents[1] / "docs" / "agent-workflows" / "proj
 # directory or a temp directory, and reports and checkpoints are written only
 # under a temp directory, so a mistyped or injected argument cannot read or
 # overwrite an arbitrary file.
-_TEMP_ROOTS = tuple({Path(tempfile.gettempdir()).resolve(), Path("/tmp").resolve()})  # noqa: S108  # nosec B108
+_TEMP_ROOTS = (Path(tempfile.gettempdir()).resolve(),)
 DEFAULT_REPORT_DIR = Path(tempfile.gettempdir()) / "prks-project3-migration"
 DEFAULT_MANIFEST = {"migrate-existing": _DOCS / "existing-items.json", "backfill": _DOCS / "backfill.json"}
 

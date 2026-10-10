@@ -277,7 +277,7 @@ Tool: `scripts/project3_migrate.py`, tested by `tests/test_project3_migrate.py`.
 - After the writes, the tool waits `--settle-seconds` (default 30) and re-reads every item it added. If a late "Item added" Inbox replaced the Status it wrote (for example Done on #181, #234 or #246), it writes the Status again once. Any other value is reported as `verify-failed` and left alone.
 - `approved: false` items are held.
 - PRs are never set to Inbox.
-- Paths are confined. `--manifest` must be a `.json` file in `docs/agent-workflows/project-3-migration/` or the system temp directory. `--report-dir` and `--checkpoint` must be under the temp directory, which is the default location.
+- Paths are confined. `--manifest` must be a `.json` file in `docs/agent-workflows/project-3-migration/` or the system temp directory. `--report-dir` and `--checkpoint` must be under the temp directory. By default the reports and checkpoint go to `prks-project3-migration` in the system temp directory.
 - A checkpoint records the items the tool added and completed. A rerun skips completed items, so a value a person changed afterwards is never rewritten. The only exception is a late native Inbox on an item the tool added, which a rerun repairs. A checkpoint from the other stage is refused.
 - A failed call stops the run. The report and checkpoint are still written, the remaining items are marked `not-run`, and the command exits 1. A rerun continues from the live state.
 
@@ -309,10 +309,10 @@ Tool: `scripts/project3_migrate.py`, tested by `tests/test_project3_migrate.py`.
 **Commands** (run by the maintainer only after approval, with a classic token that has the `project` scope, exported as `PROJECT3_MIGRATION_TOKEN`; never committed or printed):
 
 ```bash
-python scripts/project3_migrate.py migrate-existing --report-dir /tmp/p3          # dry-run
-python scripts/project3_migrate.py migrate-existing --report-dir /tmp/p3 --apply  # after approval
-python scripts/project3_migrate.py backfill --report-dir /tmp/p3                  # dry-run
-python scripts/project3_migrate.py backfill --report-dir /tmp/p3 --apply          # after approval
+python scripts/project3_migrate.py migrate-existing          # dry-run
+python scripts/project3_migrate.py migrate-existing --apply  # after approval
+python scripts/project3_migrate.py backfill                  # dry-run
+python scripts/project3_migrate.py backfill --apply          # after approval
 ```
 
 Order:
