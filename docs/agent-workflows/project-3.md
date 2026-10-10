@@ -55,7 +55,7 @@ No Work type, Area or Priority Project fields. Views filter on the canonical rep
 | Priority | `priority:P1`, `priority:P2`, `priority:P3` labels |
 | Area | `area:*` labels |
 | Research | `research` label, applied by the Research / evaluation template |
-| Kind | `bug`, `enhancement`, `roadmap`, `audit-finding`, `ux-finding` labels; Issue Types Task / Bug / Feature |
+| Kind | `bug`, `enhancement`, `roadmap`, `audit-finding`, `ux-finding` labels. An issue with none of them is an engineering task (that template sets no kind label). Issue Types are not used: they are an organization feature, and `Fooftilly` is a personal account. |
 | Dependency updates | `dependencies` label (Dependabot's default) and `author:app/dependabot` |
 | Parent / progress | native sub-issues, Parent issue and Sub-issue progress fields |
 | Linked PRs, reviewers, milestone | native fields |
