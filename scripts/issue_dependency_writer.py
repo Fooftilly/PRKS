@@ -68,7 +68,8 @@ class Client(Protocol):
 def _error_message(error: urllib.error.HTTPError) -> str:
     try:
         payload = json.loads(error.read() or b"{}")
-    except ValueError:
+    except (ValueError, OSError, http.client.HTTPException):
+        # A truncated or timed-out error body still reports the status.
         return ""
     return str(payload.get("message", ""))[:200] if isinstance(payload, dict) else ""
 

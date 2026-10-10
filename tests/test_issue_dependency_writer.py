@@ -380,6 +380,27 @@ class GitHubClientTests(unittest.TestCase):
             with self.assertRaisesRegex(writer.ApiError, "not valid JSON"):
                 client.get("repos/x/y/issues/1")
 
+    def test_an_unreadable_error_body_keeps_the_http_status(self) -> None:
+        import http.client
+        import io
+        from unittest import mock
+
+        class Broken(io.BytesIO):
+            def __init__(self, failure: Exception) -> None:
+                super().__init__()
+                self.failure = failure
+
+            def read(self, *args: Any) -> bytes:
+                raise self.failure
+
+        client = writer.GitHubClient("t")
+        for failure in (http.client.IncompleteRead(b"x"), TimeoutError("timed out")):
+            error = writer.urllib.error.HTTPError("https://api.github.com/x", 502, "Bad Gateway", {}, Broken(failure))  # type: ignore[arg-type]
+            with mock.patch.object(writer.urllib.request, "urlopen", side_effect=error):
+                with self.assertRaises(writer.ApiError, msg=type(failure).__name__) as caught:
+                    client.get("repos/x/y/issues/1")
+            self.assertEqual(caught.exception.status, 502)
+
     def test_a_timed_out_write_is_still_verified(self) -> None:
         # The POST's response is lost after GitHub created the edge: the
         # re-read reports the write instead of crashing.
