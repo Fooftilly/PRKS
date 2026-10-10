@@ -479,7 +479,8 @@ class WorkflowShapeTests(unittest.TestCase):
         self.assertEqual(grants, [("contents", "read")])
 
     def test_never_checks_out_pull_request_code(self):
-        self.assertIn("ref: ${{ github.event.repository.default_branch }}", self.text)
+        # Without a ref, pull_request_target checks out the base commit.
+        self.assertNotRegex(self.text, r"(?m)^ +ref:")
         self.assertIn("persist-credentials: false", self.text)
         self.assertNotIn("github.event.pull_request.head", self.text)
 
