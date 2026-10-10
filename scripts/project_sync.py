@@ -17,7 +17,9 @@ latest such event on the PR is newer than the latest changes-requested
 review, so a delayed run never hides newer requested changes.
 ``changes_requested`` applies only when the latest changes-requested review is
 newer than both, so a delayed review run never undoes a newer re-review
-request or conversion to draft.
+request or conversion to draft. If such a review is still unanswered when
+``opened`` or ``ready_for_review`` runs, the run sets Changes requested
+instead of In Progress or Review.
 
 Any other current Status, Blocked and Done included, is left alone. The event
 only says which rule to consider: the PR's draft and open state are re-read
@@ -249,11 +251,19 @@ def decide(config: Config, action: str, pr: PullRequest) -> tuple[Optional[str],
     current_event, why = event_is_current(action, pr)
     if not current_event:
         return None, why
+    outstanding = action in ("opened", "ready_for_review") and event_is_current("changes_requested", pr)[0]
+    if outstanding:
+        # A changes-requested review that no re-review request or conversion
+        # to draft has answered still stands, for example when this run is
+        # late and adds the item after the review.
+        target = "changes_requested"
     current = config.key_of(pr.item.status if pr.item else None)
     if current == target:
         return target, "already set"
     if current not in allowed:
         return None, f"current Status {pr.item.status if pr.item else None!r} is not one `{action}` may change"
+    if outstanding:
+        return target, f"a changes-requested review is still outstanding, so `{action}` sets {config.statuses[target]}"
     return target, f"`{action}` moves the PR to {config.statuses[target]}"
 
 
@@ -401,6 +411,7 @@ query($owner: String!, $name: String!, $number: Int!, $field: String!) {
         nodes { submittedAt }
       }
       projectItems(first: 50, includeArchived: true) {
+        pageInfo { hasNextPage }
         nodes {
           id
           isArchived
@@ -498,6 +509,10 @@ class GraphQLApi:
             for node in (pr.get("projectItems") or {}).get("nodes", [])
             if node and (node.get("project") or {}).get("id") == project_id
         ]
+        if not items and ((pr.get("projectItems") or {}).get("pageInfo") or {}).get("hasNextPage"):
+            # The item may be on a later page; adding it again would not show
+            # it on this page either, so fail closed instead of guessing.
+            raise ApiError(f"pull request #{number} is in more than 50 projects; its item could not be located")
         if len(items) > 1:
             raise ApiError(f"pull request #{number} has {len(items)} items in the project")
         item = None

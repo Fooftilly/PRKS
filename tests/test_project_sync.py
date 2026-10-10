@@ -378,6 +378,34 @@ class ChangesRequestedTests(unittest.TestCase):
             sync(board, second)
             self.assertEqual(board.pr_status, "Changes requested", first)
 
+    def test_late_opened_run_keeps_an_outstanding_changes_requested(self):
+        # The review lands before the delayed `opened` run adds the item (for
+        # example when the review relay is unavailable): the run writes
+        # Changes requested, not Review.
+        for draft in (False, True):
+            board = FakeBoard(draft=draft)
+            board.submit_changes_review("2026-10-10T12:00:00Z")
+            audit = sync(board, "opened")
+            self.assertTrue(audit.item_added)
+            self.assertEqual(board.pr_status, "Changes requested", draft)
+            self.assertIn("still outstanding", audit.reason)
+
+    def test_ready_for_review_keeps_an_unanswered_changes_requested(self):
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.person_sets("In Progress")
+        board.submit_changes_review("2026-10-10T11:00:00Z")
+        self.assertEqual(sync(board, "ready_for_review").outcome, "updated")
+        self.assertEqual(board.pr_status, "Changes requested")
+        # Answered by a newer review request, the next ready run moves on.
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.person_sets("In Progress")
+        board.submit_changes_review("2026-10-10T11:00:00Z")
+        board.request_review("2026-10-10T12:00:00Z")
+        sync(board, "ready_for_review")
+        self.assertEqual(board.pr_status, "Review")
+
     def test_adds_a_missing_item_and_sets_changes_requested(self):
         board = FakeBoard(draft=False)
         board.submit_changes_review("2026-10-10T12:00:00Z")
@@ -744,6 +772,15 @@ class GraphQLApiTests(unittest.TestCase):
         api = ps.GraphQLApi(lambda q, v: self._pr_payload(nodes))
         pr = api.load_pr(CONFIG, PR_NUMBER, PROJECT_ID)
         self.assertEqual((pr.item.id, pr.item.status), ("mine", "Review"))
+
+    def test_item_beyond_the_first_page_fails_closed(self):
+        payload = self._pr_payload([{"id": "other", "isArchived": False, "project": {"id": "PVT_other"}, "fieldValueByName": None}])
+        payload["repository"]["pullRequest"]["projectItems"]["pageInfo"] = {"hasNextPage": True}
+        api = ps.GraphQLApi(lambda q, v: payload)
+        with self.assertRaisesRegex(ps.ApiError, "more than 50 projects"):
+            api.load_pr(CONFIG, PR_NUMBER, PROJECT_ID)
+        payload["repository"]["pullRequest"]["projectItems"]["pageInfo"] = {"hasNextPage": False}
+        self.assertIsNone(api.load_pr(CONFIG, PR_NUMBER, PROJECT_ID).item)
 
     def test_duplicate_items_fail_closed(self):
         node = {"id": "a", "isArchived": False, "project": {"id": PROJECT_ID}, "fieldValueByName": None}
