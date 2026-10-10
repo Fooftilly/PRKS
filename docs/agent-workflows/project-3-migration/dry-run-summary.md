@@ -2,6 +2,11 @@
 
 Run with `scripts/project3_migrate.py <stage>` without `--apply`. No mutation was sent.
 
+**Changes after this run (re-run the dry-run before applying):**
+- #35 now maps to Backlog, not Inbox (maintainer decision).
+- #39 was reopened on 2026-10-10. It stays held, and its manifest entry no longer writes Done.
+- `--apply` now re-reads each item before writing, accepts the native Inbox in the backfill, and re-checks added items after `--settle-seconds`. The dry-run output format is unchanged.
+
 ## migrate-existing
 
 Counts: {'would-change': 41, 'held': 1, 'unchanged': 2}
@@ -58,4 +63,3 @@ Missing requirements (block --apply): field 'Execution' missing, field 'Roadmap 
 
 Counts: {'would-change': 230}
 Missing requirements (block --apply): field 'Execution' missing, field 'Roadmap Stage' missing
-

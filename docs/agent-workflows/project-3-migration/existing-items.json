@@ -30,13 +30,13 @@
     "Roadmap Stage": null
    },
    "set": {
-    "Status": "Inbox"
+    "Status": "Backlog"
    },
    "approved": true,
    "flags": [
-    "review-individually-accepted"
+    "maintainer-decision-backlog"
    ],
-   "reason": "No Status in baseline or live; approved -> Inbox. Not an epic, so no Roadmap Stage. #35 carries accepted (parent #57): maintainer may prefer Backlog/Ready."
+   "reason": "No Status in baseline or live. Carries accepted (parent #57) but is not necessarily actionable, so Backlog per the maintainer's decision (2026-10-10), not Inbox or Ready. Not an epic, so no Roadmap Stage."
   },
   {
    "number": 38,
@@ -72,8 +72,8 @@
    "number": 39,
    "type": "Issue",
    "title": "[Roadmap] PDF Reader V2",
-   "github_state": "CLOSED",
-   "state_reason": "COMPLETED",
+   "github_state": "OPEN",
+   "state_reason": "REOPENED",
    "baseline": {
     "Status": "In Progress",
     "Horizon": "Now",
@@ -85,18 +85,17 @@
     "Roadmap Order": 2.0
    },
    "expected_before": {
-    "Status": "In Progress",
+    "Status": null,
     "Roadmap Stage": null
    },
-   "set": {
-    "Status": "Done"
-   },
+   "set": {},
    "approved": false,
    "flags": [
-    "closed-not-done",
-    "closure-intent-unconfirmed"
+    "closure-intent-unconfirmed",
+    "reopened-2026-10-10",
+    "held"
    ],
-   "reason": "Closed 2026-10-01T12:18Z by cursor[bot] with no closing commit or PR (timeline 'closed' event has commit_id null), no closing comment, state_reason completed, and all 9 scope checkboxes in the body still unchecked. Related slices #328-#343 merged before it. Contract: roadmap issues are closed by a person. Closure intent is unconfirmed, so this item is HELD until the maintainer confirms (then Done) or reopens it."
+   "reason": "Closed 2026-10-01T12:18Z by cursor[bot] with no closing commit or PR, no closing comment, and all 9 scope checkboxes still unchecked. Reopened 2026-10-10T20:57Z by the Fooftilly account. The native 'Item reopened' rule may have changed its Status since the baseline (In Progress), so no expected value is recorded. HELD: the tool writes nothing for #39 until the maintainer chooses its Status and Roadmap Stage and sets approved=true."
   },
   {
    "number": 40,

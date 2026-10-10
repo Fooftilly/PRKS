@@ -113,7 +113,7 @@ The settings live under Project #3 → ⋯ → **Workflows**. Each built-in work
 
 1. **Item added to project:** under **When**, select Issues and clear Pull requests. Set Status to Inbox. Save, and turn it on.
 2. **Auto-add to project:** select the `Fooftilly/PRKS` repository. Use a filter that matches both issues and PRs, for example `is:issue,pr`, with no label condition, so dependency PRs are added too. Turn it on. Auto-add only acts on items created or updated afterwards; it does not add existing ones.
-3. **One-time membership backfill:** from the inventory's item list, compare Project #3's items with the repository's open issues and PRs (and closed research issues for Research History, §7). The maintainer adds the missing items by hand, or approves a one-off list. Added open issues get Status Inbox from "Item added"; added open PRs stay without Status until their next `project-sync` event or a person sets one. "Item closed" fires only on the close event, not on add, so the backfill sets **Done by hand on every closed item it adds** (including #181, #234 and #246), and the inventory check lists any closed item whose Status is not Done. A closed issue left off the board that is reopened later is added by auto-add on that update, after "Item reopened" had no item to move, so it arrives in Inbox and is triaged like a new issue. That is intended: an issue nobody tracked on the board gets a fresh triage instead of going straight to Ready.
+3. **One-time membership backfill:** run the `backfill` stage of `scripts/project3_migrate.py` (§13) from its reviewed manifest, which compares Project #3's items with the repository's open issues and PRs and the closed research issues for Research History (§7). Added open issues get Status Inbox; added open PRs stay without Status until their next `project-sync` event or a person sets one. "Item closed" fires only on the close event, not on add, so the backfill sets **Done explicitly on every closed item it adds** (#181, #234 and #246), and its settle check keeps a late "Item added" Inbox from replacing that Done. A closed issue left off the board that is reopened later is added by auto-add on that update, after "Item reopened" had no item to move, so it arrives in Inbox and is triaged like a new issue. That is intended: an issue nobody tracked on the board gets a fresh triage instead of going straight to Ready.
 4. **Item closed**, **Pull request merged** and **Item reopened:** set the values in the table above. Where a **When** selector is shown, choose the item types listed there.
 5. **Code review approved**, **Auto-close issue** and **Pull request linked to issue:** record their current settings from the screenshots, then turn them off now. Also record the current setting of **Code changes requested**, but leave it as it is until the `PROJECT_SYNC_MODE=apply` cutover, and turn it off in that same step, so the transition always has exactly one owner. Until then the native rule may still move a Blocked PR; that is the accepted interim state.
 6. **Auto-archive items:** leave it off.
@@ -272,9 +272,13 @@ Tool: `scripts/project3_migrate.py`, tested by `tests/test_project3_migrate.py`.
 - Scope is checked against owner `Fooftilly`, project 3, node `PVT_kwHOAsc2_s4BkAo3` and content from `Fooftilly/PRKS`.
 - Field and option IDs are resolved by name. `--apply` refuses to run until Roadmap Stage, Execution and the Backlog option exist.
 - Only listed fields are written (Status, Roadmap Stage; never Execution), and only when the current value equals the manifest's expected-before value. Any other value, or a changed issue state, is reported as drift and skipped.
+- The item is re-read immediately before each field write, not only in the snapshot taken when the run starts. A Status, Roadmap Stage or issue state changed while the run is in progress is reported as drift and never overwritten.
+- In the backfill, Inbox also counts as an expected Status. The native "Item added" workflow sets Inbox on any item that auto-add or the tool adds, so whether it runs before or after the add, the item still gets its manifest Status.
+- After the writes, the tool waits `--settle-seconds` (default 30) and re-reads every item it added. If a late "Item added" Inbox replaced the Status it wrote (for example Done on #181, #234 or #246), it writes the Status again once. Any other value is reported as `verify-failed` and left alone.
 - `approved: false` items are held.
 - PRs are never set to Inbox.
-- A checkpoint makes reruns idempotent.
+- A checkpoint records the items the tool added and completed. A rerun skips completed items, so a value a person changed afterwards is never rewritten. The only exception is a late native Inbox on an item the tool added, which a rerun repairs. A checkpoint from the other stage is refused.
+- A failed call stops the run. The report and checkpoint are still written, the remaining items are marked `not-run`, and the command exits 1. A rerun continues from the live state.
 
 **Existing items (stage `migrate-existing`):**
 
@@ -283,15 +287,16 @@ Tool: `scripts/project3_migrate.py`, tested by `tests/test_project3_migrate.py`.
 | Formerly Planned epics | 23 (baseline-planned.json) | Backlog | Planned |
 | Research / Design epics | #49, #51, #52, #60, #142, #317, #318 | Backlog | Research / Design |
 | Idea items | #53, #423, #431, #472 | Inbox | Idea |
-| No Status | #35, #75, #81, #82, #87, #102 | Inbox | – |
+| No Status | #75, #81, #82, #87, #102 | Inbox | – |
+| #35 (`accepted`, not necessarily actionable) | | Backlog (maintainer decision 2026-10-10) | – |
 | #179 | | keep In Progress | Planned (body: "Active roadmap/planning item — implementation is proceeding"; accepted, Committed) |
-| #39 | | **held** (Done once closure is confirmed) | – |
+| #39 | | **held**: nothing is written | – |
 | #85, #91 | | keep Done | – |
 
 **Exceptions needing the maintainer's decision:**
-- **#39** was closed by `cursor[bot]` with no closing commit or comment, and all 9 scope boxes are unchecked. Confirm the closure, then set `approved: true` (Done), or reopen it.
-- **#35** carries `accepted`: keep Inbox, or choose Backlog or Ready.
-- **#52** has open native blockers (#45, #46). It is not moved to Blocked (§9).
+- **#39** was closed by `cursor[bot]` on 2026-10-01 with no closing commit or comment, and all 9 scope boxes unchecked. The `Fooftilly` account reopened it on 2026-10-10. Its manifest entry is held with no writes, and its current Project Status is not assumed, because the native "Item reopened" rule may have changed it. The maintainer chooses its Status and Roadmap Stage before it is approved.
+- **#52** has open native blockers (#45, #46). It stays Backlog with Roadmap Stage Research / Design; it is not moved to Blocked (§9).
+- **#179** keeps In Progress and gets Roadmap Stage Planned.
 
 **Backfill (stage `backfill`):**
 - 215 open issues → add, Status Inbox.
@@ -312,8 +317,7 @@ python scripts/project3_migrate.py backfill --report-dir /tmp/p3 --apply        
 Order:
 1. Create the fields.
 2. Run `migrate-existing`, dry-run then apply.
-3. Configure the native workflows (§5.1). Enable "Item added" before the backfill, so that auto-add cannot race a set Status.
+3. Configure the native workflows (§5.1). The backfill works whether "Item added" is enabled before or after it, because of the Inbox rule and the settle check above.
 4. Run `backfill`, dry-run then apply.
 5. Change the views (§7).
 6. Retire legacy options only after a separate approval.
-

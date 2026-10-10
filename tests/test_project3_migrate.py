@@ -32,6 +32,17 @@ class FakeAPI:
         self.content = {}
         self.calls: list[str] = []
         self.mutations: list[tuple[str, dict]] = []
+        # Called before each mutation is applied, with (name, variables).
+        self.before_mutation = None
+        # Native "Item added" for issues: None (off), "now" (applied with the
+        # add) or "late" (applied when the run sleeps to let workflows settle).
+        self.item_added = None
+        self.pending: list = []
+        self.fail_next_set = 0
+
+    def settle(self, _seconds):
+        while self.pending:
+            self.pending.pop(0)()
 
     def add_content(self, kind, number, state="OPEN", repo="Fooftilly/PRKS"):
         self.content[number] = {"__typename": kind, "id": f"N{number}", "number": number, "state": state, "repo": repo}
@@ -40,6 +51,13 @@ class FakeAPI:
         self.add_content(kind, number, state)
         self.items[f"I{number}"] = {"number": number, "archived": archived, "values": dict(values)}
 
+    def _node(self, iid):
+        it = self.items[iid]
+        c = self.content[it["number"]]
+        return {"id": iid, "isArchived": it["archived"],
+                "fieldValues": {"nodes": [{"name": v, "field": {"name": f}} for f, v in it["values"].items()] + [{}]},
+                "content": {"__typename": c["__typename"], "number": c["number"], "state": c["state"], "repository": {"nameWithOwner": c["repo"]}}}
+
     def _fid(self, name):
         return "F_" + name.replace(" ", "_")
 
@@ -47,11 +65,25 @@ class FakeAPI:
         self.calls.append(query)
         if query.lstrip().startswith("mutation"):
             name = re.search(r"\{(\w+)\(", query).group(1)
+            if self.before_mutation:
+                self.before_mutation(name, variables)
+            if name == "updateProjectV2ItemFieldValue" and self.fail_next_set:
+                self.fail_next_set -= 1
+                raise pm.MigrationError("GraphQL error: simulated outage")
             self.mutations.append((name, variables))
             if name == "addProjectV2ItemById":
                 n = int(variables["content"][1:])
-                self.items[f"I{n}"] = {"number": n, "archived": False, "values": {}}
-                return {name: {"item": {"id": f"I{n}"}}}
+                iid = f"I{n}"
+                if iid not in self.items:  # the real API returns an existing item unchanged
+                    self.items[iid] = {"number": n, "archived": False, "values": {}}
+                    if self.item_added and self.content[n]["__typename"] == "Issue":
+                        def native(item=self.items[iid]):
+                            item["values"]["Status"] = "Inbox"
+                        if self.item_added == "now":
+                            native()
+                        else:
+                            self.pending.append(native)
+                return {name: {"item": {"id": iid}}}
             item = self.items[variables["item"]]
             field = next(f for f in self.fields if self._fid(f) == variables["field"])
             item["values"][field] = variables["option"].split(":", 1)[1]
@@ -60,13 +92,13 @@ class FakeAPI:
             c = self.content[variables["number"]]
             return {"repository": {"issueOrPullRequest": {k: c[k] for k in ("__typename", "id", "number", "state")}}}
         if "items(first" in query:
-            nodes = []
-            for iid, it in self.items.items():
-                c = self.content[it["number"]]
-                nodes.append({"id": iid, "isArchived": it["archived"],
-                              "fieldValues": {"nodes": [{"name": v, "field": {"name": f}} for f, v in it["values"].items()] + [{}]},
-                              "content": {"__typename": c["__typename"], "number": c["number"], "state": c["state"], "repository": {"nameWithOwner": c["repo"]}}})
+            nodes = [self._node(iid) for iid in self.items]
             return {"user": {"projectV2": {"items": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": nodes}}}}
+        if "node(id" in query:
+            iid = variables["id"]
+            if iid not in self.items:
+                return {"node": None}
+            return {"node": dict(self._node(iid), project={"id": pm.PROJECT_ID})}
         fields = [{"id": self._fid(n), "name": n, "dataType": "SINGLE_SELECT", "options": [{"id": f"{n}:{o}", "name": o} for o in opts]} for n, opts in self.fields.items()]
         return {"user": {"projectV2": {"id": self.project_id, "number": 3, "owner": {"login": "Fooftilly"}, "fields": {"nodes": fields}}}}
 
@@ -95,7 +127,8 @@ class Base(unittest.TestCase):
 
     def run_stage(self, stage, items, apply=False, **kw):
         return pm.run(stage, manifest(self.tmp, stage, items, **kw), apply=apply, transport=self.api,
-                      checkpoint=self.tmp / "ck.json", report_dir=self.tmp / "out", out=io.StringIO())
+                      checkpoint=self.tmp / "ck.json", report_dir=self.tmp / "out", out=io.StringIO(),
+                      settle_seconds=0, sleep=self.api.settle)
 
 
 class DryRunAndGuards(Base):
@@ -210,6 +243,156 @@ class Backfill(Base):
             self.run_stage("backfill", [{"number": 1, "type": "Issue", "state": "OPEN", "set": {"Execution": "Agent"}}])
 
 
+def research(n=181):
+    return {"number": n, "type": "Issue", "state": "CLOSED", "expected_before": {"Status": None}, "set": {"Status": "Done"}}
+
+
+def open_issue(n=500):
+    return {"number": n, "type": "Issue", "state": "OPEN", "expected_before": {"Status": None}, "set": {"Status": "Inbox"}}
+
+
+class DriftDuringTheRun(Base):
+    """The snapshot is minutes old by the time a late item is written."""
+
+    def test_a_status_changed_after_the_snapshot_is_not_overwritten(self):
+        self.api.put("Issue", 38, Status="Ready")
+        self.api.put("Issue", 40, Status="Ready")
+
+        def person(name, variables):
+            if variables.get("item") == "I38":
+                self.api.items["I40"]["values"]["Status"] = "In Progress"
+        self.api.before_mutation = person
+        r = self.run_stage("migrate-existing", [epic(38), epic(40)], apply=True)
+        self.assertEqual(r["counts"], {"changed": 1, "drift": 1})
+        self.assertEqual(self.api.items["I40"]["values"], {"Status": "In Progress"})
+        self.assertFalse(any(v.get("item") == "I40" for _, v in self.api.mutations))
+
+    def test_a_field_changed_between_two_writes_stops_the_item(self):
+        self.api.put("Issue", 38, Status="Ready")
+
+        def person(name, variables):
+            if variables.get("field") == "F_Status":
+                self.api.items["I38"]["values"]["Roadmap Stage"] = "Parked"
+        self.api.before_mutation = person
+        r = self.run_stage("migrate-existing", [epic(38)], apply=True)
+        self.assertEqual(r["counts"], {"drift": 1})
+        self.assertEqual(self.api.items["I38"]["values"], {"Status": "Backlog", "Roadmap Stage": "Parked"})
+
+    def test_an_issue_closed_during_the_run_is_not_written(self):
+        self.api.put("Issue", 38, Status="Ready")
+        self.api.put("Issue", 40, Status="Ready")
+
+        def close(name, variables):
+            if variables.get("item") == "I38":
+                self.api.content[40]["state"] = "CLOSED"
+        self.api.before_mutation = close
+        r = self.run_stage("migrate-existing", [epic(38), epic(40)], apply=True)
+        self.assertEqual(r["counts"], {"changed": 1, "drift": 1})
+        self.assertEqual(self.api.items["I40"]["values"], {"Status": "Ready"})
+
+
+class NativeWorkflowRaces(Base):
+    def test_a_late_item_added_inbox_does_not_replace_done_on_closed_research(self):
+        self.api.item_added = "late"
+        self.api.add_content("Issue", 181, state="CLOSED")
+        r = self.run_stage("backfill", [research()], apply=True)
+        self.assertEqual(self.api.items["I181"]["values"], {"Status": "Done"})
+        self.assertEqual(r["counts"], {"changed": 1})
+        self.assertTrue(r["ok"])
+        self.assertIn("late native Inbox", r["items"][0]["detail"])
+
+    def test_an_immediate_item_added_inbox_is_the_expected_entry_state(self):
+        self.api.item_added = "now"
+        self.api.add_content("Issue", 181, state="CLOSED")
+        self.api.add_content("Issue", 500)
+        r = self.run_stage("backfill", [research(), open_issue()], apply=True)
+        self.assertEqual(r["counts"], {"changed": 2})
+        self.assertEqual(self.api.items["I181"]["values"], {"Status": "Done"})
+        self.assertEqual(self.api.items["I500"]["values"], {"Status": "Inbox"})
+
+    def test_auto_add_before_the_tools_add_keeps_a_status_set_meanwhile(self):
+        self.api.add_content("Issue", 181, state="CLOSED")
+
+        def auto_add_then_person(name, variables):
+            if name == "addProjectV2ItemById" and "I181" not in self.api.items:
+                self.api.items["I181"] = {"number": 181, "archived": False, "values": {"Status": "In Progress"}}
+        self.api.before_mutation = auto_add_then_person
+        r = self.run_stage("backfill", [research()], apply=True)
+        self.assertEqual(r["counts"], {"drift": 1})
+        self.assertEqual(self.api.items["I181"]["values"], {"Status": "In Progress"})
+        self.assertEqual([m[0] for m in self.api.mutations], ["addProjectV2ItemById"])
+
+    def test_auto_add_with_native_inbox_before_the_tools_add_still_ends_in_done(self):
+        self.api.add_content("Issue", 181, state="CLOSED")
+
+        def auto_add(name, variables):
+            if name == "addProjectV2ItemById" and "I181" not in self.api.items:
+                self.api.items["I181"] = {"number": 181, "archived": False, "values": {"Status": "Inbox"}}
+        self.api.before_mutation = auto_add
+        r = self.run_stage("backfill", [research()], apply=True)
+        self.assertEqual(r["counts"], {"changed": 1})
+        self.assertEqual(self.api.items["I181"]["values"], {"Status": "Done"})
+
+    def test_a_person_changing_an_added_item_while_settling_is_reported_not_overwritten(self):
+        self.api.add_content("Issue", 181, state="CLOSED")
+        self.api.pending.append(lambda: self.api.items["I181"]["values"].update(Status="Ready"))
+        self.api.before_mutation = None
+        r = self.run_stage("backfill", [research()], apply=True)
+        self.assertEqual(r["counts"], {"verify-failed": 1})
+        self.assertFalse(r["ok"])
+        self.assertEqual(self.api.items["I181"]["values"], {"Status": "Ready"})
+
+    def test_a_native_inbox_after_the_run_is_repaired_by_a_rerun_and_nothing_else_is(self):
+        self.api.add_content("Issue", 181, state="CLOSED")
+        self.api.add_content("Issue", 246, state="CLOSED")
+        self.run_stage("backfill", [research(181), research(246)], apply=True)
+        self.api.items["I181"]["values"]["Status"] = "Inbox"   # native, much later
+        self.api.items["I246"]["values"]["Status"] = "Ready"   # a person
+        r = self.run_stage("backfill", [research(181), research(246)], apply=True)
+        self.assertEqual(r["counts"], {"repaired": 1, "checkpointed": 1})
+        self.assertEqual(self.api.items["I181"]["values"], {"Status": "Done"})
+        self.assertEqual(self.api.items["I246"]["values"], {"Status": "Ready"})
+
+
+class PartialFailure(Base):
+    def test_a_failed_write_after_an_add_stops_reports_and_a_rerun_completes(self):
+        self.api.item_added = "now"
+        self.api.add_content("Issue", 181, state="CLOSED")
+        self.api.add_content("Issue", 500)
+        self.api.fail_next_set = 1
+        r = self.run_stage("backfill", [research(), open_issue()], apply=True)
+        self.assertEqual(r["counts"], {"failed": 1, "not-run": 1})
+        self.assertFalse(r["ok"])
+        self.assertTrue((self.tmp / "out" / "backfill.json").exists())
+        self.assertEqual(json.loads((self.tmp / "ck.json").read_text())["added"], ["Issue#181"])
+        self.assertNotIn("I500", self.api.items)
+        r = self.run_stage("backfill", [research(), open_issue()], apply=True)
+        self.assertEqual(r["counts"], {"changed": 2})
+        self.assertTrue(r["ok"])
+        self.assertEqual(self.api.items["I181"]["values"], {"Status": "Done"})
+
+    def test_main_exits_non_zero_after_a_failure(self):
+        self.api.add_content("Issue", 181, state="CLOSED")
+        self.api.fail_next_set = 1
+        rc = pm.main(["backfill", "--apply", "--settle-seconds", "0", "--manifest", str(manifest(self.tmp, "backfill", [research()])),
+                      "--report-dir", str(self.tmp / "o")], env={}, transport=self.api)
+        self.assertEqual(rc, 1)
+
+    def test_a_checkpoint_from_another_stage_is_refused(self):
+        (self.tmp / "ck.json").write_text(json.dumps({"stage": "backfill", "done": ["Issue#38"]}))
+        self.api.put("Issue", 38, Status="Ready")
+        with self.assertRaisesRegex(pm.MigrationError, "checkpoint"):
+            self.run_stage("migrate-existing", [epic()], apply=True)
+
+    def test_dry_run_writes_no_checkpoint_and_does_not_wait(self):
+        self.api.add_content("Issue", 181, state="CLOSED")
+        waits = []
+        pm.run("backfill", manifest(self.tmp, "backfill", [research()]), apply=False, transport=self.api,
+               checkpoint=self.tmp / "ck.json", report_dir=self.tmp / "out", out=io.StringIO(), sleep=waits.append)
+        self.assertEqual((waits, self.api.mutations), ([], []))
+        self.assertFalse((self.tmp / "ck.json").exists())
+
+
 class NeverMutations(unittest.TestCase):
     def test_only_allowlisted_mutations_exist(self):
         text = _SCRIPT.read_text()
@@ -217,6 +400,12 @@ class NeverMutations(unittest.TestCase):
         self.assertEqual(names, set(pm.ALLOWED_MUTATIONS))
         for bad in ("deleteProjectV2", "archiveProjectV2Item", "clearProjectV2ItemFieldValue", "closeIssue", "mergePullRequest",
                     "reopenIssue", "deleteProjectV2Field", "updateProjectV2Field(", "addPullRequestReview", "enablePullRequestAutoMerge"):
+            self.assertNotIn(bad, text)
+
+    def test_cannot_reach_project_sync_settings_or_rest(self):
+        text = _SCRIPT.read_text()
+        self.assertEqual(re.findall(r"https://[^\s\"']+", text), ["https://api.github.com/graphql"])
+        for bad in ("PROJECT_SYNC", "actions/variables", "actions/secrets", "updateRepository", "createIssue", "updateIssue("):
             self.assertNotIn(bad, text)
 
     def test_graphql_wrapper_refuses_other_mutations(self):
@@ -235,6 +424,39 @@ class NeverMutations(unittest.TestCase):
         existing = pm.load_manifest(pm.DEFAULT_MANIFEST["migrate-existing"], "migrate-existing")["items"]
         self.assertEqual(len(existing), 44)
         self.assertFalse(next(i for i in existing if i["number"] == 39)["approved"])
+
+
+class CommittedManifests(unittest.TestCase):
+    """Pins the counts and the maintainer's mapping decisions (2026-10-10)."""
+
+    def setUp(self):
+        self.existing = {i["number"]: i for i in pm.load_manifest(pm.DEFAULT_MANIFEST["migrate-existing"], "migrate-existing")["items"]}
+        self.backfill = pm.load_manifest(pm.DEFAULT_MANIFEST["backfill"], "backfill")["items"]
+
+    def test_counts(self):
+        self.assertEqual(len(self.existing), 44)
+        self.assertEqual(sum(i["baseline"]["Work Type"] == "Epic" for i in self.existing.values()), 35)
+        planned = json.loads((pm._DOCS / "baseline-planned.json").read_text())
+        planned_numbers = sorted(i["number"] if isinstance(i, dict) else i for i in planned["items"])
+        self.assertEqual(planned_numbers, sorted(n for n, i in self.existing.items() if i["baseline"]["Status"] == "Planned"))
+        self.assertEqual(len(planned_numbers), 23)
+        self.assertEqual(len(self.backfill), 230)
+        kinds = {}
+        for i in self.backfill:
+            kinds[(i["type"], i["state"])] = kinds.get((i["type"], i["state"]), 0) + 1
+        self.assertEqual(kinds, {("Issue", "OPEN"): 215, ("PullRequest", "OPEN"): 12, ("Issue", "CLOSED"): 3})
+        self.assertFalse({(i["type"], i["number"]) for i in self.backfill} & {("Issue", n) for n in self.existing})
+
+    def test_maintainer_decisions(self):
+        self.assertEqual(self.existing[35]["set"], {"Status": "Backlog"})
+        self.assertEqual(self.existing[52]["set"], {"Status": "Backlog", "Roadmap Stage": "Research / Design"})
+        self.assertEqual(self.existing[179]["set"], {"Roadmap Stage": "Planned"})
+        self.assertEqual(self.existing[179]["expected_before"]["Status"], "In Progress")
+        self.assertFalse(self.existing[39]["approved"])
+        self.assertEqual(self.existing[39]["set"], {})
+        closed_research = sorted(i["number"] for i in self.backfill if i["state"] == "CLOSED")
+        self.assertEqual(closed_research, [181, 234, 246])
+        self.assertTrue(all(i["set"] == {} for i in self.backfill if i["type"] == "PullRequest"))
 
 
 class ProjectSyncLeavesBacklogAlone(unittest.TestCase):

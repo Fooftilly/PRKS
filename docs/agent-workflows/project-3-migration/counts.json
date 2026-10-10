@@ -15,19 +15,13 @@
    "status": "Inbox",
    "stage": null,
    "approved": true,
-   "count": 6
+   "count": 5
   },
   {
    "status": "Backlog",
    "stage": "Planned",
    "approved": true,
    "count": 23
-  },
-  {
-   "status": "Done",
-   "stage": null,
-   "approved": false,
-   "count": 1
   },
   {
    "status": "Backlog",
@@ -51,6 +45,18 @@
    "status": null,
    "stage": "Planned",
    "approved": true,
+   "count": 1
+  },
+  {
+   "status": "Backlog",
+   "stage": null,
+   "approved": true,
+   "count": 1
+  },
+  {
+   "status": null,
+   "stage": null,
+   "approved": false,
    "count": 1
   }
  ],

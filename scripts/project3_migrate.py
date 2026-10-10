@@ -19,10 +19,22 @@ Safety contract (enforced here, not only documented):
   option exist, and every option the manifest uses exists.
 * Drift: a field is written only when its current value equals the
   manifest's ``expected_before`` value (None = empty) and the issue/PR state
-  matches. Otherwise the item is skipped and reported. Fields the manifest
-  does not list are never touched. Items with ``approved: false`` are held.
+  matches. The item is re-read immediately before every write, not only in
+  the initial snapshot, so a change made while the run is in progress is
+  never overwritten. In the backfill stage Inbox also counts as an expected
+  Status, because the native "Item added" workflow sets it on any item that
+  auto-add or this tool adds. Otherwise the item is skipped and reported.
+  Fields the manifest does not list are never touched. Items with
+  ``approved: false`` are held.
 * PR items are never set to Inbox (manifest validation).
-* A checkpoint file records completed items so reruns are idempotent.
+* After the writes, every item this run added is re-read once the native
+  workflows have had ``--settle-seconds`` to run. A late "Item added" Inbox
+  that replaced the written Status is written over once; any other change
+  is reported as ``verify-failed`` and left alone.
+* A checkpoint file records added and completed items, so reruns are
+  idempotent and a completed item is not rewritten after a person changes
+  it. A rerun only repairs a late native Inbox on an item this tool added.
+  A failure stops the run, writes the report and checkpoint, and exits 1.
 
 Token: ``PROJECT3_MIGRATION_TOKEN`` or ``GH_TOKEN`` / ``GITHUB_TOKEN``. Never
 printed. Needs the classic ``project`` scope for --apply (read for dry-run).
@@ -33,6 +45,8 @@ import argparse
 import json
 import os
 import sys
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -45,6 +59,9 @@ REQUIRED_FIELDS = ("Status", "Roadmap Stage", "Execution")
 REQUIRED_STATUS_OPTIONS = ("Backlog",)
 ALLOWED_MUTATIONS = ("addProjectV2ItemById", "updateProjectV2ItemFieldValue")
 STAGES = ("migrate-existing", "backfill")
+# The Status the native "Item added" workflow gives a newly added issue (§5).
+NATIVE_ENTRY_STATUS = "Inbox"
+DEFAULT_SETTLE_SECONDS = 30.0
 _DOCS = Path(__file__).resolve().parents[1] / "docs" / "agent-workflows" / "project-3-migration"
 DEFAULT_MANIFEST = {"migrate-existing": _DOCS / "existing-items.json", "backfill": _DOCS / "backfill.json"}
 
@@ -101,10 +118,14 @@ class GraphQL:
 PROJECT_Q = """query($owner:String!,$number:Int!){user(login:$owner){projectV2(number:$number){id number owner{... on User{login}}
 fields(first:50){nodes{... on ProjectV2FieldCommon{id name dataType} ... on ProjectV2SingleSelectField{options{id name}}}}}}}"""
 
-ITEMS_Q = """query($owner:String!,$number:Int!,$after:String){user(login:$owner){projectV2(number:$number){items(first:100,after:$after){
-pageInfo{hasNextPage endCursor} nodes{id isArchived
+ITEM_FIELDS = """id isArchived
 fieldValues(first:40){nodes{... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2FieldCommon{name}}}}}
-content{__typename ... on Issue{number state repository{nameWithOwner}} ... on PullRequest{number state repository{nameWithOwner}}}}}}}}"""
+content{__typename ... on Issue{number state repository{nameWithOwner}} ... on PullRequest{number state repository{nameWithOwner}}}"""
+
+ITEMS_Q = ("query($owner:String!,$number:Int!,$after:String){user(login:$owner){projectV2(number:$number){"
+           "items(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{" + ITEM_FIELDS + "}}}}}")
+
+ITEM_Q = "query($id:ID!){node(id:$id){... on ProjectV2Item{project{id} " + ITEM_FIELDS + "}}}"
 
 CONTENT_Q = """query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issueOrPullRequest(number:$number){
 __typename ... on Issue{id number state} ... on PullRequest{id number state}}}}"""
@@ -139,6 +160,17 @@ def load_manifest(path: Path, stage: str) -> dict:
     return data
 
 
+def _parse_item(node: dict) -> Optional[tuple[tuple[str, int], dict]]:
+    content = node.get("content") or {}
+    if content.get("__typename") not in ("Issue", "PullRequest"):
+        return None
+    if content["repository"]["nameWithOwner"] != REPOSITORY:
+        return None
+    values = {v["field"]["name"]: v["name"] for v in node["fieldValues"]["nodes"] if v and v.get("field")}
+    return (content["__typename"], content["number"]), {
+        "id": node["id"], "state": content["state"], "archived": node["isArchived"], "values": values}
+
+
 class Project:
     def __init__(self, gql: GraphQL) -> None:
         self.gql = gql
@@ -154,17 +186,20 @@ class Project:
         while True:
             page = gql.query(ITEMS_Q, {"owner": OWNER, "number": PROJECT_NUMBER, "after": after})["user"]["projectV2"]["items"]
             for node in page["nodes"]:
-                content = node.get("content") or {}
-                if content.get("__typename") not in ("Issue", "PullRequest"):
-                    continue
-                if content["repository"]["nameWithOwner"] != REPOSITORY:
-                    continue
-                values = {v["field"]["name"]: v["name"] for v in node["fieldValues"]["nodes"] if v and v.get("field")}
-                self.items[(content["__typename"], content["number"])] = {
-                    "id": node["id"], "state": content["state"], "archived": node["isArchived"], "values": values}
+                parsed = _parse_item(node)
+                if parsed:
+                    self.items[parsed[0]] = parsed[1]
             if not page["pageInfo"]["hasNextPage"]:
                 break
             after = page["pageInfo"]["endCursor"]
+
+    def refresh(self, item_id: str) -> Optional[dict]:
+        """Re-read one item right before a write or a verification."""
+        node = self.gql.query(ITEM_Q, {"id": item_id}).get("node")
+        if not node or (node.get("project") or {}).get("id") != PROJECT_ID:
+            return None
+        parsed = _parse_item(node)
+        return parsed[1] if parsed else None
 
     def missing_requirements(self, manifest: dict) -> list[str]:
         problems = [f"field {f!r} missing" for f in REQUIRED_FIELDS if f not in self.fields]
@@ -177,21 +212,62 @@ class Project:
         return sorted(set(problems))
 
 
+class Checkpoint:
+    """Items this tool added and items it completed, per stage."""
+
+    def __init__(self, path: Path, stage: str) -> None:
+        self.path = path
+        self.stage = stage
+        self.added: set[str] = set()
+        self.done: set[str] = set()
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if data.get("stage") != stage or data.get("project_id", PROJECT_ID) != PROJECT_ID:
+                raise MigrationError(f"checkpoint {path} is for stage {data.get('stage')!r}, not {stage!r}")
+            self.added = set(data.get("added", []))
+            self.done = set(data["done"])
+
+    def save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_name(self.path.name + ".tmp")
+        tmp.write_text(json.dumps({"stage": self.stage, "project_id": PROJECT_ID,
+                                   "added": sorted(self.added), "done": sorted(self.done)}, indent=1))
+        tmp.replace(self.path)
+
+
 def _state_ok(item: dict, live_state: str) -> bool:
     want = item.get("github_state") or item.get("state")
     return want is None or want == live_state or (want == "CLOSED" and live_state == "MERGED")
 
 
-def plan_item(project: Project, item: dict, stage: str, done: set) -> dict:
+def _expected(item: dict, field: str, stage: str) -> set:
+    allowed = {item.get("expected_before", {}).get(field)}
+    if stage == "backfill" and field == "Status":
+        allowed.add(NATIVE_ENTRY_STATUS)
+    return allowed
+
+
+def _late_native_inbox(key: str, item: dict, values: dict, checkpoint: Checkpoint) -> bool:
+    target = item.get("set", {}).get("Status")
+    return (key in checkpoint.added and target is not None and target != NATIVE_ENTRY_STATUS
+            and values.get("Status") == NATIVE_ENTRY_STATUS)
+
+
+def plan_item(project: Project, item: dict, stage: str, checkpoint: Checkpoint) -> dict:
     key = f"{item['type']}#{item['number']}"
     rec: dict[str, Any] = {"item": key, "title": item.get("title", ""), "set": item.get("set", {}), "writes": [], "outcome": None, "detail": ""}
-    if key in done:
-        rec.update(outcome="checkpointed", detail="already completed in an earlier run")
-        return rec
     if not item.get("approved", True):
         rec.update(outcome="held", detail="approved=false in manifest")
         return rec
     live = project.items.get((item["type"], item["number"]))
+    if key in checkpoint.done:
+        if live is not None and _late_native_inbox(key, item, live["values"], checkpoint):
+            rec.update(outcome="would-change", add=False, before={"Status": NATIVE_ENTRY_STATUS},
+                       writes=[("Status", item["set"]["Status"])], repair=True,
+                       detail="late native Inbox replaced the Status this tool set")
+            return rec
+        rec.update(outcome="checkpointed", detail="already completed in an earlier run")
+        return rec
     if live is None and stage == "migrate-existing":
         rec.update(outcome="drift", detail="item is no longer on the project")
         return rec
@@ -204,14 +280,13 @@ def plan_item(project: Project, item: dict, stage: str, done: set) -> dict:
     if live is not None and not _state_ok(item, live["state"]):
         rec.update(outcome="drift", detail=f"GitHub state is {live['state']}, manifest expects {item.get('github_state') or item.get('state')}")
         return rec
-    expected = item.get("expected_before", {})
     drift = []
     for field, target in item.get("set", {}).items():
         current = before.get(field)
         if current == target:
             continue
-        if current != expected.get(field):
-            drift.append(f"{field}: current {current!r}, expected {expected.get(field)!r}")
+        if current not in _expected(item, field, stage):
+            drift.append(f"{field}: current {current!r}, expected {item.get('expected_before', {}).get(field)!r}")
             continue
         rec["writes"].append((field, target))
     if drift:
@@ -227,48 +302,118 @@ def plan_item(project: Project, item: dict, stage: str, done: set) -> dict:
     return rec
 
 
-def apply_item(project: Project, item: dict, rec: dict) -> None:
+def _set(project: Project, item_id: str, field: str, target: str) -> None:
+    f = project.fields[field]
+    project.gql.mutate("updateProjectV2ItemFieldValue", SET_M,
+                       {"project": PROJECT_ID, "item": item_id, "field": f["id"], "option": f["options"][target]})
+
+
+def apply_item(project: Project, item: dict, rec: dict, stage: str, checkpoint: Checkpoint) -> None:
+    """Write one item. Every field is re-checked against a fresh read first."""
     gql = project.gql
-    item_id = None
+    key = rec["item"]
     live = project.items.get((item["type"], item["number"]))
     if rec.get("add"):
         owner, name = REPOSITORY.split("/")
         content = gql.query(CONTENT_Q, {"owner": owner, "name": name, "number": item["number"]})["repository"]["issueOrPullRequest"]
         if not content or content["__typename"] != item["type"]:
-            raise MigrationError(f"{rec['item']}: content type mismatch")
+            raise MigrationError(f"{key}: content type mismatch")
         if not _state_ok(item, content["state"]):
             rec.update(outcome="drift", detail=f"GitHub state is {content['state']}", writes=[])
             return
+        # Returns the existing item if native auto-add got there first.
         item_id = gql.mutate("addProjectV2ItemById", ADD_M, {"project": PROJECT_ID, "content": content["id"]})["addProjectV2ItemById"]["item"]["id"]
+        checkpoint.added.add(key)
+        checkpoint.save()
     else:
         item_id = live["id"]
-    for field, target in rec["writes"]:
-        f = project.fields[field]
-        gql.mutate("updateProjectV2ItemFieldValue", SET_M, {"project": PROJECT_ID, "item": item_id, "field": f["id"], "option": f["options"][target]})
-    rec["outcome"] = "changed"
+    rec["item_id"] = item_id
+    written = []
+    for field, target in item.get("set", {}).items():
+        fresh = project.refresh(item_id)
+        if fresh is None or fresh["archived"]:
+            rec.update(outcome="drift", detail="item was removed or archived during the run", writes=written)
+            return
+        if not _state_ok(item, fresh["state"]):
+            rec.update(outcome="drift", detail=f"GitHub state changed to {fresh['state']} during the run", writes=written)
+            return
+        current = fresh["values"].get(field)
+        if current == target:
+            continue
+        allowed = _expected(item, field, stage)
+        if rec.get("repair"):
+            allowed = {NATIVE_ENTRY_STATUS}
+        if current not in allowed:
+            rec.update(outcome="drift", detail=f"{field} changed to {current!r} during the run; not overwritten", writes=written)
+            return
+        _set(project, item_id, field, target)
+        written.append((field, target))
+    rec["writes"] = written
+    rec["outcome"] = "changed" if written or rec.get("add") else "unchanged"
+    if rec.get("repair"):
+        rec["outcome"] = "repaired" if written else "unchanged"
 
 
-def run(stage: str, manifest_path: Path, *, apply: bool, transport: Transport, checkpoint: Path, report_dir: Path, out=sys.stdout) -> dict:
+def verify_added(project: Project, manifest_items: dict, records: list, checkpoint: Checkpoint) -> None:
+    """Undo a late native "Item added" Inbox once; report anything else."""
+    for rec in records:
+        if rec["outcome"] not in ("changed", "repaired") or rec["item"] not in checkpoint.added:
+            continue
+        item = manifest_items[rec["item"]]
+        fresh = project.refresh(rec["item_id"])
+        values = fresh["values"] if fresh else {}
+        if _late_native_inbox(rec["item"], item, values, checkpoint):
+            _set(project, rec["item_id"], "Status", item["set"]["Status"])
+            fresh = project.refresh(rec["item_id"])
+            values = fresh["values"] if fresh else {}
+            rec["detail"] = "late native Inbox written over"
+        wrong = {f: values.get(f) for f, t in item.get("set", {}).items() if values.get(f) != t}
+        if wrong:
+            rec.update(outcome="verify-failed", detail=f"after settling: {wrong}; left as is")
+            checkpoint.done.discard(rec["item"])
+
+
+def run(stage: str, manifest_path: Path, *, apply: bool, transport: Transport, checkpoint: Path, report_dir: Path,
+        out=sys.stdout, settle_seconds: float = DEFAULT_SETTLE_SECONDS, sleep: Callable[[float], None] = time.sleep) -> dict:
     manifest = load_manifest(manifest_path, stage)
     gql = GraphQL(transport, allow_mutations=apply)
     project = Project(gql)
     missing = project.missing_requirements(manifest)
     if apply and missing:
         raise MigrationError("refusing --apply: " + "; ".join(missing))
-    done = set(json.loads(checkpoint.read_text())["done"]) if checkpoint.exists() else set()
-    records = []
+    ck = Checkpoint(checkpoint, stage)
+    by_key = {f"{i['type']}#{i['number']}": i for i in manifest["items"]}
+    records: list[dict] = []
+    failed = False
     for item in manifest["items"]:
-        rec = plan_item(project, item, stage, done)
-        if apply and rec["outcome"] == "would-change":
-            apply_item(project, item, rec)
-            if rec["outcome"] == "changed":
-                done.add(rec["item"])
-                checkpoint.write_text(json.dumps({"stage": stage, "done": sorted(done)}, indent=1))
+        rec = plan_item(project, item, stage, ck)
         records.append(rec)
+        if failed:
+            rec.update(outcome="not-run", detail="stopped after an earlier failure", writes=[])
+            continue
+        if apply and rec["outcome"] == "would-change":
+            try:
+                apply_item(project, item, rec, stage, ck)
+            except (MigrationError, urllib.error.URLError, OSError, KeyError, TypeError) as exc:
+                rec.update(outcome="failed", detail=f"{type(exc).__name__}: {exc}")
+                failed = True
+                continue
+            if rec["outcome"] in ("changed", "repaired"):
+                ck.done.add(rec["item"])
+                ck.save()
+    if apply and not failed and any(r["outcome"] in ("changed", "repaired") and r["item"] in ck.added for r in records):
+        sleep(settle_seconds)
+        try:
+            verify_added(project, by_key, records, ck)
+        except (MigrationError, urllib.error.URLError, OSError, KeyError, TypeError) as exc:
+            failed = True
+            print(f"verification failed: {type(exc).__name__}: {exc}", file=out)
+        ck.save()
     counts: dict[str, int] = {}
     for r in records:
         counts[r["outcome"]] = counts.get(r["outcome"], 0) + 1
-    report = {"stage": stage, "mode": "apply" if apply else "dry-run", "requirements_missing": missing, "counts": counts, "items": records}
+    report = {"stage": stage, "mode": "apply" if apply else "dry-run", "requirements_missing": missing, "counts": counts,
+              "ok": not failed and "failed" not in counts and "verify-failed" not in counts, "items": records}
     report_dir.mkdir(parents=True, exist_ok=True)
     (report_dir / f"{stage}.json").write_text(json.dumps(report, indent=1, ensure_ascii=False, default=list))
     lines = [f"# Project #3 {stage} ({report['mode']})", "", "Missing requirements: " + (", ".join(missing) or "none"), "",
@@ -291,6 +436,8 @@ def main(argv: Optional[list[str]] = None, env: Optional[dict] = None, transport
     parser.add_argument("--apply", action="store_true", help="perform writes (default: dry-run)")
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--report-dir", type=Path, default=Path("project3-migration-report"))
+    parser.add_argument("--settle-seconds", type=float, default=DEFAULT_SETTLE_SECONDS,
+                        help="wait before re-reading added items for a late native Inbox (default: %(default)s)")
     args = parser.parse_args(argv)
     manifest = args.manifest or DEFAULT_MANIFEST[args.stage]
     checkpoint = args.checkpoint or args.report_dir / f"{args.stage}.checkpoint.json"
@@ -301,11 +448,12 @@ def main(argv: Optional[list[str]] = None, env: Optional[dict] = None, transport
             return 2
         transport = http_transport(token)
     try:
-        run(args.stage, manifest, apply=args.apply, transport=transport, checkpoint=checkpoint, report_dir=args.report_dir)
+        report = run(args.stage, manifest, apply=args.apply, transport=transport, checkpoint=checkpoint,
+                     report_dir=args.report_dir, settle_seconds=args.settle_seconds)
     except MigrationError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    return 0
+    return 0 if report["ok"] else 1
 
 
 if __name__ == "__main__":
