@@ -351,6 +351,8 @@ async function aVerifierReadOlderThanAFolderSweepIsNotCached() {
     fields.private_notes = { revision: 4 };
     const ok = body => ({ ok: true, status: 200, json: async () => body });
     let releaseFolder = null;
+    let folderStarted = null;
+    const folderInFlight = new Promise(resolve => { folderStarted = resolve; });
     const folderPolicies = [];
     const runtime = createPrksOfflineRuntime({
         store,
@@ -359,6 +361,7 @@ async function aVerifierReadOlderThanAFolderSweepIsNotCached() {
             folderPolicies.push(policy);
             return new Promise(resolve => {
                 releaseFolder = () => resolve(ok({ id: FOLDER, title: "Before the move", private_notes: "Call" }));
+                folderStarted();
             });
         },
         setTimeout: () => 0, clearTimeout: () => {},
@@ -370,7 +373,7 @@ async function aVerifierReadOlderThanAFolderSweepIsNotCached() {
     try {
         const verified = globalThis.prksVerifyFolderNoteBase(FOLDER,
             { source: "server", value: "Call", revision: 4 });
-        for (let i = 0; i < 8 && !releaseFolder; i++) await tick();
+        await folderInFlight;
         assert.equal(typeof releaseFolder, "function", "the verifier's Folder GET is in flight");
         assert.deepEqual(folderPolicies, [{ dedupe: false }], "and it is its own request");
         runtime.markDomainChanged("folders", { entityKinds: ["folder"], listKeys: ["folders:index"] });
