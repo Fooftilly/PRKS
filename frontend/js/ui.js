@@ -3487,8 +3487,14 @@ function prksPrivateNotesRetryStillDirty(live) {
 // still stops the previous retry listener for the same note.
 const prksPrivateNoteBusyRetryStops = new WeakMap();
 
-function prksSchedulePrivateNoteBusyRetry(editor, token) {
+/* Behind another pane's or tab's row (`foreign`), waiting backs off from 2 s to 30 s;
+ * that row's acknowledgement, which this tab may never hear, is otherwise the cue. */
+const PRKS_PRIVATE_NOTE_BUSY_RETRY_MS = 400;
+const PRKS_PRIVATE_NOTE_FOREIGN_RETRY_MS = [2000, 4000, 8000, 16000, 30000];
+
+function prksSchedulePrivateNoteBusyRetry(editor, token, delayMs) {
     if (!editor || !editor.ctx || editor.ctx.destroyed) return;
+    const delay = Number.isFinite(delayMs) && delayMs > 0 ? delayMs : PRKS_PRIVATE_NOTE_BUSY_RETRY_MS;
     const timerKey = 'privateNotesBusyRetry:' + editor.key;
     editor.ctx.clearTimer(timerKey);
     let retryStops = prksPrivateNoteBusyRetryStops.get(editor.ctx);
@@ -3545,7 +3551,7 @@ function prksSchedulePrivateNoteBusyRetry(editor, token) {
         }
         stopRetry();
         tryAgain();
-    }, 400);
+    }, delay);
     editor.ctx.setTimer(timerKey, timer);
 }
 
@@ -3672,7 +3678,8 @@ function prksEnqueuePrivateNoteSave(family, editor) {
     session.saveError = false;
     session.retired = false;
     session.updatedAt = Date.now();
-    prksPrivateNotesSetStatus(editor, 'Saving…');
+    /* A retry behind another pane's row keeps saying it waits, not "Saving…" each time. */
+    if (!session.foreignWaits) prksPrivateNotesSetStatus(editor, 'Saving…');
     /* The queue never holds a body newer than recovery storage. */
     const beforeSave = prksPrivateNoteRecoveryHook(family, 'beforeSave');
     if (beforeSave) beforeSave(session);
@@ -3700,6 +3707,8 @@ function prksEnqueuePrivateNoteSave(family, editor) {
             const hasNewerDraft = session.editGeneration > session.latestSaveEditGeneration;
             session.settledSaveToken = token;
             session.promise = null;
+            const foreign = code === 'scope_busy' && result.foreign === true;
+            session.foreignWaits = foreign && !hasNewerDraft ? (session.foreignWaits || 0) + 1 : 0;
             if (code === 'scope_busy' && !hasNewerDraft) {
                 // Park-flush may still be in flight; keep this body and retry.
                 session.saveError = false;
@@ -3714,7 +3723,9 @@ function prksEnqueuePrivateNoteSave(family, editor) {
                         prksPrivateNotesSetStatus(editor, prksPrivateNotesStatusForResult(code, family));
                     }
                 }
-                prksSchedulePrivateNoteBusyRetry(editor, token);
+                const waits = PRKS_PRIVATE_NOTE_FOREIGN_RETRY_MS;
+                prksSchedulePrivateNoteBusyRetry(editor, token,
+                    foreign ? waits[Math.min(session.foreignWaits, waits.length) - 1] : PRKS_PRIVATE_NOTE_BUSY_RETRY_MS);
                 return;
             }
             /* A row that needs resolution: the text stays unsaved, and the next
@@ -3752,6 +3763,7 @@ function prksEnqueuePrivateNoteSave(family, editor) {
         .catch(function () {
             if (token !== session.latestSaveToken) return;
             const hasNewerDraft = session.editGeneration > session.latestSaveEditGeneration;
+            session.foreignWaits = 0;
             session.settledSaveToken = token;
             session.promise = null;
             session.saveError = !hasNewerDraft;

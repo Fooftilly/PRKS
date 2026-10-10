@@ -142,8 +142,8 @@ class FrontendOfflineNotesGuardTests(unittest.TestCase):
 
     def test_private_note_busy_retry_waits_for_sync(self):
         src = _read(_UI)
-        self.assertIn("function prksSchedulePrivateNoteBusyRetry(editor, token)", src)
-        start = src.index("function prksSchedulePrivateNoteBusyRetry(editor, token)")
+        self.assertIn("function prksSchedulePrivateNoteBusyRetry(editor, token, delayMs)", src)
+        start = src.index("function prksSchedulePrivateNoteBusyRetry(editor, token, delayMs)")
         body = src[start : src.index("\nfunction prksEnqueueWorkPrivateNoteSave(", start)]
         self.assertIn("prksSync.subscribe", body)
         self.assertIn("prksPrivateNotesRetryTarget", body)

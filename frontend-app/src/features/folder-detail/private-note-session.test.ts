@@ -505,8 +505,21 @@ describe('Folder Reminders sessions', () => {
       expect(b.field.value).toBe('From Secondary')
       expect(b.status.textContent).toBe('Still syncing — wait or resolve the conflict in Diagnostics')
 
-      /* Waiting is retried, and keeps refusing while Main's row is unsettled. */
-      await vi.advanceTimersByTimeAsync(400)
+      /* Waiting is retried, backing off, and keeps refusing while Main's row is
+       * unsettled; a retry keeps saying it waits instead of flickering to Saving. */
+      const tries = () => queue.saves.filter((save) => save.changes.private_notes === 'From Secondary').length
+      expect(tries()).toBe(1)
+      await vi.advanceTimersByTimeAsync(1999)
+      expect(tries()).toBe(1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(tries()).toBe(2)
+      expect(b.status.textContent).toBe('Still syncing — wait or resolve the conflict in Diagnostics')
+      await vi.advanceTimersByTimeAsync(3999)
+      expect(tries()).toBe(2)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(tries()).toBe(3)
+      await vi.advanceTimersByTimeAsync(8000 + 16000 + 30000 + 30000)
+      expect(tries()).toBe(7)
       expect(noteRows().map((r) => r.op_id)).toEqual([mainRow.op_id])
       expect(session(ownerB)?.dirty).toBe(true)
     })
