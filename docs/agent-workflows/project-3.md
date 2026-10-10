@@ -11,7 +11,7 @@ This is the checked-in record of how GitHub Project #3 ("PRKS Roadmap", owned by
 - Pushing commits after a "changes requested" review does not imply approval or move the item to Review.
 - Merging a PR completes the PR item only. Automation never completes, closes or moves its parent, controller or roadmap issue, and PRs reference those issues with `Refs #N`, never a closing keyword (which would make GitHub close them).
 - Controller and roadmap issues stay active until their own acceptance criteria are met, and are closed by a person.
-- Where automation cannot know intent, a manually set Status wins. Automation never moves an item out of **Blocked** or **Done** without an explicitly approved policy.
+- Where automation cannot know intent, a manually set Status wins. Automation never moves an item out of **Blocked** or **Done** without an explicitly approved policy. The only such policies are the native closing and reopening rules in §5, approved with that configuration: closing an issue or PR, or merging a PR, sets Done from any Status (closing is a person's or a merge's own act), and reopening an issue moves it from Done to Ready. `project-sync` has no exception.
 - AI triage output never changes Status, fields or dependencies by itself.
 
 ## 1. Existing configuration
@@ -24,6 +24,7 @@ This is the checked-in record of how GitHub Project #3 ("PRKS Roadmap", owned by
 | Other custom fields | *pending* | none added except Execution (§3) | yes |
 | Native workflows and their settings | *pending* | §5 | yes |
 | Views and their filters | *pending* | §7 | yes |
+| Item membership (which issues and PRs are on the board) | *pending* | one-time backfill (§5.1 step 3) | yes |
 
 Nothing in sections 2–8 assumes the current options match the proposed ones. Each proposed change will be mapped from what the inventory shows.
 
@@ -83,10 +84,11 @@ Every setting is checked against its current configuration (§1) before it is ch
 The settings live under Project #3 → ⋯ → **Workflows**. Each built-in workflow has its own page with a **When** selector for the item type, a **Set** value, and an on/off toggle; auto-add and auto-archive use a filter text box instead. Nothing here is applied until the inventory has been reviewed and the rollout approved.
 
 1. **Item added to project:** under **When**, select Issues and clear Pull requests. Set Status to Inbox. Save, and turn it on.
-2. **Auto-add to project:** select the `Fooftilly/PRKS` repository. Use a filter that matches both issues and PRs, for example `is:issue,pr`, with no label condition, so dependency PRs are added too. Turn it on.
-3. **Item closed**, **Pull request merged** and **Item reopened:** set the values in the table above. Where a **When** selector is shown, choose the item types listed there.
-4. **Code changes requested**, **Code review approved**, **Auto-close issue** and **Pull request linked to issue:** record their current settings from the screenshots, then turn them off. Turn **Code changes requested** off in the same step as `project-sync` leaves dry-run, so the transition always has exactly one owner.
-5. **Auto-archive items:** leave it off.
+2. **Auto-add to project:** select the `Fooftilly/PRKS` repository. Use a filter that matches both issues and PRs, for example `is:issue,pr`, with no label condition, so dependency PRs are added too. Turn it on. Auto-add only acts on items created or updated afterwards; it does not add existing ones.
+3. **One-time membership backfill:** from the inventory's item list, compare Project #3's items with the repository's open issues and PRs (and closed research issues for Research History, §7). The maintainer adds the missing items by hand, or approves a one-off list. Added issues get Status Inbox from "Item added"; added PRs stay without Status until their next `project-sync` event or a person sets one.
+4. **Item closed**, **Pull request merged** and **Item reopened:** set the values in the table above. Where a **When** selector is shown, choose the item types listed there.
+5. **Code changes requested**, **Code review approved**, **Auto-close issue** and **Pull request linked to issue:** record their current settings from the screenshots, then turn them off. Turn **Code changes requested** off in the same step as `project-sync` leaves dry-run, so the transition always has exactly one owner.
+6. **Auto-archive items:** leave it off.
 
 ## 6. Event → Status mapping
 
@@ -96,9 +98,9 @@ The settings live under Project #3 → ⋯ → **Workflows**. Each built-in work
 | PR added (by auto-add or `project-sync`) | PR | no change (empty until classified) | none | |
 | Triaged as actionable | issue | Ready | person | Inbox |
 | Work starts | issue | In Progress | person | Ready |
-| Draft PR opened | PR | In Progress | `project-sync` | empty, Inbox |
-| PR opened ready for review (approved 2026-10-10) | PR | Review | `project-sync` | empty, Inbox |
-| PR marked ready for review | PR | Review | `project-sync` | empty, Inbox, Ready, In Progress |
+| Draft PR opened | PR | In Progress (Changes requested if a changes-requested review is unanswered) | `project-sync` | empty, Inbox |
+| PR opened ready for review (approved 2026-10-10) | PR | Review (Changes requested if a changes-requested review is unanswered) | `project-sync` | empty, Inbox |
+| PR marked ready for review | PR | Review (Changes requested if a changes-requested review is unanswered) | `project-sync` | empty, Inbox, Ready, In Progress |
 | PR converted back to draft | PR | In Progress | `project-sync` | Review, Changes requested, and only if the latest conversion to draft is newer than the latest changes-requested review |
 | Changes requested in a review | PR | Changes requested | `project-sync` | empty, In Progress, Review, and only if the latest changes-requested review is newer than the latest review request and the latest conversion to draft. Bot reviews count like any other review. |
 | Re-review explicitly requested | PR | Review | `project-sync` | Changes requested, and only if the latest review request is newer than the latest changes-requested review |
@@ -109,6 +111,8 @@ The settings live under Project #3 → ⋯ → **Workflows**. Each built-in work
 | Issue closed | issue | Done | native | |
 | Issue reopened | issue | Ready | native | Done |
 | Linked PR merged | its issue | no change, unless the PR's closing keyword closes the issue (then "Issue closed" applies) | none | |
+
+A changes-requested review is *unanswered* when no review request and no conversion to draft is newer than it. This covers a late `opened` run that adds the item after the review.
 
 `project-sync` never writes an issue item, never moves an item out of Blocked or Done, and leaves any item whose current Status is not in its "allowed from" list unchanged, logging that it did so.
 
