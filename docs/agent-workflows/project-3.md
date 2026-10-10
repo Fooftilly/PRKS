@@ -9,7 +9,7 @@ This is the checked-in record of how GitHub Project #3 ("PRKS Roadmap", owned by
 - Automation never merges a pull request, never enables auto-merge, and never reads green CI or a bot approval as merge authorization.
 - Status is lifecycle only. It never encodes CI health, priority, category or who executes the work.
 - Pushing commits after a "changes requested" review does not imply approval or move the item to Review.
-- Merging a PR completes the PR item only. It never completes, closes or moves its parent, controller or roadmap issue.
+- Merging a PR completes the PR item only. Automation never completes, closes or moves its parent, controller or roadmap issue, and PRs reference those issues with `Refs #N`, never a closing keyword (which would make GitHub close them).
 - Controller and roadmap issues stay active until their own acceptance criteria are met, and are closed by a person.
 - Where automation cannot know intent, a manually set Status wins. Automation never moves an item out of **Blocked** or **Done** without an explicitly approved policy.
 - AI triage output never changes Status, fields or dependencies by itself.
@@ -37,7 +37,7 @@ Nothing in sections 2–8 assumes the current options match the proposed ones. E
 | Review | Waiting for a human review. |
 | Changes requested | A review asked for changes; waiting on the author. |
 | Blocked | Cannot proceed. Set by a person; a native "Blocked by" dependency is shown separately (§9). |
-| Done | The item itself is complete: issue closed, PR merged. |
+| Done | The item itself is complete: issue closed, PR merged, or PR closed without merging. |
 
 Migration from the existing options is proposed only after the inventory (§1).
 
@@ -69,7 +69,7 @@ Every setting is checked against its current configuration (§1) before it is ch
 |---|---|---|
 | Auto-add to project | On. Filter: all issues and PRs in `Fooftilly/PRKS`, including dependency PRs | Everything enters without manual adding. Dependency PRs are kept out of the ordinary views by their filters (§7), not by auto-add. |
 | Item added to project | **When:** Issues only (Pull requests unchecked). **Set:** Status Inbox. Approved 2026-10-10 | Default entry state for issues. PR items get their first Status from `project-sync` instead (§10.1), so a delayed native run cannot reset a classified PR. |
-| Item closed | Status: Done | The item itself is complete. |
+| Item closed | Status: Done, for issues and PRs | The item itself is complete. A PR closed without merging is finished too. If a merged PR's closing keyword closes an issue, GitHub closes it and this rule moves it to Done; that is why slice PRs reference controller and roadmap issues with `Refs #N`, never a closing keyword. |
 | Pull request merged | Status: Done | Applies to the PR item only. |
 | Item reopened | **When:** Issues only, if the workflow offers the selector (checked against the screenshots). **Set:** Status Ready | Reopened work is actionable again. Whether an explicitly set state should be preserved is checked against the native workflow's behavior first. A reopened PR keeps its Status until a person or `project-sync` event changes it. |
 | Code changes requested | Status: Changes requested | |
@@ -105,9 +105,10 @@ The settings live under Project #3 → ⋯ → **Workflows**. Each built-in work
 | New commits pushed | PR | no change | none | |
 | CI result of any kind | either | no change | none | |
 | PR merged | PR | Done | native | |
+| PR closed without merging | PR | Done | native | |
 | Issue closed | issue | Done | native | |
 | Issue reopened | issue | Ready | native | Done |
-| Linked PR merged | its issue | no change | none | |
+| Linked PR merged | its issue | no change, unless the PR's closing keyword closes the issue (then "Issue closed" applies) | none | |
 
 `project-sync` never writes an issue item, never moves an item out of Blocked or Done, and leaves any item whose current Status is not in its "allowed from" list unchanged, logging that it did so.
 
@@ -147,7 +148,7 @@ Prerequisites are GitHub's native **Blocked by / Blocking** relationships, recor
 
 ## 10. `project-sync` design (approved design; ships in dry-run)
 
-A checked-in workflow, `.github/workflows/project-sync.yml`, covering only the four PR rows marked `project-sync` in §6.
+A checked-in workflow, `.github/workflows/project-sync.yml`, covering only the five PR rows marked `project-sync` in §6. They come from four events, because `opened` covers both the draft and the ready row.
 
 - **Events:** `pull_request_target` (`opened`, `ready_for_review`, `converted_to_draft`, `review_requested`). The job checks out only the default branch and never runs pull-request code. The PR's number from the event is the only input; the PR's draft and open state are re-read from the API, so a stale event changes nothing.
 - **Scope:** PR items only. Field and option IDs are resolved at run time from names kept in one config file (`.github/project-sync.json`). If any name is missing, the run fails clearly.
@@ -174,7 +175,7 @@ The PR is now wrongly back in Inbox. GitHub does not document whether "Item adde
 | Inbox for new issues | native "Item added", **When: Issues only** |
 | First Status of a PR (In Progress or Review) | `project-sync` only; a PR with no Status counts as unclassified |
 | Changes requested, merged → Done | native |
-| The four PR transitions in §6 | `project-sync` |
+| The five `project-sync` PR rows in §6 (four events) | `project-sync` |
 
 This division was approved on 2026-10-10. With "Item added" limited to issues through its **When** selector, nothing native ever writes Inbox to a PR, so no delay can reset one.
 
