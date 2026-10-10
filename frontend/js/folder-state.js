@@ -830,8 +830,8 @@
         };
         try {
             if (!await atBase()) return false;
-            const folder = await root.prksOfflineReadEntity('folder', folderId,
-                '/api/folders/' + encodeURIComponent(folderId), fresh);
+            /* readFolderBody keeps the Folder-domain fence and its own request. */
+            const folder = await readFolderBody(folderId);
             if (!folder || folder.source !== 'server' || !folder.value) return false;
             const raw = folder.value[PRIVATE_NOTES_FIELD];
             if ((raw == null ? '' : String(raw)) !== base.value) return false;

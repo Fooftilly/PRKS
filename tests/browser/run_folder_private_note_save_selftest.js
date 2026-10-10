@@ -328,6 +328,63 @@ function theQueueReaderIsOldestFirstAndUnsettledOnly() {
         ["a", "b", "f"]);
 }
 
+/* ---- the recovery verifier's Folder read is fenced like every Folder read ---- */
+
+/* The verifier reads the Folder body through the real offline runtime. A Folder
+ * mutation that sweeps the `folders` domain while that read is in flight must
+ * keep its older answer out of the cache. */
+async function aVerifierReadOlderThanAFolderSweepIsNotCached() {
+    const { createPrksOfflineRuntime } = require("../../frontend/js/offline-runtime.js");
+    const entities = new Map();
+    const store = {
+        getEntity: async (kind, id) => entities.get(kind + ":" + id) || null,
+        putEntity: async (kind, id, value, rev) => {
+            entities.set(kind + ":" + id, { value, cachedAt: 1, sourceRevision: rev }); return true; },
+        deleteEntity: async (kind, id) => { entities.delete(kind + ":" + id); return true; },
+        deleteEntitiesByKind: async (kind) => {
+            for (const key of Array.from(entities.keys())) if (key.startsWith(kind + ":")) entities.delete(key);
+            return true; },
+        getList: async () => null, putList: async () => true, deleteList: async () => true,
+    };
+    const fields = {};
+    globalThis.PRKS_FOLDER_FIELDS.forEach(name => { fields[name] = { revision: 1 }; });
+    fields.private_notes = { revision: 4 };
+    const ok = body => ({ ok: true, status: 200, json: async () => body });
+    let releaseFolder = null;
+    const folderPolicies = [];
+    const runtime = createPrksOfflineRuntime({
+        store,
+        prksRequest: (path, _init, policy) => {
+            if (path.endsWith("/sync-state")) return Promise.resolve(ok({ folder_id: FOLDER, fields }));
+            folderPolicies.push(policy);
+            return new Promise(resolve => {
+                releaseFolder = () => resolve(ok({ id: FOLDER, title: "Before the move", private_notes: "Call" }));
+            });
+        },
+        setTimeout: () => 0, clearTimeout: () => {},
+        window: null, caches: null, navigator: null,
+    });
+    const saved = { read: globalThis.prksOfflineReadEntity, invalidate: globalThis.prksOfflineInvalidateEntity };
+    globalThis.prksOfflineReadEntity = runtime.readThroughEntity;
+    globalThis.prksOfflineInvalidateEntity = runtime.invalidateEntity || (async () => true);
+    try {
+        const verified = globalThis.prksVerifyFolderNoteBase(FOLDER,
+            { source: "server", value: "Call", revision: 4 });
+        for (let i = 0; i < 8 && !releaseFolder; i++) await tick();
+        assert.equal(typeof releaseFolder, "function", "the verifier's Folder GET is in flight");
+        assert.deepEqual(folderPolicies, [{ dedupe: false }], "and it is its own request");
+        runtime.markDomainChanged("folders", { entityKinds: ["folder"], listKeys: ["folders:index"] });
+        releaseFolder();
+        assert.equal(await verified, true, "the server answer still verifies the base");
+        await settle();
+        assert.equal(await store.getEntity("folder", FOLDER), null,
+            "a Folder read older than the sweep never repopulates the offline cache");
+    } finally {
+        globalThis.prksOfflineReadEntity = saved.read;
+        globalThis.prksOfflineInvalidateEntity = saved.invalidate;
+    }
+}
+
 async function main() {
     await aSaveNamesTheExactRowHoldingItsText();
     await returningToTheBaseLeavesNothingQueued();
@@ -342,6 +399,7 @@ async function main() {
     await anOlderAckNeverCoversANewerEdit();
     theAckIsOnlyAReminderAck();
     theQueueReaderIsOldestFirstAndUnsettledOnly();
+    await aVerifierReadOlderThanAFolderSweepIsNotCached();
     console.log("All " + checks + " folder private-note save checks passed");
 }
 
