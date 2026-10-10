@@ -59,7 +59,7 @@ No Work type, Area or Priority Project fields. Views filter on the canonical rep
 | Parent / progress | native sub-issues, Parent issue and Sub-issue progress fields |
 | Linked PRs, reviewers, milestone | native fields |
 
-Research backfill: only the three `[Research]` issues (#181, #234, #246, all closed) carry the prefix. Labelling them is a separate, maintainer-approved step; nothing is relabelled in bulk.
+Research backfill: the only `[Research]` issues, #181, #234 and #246 (all closed as completed), received the `research` label on 2026-10-10 with the maintainer's approval. Their state and content were not changed. No other issue is relabelled.
 
 ## 5. Native Project workflows (Proposed)
 
@@ -68,10 +68,10 @@ Every setting is checked against its current configuration (§1) before it is ch
 | Workflow | Proposed setting | Why |
 |---|---|---|
 | Auto-add to project | On. Filter: all issues and PRs in `Fooftilly/PRKS`, including dependency PRs | Everything enters without manual adding. Dependency PRs are kept out of the ordinary views by their filters (§7), not by auto-add. |
-| Item added to project | Status: Inbox | Default entry state. |
+| Item added to project | Status: Inbox, **issues only** (filter `is:issue`) | Default entry state for issues. PR items get their first Status from `project-sync` instead (§10.1), so a delayed native run cannot reset a classified PR. |
 | Item closed | Status: Done | The item itself is complete. |
 | Pull request merged | Status: Done | Applies to the PR item only. |
-| Item reopened | Status: Ready | Reopened work is actionable again. Whether an explicitly set state should be preserved is checked against the native workflow's behavior first. |
+| Item reopened | Status: Ready, issues only | Reopened work is actionable again. Whether an explicitly set state should be preserved is checked against the native workflow's behavior first. A reopened PR keeps its Status until a person or `project-sync` event changes it. |
 | Code changes requested | Status: Changes requested | |
 | Code review approved | **Off** (provisional) | A bot approval would move Status, and approval is not authorization. |
 | Auto-close issue | **Off** (provisional) | Moving a controller issue to Done must not close it. |
@@ -82,7 +82,8 @@ Every setting is checked against its current configuration (§1) before it is ch
 
 | Event | Item | New Status | Owner | Allowed only from |
 |---|---|---|---|---|
-| Issue or PR added | either | Inbox | native | (new item) |
+| Issue added | issue | Inbox | native | (new item) |
+| PR added (by auto-add or `project-sync`) | PR | no change (empty until classified) | none | |
 | Triaged as actionable | issue | Ready | person | Inbox |
 | Work starts | issue | In Progress | person | Ready |
 | Draft PR opened | PR | In Progress | `project-sync` | empty, Inbox |
@@ -107,13 +108,16 @@ Filters use GitHub Projects filter syntax. Exact field and option names follow �
 |---|---|---|
 | Active Work | table | `is:open -label:dependencies status:Ready,"In Progress",Review,"Changes requested",Blocked` |
 | Agent Queue | table, grouped by Status | `is:open is:issue execution:Agent,Mixed status:Ready,"In Progress" -label:dependencies` |
-| Research Queue | table | `label:research is:open -status:Done` |
+| Research Queue | table | `label:research is:open -status:Done` (active research only) |
+| Research History (new) | table, sorted by Closed date | `label:research is:closed` (completed research stays discoverable here) |
 | Roadmap | roadmap | `label:roadmap`, with Sub-issue progress and milestone |
 | Work Board | board by Status | `-label:dependencies` (Done items included and visible) |
 | Timeline | roadmap by date fields | same items as Work Board |
 | Maintenance (new) | table | `label:dependencies` |
 
 **Dependency PRs:** they are added to Project #3 like any other PR and follow the same PR lifecycle (§6). Active Work, Agent Queue and Work Board exclude them with `-label:dependencies`, so they show up only in Maintenance. Automation never merges them.
+
+**Research:** active and completed research are separated by two views rather than by archiving. Research Queue holds open research. Research History holds closed research, including #181, #234 and #246. Neither view archives anything, and completed research issues are never auto-archived (§8). A closed research issue appears in Research History only if it is an item on Project #3. Whether these three already are is checked in the inventory (§1); if not, adding them is a manual step for the maintainer.
 
 Agent Queue separates ready work from work blocked by an unresolved prerequisite. A blocked-state filter qualifier in Project views is not yet verified. If it exists, Agent Queue adds it. Otherwise a read-only eligibility report lists Ready Agent/Mixed issues with and without open native blockers (§9), and the view shows both groups.
 
@@ -138,7 +142,37 @@ A checked-in workflow, `.github/workflows/project-sync.yml`, covering only the f
 - **Scope:** PR items only. Field and option IDs are resolved at run time from names kept in one config file (`.github/project-sync.json`). If any name is missing, the run fails clearly.
 - **Behavior:** applies the "allowed from" rules in §6, so a repeated run makes no change. Each run logs one audit record (PR, event, Status before and after, outcome) and a job summary.
 - **Default:** dry-run. Writing is enabled only after the credential and the workflow have been reviewed.
-- **Open question:** a draft PR may fire `opened` before auto-add has created its item. Either `project-sync` adds the PR item itself (an idempotent API call), or it skips with a log entry.
+- **Missing items (approved):** if auto-add has not yet created the PR's item, `project-sync` adds it with `addProjectV2ItemById`, using the PR's own node ID. It first looks for an existing item. GitHub documents that adding an item that already exists returns the existing item, so repeated or concurrent adds converge to one item. It only adds PRs whose repository is `Fooftilly/PRKS`, only to Project #3, and never adds or edits the linked issue.
+
+### 10.1 Race between native auto-add, "Item added" and `project-sync`
+
+The risky ordering, with "Item added → Inbox" applying to PRs:
+
+1. A draft PR opens. `project-sync` finds no item, adds it, and sets In Progress.
+2. The native auto-add then runs and finds the item already there (no new item).
+3. The native "Item added" workflow, triggered by step 1's add and running later, sets the Status to Inbox.
+
+The PR is now wrongly back in Inbox. GitHub does not document whether "Item added" leaves an already-set Status alone, or in what order native workflows run against API writes, so this combination **cannot be guaranteed safe**. The same reset can happen when the native add wins and `project-sync` classifies the PR before the native "Item added" run lands.
+
+**Recommended division of responsibility:**
+
+| Concern | Owner |
+|---|---|
+| Putting the PR on the board | native auto-add, with `project-sync` as an idempotent fallback |
+| Inbox for new issues | native "Item added", **scoped to `is:issue`** |
+| First Status of a PR (In Progress or Review) | `project-sync` only; a PR with no Status counts as unclassified |
+| Changes requested, merged → Done | native |
+| The four PR transitions in §6 | `project-sync` |
+
+With "Item added" scoped to issues, nothing native ever writes Inbox to a PR, so no delay can reset one. If the screenshots show that "Item added" cannot be scoped to issues, the fallback is to turn it off and let an empty Status mean Inbox in the views (`no:status`), rather than letting it touch PRs.
+
+Remaining races and how `project-sync` handles them:
+
+- **PR merged or closed while `project-sync` writes.** It re-reads the PR and the item's Status immediately before writing, and skips a merged or closed PR. The Projects API has no compare-and-set, so a short window remains. After writing, it re-reads the PR; if it was merged or closed in that window, it sets Done, which is what the native rule would have set, and logs the correction.
+- **Two `project-sync` runs for the same PR.** One concurrency group per PR, without cancellation, serializes them. Each re-reads before writing, so the later run sees the earlier result.
+- **A person changes Status at the same time.** A Status outside the "allowed from" list is left alone. If the person's write lands just after a `project-sync` read, the person's value wins, because it is the last write.
+
+**Testing.** The decision logic is a pure function of PR state, item state and event. Unit tests run it against a fake project that replays each ordering above: native add before and after, a delayed native "Item added", a duplicate concurrent add, a merge during the write, and Blocked or Done set by hand. The live check is a dry-run on the next ordinary PR after the configuration is approved. It does not use test PRs or arbitrary items.
 
 ## 11. Credentials and permissions
 
