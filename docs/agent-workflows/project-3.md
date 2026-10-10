@@ -101,7 +101,7 @@ The settings live under Project #3 → ⋯ → **Workflows**. Each built-in work
 | PR marked ready for review | PR | Review | `project-sync` | empty, Inbox, Ready, In Progress |
 | PR converted back to draft | PR | In Progress | `project-sync` | Review, Changes requested |
 | Changes requested in a review | PR | Changes requested | native | (native rule) |
-| Re-review explicitly requested | PR | Review | `project-sync` | Changes requested |
+| Re-review explicitly requested | PR | Review | `project-sync` | Changes requested, and only if the latest review request is newer than the latest changes-requested review |
 | New commits pushed | PR | no change | none | |
 | CI result of any kind | either | no change | none | |
 | PR merged | PR | Done | native | |
@@ -181,6 +181,8 @@ This division was approved on 2026-10-10. With "Item added" limited to issues th
 Remaining races and how `project-sync` handles them:
 
 - **PR merged or closed while `project-sync` writes.** It re-reads the PR and the item's Status immediately before writing, and skips a merged or closed PR. The Projects API has no compare-and-set, so a short window remains. After writing, it re-reads the PR; if it was merged or closed in that window, it sets Done, which is what the native rule would have set, and logs the correction.
+- **PR merged or closed before its item is added.** The native Done rule had no item to update. If the item `project-sync` then adds has no Status, it sets Done; a Status set meanwhile is left alone.
+- **A delayed re-review request.** A `review_requested` run applies only when the latest review request is newer than the latest changes-requested review (dismissed reviews excluded), and fails closed without a recorded request. If a changes-requested review lands during the write, Changes requested is restored.
 - **Two `project-sync` runs for the same PR.** One concurrency group per PR, without cancellation, serializes them. Each re-reads before writing, so the later run sees the earlier result.
 - **A person changes Status at the same time.** A Status outside the "allowed from" list is left alone. If the person's write lands just after a `project-sync` read, the person's value wins, because it is the last write.
 
