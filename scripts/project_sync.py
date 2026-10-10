@@ -527,6 +527,9 @@ query($owner: String!, $name: String!, $number: Int!, $field: String!) {
       changeReviews: reviews(last: 100, states: [CHANGES_REQUESTED]) {
         nodes { submittedAt author { login } }
       }
+      approvals: reviews(last: 100, states: [APPROVED]) {
+        nodes { submittedAt author { login } }
+      }
       dismissals: timelineItems(last: 100, itemTypes: [REVIEW_DISMISSED_EVENT]) {
         nodes { ... on ReviewDismissedEvent { createdAt previousReviewState review { author { login } } } }
       }
@@ -665,17 +668,21 @@ class GraphQLApi:
             for node in (pr.get("dismissals") or {}).get("nodes") or []
             if node and node.get("previousReviewState") == "CHANGES_REQUESTED" and node.get("createdAt")
         ]
-        earlier = [
-            (((node.get("author") or {}).get("login") or "ghost").lower(), node["submittedAt"])
-            for node in (pr.get("changeReviews") or {}).get("nodes") or []
-            if node and node.get("submittedAt")
-        ]
-        for node in (pr.get("latestOpinionatedReviews") or {}).get("nodes") or []:
-            if not node or node.get("state") != "APPROVED" or not node.get("submittedAt"):
-                continue
-            who = ((node.get("author") or {}).get("login") or "ghost").lower()
-            if any(by == who and _after(node["submittedAt"], at) for by, at in earlier):
-                withdrawals.append((who, node["submittedAt"]))
+        def reviews_of(key: str) -> list[tuple[str, str]]:
+            return [
+                (((node.get("author") or {}).get("login") or "ghost").lower(), node["submittedAt"])
+                for node in (pr.get(key) or {}).get("nodes") or []
+                if node and node.get("submittedAt")
+            ]
+
+        # An approval withdraws only the change requests it is the first
+        # approval after; a later repeat approval withdraws nothing new.
+        approvals = reviews_of("approvals")
+        for who, at in reviews_of("changeReviews"):
+            following = [when for by, when in approvals if by == who and _after(when, at)]
+            first = min(following, key=lambda when: _time(when) or datetime.min) if following else None
+            if first is not None and (who, first) not in withdrawals:
+                withdrawals.append((who, first))
         return PullRequest(
             id=pr["id"],
             state=str(pr["state"]),

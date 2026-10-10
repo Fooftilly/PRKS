@@ -970,6 +970,9 @@ class GraphQLApiTests(unittest.TestCase):
             {"submittedAt": "2026-10-10T10:00:00Z", "author": {"login": "Bob"}},
             {"submittedAt": "2026-10-10T10:10:00Z", "author": {"login": "Carol"}},
         ]}
+        pr_raw["approvals"] = {"nodes": [
+            {"submittedAt": "2026-10-10T10:30:00Z", "author": {"login": "carol"}},
+        ]}
         pr_raw["dismissals"] = {"nodes": [
             {"createdAt": "2026-10-10T10:45:00Z", "previousReviewState": "CHANGES_REQUESTED", "review": {"author": {"login": "Dave"}}},
             {"createdAt": "2026-10-10T10:46:00Z", "previousReviewState": "APPROVED", "review": {"author": {"login": "erin"}}},
@@ -987,10 +990,40 @@ class GraphQLApiTests(unittest.TestCase):
         # Erin's dismissed review was an approval, so it withdraws nothing.
         self.assertEqual(pr.withdrawals, (("dave", "2026-10-10T10:45:00Z"), ("carol", "2026-10-10T10:30:00Z")))
         self.assertIn("reviews(last: 100, states: [CHANGES_REQUESTED])", seen[0])
+        self.assertIn("reviews(last: 100, states: [APPROVED])", seen[0])
         self.assertIn("itemTypes: [REVIEW_DISMISSED_EVENT]", seen[0])
         self.assertIn("itemTypes: [CONVERT_TO_DRAFT_EVENT]", seen[0])
         self.assertIn("timelineItems(last: 100, itemTypes: [REVIEW_REQUESTED_EVENT])", seen[0])
         self.assertIn("latestOpinionatedReviews(first: 100)", seen[0])
+
+    def test_a_repeat_approval_withdraws_nothing_new(self):
+        # Alice requests changes (T1) and approves (T2); a person sets
+        # Changes requested (T3); Alice approves again (T4). Only T2 is a
+        # withdrawal, so the hand-set Status stays.
+        nodes = [{"id": "mine", "isArchived": False, "project": {"id": PROJECT_ID},
+                  "fieldValueByName": {"__typename": "ProjectV2ItemFieldSingleSelectValue",
+                                       "name": "Changes requested", "updatedAt": "2026-10-10T13:00:00Z"}}]
+        payload = self._pr_payload(nodes)
+        pr_raw = payload["repository"]["pullRequest"]
+        pr_raw["isDraft"] = False
+        pr_raw["changeReviews"] = {"nodes": [{"submittedAt": "2026-10-10T11:00:00Z", "author": {"login": "alice"}}]}
+        pr_raw["approvals"] = {"nodes": [
+            {"submittedAt": "2026-10-10T12:00:00Z", "author": {"login": "alice"}},
+            {"submittedAt": "2026-10-10T14:00:00Z", "author": {"login": "alice"}},
+        ]}
+        pr_raw["latestOpinionatedReviews"] = {"nodes": [
+            {"state": "APPROVED", "submittedAt": "2026-10-10T14:00:00Z", "author": {"login": "alice"}},
+        ]}
+        pr = ps.GraphQLApi(lambda q, v: payload).load_pr(CONFIG, PR_NUMBER, PROJECT_ID)
+        self.assertEqual(pr.withdrawals, (("alice", "2026-10-10T12:00:00Z"),))
+        target, reason = ps.decide(CONFIG, "review_changed", pr)
+        self.assertIsNone(target)
+        self.assertIn("no change request was dismissed or withdrawn", reason)
+        # A new change request followed by an approval is a fresh withdrawal.
+        pr_raw["changeReviews"]["nodes"].append({"submittedAt": "2026-10-10T15:00:00Z", "author": {"login": "alice"}})
+        pr_raw["approvals"]["nodes"].append({"submittedAt": "2026-10-10T16:00:00Z", "author": {"login": "alice"}})
+        pr = ps.GraphQLApi(lambda q, v: payload).load_pr(CONFIG, PR_NUMBER, PROJECT_ID)
+        self.assertEqual(ps.decide(CONFIG, "review_changed", pr)[0], "review")
 
     def test_items_of_other_projects_are_ignored(self):
         nodes = [
