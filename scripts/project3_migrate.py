@@ -439,7 +439,8 @@ def apply_item(project: Project, item: dict, rec: dict, stage: str, checkpoint: 
     else:
         item_id = live["id"]
     rec["item_id"] = item_id
-    written = []
+    written: list = []
+    last: Optional[dict] = None
     for field, target in item.get("set", {}).items():
         fresh = project.refresh(item_id)
         reason = _unsafe_to_touch(item, fresh)
@@ -460,15 +461,33 @@ def apply_item(project: Project, item: dict, rec: dict, stage: str, checkpoint: 
         # The write is not atomic with the check above: an issue closed (and
         # moved to Done by "Item closed") in between would now carry this
         # target. Re-read and report it so the apply fails for a person to fix.
-        after = _unsafe_to_touch(item, project.refresh(item_id))
+        last = project.refresh(item_id)
+        after = _unsafe_to_touch(item, last)
         if after:
             rec.update(outcome="drift", writes=written,
                        detail=f"{after} while {field} was written; check this item by hand")
             return
+    _finish_item(rec, item, written, last, checkpoint)
+
+
+def _finish_item(rec: dict, item: dict, written: list, last: Optional[dict], checkpoint: Checkpoint) -> None:
+    moved = _moved_since_written(rec["item"], item, last, checkpoint) if written else {}
+    if moved:
+        rec.update(outcome="drift", writes=written, detail=f"{moved} changed during the run; left as is, check this item by hand")
+        return
     rec["writes"] = written
     rec["outcome"] = "changed" if written or rec.get("add") else "unchanged"
     if rec.get("repair"):
         rec["outcome"] = "repaired" if written else "unchanged"
+
+
+def _moved_since_written(key: str, item: dict, last: Optional[dict], checkpoint: Checkpoint) -> dict:
+    """Planned fields that no longer hold their target on the read after the
+    item's last write, e.g. a Status a person changed while Roadmap Stage was
+    being written. A late native Inbox on an added item is left to verify_added."""
+    values = last["values"] if last else {}
+    return {f: values.get(f) for f, t in item.get("set", {}).items()
+            if values.get(f) != t and not (f == "Status" and values.get(f) == NATIVE_ENTRY_STATUS and key in checkpoint.added)}
 
 
 def _unsafe_to_touch(item: dict, fresh: Optional[dict]) -> Optional[str]:

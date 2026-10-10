@@ -472,6 +472,20 @@ class DriftDuringTheRun(Base):
         self.assertEqual(r["counts"], {"drift": 1})
         self.assertEqual(self.api.items["I38"]["values"], {"Status": "Backlog", "Roadmap Stage": "Parked"})
 
+    def test_a_written_field_changed_while_the_next_one_is_written_is_drift(self):
+        self.api.put("Issue", 38, Status="Ready")
+
+        def person_moves_status(name, variables):
+            if name == "updateProjectV2ItemFieldValue" and variables["field"] == "F_Roadmap_Stage":
+                self.api.items["I38"]["values"]["Status"] = "In Progress"
+        self.api.before_mutation = person_moves_status
+        r = self.run_stage("migrate-existing", [epic()], apply=True)
+        self.assertEqual(r["counts"], {"drift": 1})
+        self.assertIn("'Status': 'In Progress'", r["items"][0]["detail"])
+        self.assertFalse(r["ok"])
+        self.assertEqual(self.api.items["I38"]["values"]["Status"], "In Progress")
+        self.assertFalse((self.tmp / "ck.json").exists())   # nothing was completed
+
     def test_an_issue_closed_during_the_run_is_not_written(self):
         self.api.put("Issue", 38, Status="Ready")
         self.api.put("Issue", 40, Status="Ready")
