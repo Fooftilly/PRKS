@@ -5,6 +5,10 @@ name: Project sync review signal
 # write access, so it holds no secret, checks nothing out and writes nothing.
 # Its completion triggers the workflow_run job in project-sync.yml, which
 # runs from the default branch, re-reads the PR and decides on its own.
+# The job condition only saves runs: a run for another review state may still
+# conclude as success, and project-sync then reconciles from the review
+# history (each reviewer's latest review and later re-requests), so it sets
+# Changes requested only while such a review is unanswered.
 on:
   pull_request_review:
     types: [submitted]

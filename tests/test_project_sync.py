@@ -387,6 +387,17 @@ class ChangesRequestedTests(unittest.TestCase):
         self.assertEqual(sync(board, "review_requested").outcome, "updated")
         self.assertEqual(board.pr_status, "Review")
 
+    def test_a_relay_for_a_comment_review_only_confirms_the_review_history(self):
+        # A non-changes-requested review's relay run may still arrive. It
+        # sets Changes requested only while a review is unanswered.
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.person_sets("Review")
+        board.submit_changes_review("2026-10-10T11:00:00Z")
+        board.request_review("2026-10-10T12:00:00Z")
+        self.assertEqual(sync(board, "changes_requested").outcome, "skipped")
+        self.assertEqual(board.pr_status, "Review")
+
     def test_a_later_approval_by_the_same_reviewer_withdraws_the_request(self):
         board = FakeBoard(draft=False)
         board.native_auto_add()
@@ -951,9 +962,10 @@ class SignalWorkflowShapeTests(unittest.TestCase):
         for forbidden in ("secrets.", "vars.", "actions/checkout", "github.token", "upload-artifact"):
             self.assertNotIn(forbidden, self.text)
 
-    def test_only_a_changes_requested_review_completes_successfully(self):
-        # A job-level condition skips the whole run for other reviews, so
-        # project-sync (which requires a successful run) is not started.
+    def test_other_review_states_skip_the_relay_job(self):
+        # Only an optimization: if a skipped run still counts as success,
+        # project-sync re-derives the state from the review history (see
+        # test_a_later_approval_by_the_same_reviewer_withdraws_the_request).
         self.assertIn("    if: github.event.review.state == 'changes_requested'\n", self.text)
 
     def test_no_expressions_in_run_blocks(self):
