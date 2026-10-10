@@ -347,6 +347,49 @@ class GitHubClientTests(unittest.TestCase):
         self.assertEqual(status, 2)
         self.assertIn("https", json.loads(out.getvalue().strip().splitlines()[-1])["reason"])
 
+    def test_transport_failures_and_bad_bodies_become_api_errors(self) -> None:
+        import http.client
+        from unittest import mock
+
+        class Body:
+            def __init__(self, raw: bytes) -> None:
+                self.raw = raw
+
+            def __enter__(self) -> "Body":
+                return self
+
+            def __exit__(self, *args: Any) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return self.raw
+
+        client = writer.GitHubClient("t")
+        failures: list[Any] = [
+            TimeoutError("timed out"),
+            ConnectionResetError("reset"),
+            http.client.RemoteDisconnected("closed"),
+            http.client.IncompleteRead(b"x"),
+        ]
+        for failure in failures:
+            with mock.patch.object(writer.urllib.request, "urlopen", side_effect=failure):
+                with self.assertRaises(writer.ApiError, msg=type(failure).__name__) as caught:
+                    client.post("repos/x/y/issues/1/dependencies/blocked_by", {"issue_id": 1})
+                self.assertEqual(caught.exception.status, 0)
+        with mock.patch.object(writer.urllib.request, "urlopen", return_value=Body(b"<html>")):
+            with self.assertRaisesRegex(writer.ApiError, "not valid JSON"):
+                client.get("repos/x/y/issues/1")
+
+    def test_a_timed_out_write_is_still_verified(self) -> None:
+        # The POST's response is lost after GitHub created the edge: the
+        # re-read reports the write instead of crashing.
+        gh = FakeGitHub()
+        gh.add(10)
+        gh.add(20)
+        gh.post_error = writer.ApiError(0, "POST", "x", "TimeoutError: timed out")
+        status, audit = run(gh, request(apply=True))
+        self.assertEqual((status, audit.outcome), (0, "converged"))
+
     def test_error_message_tolerates_non_json_bodies(self) -> None:
         import io
         import urllib.error

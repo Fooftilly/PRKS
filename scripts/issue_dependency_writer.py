@@ -26,6 +26,7 @@ Exit status: 0 for a dry run that would write, a no-op, or a verified write;
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import re
@@ -103,7 +104,15 @@ class GitHubClient:
             raise ApiError(error.code, method, path, _error_message(error)) from None
         except urllib.error.URLError as error:
             raise ApiError(0, method, path, str(error.reason)[:200]) from None
-        return json.loads(raw) if raw else None
+        except (OSError, http.client.HTTPException) as error:
+            # Read timeouts, connection resets and truncated reads.
+            raise ApiError(0, method, path, f"{type(error).__name__}: {str(error)[:200]}") from None
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except ValueError:
+            raise ApiError(0, method, path, "the response is not valid JSON") from None
 
     def get(self, path: str) -> Any:
         return self._request("GET", path)
