@@ -577,7 +577,6 @@ query($owner: String!, $name: String!, $number: Int!, $field: String!) {
               ... on User { login }
               ... on Bot { login }
               ... on Mannequin { login }
-              ... on Team { slug }
             }
           }
         }
@@ -719,7 +718,10 @@ class GraphQLApi:
         requests: list[tuple[str, str]] = []
         for node in (pr.get("reviewRequests") or {}).get("nodes") or []:
             reviewer = (node or {}).get("requestedReviewer") or {}
-            who = reviewer.get("login") or (f"team:{reviewer['slug']}" if reviewer.get("slug") else "")
+            # Team requests are not read: Team.slug needs read:org, which the
+            # project-only PROJECT_SYNC_TOKEN lacks, and a personal-account
+            # repository cannot have teams.
+            who = reviewer.get("login") or ""
             if who and node.get("createdAt"):
                 requests.append((who.lower(), node["createdAt"]))
         changes = [

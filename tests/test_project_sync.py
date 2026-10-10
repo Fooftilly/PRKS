@@ -1201,12 +1201,20 @@ class GraphQLApiTests(unittest.TestCase):
     def _pr_payload(self, nodes):
         return {"repository": {"pullRequest": {"id": PR_ID, "state": "OPEN", "isDraft": True, "projectItems": {"nodes": nodes}}}}
 
+    def test_queries_need_only_the_project_scope(self):
+        # Team.slug (and any organization field) needs read:org, which the
+        # project-only PROJECT_SYNC_TOKEN does not have (#441).
+        for query in (ps.PR_QUERY, ps.PROJECT_QUERY):
+            self.assertNotIn("slug", query)
+            self.assertNotIn("Team", query)
+            self.assertNotIn("organization", query)
+
     def test_review_times_are_read_and_dismissed_reviews_are_excluded(self):
         payload = self._pr_payload([])
         pr_raw = payload["repository"]["pullRequest"]
         pr_raw["reviewRequests"] = {"nodes": [
             {"createdAt": "2026-10-10T11:00:00Z", "requestedReviewer": {"__typename": "User", "login": "Alice"}},
-            {"createdAt": "2026-10-10T11:30:00Z", "requestedReviewer": {"__typename": "Team", "slug": "core"}},
+            {"createdAt": "2026-10-10T11:30:00Z", "requestedReviewer": {"__typename": "Team"}},
             {"createdAt": "2026-10-10T11:40:00Z", "requestedReviewer": None},
         ]}
         pr_raw["latestOpinionatedReviews"] = {"nodes": [
@@ -1232,9 +1240,9 @@ class GraphQLApiTests(unittest.TestCase):
         seen = []
         api = ps.GraphQLApi(lambda q, v: seen.append(q) or payload)
         pr = api.load_pr(CONFIG, PR_NUMBER, PROJECT_ID)
-        self.assertEqual(pr.review_requests, (("alice", "2026-10-10T11:00:00Z"), ("team:core", "2026-10-10T11:30:00Z")))
+        self.assertEqual(pr.review_requests, (("alice", "2026-10-10T11:00:00Z"),))
         self.assertEqual(pr.changes_requested, (("bob", "2026-10-10T10:00:00Z"), ("ghost", "2026-10-10T10:50:00Z")))
-        self.assertEqual(pr.last_review_requested_at, "2026-10-10T11:30:00Z")
+        self.assertEqual(pr.last_review_requested_at, "2026-10-10T11:00:00Z")
         self.assertEqual(pr.last_changes_requested_at, "2026-10-10T10:50:00Z")
         self.assertEqual(pr.last_converted_to_draft_at, "2026-10-10T09:00:00Z")
         self.assertEqual(ps.unanswered_changes(pr), ["bob", "ghost"])
