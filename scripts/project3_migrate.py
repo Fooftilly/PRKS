@@ -161,8 +161,10 @@ ADD_M = """mutation($project:ID!,$content:ID!){addProjectV2ItemById(input:{proje
 SET_M = """mutation($project:ID!,$item:ID!,$field:ID!,$option:String!){updateProjectV2ItemFieldValue(input:{projectId:$project,itemId:$item,fieldId:$field,value:{singleSelectOptionId:$option}}){projectV2Item{id}}}"""
 
 
-def load_plan(path: Path, stage: str) -> dict:
-    data = json.loads(path.read_text(encoding="utf-8"))
+def load_plan(path: Path, stage: str, raw: Optional[bytes] = None) -> dict:
+    """Parse and validate a plan. ``raw`` is the file's bytes when the caller
+    already read them to hash, so the plan that runs is the plan hashed."""
+    data = json.loads((path.read_bytes() if raw is None else raw).decode("utf-8"))
     scope = data.get("scope", {})
     expected = {"owner": OWNER, "repository": REPOSITORY, "project_number": PROJECT_NUMBER, "project_id": PROJECT_ID}
     for key, value in expected.items():
@@ -542,10 +544,11 @@ def _run_ok(apply: bool, failed: bool, counts: dict[str, int]) -> bool:
 def run(stage: str, plan_path: Path, *, apply: bool, transport: Transport, checkpoint: Path, report_dir: Path,
         out=sys.stdout, settle_seconds: float = DEFAULT_SETTLE_SECONDS, sleep: Callable[[float], None] = time.sleep,
         expected_sha256: Optional[str] = None) -> dict:
-    digest = plan_sha256(plan_path)
+    raw = plan_path.read_bytes()   # read once: these exact bytes are hashed and run
+    digest = hashlib.sha256(raw).hexdigest()
     if apply and expected_sha256 != digest:
         raise MigrationError(f"refusing --apply: --plan-sha256 does not match the plan file ({digest})")
-    plan = load_plan(plan_path, stage)
+    plan = load_plan(plan_path, stage, raw)
     gql = GraphQL(transport, allow_mutations=apply)
     project = Project(gql)
     missing = project.missing_requirements(plan)

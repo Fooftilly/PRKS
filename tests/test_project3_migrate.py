@@ -583,6 +583,22 @@ class PartialFailure(Base):
                       "--report-dir", str(self.tmp / "o")], env={}, transport=self.api)
         self.assertEqual(rc, 1)
 
+    def test_the_plan_that_runs_is_the_plan_that_was_hashed(self):
+        self.api.put("Issue", 38, Status="Ready")
+        path = plan_file(self.tmp, "migrate-existing", [epic()])
+        digest = pm.plan_sha256(path)
+        original = pm.load_plan
+
+        def swap_file_after_hashing(p, stage, raw=None):
+            plan_file(self.tmp, "migrate-existing", [epic(set={"Status": "Done"})])   # edited in between
+            return original(p, stage, raw)
+        with unittest.mock.patch.object(pm, "load_plan", swap_file_after_hashing):
+            r = pm.run("migrate-existing", path, apply=True, transport=self.api, checkpoint=self.tmp / "ck.json",
+                       report_dir=self.tmp / "out", out=io.StringIO(), settle_seconds=0, sleep=self.api.settle,
+                       expected_sha256=digest)
+        self.assertEqual(r["plan_sha256"], digest)
+        self.assertEqual(self.api.items["I38"]["values"]["Status"], "Backlog")   # the reviewed target, not Done
+
     def test_a_checkpoint_from_another_stage_is_refused(self):
         (self.tmp / "ck.json").write_text(json.dumps({"stage": "backfill", "done": ["Issue#38"]}))
         self.api.put("Issue", 38, Status="Ready")
