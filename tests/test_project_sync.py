@@ -947,6 +947,100 @@ class MainTests(unittest.TestCase):
         self.assertEqual((code, record["outcome"]), (2, "failed"))
 
 
+class ReviewHistoryTests(unittest.TestCase):
+    """Withdrawals derived from GitHub's review history, end to end through
+    GraphQL parsing and the ``review_changed`` decision."""
+
+    def _decide(self, status, status_at, *, changes=(), approvals=(), latest=(), dismissals=()):
+        def reviews(pairs):
+            return {"nodes": [{"submittedAt": at, "author": {"login": who}} for who, at in pairs]}
+
+        pr_raw = {
+            "id": PR_ID, "state": "OPEN", "isDraft": False,
+            "projectItems": {"nodes": [{
+                "id": "item", "isArchived": False, "project": {"id": PROJECT_ID},
+                "fieldValueByName": {"__typename": "ProjectV2ItemFieldSingleSelectValue",
+                                     "name": status, "updatedAt": status_at},
+            }]},
+            "changeReviews": reviews(changes),
+            "approvals": reviews(approvals),
+            "latestOpinionatedReviews": {"nodes": [
+                {"state": state, "submittedAt": at, "author": {"login": who}} for who, state, at in latest
+            ]},
+            "dismissals": {"nodes": [
+                {"createdAt": at, "previousReviewState": "CHANGES_REQUESTED", "review": {"author": {"login": who}}}
+                for who, at in dismissals
+            ]},
+        }
+        payload = {"repository": {"pullRequest": pr_raw}}
+        pr = ps.GraphQLApi(lambda q, v: payload).load_pr(CONFIG, PR_NUMBER, PROJECT_ID)
+        return ps.decide(CONFIG, "review_changed", pr)
+
+    def test_an_approval_after_a_change_request_releases_it(self):
+        target, _ = self._decide(
+            "Changes requested", "2026-10-10T10:30:00Z",
+            changes=[("alice", "2026-10-10T10:00:00Z")],
+            approvals=[("alice", "2026-10-10T11:00:00Z")],
+            latest=[("alice", "APPROVED", "2026-10-10T11:00:00Z")],
+        )
+        self.assertEqual(target, "review")
+
+    def test_a_delayed_run_does_not_replay_an_old_withdrawal(self):
+        # Released at T2 by the approval's run; set by hand at T3; the same
+        # approval's relay run arrives again late. T2 is older than T3.
+        target, reason = self._decide(
+            "Changes requested", "2026-10-10T13:00:00Z",
+            changes=[("alice", "2026-10-10T11:00:00Z")],
+            approvals=[("alice", "2026-10-10T12:00:00Z")],
+            latest=[("alice", "APPROVED", "2026-10-10T12:00:00Z")],
+        )
+        self.assertIsNone(target)
+        self.assertIn("no change request was dismissed or withdrawn", reason)
+
+    def test_one_reviewers_approval_does_not_release_anothers_change_request(self):
+        target, reason = self._decide(
+            "Changes requested", "2026-10-10T10:30:00Z",
+            changes=[("alice", "2026-10-10T10:00:00Z"), ("bob", "2026-10-10T10:15:00Z")],
+            approvals=[("alice", "2026-10-10T11:00:00Z")],
+            latest=[("alice", "APPROVED", "2026-10-10T11:00:00Z"), ("bob", "CHANGES_REQUESTED", "2026-10-10T10:15:00Z")],
+        )
+        self.assertEqual((target, reason), ("changes_requested", "already set"))
+
+    def test_approvals_after_a_dismissal_withdraw_nothing_more(self):
+        # The dismissed review is no longer CHANGES_REQUESTED, so a later
+        # approval has no change request to withdraw; the dismissal (T2) is
+        # older than the hand-set Status (T3).
+        target, _ = self._decide(
+            "Changes requested", "2026-10-10T13:00:00Z",
+            approvals=[("alice", "2026-10-10T14:00:00Z"), ("alice", "2026-10-10T15:00:00Z")],
+            latest=[("alice", "APPROVED", "2026-10-10T15:00:00Z")],
+            dismissals=[("alice", "2026-10-10T12:00:00Z")],
+        )
+        self.assertIsNone(target)
+
+    def test_repeated_dismissal_and_approval_reads_are_idempotent(self):
+        kwargs = dict(
+            changes=[("alice", "2026-10-10T10:00:00Z")],
+            approvals=[("alice", "2026-10-10T11:00:00Z"), ("alice", "2026-10-10T12:00:00Z")],
+            latest=[("alice", "APPROVED", "2026-10-10T12:00:00Z")],
+        )
+        first = self._decide("Changes requested", "2026-10-10T10:30:00Z", **kwargs)
+        second = self._decide("Changes requested", "2026-10-10T10:30:00Z", **kwargs)
+        self.assertEqual(first, second)
+        self.assertEqual(first[0], "review")
+
+    def test_blocked_and_done_survive_a_fresh_withdrawal(self):
+        for status in ("Blocked", "Done"):
+            target, _ = self._decide(
+                status, "2026-10-10T09:00:00Z",
+                changes=[("alice", "2026-10-10T10:00:00Z")],
+                approvals=[("alice", "2026-10-10T11:00:00Z")],
+                latest=[("alice", "APPROVED", "2026-10-10T11:00:00Z")],
+                dismissals=[("bob", "2026-10-10T11:30:00Z")],
+            )
+            self.assertIsNone(target, status)
+
+
 class GraphQLApiTests(unittest.TestCase):
     def _pr_payload(self, nodes):
         return {"repository": {"pullRequest": {"id": PR_ID, "state": "OPEN", "isDraft": True, "projectItems": {"nodes": nodes}}}}
