@@ -80,7 +80,7 @@ def http_transport(token: str) -> Transport:
             data=json.dumps({"query": query, "variables": variables}).encode(),
             headers={"Authorization": f"bearer {token}", "Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310 - fixed https URL
+        with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310  # nosec B310 - fixed https URL
             body = json.loads(resp.read().decode())
         if body.get("errors"):
             raise MigrationError("GraphQL error: " + "; ".join(e.get("message", "?") for e in body["errors"]))
@@ -253,6 +253,29 @@ def _late_native_inbox(key: str, item: dict, values: dict, checkpoint: Checkpoin
             and values.get("Status") == NATIVE_ENTRY_STATUS)
 
 
+def _plan_checkpointed(rec: dict, item: dict, live: Optional[dict], checkpoint: Checkpoint) -> dict:
+    if live is not None and _late_native_inbox(rec["item"], item, live["values"], checkpoint):
+        rec.update(outcome="would-change", add=False, before={"Status": NATIVE_ENTRY_STATUS},
+                   writes=[("Status", item["set"]["Status"])], repair=True,
+                   detail="late native Inbox replaced the Status this tool set")
+        return rec
+    rec.update(outcome="checkpointed", detail="already completed in an earlier run")
+    return rec
+
+
+def _planned_writes(item: dict, before: dict, stage: str) -> tuple[list, list]:
+    writes, drift = [], []
+    for field, target in item.get("set", {}).items():
+        current = before.get(field)
+        if current == target:
+            continue
+        if current not in _expected(item, field, stage):
+            drift.append(f"{field}: current {current!r}, expected {item.get('expected_before', {}).get(field)!r}")
+            continue
+        writes.append((field, target))
+    return writes, drift
+
+
 def plan_item(project: Project, item: dict, stage: str, checkpoint: Checkpoint) -> dict:
     key = f"{item['type']}#{item['number']}"
     rec: dict[str, Any] = {"item": key, "title": item.get("title", ""), "set": item.get("set", {}), "writes": [], "outcome": None, "detail": ""}
@@ -261,13 +284,7 @@ def plan_item(project: Project, item: dict, stage: str, checkpoint: Checkpoint) 
         return rec
     live = project.items.get((item["type"], item["number"]))
     if key in checkpoint.done:
-        if live is not None and _late_native_inbox(key, item, live["values"], checkpoint):
-            rec.update(outcome="would-change", add=False, before={"Status": NATIVE_ENTRY_STATUS},
-                       writes=[("Status", item["set"]["Status"])], repair=True,
-                       detail="late native Inbox replaced the Status this tool set")
-            return rec
-        rec.update(outcome="checkpointed", detail="already completed in an earlier run")
-        return rec
+        return _plan_checkpointed(rec, item, live, checkpoint)
     if live is None and stage == "migrate-existing":
         rec.update(outcome="drift", detail="item is no longer on the project")
         return rec
@@ -280,15 +297,7 @@ def plan_item(project: Project, item: dict, stage: str, checkpoint: Checkpoint) 
     if live is not None and not _state_ok(item, live["state"]):
         rec.update(outcome="drift", detail=f"GitHub state is {live['state']}, manifest expects {item.get('github_state') or item.get('state')}")
         return rec
-    drift = []
-    for field, target in item.get("set", {}).items():
-        current = before.get(field)
-        if current == target:
-            continue
-        if current not in _expected(item, field, stage):
-            drift.append(f"{field}: current {current!r}, expected {item.get('expected_before', {}).get(field)!r}")
-            continue
-        rec["writes"].append((field, target))
+    rec["writes"], drift = _planned_writes(item, before, stage)
     if drift:
         rec.update(outcome="drift", detail="; ".join(drift), writes=[])
         return rec
