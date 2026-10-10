@@ -118,7 +118,13 @@ def http_transport(token: str) -> Transport:
             headers={"Authorization": f"bearer {token}", "Content-Type": "application/json"},
         )
         with opener.open(req, timeout=60) as resp:
-            body = json.loads(resp.read().decode())
+            raw = resp.read()
+        try:
+            body = json.loads(raw.decode())
+        except ValueError as exc:   # truncated or non-JSON, possibly after a mutation landed
+            raise MigrationError(f"malformed GraphQL response: {type(exc).__name__}: {exc}") from exc
+        if not isinstance(body, dict):
+            raise MigrationError(f"malformed GraphQL response: expected an object, got {type(body).__name__}")
         if body.get("errors"):
             raise MigrationError("GraphQL error: " + "; ".join(e.get("message", "?") for e in body["errors"]))
         return body["data"]
@@ -561,7 +567,7 @@ def plan_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-_RUN_ERRORS = (MigrationError, urllib.error.URLError, OSError, KeyError, TypeError)
+_RUN_ERRORS = (MigrationError, urllib.error.URLError, OSError, KeyError, TypeError, ValueError)
 
 
 def _run_items(project: Project, plan: dict, stage: str, ck: Checkpoint, apply: bool) -> tuple[list[dict], bool]:

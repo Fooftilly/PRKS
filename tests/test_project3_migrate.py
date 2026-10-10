@@ -777,6 +777,37 @@ class PartialFailure(Base):
         self.assertTrue(r["ok"])
         self.assertEqual(self.api.items["I181"]["values"], {"Status": "Done"})
 
+    def test_a_malformed_response_after_a_write_fails_the_run_with_a_report(self):
+        self.api.put("Issue", 38, Status="Ready")
+        self.api.put("Issue", 40, Status="Ready")
+        api = self.api
+        sent = []
+
+        def truncated(query, variables):
+            result = api(query, variables)
+            if query.lstrip().startswith("mutation") and not sent:
+                sent.append(query)
+                raise json.JSONDecodeError("Unterminated string", '{"data": {"upd', 14)
+            return result
+        path = plan_file(self.tmp, "migrate-existing", [epic(38), epic(40)])
+        r = pm.run("migrate-existing", path, apply=True, transport=truncated, checkpoint=self.tmp / "ck.json",
+                   report_dir=self.tmp / "out", out=io.StringIO(), settle_seconds=0, sleep=api.settle,
+                   expected_sha256=pm.plan_sha256(path))
+        self.assertEqual(r["counts"], {"failed": 1, "not-run": 1})
+        self.assertIn("JSONDecodeError", r["items"][0]["detail"])
+        self.assertFalse(r["ok"])
+        self.assertTrue((self.tmp / "out" / "migrate-existing.json").exists())
+
+    def test_the_http_transport_reports_a_malformed_body_as_a_migration_error(self):
+        for raw in (b'{"data": {"upd', b"\xff\xfe", b"[]"):
+            resp = unittest.mock.MagicMock()
+            resp.__enter__.return_value.read.return_value = raw
+            opener = unittest.mock.MagicMock()
+            opener.open.return_value = resp
+            with self.subTest(raw=raw), unittest.mock.patch.object(pm, "_https_only_opener", return_value=opener):
+                with self.assertRaisesRegex(pm.MigrationError, "malformed GraphQL response"):
+                    pm.http_transport("t")("query { viewer { login } }", {})
+
     def test_a_checkpoint_that_cannot_be_saved_after_a_write_fails_the_run_with_a_report(self):
         self.api.put("Issue", 38, Status="Ready")
         self.api.put("Issue", 40, Status="Ready")
