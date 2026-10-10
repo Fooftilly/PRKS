@@ -183,7 +183,28 @@ def load_plan(path: Path, stage: str) -> dict:
         for field in item.get("set", {}):
             if field not in ("Status", "Roadmap Stage"):
                 raise MigrationError(f"#{item['number']}: field {field!r} is not writable by this tool")
+        _check_guards(item)
     return data
+
+
+GITHUB_STATES = ("OPEN", "CLOSED", "MERGED")
+
+
+def _check_guards(item: dict) -> None:
+    """A row that can write must carry the values its drift checks compare
+    against: the GitHub state, and an explicit expected-before entry (JSON
+    null allowed) for every field it sets. Held and no-op rows are exempt."""
+    target = item.get("set") or {}
+    if not item.get("approved", True) or not target:
+        return
+    key = f"{item['type']}#{item['number']}"
+    state = item.get("github_state") or item.get("state")
+    if state not in GITHUB_STATES:
+        raise MigrationError(f"{key}: plan row needs github_state (or state) set to one of {', '.join(GITHUB_STATES)}, got {state!r}")
+    before = item.get("expected_before")
+    missing = [f for f in target if not isinstance(before, dict) or f not in before]
+    if missing:
+        raise MigrationError(f"{key}: plan row needs an explicit expected_before entry for {', '.join(missing)} (null is allowed)")
 
 
 def _parse_item(node: dict) -> Optional[tuple[tuple[str, int], dict]]:

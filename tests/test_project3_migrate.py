@@ -286,9 +286,9 @@ class Backfill(Base):
         self.api.add_content("PullRequest", 480)
         self.api.add_content("Issue", 181, state="CLOSED")
         items = [
-            {"number": 500, "type": "Issue", "state": "OPEN", "set": {"Status": "Inbox"}},
+            open_issue(),
             {"number": 480, "type": "PullRequest", "state": "OPEN", "set": {}},
-            {"number": 181, "type": "Issue", "state": "CLOSED", "set": {"Status": "Done"}},
+            research(),
         ]
         r = self.run_stage("backfill", items, apply=True)
         self.assertEqual(r["counts"], {"changed": 3})
@@ -298,8 +298,44 @@ class Backfill(Base):
 
     def test_backfill_existing_item_with_status_is_drift(self):
         self.api.put("Issue", 500, Status="Ready")
-        r = self.run_stage("backfill", [{"number": 500, "type": "Issue", "state": "OPEN", "set": {"Status": "Inbox"}}], apply=True)
+        r = self.run_stage("backfill", [open_issue()], apply=True)
         self.assertEqual(r["counts"], {"drift": 1})
+
+    def _refused_before_any_call(self, stage, row, pattern):
+        self.api.put("Issue", 38, Status="Ready")
+        for apply in (False, True):
+            with self.assertRaisesRegex(pm.MigrationError, pattern):
+                self.run_stage(stage, [row], apply=apply)
+        self.assertEqual((self.api.calls, self.api.mutations), ([], []))
+
+    def test_a_writable_row_without_github_state_is_refused(self):
+        row = {"number": 38, "type": "Issue", "expected_before": {"Status": None}, "set": {"Status": "Backlog"}}
+        self._refused_before_any_call("migrate-existing", row, "Issue#38: .*github_state")
+
+    def test_a_writable_row_with_an_unknown_github_state_is_refused(self):
+        row = {"number": 38, "type": "Issue", "github_state": "open", "expected_before": {"Status": None}, "set": {"Status": "Backlog"}}
+        self._refused_before_any_call("migrate-existing", row, "github_state")
+
+    def test_a_writable_row_without_expected_before_is_refused(self):
+        row = {"number": 38, "type": "Issue", "github_state": "OPEN", "set": {"Status": "Backlog"}}
+        self._refused_before_any_call("migrate-existing", row, "expected_before entry for Status")
+
+    def test_a_row_missing_one_expected_before_field_is_refused(self):
+        row = epic(expected_before={"Status": "Ready"})
+        self._refused_before_any_call("migrate-existing", row, "expected_before entry for Roadmap Stage")
+
+    def test_a_backfill_row_without_state_is_refused(self):
+        row = {"number": 500, "type": "Issue", "expected_before": {"Status": None}, "set": {"Status": "Inbox"}}
+        self._refused_before_any_call("backfill", row, "state")
+
+    def test_held_and_no_op_rows_need_no_guards(self):
+        held = {"number": 39, "type": "Issue", "set": {"Status": "Done"}, "approved": False}
+        no_op = {"number": 480, "type": "PullRequest", "set": {}}
+        self.api.put("Issue", 39, state="OPEN")
+        self.api.add_content("PullRequest", 480)
+        r = self.run_stage("backfill", [held, no_op], apply=True)
+        self.assertEqual(r["counts"]["held"], 1)
+        self.assertNotIn("I39", [m[1].get("item") for m in self.api.mutations])
 
     def test_unwritable_field_rejected(self):
         with self.assertRaises(pm.MigrationError):
