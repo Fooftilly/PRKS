@@ -191,6 +191,14 @@ class IssueDependencyWriterTests(unittest.TestCase):
         self.gh.edges.add((20, 10))
         self.assertRefused(request(apply=True), "cycle: #20 blocked by #10")
 
+    def test_refusal_still_records_the_existing_edges(self) -> None:
+        self.gh.edges.update({(10, 30), (20, 10)})  # 10 is blocked by 30; 20 is blocked by 10
+        status, audit = run(self.gh, request(10, 20, apply=True))
+        self.assertEqual((status, audit.outcome), (1, "refused"))
+        self.assertEqual(audit.before, ["#30"])
+        self.assertEqual(audit.after, ["#30"])
+        self.assertIn("#30", audit.summary_markdown())
+
     def test_transitive_cycle_is_refused_with_its_path(self) -> None:
         self.gh.edges |= {(20, 30), (30, 40), (40, 10)}
         self.assertRefused(request(apply=True), "#20 blocked by #30 blocked by #40 blocked by #10")

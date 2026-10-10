@@ -306,10 +306,13 @@ class Plan:
     already_present: bool
 
 
-def preflight(client: Client, request: Request) -> Plan:
+def preflight(client: Client, request: Request, audit: Audit | None = None) -> Plan:
     blocked_ref = fetch_open_issue(client, request.repo, request.blocked, "blocked issue")
     blocker_ref = fetch_open_issue(client, request.repo, request.blocking, "blocking issue")
     existing = blocked_by(client, blocked_ref)
+    if audit is not None:
+        # Recorded before the cycle check, so a refusal still shows them.
+        audit.before = audit.after = [ref.label(request.repo) for ref in existing]
     if any(edge.id == blocker_ref.id for edge in existing):
         return Plan(blocked_ref, blocker_ref, existing, already_present=True)
     cycle = find_cycle(client, blocked_ref, blocker_ref)
@@ -355,8 +358,7 @@ def _write(client: Client, request: Request, audit: Audit) -> int:
 def run(client: Client, request: Request, audit: Audit) -> int:
     try:
         validate(request)
-        plan = preflight(client, request)
-        audit.before = [ref.label(request.repo) for ref in plan.existing]
+        plan = preflight(client, request, audit)
         if plan.already_present:
             return _finish(audit, "no-op", "relationship already present", audit.before, 0)
         if not request.apply:
