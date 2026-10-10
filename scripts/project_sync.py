@@ -10,25 +10,22 @@ submitted or dismissed review, and covers only the PR rows owned by
 * ``ready_for_review``   -> Review, from empty, Inbox, Ready or In Progress
 * ``converted_to_draft`` -> In Progress, from Review or Changes requested, when
   the conversion is newer than the current Status
-* ``review_requested``   -> Review, from Changes requested, only for the
-  re-request that first answers a reviewer's change request, made after that
-  Status was set; a repeat request answers nothing new
+* ``review_requested``   -> Review, from Changes requested, when no review is
+  unanswered and a change request was first answered after that Status was set
 * ``review_changed``     -> Changes requested, from empty, In Progress or Review,
   while a review is unanswered; otherwise In Progress (draft) or Review, from
-  Changes requested, once a change request was dismissed or withdrawn by an
-  approval after that Status was set
+  Changes requested, on the same release rule as ``review_requested``
 
-A changes-requested review is *unanswered* until the same reviewer is
-requested again, or the PR is converted to draft, after it. A dismissed
-review, or one followed by the same reviewer's approval, is no longer the
-reviewer's latest change request and does not count.
-``review_requested`` applies only when no review is unanswered, so
-requesting another reviewer or a delayed run never hides requested changes.
+Review history is read one way throughout (see ``answers``). Each
+changes-requested review is answered once, by the first later event among: a
+request of the same reviewer, an approval by the same reviewer, the dismissal
+of that review, or a conversion to draft. A review with no answer is
+*unanswered*. Only a first answer newer than the current Status releases
+Changes requested, so a repeat request or approval, a dismissal of a review
+already answered, a request of another reviewer, a comment review, or a
+delayed run never clears a Changes requested set later by hand.
 ``converted_to_draft`` applies only when the conversion is newer than the
-latest changes-requested review. ``review_changed`` re-derives the state from
-the review history, so a delayed review run never undoes a re-request and a
-dismissal releases Changes requested, while a comment review or an unrelated
-approval leaves it alone. If a review is unanswered when
+latest changes-requested review. If a review is unanswered when
 ``opened`` or ``ready_for_review`` runs, the run sets Changes requested
 instead of In Progress or Review.
 
@@ -153,17 +150,24 @@ class PullRequest:
     state: str
     is_draft: bool
     item: Optional[Item]
-    # ISO 8601 time of the latest conversion to draft, or None.
-    last_converted_to_draft_at: Optional[str] = None
+    # ISO 8601 times of the conversions to draft.
+    draft_conversions: tuple[str, ...] = ()
     # (reviewer, time) of each review request, and of each reviewer whose
     # latest approving or change-requesting review requested changes
     # (dismissed reviews do not count).
     review_requests: tuple[tuple[str, str], ...] = ()
     changes_requested: tuple[tuple[str, str], ...] = ()
-    # (reviewer, time) of each change request that no longer stands: a
-    # dismissal of a changes-requested review, or an approval that followed
-    # the same reviewer's change request.
-    withdrawals: tuple[tuple[str, str], ...] = ()
+    # The review history: (reviewer, time) of every changes-requested review
+    # (dismissed ones included) and of every approval, and (reviewer, time of
+    # the dismissed review, time of the dismissal) of each dismissed
+    # changes-requested review.
+    change_reviews: tuple[tuple[str, str], ...] = ()
+    approvals: tuple[tuple[str, str], ...] = ()
+    dismissals: tuple[tuple[str, Optional[str], str], ...] = ()
+
+    @property
+    def last_converted_to_draft_at(self) -> Optional[str]:
+        return _latest(self.draft_conversions)
 
     @property
     def last_review_requested_at(self) -> Optional[str]:
@@ -241,24 +245,66 @@ def _after(later: Optional[str], earlier: str) -> bool:
     return later_time is not None and earlier_time is not None and later_time > earlier_time
 
 
-def unanswered_changes(pr: PullRequest) -> list[str]:
-    """Reviewers whose changes-requested review still stands.
+# How review history is read: each changes-requested review is answered once,
+# by the first of these events after it: a request of the same reviewer, an
+# approval by the same reviewer, the dismissal of that review, or a conversion
+# to draft. That first answer is the only event that can release Changes
+# requested, and only when it is newer than the current Status. Later events
+# (a repeat request or approval, or a dismissal of a review already answered)
+# answer nothing new, so they never replay the release. Equal times answer
+# nothing.
 
-    A review is answered by a newer review request of the same reviewer, or
-    by a newer conversion to draft. Equal times do not answer it.
-    """
-    return sorted(
-        reviewer
-        for reviewer, at in pr.changes_requested
-        if not _after(pr.last_converted_to_draft_at, at)
-        and not any(who == reviewer and _after(when, at) for who, when in pr.review_requests)
+
+@dataclass(frozen=True)
+class Answer:
+    reviewer: str
+    requested_at: str
+    answered_at: str
+    by: str
+
+
+def _first_answer(pr: PullRequest, reviewer: str, at: str) -> Optional[tuple[str, str]]:
+    """The (time, kind) of the first event that answers a change request."""
+    candidates = [(when, "re-request") for who, when in pr.review_requests if who == reviewer and _after(when, at)]
+    candidates += [(when, "approval") for who, when in pr.approvals if who == reviewer and _after(when, at)]
+    candidates += [(when, "dismissal") for who, review, when in pr.dismissals if who == reviewer and review == at]
+    candidates += [(when, "conversion to draft") for when in pr.draft_conversions if _after(when, at)]
+    return min(candidates, key=lambda answer: _time(answer[0]) or datetime.min) if candidates else None
+
+
+def answers(pr: PullRequest) -> list[Answer]:
+    """The first answer of every change request in the history that has one."""
+    requests = dict.fromkeys(
+        [*pr.change_reviews, *pr.changes_requested, *((who, review) for who, review, _ in pr.dismissals if review)]
+    )
+    found = []
+    for reviewer, at in requests:
+        first = _first_answer(pr, reviewer, at)
+        if first is not None:
+            found.append(Answer(reviewer, at, *first))
+    return found
+
+
+def unanswered_changes(pr: PullRequest) -> list[str]:
+    """Reviewers whose latest changes-requested review has no answer yet."""
+    return sorted(reviewer for reviewer, at in pr.changes_requested if _first_answer(pr, reviewer, at) is None)
+
+
+def releases(pr: PullRequest) -> list[Answer]:
+    """First answers newer than the current Status: the only events that may
+    release Changes requested. With no recorded Status time, every answer
+    counts."""
+    since = pr.item.status_updated_at if pr.item else None
+    return [answer for answer in answers(pr) if since is None or _after(answer.answered_at, since)]
+
+
+def _describe(found: list[Answer]) -> str:
+    return "; ".join(
+        sorted({f"{answer.reviewer}'s change request was answered by {_ARTICLES[answer.by]} {answer.by}" for answer in found})
     )
 
 
-def _first_re_request(pr: PullRequest, reviewer: str, changes_at: str) -> Optional[str]:
-    """The time of the first request of ``reviewer`` after their change request."""
-    following = [when for who, when in pr.review_requests if who == reviewer and _after(when, changes_at)]
-    return min(following, key=lambda when: _time(when) or datetime.min) if following else None
+_ARTICLES = {"re-request": "a", "approval": "an", "dismissal": "a", "conversion to draft": "a"}
 
 
 # Actions whose run must not hide a changes-requested review.
@@ -321,26 +367,13 @@ def decide(config: Config, action: str, pr: PullRequest) -> tuple[Optional[str],
         if not _after(pr.last_converted_to_draft_at, pr.item.status_updated_at):
             return None, "stale event: the current Status was set after the latest conversion to draft"
     if action == "review_requested":
-        # Only the re-request that first answers a reviewer's change request,
-        # made after Changes requested was set, releases it. A request of
-        # anyone else, a repeat request after the change request was already
-        # answered (by an earlier re-request or a conversion to draft), or one
-        # older than the Status (a delayed run, or a Status set by hand
-        # later) leaves it alone.
-        assert pr.item is not None
-        since = pr.item.status_updated_at
-        released = sorted(
-            {
-                by
-                for by, at in pr.changes_requested
-                if (answer := _first_re_request(pr, by, at)) is not None
-                and not (_after(pr.last_converted_to_draft_at, at) and _after(answer, pr.last_converted_to_draft_at))
-                and (since is None or _after(answer, since))
-            }
-        )
+        # Only the first answer of a change request, newer than the Status,
+        # releases it (see ``answers``). A request of anyone else, a repeat
+        # request, or one older than the Status leaves it alone.
+        released = releases(pr)
         if not released:
-            return None, "no re-request of a reviewer who requested changes is newer than the current Status"
-        return target, f"{', '.join(released)} was requested again, so `{action}` moves the PR to {config.statuses[target]}"
+            return None, "no change request was first answered after the current Status was set"
+        return target, f"{_describe(released)}, so `{action}` moves the PR to {config.statuses[target]}"
     if outstanding:
         return target, f"a changes-requested review is still outstanding, so `{action}` sets {config.statuses[target]}"
     return target, f"`{action}` moves the PR to {config.statuses[target]}"
@@ -351,10 +384,9 @@ def _decide_review(config: Config, pr: PullRequest) -> tuple[Optional[str], str]
 
     While a changes-requested review is unanswered the PR moves to Changes
     requested. Once none is, an item in Changes requested moves on, to In
-    Progress or Review, only when a change request was withdrawn (dismissed,
-    or followed by the same reviewer's approval) after its Status was set. A
-    Changes requested set by hand, or one no withdrawal answers, stays, so a
-    comment review or an unrelated approval never clears it.
+    Progress or Review, only when a change request was first answered after
+    its Status was set (see ``answers``). A Changes requested set by hand
+    stays through comment reviews, unrelated approvals and repeat events.
     """
     current = config.key_of(_status_of(pr))
     pending = unanswered_changes(pr)
@@ -368,12 +400,10 @@ def _decide_review(config: Config, pr: PullRequest) -> tuple[Optional[str], str]
         reason = "no changes-requested review is unanswered"
         if current != "changes_requested":
             return None, reason
-        assert pr.item is not None
-        since = pr.item.status_updated_at
-        withdrawn = sorted(who for who, at in pr.withdrawals if since is None or _after(at, since))
-        if not withdrawn:
-            return None, f"{reason}, but no change request was dismissed or withdrawn after Changes requested was set"
-        reason = f"the change request by {', '.join(withdrawn)} was dismissed or withdrawn"
+        released = releases(pr)
+        if not released:
+            return None, f"{reason}, but no change request was first answered after Changes requested was set"
+        reason = _describe(released)
     if current == target:
         return target, "already set"
     if current not in allowed:
@@ -552,7 +582,7 @@ query($owner: String!, $name: String!, $number: Int!, $field: String!) {
           }
         }
       }
-      convertedToDraft: timelineItems(last: 1, itemTypes: [CONVERT_TO_DRAFT_EVENT]) {
+      convertedToDraft: timelineItems(last: 100, itemTypes: [CONVERT_TO_DRAFT_EVENT]) {
         nodes { ... on ConvertToDraftEvent { createdAt } }
       }
       latestOpinionatedReviews(first: 100) {
@@ -565,7 +595,7 @@ query($owner: String!, $name: String!, $number: Int!, $field: String!) {
         nodes { submittedAt author { login } }
       }
       dismissals: timelineItems(last: 100, itemTypes: [REVIEW_DISMISSED_EVENT]) {
-        nodes { ... on ReviewDismissedEvent { createdAt previousReviewState review { author { login } } } }
+        nodes { ... on ReviewDismissedEvent { createdAt previousReviewState review { submittedAt author { login } } } }
       }
       projectItems(first: 50, includeArchived: true) {
         pageInfo { hasNextPage }
@@ -697,11 +727,16 @@ class GraphQLApi:
             for node in (pr.get("latestOpinionatedReviews") or {}).get("nodes") or []
             if node and node.get("state") == "CHANGES_REQUESTED" and node.get("submittedAt")
         ]
-        withdrawals = [
-            ((((node.get("review") or {}).get("author") or {}).get("login") or "ghost").lower(), node["createdAt"])
+        dismissals = [
+            (
+                (((node.get("review") or {}).get("author") or {}).get("login") or "ghost").lower(),
+                (node.get("review") or {}).get("submittedAt"),
+                node["createdAt"],
+            )
             for node in (pr.get("dismissals") or {}).get("nodes") or []
             if node and node.get("previousReviewState") == "CHANGES_REQUESTED" and node.get("createdAt")
         ]
+
         def reviews_of(key: str) -> list[tuple[str, str]]:
             return [
                 (((node.get("author") or {}).get("login") or "ghost").lower(), node["submittedAt"])
@@ -709,23 +744,17 @@ class GraphQLApi:
                 if node and node.get("submittedAt")
             ]
 
-        # An approval withdraws only the change requests it is the first
-        # approval after; a later repeat approval withdraws nothing new.
-        approvals = reviews_of("approvals")
-        for who, at in reviews_of("changeReviews"):
-            following = [when for by, when in approvals if by == who and _after(when, at)]
-            first = min(following, key=lambda when: _time(when) or datetime.min) if following else None
-            if first is not None and (who, first) not in withdrawals:
-                withdrawals.append((who, first))
         return PullRequest(
             id=pr["id"],
             state=str(pr["state"]),
             is_draft=bool(pr["isDraft"]),
             item=item,
-            last_converted_to_draft_at=(drafts[-1] or {}).get("createdAt") if drafts else None,
+            draft_conversions=tuple(node["createdAt"] for node in drafts if node and node.get("createdAt")),
             review_requests=tuple(requests),
             changes_requested=tuple(changes),
-            withdrawals=tuple(withdrawals),
+            change_reviews=tuple(reviews_of("changeReviews")),
+            approvals=tuple(reviews_of("approvals")),
+            dismissals=tuple(dismissals),
         )
 
     def add_item(self, project_id: str, content_id: str) -> None:

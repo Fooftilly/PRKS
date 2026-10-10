@@ -54,9 +54,11 @@ class FakeBoard:
         self.before_add: Optional[Callable[[], None]] = None
         self.options = dict(OPTIONS)
         self.review_requests: list[tuple[str, str]] = []
-        self.converted_to_draft_at: Optional[str] = None
+        self.draft_conversions: list[str] = []
         self.changes_by: dict[str, str] = {}  # reviewer -> latest changes-requested review
-        self.withdrawals: list[tuple[str, str]] = []  # dismissed or approved change requests
+        self.change_reviews: list[tuple[str, str]] = []  # every changes-requested review
+        self.approvals: list[tuple[str, str]] = []
+        self.dismissals: list[tuple[str, Optional[str], str]] = []
         self.status_at: Optional[str] = None  # when the PR's Status was last set, if known
         self.after_add: Optional[Callable[[], None]] = None
         self._next = 0
@@ -86,7 +88,7 @@ class FakeBoard:
 
     def convert_to_draft(self, at: str) -> None:
         self.pr["draft"] = True
-        self.converted_to_draft_at = at
+        self.draft_conversions.append(at)
 
     def request_changes(self, at: str, reviewer: str = "alice") -> None:
         """A changes-requested review whose Changes requested write is queued.
@@ -96,22 +98,27 @@ class FakeBoard:
         mid-run.
         """
         self.changes_by[reviewer] = at
+        self.change_reviews.append((reviewer, at))
         if PR_ID in self.items:
             self.pending_native.append((PR_ID, CONFIG.statuses["changes_requested"]))
 
     def submit_changes_review(self, at: str, reviewer: str = "alice") -> None:
         """A changes-requested review with no native rule: only the time is recorded."""
         self.changes_by[reviewer] = at
+        self.change_reviews.append((reviewer, at))
 
     def dismiss(self, reviewer: str = "alice", at: str = "2026-10-10T20:00:00Z") -> None:
         """A maintainer dismissed the reviewer's change request."""
-        if self.changes_by.pop(reviewer, None) is not None:
-            self.withdrawals.append((reviewer, at))
+        review = self.changes_by.pop(reviewer, None)
+        if review is not None:
+            # A dismissed review is no longer CHANGES_REQUESTED in GitHub.
+            self.change_reviews.remove((reviewer, review))
+            self.dismissals.append((reviewer, review, at))
 
     def approve(self, reviewer: str = "alice", at: str = "2026-10-10T20:00:00Z") -> None:
-        """The reviewer approves; an earlier change request of theirs is withdrawn."""
-        if self.changes_by.pop(reviewer, None) is not None:
-            self.withdrawals.append((reviewer, at))
+        """The reviewer approves, which replaces their latest change request."""
+        self.changes_by.pop(reviewer, None)
+        self.approvals.append((reviewer, at))
 
     def flush_native(self) -> None:
         while self.pending_native:
@@ -144,10 +151,12 @@ class FakeBoard:
             state=self.pr["state"],
             is_draft=self.pr["draft"],
             item=item,
-            last_converted_to_draft_at=self.converted_to_draft_at,
+            draft_conversions=tuple(self.draft_conversions),
             review_requests=tuple(self.review_requests),
             changes_requested=tuple(self.changes_by.items()),
-            withdrawals=tuple(self.withdrawals),
+            change_reviews=tuple(self.change_reviews),
+            approvals=tuple(self.approvals),
+            dismissals=tuple(self.dismissals),
         )
 
     def add_item(self, project_id, content_id):
@@ -398,7 +407,7 @@ class ChangesRequestedTests(unittest.TestCase):
         board.request_review("2026-10-10T12:00:00Z", reviewer="bob")
         audit = sync(board, "review_requested")
         self.assertEqual(audit.outcome, "skipped")
-        self.assertIn("no re-request of a reviewer who requested changes", audit.reason)
+        self.assertIn("no change request was first answered after", audit.reason)
         self.assertEqual(board.pr_status, "Changes requested")
 
     def test_requesting_someone_else_after_an_answered_request_keeps_a_hand_set_status(self):
@@ -430,7 +439,7 @@ class ChangesRequestedTests(unittest.TestCase):
         board.request_review("2026-10-10T11:00:00Z")
         audit = sync(board, "review_requested")
         self.assertEqual(audit.outcome, "updated")
-        self.assertIn("alice was requested again", audit.reason)
+        self.assertIn("alice's change request was answered by a re-request", audit.reason)
         self.assertEqual(board.pr_status, "Review")
 
     def test_a_repeat_re_request_keeps_a_hand_set_status(self):
@@ -453,6 +462,64 @@ class ChangesRequestedTests(unittest.TestCase):
         board.person_sets("Changes requested", at="2026-10-10T14:00:05Z")
         board.request_review("2026-10-10T15:00:00Z")
         self.assertEqual(sync(board, "review_requested").outcome, "updated")
+        self.assertEqual(board.pr_status, "Review")
+
+    def _answered_then_set_by_hand(self) -> FakeBoard:
+        """T1 Alice requests changes, T2 her re-request releases it, T3 a
+        person sets Changes requested for another reason."""
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.submit_changes_review("2026-10-10T10:00:00Z")
+        board.person_sets("Changes requested", at="2026-10-10T10:00:05Z")
+        board.request_review("2026-10-10T11:00:00Z")
+        self.assertEqual(sync(board, "review_requested").outcome, "updated")
+        board.person_sets("Changes requested", at="2026-10-10T12:00:00Z")
+        return board
+
+    def test_a_later_approval_of_an_answered_change_request_keeps_a_hand_set_status(self):
+        board = self._answered_then_set_by_hand()
+        board.approve("alice", at="2026-10-10T13:00:00Z")
+        audit = sync(board, "review_changed")
+        self.assertEqual(audit.outcome, "skipped")
+        self.assertIn("no change request was first answered after", audit.reason)
+        self.assertEqual(board.pr_status, "Changes requested")
+
+    def test_a_later_dismissal_of_an_answered_change_request_keeps_a_hand_set_status(self):
+        board = self._answered_then_set_by_hand()
+        board.dismiss("alice", at="2026-10-10T13:00:00Z")
+        self.assertEqual(sync(board, "review_changed").outcome, "skipped")
+        self.assertEqual(board.pr_status, "Changes requested")
+
+    def test_replayed_runs_after_a_release_change_nothing(self):
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.submit_changes_review("2026-10-10T10:00:00Z")
+        board.person_sets("Changes requested", at="2026-10-10T10:00:05Z")
+        board.request_review("2026-10-10T11:00:00Z")
+        self.assertEqual(sync(board, "review_requested").outcome, "updated")
+        writes = len(board.mutations)
+        for action in ("review_requested", "review_changed", "review_requested"):
+            self.assertIn(sync(board, action).outcome, {"skipped", "unchanged"}, action)
+        self.assertEqual(len(board.mutations), writes)
+        self.assertEqual(board.pr_status, "Review")
+
+    def test_reviewers_are_answered_independently_across_kinds(self):
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.submit_changes_review("2026-10-10T10:00:00Z", reviewer="alice")
+        board.submit_changes_review("2026-10-10T10:10:00Z", reviewer="bob")
+        board.person_sets("Changes requested", at="2026-10-10T10:10:05Z")
+        board.request_review("2026-10-10T11:00:00Z", reviewer="alice")
+        # Bob's change request still stands, so Alice's re-request alone
+        # releases nothing.
+        self.assertEqual(sync(board, "review_requested").outcome, "skipped")
+        self.assertEqual(board.pr_status, "Changes requested")
+        # Bob's approval answers his; both answers are newer than the Status.
+        board.approve("bob", at="2026-10-10T12:00:00Z")
+        audit = sync(board, "review_changed")
+        self.assertEqual(audit.outcome, "updated")
+        self.assertIn("alice's change request was answered by a re-request", audit.reason)
+        self.assertIn("bob's change request was answered by an approval", audit.reason)
         self.assertEqual(board.pr_status, "Review")
 
     def test_a_re_request_after_a_draft_conversion_answered_the_review_keeps_a_hand_set_status(self):
@@ -522,7 +589,7 @@ class ChangesRequestedTests(unittest.TestCase):
             board.dismiss()
             audit = sync(board, "review_changed")
             self.assertEqual(audit.outcome, "updated", draft)
-            self.assertIn("by alice was dismissed or withdrawn", audit.reason)
+            self.assertIn("alice's change request was answered by a dismissal", audit.reason)
             self.assertEqual(board.pr_status, expected)
 
     def test_a_later_approval_releases_changes_requested(self):
@@ -552,7 +619,7 @@ class ChangesRequestedTests(unittest.TestCase):
         board.person_sets("Changes requested", at="2026-10-10T11:00:00Z")
         audit = sync(board, "review_changed")  # a bot's comment review
         self.assertEqual(audit.outcome, "skipped")
-        self.assertIn("no change request was dismissed or withdrawn", audit.reason)
+        self.assertIn("no change request was first answered after", audit.reason)
         board.approve(reviewer="bob")  # never requested changes
         self.assertEqual(sync(board, "review_changed").outcome, "skipped")
         self.assertEqual(board.pr_status, "Changes requested")
@@ -1084,7 +1151,7 @@ class ReviewHistoryTests(unittest.TestCase):
             latest=[("alice", "APPROVED", "2026-10-10T12:00:00Z")],
         )
         self.assertIsNone(target)
-        self.assertIn("no change request was dismissed or withdrawn", reason)
+        self.assertIn("no change request was first answered after", reason)
 
     def test_one_reviewers_approval_does_not_release_anothers_change_request(self):
         target, reason = self._decide(
@@ -1157,8 +1224,10 @@ class GraphQLApiTests(unittest.TestCase):
             {"submittedAt": "2026-10-10T10:30:00Z", "author": {"login": "carol"}},
         ]}
         pr_raw["dismissals"] = {"nodes": [
-            {"createdAt": "2026-10-10T10:45:00Z", "previousReviewState": "CHANGES_REQUESTED", "review": {"author": {"login": "Dave"}}},
-            {"createdAt": "2026-10-10T10:46:00Z", "previousReviewState": "APPROVED", "review": {"author": {"login": "erin"}}},
+            {"createdAt": "2026-10-10T10:45:00Z", "previousReviewState": "CHANGES_REQUESTED",
+             "review": {"submittedAt": "2026-10-10T10:40:00Z", "author": {"login": "Dave"}}},
+            {"createdAt": "2026-10-10T10:46:00Z", "previousReviewState": "APPROVED",
+             "review": {"submittedAt": "2026-10-10T10:20:00Z", "author": {"login": "erin"}}},
         ]}
         seen = []
         api = ps.GraphQLApi(lambda q, v: seen.append(q) or payload)
@@ -1169,9 +1238,17 @@ class GraphQLApiTests(unittest.TestCase):
         self.assertEqual(pr.last_changes_requested_at, "2026-10-10T10:50:00Z")
         self.assertEqual(pr.last_converted_to_draft_at, "2026-10-10T09:00:00Z")
         self.assertEqual(ps.unanswered_changes(pr), ["bob", "ghost"])
-        # Dave's change request was dismissed; Carol approved after hers.
-        # Erin's dismissed review was an approval, so it withdraws nothing.
-        self.assertEqual(pr.withdrawals, (("dave", "2026-10-10T10:45:00Z"), ("carol", "2026-10-10T10:30:00Z")))
+        # Carol approved after her change request; Dave's was dismissed.
+        # Erin's dismissed review was an approval, so it answers nothing.
+        # Bob's came after the only draft conversion, so it stands.
+        self.assertEqual(
+            [(a.reviewer, a.requested_at, a.answered_at, a.by) for a in ps.answers(pr)],
+            [
+                ("carol", "2026-10-10T10:10:00Z", "2026-10-10T10:30:00Z", "approval"),
+                ("dave", "2026-10-10T10:40:00Z", "2026-10-10T10:45:00Z", "dismissal"),
+            ],
+        )
+        self.assertIn("review { submittedAt author { login } }", seen[0])
         self.assertIn("reviews(last: 100, states: [CHANGES_REQUESTED])", seen[0])
         self.assertIn("reviews(last: 100, states: [APPROVED])", seen[0])
         self.assertIn("itemTypes: [REVIEW_DISMISSED_EVENT]", seen[0])
@@ -1198,10 +1275,10 @@ class GraphQLApiTests(unittest.TestCase):
             {"state": "APPROVED", "submittedAt": "2026-10-10T14:00:00Z", "author": {"login": "alice"}},
         ]}
         pr = ps.GraphQLApi(lambda q, v: payload).load_pr(CONFIG, PR_NUMBER, PROJECT_ID)
-        self.assertEqual(pr.withdrawals, (("alice", "2026-10-10T12:00:00Z"),))
+        self.assertEqual([(a.answered_at, a.by) for a in ps.answers(pr)], [("2026-10-10T12:00:00Z", "approval")])
         target, reason = ps.decide(CONFIG, "review_changed", pr)
         self.assertIsNone(target)
-        self.assertIn("no change request was dismissed or withdrawn", reason)
+        self.assertIn("no change request was first answered after", reason)
         # A new change request followed by an approval is a fresh withdrawal.
         pr_raw["changeReviews"]["nodes"].append({"submittedAt": "2026-10-10T15:00:00Z", "author": {"login": "alice"}})
         pr_raw["approvals"]["nodes"].append({"submittedAt": "2026-10-10T16:00:00Z", "author": {"login": "alice"}})
