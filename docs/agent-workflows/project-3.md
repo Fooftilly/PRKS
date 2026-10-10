@@ -285,7 +285,7 @@ Both plans use the same schema:
 }
 ```
 
-`expected_before` is the value the reviewer saw (`null` = empty). `set` may name only Status and Roadmap Stage. An item with `approved: false` is held, and a `set` of `{}` writes nothing. A backfill plan uses `"stage": "backfill"` and `state` in place of `github_state`. Every other row is checked before anything is read or written: it must give `github_state` (or `state`) as OPEN, CLOSED or MERGED, and an explicit `expected_before` entry for every field in `set`. A missing entry is refused rather than read as empty, so a hand-written row cannot switch off the drift checks.
+`expected_before` is the value the reviewer saw (`null` = empty). `set` may name only Status and Roadmap Stage. An item with `approved: false` is held, and a `set` of `{}` writes nothing. A backfill plan uses `"stage": "backfill"` and `state` in place of `github_state`. Every other row, and every backfill row (each one can add its item, even with an empty `set`), is checked before anything is read or written: it must give `github_state` (or `state`) as OPEN, CLOSED or MERGED, and an explicit `expected_before` entry for every field in `set`. A missing entry is refused rather than read as empty, so a hand-written row cannot switch off the drift checks.
 
 **Guarantees enforced by the tool:**
 - Dry-run unless `--apply` is given. A dry-run, and `plan-backfill`, only send queries.
@@ -296,7 +296,7 @@ Both plans use the same schema:
 - Only listed fields are written (Status, Roadmap Stage; never Execution), and only when the current value equals the plan's expected-before value. Any other value, or a changed issue state, is reported as drift and skipped.
 - The item is re-read immediately before each field write, not only in the snapshot taken when the run starts. A Status, Roadmap Stage or issue state changed while the run is in progress is reported as drift and never overwritten.
 - In the backfill, Inbox also counts as an expected Status. The native "Item added" workflow sets Inbox on any item that auto-add or the tool adds, so whether it runs before or after the add, the item still gets its planned Status.
-- After the writes, the tool waits `--settle-seconds` (default 30) and re-reads every item it added. If a late "Item added" Inbox replaced the Status it wrote (for example Done on a closed research issue), it writes the Status again once. That repair is guarded like every other write: if the item was removed or archived, or its issue or PR changed state during the wait, nothing is written. That case, and any other value, is reported as `verify-failed` and left alone.
+- After the writes, the tool waits `--settle-seconds` (default 30) and re-reads every item it added. If a late "Item added" Inbox replaced the Status it wrote (for example Done on a closed research issue), it writes the Status again once. That repair is guarded like every other write: if the item was removed or archived, or its issue or PR changed state during the wait, nothing is written. The item is re-read after the repair as well, and a change in that moment is reported the same way. That case, and any other value, is reported as `verify-failed` and left alone.
 - Items on the board that a migrate-existing plan does not list are reported as `not-in-plan` and never touched.
 - PRs are never set to Inbox.
 - Plans, reports and checkpoints must be under the home or temp directory and outside this repository. By default reports and the checkpoint go to `prks-project3-migration` in the system temp directory.
