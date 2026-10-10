@@ -273,6 +273,24 @@ class Writes(Base):
         self.assertEqual(r["counts"], {"checkpointed": 1, "held": 1, "unchanged": 1})
         self.assertTrue(r["ok"])
 
+    def test_an_issue_closed_during_a_write_fails_the_apply_and_is_not_completed(self):
+        self.api.put("Issue", 38, Status="Ready")
+
+        def close_during_status_write(name, variables):
+            if name == "updateProjectV2ItemFieldValue" and variables["field"] == "F_Status":
+                self.api.content[38]["state"] = "CLOSED"   # closed after the pre-write check
+        self.api.before_mutation = close_during_status_write
+        r = self.run_stage("migrate-existing", [epic()], apply=True)
+        self.assertEqual(r["counts"], {"drift": 1})
+        self.assertFalse(r["ok"])
+        self.assertIn("GitHub state changed to CLOSED while Status was written", r["items"][0]["detail"])
+        self.assertEqual(r["items"][0]["writes"], [("Status", "Backlog")])
+        ck = self.tmp / "ck.json"
+        self.assertFalse(ck.exists() and "Issue#38" in json.loads(ck.read_text())["done"])
+        n = len(self.api.mutations)
+        self.assertEqual(self.run_stage("migrate-existing", [epic()], apply=True)["counts"], {"drift": 1})
+        self.assertEqual(len(self.api.mutations), n)   # a rerun never writes the closed issue
+
     def test_existing_stage_value_is_not_overwritten(self):
         self.api.put("Issue", 38, Status="Ready", **{"Roadmap Stage": "Parked"})
         r = self.run_stage("migrate-existing", [epic()], apply=True)

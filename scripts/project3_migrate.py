@@ -414,6 +414,14 @@ def apply_item(project: Project, item: dict, rec: dict, stage: str, checkpoint: 
             return
         _set(project, item_id, field, target)
         written.append((field, target))
+        # The write is not atomic with the check above: an issue closed (and
+        # moved to Done by "Item closed") in between would now carry this
+        # target. Re-read and report it so the apply fails for a person to fix.
+        after = _unsafe_to_touch(item, project.refresh(item_id))
+        if after:
+            rec.update(outcome="drift", writes=written,
+                       detail=f"{after} while {field} was written; check this item by hand")
+            return
     rec["writes"] = written
     rec["outcome"] = "changed" if written or rec.get("add") else "unchanged"
     if rec.get("repair"):
