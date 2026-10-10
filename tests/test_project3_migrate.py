@@ -728,6 +728,20 @@ class PartialFailure(Base):
         self.assertTrue((self.tmp / "out" / "migrate-existing.json").exists())
         self.assertEqual(self.api.items["I40"]["values"], {"Status": "Ready"})   # stopped before the next item
 
+    def test_an_invalid_settle_delay_is_refused_before_anything_runs(self):
+        self.api.add_content("Issue", 181, state="CLOSED")
+        path = plan_file(self.tmp, "backfill", [research()])
+        for value in ("-1", "nan", "inf"):
+            with self.subTest(value=value):
+                err = io.StringIO()
+                with unittest.mock.patch("sys.stderr", err):
+                    rc = pm.main(["backfill", "--apply", "--settle-seconds", value, "--plan", str(path),
+                                  "--plan-sha256", pm.plan_sha256(path), "--report-dir", str(self.tmp / "o")],
+                                 env={}, transport=self.api)
+                self.assertEqual(rc, 1)   # refused like a --plan-sha256 mismatch
+                self.assertIn("--settle-seconds", err.getvalue())
+        self.assertEqual((self.api.calls, self.api.mutations), ([], []))
+
     def test_main_exits_non_zero_after_a_failure(self):
         self.api.add_content("Issue", 181, state="CLOSED")
         self.api.fail_next_set = 1

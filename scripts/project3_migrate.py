@@ -58,6 +58,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import sys
 import tempfile
@@ -623,9 +624,16 @@ def _run_ok(apply: bool, failed: bool, counts: dict[str, int]) -> bool:
     return not (apply and counts.get("drift"))
 
 
+def _check_settle_seconds(settle_seconds: float) -> None:
+    """Refuse a delay that sleep() would reject only after the writes."""
+    if not (math.isfinite(settle_seconds) and settle_seconds >= 0):
+        raise MigrationError(f"--settle-seconds must be a finite number of seconds, 0 or more; got {settle_seconds!r}")
+
+
 def run(stage: str, plan_path: Path, *, apply: bool, transport: Transport, checkpoint: Path, report_dir: Path,
         out=sys.stdout, settle_seconds: float = DEFAULT_SETTLE_SECONDS, sleep: Callable[[float], None] = time.sleep,
         expected_sha256: Optional[str] = None) -> dict:
+    _check_settle_seconds(settle_seconds)
     raw = plan_path.read_bytes()   # read once: these exact bytes are hashed and run
     digest = hashlib.sha256(raw).hexdigest()
     if apply and expected_sha256 != digest:
