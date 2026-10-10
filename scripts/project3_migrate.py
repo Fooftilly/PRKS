@@ -45,6 +45,7 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -63,6 +64,12 @@ STAGES = ("migrate-existing", "backfill")
 NATIVE_ENTRY_STATUS = "Inbox"
 DEFAULT_SETTLE_SECONDS = 30.0
 _DOCS = Path(__file__).resolve().parents[1] / "docs" / "agent-workflows" / "project-3-migration"
+# CLI paths are confined: manifests are read from the checked-in manifest
+# directory or a temp directory, and reports and checkpoints are written only
+# under a temp directory, so a mistyped or injected argument cannot read or
+# overwrite an arbitrary file.
+_TEMP_ROOTS = tuple({Path(tempfile.gettempdir()).resolve(), Path("/tmp").resolve()})  # noqa: S108  # nosec B108
+DEFAULT_REPORT_DIR = Path(tempfile.gettempdir()) / "prks-project3-migration"
 DEFAULT_MANIFEST = {"migrate-existing": _DOCS / "existing-items.json", "backfill": _DOCS / "backfill.json"}
 
 
@@ -437,6 +444,15 @@ def run(stage: str, manifest_path: Path, *, apply: bool, transport: Transport, c
     return report
 
 
+def _confined(path: Path, roots: tuple, what: str, suffix: Optional[str] = None) -> Path:
+    resolved = path.expanduser().resolve()
+    if not any(resolved == root or resolved.is_relative_to(root) for root in roots):
+        raise MigrationError(f"{what} must be under {' or '.join(str(r) for r in roots)}: {resolved}")
+    if suffix and resolved.suffix != suffix:
+        raise MigrationError(f"{what} must be a {suffix} file: {resolved}")
+    return resolved
+
+
 def main(argv: Optional[list[str]] = None, env: Optional[dict] = None, transport: Optional[Transport] = None) -> int:
     env = dict(os.environ) if env is None else env
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -444,12 +460,18 @@ def main(argv: Optional[list[str]] = None, env: Optional[dict] = None, transport
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--apply", action="store_true", help="perform writes (default: dry-run)")
     parser.add_argument("--checkpoint", type=Path)
-    parser.add_argument("--report-dir", type=Path, default=Path("project3-migration-report"))
+    parser.add_argument("--report-dir", type=Path, default=DEFAULT_REPORT_DIR,
+                        help="under the system temp directory (default: %(default)s)")
     parser.add_argument("--settle-seconds", type=float, default=DEFAULT_SETTLE_SECONDS,
                         help="wait before re-reading added items for a late native Inbox (default: %(default)s)")
     args = parser.parse_args(argv)
-    manifest = args.manifest or DEFAULT_MANIFEST[args.stage]
-    checkpoint = args.checkpoint or args.report_dir / f"{args.stage}.checkpoint.json"
+    try:
+        manifest = _confined(args.manifest or DEFAULT_MANIFEST[args.stage], (_DOCS.resolve(),) + _TEMP_ROOTS, "--manifest", ".json")
+        report_dir = _confined(args.report_dir, _TEMP_ROOTS, "--report-dir")
+        checkpoint = _confined(args.checkpoint or report_dir / f"{args.stage}.checkpoint.json", _TEMP_ROOTS, "--checkpoint", ".json")
+    except MigrationError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     if transport is None:
         token = env.get("PROJECT3_MIGRATION_TOKEN") or env.get("GH_TOKEN") or env.get("GITHUB_TOKEN")
         if not token:
@@ -458,7 +480,7 @@ def main(argv: Optional[list[str]] = None, env: Optional[dict] = None, transport
         transport = http_transport(token)
     try:
         report = run(args.stage, manifest, apply=args.apply, transport=transport, checkpoint=checkpoint,
-                     report_dir=args.report_dir, settle_seconds=args.settle_seconds)
+                     report_dir=report_dir, settle_seconds=args.settle_seconds)
     except MigrationError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

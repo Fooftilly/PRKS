@@ -9,6 +9,7 @@ import re
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -164,6 +165,18 @@ class DryRunAndGuards(Base):
         self.api = FakeAPI(project_id="PVT_other")
         with self.assertRaisesRegex(pm.MigrationError, "scope"):
             self.run_stage("migrate-existing", [epic()])
+
+    def test_cli_paths_are_confined(self):
+        ok = str(manifest(self.tmp, "backfill", []))
+        for argv in (["--manifest", str(_ROOT / "README.md")],
+                     ["--manifest", str(_ROOT / ".github" / "project-sync.json")],
+                     ["--manifest", ok, "--report-dir", str(_ROOT / "docs")],
+                     ["--manifest", ok, "--report-dir", str(self.tmp), "--checkpoint", str(_ROOT / "ck.json")]):
+            err = io.StringIO()
+            with unittest.mock.patch("sys.stderr", err):
+                self.assertEqual(pm.main(["backfill", *argv], env={}, transport=self.api), 2, argv)
+            self.assertIn("must be", err.getvalue())
+        self.assertEqual(self.api.calls, [])
 
     def test_missing_token_fails_cleanly(self):
         self.assertEqual(pm.main(["backfill"], env={}), 2)
