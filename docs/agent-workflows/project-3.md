@@ -72,7 +72,7 @@ Every setting is checked against its current configuration (§1) before it is ch
 | Item closed | Status: Done, for issues and PRs | The item itself is complete. A PR closed without merging is finished too. If a merged PR's closing keyword closes an issue, GitHub closes it and this rule moves it to Done; that is why slice PRs reference controller and roadmap issues with `Refs #N`, never a closing keyword. |
 | Pull request merged | Status: Done | Applies to the PR item only. |
 | Item reopened | **When:** Issues only, if the workflow offers the selector (checked against the screenshots). **Set:** Status Ready | Reopened work is actionable again. Whether an explicitly set state should be preserved is checked against the native workflow's behavior first. A reopened PR keeps its Status until a person or `project-sync` event changes it. |
-| Code changes requested | Status: Changes requested | |
+| Code changes requested | **Off.** `project-sync` owns this transition (§6) | The native rule does not check the current Status, so any changes-requested review, a bot's included, would move a PR out of a Blocked status a person set. `project-sync` applies it only from empty, In Progress or Review. |
 | Code review approved | **Off** (provisional) | A bot approval would move Status, and approval is not authorization. |
 | Auto-close issue | **Off** (provisional) | Moving a controller issue to Done must not close it. |
 | Pull request linked to issue | **Off** (provisional) | One slice PR must not move its controller issue. |
@@ -84,8 +84,8 @@ The settings live under Project #3 → ⋯ → **Workflows**. Each built-in work
 
 1. **Item added to project:** under **When**, select Issues and clear Pull requests. Set Status to Inbox. Save, and turn it on.
 2. **Auto-add to project:** select the `Fooftilly/PRKS` repository. Use a filter that matches both issues and PRs, for example `is:issue,pr`, with no label condition, so dependency PRs are added too. Turn it on.
-3. **Item closed**, **Pull request merged**, **Item reopened** and **Code changes requested:** set the values in the table above. Where a **When** selector is shown, choose the item types listed there.
-4. **Code review approved**, **Auto-close issue** and **Pull request linked to issue:** record their current settings from the screenshots, then turn them off.
+3. **Item closed**, **Pull request merged** and **Item reopened:** set the values in the table above. Where a **When** selector is shown, choose the item types listed there.
+4. **Code changes requested**, **Code review approved**, **Auto-close issue** and **Pull request linked to issue:** record their current settings from the screenshots, then turn them off. Turn **Code changes requested** off in the same step as `project-sync` leaves dry-run, so the transition always has exactly one owner.
 5. **Auto-archive items:** leave it off.
 
 ## 6. Event → Status mapping
@@ -100,7 +100,7 @@ The settings live under Project #3 → ⋯ → **Workflows**. Each built-in work
 | PR opened ready for review (approved 2026-10-10) | PR | Review | `project-sync` | empty, Inbox |
 | PR marked ready for review | PR | Review | `project-sync` | empty, Inbox, Ready, In Progress |
 | PR converted back to draft | PR | In Progress | `project-sync` | Review, Changes requested, and only if the latest conversion to draft is newer than the latest changes-requested review |
-| Changes requested in a review | PR | Changes requested | native | (native rule) |
+| Changes requested in a review | PR | Changes requested | `project-sync` | empty, In Progress, Review, and only if the latest changes-requested review is newer than the latest review request and the latest conversion to draft. Bot reviews count like any other review. |
 | Re-review explicitly requested | PR | Review | `project-sync` | Changes requested, and only if the latest review request is newer than the latest changes-requested review |
 | New commits pushed | PR | no change | none | |
 | CI result of any kind | either | no change | none | |
@@ -148,9 +148,11 @@ Prerequisites are GitHub's native **Blocked by / Blocking** relationships, recor
 
 ## 10. `project-sync` design (approved design; ships in dry-run)
 
-A checked-in workflow, `.github/workflows/project-sync.yml`, covering only the five PR rows marked `project-sync` in §6. They come from four events, because `opened` covers both the draft and the ready row.
+A checked-in workflow, `.github/workflows/project-sync.yml`, covering only the six PR rows marked `project-sync` in §6. They come from five events, because `opened` covers both the draft and the ready row.
 
-- **Events:** `pull_request_target` (`opened`, `ready_for_review`, `converted_to_draft`, `review_requested`). The job checks out only the default branch and never runs pull-request code. The PR's number from the event is the only input; the PR's draft and open state are re-read from the API, so a stale event changes nothing.
+- **Events:** `pull_request_target` (`opened`, `ready_for_review`, `converted_to_draft`, `review_requested`), and a submitted changes-requested review. A review has no `pull_request_target` action, so `.github/workflows/project-sync-review.yml` relays it: a `pull_request_review` workflow with no permissions, no secrets and no checkout, whose successful completion starts `project-sync` through `workflow_run`. A `workflow_run` run always uses the default branch's copy of `project-sync.yml` and takes the PR number from GitHub's record of the relay run, never from its output. The job checks out only the default branch and never runs pull-request code. The PR's number is the only input; the PR's draft and open state and its review history are re-read from the API, so a stale event changes nothing.
+- **Merged or closed PRs:** an event for a PR that is already merged or closed when the run reads it changes nothing: no item is added and no Status is written. A run never writes In Progress, Review or Changes requested to a merged or closed PR. Its only write for one is Done, and only for a PR that was merged or closed after the run had read it open (during the item add or the Status write); then the run sets Done on an item that has no Status yet, or on the Status the run itself just wrote, and leaves any other Status alone.
+- **Fork PRs (known limitation):** GitHub does not attach the PR number to a `workflow_run` started from a fork's review, so changes-requested reviews on fork PRs are not relayed and their Status is set by hand. The `pull_request_target` events still apply.
 - **Scope:** PR items only. Field and option IDs are resolved at run time from names kept in one config file (`.github/project-sync.json`). If any name is missing, the run fails clearly.
 - **Behavior:** applies the "allowed from" rules in §6, so a repeated run makes no change. Each run logs one audit record (PR, event, Status before and after, outcome) and a job summary.
 - **Default:** dry-run. It writes only when the repository variable `PROJECT_SYNC_MODE` is exactly `apply`, which is set only after the credential, the configuration and the workflow have been reviewed and the maintainer authorizes it. Without `PROJECT_SYNC_TOKEN` a run reports `not-configured` and succeeds without calling the API, so PR checks stay green before rollout.
@@ -174,28 +176,30 @@ The PR is now wrongly back in Inbox. GitHub does not document whether "Item adde
 | Putting the PR on the board | native auto-add, with `project-sync` as an idempotent fallback |
 | Inbox for new issues | native "Item added", **When: Issues only** |
 | First Status of a PR (In Progress or Review) | `project-sync` only; a PR with no Status counts as unclassified |
-| Changes requested, merged → Done | native |
-| The five `project-sync` PR rows in §6 (four events) | `project-sync` |
+| Merged or closed → Done | native |
+| The six `project-sync` PR rows in §6 (five events), Changes requested included | `project-sync` |
 
 This division was approved on 2026-10-10. With "Item added" limited to issues through its **When** selector, nothing native ever writes Inbox to a PR, so no delay can reset one.
 
 Remaining races and how `project-sync` handles them:
 
-- **PR merged or closed while `project-sync` writes.** It re-reads the PR and the item's Status immediately before writing, and skips a merged or closed PR. The Projects API has no compare-and-set, so a short window remains. After writing, it re-reads the PR; if it was merged or closed in that window, it sets Done, which is what the native rule would have set, and logs the correction.
-- **PR merged or closed before its item is added.** The native Done rule had no item to update. If the item `project-sync` then adds has no Status, it sets Done; a Status set meanwhile is left alone.
+- **PR merged or closed while `project-sync` writes.** It re-reads the PR and the item's Status immediately before writing; a PR already merged or closed at that point is left alone (§10). The Projects API has no compare-and-set, so a short window remains. After writing, it re-reads the PR; if it was merged or closed in that window, it replaces its own write with Done, which is what the native rule would have set, and logs the correction.
+- **PR merged or closed while its item is being added.** The run read the PR open, so it adds the item; the native Done rule may have fired before the item existed and had nothing to update. If the added item has no Status, it sets Done; a Status set meanwhile is left alone.
 - **A delayed re-review request or draft conversion.** A `review_requested` or `converted_to_draft` run applies only when the latest such event on the PR is newer than the latest changes-requested review (dismissed reviews excluded), and fails closed when no event is recorded or the times are equal. If a changes-requested review lands during the write, Changes requested is restored. `opened` and `ready_for_review` never move an item out of Changes requested, so they need no ordering check.
+- **A delayed changes-requested review run.** It applies only when the latest changes-requested review is newer than the latest review request and the latest conversion to draft, and fails closed when no such review is recorded or the times are equal. So whichever of a review run and a re-review run executes first, the PR ends in the state the later of the two GitHub events implies.
 - **Two `project-sync` runs for the same PR.** One concurrency group per PR, without cancellation, serializes them. Each re-reads before writing, so the later run sees the earlier result.
 - **A person changes Status at the same time.** A Status outside the "allowed from" list is left alone, and a person's write after the `project-sync` write stands. The Projects API offers no conditional write, so in the short window between the `project-sync` read and its write, the later write wins. The audit record keeps the before and after values for a manual fix.
 
-**Testing.** The decision logic is a pure function of PR state, item state and event. Unit tests run it against a fake project that replays each ordering above: native add before and after, a delayed native "Item added", a duplicate concurrent add, a merge during the write, and Blocked or Done set by hand. The live check is a dry-run on the next ordinary PR after the configuration is approved. It does not use test PRs or arbitrary items.
+**Testing.** The decision logic is a pure function of PR state, item state and event. Unit tests run it against a fake project that replays each ordering above: native add before and after, a delayed native "Item added", a duplicate concurrent add, a merge during the write, a PR already merged or closed when the run reads it, a merge or close between the first read and the item add (with the native Done rule delivered before or after), delayed review-request, draft-conversion and changes-requested runs in both orders, and Blocked or Done set by hand. The live check is a dry-run on the next ordinary PR after the configuration is approved. It does not use test PRs or arbitrary items.
 
-Implementation: `scripts/project_sync.py`, `.github/workflows/project-sync.yml` and `.github/project-sync.json`, with tests in `tests/test_project_sync.py`.
+Implementation: `scripts/project_sync.py`, `.github/workflows/project-sync.yml`, `.github/workflows/project-sync-review.yml` and `.github/project-sync.json`, with tests in `tests/test_project_sync.py`.
 
 ## 11. Credentials and permissions
 
 | Automation | Identity | Permissions |
 |---|---|---|
 | Issue dependency writer | `GITHUB_TOKEN` | `issues: read` (plan job), `issues: write` (apply job only) |
+| `project-sync` review relay (`project-sync-review.yml`) | none | `permissions: {}`; no secrets, no checkout, no writes |
 | `project-sync` | `PROJECT_SYNC_TOKEN` repository Actions secret: a classic personal access token with only the `project` scope (`GITHUB_TOKEN` cannot reach Projects) | Project read/write. Repository data it reads is public. |
 
 - The token has an expiration date. To rotate it, create a new token with the same single scope, replace the secret, then revoke the old token.
