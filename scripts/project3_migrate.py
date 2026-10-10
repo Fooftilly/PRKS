@@ -551,15 +551,24 @@ def _run_items(project: Project, plan: dict, stage: str, ck: Checkpoint, apply: 
             rec.update(outcome="failed", detail=f"{type(exc).__name__}: {exc}")
             failed = True
             continue
-        if rec["outcome"] in ("changed", "repaired"):
-            # An added item (a first add, or a rerun's repair of one already
-            # done) is done only once verify_added confirms it.
-            if rec["item"] in ck.added:
-                ck.done.discard(rec["item"])
-            else:
-                ck.done.add(rec["item"])
-            ck.save()
+        try:
+            _checkpoint_written(rec, ck)
+        except OSError as exc:   # the write landed; only the bookkeeping failed
+            rec.update(outcome="failed", detail=f"written, but the checkpoint could not be saved: {type(exc).__name__}: {exc}")
+            failed = True
     return records, failed
+
+
+def _checkpoint_written(rec: dict, ck: Checkpoint) -> None:
+    if rec["outcome"] not in ("changed", "repaired"):
+        return
+    # An added item (a first add, or a rerun's repair of one already done)
+    # is done only once verify_added confirms it.
+    if rec["item"] in ck.added:
+        ck.done.discard(rec["item"])
+    else:
+        ck.done.add(rec["item"])
+    ck.save()
 
 
 def _not_in_plan(project: Project, plan: dict) -> list[dict]:
@@ -616,10 +625,10 @@ def run(stage: str, plan_path: Path, *, apply: bool, transport: Transport, check
         sleep(settle_seconds)
         try:
             verify_added(project, {f"{i['type']}#{i['number']}": i for i in plan["items"]}, records, ck)
+            ck.save()
         except _RUN_ERRORS as exc:
             failed = True
-            print(f"verification failed: {type(exc).__name__}: {exc}", file=out)
-        ck.save()
+            print(f"verification or checkpoint save failed: {type(exc).__name__}: {exc}", file=out)
     counts: dict[str, int] = {}
     for r in records:
         counts[r["outcome"]] = counts.get(r["outcome"], 0) + 1

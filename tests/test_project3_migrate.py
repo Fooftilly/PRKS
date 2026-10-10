@@ -688,6 +688,20 @@ class PartialFailure(Base):
         self.assertTrue(r["ok"])
         self.assertEqual(self.api.items["I181"]["values"], {"Status": "Done"})
 
+    def test_a_checkpoint_that_cannot_be_saved_after_a_write_fails_the_run_with_a_report(self):
+        self.api.put("Issue", 38, Status="Ready")
+        self.api.put("Issue", 40, Status="Ready")
+
+        def disk_full(_ck):
+            raise OSError(28, "No space left on device")
+        with unittest.mock.patch.object(pm.Checkpoint, "save", disk_full):
+            r = self.run_stage("migrate-existing", [epic(38), epic(40)], apply=True)
+        self.assertEqual(r["counts"], {"failed": 1, "not-run": 1})
+        self.assertIn("written, but the checkpoint could not be saved", r["items"][0]["detail"])
+        self.assertFalse(r["ok"])
+        self.assertTrue((self.tmp / "out" / "migrate-existing.json").exists())
+        self.assertEqual(self.api.items["I40"]["values"], {"Status": "Ready"})   # stopped before the next item
+
     def test_main_exits_non_zero_after_a_failure(self):
         self.api.add_content("Issue", 181, state="CLOSED")
         self.api.fail_next_set = 1
