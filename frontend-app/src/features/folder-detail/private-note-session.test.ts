@@ -646,6 +646,28 @@ describe('Folder Reminders edit base', () => {
     expect(noteRows().map((r) => [r.payload.value, r.base_revision])).toEqual([['A edit', 4]])
   })
 
+  it('typing on after its own acknowledgement of text with surrounding whitespace saves on the acknowledged revision', async () => {
+    installShell()
+    const { ownerA } = mountPair()
+    await openFolder(ownerA, FA)
+    const { field, status } = mountCard(ownerA, FA)
+    type(field, 'Call Ana ')
+    w.prksFlushPendingPrivateNotes(ownerA)
+    await settle()
+    const [row] = noteRows()
+    queue.ack(row.op_id, 5)
+    await settle()
+    expect(server[FA]).toMatchObject({ private_notes: 'Call Ana', revision: 5 })
+    expect(session(ownerA)).toMatchObject({ state: 'committed', dirty: false, ownQueued: null })
+    expect(field.value).toBe('Call Ana ')
+    type(field, 'Call Ana tomorrow\n')
+    expect(session(ownerA)?.editBase).toEqual({ value: 'Call Ana', revision: 5, source: 'server', start: 'Call Ana ' })
+    w.prksFlushPendingPrivateNotes(ownerA)
+    await settle()
+    expect(noteRows().map((r) => [r.payload.value, r.base_revision])).toEqual([['Call Ana tomorrow\n', 5]])
+    expect(status.textContent).toBe('Saved')
+  })
+
   it('a held draft keeps the base it was typed on when the Folder changes while it is held', async () => {
     installShell()
     const { ownerA } = mountPair()
