@@ -429,9 +429,11 @@ def _verify(
     A merge or close sets Done. For ``review_requested`` and
     ``converted_to_draft``, a changes-requested review submitted during the
     write restores Changes requested, and a merge or close during that
-    corrective write still ends in Done. A newer review event after a
-    ``review_changed`` write needs no repair here: its own run is queued
-    behind this one and applies next.
+    corrective write still ends in Done. For a ``review_changed`` write of
+    Changes requested, a withdrawal during the write undoes it: the
+    withdrawal's own run would find it older than the Status and leave it.
+    Any other newer review event after a ``review_changed`` write needs no
+    repair here: its own run is queued behind this one and applies next.
     """
     after = api.load_pr(config, event.number, project.id)
     status = _status_of(after)
@@ -441,6 +443,15 @@ def _verify(
             repair = ("done", f"the PR was {after.state.lower()} during the write")
         elif event.action in ORDERED_ACTIONS and not event_is_current(event.action, after)[0]:
             repair = ("changes_requested", "changes were requested during the write")
+        elif event.action == "review_changed" and target_name == config.statuses["changes_requested"]:
+            if not unanswered_changes(after):
+                # Withdrawn between this run's read and its write: that
+                # withdrawal is older than the Status just written, so its
+                # own run would leave it, and only this run can undo it.
+                repair = (
+                    "in_progress" if after.is_draft else "review",
+                    "the change request was dismissed or withdrawn during the write",
+                )
         if repair:
             name = config.statuses[repair[0]]
             api.set_status(project.id, after.item.id, project.field_id, project.options[name])

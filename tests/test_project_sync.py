@@ -483,6 +483,23 @@ class ChangesRequestedTests(unittest.TestCase):
         self.assertEqual(sync(board, "review_changed").outcome, "updated")
         self.assertEqual(board.pr_status, "Review")
 
+    def test_a_dismissal_between_the_review_runs_read_and_write_is_undone(self):
+        # The review run reads Alice unanswered; the dismissal lands before its
+        # write, so the dismissal's run would find it older than the Status.
+        for draft, expected in ((False, "Review"), (True, "In Progress")):
+            board = FakeBoard(draft=draft)
+            board.native_auto_add()
+            board.person_sets("Review" if not draft else "In Progress", at="2026-10-10T09:00:00Z")
+            board.submit_changes_review("2026-10-10T10:00:00Z")
+            board.before_set = lambda board=board: board.dismiss(at="2026-10-10T10:01:00Z")
+            audit = sync(board, "review_changed")
+            self.assertEqual(audit.outcome, "corrected", draft)
+            self.assertIn("withdrawn during the write", audit.reason)
+            self.assertEqual(board.pr_status, expected)
+            board.status_at = "2026-10-10T10:02:00Z"  # GitHub's time for that write
+            self.assertEqual(sync(board, "review_changed").outcome, "skipped")  # the dismissal's own run
+            self.assertEqual(board.pr_status, expected)
+
     def test_release_only_moves_changes_requested(self):
         # With no unanswered review the run leaves every other Status alone.
         for start in (None, "Inbox", "Ready", "In Progress", "Review", "Blocked", "Done"):
