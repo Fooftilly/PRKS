@@ -56,6 +56,8 @@ class FakeBoard:
         self.review_requests: list[tuple[str, str]] = []
         self.converted_to_draft_at: Optional[str] = None
         self.changes_by: dict[str, str] = {}  # reviewer -> latest changes-requested review
+        self.withdrawals: list[tuple[str, str]] = []  # dismissed or approved change requests
+        self.status_at: Optional[str] = None  # when the PR's Status was last set, if known
         self.after_add: Optional[Callable[[], None]] = None
         self._next = 0
         # A linked issue is on the board too; project-sync must never touch it.
@@ -101,21 +103,24 @@ class FakeBoard:
         """A changes-requested review with no native rule: only the time is recorded."""
         self.changes_by[reviewer] = at
 
-    def dismiss(self, reviewer: str = "alice") -> None:
+    def dismiss(self, reviewer: str = "alice", at: str = "2026-10-10T20:00:00Z") -> None:
         """A maintainer dismissed the reviewer's change request."""
-        self.changes_by.pop(reviewer, None)
+        if self.changes_by.pop(reviewer, None) is not None:
+            self.withdrawals.append((reviewer, at))
 
-    def approve(self, reviewer: str = "alice") -> None:
-        """The reviewer's latest opinionated review is no longer a change request."""
-        self.changes_by.pop(reviewer, None)
+    def approve(self, reviewer: str = "alice", at: str = "2026-10-10T20:00:00Z") -> None:
+        """The reviewer approves; an earlier change request of theirs is withdrawn."""
+        if self.changes_by.pop(reviewer, None) is not None:
+            self.withdrawals.append((reviewer, at))
 
     def flush_native(self) -> None:
         while self.pending_native:
             content_id, status = self.pending_native.pop(0)
             self.items[content_id]["status"] = status
 
-    def person_sets(self, status: str) -> None:
+    def person_sets(self, status: str, at: Optional[str] = None) -> None:
         self.items[PR_ID]["status"] = status
+        self.status_at = at
 
     @property
     def pr_status(self) -> Optional[str]:
@@ -129,7 +134,11 @@ class FakeBoard:
     def load_pr(self, config, number, project_id):
         assert number == PR_NUMBER and project_id == PROJECT_ID
         raw = self.items.get(PR_ID)
-        item = ps.Item(id=raw["id"], status=raw["status"], archived=raw["archived"]) if raw else None
+        item = (
+            ps.Item(id=raw["id"], status=raw["status"], archived=raw["archived"], status_updated_at=self.status_at)
+            if raw
+            else None
+        )
         return ps.PullRequest(
             id=PR_ID,
             state=self.pr["state"],
@@ -138,6 +147,7 @@ class FakeBoard:
             last_converted_to_draft_at=self.converted_to_draft_at,
             review_requests=tuple(self.review_requests),
             changes_requested=tuple(self.changes_by.items()),
+            withdrawals=tuple(self.withdrawals),
         )
 
     def add_item(self, project_id, content_id):
@@ -157,6 +167,8 @@ class FakeBoard:
             hook, self.before_set = self.before_set, None
             hook()
         name = {v: k for k, v in self.options.items()}[option_id]
+        if item_id == self.items.get(PR_ID, {}).get("id"):
+            self.status_at = None  # the fake has no clock for its own writes
         for item in self.items.values():
             if item["id"] == item_id:
                 item["status"] = name
@@ -421,7 +433,7 @@ class ChangesRequestedTests(unittest.TestCase):
             board.dismiss()
             audit = sync(board, "review_changed")
             self.assertEqual(audit.outcome, "updated", draft)
-            self.assertIn("no changes-requested review is unanswered", audit.reason)
+            self.assertIn("by alice was dismissed or withdrawn", audit.reason)
             self.assertEqual(board.pr_status, expected)
 
     def test_a_later_approval_releases_changes_requested(self):
@@ -443,6 +455,33 @@ class ChangesRequestedTests(unittest.TestCase):
         audit = sync(board, "review_changed")
         self.assertEqual(audit.outcome, "unchanged")
         self.assertEqual(board.pr_status, "Changes requested")
+
+    def test_a_hand_set_changes_requested_survives_comment_and_unrelated_approval_runs(self):
+        # No change request stands behind it, so nothing was withdrawn.
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.person_sets("Changes requested", at="2026-10-10T11:00:00Z")
+        audit = sync(board, "review_changed")  # a bot's comment review
+        self.assertEqual(audit.outcome, "skipped")
+        self.assertIn("no change request was dismissed or withdrawn", audit.reason)
+        board.approve(reviewer="bob")  # never requested changes
+        self.assertEqual(sync(board, "review_changed").outcome, "skipped")
+        self.assertEqual(board.pr_status, "Changes requested")
+        self.assertFalse([m for m in board.mutations if m[0] == "set"])
+
+    def test_a_withdrawal_before_the_status_was_set_does_not_release_it(self):
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.submit_changes_review("2026-10-10T10:00:00Z")
+        board.dismiss(at="2026-10-10T11:00:00Z")
+        board.person_sets("Changes requested", at="2026-10-10T12:00:00Z")
+        self.assertEqual(sync(board, "review_changed").outcome, "skipped")
+        self.assertEqual(board.pr_status, "Changes requested")
+        # A later withdrawal does.
+        board.submit_changes_review("2026-10-10T13:00:00Z")
+        board.dismiss(at="2026-10-10T14:00:00Z")
+        self.assertEqual(sync(board, "review_changed").outcome, "updated")
+        self.assertEqual(board.pr_status, "Review")
 
     def test_release_only_moves_changes_requested(self):
         # With no unanswered review the run leaves every other Status alone.
@@ -899,6 +938,14 @@ class GraphQLApiTests(unittest.TestCase):
             {"state": "CHANGES_REQUESTED", "submittedAt": "2026-10-10T10:50:00Z", "author": None},
         ]}
         pr_raw["convertedToDraft"] = {"nodes": [{"createdAt": "2026-10-10T09:00:00Z"}]}
+        pr_raw["changeReviews"] = {"nodes": [
+            {"submittedAt": "2026-10-10T10:00:00Z", "author": {"login": "Bob"}},
+            {"submittedAt": "2026-10-10T10:10:00Z", "author": {"login": "Carol"}},
+        ]}
+        pr_raw["dismissals"] = {"nodes": [
+            {"createdAt": "2026-10-10T10:45:00Z", "previousReviewState": "CHANGES_REQUESTED", "review": {"author": {"login": "Dave"}}},
+            {"createdAt": "2026-10-10T10:46:00Z", "previousReviewState": "APPROVED", "review": {"author": {"login": "erin"}}},
+        ]}
         seen = []
         api = ps.GraphQLApi(lambda q, v: seen.append(q) or payload)
         pr = api.load_pr(CONFIG, PR_NUMBER, PROJECT_ID)
@@ -908,6 +955,11 @@ class GraphQLApiTests(unittest.TestCase):
         self.assertEqual(pr.last_changes_requested_at, "2026-10-10T10:50:00Z")
         self.assertEqual(pr.last_converted_to_draft_at, "2026-10-10T09:00:00Z")
         self.assertEqual(ps.unanswered_changes(pr), ["bob", "ghost"])
+        # Dave's change request was dismissed; Carol approved after hers.
+        # Erin's dismissed review was an approval, so it withdraws nothing.
+        self.assertEqual(pr.withdrawals, (("dave", "2026-10-10T10:45:00Z"), ("carol", "2026-10-10T10:30:00Z")))
+        self.assertIn("reviews(last: 100, states: [CHANGES_REQUESTED])", seen[0])
+        self.assertIn("itemTypes: [REVIEW_DISMISSED_EVENT]", seen[0])
         self.assertIn("itemTypes: [CONVERT_TO_DRAFT_EVENT]", seen[0])
         self.assertIn("timelineItems(last: 100, itemTypes: [REVIEW_REQUESTED_EVENT])", seen[0])
         self.assertIn("latestOpinionatedReviews(first: 100)", seen[0])
@@ -916,11 +968,13 @@ class GraphQLApiTests(unittest.TestCase):
         nodes = [
             {"id": "other", "isArchived": False, "project": {"id": "PVT_other"}, "fieldValueByName": None},
             {"id": "mine", "isArchived": False, "project": {"id": PROJECT_ID},
-             "fieldValueByName": {"__typename": "ProjectV2ItemFieldSingleSelectValue", "name": "Review"}},
+             "fieldValueByName": {"__typename": "ProjectV2ItemFieldSingleSelectValue", "name": "Review",
+                                  "updatedAt": "2026-10-10T08:00:00Z"}},
         ]
         api = ps.GraphQLApi(lambda q, v: self._pr_payload(nodes))
         pr = api.load_pr(CONFIG, PR_NUMBER, PROJECT_ID)
         self.assertEqual((pr.item.id, pr.item.status), ("mine", "Review"))
+        self.assertEqual(pr.item.status_updated_at, "2026-10-10T08:00:00Z")
 
     def test_item_beyond_the_first_page_fails_closed(self):
         payload = self._pr_payload([{"id": "other", "isArchived": False, "project": {"id": "PVT_other"}, "fieldValueByName": None}])

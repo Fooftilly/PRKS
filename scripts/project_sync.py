@@ -12,7 +12,8 @@ submitted or dismissed review, and covers only the PR rows owned by
 * ``review_requested``   -> Review, from Changes requested
 * ``review_changed``     -> Changes requested, from empty, In Progress or Review,
   while a review is unanswered; otherwise In Progress (draft) or Review, from
-  Changes requested
+  Changes requested, once a change request was dismissed or withdrawn by an
+  approval after that Status was set
 
 A changes-requested review is *unanswered* until the same reviewer is
 requested again, or the PR is converted to draft, after it. A dismissed
@@ -23,7 +24,8 @@ requesting another reviewer or a delayed run never hides requested changes.
 ``converted_to_draft`` applies only when the conversion is newer than the
 latest changes-requested review. ``review_changed`` re-derives the state from
 the review history, so a delayed review run never undoes a re-request and a
-dismissal releases Changes requested. If a review is unanswered when
+dismissal releases Changes requested, while a comment review or an unrelated
+approval leaves it alone. If a review is unanswered when
 ``opened`` or ``ready_for_review`` runs, the run sets Changes requested
 instead of In Progress or Review.
 
@@ -138,6 +140,8 @@ class Item:
     id: str
     status: Optional[str]  # option name
     archived: bool = False
+    # ISO 8601 time the Status was last set, or None when unknown.
+    status_updated_at: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -153,6 +157,10 @@ class PullRequest:
     # (dismissed reviews do not count).
     review_requests: tuple[tuple[str, str], ...] = ()
     changes_requested: tuple[tuple[str, str], ...] = ()
+    # (reviewer, time) of each change request that no longer stands: a
+    # dismissal of a changes-requested review, or an approval that followed
+    # the same reviewer's change request.
+    withdrawals: tuple[tuple[str, str], ...] = ()
 
     @property
     def last_review_requested_at(self) -> Optional[str]:
@@ -308,9 +316,11 @@ def _decide_review(config: Config, pr: PullRequest) -> tuple[Optional[str], str]
     """A review was submitted or dismissed: re-derive the state from the history.
 
     While a changes-requested review is unanswered the PR moves to Changes
-    requested. Once none is (dismissed, followed by the same reviewer's
-    approval, or answered by a re-request or draft conversion), only an item
-    in Changes requested moves on, to In Progress or Review.
+    requested. Once none is, an item in Changes requested moves on, to In
+    Progress or Review, only when a change request was withdrawn (dismissed,
+    or followed by the same reviewer's approval) after its Status was set. A
+    Changes requested set by hand, or one no withdrawal answers, stays, so a
+    comment review or an unrelated approval never clears it.
     """
     current = config.key_of(_status_of(pr))
     pending = unanswered_changes(pr)
@@ -324,6 +334,12 @@ def _decide_review(config: Config, pr: PullRequest) -> tuple[Optional[str], str]
         reason = "no changes-requested review is unanswered"
         if current != "changes_requested":
             return None, reason
+        assert pr.item is not None
+        since = pr.item.status_updated_at
+        withdrawn = sorted(who for who, at in pr.withdrawals if since is None or _after(at, since))
+        if not withdrawn:
+            return None, f"{reason}, but no change request was dismissed or withdrawn after Changes requested was set"
+        reason = f"the change request by {', '.join(withdrawn)} was dismissed or withdrawn"
     if current == target:
         return target, "already set"
     if current not in allowed:
@@ -495,6 +511,12 @@ query($owner: String!, $name: String!, $number: Int!, $field: String!) {
       latestOpinionatedReviews(first: 100) {
         nodes { state submittedAt author { login } }
       }
+      changeReviews: reviews(last: 100, states: [CHANGES_REQUESTED]) {
+        nodes { submittedAt author { login } }
+      }
+      dismissals: timelineItems(last: 100, itemTypes: [REVIEW_DISMISSED_EVENT]) {
+        nodes { ... on ReviewDismissedEvent { createdAt previousReviewState review { author { login } } } }
+      }
       projectItems(first: 50, includeArchived: true) {
         pageInfo { hasNextPage }
         nodes {
@@ -503,7 +525,7 @@ query($owner: String!, $name: String!, $number: Int!, $field: String!) {
           project { id }
           fieldValueByName(name: $field) {
             __typename
-            ... on ProjectV2ItemFieldSingleSelectValue { name }
+            ... on ProjectV2ItemFieldSingleSelectValue { name updatedAt }
           }
         }
       }
@@ -611,6 +633,7 @@ class GraphQLApi:
                 id=items[0]["id"],
                 status=value.get("name") if value.get("__typename") == "ProjectV2ItemFieldSingleSelectValue" else None,
                 archived=bool(items[0].get("isArchived")),
+                status_updated_at=value.get("updatedAt") if value.get("__typename") == "ProjectV2ItemFieldSingleSelectValue" else None,
             )
         drafts = (pr.get("convertedToDraft") or {}).get("nodes") or []
         requests: list[tuple[str, str]] = []
@@ -624,6 +647,22 @@ class GraphQLApi:
             for node in (pr.get("latestOpinionatedReviews") or {}).get("nodes") or []
             if node and node.get("state") == "CHANGES_REQUESTED" and node.get("submittedAt")
         ]
+        withdrawals = [
+            ((((node.get("review") or {}).get("author") or {}).get("login") or "ghost").lower(), node["createdAt"])
+            for node in (pr.get("dismissals") or {}).get("nodes") or []
+            if node and node.get("previousReviewState") == "CHANGES_REQUESTED" and node.get("createdAt")
+        ]
+        earlier = [
+            (((node.get("author") or {}).get("login") or "ghost").lower(), node["submittedAt"])
+            for node in (pr.get("changeReviews") or {}).get("nodes") or []
+            if node and node.get("submittedAt")
+        ]
+        for node in (pr.get("latestOpinionatedReviews") or {}).get("nodes") or []:
+            if not node or node.get("state") != "APPROVED" or not node.get("submittedAt"):
+                continue
+            who = ((node.get("author") or {}).get("login") or "ghost").lower()
+            if any(by == who and _after(node["submittedAt"], at) for by, at in earlier):
+                withdrawals.append((who, node["submittedAt"]))
         return PullRequest(
             id=pr["id"],
             state=str(pr["state"]),
@@ -632,6 +671,7 @@ class GraphQLApi:
             last_converted_to_draft_at=(drafts[-1] or {}).get("createdAt") if drafts else None,
             review_requests=tuple(requests),
             changes_requested=tuple(changes),
+            withdrawals=tuple(withdrawals),
         )
 
     def add_item(self, project_id: str, content_id: str) -> None:

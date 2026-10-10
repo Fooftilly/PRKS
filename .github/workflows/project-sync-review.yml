@@ -10,7 +10,8 @@ name: Project sync review signal
 # another review state may still conclude as success, and project-sync then
 # reconciles from the review history (each reviewer's latest review and later
 # re-requests). It sets Changes requested only while such a review is
-# unanswered, and moves the PR out of Changes requested once none is.
+# unanswered, and moves the PR out of Changes requested only after a change
+# request was dismissed or withdrawn by the same reviewer's approval.
 on:
   pull_request_review:
     types: [submitted, dismissed]
