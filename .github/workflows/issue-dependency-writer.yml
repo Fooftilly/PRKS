@@ -49,13 +49,28 @@ concurrency:
 jobs:
   plan:
     name: Check and report (read-only)
-    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    # No job-level branch condition: a skipped job reports success and would
+    # leave no audit record. The first step refuses instead, before any
+    # repository code is checked out, and the failure skips the apply job.
     permissions:
       contents: read # check out the writer script
       issues: read # read both issues and their dependencies
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      - name: Require the default branch
+        env:
+          RUN_REF: ${{ github.ref }}
+          DEFAULT_REF: refs/heads/${{ github.event.repository.default_branch }}
+        run: |
+          if [ "${RUN_REF}" != "${DEFAULT_REF}" ]; then
+            reason="the run is from ${RUN_REF}, not the default branch (${DEFAULT_REF})"
+            REASON="${reason}" python3 -c 'import json, os; print(json.dumps({"outcome": "refused", "reason": os.environ["REASON"], "tool": "issue-dependency-writer"}, sort_keys=True))'
+            printf '## Issue dependency writer: refused\n\n%s. Nothing was written.\n' "${reason}" >> "${GITHUB_STEP_SUMMARY}"
+            echo "::error::refused: ${reason}"
+            exit 1
+          fi
+
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

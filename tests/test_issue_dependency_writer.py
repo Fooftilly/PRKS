@@ -336,8 +336,22 @@ class WorkflowShapeTests(unittest.TestCase):
         )
 
     def test_both_jobs_require_the_default_branch(self) -> None:
+        plan_job = self.text.split("\n  plan:\n", 1)[1].split("\n  apply:\n", 1)[0]
+        apply_job = self.text.split("\n  apply:\n", 1)[1]
         guard = "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
-        self.assertEqual(self.text.count(guard), 2)
+        self.assertIn(guard, apply_job)
+        self.assertIn("needs: plan", apply_job)
+        # A job-level condition would skip the plan job, which reports success
+        # with no audit record; the plan job refuses in its first step instead.
+        self.assertNotIn(guard, plan_job)
+        steps = plan_job.split("\n      - name: ")
+        self.assertTrue(steps[1].startswith("Require the default branch"))
+        self.assertIn('if [ "${RUN_REF}" != "${DEFAULT_REF}" ]', steps[1])
+        self.assertIn('"outcome": "refused"', steps[1])
+        self.assertNotIn("actions/checkout", steps[1])
+        self.assertIn("GITHUB_STEP_SUMMARY", steps[1])
+        self.assertIn("exit 1", steps[1])
+        self.assertTrue(steps[2].startswith("Check out repository"))
 
     def test_inputs_reach_the_script_only_through_env(self) -> None:
         for run_block in re.findall(r"run: >-\n((?:          .*\n)+)", self.text):

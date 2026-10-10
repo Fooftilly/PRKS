@@ -24,7 +24,7 @@ Every run first runs a read-only check job. The write job runs only for `apply`,
 A request is refused, and nothing is written, when:
 
 - the person who started or re-ran the run is not an allowed actor;
-- the run is not from the default branch;
+- the run is not from the default branch (the check job refuses before checking out any code, so the run fails with a `refused` record and the write job is skipped);
 - either number is missing, a pull request, or a closed issue;
 - both numbers are the same;
 - the blocking issue is already (transitively) blocked by the blocked issue, so the edge would close a cycle (the summary shows the path);
