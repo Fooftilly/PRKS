@@ -234,34 +234,27 @@ def fetch_open_issue(client: Client, repo: str, number: int, role: str) -> Issue
     return _ref(issue, repo)
 
 
-def blocked_by(client: Client, ref: IssueRef) -> list[IssueRef]:
+def _edges(client: Client, ref: IssueRef, direction: str) -> list[IssueRef]:
     edges: list[IssueRef] = []
     page = 1
     while True:
         batch = client.get(
-            f"repos/{ref.repo}/issues/{ref.number}/dependencies/blocked_by?per_page=100&page={page}"
+            f"repos/{ref.repo}/issues/{ref.number}/dependencies/{direction}?per_page=100&page={page}"
         )
         if not isinstance(batch, list):
-            raise ApiError(0, "GET", f"{ref.repo}#{ref.number} blocked_by", "expected a list")
+            raise ApiError(0, "GET", f"{ref.repo}#{ref.number} {direction}", "expected a list")
         edges.extend(_ref(item, ref.repo) for item in batch)
         if len(batch) < 100:
             return edges
         page += 1
+
+
+def blocked_by(client: Client, ref: IssueRef) -> list[IssueRef]:
+    return _edges(client, ref, "blocked_by")
 
 
 def blocking(client: Client, ref: IssueRef) -> list[IssueRef]:
-    edges: list[IssueRef] = []
-    page = 1
-    while True:
-        batch = client.get(
-            f"repos/{ref.repo}/issues/{ref.number}/dependencies/blocking?per_page=100&page={page}"
-        )
-        if not isinstance(batch, list):
-            raise ApiError(0, "GET", f"{ref.repo}#{ref.number} blocking", "expected a list")
-        edges.extend(_ref(item, ref.repo) for item in batch)
-        if len(batch) < 100:
-            return edges
-        page += 1
+    return _edges(client, ref, "blocking")
 
 
 def find_cycle(client: Client, blocked: IssueRef, blocker: IssueRef) -> list[IssueRef] | None:
@@ -315,57 +308,54 @@ def preflight(client: Client, request: Request) -> Plan:
     return Plan(blocked_ref, blocker_ref, existing, already_present=False)
 
 
+def _finish(audit: Audit, outcome: str, reason: str, after: list[str], status: int) -> int:
+    audit.outcome, audit.reason, audit.after = outcome, reason, after
+    return status
+
+
+def _write(client: Client, request: Request, audit: Audit) -> int:
+    # Re-check live state immediately before the write. The workflow also
+    # serializes runs, so no other writer of this tool races the check.
+    plan = preflight(client, request)
+    if plan.already_present:
+        labels = [ref.label(request.repo) for ref in plan.existing]
+        return _finish(audit, "no-op", "relationship appeared before the write", labels, 0)
+    write_error: ApiError | None = None
+    try:
+        client.post(
+            f"repos/{request.repo}/issues/{plan.blocked.number}/dependencies/blocked_by",
+            {"issue_id": plan.blocker.id},
+        )
+    except ApiError as error:
+        # A concurrent identical write may have won; the re-read decides.
+        write_error = error
+    after = blocked_by(client, plan.blocked)
+    labels = [ref.label(request.repo) for ref in after]
+    present = any(edge.id == plan.blocker.id for edge in after)
+    mirrored = any(edge.id == plan.blocked.id for edge in blocking(client, plan.blocker))
+    if not (present and mirrored):
+        reason = str(write_error) if write_error else "write accepted but the edge is not visible on both issues"
+        return _finish(audit, "failed", reason, labels, 2)
+    if write_error is None:
+        return _finish(audit, "written", "", labels, 0)
+    return _finish(audit, "converged", f"write returned an error but the edge is present ({write_error})", labels, 0)
+
+
 def run(client: Client, request: Request, audit: Audit) -> int:
     try:
         validate(request)
         plan = preflight(client, request)
         audit.before = [ref.label(request.repo) for ref in plan.existing]
         if plan.already_present:
-            audit.after = audit.before
-            audit.outcome = "no-op"
-            audit.reason = "relationship already present"
-            return 0
+            return _finish(audit, "no-op", "relationship already present", audit.before, 0)
         if not request.apply:
-            audit.after = audit.before + [plan.blocker.label(request.repo)]
-            audit.outcome = "dry-run"
-            audit.reason = "would add the relationship; nothing was written"
-            return 0
-        # Re-check live state immediately before the write. The workflow also
-        # serializes runs, so no other writer of this tool races the check.
-        plan = preflight(client, request)
-        if plan.already_present:
-            audit.after = [ref.label(request.repo) for ref in plan.existing]
-            audit.outcome = "no-op"
-            audit.reason = "relationship appeared before the write"
-            return 0
-        write_error: ApiError | None = None
-        try:
-            client.post(
-                f"repos/{request.repo}/issues/{plan.blocked.number}/dependencies/blocked_by",
-                {"issue_id": plan.blocker.id},
-            )
-        except ApiError as error:
-            # A concurrent identical write may have won; the re-read decides.
-            write_error = error
-        after = blocked_by(client, plan.blocked)
-        audit.after = [ref.label(request.repo) for ref in after]
-        present = any(edge.id == plan.blocker.id for edge in after)
-        mirrored = any(edge.id == plan.blocked.id for edge in blocking(client, plan.blocker))
-        if present and mirrored:
-            audit.outcome = "written" if write_error is None else "converged"
-            audit.reason = "" if write_error is None else f"write returned an error but the edge is present ({write_error})"
-            return 0
-        audit.outcome = "failed"
-        audit.reason = str(write_error) if write_error else "write accepted but the edge is not visible on both issues"
-        return 2
+            proposed = audit.before + [plan.blocker.label(request.repo)]
+            return _finish(audit, "dry-run", "would add the relationship; nothing was written", proposed, 0)
+        return _write(client, request, audit)
     except Refused as refusal:
-        audit.outcome = "refused"
-        audit.reason = str(refusal)
-        return 1
+        return _finish(audit, "refused", str(refusal), audit.after, 1)
     except ApiError as error:
-        audit.outcome = "failed"
-        audit.reason = str(error)
-        return 2
+        return _finish(audit, "failed", str(error), audit.after, 2)
 
 
 def build_request(args: argparse.Namespace, env: dict[str, str]) -> Request:
