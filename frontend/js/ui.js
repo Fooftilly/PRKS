@@ -2991,6 +2991,8 @@ function prksFolderPrivateNoteAcknowledged(ctx, ack) {
     session.retired = true;
     session.editBase = null;
     session.updatedAt = Date.now();
+    const drop = prksPrivateNoteRecoveryHook(PRKS_PRIVATE_NOTE_FAMILIES.folder, 'drop');
+    if (drop) drop(session);
     prksRepaintCleanPrivateNotes(PRKS_PRIVATE_NOTE_FAMILIES.folder, ctx, session.entityId);
 }
 
