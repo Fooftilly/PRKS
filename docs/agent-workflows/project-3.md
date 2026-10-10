@@ -2,7 +2,7 @@
 
 This is the checked-in record of how GitHub Project #3 ("PRKS Roadmap", owned by the `Fooftilly` account) is configured and automated, and of the rules automation must keep (#441). Project-side settings live in GitHub's UI, not in this repository, so this document is the reference for reasoning about them together with the checked-in workflows.
 
-> **Status of this document: proposal.** Section 1 (existing configuration) is pending the read-only inventory. Everything marked **Proposed** needs the maintainer's approval of the specific configuration before anyone changes Project #3. Until then nothing in this document is applied, and no Project #3 field, status, workflow or view may be changed.
+> **Status of this document.** Section 1 records the configuration verified read-only on 2026-10-10. Lifecycle Status (§2), Roadmap Stage and Execution (§3) are approved designs; everything marked **Proposed** still needs the maintainer's approval of the exact configuration. Nothing in §5, §7 or §13 is applied by this document, and no automation may change Project #3 fields, options, items, workflows or views until the maintainer approves the specific step.
 
 ## Governance (always applies)
 
@@ -14,25 +14,49 @@ This is the checked-in record of how GitHub Project #3 ("PRKS Roadmap", owned by
 - Where automation cannot know intent, a manually set Status wins. Automation never moves an item out of **Blocked** or **Done** without an explicitly approved policy. The only such policies are the native closing and reopening rules in §5, approved with that configuration: closing an issue or PR, or merging a PR, sets Done from any Status (closing is a person's or a merge's own act), and reopening an issue moves it from Done to Ready. `project-sync` has no exception.
 - AI triage output never changes Status, fields or dependencies by itself.
 
-## 1. Existing configuration
+## 1. Existing configuration (verified 2026-10-10, read-only)
 
-**Pending inventory.** The maintainer runs the read-only export in the #441 audit report, which lists fields with their options, views with their filters, and native workflows with their on/off state. Workflow settings (auto-add filter, target statuses, archive filter) come from screenshots, because the API does not expose them. This section will then record, verbatim:
+Sources: the maintainer's baseline export (44 items, `hasNextPage: false`, taken before the 2026-10-10 manual changes) and a live read-only GraphQL snapshot. Workflow filters, target values and When selectors are not exposed by the API; those rows are as reported by the maintainer.
+
+**Items.** 44, all issues from `Fooftilly/PRKS`, none archived, no PRs or draft issues. **35 have Work Type = Epic** (the Roadmap view). The others: #472 (Feature, sub-issue of #314) and eight findings/sub-issues (#35, #75, #81, #82, #85, #87, #91, #102). An earlier draft of the inventory said "26 epics"; that was a miscount of the `[Roadmap]` titles, not a pagination gap. A recount of all 44 baseline nodes and of the live items gives 35.
+
+**Custom fields (all preserved).** Status; Horizon {Now, Next, Later, Long-term, Exploratory}; Work Type {Epic, Feature, Research, Bug, Infrastructure, Documentation}; Priority {P0, P1, P2, P3}; Commitment {Committed, Research-first, Exploratory}; Agent {Unassigned, Cursor Cloud, Claude Code, Codex, Manual}; Effort {XS, S, M, L, XL}; Roadmap Order (number); Start date, Target date (date). No iteration field. No item has Agent, Effort, dates or assignees set.
+
+**Status options.**
+
+| Baseline | Live |
+|---|---|
+| Idea, Research / Design, **Planned** (`cff9bdb9`), Ready for Agent, In Progress, Review, Ready to Merge, Done, Parked | Idea, Research / Design, **Ready** (`cff9bdb9`, the renamed Planned), Ready for Agent, In Progress, Review, Ready to Merge, Done, Parked, Inbox, Changes requested, Blocked, Backlog |
+
+Renaming Planned to Ready kept the option ID, so the 23 epics that were Planned now read Ready. The baseline export is the record of which they were. `project-3-migration/baseline-planned.json` lists them, and §13 restores the distinction through Roadmap Stage = Planned with Status Backlog.
+
+**Native workflows.** Baseline (API): Auto-add sub-issues **on**, Auto-close issue on, Item added to project **off**, Item closed on, Item reopened on, Pull request linked to issue on, Pull request merged on. "Auto-add to project", "Auto-archive items", "Code changes requested" and "Code review approved" were not returned by the API. As reported by the maintainer since then (not verifiable via the API): Auto-close issue **off**, Pull request linked to issue **off**, Item reopened = Issues only → Ready.
+
+**Views (baseline = live).**
+
+| # | View | Layout | Filter | Group / columns by | Sort |
+|---|---|---|---|---|---|
+| 1 | Roadmap | table | `work-type:Epic` | Horizon | Roadmap Order ↑ |
+| 7 | Active Work | table | `status:"In Progress",Review,"Ready to Merge"` | Status | – |
+| 8 | Work Board | board | `-status:Idea,Parked,Done -work-type:Epic` | columns: Status | – |
+| 9 | Agent Queue | table | `status:"Ready for Agent"` | – | Priority ↑, Effort ↑ |
+| 10 | Research Queue | table | `status:"Research / Design"` | – | – |
+| 11 | Timeline | roadmap | none | – | – |
 
 | Item | Existing | Proposed change | Needs approval |
 |---|---|---|---|
-| Status options | *pending* | §2 | yes |
-| Other custom fields | *pending* | none added except Execution (§3) | yes |
-| Native workflows and their settings | *pending* | §5 | yes |
-| Views and their filters | *pending* | §7 | yes |
-| Item membership (which issues and PRs are on the board) | *pending* | one-time backfill (§5.1 step 3) | yes |
+| Status options | as above | add nothing more; legacy options kept until no item or view uses them (§13) | yes |
+| Other custom fields | as above, all kept | add Roadmap Stage and Execution (§3) | yes (field creation) |
+| Native workflows | as above | §5 | yes |
+| Views | as above | §7 | yes |
+| Membership | 44 items | backfill (§13) | yes |
 
-Nothing in sections 2–8 assumes the current options match the proposed ones. Each proposed change will be mapped from what the inventory shows.
-
-## 2. Lifecycle Status (provisionally approved)
+## 2. Lifecycle Status (approved)
 
 | Status | Meaning |
 |---|---|
 | Inbox | Added, not triaged. |
+| Backlog | Triaged and accepted or planned, but not actionable yet (approved 2026-10-10). |
 | Ready | Triaged and actionable; can start now. |
 | In Progress | Being worked on, including draft PRs. |
 | Review | Waiting for a human review. |
@@ -40,15 +64,19 @@ Nothing in sections 2–8 assumes the current options match the proposed ones. E
 | Blocked | Cannot proceed. Set by a person; a native "Blocked by" dependency is shown separately (§9). |
 | Done | The item itself is complete: issue closed, PR merged, or PR closed without merging. |
 
-Migration from the existing options is proposed only after the inventory (§1).
+Legacy planning options (Idea, Research / Design, Ready for Agent, Ready to Merge, Parked) stay on the field until §13 has moved every item and no view references them. Their meaning moves to Roadmap Stage (§3) and Execution, never by an automatic lossy remap. Planned→Ready, Parked→Blocked and Ready to Merge→Review would each lose information: planned is not actionable, parked is a choice and not an impediment, and approval is not a lifecycle state (the native review decision shows it, and a merge is always a person's act).
 
-## 3. Execution field (approved)
+`project-sync` treats any Status it has no key for, Backlog and the legacy options included, as `unknown:<name>`. Such a value matches no "allowed from" list, so a PR in Backlog is never moved by `project-sync` (covered by `tests/test_project3_migrate.py`). No change to `project-sync` was needed.
 
-One new single-select field, **Execution**, with options **Human**, **Agent** and **Mixed**. It is set by hand at first. Execution says who does the work; it does not make an item ready. Agent Queue (§7) also requires a lifecycle Status and no unresolved prerequisite.
+## 3. Roadmap Stage and Execution fields (approved; not created yet)
+
+**Roadmap Stage**, single select {Idea, Research / Design, Planned, Parked}: the planning stage of roadmap items, previously carried by Status. It is separate from Commitment (how firmly PRKS commits: Committed, Research-first, Exploratory) and Horizon (when). These are three different questions. Today Stage and Commitment mostly line up (#472 is Idea + Research-first), but they evolve independently, and Parked has no other home.
+
+**Execution**, single select {Human, Agent, Mixed}: who does the work, as a category. The existing **Agent** field (the specific executor: Cursor Cloud, Claude Code, Codex, Manual) stays. Execution is set by hand and never inferred: no current item has any Agent value, assignee or agent label, so the migration leaves it empty. Execution does not make an item ready. Agent Queue (§7) also requires a lifecycle Status, and a person checks for open prerequisites (§9).
 
 ## 4. Classification comes from repository metadata
 
-No Work type, Area or Priority Project fields. Views filter on the canonical repository metadata instead:
+No **new** classification fields. The existing Work Type and Priority Project fields are kept: they carry the roadmap planning data (the Roadmap view keys on `work-type:Epic`; Priority is set on epics) and are not copied onto other items. For all other items, views filter on the canonical repository metadata. Note there is no `priority:P0` label.
 
 | Concept | Source |
 |---|---|
@@ -68,7 +96,7 @@ Every setting is checked against its current configuration (§1) before it is ch
 
 | Workflow | Proposed setting | Why |
 |---|---|---|
-| Auto-add to project | On. Filter: all issues and PRs in `Fooftilly/PRKS`, including dependency PRs | Everything enters without manual adding. Dependency PRs are kept out of the ordinary views by their filters (§7), not by auto-add. |
+| Auto-add to project | On. Repository `Fooftilly/PRKS`, filter `is:issue,pr` (all issues and PRs, including dependency PRs). GitHub Free allows one auto-add workflow, which is enough. Supported auto-add qualifiers: `is` (open, closed, merged, draft, issue, pr), `label`, `reason`, `assignee`, `no` | Everything enters without manual adding. Dependency PRs are kept out of the ordinary views by their filters (§7), not by auto-add. |
 | Item added to project | **When:** Issues only (Pull requests unchecked). **Set:** Status Inbox. Approved 2026-10-10 | Default entry state for issues. PR items get their first Status from `project-sync` instead (§10.1), so a delayed native run cannot reset a classified PR. |
 | Item closed | Status: Done, for issues and PRs | The item itself is complete. A PR closed without merging is finished too. If a merged PR's closing keyword closes an issue, GitHub closes it and this rule moves it to Done; that is why slice PRs reference controller and roadmap issues with `Refs #N`, never a closing keyword. |
 | Pull request merged | Status: Done | Applies to the PR item only. |
@@ -77,7 +105,7 @@ Every setting is checked against its current configuration (§1) before it is ch
 | Code review approved | **Off** (provisional) | A bot approval would move Status, and approval is not authorization. |
 | Auto-close issue | **Off** (provisional) | Moving a controller issue to Done must not close it. |
 | Pull request linked to issue | **Off** (provisional) | One slice PR must not move its controller issue. |
-| Auto-archive items | **Off for issues** (§8) | Issues stay discoverable. |
+| Auto-archive items | **Off** (§8; merged-PR archiving is only a later proposal) | Issues stay discoverable. |
 
 ### 5.1 Applying these settings (only after the rollout is approved)
 
@@ -121,24 +149,26 @@ Only a review's *first* answer can release Changes requested, and only when it i
 
 ## 7. Views as filtered projections (Proposed)
 
-Filters use GitHub Projects filter syntax. Exact field and option names follow §1 once it is filled in.
+Only documented Projects filter qualifiers are used (`is:`, `label:`, `-label:`, field names such as `status:`, `work-type:`, `execution:`, `roadmap-stage:`, `has:`/`no:`, `updated:`, `reason:`, `parent-issue:`). `execution:` and `roadmap-stage:` work once those fields exist. **There is no blocked-by filter qualifier**, so views cannot hide items with an open native prerequisite (§9).
 
-| View | Layout | Filter |
-|---|---|---|
-| Active Work | table | `is:open -label:dependencies status:Ready,"In Progress",Review,"Changes requested",Blocked` |
-| Agent Queue | table, grouped by Status | `is:open is:issue execution:Agent,Mixed status:Ready,"In Progress" -label:dependencies` |
-| Research Queue | table | `label:research is:open -status:Done` (active research only) |
-| Research History (new) | table, sorted by Closed date | `label:research is:closed` (completed research stays discoverable here) |
-| Roadmap | roadmap | `label:roadmap`, with Sub-issue progress and milestone |
-| Work Board | board by Status | `-label:dependencies` (Done items included and visible) |
-| Timeline | roadmap by date fields | same items as Work Board |
-| Maintenance (new) | table | `label:dependencies` |
+| View | Layout | Filter | Group / columns | Sort | Columns |
+|---|---|---|---|---|---|
+| Roadmap (#1, preserved) | table | `work-type:Epic` | Horizon | Roadmap Order ↑ | Title, Status, Roadmap Stage, Sub-issues progress, Priority, Commitment, Roadmap Order |
+| Active Work (#7) | table | `is:open -label:dependencies -work-type:Epic status:"In Progress",Review,"Changes requested",Blocked` | Status | Priority ↑ | Title, Status, Assignees, Execution, Agent, Linked pull requests, Parent issue, Labels |
+| Work Board (#8) | board | `-label:dependencies -work-type:Epic -status:Inbox,Backlog,Idea,Parked` | columns: Status (hide Inbox and Backlog columns) | – | Title, Status, Linked pull requests, Parent issue, Execution, Labels |
+| Triage (new, optional) | table | `is:open status:Inbox -label:dependencies` | – | Updated ↓ | Title, Labels, Parent issue, Created |
+| Agent Queue (#9) | table | `is:open is:issue -label:dependencies execution:Agent,Mixed status:Ready,"In Progress"` | Status | Priority ↑, Effort ↑ | Title, Status, Execution, Agent, Effort, Parent issue, Labels, Linked pull requests |
+| Research Queue (#10) | table | `is:open label:research -status:Done` | – | Updated ↓ | Title, Status, Assignees, Parent issue, Labels |
+| Roadmap Research (new, optional) | table | `is:open work-type:Epic roadmap-stage:"Research / Design"` | – | Roadmap Order ↑ | Title, Status, Horizon, Commitment, Sub-issues progress |
+| Research History (new) | table | `label:research is:closed` | – | Closed ↓ | Title, Closed, Labels, Linked pull requests |
+| Timeline (#11) | roadmap (Start date → Target date) | `-label:dependencies work-type:Epic` | Horizon | Roadmap Order ↑ | Title, Status, Roadmap Stage, Sub-issues progress |
+| Maintenance (new) | table | `label:dependencies` | Status | Updated ↓ | Title, Status, Repository, Labels, Reviewers, Linked pull requests |
 
-**Dependency PRs:** they are added to Project #3 like any other PR and follow the same PR lifecycle (§6). Active Work, Agent Queue and Work Board exclude them with `-label:dependencies`, so they show up only in Maintenance. Automation never merges them.
-
-**Research:** active and completed research are separated by two views rather than by archiving. Research Queue holds open research. Research History holds closed research, including #181, #234 and #246. Neither view archives anything, and completed research issues are never auto-archived (§8). A closed research issue appears in Research History only if it is an item on Project #3. Whether these three already are is checked in the inventory (§1); if not, adding them is a manual step for the maintainer.
-
-Agent Queue separates ready work from work blocked by an unresolved prerequisite. A blocked-state filter qualifier in Project views is not yet verified. If it exists, Agent Queue adds it. Otherwise a read-only eligibility report lists Ready Agent/Mixed issues with and without open native blockers (§9), and the view shows both groups.
+- **Work Board** keeps Done visible. If the Done column grows too long, add a date bound in the UI and check that the preview shows the expected items, because GitHub documents the `updated:` comparison operators ambiguously. Inbox (hundreds of backfilled findings) and Backlog stay out of it; Inbox has its own Triage view. In a board view, a hidden column is a view setting, not a filter.
+- **Research:** Research Queue holds actual research tasks (the `research` label). Roadmap epics that are still being researched or designed are in Roadmap Research or the Roadmap view, not mixed into Research Queue. Research History holds closed research, including #181, #234 and #246 once they are added (§13).
+- **Dependency PRs** (`dependencies` label: Dependabot, plus the human-authored #335) appear only in Maintenance. Maintenance does not filter on Status, because Dependabot PRs never get a `project-sync` Status (§10).
+- **Agent Queue** cannot exclude items with an open Blocked-by prerequisite, because no filter qualifier exists. Check the issue's Relationships panel before starting work.
+- **Timeline** stays sparse until Start date and Target date are filled in (no item has them today).
 
 ## 8. Archival
 
@@ -231,3 +261,59 @@ Implementation: `scripts/project_sync.py`, `.github/workflows/project-sync.yml`,
 - **A field or option was renamed:** runs fail with the missing name. Update `.github/project-sync.json` or rename it back.
 - **Dependency writer refused or failed:** see the job summary and `docs/agent-workflows/issue-dependencies.md`.
 - **A token expired or was revoked:** `project-sync` fails without writing. Rotate it as in §11.
+
+## 13. One-time migration and backfill (Proposed; dry-run only until approved)
+
+Tool: `scripts/project3_migrate.py`, tested by `tests/test_project3_migrate.py`. Manifests are in `docs/agent-workflows/project-3-migration/`: `existing-items.json` (all 44 items with expected-before value, target values, reason and flags), `backfill.json`, `baseline-planned.json` and `counts.json`. The latest read-only dry-run is in `dry-run-summary.md`.
+
+**Guarantees enforced by the tool:**
+- Dry-run unless `--apply` is given.
+- The only mutations it can send are `addProjectV2ItemById` and `updateProjectV2ItemFieldValue`. Nothing is ever deleted, cleared, archived, closed, reopened, approved or merged.
+- Scope is checked against owner `Fooftilly`, project 3, node `PVT_kwHOAsc2_s4BkAo3` and content from `Fooftilly/PRKS`.
+- Field and option IDs are resolved by name. `--apply` refuses to run until Roadmap Stage, Execution and the Backlog option exist.
+- Only listed fields are written (Status, Roadmap Stage; never Execution), and only when the current value equals the manifest's expected-before value. Any other value, or a changed issue state, is reported as drift and skipped.
+- `approved: false` items are held.
+- PRs are never set to Inbox.
+- A checkpoint makes reruns idempotent.
+
+**Existing items (stage `migrate-existing`):**
+
+| Group | Items | Status → | Roadmap Stage → |
+|---|---|---|---|
+| Formerly Planned epics | 23 (baseline-planned.json) | Backlog | Planned |
+| Research / Design epics | #49, #51, #52, #60, #142, #317, #318 | Backlog | Research / Design |
+| Idea items | #53, #423, #431, #472 | Inbox | Idea |
+| No Status | #35, #75, #81, #82, #87, #102 | Inbox | – |
+| #179 | | keep In Progress | Planned (body: "Active roadmap/planning item — implementation is proceeding"; accepted, Committed) |
+| #39 | | **held** (Done once closure is confirmed) | – |
+| #85, #91 | | keep Done | – |
+
+**Exceptions needing the maintainer's decision:**
+- **#39** was closed by `cursor[bot]` with no closing commit or comment, and all 9 scope boxes are unchecked. Confirm the closure, then set `approved: true` (Done), or reopen it.
+- **#35** carries `accepted`: keep Inbox, or choose Backlog or Ready.
+- **#52** has open native blockers (#45, #46). It is not moved to Blocked (§9).
+
+**Backfill (stage `backfill`):**
+- 215 open issues → add, Status Inbox.
+- 12 open dependency PRs (11 Dependabot and #335) → add with **no Status** (Maintenance).
+- Closed research #181, #234, #246 → add, Status Done. "Item closed" does not fire on add, so Done is set explicitly.
+- No other closed research-labelled issues exist. #295 is excluded: "Research" in its title, but it is a feature.
+- Regenerate the manifest right before applying if the repository has changed.
+
+**Commands** (run by the maintainer only after approval, with a classic token that has the `project` scope, exported as `PROJECT3_MIGRATION_TOKEN`; never committed or printed):
+
+```bash
+python scripts/project3_migrate.py migrate-existing --report-dir /tmp/p3          # dry-run
+python scripts/project3_migrate.py migrate-existing --report-dir /tmp/p3 --apply  # after approval
+python scripts/project3_migrate.py backfill --report-dir /tmp/p3                  # dry-run
+python scripts/project3_migrate.py backfill --report-dir /tmp/p3 --apply          # after approval
+```
+
+Order:
+1. Create the fields.
+2. Run `migrate-existing`, dry-run then apply.
+3. Configure the native workflows (§5.1). Enable "Item added" before the backfill, so that auto-add cannot race a set Status.
+4. Run `backfill`, dry-run then apply.
+5. Change the views (§7).
+6. Retire legacy options only after a separate approval.
+

@@ -1,0 +1,4109 @@
+{
+ "schema": 1,
+ "scope": {
+  "owner": "Fooftilly",
+  "repository": "Fooftilly/PRKS",
+  "project_number": 3,
+  "project_id": "PVT_kwHOAsc2_s4BkAo3"
+ },
+ "stage": "backfill",
+ "generated": "2026-10-10",
+ "other_closed_research_candidates_for_approval": [],
+ "excluded": [
+  {
+   "number": 295,
+   "reason": "Title contains Research but it is a feature (enhancement), no research label."
+  }
+ ],
+ "counts": {
+  "open-issue": 215,
+  "maintenance-pr": 12,
+  "closed-research": 3
+ },
+ "items": [
+  {
+   "number": 30,
+   "type": "Issue",
+   "title": "UX: \"Edit folder\" opens file assignment instead of folder metadata editing",
+   "state": "OPEN",
+   "labels": [
+    "accepted",
+    "priority:P2",
+    "area:correctness",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 31,
+   "type": "Issue",
+   "title": "UX: Empty Folder Library has competing create CTAs (New folder vs New File)",
+   "state": "OPEN",
+   "labels": [
+    "accepted",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 32,
+   "type": "Issue",
+   "title": "UX: Unavailable YouTube URL still creates a work without clear warning",
+   "state": "OPEN",
+   "labels": [
+    "accepted",
+    "priority:P2",
+    "area:correctness",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 33,
+   "type": "Issue",
+   "title": "UX: Create/save success feedback is easy to miss (\"change queued\" without clear confirmation)",
+   "state": "OPEN",
+   "labels": [
+    "accepted",
+    "priority:P3",
+    "area:sync",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 34,
+   "type": "Issue",
+   "title": "UX: Research Graph empty/sparse state lacks guidance and node summary",
+   "state": "OPEN",
+   "labels": [
+    "accepted",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 36,
+   "type": "Issue",
+   "title": "UX: Research Notes are hard to discover outside an open Work",
+   "state": "OPEN",
+   "labels": [
+    "accepted",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 37,
+   "type": "Issue",
+   "title": "UX: New File folder picker can stay invalid and still create under Uncategorized",
+   "state": "OPEN",
+   "labels": [
+    "accepted",
+    "priority:P2",
+    "area:correctness",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 66,
+   "type": "Issue",
+   "title": "[Audit Finding] Design bounded retention/compaction for sync operation ledger",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:architecture",
+    "area:reliability",
+    "area:sync"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 69,
+   "type": "Issue",
+   "title": "[Audit Finding] Pyright CI currently disables normal type checking",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "accepted",
+    "priority:P3",
+    "area:correctness",
+    "area:tooling"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 70,
+   "type": "Issue",
+   "title": "[Audit Finding] Remove misleading server import-time path/directory side effects",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:maintainability",
+    "area:reliability"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 78,
+   "type": "Issue",
+   "title": "[Audit Finding] Classify data-changing CTEs correctly in performance diagnostics",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 83,
+   "type": "Issue",
+   "title": "UX: Detail layout turns Search and New File into unlabeled icons",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 86,
+   "type": "Issue",
+   "title": "UX: Empty Tags directory has no on-page way to create a tag",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 88,
+   "type": "Issue",
+   "title": "UX: Command palette Go to list omits many sidebar destinations until queried",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 93,
+   "type": "Issue",
+   "title": "UX: Publishers Aliases control opens search instead of alias editor",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P2",
+    "area:correctness",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 95,
+   "type": "Issue",
+   "title": "UX: Instructional help is often shown inline instead of behind ? hint buttons",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 99,
+   "type": "Issue",
+   "title": "[Audit Finding] Replace publisher alias search N+1 queries with a set-based query",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:correctness",
+    "area:performance"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 100,
+   "type": "Issue",
+   "title": "[Audit Finding] Make PDF text extraction linear in page count",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "accepted",
+    "priority:P3",
+    "area:correctness",
+    "area:performance"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 116,
+   "type": "Issue",
+   "title": "[Audit Finding] Reconcile PDF-derived Mentioned roles instead of appending them forever",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness",
+    "area:sync"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 120,
+   "type": "Issue",
+   "title": "[Audit Finding] Bound process-local PDF coordination registries",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:correctness",
+    "area:performance"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 121,
+   "type": "Issue",
+   "title": "UX: Theme changes force a full page reload instead of applying live",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding",
+    "roadmap-overlap"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 124,
+   "type": "Issue",
+   "title": "[Audit Finding] Resolve wiki links in batches instead of querying per marker",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "accepted",
+    "priority:P3",
+    "area:performance"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 125,
+   "type": "Issue",
+   "title": "[Audit Finding] Batch Argument catalog relationships instead of issuing queries per Argument and source",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:performance"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 126,
+   "type": "Issue",
+   "title": "[Audit Finding] Make shared managed-PDF detection query the target path instead of scanning every Work",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:performance"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 127,
+   "type": "Issue",
+   "title": "[Audit Finding] Rewrite playlist order with bounded SQL instead of one UPDATE per item",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:performance"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 128,
+   "type": "Issue",
+   "title": "[Audit Finding] Index normalized Concept names instead of scanning every Concept during identity resolution",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:performance"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 130,
+   "type": "Issue",
+   "title": "[Audit Finding] Avoid reparsing the entire Research Notes corpus for every Concept or Argument deletion",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:performance"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 137,
+   "type": "Issue",
+   "title": "[Audit Finding] Avoid loading the complete research graph to validate one hierarchy mutation",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:performance"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 141,
+   "type": "Issue",
+   "title": "[Audit Finding] Remove the per-Concept correlated count from the Concept catalog query",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "accepted",
+    "priority:P3",
+    "area:performance"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 149,
+   "type": "Issue",
+   "title": "UX: Long folder names clip without wrapping or ellipsis",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 150,
+   "type": "Issue",
+   "title": "UX: Annotation row actions use text that clips; prefer icons",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P2",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 153,
+   "type": "Issue",
+   "title": "[Audit Finding] Replace unindexed per-row Person Group catalog counts with set-based aggregation",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "accepted",
+    "priority:P3",
+    "area:performance"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 154,
+   "type": "Issue",
+   "title": "UX: Create/settings modals do not trap keyboard focus (Tab escapes to page behind)",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P2",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 155,
+   "type": "Issue",
+   "title": "[Audit Finding] Compute Folder catalog counts once instead of repeating correlated aggregates",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:performance"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 156,
+   "type": "Issue",
+   "title": "[Audit Finding] Build Work role projections from one relationship pass instead of four correlated subqueries",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:performance"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 157,
+   "type": "Issue",
+   "title": "[Audit Finding] Aggregate Playlist item counts once instead of running a correlated count per Playlist",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:performance"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 158,
+   "type": "Issue",
+   "title": "[Audit Finding] Make composite sync revisions queryable without N+1 lookups and JSON scans",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:performance"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 159,
+   "type": "Issue",
+   "title": "[Audit Finding] Compute Tag usage counts once and reuse them for catalog filtering",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:performance"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 167,
+   "type": "Issue",
+   "title": "[Audit Finding] Make Processing Inbox metadata, role, and tag edits atomic",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "accepted",
+    "priority:P2",
+    "area:correctness",
+    "roadmap-overlap"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 168,
+   "type": "Issue",
+   "title": "[Audit Finding] Do not silently return incomplete OR-mode search results when a search branch fails",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 173,
+   "type": "Issue",
+   "title": "Research Notes: simplify Markdown toolbar with contextual selection actions",
+   "state": "OPEN",
+   "labels": [
+    "priority:P2",
+    "area:ux"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 180,
+   "type": "Issue",
+   "title": "Introduce typed API boundary models and executable OpenAPI validation",
+   "state": "OPEN",
+   "labels": [
+    "area:architecture",
+    "area:testing",
+    "area:maintainability"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 186,
+   "type": "Issue",
+   "title": "[Audit Finding] Build the Publisher catalog without per-Publisher alias queries and Work scans",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "accepted",
+    "priority:P3",
+    "area:performance"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 193,
+   "type": "Issue",
+   "title": "tooling: ban fake window resize events in frontend",
+   "state": "OPEN",
+   "labels": [
+    "enhancement",
+    "javascript",
+    "priority:P3",
+    "area:tooling",
+    "area:ux"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 194,
+   "type": "Issue",
+   "title": "[Audit Finding] Processing import can leave a library Work while marking the inbox row failed, then rescan re-enables a duplicate import",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness",
+    "area:storage",
+    "roadmap-overlap"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 197,
+   "type": "Issue",
+   "title": "UX: First subfolder under a leaf Folder missing from hierarchy tree until remount",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P2",
+    "area:correctness",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 198,
+   "type": "Issue",
+   "title": "[Audit Finding] Do not silently omit Folder and Playlist relationships from Work detail when their queries fail",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 225,
+   "type": "Issue",
+   "title": "UX: Edit Metadata shows empty Publication heading on non-video Works",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 232,
+   "type": "Issue",
+   "title": "Adopt TanStack Query for Vue server-state orchestration",
+   "state": "OPEN",
+   "labels": [
+    "enhancement",
+    "priority:P2",
+    "area:architecture",
+    "area:testing",
+    "area:maintainability"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 233,
+   "type": "Issue",
+   "title": "Standardize VueUse for Vue browser lifecycle primitives",
+   "state": "OPEN",
+   "labels": [
+    "enhancement",
+    "priority:P2",
+    "area:architecture",
+    "area:testing",
+    "area:maintainability",
+    "area:ux"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 241,
+   "type": "PullRequest",
+   "title": "build(deps): bump dompurify from 3.4.15 to 3.4.16 in /tools/frontend-vendor",
+   "state": "OPEN",
+   "author": "dependabot[bot]",
+   "labels": [
+    "dependencies",
+    "javascript"
+   ],
+   "action": "add",
+   "set": {},
+   "reason": "Dependency PR. PRs get no Inbox; Status stays empty (project-sync classifies non-Dependabot PRs on their next event).",
+   "category": "maintenance-pr"
+  },
+  {
+   "number": 243,
+   "type": "PullRequest",
+   "title": "build(deps): bump actions/cache from 5.0.1 to 6.1.0",
+   "state": "OPEN",
+   "author": "dependabot[bot]",
+   "labels": [
+    "dependencies",
+    "github_actions"
+   ],
+   "action": "add",
+   "set": {},
+   "reason": "Dependency PR. PRs get no Inbox; Status stays empty (project-sync classifies non-Dependabot PRs on their next event).",
+   "category": "maintenance-pr"
+  },
+  {
+   "number": 244,
+   "type": "PullRequest",
+   "title": "build(deps): bump actions/upload-artifact from 4.6.2 to 7.0.1",
+   "state": "OPEN",
+   "author": "dependabot[bot]",
+   "labels": [
+    "dependencies",
+    "github_actions"
+   ],
+   "action": "add",
+   "set": {},
+   "reason": "Dependency PR. PRs get no Inbox; Status stays empty (project-sync classifies non-Dependabot PRs on their next event).",
+   "category": "maintenance-pr"
+  },
+  {
+   "number": 273,
+   "type": "Issue",
+   "title": "[Audit Finding] Do not match Works using hidden legacy title or abstract metadata",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 274,
+   "type": "Issue",
+   "title": "[Audit Finding] Serialize workspace leave decisions instead of overwriting or reusing pending approvals",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness",
+    "area:reliability"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 275,
+   "type": "Issue",
+   "title": "Normalize Arguments kind selector tab semantics",
+   "state": "OPEN",
+   "labels": [
+    "priority:P3",
+    "area:ux"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 277,
+   "type": "Issue",
+   "title": "[Audit Finding] Aggregate Folder-detail child counts once instead of two correlated counts per child Folder",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:performance"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 278,
+   "type": "Issue",
+   "title": "[Audit Finding] Aggregate Person Group detail child member counts once instead of a correlated count per child",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:performance"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 281,
+   "type": "Issue",
+   "title": "[Audit Finding] Re-arm Concepts retained-route cleanup like Folder Library, Positions, and Arguments",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 282,
+   "type": "Issue",
+   "title": "[Audit Finding] Scope Folder Library expand/collapse per pane instead of window.__prksFolderTreeCollapsed",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 289,
+   "type": "Issue",
+   "title": "[Audit Finding] Surface partial failure when New Playlist cannot attach the originating Work",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 300,
+   "type": "Issue",
+   "title": "[Audit Finding] Person Group Manage-members combobox binds via document.getElementById under dual Vue mounts",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 335,
+   "type": "PullRequest",
+   "title": "build(deps): update CodeQL to 4.38.2 and group future bumps",
+   "state": "OPEN",
+   "author": "Fooftilly",
+   "labels": [
+    "dependencies",
+    "area:tooling",
+    "github_actions"
+   ],
+   "action": "add",
+   "set": {},
+   "reason": "Dependency PR (human-authored CodeQL update; Maintenance with the Dependabot PRs). PRs get no Inbox; Status stays empty (project-sync classifies non-Dependabot PRs on their next event).",
+   "category": "maintenance-pr"
+  },
+  {
+   "number": 337,
+   "type": "Issue",
+   "title": "Transitional: automate regeneration of committed frontend artifacts on dependency PRs",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "area:tooling",
+    "area:maintainability",
+    "area:dependencies",
+    "roadmap-overlap"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 338,
+   "type": "Issue",
+   "title": "Define dependency-update risk classes and make Dependabot policy-aware",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "area:tooling",
+    "area:maintainability",
+    "area:dependencies",
+    "roadmap-overlap"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 339,
+   "type": "Issue",
+   "title": "Add dependency-aware CI gates and Docker runtime smoke validation",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "area:tooling",
+    "area:reliability",
+    "area:dependencies",
+    "roadmap-overlap"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 340,
+   "type": "Issue",
+   "title": "Move generated frontend artifacts out of source control into release/package builds",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "area:tooling",
+    "area:maintainability",
+    "area:dependencies",
+    "roadmap-overlap"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 342,
+   "type": "Issue",
+   "title": "UX: Create Folder under a folder prompts unsaved discard on Escape with no edits",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 351,
+   "type": "Issue",
+   "title": "UX: Opening a Work from Recent or File Types leaves Folders highlighted in the sidebar",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 360,
+   "type": "Issue",
+   "title": "[Audit Finding] Owner-scope Vue route DOM IDs and close the focused pane's modal on Escape",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness",
+    "area:ux"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 367,
+   "type": "PullRequest",
+   "title": "build(deps): bump devalue from 5.9.2 to 5.9.4 in /tools/pdf-viewer",
+   "state": "OPEN",
+   "author": "dependabot[bot]",
+   "labels": [
+    "dependencies",
+    "javascript",
+    "area:tooling"
+   ],
+   "action": "add",
+   "set": {},
+   "reason": "Dependency PR. PRs get no Inbox; Status stays empty (project-sync classifies non-Dependabot PRs on their next event).",
+   "category": "maintenance-pr"
+  },
+  {
+   "number": 370,
+   "type": "Issue",
+   "title": "UX: Creates the server refuses look saved, then stay \"queued\" forever or silently vanish",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P2",
+    "area:sync",
+    "area:ux",
+    "ux-finding",
+    "roadmap-overlap"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 371,
+   "type": "Issue",
+   "title": "UX: An unknown or malformed route shows \"Section In Development\" and wipes all saved workspace tabs on reload",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P2",
+    "area:reliability",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 372,
+   "type": "Issue",
+   "title": "UX: Folder Library opened offline claims \"1 folder · 0 files\" after a local create and stays wrong after reconnect",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P2",
+    "area:sync",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 373,
+   "type": "Issue",
+   "title": "UX: New Folder and New Group reopen with the previous submission (duplicate-name error, Save disabled)",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 377,
+   "type": "Issue",
+   "title": "UX: PDF reopened on its remembered page ignores Prev/Next, keyboard and scroll for ~8 s (snaps back)",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P2",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 378,
+   "type": "Issue",
+   "title": "UX: Open annotation drawer covers the PDF toolbar, so clicking the Annotations toggle again doesn't close it",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 380,
+   "type": "Issue",
+   "title": "UX: PDF annotation comment popup is unstyled, oversized, and needs manual save/cancel",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 382,
+   "type": "Issue",
+   "title": "UX: PDF annotations have no title for scanning and recall",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 383,
+   "type": "Issue",
+   "title": "[Audit Finding] Work Reminders repaint pre-edit text after hide → re-tile when the save is acked mid-remount (flaky test_private_reminder_hide_show_prefers_unsettled_complete_draft)",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness",
+    "area:testing",
+    "area:sync"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 385,
+   "type": "Issue",
+   "title": "Annotations created in other PDF apps never reach PRKS: adopt runs before the viewer has loaded them",
+   "state": "OPEN",
+   "labels": [
+    "bug",
+    "priority:P2",
+    "area:correctness",
+    "area:sync"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 386,
+   "type": "Issue",
+   "title": "PDF sticky notes and replies are classified as links and never imported (EmbedPDF type 1 = Text)",
+   "state": "OPEN",
+   "labels": [
+    "bug",
+    "priority:P3",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 387,
+   "type": "Issue",
+   "title": "Highlight whose subject or comment is exactly \"Link\" is classified as a link and never imported",
+   "state": "OPEN",
+   "labels": [
+    "bug",
+    "priority:P3",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 393,
+   "type": "Issue",
+   "title": "UX: Work right panel keeps an empty \"Annotations\" tab after annotations moved to the PDF drawer",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 394,
+   "type": "Issue",
+   "title": "UX: Collapsed Research Notes side rail clips the sync status (\"ed · PD\") and keeps an inert resize handle that rewrites the saved width",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 395,
+   "type": "Issue",
+   "title": "UX: Research Notes beside the PDF can shrink to 160px, where the toolbar wraps into a 4-row grid",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 396,
+   "type": "Issue",
+   "title": "UX: Linked Persons requires a separate \"Manage relationships\" mode for every link or unlink",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 397,
+   "type": "Issue",
+   "title": "UX: Work Details hides \"Delete File\" alone behind a one-item \"More\" disclosure",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 398,
+   "type": "Issue",
+   "title": "UX: New File split-button menu opens from the chevron instead of aligning to the split button",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 399,
+   "type": "Issue",
+   "title": "UX: \"Delete playlist\" is a full danger button directly under the playlist title",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 400,
+   "type": "Issue",
+   "title": "UX: Playlists right panel duplicates the main page and is the only way into playlist edit mode (its Done discards edits)",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P2",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 401,
+   "type": "Issue",
+   "title": "Editing an existing PDF annotation comment is silently reverted: no sync op is sent, but status says \"Saved · PDF updated\"",
+   "state": "OPEN",
+   "labels": [
+    "bug",
+    "priority:P1",
+    "area:correctness",
+    "area:sync"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 402,
+   "type": "Issue",
+   "title": "Comment on an imported annotation is silently lost when the same PDF exists in another Work (409 ANNOTATION_ID_CONFLICT discarded, status says Saved)",
+   "state": "OPEN",
+   "labels": [
+    "bug",
+    "priority:P2",
+    "area:correctness",
+    "area:sync"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 403,
+   "type": "Issue",
+   "title": "Person profile right-panel \"Done\" discards unsaved profile edits without the unsaved-changes prompt",
+   "state": "OPEN",
+   "labels": [
+    "bug",
+    "priority:P2",
+    "area:correctness",
+    "area:ux"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 404,
+   "type": "Issue",
+   "title": "Argument/Stance edit form mixes 42px/16px inputs with 32px pickers in the same rows (violates DESIGN control sizing)",
+   "state": "OPEN",
+   "labels": [
+    "bug",
+    "priority:P3",
+    "area:ux"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 405,
+   "type": "Issue",
+   "title": "UX: Research edit pages split Save/Cancel, use full-width add bars and mix three different edit models",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 406,
+   "type": "Issue",
+   "title": "UX: Positions cannot be renamed, described, or deleted anywhere in the UI",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P2",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 407,
+   "type": "Issue",
+   "title": "UX: Concepts / Positions / Arguments index pages are sparse name lists that hide hierarchy, verdicts and gaps",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 408,
+   "type": "Issue",
+   "title": "UX: Research detail pages stack empty placeholder sections, hide verdicts and show raw [[…]] note snippets",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 409,
+   "type": "Issue",
+   "title": "UX: Research Graph does not show relationship meaning (verdicts, labels) and re-randomizes its layout",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 410,
+   "type": "Issue",
+   "title": "Viewing a Concept/Position leaves a visible 30px white EasyMDE strip on the right edge of every page until reload",
+   "state": "OPEN",
+   "labels": [
+    "bug",
+    "priority:P3",
+    "area:ux"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 411,
+   "type": "Issue",
+   "title": "UX: Cards/List toggle has no visible selected state, no focus ring and no padding",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding",
+    "roadmap-overlap"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 412,
+   "type": "Issue",
+   "title": "UX: Person portraits can only be set by remote URL (no upload, drag-drop or paste)",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 413,
+   "type": "Issue",
+   "title": "UX: \"Delete publisher\" is a full-width danger bar in the aliases dialog and deletes publishers still used by works",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 414,
+   "type": "Issue",
+   "title": "UX: \"Edit Profile Using Template\" dialog is a fixed 500px column with always-expanded rules and a hardcoded, non-customisable prompt",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 415,
+   "type": "Issue",
+   "title": "UX: Person profile right panel hides \"Edit using template\" behind \"More\" next to a full-width red \"Delete person\"",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding",
+    "roadmap-overlap"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 416,
+   "type": "Issue",
+   "title": "UX: Dark UI should use near-black tokens, one merged 40px top row (ribbon + tabs) and a tighter sidebar (redesign parent)",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding",
+    "roadmap-overlap"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 417,
+   "type": "Issue",
+   "title": "UX: PDF reading view wastes space and is hard to scan (truncated toolbar title, wrapping notes toolbar, raw link markup, text-button annotation drawer)",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P2",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 418,
+   "type": "Issue",
+   "title": "UX: Search results bury results under stacked fields and big cards, with no match snippets, facets or related-entity matches",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 419,
+   "type": "Issue",
+   "title": "UX: PRKS opens on a mostly empty folder list; add a dense Home route (continue reading, recently added, needs attention, recent notes)",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 420,
+   "type": "Issue",
+   "title": "UX: Folder detail truncates tree names to \"S…\", shows files only as big cards and opens the right panel with Reminders",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 421,
+   "type": "Issue",
+   "title": "UX: Tags and Saved Views are sparse tiles/cards with inline help and per-row text/red buttons; use a dense table with counts",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 422,
+   "type": "Issue",
+   "title": "Files for Processing: \"Refresh folder scan\" finds new files but keeps them hidden behind \"Load more\" (visible window clamped to the old count)",
+   "state": "OPEN",
+   "labels": [
+    "bug",
+    "priority:P3",
+    "area:ux",
+    "roadmap-overlap"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 425,
+   "type": "Issue",
+   "title": "UX: Text contrast fails WCAG AA in Light and Dark (primary buttons 3.9/2.9:1, tertiary and placeholder text, doc-type badges, Light accent links)",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P2",
+    "area:ux",
+    "ux-finding",
+    "roadmap-overlap"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 426,
+   "type": "Issue",
+   "title": "[Audit Finding] Do not block mutation outcomes on cache-refetch completion",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness",
+    "area:reliability"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 428,
+   "type": "Issue",
+   "title": "UX: Narrow split fallback leaves a persistent wider-workspace ghost that follows navigation",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P2",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 429,
+   "type": "Issue",
+   "title": "UX: Processing inbox copy hardcodes /data/for_processing even under --testing",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding",
+    "roadmap-overlap"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 430,
+   "type": "Issue",
+   "title": "UX: Processing file card status chips clip into labels, and Preview/Import sit below the fold",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P2",
+    "area:ux",
+    "ux-finding",
+    "roadmap-overlap"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 432,
+   "type": "Issue",
+   "title": "Main workspace pane gets a full-page purple focus outline after the canvas narrows (focus moved to the tile even with no split)",
+   "state": "OPEN",
+   "labels": [
+    "bug",
+    "priority:P3",
+    "area:correctness",
+    "area:ux"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 433,
+   "type": "Issue",
+   "title": "UX: People is a sparse full-width list and the person profile buries works under big cards with a full-width \"Edit profile\" panel; use a list + profile layout",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding",
+    "roadmap-overlap"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 434,
+   "type": "Issue",
+   "title": "UX: Concepts index and detail are separate sparse pages; use a concept tree next to the detail, with positions, arguments, files and notes in one grid",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 435,
+   "type": "Issue",
+   "title": "UX: Position detail is one flat list of arguments with no for/against split, no verdict and no actions; show supporting and opposing arguments side by side",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 436,
+   "type": "Issue",
+   "title": "UX: Playlists are chip rows plus a duplicate right panel, with a red Delete under the title; use a playlist list + ordered video table with inline editing",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 437,
+   "type": "Issue",
+   "title": "UX: Progress shows one status at a time as big thumbnail cards; use a five-column status board with type filter and bulk status changes (fold in File Types)",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 438,
+   "type": "Issue",
+   "title": "UX: Recently Opened is a grid of big thumbnail cards with raw timestamps; use a dense table grouped by day with progress and a Resume action",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 439,
+   "type": "Issue",
+   "title": "UX: Command palette is a flat list without grouping, entity types, match context or preview; group results, add scopes and a preview pane",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 441,
+   "type": "Issue",
+   "title": "Improve GitHub Project #3 automation and board synchronization",
+   "state": "OPEN",
+   "labels": [
+    "enhancement",
+    "area:maintainability"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 444,
+   "type": "Issue",
+   "title": "Split view is refused at 1280px when starting from a Work: the Details panel shrinks the canvas to 706px, below the 720px split threshold",
+   "state": "OPEN",
+   "labels": [
+    "bug",
+    "priority:P2",
+    "area:correctness",
+    "area:ux"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 445,
+   "type": "Issue",
+   "title": "UX: Split view redesign — Layout picker, slim pane headers, stable shell (split is functional but cramped, menu-driven and reflows the whole app)",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P2",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 456,
+   "type": "Issue",
+   "title": "E2E flake: divider drag network-count test observes late Work/PDF GETs",
+   "state": "OPEN",
+   "labels": [
+    "bug",
+    "area:testing"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 457,
+   "type": "Issue",
+   "title": "E2E flake: browse projection cache warm-up times out waiting for recent:index",
+   "state": "OPEN",
+   "labels": [
+    "bug",
+    "area:testing"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 458,
+   "type": "Issue",
+   "title": "E2E flake: Settings narrow category strip asserts aria-orientation before resize sync",
+   "state": "OPEN",
+   "labels": [
+    "bug",
+    "area:testing"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 460,
+   "type": "Issue",
+   "title": "[Audit Finding] Offline video Work detail fails: works-video.js is lazily imported but never precached by the service worker",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:reliability"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 461,
+   "type": "Issue",
+   "title": "Backup archives library internals when PRKS_FOR_PROCESSING_DIR aliases the storage root or .prks-maintenance",
+   "state": "OPEN",
+   "labels": [
+    "bug",
+    "area:reliability",
+    "area:storage"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 462,
+   "type": "PullRequest",
+   "title": "build(deps): bump source-map-js from 1.2.1 to 1.2.2 in /frontend-app in the npm_and_yarn group across 1 directory",
+   "state": "OPEN",
+   "author": "dependabot[bot]",
+   "labels": [
+    "dependencies",
+    "javascript"
+   ],
+   "action": "add",
+   "set": {},
+   "reason": "Dependency PR. PRs get no Inbox; Status stays empty (project-sync classifies non-Dependabot PRs on their next event).",
+   "category": "maintenance-pr"
+  },
+  {
+   "number": 463,
+   "type": "PullRequest",
+   "title": "build(deps): bump source-map-js from 1.2.1 to 1.2.2 in /tools/pdf-viewer",
+   "state": "OPEN",
+   "author": "dependabot[bot]",
+   "labels": [
+    "dependencies",
+    "javascript"
+   ],
+   "action": "add",
+   "set": {},
+   "reason": "Dependency PR. PRs get no Inbox; Status stays empty (project-sync classifies non-Dependabot PRs on their next event).",
+   "category": "maintenance-pr"
+  },
+  {
+   "number": 464,
+   "type": "Issue",
+   "title": "[Audit Finding] Storage root-binding warning tests fail on overlayfs hosts because a mocked filesystem type disables the overlay V7 relaxation",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:testing",
+    "area:storage"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 465,
+   "type": "Issue",
+   "title": "UX: Research Notes typed after a failed autosave are never saved, yet the status says \"All changes saved\"",
+   "state": "OPEN",
+   "labels": [
+    "accepted",
+    "priority:P2",
+    "area:reliability",
+    "area:sync",
+    "area:ux",
+    "ux-finding",
+    "roadmap-overlap"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 466,
+   "type": "Issue",
+   "title": "UX: Research Notes typed in the last ~2 s are lost on browser reload or tab close, with no warning",
+   "state": "OPEN",
+   "labels": [
+    "accepted",
+    "priority:P2",
+    "area:reliability",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 467,
+   "type": "Issue",
+   "title": "UX: Parent pickers in New Folder, Move folder and New Group ignore ArrowDown/Enter; Enter-then-Save files to top level or creates a stray parent",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P2",
+    "area:correctness",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 468,
+   "type": "Issue",
+   "title": "UX: Concept \"Parent concepts\" asks for raw Concept IDs; typed names and cycles are refused silently or shown as saved",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P2",
+    "area:correctness",
+    "area:sync",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 473,
+   "type": "Issue",
+   "title": "[Audit Finding] Search, author/publisher filters and Publisher counts never match names with non-ASCII capitals (Python .lower() vs SQLite ASCII-only LOWER/LIKE)",
+   "state": "OPEN",
+   "labels": [
+    "bug",
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 476,
+   "type": "Issue",
+   "title": "Cross-tab note acknowledgement and base coherence",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "roadmap-overlap"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 478,
+   "type": "PullRequest",
+   "title": "build(deps): bump lucide from 1.47.0 to 1.52.0 in /tools/frontend-vendor",
+   "state": "OPEN",
+   "author": "dependabot[bot]",
+   "labels": [
+    "dependencies",
+    "javascript"
+   ],
+   "action": "add",
+   "set": {},
+   "reason": "Dependency PR. PRs get no Inbox; Status stays empty (project-sync classifies non-Dependabot PRs on their next event).",
+   "category": "maintenance-pr"
+  },
+  {
+   "number": 479,
+   "type": "PullRequest",
+   "title": "build(deps): bump @tanstack/vue-query from 5.104.0 to 5.104.1 in /frontend-app",
+   "state": "OPEN",
+   "author": "dependabot[bot]",
+   "labels": [
+    "dependencies",
+    "javascript"
+   ],
+   "action": "add",
+   "set": {},
+   "reason": "Dependency PR. PRs get no Inbox; Status stays empty (project-sync classifies non-Dependabot PRs on their next event).",
+   "category": "maintenance-pr"
+  },
+  {
+   "number": 480,
+   "type": "PullRequest",
+   "title": "build(deps): bump vue-tsc from 3.3.11 to 3.3.12 in /frontend-app",
+   "state": "OPEN",
+   "author": "dependabot[bot]",
+   "labels": [
+    "dependencies",
+    "javascript"
+   ],
+   "action": "add",
+   "set": {},
+   "reason": "Dependency PR. PRs get no Inbox; Status stays empty (project-sync classifies non-Dependabot PRs on their next event).",
+   "category": "maintenance-pr"
+  },
+  {
+   "number": 481,
+   "type": "PullRequest",
+   "title": "build(deps): bump @storybook/addon-a11y from 10.6.0 to 10.6.1 in /frontend-app",
+   "state": "OPEN",
+   "author": "dependabot[bot]",
+   "labels": [
+    "dependencies",
+    "javascript"
+   ],
+   "action": "add",
+   "set": {},
+   "reason": "Dependency PR. PRs get no Inbox; Status stays empty (project-sync classifies non-Dependabot PRs on their next event).",
+   "category": "maintenance-pr"
+  },
+  {
+   "number": 482,
+   "type": "PullRequest",
+   "title": "build(deps): bump vite from 8.3.1 to 8.3.2 in /frontend-app",
+   "state": "OPEN",
+   "author": "dependabot[bot]",
+   "labels": [
+    "dependencies",
+    "javascript"
+   ],
+   "action": "add",
+   "set": {},
+   "reason": "Dependency PR. PRs get no Inbox; Status stays empty (project-sync classifies non-Dependabot PRs on their next event).",
+   "category": "maintenance-pr"
+  },
+  {
+   "number": 483,
+   "type": "Issue",
+   "title": "UX: Edit metadata saves per section, so edits in other sections are silently left unsaved while each status reads \"All changes synced\"",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P2",
+    "area:correctness",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 484,
+   "type": "Issue",
+   "title": "UX: A new response shows its target as a raw Argument ID (and lowercase \"opposes\") until the page is reloaded",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:correctness",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 485,
+   "type": "Issue",
+   "title": "UX: New Position and New Argument silently create duplicates of an existing name (including case-only variants)",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P2",
+    "area:correctness",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 486,
+   "type": "Issue",
+   "title": "UX: The tab left by the narrow split fallback has no icons (invisible Close and Split) and a generic title like \"Playlist\"",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 487,
+   "type": "Issue",
+   "title": "UX: Closing the New Position / New Argument prompt or Edit Saved View drops keyboard focus to the page body",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 491,
+   "type": "Issue",
+   "title": "[Audit Finding] Enforce Research Graph size limits before loading and sorting oversized snapshots",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:performance"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 492,
+   "type": "Issue",
+   "title": "[Audit Finding] Stream Research Notes during startup reconciliation instead of loading the entire corpus",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:performance"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 493,
+   "type": "Issue",
+   "title": "[Audit Finding] Do not silently omit PDF full-text matches when the derived text index fails",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 494,
+   "type": "Issue",
+   "title": "[Audit Finding] Export canonical urldate instead of substituting Work modification time",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 495,
+   "type": "Issue",
+   "title": "[Audit Finding] Generate distinct BibLaTeX citation keys for different Works",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 496,
+   "type": "Issue",
+   "title": "[Audit Finding] Escape TeX-special characters in exported BibLaTeX text fields",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 497,
+   "type": "Issue",
+   "title": "[Audit Finding] Interpret canonical UTC timestamps correctly in Recent and Recently Added",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 498,
+   "type": "Issue",
+   "title": "[Audit Finding] Bound whole-library maintenance so PDF optimization and reindexing do not block all mutations",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 499,
+   "type": "Issue",
+   "title": "[Audit Finding] Prevent Work-catalog filesystem operations from holding SQLite read locks",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 500,
+   "type": "Issue",
+   "title": "[Audit Finding] Bound qpdf execution time so PDF operations cannot wait indefinitely",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 501,
+   "type": "Issue",
+   "title": "[Audit Finding] Make Docker Compose first-run storage initialization work without manual bind-mount ownership changes",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 502,
+   "type": "Issue",
+   "title": "[Audit Finding] Advance Playlist order revisions when Work creation or deletion changes membership",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 503,
+   "type": "Issue",
+   "title": "[Audit Finding] Advance Argument source revisions when Work deletion removes citations",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 504,
+   "type": "Issue",
+   "title": "[Audit Finding] Keep Work, Person and Folder detail projections within one canonical SQLite snapshot",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 505,
+   "type": "Issue",
+   "title": "[Audit Finding] Resolve Uncategorized folders using the canonical case-insensitive identity",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 506,
+   "type": "Issue",
+   "title": "[Audit Finding] Make composite Work PATCH updates atomic across folder, Research Notes and metadata",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 507,
+   "type": "Issue",
+   "title": "[Audit Finding] Return not-found for Work metadata PATCH against a nonexistent Work",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 508,
+   "type": "Issue",
+   "title": "[Audit Finding] Prevent partially committed Settings PATCH requests after validation failures",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 509,
+   "type": "Issue",
+   "title": "[Audit Finding] Make Work and Folder Tag pickers usable with the keyboard",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 510,
+   "type": "Issue",
+   "title": "[Audit Finding] Prevent retrying sync operations from starving unrelated pending changes",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:reliability"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 511,
+   "type": "Issue",
+   "title": "[Audit Finding] Avoid quadratic IndexedDB operation scans during synchronization draining",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:performance"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 512,
+   "type": "Issue",
+   "title": "[Audit Finding] Retain sync wake notifications received while a drain is running",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:reliability"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 513,
+   "type": "Issue",
+   "title": "[Audit Finding] Prevent non-HTML navigations from overwriting the cached application shell",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:reliability"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 514,
+   "type": "Issue",
+   "title": "[Audit Finding] Persist offline-cache invalidation across reloads when cache deletion fails",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:reliability"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 515,
+   "type": "Issue",
+   "title": "[Audit Finding] Use consistent Unicode normalization for Concept references across Python and JavaScript",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 516,
+   "type": "Issue",
+   "title": "[Audit Finding] Advance Work-folder revisions when bulk moving Works",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 517,
+   "type": "Issue",
+   "title": "[Audit Finding] Prevent canonical Publisher names from colliding with existing aliases",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 518,
+   "type": "Issue",
+   "title": "[Audit Finding] Separate Concept parent-set conflict revisions from unrelated child membership changes",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 519,
+   "type": "Issue",
+   "title": "[Audit Finding] Invalidate browser-cached PDF thumbnails after managed PDF content changes",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 520,
+   "type": "Issue",
+   "title": "[Audit Finding] Serve PDF Range headers and bytes from the same stable managed-file version",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:reliability"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 521,
+   "type": "Issue",
+   "title": "[Audit Finding] Reconcile Research Notes mention indexes when Concept identities or aliases change",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 522,
+   "type": "Issue",
+   "title": "[Audit Finding] Keep thumbnail and Person portrait reads from monopolizing the mutation gate",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:performance"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 523,
+   "type": "Issue",
+   "title": "[Audit Finding] Bound offline cached-PDF Range memory and return correct unsatisfiable ranges",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:performance"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 524,
+   "type": "Issue",
+   "title": "[Audit Finding] Use canonical YouTube ID validation for creation and preview flows",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 525,
+   "type": "Issue",
+   "title": "[Audit Finding] Index Folder children once rather than repeatedly scanning the full hierarchy during filtering and rendering",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:performance"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 526,
+   "type": "Issue",
+   "title": "[Audit Finding] Recover failed dependency propagation so sync operations cannot remain permanently blocked",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:reliability"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 527,
+   "type": "Issue",
+   "title": "[Audit Finding] Report offline-cache clearing failures instead of displaying false success",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 528,
+   "type": "Issue",
+   "title": "[Audit Finding] Validate Research mention-index table layouts and indexes before treating the derived schema as current",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:reliability"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 529,
+   "type": "Issue",
+   "title": "[Audit Finding] Keep Recent timestamps monotonic when pending Work-open events predate a newer server open",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 530,
+   "type": "Issue",
+   "title": "[Audit Finding] Keep the legacy annotation-author setting until server migration is acknowledged",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 531,
+   "type": "Issue",
+   "title": "[Audit Finding] Complete initiated Processing imports after route navigation during metadata save",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 532,
+   "type": "Issue",
+   "title": "UX: Research Notes recovery Review \"Copy text\" always shows \"Copy failed\" and copies nothing",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 536,
+   "type": "Issue",
+   "title": "Add opt-in testing-only PostHog telemetry with production isolation",
+   "state": "OPEN",
+   "labels": [
+    "enhancement",
+    "priority:P2",
+    "area:architecture",
+    "area:testing"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 538,
+   "type": "Issue",
+   "title": "[Audit Finding] Advance Work-folder revisions when attaching existing Works through the Folder endpoint",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 539,
+   "type": "Issue",
+   "title": "[Audit Finding] Make Person Group hierarchy projections cycle-safe under pending offline edits",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 540,
+   "type": "Issue",
+   "title": "[Audit Finding] Prevent pending Person Group membership operations from producing incorrect member counts",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 541,
+   "type": "Issue",
+   "title": "[Audit Finding] Prevent existing Tag colors from being silently overwritten by repeated creation",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 542,
+   "type": "Issue",
+   "title": "[Audit Finding] Make Tag canonical-name and alias uniqueness atomic across creation paths",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 543,
+   "type": "Issue",
+   "title": "[Audit Finding] Recover Settings reads and saves after transient failures instead of retaining unsaved defaults",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:reliability"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 544,
+   "type": "Issue",
+   "title": "[Audit Finding] Classify Vue API response-body stream failures as transport failures",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:reliability"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 545,
+   "type": "Issue",
+   "title": "[Audit Finding] Serialize Concept identity creation against the normalized name-and-alias namespace",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 546,
+   "type": "Issue",
+   "title": "[Audit Finding] Assemble Research Network relationship projections within one SQLite read snapshot",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 547,
+   "type": "Issue",
+   "title": "[Audit Finding] Keep external YouTube metadata enrichment outside the global Work mutation gate",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:performance",
+    "area:reliability"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 548,
+   "type": "Issue",
+   "title": "[Audit Finding] Enforce Unicode-aware case-insensitive identity for Tags, Folders, and Person Groups",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 550,
+   "type": "Issue",
+   "title": "Stable library identity so browser-local state can tell which library it belongs to",
+   "state": "OPEN",
+   "labels": [
+    "area:reliability"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 557,
+   "type": "Issue",
+   "title": "Offline cache keeps Folder title/description as sent, while the server stores them trimmed",
+   "state": "OPEN",
+   "labels": [],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 558,
+   "type": "Issue",
+   "title": "[Audit Finding] Do not treat blocked IndexedDB deletion as a cancelled durable reset",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:reliability"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 559,
+   "type": "Issue",
+   "title": "[Audit Finding] Keep sync operation timeouts active through response-body consumption",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P2",
+    "area:reliability"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 560,
+   "type": "Issue",
+   "title": "[Audit Finding] Recover disposable offline storage after a transient blocked IndexedDB upgrade",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:reliability"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 561,
+   "type": "Issue",
+   "title": "Folder Reminders: prevent delayed older acknowledgements from regressing a newer detail read",
+   "state": "OPEN",
+   "labels": [],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 562,
+   "type": "Issue",
+   "title": "Research Graph: selected node loses its type colour and gets no highlight fill (color-mix token rejected by Cytoscape)",
+   "state": "OPEN",
+   "labels": [
+    "bug",
+    "priority:P3",
+    "area:correctness",
+    "area:ux"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 563,
+   "type": "Issue",
+   "title": "UX: A long tag name without spaces pushes its alias and merge buttons off-screen on All tags",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 564,
+   "type": "Issue",
+   "title": "UX: Concepts, Positions and Arguments lists forget their search filter after opening a result and going Back",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 565,
+   "type": "Issue",
+   "title": "Command palette intermittently drops the first character typed right after opening it",
+   "state": "OPEN",
+   "labels": [
+    "bug",
+    "priority:P3",
+    "area:ux"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 566,
+   "type": "Issue",
+   "title": "UX: No keyboard shortcuts beyond Ctrl+K and no shortcut reference (\"/\" doesn't focus the page filter, \"?\" does nothing)",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 567,
+   "type": "Issue",
+   "title": "UX: Research Graph \"Find node\" suggestions stay open over the graph after Enter selects a node",
+   "state": "OPEN",
+   "labels": [
+    "candidate",
+    "priority:P3",
+    "area:ux",
+    "ux-finding"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 568,
+   "type": "Issue",
+   "title": "Editing a Concept Definition in two tabs silently overwrites the first save instead of raising a revision conflict",
+   "state": "OPEN",
+   "labels": [
+    "bug",
+    "priority:P2",
+    "area:correctness",
+    "area:sync"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 569,
+   "type": "Issue",
+   "title": "Double-clicking Save Folder queues two folder creates; the refused duplicate stays listed after reload",
+   "state": "OPEN",
+   "labels": [
+    "bug",
+    "priority:P2",
+    "area:correctness",
+    "area:sync"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 570,
+   "type": "Issue",
+   "title": "Folder deletion leaves browser-local Reminders recovery drafts orphaned",
+   "state": "OPEN",
+   "labels": [
+    "enhancement",
+    "area:reliability"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 571,
+   "type": "Issue",
+   "title": "Tag Merge dialog stays open after the merge succeeds; a second click sends a refused duplicate merge",
+   "state": "OPEN",
+   "labels": [
+    "bug",
+    "priority:P3",
+    "area:sync",
+    "area:ux"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 572,
+   "type": "Issue",
+   "title": "Concepts opened online still can't be renamed or edited offline (\"Open it once while connected\")",
+   "state": "OPEN",
+   "labels": [
+    "bug",
+    "priority:P3",
+    "area:sync"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 577,
+   "type": "Issue",
+   "title": "[Audit Finding] Flush managed-PDF unlink before retiring its durable cleanup claim",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:reliability",
+    "area:storage"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 578,
+   "type": "Issue",
+   "title": "[Audit Finding] Assemble Research Graph canonical relationships within one SQLite read snapshot",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:correctness"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 579,
+   "type": "Issue",
+   "title": "[Audit Finding] SonarCloud master quality gate red since #354 on unreviewed new-code findings",
+   "state": "OPEN",
+   "labels": [
+    "audit-finding",
+    "candidate",
+    "priority:P3",
+    "area:tooling"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Inbox"
+   },
+   "category": "open-issue",
+   "reason": "Open issue missing from Project #3. Inbox; classification stays in repo labels."
+  },
+  {
+   "number": 181,
+   "type": "Issue",
+   "title": "[Research] Evaluate thin browser infrastructure libraries for IndexedDB and service-worker plumbing",
+   "state": "CLOSED",
+   "labels": [
+    "research"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Done"
+   },
+   "category": "closed-research",
+   "reason": "Closed research for Research History; Item closed does not fire on add, so Done is set explicitly."
+  },
+  {
+   "number": 234,
+   "type": "Issue",
+   "title": "[Research] Evaluate Pragmatic Drag and Drop for Vue workspace interactions",
+   "state": "CLOSED",
+   "labels": [
+    "research"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Done"
+   },
+   "category": "closed-research",
+   "reason": "Closed research for Research History; Item closed does not fire on add, so Done is set explicitly."
+  },
+  {
+   "number": 246,
+   "type": "Issue",
+   "title": "[Research] OpenAPI→TypeScript codegen: ADOPT types only",
+   "state": "CLOSED",
+   "labels": [
+    "research"
+   ],
+   "action": "add",
+   "set": {
+    "Status": "Done"
+   },
+   "category": "closed-research",
+   "reason": "Closed research for Research History; Item closed does not fire on add, so Done is set explicitly."
+  }
+ ]
+}

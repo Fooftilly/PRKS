@@ -1,0 +1,1303 @@
+{
+ "schema": 1,
+ "scope": {
+  "owner": "Fooftilly",
+  "repository": "Fooftilly/PRKS",
+  "project_number": 3,
+  "project_id": "PVT_kwHOAsc2_s4BkAo3"
+ },
+ "stage": "migrate-existing",
+ "note": "expected_before = live values on 2026-10-10 (the Status option cff9bdb9 reads Ready because Planned was renamed). Items whose current value differs are skipped as drift. approved=false items are never written.",
+ "items": [
+  {
+   "number": 35,
+   "type": "Issue",
+   "title": "UX: Deleting a work confirms but offers no undo/recovery affordance",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": null,
+    "Horizon": null,
+    "Work Type": null,
+    "Priority": null,
+    "Commitment": null,
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": null
+   },
+   "expected_before": {
+    "Status": null,
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Inbox"
+   },
+   "approved": true,
+   "flags": [
+    "review-individually-accepted"
+   ],
+   "reason": "No Status in baseline or live; approved -> Inbox. Not an epic, so no Roadmap Stage. #35 carries accepted (parent #57): maintainer may prefer Backlog/Ready."
+  },
+  {
+   "number": 38,
+   "type": "Issue",
+   "title": "[Roadmap] Quality & Documentation",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Planned",
+    "Horizon": "Now",
+    "Work Type": "Epic",
+    "Priority": "P1",
+    "Commitment": "Committed",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 1.0
+   },
+   "expected_before": {
+    "Status": "Ready",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Planned"
+   },
+   "approved": true,
+   "flags": [
+    "planned-recovered-from-baseline"
+   ],
+   "reason": "Baseline Status Planned (option cff9bdb9), renamed live to Ready. Approved: Stage Planned, Status Backlog (accepted, not yet actionable)."
+  },
+  {
+   "number": 39,
+   "type": "Issue",
+   "title": "[Roadmap] PDF Reader V2",
+   "github_state": "CLOSED",
+   "state_reason": "COMPLETED",
+   "baseline": {
+    "Status": "In Progress",
+    "Horizon": "Now",
+    "Work Type": "Epic",
+    "Priority": "P1",
+    "Commitment": "Committed",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 2.0
+   },
+   "expected_before": {
+    "Status": "In Progress",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Done"
+   },
+   "approved": false,
+   "flags": [
+    "closed-not-done",
+    "closure-intent-unconfirmed"
+   ],
+   "reason": "Closed 2026-10-01T12:18Z by cursor[bot] with no closing commit or PR (timeline 'closed' event has commit_id null), no closing comment, state_reason completed, and all 9 scope checkboxes in the body still unchecked. Related slices #328-#343 merged before it. Contract: roadmap issues are closed by a person. Closure intent is unconfirmed, so this item is HELD until the maintainer confirms (then Done) or reopens it."
+  },
+  {
+   "number": 40,
+   "type": "Issue",
+   "title": "[Roadmap] Processing Inbox V2",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Planned",
+    "Horizon": "Next",
+    "Work Type": "Epic",
+    "Priority": "P1",
+    "Commitment": "Committed",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 3.0
+   },
+   "expected_before": {
+    "Status": "Ready",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Planned"
+   },
+   "approved": true,
+   "flags": [
+    "planned-recovered-from-baseline"
+   ],
+   "reason": "Baseline Status Planned (option cff9bdb9), renamed live to Ready. Approved: Stage Planned, Status Backlog (accepted, not yet actionable)."
+  },
+  {
+   "number": 41,
+   "type": "Issue",
+   "title": "[Roadmap] Citation & Bibliography V2",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Planned",
+    "Horizon": "Next",
+    "Work Type": "Epic",
+    "Priority": "P1",
+    "Commitment": "Committed",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 4.0
+   },
+   "expected_before": {
+    "Status": "Ready",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Planned"
+   },
+   "approved": true,
+   "flags": [
+    "planned-recovered-from-baseline"
+   ],
+   "reason": "Baseline Status Planned (option cff9bdb9), renamed live to Ready. Approved: Stage Planned, Status Backlog (accepted, not yet actionable)."
+  },
+  {
+   "number": 42,
+   "type": "Issue",
+   "title": "[Roadmap] Ingestion & Metadata",
+   "github_state": "OPEN",
+   "state_reason": "REOPENED",
+   "baseline": {
+    "Status": "Planned",
+    "Horizon": "Next",
+    "Work Type": "Epic",
+    "Priority": "P1",
+    "Commitment": "Committed",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 5.0
+   },
+   "expected_before": {
+    "Status": "Ready",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Planned"
+   },
+   "approved": true,
+   "flags": [
+    "planned-recovered-from-baseline"
+   ],
+   "reason": "Baseline Status Planned (option cff9bdb9), renamed live to Ready. Approved: Stage Planned, Status Backlog (accepted, not yet actionable)."
+  },
+  {
+   "number": 43,
+   "type": "Issue",
+   "title": "[Roadmap] People Profiles V2",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Planned",
+    "Horizon": "Next",
+    "Work Type": "Epic",
+    "Priority": "P2",
+    "Commitment": "Committed",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 6.0
+   },
+   "expected_before": {
+    "Status": "Ready",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Planned"
+   },
+   "approved": true,
+   "flags": [
+    "planned-recovered-from-baseline"
+   ],
+   "reason": "Baseline Status Planned (option cff9bdb9), renamed live to Ready. Approved: Stage Planned, Status Backlog (accepted, not yet actionable)."
+  },
+  {
+   "number": 44,
+   "type": "Issue",
+   "title": "[Roadmap] Internationalization",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Planned",
+    "Horizon": "Next",
+    "Work Type": "Epic",
+    "Priority": "P2",
+    "Commitment": "Committed",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 7.0
+   },
+   "expected_before": {
+    "Status": "Ready",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Planned"
+   },
+   "approved": true,
+   "flags": [
+    "planned-recovered-from-baseline"
+   ],
+   "reason": "Baseline Status Planned (option cff9bdb9), renamed live to Ready. Approved: Stage Planned, Status Backlog (accepted, not yet actionable)."
+  },
+  {
+   "number": 45,
+   "type": "Issue",
+   "title": "[Roadmap] PRKS API Contract / OpenAPI",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Planned",
+    "Horizon": "Later",
+    "Work Type": "Epic",
+    "Priority": "P1",
+    "Commitment": "Committed",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 8.0
+   },
+   "expected_before": {
+    "Status": "Ready",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Planned"
+   },
+   "approved": true,
+   "flags": [
+    "planned-recovered-from-baseline"
+   ],
+   "reason": "Baseline Status Planned (option cff9bdb9), renamed live to Ready. Approved: Stage Planned, Status Backlog (accepted, not yet actionable)."
+  },
+  {
+   "number": 46,
+   "type": "Issue",
+   "title": "[Roadmap] Distribution & Access",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Planned",
+    "Horizon": "Later",
+    "Work Type": "Epic",
+    "Priority": "P2",
+    "Commitment": "Committed",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 9.0
+   },
+   "expected_before": {
+    "Status": "Ready",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Planned"
+   },
+   "approved": true,
+   "flags": [
+    "planned-recovered-from-baseline"
+   ],
+   "reason": "Baseline Status Planned (option cff9bdb9), renamed live to Ready. Approved: Stage Planned, Status Backlog (accepted, not yet actionable)."
+  },
+  {
+   "number": 47,
+   "type": "Issue",
+   "title": "[Roadmap] PRKS MCP & Agent Integration",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Planned",
+    "Horizon": "Later",
+    "Work Type": "Epic",
+    "Priority": "P2",
+    "Commitment": "Committed",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 10.0
+   },
+   "expected_before": {
+    "Status": "Ready",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Planned"
+   },
+   "approved": true,
+   "flags": [
+    "planned-recovered-from-baseline"
+   ],
+   "reason": "Baseline Status Planned (option cff9bdb9), renamed live to Ready. Approved: Stage Planned, Status Backlog (accepted, not yet actionable)."
+  },
+  {
+   "number": 48,
+   "type": "Issue",
+   "title": "[Roadmap] PRKS Showcase",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Planned",
+    "Horizon": "Later",
+    "Work Type": "Epic",
+    "Priority": "P3",
+    "Commitment": "Committed",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 11.0
+   },
+   "expected_before": {
+    "Status": "Ready",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Planned"
+   },
+   "approved": true,
+   "flags": [
+    "planned-recovered-from-baseline"
+   ],
+   "reason": "Baseline Status Planned (option cff9bdb9), renamed live to Ready. Approved: Stage Planned, Status Backlog (accepted, not yet actionable)."
+  },
+  {
+   "number": 49,
+   "type": "Issue",
+   "title": "[Roadmap] OCR / Scanned Document Support",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Research / Design",
+    "Horizon": "Later",
+    "Work Type": "Epic",
+    "Priority": "P2",
+    "Commitment": "Research-first",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 12.0
+   },
+   "expected_before": {
+    "Status": "Research / Design",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Research / Design"
+   },
+   "approved": true,
+   "flags": [
+    "research-epic"
+   ],
+   "reason": "Approved: Research / Design epics -> Stage Research / Design, Status Backlog."
+  },
+  {
+   "number": 50,
+   "type": "Issue",
+   "title": "[Roadmap] Research Synthesis",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Planned",
+    "Horizon": "Long-term",
+    "Work Type": "Epic",
+    "Priority": "P2",
+    "Commitment": "Committed",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 13.0
+   },
+   "expected_before": {
+    "Status": "Ready",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Planned"
+   },
+   "approved": true,
+   "flags": [
+    "planned-recovered-from-baseline"
+   ],
+   "reason": "Baseline Status Planned (option cff9bdb9), renamed live to Ready. Approved: Stage Planned, Status Backlog (accepted, not yet actionable)."
+  },
+  {
+   "number": 51,
+   "type": "Issue",
+   "title": "[Roadmap] Research Writing / LaTeX",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Research / Design",
+    "Horizon": "Long-term",
+    "Work Type": "Epic",
+    "Priority": "P2",
+    "Commitment": "Research-first",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 14.0
+   },
+   "expected_before": {
+    "Status": "Research / Design",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Research / Design"
+   },
+   "approved": true,
+   "flags": [
+    "research-epic"
+   ],
+   "reason": "Approved: Research / Design epics -> Stage Research / Design, Status Backlog."
+  },
+  {
+   "number": 52,
+   "type": "Issue",
+   "title": "[Roadmap] PRKS Android",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Research / Design",
+    "Horizon": "Long-term",
+    "Work Type": "Epic",
+    "Priority": "P3",
+    "Commitment": "Research-first",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 15.0
+   },
+   "expected_before": {
+    "Status": "Research / Design",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Research / Design"
+   },
+   "approved": true,
+   "flags": [
+    "open-native-blockers",
+    "research-epic"
+   ],
+   "reason": "Approved: Research / Design epics -> Stage Research / Design, Status Backlog. Open native blockers [46, 45]: shown via dependencies, NOT moved to Blocked.",
+   "open_blocked_by": [
+    46,
+    45
+   ]
+  },
+  {
+   "number": 53,
+   "type": "Issue",
+   "title": "[Roadmap] Local AI Exploration",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Idea",
+    "Horizon": "Exploratory",
+    "Work Type": "Epic",
+    "Priority": "P3",
+    "Commitment": "Exploratory",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 16.0
+   },
+   "expected_before": {
+    "Status": "Idea",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Inbox",
+    "Roadmap Stage": "Idea"
+   },
+   "approved": true,
+   "flags": [],
+   "reason": "Approved: Idea items -> Stage Idea, Status Inbox."
+  },
+  {
+   "number": 57,
+   "type": "Issue",
+   "title": "[Roadmap] Library Safety, History & Maintenance",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Planned",
+    "Horizon": "Next",
+    "Work Type": "Epic",
+    "Priority": "P1",
+    "Commitment": "Committed",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 17.0
+   },
+   "expected_before": {
+    "Status": "Ready",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Planned"
+   },
+   "approved": true,
+   "flags": [
+    "planned-recovered-from-baseline"
+   ],
+   "reason": "Baseline Status Planned (option cff9bdb9), renamed live to Ready. Approved: Stage Planned, Status Backlog (accepted, not yet actionable)."
+  },
+  {
+   "number": 58,
+   "type": "Issue",
+   "title": "[Roadmap] Workspace & Offline UX",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Planned",
+    "Horizon": "Next",
+    "Work Type": "Epic",
+    "Priority": "P1",
+    "Commitment": "Committed",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 18.0
+   },
+   "expected_before": {
+    "Status": "Ready",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Planned"
+   },
+   "approved": true,
+   "flags": [
+    "planned-recovered-from-baseline"
+   ],
+   "reason": "Baseline Status Planned (option cff9bdb9), renamed live to Ready. Approved: Stage Planned, Status Backlog (accepted, not yet actionable)."
+  },
+  {
+   "number": 59,
+   "type": "Issue",
+   "title": "[Roadmap] Capture & Discovery",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Planned",
+    "Horizon": "Later",
+    "Work Type": "Epic",
+    "Priority": "P2",
+    "Commitment": "Committed",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 19.0
+   },
+   "expected_before": {
+    "Status": "Ready",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Planned"
+   },
+   "approved": true,
+   "flags": [
+    "planned-recovered-from-baseline"
+   ],
+   "reason": "Baseline Status Planned (option cff9bdb9), renamed live to Ready. Approved: Stage Planned, Status Backlog (accepted, not yet actionable)."
+  },
+  {
+   "number": 60,
+   "type": "Issue",
+   "title": "[Roadmap] Work Identity, Editions, Versions & Deduplication",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Research / Design",
+    "Horizon": "Later",
+    "Work Type": "Epic",
+    "Priority": "P2",
+    "Commitment": "Research-first",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 20.0
+   },
+   "expected_before": {
+    "Status": "Research / Design",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Research / Design"
+   },
+   "approved": true,
+   "flags": [
+    "research-epic"
+   ],
+   "reason": "Approved: Research / Design epics -> Stage Research / Design, Status Backlog."
+  },
+  {
+   "number": 61,
+   "type": "Issue",
+   "title": "[Roadmap] Reading Workflow Enhancements",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Planned",
+    "Horizon": "Next",
+    "Work Type": "Epic",
+    "Priority": "P1",
+    "Commitment": "Committed",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 21.0
+   },
+   "expected_before": {
+    "Status": "Ready",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Planned"
+   },
+   "approved": true,
+   "flags": [
+    "planned-recovered-from-baseline"
+   ],
+   "reason": "Baseline Status Planned (option cff9bdb9), renamed live to Ready. Approved: Stage Planned, Status Backlog (accepted, not yet actionable)."
+  },
+  {
+   "number": 62,
+   "type": "Issue",
+   "title": "[Roadmap] Deterministic Rules & Automation",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Planned",
+    "Horizon": "Later",
+    "Work Type": "Epic",
+    "Priority": "P3",
+    "Commitment": "Committed",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 22.0
+   },
+   "expected_before": {
+    "Status": "Ready",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Planned"
+   },
+   "approved": true,
+   "flags": [
+    "planned-recovered-from-baseline"
+   ],
+   "reason": "Baseline Status Planned (option cff9bdb9), renamed live to Ready. Approved: Stage Planned, Status Backlog (accepted, not yet actionable)."
+  },
+  {
+   "number": 75,
+   "type": "Issue",
+   "title": "[Audit Finding] Lock Python runtime dependencies for reproducible Docker builds",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": null,
+    "Horizon": null,
+    "Work Type": null,
+    "Priority": null,
+    "Commitment": null,
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": null
+   },
+   "expected_before": {
+    "Status": null,
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Inbox"
+   },
+   "approved": true,
+   "flags": [],
+   "reason": "No Status in baseline or live; approved -> Inbox. Not an epic, so no Roadmap Stage."
+  },
+  {
+   "number": 77,
+   "type": "Issue",
+   "title": "[Roadmap] Standardize dependency packaging and reproducible release builds",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Planned",
+    "Horizon": "Next",
+    "Work Type": "Epic",
+    "Priority": null,
+    "Commitment": "Committed",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 24.0
+   },
+   "expected_before": {
+    "Status": "Ready",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Planned"
+   },
+   "approved": true,
+   "flags": [
+    "planned-recovered-from-baseline"
+   ],
+   "reason": "Baseline Status Planned (option cff9bdb9), renamed live to Ready. Approved: Stage Planned, Status Backlog (accepted, not yet actionable)."
+  },
+  {
+   "number": 81,
+   "type": "Issue",
+   "title": "UX: Sidebar expansions push Processing and Progress below the fold",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": null,
+    "Horizon": null,
+    "Work Type": null,
+    "Priority": null,
+    "Commitment": null,
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": null
+   },
+   "expected_before": {
+    "Status": null,
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Inbox"
+   },
+   "approved": true,
+   "flags": [],
+   "reason": "No Status in baseline or live; approved -> Inbox. Not an epic, so no Roadmap Stage."
+  },
+  {
+   "number": 82,
+   "type": "Issue",
+   "title": "UX: New Person form is too long for quick capture",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": null,
+    "Horizon": null,
+    "Work Type": null,
+    "Priority": null,
+    "Commitment": null,
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": null
+   },
+   "expected_before": {
+    "Status": null,
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Inbox"
+   },
+   "approved": true,
+   "flags": [],
+   "reason": "No Status in baseline or live; approved -> Inbox. Not an epic, so no Roadmap Stage."
+  },
+  {
+   "number": 85,
+   "type": "Issue",
+   "title": "UX: New File modal mixes upload basics with dense enrichment in one scroll",
+   "github_state": "CLOSED",
+   "state_reason": "COMPLETED",
+   "baseline": {
+    "Status": "Done",
+    "Horizon": null,
+    "Work Type": null,
+    "Priority": null,
+    "Commitment": null,
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": null
+   },
+   "expected_before": {
+    "Status": "Done",
+    "Roadmap Stage": null
+   },
+   "set": {},
+   "approved": true,
+   "flags": [],
+   "reason": "Closed and already Done; preserved."
+  },
+  {
+   "number": 87,
+   "type": "Issue",
+   "title": "UX: Files for Processing empty state lacks a clear next user action",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": null,
+    "Horizon": null,
+    "Work Type": null,
+    "Priority": null,
+    "Commitment": null,
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": null
+   },
+   "expected_before": {
+    "Status": null,
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Inbox"
+   },
+   "approved": true,
+   "flags": [],
+   "reason": "No Status in baseline or live; approved -> Inbox. Not an epic, so no Roadmap Stage."
+  },
+  {
+   "number": 91,
+   "type": "Issue",
+   "title": "[Audit Finding] Make post-delete cleanup failures recoverable",
+   "github_state": "CLOSED",
+   "state_reason": "COMPLETED",
+   "baseline": {
+    "Status": "Done",
+    "Horizon": null,
+    "Work Type": null,
+    "Priority": null,
+    "Commitment": null,
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": null
+   },
+   "expected_before": {
+    "Status": "Done",
+    "Roadmap Stage": null
+   },
+   "set": {},
+   "approved": true,
+   "flags": [],
+   "reason": "Closed and already Done; preserved."
+  },
+  {
+   "number": 102,
+   "type": "Issue",
+   "title": "Simplify README, improve presentation, and keep screenshots current",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": null,
+    "Horizon": null,
+    "Work Type": null,
+    "Priority": null,
+    "Commitment": null,
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": null
+   },
+   "expected_before": {
+    "Status": null,
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Inbox"
+   },
+   "approved": true,
+   "flags": [],
+   "reason": "No Status in baseline or live; approved -> Inbox. Not an epic, so no Roadmap Stage."
+  },
+  {
+   "number": 142,
+   "type": "Issue",
+   "title": "[Roadmap] Research Tasks & Follow-ups",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Research / Design",
+    "Horizon": "Later",
+    "Work Type": "Epic",
+    "Priority": null,
+    "Commitment": "Research-first",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 28.0
+   },
+   "expected_before": {
+    "Status": "Research / Design",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Research / Design"
+   },
+   "approved": true,
+   "flags": [
+    "research-epic"
+   ],
+   "reason": "Approved: Research / Design epics -> Stage Research / Design, Status Backlog."
+  },
+  {
+   "number": 179,
+   "type": "Issue",
+   "title": "[Roadmap] Application Architecture & Maintainability",
+   "github_state": "OPEN",
+   "state_reason": "REOPENED",
+   "baseline": {
+    "Status": "In Progress",
+    "Horizon": "Now",
+    "Work Type": "Epic",
+    "Priority": null,
+    "Commitment": "Committed",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 23.0
+   },
+   "expected_before": {
+    "Status": "In Progress",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Roadmap Stage": "Planned"
+   },
+   "approved": true,
+   "flags": [
+    "stage-proposed-from-evidence"
+   ],
+   "reason": "Keep In Progress. Body: 'Active roadmap/planning item - implementation is proceeding in focused, incremental slices'; labels accepted+roadmap; Commitment Committed; 3 of 11 scope boxes done; reopened twice by the maintainer after bot closures (2026-09-25). Evidence supports Roadmap Stage=Planned (accepted, being executed), not Research / Design."
+  },
+  {
+   "number": 310,
+   "type": "Issue",
+   "title": "[Roadmap] Server, Multi-User & Storage Architecture",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Planned",
+    "Horizon": "Later",
+    "Work Type": "Epic",
+    "Priority": null,
+    "Commitment": "Committed",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 26.0
+   },
+   "expected_before": {
+    "Status": "Ready",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Planned"
+   },
+   "approved": true,
+   "flags": [
+    "planned-recovered-from-baseline"
+   ],
+   "reason": "Baseline Status Planned (option cff9bdb9), renamed live to Ready. Approved: Stage Planned, Status Backlog (accepted, not yet actionable)."
+  },
+  {
+   "number": 314,
+   "type": "Issue",
+   "title": "[Roadmap] Extensions, Connectors & Integration SDK",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Planned",
+    "Horizon": "Later",
+    "Work Type": "Epic",
+    "Priority": null,
+    "Commitment": "Committed",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 27.0
+   },
+   "expected_before": {
+    "Status": "Ready",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Planned"
+   },
+   "approved": true,
+   "flags": [
+    "planned-recovered-from-baseline"
+   ],
+   "reason": "Baseline Status Planned (option cff9bdb9), renamed live to Ready. Approved: Stage Planned, Status Backlog (accepted, not yet actionable)."
+  },
+  {
+   "number": 315,
+   "type": "Issue",
+   "title": "[Roadmap] Research Projects & Inquiry",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Planned",
+    "Horizon": "Long-term",
+    "Work Type": "Epic",
+    "Priority": null,
+    "Commitment": "Committed",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 31.0
+   },
+   "expected_before": {
+    "Status": "Ready",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Planned"
+   },
+   "approved": true,
+   "flags": [
+    "planned-recovered-from-baseline"
+   ],
+   "reason": "Baseline Status Planned (option cff9bdb9), renamed live to Ready. Approved: Stage Planned, Status Backlog (accepted, not yet actionable)."
+  },
+  {
+   "number": 316,
+   "type": "Issue",
+   "title": "[Roadmap] Structured Research Schemas & Comparative Analysis",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Planned",
+    "Horizon": "Long-term",
+    "Work Type": "Epic",
+    "Priority": null,
+    "Commitment": "Committed",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 32.0
+   },
+   "expected_before": {
+    "Status": "Ready",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Planned"
+   },
+   "approved": true,
+   "flags": [
+    "planned-recovered-from-baseline"
+   ],
+   "reason": "Baseline Status Planned (option cff9bdb9), renamed live to Ready. Approved: Stage Planned, Status Backlog (accepted, not yet actionable)."
+  },
+  {
+   "number": 317,
+   "type": "Issue",
+   "title": "[Roadmap] Temporal, Spatial & Contextual Research Model",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Research / Design",
+    "Horizon": "Long-term",
+    "Work Type": "Epic",
+    "Priority": null,
+    "Commitment": "Research-first",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 33.0
+   },
+   "expected_before": {
+    "Status": "Research / Design",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Research / Design"
+   },
+   "approved": true,
+   "flags": [
+    "research-epic"
+   ],
+   "reason": "Approved: Research / Design epics -> Stage Research / Design, Status Backlog."
+  },
+  {
+   "number": 318,
+   "type": "Issue",
+   "title": "[Roadmap] Scholarly Status, Corrections & Source Integrity",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Research / Design",
+    "Horizon": "Later",
+    "Work Type": "Epic",
+    "Priority": null,
+    "Commitment": "Research-first",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 30.0
+   },
+   "expected_before": {
+    "Status": "Research / Design",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Research / Design"
+   },
+   "approved": true,
+   "flags": [
+    "research-epic"
+   ],
+   "reason": "Approved: Research / Design epics -> Stage Research / Design, Status Backlog."
+  },
+  {
+   "number": 391,
+   "type": "Issue",
+   "title": "[Roadmap] Generative, Property-Based & Model-Based Testing",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Planned",
+    "Horizon": "Next",
+    "Work Type": "Epic",
+    "Priority": null,
+    "Commitment": "Committed",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 25.0
+   },
+   "expected_before": {
+    "Status": "Ready",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Planned"
+   },
+   "approved": true,
+   "flags": [
+    "planned-recovered-from-baseline"
+   ],
+   "reason": "Baseline Status Planned (option cff9bdb9), renamed live to Ready. Approved: Stage Planned, Status Backlog (accepted, not yet actionable)."
+  },
+  {
+   "number": 423,
+   "type": "Issue",
+   "title": "[Roadmap] Themes: built-in Light / Blue dark / Full black dark, accessibility themes and custom themes",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Idea",
+    "Horizon": null,
+    "Work Type": "Epic",
+    "Priority": null,
+    "Commitment": "Exploratory",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 34.0
+   },
+   "expected_before": {
+    "Status": "Idea",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Inbox",
+    "Roadmap Stage": "Idea"
+   },
+   "approved": true,
+   "flags": [],
+   "reason": "Approved: Idea items -> Stage Idea, Status Inbox."
+  },
+  {
+   "number": 431,
+   "type": "Issue",
+   "title": "[Roadmap] Files for Processing: user-selectable watched folders (multiple sources) in Settings",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Idea",
+    "Horizon": null,
+    "Work Type": "Epic",
+    "Priority": null,
+    "Commitment": "Exploratory",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 35.0
+   },
+   "expected_before": {
+    "Status": "Idea",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Inbox",
+    "Roadmap Stage": "Idea"
+   },
+   "approved": true,
+   "flags": [],
+   "reason": "Approved: Idea items -> Stage Idea, Status Inbox."
+  },
+  {
+   "number": 446,
+   "type": "Issue",
+   "title": "[Roadmap] PDF logical page labels / printed-page numbering",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Planned",
+    "Horizon": "Later",
+    "Work Type": "Epic",
+    "Priority": null,
+    "Commitment": "Committed",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": 29.0
+   },
+   "expected_before": {
+    "Status": "Ready",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Backlog",
+    "Roadmap Stage": "Planned"
+   },
+   "approved": true,
+   "flags": [
+    "planned-recovered-from-baseline"
+   ],
+   "reason": "Baseline Status Planned (option cff9bdb9), renamed live to Ready. Approved: Stage Planned, Status Backlog (accepted, not yet actionable)."
+  },
+  {
+   "number": 472,
+   "type": "Issue",
+   "title": "[Roadmap] Dynamic people profiles: official extension that keeps People up to date from authoritative sources",
+   "github_state": "OPEN",
+   "state_reason": null,
+   "baseline": {
+    "Status": "Idea",
+    "Horizon": "Long-term",
+    "Work Type": "Feature",
+    "Priority": "P3",
+    "Commitment": "Research-first",
+    "Agent": null,
+    "Effort": null,
+    "Roadmap Order": null
+   },
+   "expected_before": {
+    "Status": "Idea",
+    "Roadmap Stage": null
+   },
+   "set": {
+    "Status": "Inbox",
+    "Roadmap Stage": "Idea"
+   },
+   "approved": true,
+   "flags": [],
+   "reason": "Approved: Idea items -> Stage Idea, Status Inbox."
+  }
+ ]
+}

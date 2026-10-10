@@ -1,0 +1,99 @@
+{
+ "source": "project3-items.json (baseline export, 44 nodes, hasNextPage=false)",
+ "option_id": "cff9bdb9",
+ "count": 23,
+ "items": [
+  {
+   "number": 38,
+   "title": "[Roadmap] Quality & Documentation"
+  },
+  {
+   "number": 40,
+   "title": "[Roadmap] Processing Inbox V2"
+  },
+  {
+   "number": 41,
+   "title": "[Roadmap] Citation & Bibliography V2"
+  },
+  {
+   "number": 42,
+   "title": "[Roadmap] Ingestion & Metadata"
+  },
+  {
+   "number": 43,
+   "title": "[Roadmap] People Profiles V2"
+  },
+  {
+   "number": 44,
+   "title": "[Roadmap] Internationalization"
+  },
+  {
+   "number": 45,
+   "title": "[Roadmap] PRKS API Contract / OpenAPI"
+  },
+  {
+   "number": 46,
+   "title": "[Roadmap] Distribution & Access"
+  },
+  {
+   "number": 47,
+   "title": "[Roadmap] PRKS MCP & Agent Integration"
+  },
+  {
+   "number": 48,
+   "title": "[Roadmap] PRKS Showcase"
+  },
+  {
+   "number": 50,
+   "title": "[Roadmap] Research Synthesis"
+  },
+  {
+   "number": 57,
+   "title": "[Roadmap] Library Safety, History & Maintenance"
+  },
+  {
+   "number": 58,
+   "title": "[Roadmap] Workspace & Offline UX"
+  },
+  {
+   "number": 59,
+   "title": "[Roadmap] Capture & Discovery"
+  },
+  {
+   "number": 61,
+   "title": "[Roadmap] Reading Workflow Enhancements"
+  },
+  {
+   "number": 62,
+   "title": "[Roadmap] Deterministic Rules & Automation"
+  },
+  {
+   "number": 77,
+   "title": "[Roadmap] Standardize dependency packaging and reproducible release builds"
+  },
+  {
+   "number": 310,
+   "title": "[Roadmap] Server, Multi-User & Storage Architecture"
+  },
+  {
+   "number": 314,
+   "title": "[Roadmap] Extensions, Connectors & Integration SDK"
+  },
+  {
+   "number": 315,
+   "title": "[Roadmap] Research Projects & Inquiry"
+  },
+  {
+   "number": 316,
+   "title": "[Roadmap] Structured Research Schemas & Comparative Analysis"
+  },
+  {
+   "number": 391,
+   "title": "[Roadmap] Generative, Property-Based & Model-Based Testing"
+  },
+  {
+   "number": 446,
+   "title": "[Roadmap] PDF logical page labels / printed-page numbering"
+  }
+ ]
+}
