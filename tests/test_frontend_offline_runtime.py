@@ -1112,8 +1112,14 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
                                          "%s writes /api/folders directly" % name)
         ui = _read(os.path.join(_FRONTEND, "js", "ui.js"))
         folder_notes = _fn_body(ui, "async function prksSaveFolderPrivateNoteForSession(")
-        self.assertIn("prksSaveFolderPrivateNoteDurably(", folder_notes)
+        self.assertIn("prksSaveFolderPrivateNoteInOrder(", folder_notes)
         self.assertNotIn("prksRequest(", folder_notes)
+        durable = _fn_body(ui, "function prksFolderSaveDurably(")
+        self.assertIn("prksSaveFolderPrivateNoteDurably(", durable)
+        self.assertNotIn("prksRequest(", durable)
+        in_order = _fn_body(ui, "async function prksSaveFolderPrivateNoteInOrder(")
+        self.assertIn("prksFolderSaveDurably(", in_order)
+        self.assertNotIn("prksRequest(", in_order)
         self.assertNotIn("Documented exception to the canonical-Folder-wrapper rule", ui)
 
     def test_folder_title_rename_evicts_member_work_snapshots(self):

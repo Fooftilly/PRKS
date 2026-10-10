@@ -2846,6 +2846,7 @@ function prksEnsurePrivateNoteSession(family, ctx, id, initialText) {
         updatedAt: Date.now(),
     };
     session[family.idField] = String(id);
+    if (family.tracksOwnQueued) session.ownQueued = prksFolderInheritedOwnRow(ctx, id);
     ctx.ui[family.sessionSlot] = session;
     if (carried) {
         const inherit = prksPrivateNoteRecoveryHook(family, 'inherit');
@@ -2981,8 +2982,13 @@ function prksCanonicalFolderNote(text) {
  * clean session takes the acknowledged text into its field.
  */
 function prksFolderPrivateNoteAcknowledged(ctx, ack) {
-    const session = ctx && ctx.ui ? ctx.ui.folderPrivateNoteSession : null;
-    if (!session || !ack || String(session.entityId) !== String(ack.folderId)) return;
+    if (!ctx || !ctx.ui || !ack) return;
+    prksFolderRememberAck(ctx, ack);
+    const rows = prksFolderOwnRows(ctx);
+    const paneOwn = rows[String(ack.folderId)];
+    if (paneOwn && paneOwn.opId === ack.opId) delete rows[String(ack.folderId)];
+    const session = ctx.ui.folderPrivateNoteSession;
+    if (!session || String(session.entityId) !== String(ack.folderId)) return;
     if (String(session.ownerTabId) !== String(ctx.tabId)) return;
     const own = session.ownQueued;
     const pin = session.editBase;
@@ -3007,6 +3013,69 @@ function prksFolderPrivateNoteAcknowledged(ctx, ack) {
     const drop = prksPrivateNoteRecoveryHook(PRKS_PRIVATE_NOTE_FAMILIES.folder, 'drop');
     if (drop) drop(session);
     prksRepaintCleanPrivateNotes(PRKS_PRIVATE_NOTE_FAMILIES.folder, ctx, session.entityId);
+}
+
+/*
+ * This pane's unsettled Folder Reminders row per Folder, `{opId, text}`
+ * (#534): the one row its saves may replace, whichever of its sessions queued
+ * it, until that row's acknowledgement. Any other unsettled row is another
+ * pane's or tab's, and the store refuses to replace it.
+ */
+function prksFolderOwnRows(ctx) {
+    if (!ctx.ui.folderPrivateNoteOwnRows) ctx.ui.folderPrivateNoteOwnRows = Object.create(null);
+    return ctx.ui.folderPrivateNoteOwnRows;
+}
+
+/*
+ * The pane's own row for a session it opens, while the queue still holds it.
+ * Its acknowledgement may have landed while the pane showed another Folder;
+ * a row the queue no longer holds is no predecessor. Kept while the queue
+ * could not be read: a row it names is never someone else's.
+ */
+function prksFolderInheritedOwnRow(ctx, id) {
+    const rows = prksFolderOwnRows(ctx);
+    const own = rows[String(id)];
+    if (!own) return null;
+    const read = typeof prksPendingFolderNotesRead === 'function' && prksPendingFolderNotesRead();
+    const row = typeof prksPendingFolderNoteRow === 'function' ? prksPendingFolderNoteRow(String(id)) : null;
+    if (read && (!row || row.opId !== own.opId)) {
+        delete rows[String(id)];
+        return null;
+    }
+    return { opId: own.opId, generation: 0, text: own.text };
+}
+
+const PRKS_FOLDER_RECENT_ACKS = 16;
+
+/* The pane's latest Reminders acknowledgements, for a save that learns its op id after its row was acknowledged. */
+function prksFolderRememberAck(ctx, ack) {
+    if (!ctx.ui.folderPrivateNoteRecentAcks) ctx.ui.folderPrivateNoteRecentAcks = [];
+    const recent = ctx.ui.folderPrivateNoteRecentAcks;
+    if (recent.some(function (seen) { return seen.opId === ack.opId; })) return;
+    recent.push(ack);
+    if (recent.length > PRKS_FOLDER_RECENT_ACKS) recent.shift();
+}
+
+/*
+ * A save of `session` queued `opId` with `text`, or left no row (`opId`
+ * null): the pane's own row for the Folder, recorded before the save
+ * resolves so an acknowledgement that follows finds it. One that already
+ * landed is applied now.
+ */
+function prksFolderOwnRowQueued(ctx, session, id, opId, text, generation) {
+    const rows = prksFolderOwnRows(ctx);
+    const own = opId ? { opId: opId, generation: generation, text: text } : null;
+    if (own) rows[id] = { opId: opId, text: text };
+    else delete rows[id];
+    session.ownQueued = own;
+    const current = ctx.ui.folderPrivateNoteSession;
+    if (current && current !== session && String(current.entityId) === id &&
+        String(current.ownerTabId) === String(ctx.tabId)) {
+        current.ownQueued = own ? Object.assign({}, own) : null;
+    }
+    const early = own && ctx.ui.folderPrivateNoteRecentAcks
+        ? ctx.ui.folderPrivateNoteRecentAcks.find(function (ack) { return ack.opId === opId; }) : null;
+    if (early) prksFolderPrivateNoteAcknowledged(ctx, early);
 }
 
 /* Shows the entity's text in this pane's clean Reminders field, if it is installed. */
@@ -3334,6 +3403,13 @@ function prksPrivateRecoveryInstall(family, api, ctx, id, writer, restore, base)
     if (family.tracksOwnQueued) {
         session.ownQueued = restore.predecessor
             ? { opId: restore.predecessor.opId, generation: 0, text: restore.predecessor.text } : null;
+        /* The lineage's own queued row, by exact op id and text, is this pane's to replace. */
+        const ownRows = prksFolderOwnRows(ctx);
+        if (restore.predecessor) {
+            ownRows[String(id)] = { opId: restore.predecessor.opId, text: restore.predecessor.text };
+        } else if (ownRows[String(id)]) {
+            delete ownRows[String(id)];
+        }
     }
     writer.setBase(adapter.draftBase(api, base));
     if (generation !== restore.record.generation) writer.edit(generation, restore.body);
@@ -3640,12 +3716,41 @@ async function prksSaveWorkPrivateNoteForSession(editor, entityId, content) {
  */
 async function prksSaveFolderPrivateNoteForSession(editor, entityId, content, session) {
     if (typeof prksSaveFolderPrivateNoteDurably !== 'function') return { result: { code: 'unavailable' }, base: null };
+    const ctx = editor.ctx;
+    const id = String(entityId);
+    const generation = session ? session.editGeneration : 0;
+    /* One save at a time per pane and Folder: each names the row the one
+     * before it queued as the row it may replace. */
+    if (!ctx.ui.folderPrivateNoteSaveChains) ctx.ui.folderPrivateNoteSaveChains = Object.create(null);
+    const chains = ctx.ui.folderPrivateNoteSaveChains;
+    const prior = chains[id] || null;
+    const run = (async function () {
+        if (prior) await prior;
+        const out = await prksSaveFolderPrivateNoteInOrder(editor, id, content, session);
+        const code = out.result && out.result.code;
+        if (code === 'queued' || code === 'unchanged') {
+            prksFolderOwnRowQueued(ctx, session, id, code === 'queued' ? out.result.opId : null, content, generation);
+        }
+        return out;
+    })();
+    const done = run.then(function () {}, function () {});
+    chains[id] = done;
+    void done.then(function () { if (chains[id] === done) delete chains[id]; });
+    return run;
+}
+
+function prksFolderSaveDurably(ctx, id, content, base) {
+    const own = prksFolderOwnRows(ctx)[id];
+    return prksSaveFolderPrivateNoteDurably(id, content, base, { ownOpId: own ? own.opId : null });
+}
+
+async function prksSaveFolderPrivateNoteInOrder(editor, entityId, content, session) {
+    const ctx = editor.ctx;
     const pin = session && String(session.entityId) === String(entityId) ? session.editBase : null;
     if (pin && Number.isSafeInteger(pin.revision)) {
         const pinned = { value: pin.value, revision: pin.revision };
-        return { result: await prksSaveFolderPrivateNoteDurably(String(entityId), content, pinned), base: pinned };
+        return { result: await prksFolderSaveDurably(ctx, entityId, content, pinned), base: pinned };
     }
-    const ctx = editor.ctx;
     let observed = typeof prksFolderNoteObserved === 'function' ? prksFolderNoteObserved(ctx, entityId) : null;
     const live = ctx && ctx.getEntity ? ctx.getEntity('folder') : null;
     if (!observed && live && String(live.id) === String(entityId) && typeof prksEnsureFolderNotesBase === 'function') {
@@ -3667,7 +3772,7 @@ async function prksSaveFolderPrivateNoteForSession(editor, entityId, content, se
         if (session.editBase === pin) session.editBase = resolved;
     }
     const base = observed ? { value: observed.value, revision: observed.revision } : null;
-    return { result: await prksSaveFolderPrivateNoteDurably(String(entityId), content, base), base: base };
+    return { result: await prksFolderSaveDurably(ctx, entityId, content, base), base: base };
 }
 
 function prksEnqueuePrivateNoteSave(family, editor) {
@@ -3721,9 +3826,6 @@ function prksEnqueuePrivateNoteSave(family, editor) {
             const ok = family.ok(code);
             /* Recorded whether or not a newer save has taken over: a newer body was typed on it. */
             if (ok && result.opId && queued) queued(session, result.opId, savedGeneration, content, usedBase);
-            if (ok && family.tracksOwnQueued) {
-                session.ownQueued = result.opId ? { opId: result.opId, generation: savedGeneration, text: content } : null;
-            }
             if (ok) {
                 const refreshing = family.refreshPending();
                 if (refreshing) await refreshing;

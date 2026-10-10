@@ -548,6 +548,21 @@ describe('Folder Reminders restore', () => {
     await waitFor(() => noteRows().some((r) => r.payload.value === 'Saved reminder. Queued and newer'), 'newer text saved after its predecessor')
   })
 
+  it('restored text replaces its own never-sent predecessor, and only that row', async () => {
+    const { ctx, ta } = await openFolder()
+    type(ctx, ta!, 'Saved reminder. Queued')
+    win.prksFlushPendingPrivateNotes(ctx)
+    const first = await queuedAs('Saved reminder. Queued')
+    await type(ctx, ta!, 'Saved reminder. Queued and newer').recovery!.flush()
+    await reload(true)
+    const { ctx: fresh, result } = await openAndRestore()
+    expect(result).toMatchObject({ restored: true })
+    expect(fresh.ui.folderPrivateNoteSession!.ownQueued).toMatchObject({ opId: first })
+    win.prksFlushPendingPrivateNotes(fresh)
+    await waitFor(() => noteRows().some((r) => r.payload.value === 'Saved reminder. Queued and newer'), 'restored text coalesced over its own row')
+    expect(noteRows().map((r) => r.payload.value)).toEqual(['Saved reminder. Queued and newer'])
+  })
+
   it('does not restore into a field that already has unsaved text', async () => {
     const { ctx, ta } = await openFolder()
     await type(ctx, ta!, 'Saved reminder. Old draft').recovery!.flush()

@@ -517,7 +517,12 @@
             Number.isSafeInteger(observed.revision) && observed.revision >= 0;
     }
 
-    async function saveFolderPrivateNoteDurably(folderId, text, observed) {
+    /**
+     * `options.ownOpId`: the unsettled Reminders row the saving session owns,
+     * or null. When given (a session save), the save replaces only that row;
+     * another unsettled row is someone else's and makes it `scope_busy`.
+     */
+    async function saveFolderPrivateNoteDurably(folderId, text, observed, options) {
         const runtime = root.prksSync;
         if (!runtime || !runtime.store || typeof runtime.store.saveFolderFields !== 'function') {
             return { code: 'unavailable', opId: null };
@@ -530,10 +535,13 @@
         }
         if (!isObservedField(observed)) return { code: 'unknown_base', opId: null };
         const base = { value: observed.value, revision: observed.revision };
+        const owns = options && Object.prototype.hasOwnProperty.call(options, 'ownOpId')
+            ? { private_notes: typeof options.ownOpId === 'string' ? options.ownOpId : null }
+            : undefined;
         let written;
         try {
             written = await runtime.store.saveFolderFields(folderId,
-                { private_notes: text }, { private_notes: base });
+                { private_notes: text }, { private_notes: base }, owns);
         } catch (error) {
             const storeCode = error && error.prksLocalStoreCode;
             if (storeCode === 'scope_busy') {
@@ -541,6 +549,7 @@
                 return {
                     code: error.prksBusyStatus === 'conflict' ? 'conflict' : 'scope_busy',
                     opId: busyOpId,
+                    foreign: error.prksBusyForeign === true,
                 };
             }
             return {
@@ -774,6 +783,7 @@
             text: rowText(row),
             baseRevision: Number.isSafeInteger(row.base_revision) ? row.base_revision : null,
             status: String(row.status || ''),
+            opId: typeof row.op_id === 'string' ? row.op_id : null,
         };
     }
 
