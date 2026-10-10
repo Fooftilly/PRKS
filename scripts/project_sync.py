@@ -8,7 +8,8 @@ actions and covers only the PR rows owned by ``project-sync`` in
 * ``opened``             -> In Progress (draft) or Review, from empty or Inbox
 * ``ready_for_review``   -> Review, from empty, Inbox, Ready or In Progress
 * ``converted_to_draft`` -> In Progress, from Review or Changes requested
-* ``review_requested``   -> Review, from Changes requested
+* ``review_requested``   -> Review, from Changes requested, only when the
+  latest review request is newer than the latest changes-requested review
 
 Any other current Status, Blocked and Done included, is left alone. The event
 only says which rule to consider: the PR's draft and open state are re-read
@@ -31,6 +32,7 @@ import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Protocol, Sequence
 
@@ -121,6 +123,10 @@ class PullRequest:
     state: str
     is_draft: bool
     item: Optional[Item]
+    # ISO 8601 times of the latest review request and the latest review that
+    # requested changes (dismissed reviews excluded), or None.
+    last_review_requested_at: Optional[str] = None
+    last_changes_requested_at: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -176,6 +182,26 @@ class Audit:
         )
 
 
+def _time(value: Optional[str]) -> Optional[datetime]:
+    return datetime.fromisoformat(value.replace("Z", "+00:00")) if value else None
+
+
+def review_request_is_current(pr: PullRequest) -> tuple[bool, str]:
+    """A re-review request counts only if no changes were requested after it.
+
+    A delayed ``review_requested`` run must not hide a newer changes-requested
+    review, so with no recorded request, or an equal or newer review, it fails
+    closed.
+    """
+    requested = _time(pr.last_review_requested_at)
+    changes = _time(pr.last_changes_requested_at)
+    if requested is None:
+        return False, "no review request is recorded on the PR"
+    if changes is not None and changes >= requested:
+        return False, "stale event: changes were requested after the latest review request"
+    return True, ""
+
+
 def decide(config: Config, action: str, pr: PullRequest) -> tuple[Optional[str], str]:
     """Return the Status key to set, or None with the reason nothing applies."""
     draft_target, ready_target, allowed = RULES[action]
@@ -183,6 +209,10 @@ def decide(config: Config, action: str, pr: PullRequest) -> tuple[Optional[str],
     if target is None:
         state = "a draft" if pr.is_draft else "ready for review"
         return None, f"stale event: the PR is now {state}"
+    if action == "review_requested":
+        current_request, why = review_request_is_current(pr)
+        if not current_request:
+            return None, why
     current = config.key_of(pr.item.status if pr.item else None)
     if current == target:
         return target, "already set"
@@ -239,6 +269,13 @@ def run(event: Event, config: Config, api: ProjectApi, apply: bool) -> Audit:
         if pr.item is None:
             return _finish(audit, "failed", "the added item is not visible")
         audit.status_after = _status_of(pr)
+        if pr.state != OPEN and pr.item.status is None:
+            # Closed or merged before the item existed, so the native Done
+            # rule had nothing to update. Only an item with no Status is set.
+            done = config.statuses["done"]
+            api.set_status(project.id, pr.item.id, project.field_id, project.options[done])
+            audit.steps.append(f"set {done}")
+            return _finish(audit, "corrected", f"the PR was {pr.state.lower()} before its item was added", done)
         skip = _skip_reason(pr)
         if skip:
             return _finish(audit, "skipped", skip)
@@ -255,20 +292,30 @@ def run(event: Event, config: Config, api: ProjectApi, apply: bool) -> Audit:
 
     api.set_status(project.id, pr.item.id, project.field_id, project.options[target_name])
     audit.steps.append(f"set {target_name}")
-    return _verify(audit, config, api, project, event.number, target_name, reason)
+    return _verify(audit, config, api, project, event, target_name, reason)
 
 
 def _verify(
-    audit: Audit, config: Config, api: ProjectApi, project: Project, number: int, target_name: str, reason: str
+    audit: Audit, config: Config, api: ProjectApi, project: Project, event: Event, target_name: str, reason: str
 ) -> Audit:
-    """Re-read after writing; repair a merge or close that landed during the write."""
-    after = api.load_pr(config, number, project.id)
+    """Re-read after writing; repair a state change that landed during the write.
+
+    A merge or close sets Done. For ``review_requested``, a changes-requested
+    review submitted during the write restores Changes requested.
+    """
+    after = api.load_pr(config, event.number, project.id)
     status = _status_of(after)
-    if after.state != OPEN and status == target_name and after.item is not None:
-        done = config.statuses["done"]
-        api.set_status(project.id, after.item.id, project.field_id, project.options[done])
-        audit.steps.append(f"set {done}")
-        return _finish(audit, "corrected", f"the PR was {after.state.lower()} during the write", done)
+    if status == target_name and after.item is not None:
+        repair: Optional[tuple[str, str]] = None
+        if after.state != OPEN:
+            repair = ("done", f"the PR was {after.state.lower()} during the write")
+        elif event.action == "review_requested" and not review_request_is_current(after)[0]:
+            repair = ("changes_requested", "changes were requested during the write")
+        if repair:
+            name = config.statuses[repair[0]]
+            api.set_status(project.id, after.item.id, project.field_id, project.options[name])
+            audit.steps.append(f"set {name}")
+            return _finish(audit, "corrected", repair[1], name)
     if status != target_name:
         return _finish(audit, "superseded", f"another writer set {status!r} after this run", status)
     return _finish(audit, "updated", reason, target_name)
@@ -305,6 +352,12 @@ query($owner: String!, $name: String!, $number: Int!, $field: String!) {
       id
       state
       isDraft
+      reviewRequests: timelineItems(last: 1, itemTypes: [REVIEW_REQUESTED_EVENT]) {
+        nodes { ... on ReviewRequestedEvent { createdAt } }
+      }
+      changesRequested: reviews(last: 1, states: [CHANGES_REQUESTED]) {
+        nodes { submittedAt }
+      }
       projectItems(first: 50, includeArchived: true) {
         nodes {
           id
@@ -413,7 +466,16 @@ class GraphQLApi:
                 status=value.get("name") if value.get("__typename") == "ProjectV2ItemFieldSingleSelectValue" else None,
                 archived=bool(items[0].get("isArchived")),
             )
-        return PullRequest(id=pr["id"], state=str(pr["state"]), is_draft=bool(pr["isDraft"]), item=item)
+        requests = (pr.get("reviewRequests") or {}).get("nodes") or []
+        changes = (pr.get("changesRequested") or {}).get("nodes") or []
+        return PullRequest(
+            id=pr["id"],
+            state=str(pr["state"]),
+            is_draft=bool(pr["isDraft"]),
+            item=item,
+            last_review_requested_at=(requests[-1] or {}).get("createdAt") if requests else None,
+            last_changes_requested_at=(changes[-1] or {}).get("submittedAt") if changes else None,
+        )
 
     def add_item(self, project_id: str, content_id: str) -> None:
         self._send(ADD_ITEM, {"project": project_id, "content": content_id})

@@ -52,6 +52,8 @@ class FakeBoard:
         self.after_set: Optional[Callable[[], None]] = None
         self.before_add: Optional[Callable[[], None]] = None
         self.options = dict(OPTIONS)
+        self.review_requested_at: Optional[str] = None
+        self.changes_requested_at: Optional[str] = None
         self._next = 0
         # A linked issue is on the board too; project-sync must never touch it.
         self._create(LINKED_ISSUE_ID, "issue")
@@ -74,6 +76,15 @@ class FakeBoard:
         if PR_ID in self.items:
             self.pending_native.append((PR_ID, CONFIG.statuses["done"]))
 
+    def request_review(self, at: str) -> None:
+        self.review_requested_at = at
+
+    def request_changes(self, at: str) -> None:
+        """A reviewer submits a changes-requested review; native rule queued."""
+        self.changes_requested_at = at
+        if PR_ID in self.items:
+            self.pending_native.append((PR_ID, CONFIG.statuses["changes_requested"]))
+
     def flush_native(self) -> None:
         while self.pending_native:
             content_id, status = self.pending_native.pop(0)
@@ -95,7 +106,14 @@ class FakeBoard:
         assert number == PR_NUMBER and project_id == PROJECT_ID
         raw = self.items.get(PR_ID)
         item = ps.Item(id=raw["id"], status=raw["status"], archived=raw["archived"]) if raw else None
-        return ps.PullRequest(id=PR_ID, state=self.pr["state"], is_draft=self.pr["draft"], item=item)
+        return ps.PullRequest(
+            id=PR_ID,
+            state=self.pr["state"],
+            is_draft=self.pr["draft"],
+            item=item,
+            last_review_requested_at=self.review_requested_at,
+            last_changes_requested_at=self.changes_requested_at,
+        )
 
     def add_item(self, project_id, content_id):
         self.mutations.append(("add", (project_id, content_id)))
@@ -167,7 +185,9 @@ class LifecycleTests(unittest.TestCase):
     def test_re_review_requested_moves_changes_requested_to_review(self):
         board = FakeBoard(draft=False)
         board.native_auto_add()
-        board.person_sets("Changes requested")
+        board.request_changes("2026-10-10T10:00:00Z")
+        board.flush_native()
+        board.request_review("2026-10-10T11:00:00Z")
         self.assertEqual(sync(board, "review_requested").outcome, "updated")
         self.assertEqual(board.pr_status, "Review")
 
@@ -312,6 +332,81 @@ class RaceTests(unittest.TestCase):
         self.assertEqual(sync(board, "opened").outcome, "corrected")
         self.assertEqual(board.pr_status, "Done")
 
+    def test_delayed_review_request_cannot_erase_newer_changes_requested(self):
+        # T1 re-review requested (its run is delayed); T2 the reviewer asks for
+        # changes again and the native rule lands; T3 the T1 run executes.
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.request_changes("2026-10-10T10:00:00Z")
+        board.flush_native()
+        board.request_review("2026-10-10T11:00:00Z")
+        board.request_changes("2026-10-10T12:00:00Z")
+        board.flush_native()
+        audit = sync(board, "review_requested")
+        self.assertEqual(audit.outcome, "skipped")
+        self.assertIn("changes were requested after", audit.reason)
+        self.assertEqual(board.pr_status, "Changes requested")
+        self.assertFalse([m for m in board.mutations if m[0] == "set"])
+
+    def test_review_request_without_a_recorded_request_fails_closed(self):
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.person_sets("Changes requested")
+        self.assertEqual(sync(board, "review_requested").outcome, "skipped")
+        self.assertEqual(board.pr_status, "Changes requested")
+
+    def test_review_request_at_the_same_instant_as_changes_fails_closed(self):
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.request_review("2026-10-10T11:00:00Z")
+        board.request_changes("2026-10-10T11:00:00Z")
+        board.flush_native()
+        self.assertEqual(sync(board, "review_requested").outcome, "skipped")
+
+    def test_changes_requested_during_the_write_is_restored(self):
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.request_changes("2026-10-10T10:00:00Z")
+        board.flush_native()
+        board.request_review("2026-10-10T11:00:00Z")
+
+        def review_now():
+            board.request_changes("2026-10-10T12:00:00Z")
+            board.flush_native()  # native rule lands before the write
+
+        board.before_set = review_now
+        audit = sync(board, "review_requested")
+        self.assertEqual(audit.outcome, "corrected")
+        self.assertEqual(board.pr_status, "Changes requested")
+
+    def test_merge_between_first_read_and_add_ends_in_done(self):
+        # The PR merges while it is not on the board, so the native Done rule
+        # has no item to update; the item project-sync then adds gets Done.
+        board = FakeBoard()
+
+        def merge_now():
+            board.merge()
+            board.flush_native()
+
+        board.before_add = merge_now
+        audit = sync(board, "opened")
+        self.assertTrue(audit.item_added)
+        self.assertEqual(audit.outcome, "corrected")
+        self.assertEqual(board.pr_status, "Done")
+
+    def test_close_between_first_read_and_add_keeps_a_status_set_meanwhile(self):
+        board = FakeBoard()
+
+        def close_and_classify():
+            board.merge(merged=False)
+            board.native_auto_add()
+            board.person_sets("Blocked")
+
+        board.before_add = close_and_classify
+        audit = sync(board, "opened")
+        self.assertEqual(audit.outcome, "skipped")
+        self.assertEqual(board.pr_status, "Blocked")
+
     def test_a_person_writing_after_the_run_wins(self):
         board = FakeBoard(draft=False)
         board.native_auto_add()
@@ -422,6 +517,19 @@ class MainTests(unittest.TestCase):
 class GraphQLApiTests(unittest.TestCase):
     def _pr_payload(self, nodes):
         return {"repository": {"pullRequest": {"id": PR_ID, "state": "OPEN", "isDraft": True, "projectItems": {"nodes": nodes}}}}
+
+    def test_review_times_are_read_and_dismissed_reviews_are_excluded(self):
+        payload = self._pr_payload([])
+        pr_raw = payload["repository"]["pullRequest"]
+        pr_raw["reviewRequests"] = {"nodes": [{"createdAt": "2026-10-10T11:00:00Z"}]}
+        pr_raw["changesRequested"] = {"nodes": [{"submittedAt": "2026-10-10T10:00:00Z"}]}
+        seen = []
+        api = ps.GraphQLApi(lambda q, v: seen.append(q) or payload)
+        pr = api.load_pr(CONFIG, PR_NUMBER, PROJECT_ID)
+        self.assertEqual(pr.last_review_requested_at, "2026-10-10T11:00:00Z")
+        self.assertEqual(pr.last_changes_requested_at, "2026-10-10T10:00:00Z")
+        self.assertIn("itemTypes: [REVIEW_REQUESTED_EVENT]", seen[0])
+        self.assertIn("states: [CHANGES_REQUESTED]", seen[0])
 
     def test_items_of_other_projects_are_ignored(self):
         nodes = [
