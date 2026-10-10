@@ -15,7 +15,8 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 _SCRIPT = _ROOT / "scripts" / "project3_migrate.py"
 _spec = importlib.util.spec_from_file_location("project3_migrate", _SCRIPT)
-assert _spec and _spec.loader
+if _spec is None or _spec.loader is None:
+    raise ImportError(f"cannot load {_SCRIPT}")
 pm = importlib.util.module_from_spec(_spec)
 sys.modules["project3_migrate"] = pm
 _spec.loader.exec_module(pm)
@@ -130,9 +131,9 @@ class FakeAPI:
             "pageInfo": {"hasNextPage": first and half > 0, "endCursor": "c1"}, "nodes": page if half else nodes}}}
 
 
-def plan_file(tmp: Path, stage: str, items, scope=SCOPE) -> Path:
+def plan_file(tmp: Path, stage: str, items, scope=None) -> Path:
     p = tmp / f"{stage}.json"
-    p.write_text(json.dumps({"scope": scope, "stage": stage, "items": items}))
+    p.write_text(json.dumps({"scope": SCOPE if scope is None else scope, "stage": stage, "items": items}))
     return p
 
 
@@ -561,7 +562,8 @@ class ProjectSyncLeavesBacklogAlone(unittest.TestCase):
 
     def test_backlog_is_unknown_and_never_allowed_from(self):
         spec = importlib.util.spec_from_file_location("project_sync_for_backlog", _ROOT / "scripts" / "project_sync.py")
-        assert spec and spec.loader
+        if spec is None or spec.loader is None:
+            self.fail("cannot load scripts/project_sync.py")
         ps = importlib.util.module_from_spec(spec)
         sys.modules["project_sync_for_backlog"] = ps
         spec.loader.exec_module(ps)
