@@ -53,9 +53,9 @@ class FakeBoard:
         self.after_set: Optional[Callable[[], None]] = None
         self.before_add: Optional[Callable[[], None]] = None
         self.options = dict(OPTIONS)
-        self.review_requested_at: Optional[str] = None
+        self.review_requests: list[tuple[str, str]] = []
         self.converted_to_draft_at: Optional[str] = None
-        self.changes_requested_at: Optional[str] = None
+        self.changes_by: dict[str, str] = {}  # reviewer -> latest changes-requested review
         self.after_add: Optional[Callable[[], None]] = None
         self._next = 0
         # A linked issue is on the board too; project-sync must never touch it.
@@ -79,27 +79,31 @@ class FakeBoard:
         if PR_ID in self.items:
             self.pending_native.append((PR_ID, CONFIG.statuses["done"]))
 
-    def request_review(self, at: str) -> None:
-        self.review_requested_at = at
+    def request_review(self, at: str, reviewer: str = "alice") -> None:
+        self.review_requests.append((reviewer, at))
 
     def convert_to_draft(self, at: str) -> None:
         self.pr["draft"] = True
         self.converted_to_draft_at = at
 
-    def request_changes(self, at: str) -> None:
+    def request_changes(self, at: str, reviewer: str = "alice") -> None:
         """A changes-requested review whose Changes requested write is queued.
 
         The queued write stands for any other writer of that Status (a
         person, or the review's own project-sync run), so tests can land it
         mid-run.
         """
-        self.changes_requested_at = at
+        self.changes_by[reviewer] = at
         if PR_ID in self.items:
             self.pending_native.append((PR_ID, CONFIG.statuses["changes_requested"]))
 
-    def submit_changes_review(self, at: str) -> None:
+    def submit_changes_review(self, at: str, reviewer: str = "alice") -> None:
         """A changes-requested review with no native rule: only the time is recorded."""
-        self.changes_requested_at = at
+        self.changes_by[reviewer] = at
+
+    def approve(self, reviewer: str = "alice") -> None:
+        """The reviewer's latest opinionated review is no longer a change request."""
+        self.changes_by.pop(reviewer, None)
 
     def flush_native(self) -> None:
         while self.pending_native:
@@ -127,9 +131,9 @@ class FakeBoard:
             state=self.pr["state"],
             is_draft=self.pr["draft"],
             item=item,
-            last_review_requested_at=self.review_requested_at,
             last_converted_to_draft_at=self.converted_to_draft_at,
-            last_changes_requested_at=self.changes_requested_at,
+            review_requests=tuple(self.review_requests),
+            changes_requested=tuple(self.changes_by.items()),
         )
 
     def add_item(self, project_id, content_id):
@@ -331,7 +335,7 @@ class ChangesRequestedTests(unittest.TestCase):
         self.assertEqual(sync(board, "review_requested").outcome, "updated")
         audit = sync(board, "changes_requested")
         self.assertEqual(audit.outcome, "skipped")
-        self.assertIn("review request followed", audit.reason)
+        self.assertIn("followed by a re-request", audit.reason)
         self.assertEqual(board.pr_status, "Review")
 
     def test_delayed_review_run_cannot_undo_a_newer_draft_conversion(self):
@@ -344,12 +348,51 @@ class ChangesRequestedTests(unittest.TestCase):
         self.assertEqual(sync(board, "changes_requested").outcome, "skipped")
         self.assertEqual(board.pr_status, "In Progress")
 
-    def test_review_at_the_same_instant_as_a_request_fails_closed(self):
+    def test_a_request_at_the_same_instant_does_not_answer_the_review(self):
+        # Ties resolve toward the review: both runs leave Changes requested.
         board = FakeBoard(draft=False)
         board.native_auto_add()
         board.person_sets("Review")
         board.request_review("2026-10-10T12:00:00Z")
         board.submit_changes_review("2026-10-10T12:00:00Z")
+        self.assertEqual(sync(board, "changes_requested").outcome, "updated")
+        self.assertEqual(sync(board, "review_requested").outcome, "skipped")
+        self.assertEqual(board.pr_status, "Changes requested")
+
+    def test_requesting_another_reviewer_keeps_changes_requested(self):
+        # Alice asked for changes; requesting Bob does not answer her review.
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.person_sets("Changes requested")
+        board.submit_changes_review("2026-10-10T11:00:00Z", reviewer="alice")
+        board.request_review("2026-10-10T12:00:00Z", reviewer="bob")
+        audit = sync(board, "review_requested")
+        self.assertEqual(audit.outcome, "skipped")
+        self.assertIn("changes requested by alice", audit.reason)
+        self.assertEqual(board.pr_status, "Changes requested")
+        # Re-requesting Alice answers it.
+        board.request_review("2026-10-10T13:00:00Z", reviewer="alice")
+        self.assertEqual(sync(board, "review_requested").outcome, "updated")
+        self.assertEqual(board.pr_status, "Review")
+
+    def test_every_reviewer_must_be_re_requested(self):
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.person_sets("Changes requested")
+        board.submit_changes_review("2026-10-10T11:00:00Z", reviewer="alice")
+        board.submit_changes_review("2026-10-10T11:30:00Z", reviewer="bob")
+        board.request_review("2026-10-10T12:00:00Z", reviewer="alice")
+        self.assertEqual(sync(board, "review_requested").outcome, "skipped")
+        board.request_review("2026-10-10T12:30:00Z", reviewer="bob")
+        self.assertEqual(sync(board, "review_requested").outcome, "updated")
+        self.assertEqual(board.pr_status, "Review")
+
+    def test_a_later_approval_by_the_same_reviewer_withdraws_the_request(self):
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.person_sets("Review")
+        board.submit_changes_review("2026-10-10T11:00:00Z")
+        board.approve()
         self.assertEqual(sync(board, "changes_requested").outcome, "skipped")
         self.assertEqual(board.pr_status, "Review")
 
@@ -521,7 +564,7 @@ class RaceTests(unittest.TestCase):
         board.flush_native()
         audit = sync(board, "review_requested")
         self.assertEqual(audit.outcome, "skipped")
-        self.assertIn("changes were requested after", audit.reason)
+        self.assertIn("changes requested by alice", audit.reason)
         self.assertEqual(board.pr_status, "Changes requested")
         self.assertFalse([m for m in board.mutations if m[0] == "set"])
 
@@ -750,18 +793,30 @@ class GraphQLApiTests(unittest.TestCase):
     def test_review_times_are_read_and_dismissed_reviews_are_excluded(self):
         payload = self._pr_payload([])
         pr_raw = payload["repository"]["pullRequest"]
-        pr_raw["reviewRequests"] = {"nodes": [{"createdAt": "2026-10-10T11:00:00Z"}]}
-        pr_raw["changesRequested"] = {"nodes": [{"submittedAt": "2026-10-10T10:00:00Z"}]}
+        pr_raw["reviewRequests"] = {"nodes": [
+            {"createdAt": "2026-10-10T11:00:00Z", "requestedReviewer": {"__typename": "User", "login": "Alice"}},
+            {"createdAt": "2026-10-10T11:30:00Z", "requestedReviewer": {"__typename": "Team", "slug": "core"}},
+            {"createdAt": "2026-10-10T11:40:00Z", "requestedReviewer": None},
+        ]}
+        pr_raw["latestOpinionatedReviews"] = {"nodes": [
+            {"state": "CHANGES_REQUESTED", "submittedAt": "2026-10-10T10:00:00Z", "author": {"login": "Bob"}},
+            {"state": "APPROVED", "submittedAt": "2026-10-10T10:30:00Z", "author": {"login": "carol"}},
+            {"state": "DISMISSED", "submittedAt": "2026-10-10T10:40:00Z", "author": {"login": "dave"}},
+            {"state": "CHANGES_REQUESTED", "submittedAt": "2026-10-10T10:50:00Z", "author": None},
+        ]}
         pr_raw["convertedToDraft"] = {"nodes": [{"createdAt": "2026-10-10T09:00:00Z"}]}
         seen = []
         api = ps.GraphQLApi(lambda q, v: seen.append(q) or payload)
         pr = api.load_pr(CONFIG, PR_NUMBER, PROJECT_ID)
-        self.assertEqual(pr.last_review_requested_at, "2026-10-10T11:00:00Z")
-        self.assertEqual(pr.last_changes_requested_at, "2026-10-10T10:00:00Z")
+        self.assertEqual(pr.review_requests, (("alice", "2026-10-10T11:00:00Z"), ("team:core", "2026-10-10T11:30:00Z")))
+        self.assertEqual(pr.changes_requested, (("bob", "2026-10-10T10:00:00Z"), ("ghost", "2026-10-10T10:50:00Z")))
+        self.assertEqual(pr.last_review_requested_at, "2026-10-10T11:30:00Z")
+        self.assertEqual(pr.last_changes_requested_at, "2026-10-10T10:50:00Z")
         self.assertEqual(pr.last_converted_to_draft_at, "2026-10-10T09:00:00Z")
+        self.assertEqual(ps.unanswered_changes(pr), ["bob", "ghost"])
         self.assertIn("itemTypes: [CONVERT_TO_DRAFT_EVENT]", seen[0])
-        self.assertIn("itemTypes: [REVIEW_REQUESTED_EVENT]", seen[0])
-        self.assertIn("states: [CHANGES_REQUESTED]", seen[0])
+        self.assertIn("timelineItems(last: 100, itemTypes: [REVIEW_REQUESTED_EVENT])", seen[0])
+        self.assertIn("latestOpinionatedReviews(first: 100)", seen[0])
 
     def test_items_of_other_projects_are_ignored(self):
         nodes = [

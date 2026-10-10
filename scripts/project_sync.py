@@ -12,14 +12,15 @@ submitted review, and covers only the PR rows owned by ``project-sync`` in
 * ``review_requested``   -> Review, from Changes requested
 * ``changes_requested``  -> Changes requested, from empty, In Progress or Review
 
-``converted_to_draft`` and ``review_requested`` also apply only when the
-latest such event on the PR is newer than the latest changes-requested
-review, so a delayed run never hides newer requested changes.
-``changes_requested`` applies only when the latest changes-requested review is
-newer than both, so a delayed review run never undoes a newer re-review
-request or conversion to draft. If such a review is still unanswered when
-``opened`` or ``ready_for_review`` runs, the run sets Changes requested
-instead of In Progress or Review.
+A changes-requested review is *unanswered* until the same reviewer is
+requested again, or the PR is converted to draft, after it.
+``review_requested`` applies only when no review is unanswered, so
+requesting another reviewer or a delayed run never hides requested changes.
+``converted_to_draft`` applies only when the conversion is newer than the
+latest changes-requested review. ``changes_requested`` applies only while a
+review is unanswered, so a delayed review run never undoes a re-request. If a
+review is unanswered when ``opened`` or ``ready_for_review`` runs, the run
+sets Changes requested instead of In Progress or Review.
 
 Any other current Status, Blocked and Done included, is left alone. The event
 only says which rule to consider: the PR's draft and open state are re-read
@@ -138,12 +139,21 @@ class PullRequest:
     state: str
     is_draft: bool
     item: Optional[Item]
-    # ISO 8601 times of the latest review request, the latest conversion to
-    # draft and the latest review that requested changes (dismissed reviews
-    # excluded), or None.
-    last_review_requested_at: Optional[str] = None
+    # ISO 8601 time of the latest conversion to draft, or None.
     last_converted_to_draft_at: Optional[str] = None
-    last_changes_requested_at: Optional[str] = None
+    # (reviewer, time) of each review request, and of each reviewer whose
+    # latest approving or change-requesting review requested changes
+    # (dismissed reviews do not count).
+    review_requests: tuple[tuple[str, str], ...] = ()
+    changes_requested: tuple[tuple[str, str], ...] = ()
+
+    @property
+    def last_review_requested_at(self) -> Optional[str]:
+        return _latest(at for _, at in self.review_requests)
+
+    @property
+    def last_changes_requested_at(self) -> Optional[str]:
+        return _latest(at for _, at in self.changes_requested)
 
 
 @dataclass(frozen=True)
@@ -203,41 +213,66 @@ def _time(value: Optional[str]) -> Optional[datetime]:
     return datetime.fromisoformat(value.replace("Z", "+00:00")) if value else None
 
 
-# Actions whose run must not override a newer changes-requested review, with
-# the PullRequest attribute holding the time of the latest such event.
-ORDERED_ACTIONS = {
-    "review_requested": ("last_review_requested_at", "review request"),
-    "converted_to_draft": ("last_converted_to_draft_at", "conversion to draft"),
-}
+def _latest(values: Any) -> Optional[str]:
+    times = [value for value in values if value]
+    return max(times, key=lambda value: _time(value) or datetime.min) if times else None
+
+
+def _after(later: Optional[str], earlier: str) -> bool:
+    later_time, earlier_time = _time(later), _time(earlier)
+    return later_time is not None and earlier_time is not None and later_time > earlier_time
+
+
+def unanswered_changes(pr: PullRequest) -> list[str]:
+    """Reviewers whose changes-requested review still stands.
+
+    A review is answered by a newer review request of the same reviewer, or
+    by a newer conversion to draft. Equal times do not answer it.
+    """
+    return sorted(
+        reviewer
+        for reviewer, at in pr.changes_requested
+        if not _after(pr.last_converted_to_draft_at, at)
+        and not any(who == reviewer and _after(when, at) for who, when in pr.review_requests)
+    )
+
+
+# Actions whose run must not hide a changes-requested review.
+ORDERED_ACTIONS = frozenset({"review_requested", "converted_to_draft"})
 
 
 def event_is_current(action: str, pr: PullRequest) -> tuple[bool, str]:
-    """The event counts only if no changes were requested at or after it.
+    """Whether the review history still supports the event.
 
-    A delayed run must not hide a newer changes-requested review, so with no
-    recorded event, or an equal or newer review, it fails closed. In the other
-    direction, ``changes_requested`` counts only if its review is newer than
-    the latest review request and conversion to draft. ``opened`` and
-    ``ready_for_review`` are not ordered against reviews.
+    ``review_requested`` applies only when every changes-requested review is
+    answered, so requesting another reviewer or a stale run never hides one.
+    ``converted_to_draft`` applies only when the latest conversion is newer
+    than the latest changes-requested review. ``changes_requested`` applies
+    only while some changes-requested review is unanswered. Each fails closed
+    when the event it relies on is not recorded. ``opened`` and
+    ``ready_for_review`` are not gated here (see ``decide``).
     """
     if action == "changes_requested":
-        changes = _time(pr.last_changes_requested_at)
-        if changes is None:
+        if not pr.changes_requested:
             return False, "no changes-requested review is recorded on the PR"
-        for attribute, label in ORDERED_ACTIONS.values():
-            happened = _time(getattr(pr, attribute))
-            if happened is not None and happened >= changes:
-                return False, f"stale event: a {label} followed the latest changes-requested review"
+        if not unanswered_changes(pr):
+            return False, "stale event: each changes-requested review was followed by a re-request or conversion to draft"
         return True, ""
-    if action not in ORDERED_ACTIONS:
+    if action == "review_requested":
+        if pr.last_review_requested_at is None:
+            return False, "no review request is recorded on the PR"
+        pending = unanswered_changes(pr)
+        if pending:
+            return False, f"changes requested by {', '.join(pending)} are not answered by a newer re-request"
         return True, ""
-    attribute, label = ORDERED_ACTIONS[action]
-    happened = _time(getattr(pr, attribute))
-    changes = _time(pr.last_changes_requested_at)
-    if happened is None:
-        return False, f"no {label} is recorded on the PR"
-    if changes is not None and changes >= happened:
-        return False, f"stale event: changes were requested after the latest {label}"
+    if action == "converted_to_draft":
+        converted = pr.last_converted_to_draft_at
+        if converted is None:
+            return False, "no conversion to draft is recorded on the PR"
+        changes = pr.last_changes_requested_at
+        if changes is not None and not _after(converted, changes):
+            return False, "stale event: changes were requested after the latest conversion to draft"
+        return True, ""
     return True, ""
 
 
@@ -251,7 +286,7 @@ def decide(config: Config, action: str, pr: PullRequest) -> tuple[Optional[str],
     current_event, why = event_is_current(action, pr)
     if not current_event:
         return None, why
-    outstanding = action in ("opened", "ready_for_review") and event_is_current("changes_requested", pr)[0]
+    outstanding = action in ("opened", "ready_for_review") and bool(unanswered_changes(pr))
     if outstanding:
         # A changes-requested review that no re-review request or conversion
         # to draft has answered still stands, for example when this run is
@@ -401,14 +436,25 @@ query($owner: String!, $name: String!, $number: Int!, $field: String!) {
       id
       state
       isDraft
-      reviewRequests: timelineItems(last: 1, itemTypes: [REVIEW_REQUESTED_EVENT]) {
-        nodes { ... on ReviewRequestedEvent { createdAt } }
+      reviewRequests: timelineItems(last: 100, itemTypes: [REVIEW_REQUESTED_EVENT]) {
+        nodes {
+          ... on ReviewRequestedEvent {
+            createdAt
+            requestedReviewer {
+              __typename
+              ... on User { login }
+              ... on Bot { login }
+              ... on Mannequin { login }
+              ... on Team { slug }
+            }
+          }
+        }
       }
       convertedToDraft: timelineItems(last: 1, itemTypes: [CONVERT_TO_DRAFT_EVENT]) {
         nodes { ... on ConvertToDraftEvent { createdAt } }
       }
-      changesRequested: reviews(last: 1, states: [CHANGES_REQUESTED]) {
-        nodes { submittedAt }
+      latestOpinionatedReviews(first: 100) {
+        nodes { state submittedAt author { login } }
       }
       projectItems(first: 50, includeArchived: true) {
         pageInfo { hasNextPage }
@@ -523,17 +569,26 @@ class GraphQLApi:
                 status=value.get("name") if value.get("__typename") == "ProjectV2ItemFieldSingleSelectValue" else None,
                 archived=bool(items[0].get("isArchived")),
             )
-        requests = (pr.get("reviewRequests") or {}).get("nodes") or []
         drafts = (pr.get("convertedToDraft") or {}).get("nodes") or []
-        changes = (pr.get("changesRequested") or {}).get("nodes") or []
+        requests: list[tuple[str, str]] = []
+        for node in (pr.get("reviewRequests") or {}).get("nodes") or []:
+            reviewer = (node or {}).get("requestedReviewer") or {}
+            who = reviewer.get("login") or (f"team:{reviewer['slug']}" if reviewer.get("slug") else "")
+            if who and node.get("createdAt"):
+                requests.append((who.lower(), node["createdAt"]))
+        changes = [
+            (((node.get("author") or {}).get("login") or "ghost").lower(), node["submittedAt"])
+            for node in (pr.get("latestOpinionatedReviews") or {}).get("nodes") or []
+            if node and node.get("state") == "CHANGES_REQUESTED" and node.get("submittedAt")
+        ]
         return PullRequest(
             id=pr["id"],
             state=str(pr["state"]),
             is_draft=bool(pr["isDraft"]),
             item=item,
-            last_review_requested_at=(requests[-1] or {}).get("createdAt") if requests else None,
             last_converted_to_draft_at=(drafts[-1] or {}).get("createdAt") if drafts else None,
-            last_changes_requested_at=(changes[-1] or {}).get("submittedAt") if changes else None,
+            review_requests=tuple(requests),
+            changes_requested=tuple(changes),
         )
 
     def add_item(self, project_id: str, content_id: str) -> None:
