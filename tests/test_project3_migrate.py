@@ -374,12 +374,22 @@ class Backfill(Base):
 
     def test_held_and_no_op_rows_need_no_guards(self):
         held = {"number": 39, "type": "Issue", "set": {"Status": "Done"}, "approved": False}
-        no_op = {"number": 480, "type": "PullRequest", "set": {}}
+        no_op = {"number": 40, "type": "Issue", "set": {}}
         self.api.put("Issue", 39, state="OPEN")
-        self.api.add_content("PullRequest", 480)
-        r = self.run_stage("backfill", [held, no_op], apply=True)
-        self.assertEqual(r["counts"]["held"], 1)
-        self.assertNotIn("I39", [m[1].get("item") for m in self.api.mutations])
+        self.api.put("Issue", 40, Status="Ready")
+        r = self.run_stage("migrate-existing", [held, no_op], apply=True)
+        self.assertEqual(r["counts"], {"held": 1, "unchanged": 1})
+        self.assertEqual(self.api.mutations, [])
+
+    def test_an_add_only_backfill_row_without_state_is_refused(self):
+        row = {"number": 480, "type": "PullRequest", "expected_before": {}, "set": {}}
+        self._refused_before_any_call("backfill", row, "PullRequest#480: .*state")
+
+    def test_an_add_only_backfill_row_for_a_pr_merged_since_is_not_added(self):
+        self.api.add_content("PullRequest", 480, state="MERGED")
+        r = self.run_stage("backfill", [{"number": 480, "type": "PullRequest", "state": "OPEN", "set": {}}], apply=True)
+        self.assertEqual(r["counts"], {"drift": 1})
+        self.assertEqual(self.api.mutations, [])
 
     def test_unwritable_field_rejected(self):
         with self.assertRaises(pm.MigrationError):
@@ -510,6 +520,21 @@ class NativeWorkflowRaces(Base):
         self.assertEqual(len(sets), 1)
         self.assertEqual(r["counts"], {"verify-failed": 1})
         self.assertIn("removed", r["items"][0]["detail"])
+        self.assertNotIn("Issue#181", json.loads((self.tmp / "ck.json").read_text())["done"])
+
+    def test_verify_reports_an_issue_reopened_during_the_repair_write(self):
+        self.api.add_content("Issue", 181, state="CLOSED")
+        self.api.pending.append(lambda: self.api.items["I181"]["values"].update(Status="Inbox"))   # late native Inbox
+
+        def reopen_during_repair(name, variables):
+            sets = [m for m in self.api.mutations if m[0] == "updateProjectV2ItemFieldValue"]
+            if name == "updateProjectV2ItemFieldValue" and len(sets) == 1:   # the repair, after the first Done
+                self.api.content[181]["state"] = "OPEN"
+        self.api.before_mutation = reopen_during_repair
+        r = self.run_stage("backfill", [research()], apply=True)
+        self.assertEqual(r["counts"], {"verify-failed": 1})
+        self.assertIn("GitHub state changed to OPEN while the repair was written", r["items"][0]["detail"])
+        self.assertFalse(r["ok"])
         self.assertNotIn("Issue#181", json.loads((self.tmp / "ck.json").read_text())["done"])
 
     def test_a_person_changing_an_added_item_while_settling_is_reported_not_overwritten(self):

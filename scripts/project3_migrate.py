@@ -183,19 +183,21 @@ def load_plan(path: Path, stage: str) -> dict:
         for field in item.get("set", {}):
             if field not in ("Status", "Roadmap Stage"):
                 raise MigrationError(f"#{item['number']}: field {field!r} is not writable by this tool")
-        _check_guards(item)
+        _check_guards(item, stage)
     return data
 
 
 GITHUB_STATES = ("OPEN", "CLOSED", "MERGED")
 
 
-def _check_guards(item: dict) -> None:
+def _check_guards(item: dict, stage: str) -> None:
     """A row that can write must carry the values its drift checks compare
     against: the GitHub state, and an explicit expected-before entry (JSON
-    null allowed) for every field it sets. Held and no-op rows are exempt."""
+    null allowed) for every field it sets. Every backfill row can add its
+    item, so it always needs a state. Held rows, and migrate-existing rows
+    that set nothing, are exempt."""
     target = item.get("set") or {}
-    if not item.get("approved", True) or not target:
+    if not item.get("approved", True) or not (target or stage == "backfill"):
         return
     key = f"{item['type']}#{item['number']}"
     state = item.get("github_state") or item.get("state")
@@ -460,6 +462,11 @@ def verify_added(project: Project, plan_items: dict, records: list, checkpoint: 
         if _late_native_inbox(rec["item"], item, values, checkpoint):
             _set(project, rec["item_id"], "Status", item["set"]["Status"])
             fresh = project.refresh(rec["item_id"])
+            after = _unsafe_to_touch(item, fresh)
+            if after:   # changed between the check and the repair write
+                rec.update(outcome="verify-failed", detail=f"after settling: {after} while the repair was written; check this item by hand")
+                checkpoint.done.discard(rec["item"])
+                continue
             values = fresh["values"] if fresh else {}
             rec["detail"] = "late native Inbox written over"
         wrong = {f: values.get(f) for f, t in item.get("set", {}).items() if values.get(f) != t}
