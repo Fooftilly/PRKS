@@ -247,6 +247,32 @@ class Writes(Base):
         self.assertEqual(self.api.mutations, [])
         self.assertEqual(self.api.items["I38"]["values"]["Status"], "In Progress")
 
+    def test_an_apply_that_skipped_drift_is_not_ok_and_exits_non_zero(self):
+        self.api.put("Issue", 38, Status="In Progress")      # drifted
+        self.api.put("Issue", 40, Status="Ready")            # still as reviewed
+        path = plan_file(self.tmp, "migrate-existing", [epic(38), epic(40)])
+        rc = pm.main(["migrate-existing", "--apply", "--plan", str(path), "--plan-sha256", pm.plan_sha256(path),
+                      "--report-dir", str(self.tmp / "o")], env={}, transport=self.api)
+        self.assertEqual(rc, 1)
+        report = json.loads((self.tmp / "o" / "migrate-existing.json").read_text())
+        self.assertEqual(report["counts"], {"drift": 1, "changed": 1})
+        self.assertFalse(report["ok"])
+        self.assertEqual(self.api.items["I38"]["values"], {"Status": "In Progress"})
+        self.assertEqual(self.api.items["I40"]["values"], {"Status": "Backlog", "Roadmap Stage": "Planned"})
+
+    def test_drift_in_a_dry_run_and_intended_skips_in_an_apply_stay_ok(self):
+        self.api.put("Issue", 38, Status="In Progress")
+        self.assertTrue(self.run_stage("migrate-existing", [epic()])["ok"])
+        self.api.put("Issue", 38, Status="Ready")
+        self.api.put("Issue", 39, state="CLOSED")
+        self.api.put("Issue", 41, Status="Backlog", **{"Roadmap Stage": "Planned"})
+        held = {"number": 39, "type": "Issue", "set": {"Status": "Done"}, "approved": False}
+        plan = [epic(), held, epic(41)]
+        self.assertTrue(self.run_stage("migrate-existing", plan, apply=True)["ok"])
+        r = self.run_stage("migrate-existing", plan, apply=True)
+        self.assertEqual(r["counts"], {"checkpointed": 1, "held": 1, "unchanged": 1})
+        self.assertTrue(r["ok"])
+
     def test_existing_stage_value_is_not_overwritten(self):
         self.api.put("Issue", 38, Status="Ready", **{"Roadmap Stage": "Parked"})
         r = self.run_stage("migrate-existing", [epic()], apply=True)

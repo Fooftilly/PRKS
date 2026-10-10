@@ -302,6 +302,7 @@ Both plans use the same schema:
 - Plans, reports and checkpoints must be under the home or temp directory and outside this repository. By default reports and the checkpoint go to `prks-project3-migration` in the system temp directory.
 - A checkpoint records the items the tool added and completed. A rerun skips completed items, so a value a person changed afterwards is never rewritten. The only exception is a late native Inbox on an item the tool added, which a rerun repairs. A checkpoint is bound to the sha256 of the plan that wrote it: a checkpoint from the other stage, from a different plan file, or one that does not name its plan is refused, in dry-run and `--apply` alike. To run a revised plan, remove the old checkpoint or pass a new `--checkpoint`; the run then starts from the live state.
 - A failed call stops the run. The report and checkpoint are still written, the remaining items are marked `not-run`, and the command exits 1. A rerun continues from the live state.
+- An `--apply` that skipped any item as `drift` did not apply the whole reviewed plan, so its report has `ok: false` and the command exits 1, even though the other items were written. `held`, `unchanged`, `checkpointed` and `not-in-plan` are intended and do not fail a run. A dry-run reports drift without failing.
 
 **Reviewed decisions for the existing items (2026-10-10):**
 

@@ -515,6 +515,15 @@ def _write_report(report: dict, report_dir: Path, out) -> None:
         print("missing requirements: " + "; ".join(missing), file=out)
 
 
+def _run_ok(apply: bool, failed: bool, counts: dict[str, int]) -> bool:
+    """A run is ok only if nothing failed and, with --apply, the reviewed plan
+    was applied in full: an item skipped as drift leaves the plan incomplete.
+    held, unchanged, checkpointed and not-in-plan are intended and stay ok."""
+    if failed or counts.get("failed") or counts.get("verify-failed"):
+        return False
+    return not (apply and counts.get("drift"))
+
+
 def run(stage: str, plan_path: Path, *, apply: bool, transport: Transport, checkpoint: Path, report_dir: Path,
         out=sys.stdout, settle_seconds: float = DEFAULT_SETTLE_SECONDS, sleep: Callable[[float], None] = time.sleep,
         expected_sha256: Optional[str] = None) -> dict:
@@ -543,7 +552,7 @@ def run(stage: str, plan_path: Path, *, apply: bool, transport: Transport, check
     for r in records:
         counts[r["outcome"]] = counts.get(r["outcome"], 0) + 1
     report = {"stage": stage, "mode": "apply" if apply else "dry-run", "plan_sha256": digest, "requirements_missing": missing, "counts": counts,
-              "ok": not failed and "failed" not in counts and "verify-failed" not in counts, "items": records}
+              "ok": _run_ok(apply, failed, counts), "items": records}
     _write_report(report, report_dir, out)
     return report
 
