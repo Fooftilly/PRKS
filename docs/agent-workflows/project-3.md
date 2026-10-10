@@ -67,7 +67,7 @@ Every setting is checked against its current configuration (§1) before it is ch
 
 | Workflow | Proposed setting | Why |
 |---|---|---|
-| Auto-add to project | On. Filter: issues and PRs in `Fooftilly/PRKS`, excluding `label:dependencies` | Ordinary work enters without manual adding. Dependency PRs stay out of normal views. |
+| Auto-add to project | On. Filter: all issues and PRs in `Fooftilly/PRKS`, including dependency PRs | Everything enters without manual adding. Dependency PRs are kept out of the ordinary views by their filters (§7), not by auto-add. |
 | Item added to project | Status: Inbox | Default entry state. |
 | Item closed | Status: Done | The item itself is complete. |
 | Pull request merged | Status: Done | Applies to the PR item only. |
@@ -111,7 +111,9 @@ Filters use GitHub Projects filter syntax. Exact field and option names follow �
 | Roadmap | roadmap | `label:roadmap`, with Sub-issue progress and milestone |
 | Work Board | board by Status | `-label:dependencies` (Done items included and visible) |
 | Timeline | roadmap by date fields | same items as Work Board |
-| Maintenance (new, optional) | table | `label:dependencies` |
+| Maintenance (new) | table | `label:dependencies` |
+
+**Dependency PRs:** they are added to Project #3 like any other PR and follow the same PR lifecycle (§6). Active Work, Agent Queue and Work Board exclude them with `-label:dependencies`, so they show up only in Maintenance. Automation never merges them.
 
 Agent Queue separates ready work from work blocked by an unresolved prerequisite. A blocked-state filter qualifier in Project views is not yet verified. If it exists, Agent Queue adds it. Otherwise a read-only eligibility report lists Ready Agent/Mixed issues with and without open native blockers (§9), and the view shows both groups.
 
