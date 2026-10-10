@@ -53,7 +53,9 @@ class FakeBoard:
         self.before_add: Optional[Callable[[], None]] = None
         self.options = dict(OPTIONS)
         self.review_requested_at: Optional[str] = None
+        self.converted_to_draft_at: Optional[str] = None
         self.changes_requested_at: Optional[str] = None
+        self.after_add: Optional[Callable[[], None]] = None
         self._next = 0
         # A linked issue is on the board too; project-sync must never touch it.
         self._create(LINKED_ISSUE_ID, "issue")
@@ -78,6 +80,10 @@ class FakeBoard:
 
     def request_review(self, at: str) -> None:
         self.review_requested_at = at
+
+    def convert_to_draft(self, at: str) -> None:
+        self.pr["draft"] = True
+        self.converted_to_draft_at = at
 
     def request_changes(self, at: str) -> None:
         """A reviewer submits a changes-requested review; native rule queued."""
@@ -112,6 +118,7 @@ class FakeBoard:
             is_draft=self.pr["draft"],
             item=item,
             last_review_requested_at=self.review_requested_at,
+            last_converted_to_draft_at=self.converted_to_draft_at,
             last_changes_requested_at=self.changes_requested_at,
         )
 
@@ -122,6 +129,9 @@ class FakeBoard:
             hook()
         if content_id not in self.items:  # addProjectV2ItemById returns the existing item
             self._create(content_id, "pr")
+        if self.after_add:
+            hook, self.after_add = self.after_add, None
+            hook()
 
     def set_status(self, project_id, item_id, field_id, option_id):
         self.mutations.append(("set", (project_id, item_id, field_id, option_id)))
@@ -176,9 +186,14 @@ class LifecycleTests(unittest.TestCase):
 
     def test_converted_to_draft_moves_back_to_in_progress(self):
         for start in ("Review", "Changes requested"):
-            board = FakeBoard(draft=True)
+            board = FakeBoard(draft=False)
             board.native_auto_add()
-            board.person_sets(start)
+            if start == "Changes requested":
+                board.request_changes("2026-10-10T10:00:00Z")
+                board.flush_native()
+            else:
+                board.person_sets(start)
+            board.convert_to_draft("2026-10-10T11:00:00Z")
             self.assertEqual(sync(board, "converted_to_draft").outcome, "updated", start)
             self.assertEqual(board.pr_status, "In Progress")
 
@@ -379,6 +394,58 @@ class RaceTests(unittest.TestCase):
         self.assertEqual(audit.outcome, "corrected")
         self.assertEqual(board.pr_status, "Changes requested")
 
+    def test_delayed_draft_conversion_cannot_erase_newer_changes_requested(self):
+        # T1 converted to draft (its run is delayed); T2 a reviewer still asks
+        # for changes and the native rule lands; T3 the T1 run executes.
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.person_sets("Review")
+        board.convert_to_draft("2026-10-10T11:00:00Z")
+        board.request_changes("2026-10-10T12:00:00Z")
+        board.flush_native()
+        audit = sync(board, "converted_to_draft")
+        self.assertEqual(audit.outcome, "skipped")
+        self.assertIn("changes were requested after", audit.reason)
+        self.assertEqual(board.pr_status, "Changes requested")
+
+    def test_draft_conversion_without_a_recorded_event_fails_closed(self):
+        board = FakeBoard(draft=True)
+        board.native_auto_add()
+        board.person_sets("Review")
+        self.assertEqual(sync(board, "converted_to_draft").outcome, "skipped")
+        self.assertEqual(board.pr_status, "Review")
+
+    def test_changes_requested_during_a_draft_conversion_write_is_restored(self):
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.person_sets("Review")
+        board.convert_to_draft("2026-10-10T11:00:00Z")
+
+        def review_now():
+            board.request_changes("2026-10-10T12:00:00Z")
+            board.flush_native()
+
+        board.before_set = review_now
+        self.assertEqual(sync(board, "converted_to_draft").outcome, "corrected")
+        self.assertEqual(board.pr_status, "Changes requested")
+
+    def test_merge_during_item_creation_ends_in_done(self):
+        # The merge lands after the add mutation but before the re-read, with
+        # the native Done rule either already delivered or still pending.
+        for native_delivered in (True, False):
+            board = FakeBoard()
+
+            def merge_now(board=board, delivered=native_delivered):
+                board.merge()
+                if delivered:
+                    board.flush_native()
+
+            board.after_add = merge_now
+            audit = sync(board, "opened")
+            self.assertEqual(audit.outcome, "skipped" if native_delivered else "corrected")
+            board.flush_native()
+            self.assertEqual(board.pr_status, "Done", native_delivered)
+
     def test_merge_between_first_read_and_add_ends_in_done(self):
         # The PR merges while it is not on the board, so the native Done rule
         # has no item to update; the item project-sync then adds gets Done.
@@ -416,10 +483,10 @@ class RaceTests(unittest.TestCase):
         self.assertEqual(board.pr_status, "Blocked")
 
     def test_only_the_pr_is_ever_added_or_written(self):
-        board = FakeBoard()
+        board = FakeBoard(draft=False)
         sync(board, "opened")
-        board.person_sets("Review")
-        sync(board, "converted_to_draft")
+        board.convert_to_draft("2026-10-10T11:00:00Z")
+        self.assertEqual(sync(board, "converted_to_draft").outcome, "updated")
         issue_item = board.items[LINKED_ISSUE_ID]["id"]
         for kind, args in board.mutations:
             self.assertNotIn(LINKED_ISSUE_ID, args)
@@ -523,11 +590,14 @@ class GraphQLApiTests(unittest.TestCase):
         pr_raw = payload["repository"]["pullRequest"]
         pr_raw["reviewRequests"] = {"nodes": [{"createdAt": "2026-10-10T11:00:00Z"}]}
         pr_raw["changesRequested"] = {"nodes": [{"submittedAt": "2026-10-10T10:00:00Z"}]}
+        pr_raw["convertedToDraft"] = {"nodes": [{"createdAt": "2026-10-10T09:00:00Z"}]}
         seen = []
         api = ps.GraphQLApi(lambda q, v: seen.append(q) or payload)
         pr = api.load_pr(CONFIG, PR_NUMBER, PROJECT_ID)
         self.assertEqual(pr.last_review_requested_at, "2026-10-10T11:00:00Z")
         self.assertEqual(pr.last_changes_requested_at, "2026-10-10T10:00:00Z")
+        self.assertEqual(pr.last_converted_to_draft_at, "2026-10-10T09:00:00Z")
+        self.assertIn("itemTypes: [CONVERT_TO_DRAFT_EVENT]", seen[0])
         self.assertIn("itemTypes: [REVIEW_REQUESTED_EVENT]", seen[0])
         self.assertIn("states: [CHANGES_REQUESTED]", seen[0])
 
