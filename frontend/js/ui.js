@@ -3066,6 +3066,13 @@ function prksPrivateRecoveryKind(family) {
         observed: function (owner) {
             return typeof prksFolderNoteObserved === 'function' ? prksFolderNoteObserved(owner) : null;
         },
+        /* The session's pinned base (#534): another pane's acknowledgement may
+         * have moved the pane's observed one past the text being typed. */
+        editBase: function (_owner, entry) {
+            const pin = entry ? entry.editBase : null;
+            if (!pin || typeof pin.value !== 'string' || !Number.isSafeInteger(pin.revision)) return null;
+            return { value: pin.value, revision: pin.revision, source: pin.source || 'server' };
+        },
         ack: function (event) {
             const ack = typeof prksFolderPrivateNoteAck === 'function' ? prksFolderPrivateNoteAck(event) : null;
             return ack ? { opId: ack.opId, entityId: ack.folderId, text: ack.text, stored: ack.stored, revision: ack.revision } : null;
@@ -3298,6 +3305,12 @@ function prksPrivateRecoveryInstall(family, api, ctx, id, writer, restore, base)
     session.updatedAt = Date.now();
     session.recovery = writer;
     session.recoveryBase = base;
+    if (family.pin) {
+        /* The restored text was typed on the verified base, and saves on it. */
+        session.editBase = base && typeof base.value === 'string' && Number.isSafeInteger(base.revision)
+            ? { value: base.value, revision: base.revision, source: base.source || 'server', start: base.value }
+            : { value: null, revision: null, source: 'unknown', start: null };
+    }
     session.recoveryRestored = true;
     session.recoveryPipeline = restore.record.pipeline;
     session.recoveryPipelineStored = true;

@@ -79,6 +79,7 @@ type W = Record<string, unknown> & {
   prksEnsureFolderNotesBase: (owner: Ctx, folder: Folder) => Promise<unknown>
   prksRefreshPendingFolderNotes: () => Promise<unknown>
   prksBindFolderPrivateNotesSync: (owner: Ctx) => void
+  prksFolderNoteObserved: (owner: Ctx, folderId?: string) => { value: string; revision: number } | null
   prksRestoreFolderPrivateNoteRecovery: (ctx: Ctx, folder: Folder) => Promise<{ restored: boolean; review: Array<{ reason: string; lineage?: string; action?: string | null }> } | null>
   prksFolderPrivateNotesRecoveryView: (ctx: Ctx) => { drafts: number; incomplete: number; unprotected: string | null } | null
   prksFolderPrivateNotesRecoveryDetails: (ctx: Ctx, id: string) => Promise<Details | null>
@@ -410,6 +411,23 @@ describe('Folder Reminders restore', () => {
     expect(noteRows()[0]!.base_revision).toBe(5)
     sync.ack(opId, 6)
     await waitFor(async () => (await records()).length === 0, 'cleared on acknowledgement')
+  })
+
+  it('saves restored text on the base it was typed on, even after another tab\'s save lands first', async () => {
+    const { ctx, ta } = await openFolder()
+    await type(ctx, ta!, 'Saved reminder. Typed on 5').recovery!.flush()
+    await reload()
+    const { ctx: fresh, ta: field, result } = await openAndRestore()
+    expect(result).toMatchObject({ restored: true })
+    expect(field!.value).toBe('Saved reminder. Typed on 5')
+    /* Before the restored text's save, another tab's Reminders reach the server. */
+    const foreign = sync.foreign(FA, 'private_notes', 'From another tab', 5)
+    sync.ack(foreign.op_id, 6)
+    expect(win.prksFolderNoteObserved(fresh, FA)).toMatchObject({ value: 'From another tab', revision: 6 })
+    expect(field!.value).toBe('Saved reminder. Typed on 5')
+    await queuedAs('Saved reminder. Typed on 5')
+    /* Revision 5, so the server answers with a conflict, never an overwrite. */
+    expect(noteRows().map((r) => [r.payload.value, r.base_revision])).toEqual([['Saved reminder. Typed on 5', 5]])
   })
 
   it.each([

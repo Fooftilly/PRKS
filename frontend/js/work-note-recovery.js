@@ -18,7 +18,9 @@
  * never "saved": no status here reads as saved because of it.
  *
  * `entry.recoveryBase` is the acknowledged body this session's text was typed
- * on. It is set from the observed base when a lineage starts and advanced
+ * on. It is set when a lineage starts, from the kind's `editBase(owner, entry)`
+ * when it has one (a Folder session's pinned base) or else from the observed
+ * base, and advanced
  * only by the acknowledgement of this session's own queued operation, never
  * by another pane's or tab's, so a foreign edit is never silently treated as
  * the base. The record is cleared only by the exact acknowledged generation
@@ -262,8 +264,9 @@
                     entry.recovery = writer;
                 }
                 if (writer.state() === 'clean') {
-                    /* A fresh lineage: typed on the acknowledged body this pane observes now. */
-                    entry.recoveryBase = observedBase(owner);
+                    /* A fresh lineage: typed on the base the session pinned for this
+                     * text, or on the acknowledged body this pane observes now. */
+                    entry.recoveryBase = K.editBase ? K.editBase(owner, entry) : observedBase(owner);
                     entry.recoveryQueued = null;
                     entry.recoveryPipeline = null;
                     entry.recoveryPipelineStored = false;
