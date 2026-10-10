@@ -239,24 +239,36 @@ class Project:
 
 
 class Checkpoint:
-    """Items this tool added and items it completed, per stage."""
+    """Items this tool added and items it completed, for one stage and one
+    exact plan file.
 
-    def __init__(self, path: Path, stage: str) -> None:
+    A checkpoint is bound to the sha256 of the plan that produced it, so an
+    item completed under one reviewed plan is never reported as done under a
+    different one. A checkpoint from another plan, or one that does not name
+    its plan, is refused; delete it (or pass a new --checkpoint) to start over.
+    """
+
+    def __init__(self, path: Path, stage: str, plan_digest: str) -> None:
         self.path = path
         self.stage = stage
+        self.plan_digest = plan_digest
         self.added: set[str] = set()
         self.done: set[str] = set()
         if path.exists():
             data = json.loads(path.read_text(encoding="utf-8"))
             if data.get("stage") != stage or data.get("project_id", PROJECT_ID) != PROJECT_ID:
                 raise MigrationError(f"checkpoint {path} is for stage {data.get('stage')!r}, not {stage!r}")
+            if data.get("plan_sha256") != plan_digest:
+                raise MigrationError(
+                    f"checkpoint {path} was written for plan sha256 {data.get('plan_sha256')!r}, not this plan "
+                    f"({plan_digest}); remove it or pass a new --checkpoint to start this plan from the live state")
             self.added = set(data.get("added", []))
             self.done = set(data["done"])
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_name(self.path.name + ".tmp")
-        tmp.write_text(json.dumps({"stage": self.stage, "project_id": PROJECT_ID,
+        tmp.write_text(json.dumps({"stage": self.stage, "project_id": PROJECT_ID, "plan_sha256": self.plan_digest,
                                    "added": sorted(self.added), "done": sorted(self.done)}, indent=1))
         tmp.replace(self.path)
 
@@ -475,7 +487,7 @@ def run(stage: str, plan_path: Path, *, apply: bool, transport: Transport, check
     missing = project.missing_requirements(plan)
     if apply and missing:
         raise MigrationError("refusing --apply: " + "; ".join(missing))
-    ck = Checkpoint(checkpoint, stage)
+    ck = Checkpoint(checkpoint, stage, digest)
     records, failed = _run_items(project, plan, stage, ck, apply)
     if stage == "migrate-existing":
         records += _not_in_plan(project, plan)

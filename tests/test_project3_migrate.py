@@ -448,6 +448,34 @@ class PartialFailure(Base):
         with self.assertRaisesRegex(pm.MigrationError, "checkpoint"):
             self.run_stage("migrate-existing", [epic()], apply=True)
 
+    def test_a_checkpoint_from_a_different_plan_is_refused(self):
+        self.api.put("Issue", 38, Status="Ready")
+        self.run_stage("migrate-existing", [epic()], apply=True)
+        self.assertIn("Issue#38", json.loads((self.tmp / "ck.json").read_text())["done"])
+        self.api.items["I38"]["values"] = {"Status": "Ready"}   # back to the state plan B was reviewed against
+        n = len(self.api.mutations)
+        revised = epic(set={"Status": "In Progress", "Roadmap Stage": "Planned"})
+        for apply in (True, False):
+            with self.assertRaisesRegex(pm.MigrationError, "checkpoint .* plan sha256"):
+                self.run_stage("migrate-existing", [revised], apply=apply)
+        self.assertEqual(len(self.api.mutations), n)
+        (self.tmp / "ck.json").unlink()   # the explicit reset
+        r = self.run_stage("migrate-existing", [revised], apply=True)
+        self.assertEqual(r["counts"], {"changed": 1})
+        self.assertEqual(self.api.items["I38"]["values"]["Status"], "In Progress")
+
+    def test_a_checkpoint_that_names_no_plan_is_refused(self):
+        (self.tmp / "ck.json").write_text(json.dumps({"stage": "migrate-existing", "project_id": pm.PROJECT_ID, "done": ["Issue#38"]}))
+        self.api.put("Issue", 38, Status="Ready")
+        with self.assertRaisesRegex(pm.MigrationError, "plan sha256 None"):
+            self.run_stage("migrate-existing", [epic()], apply=True)
+
+    def test_the_checkpoint_records_the_plan_digest(self):
+        self.api.put("Issue", 38, Status="Ready")
+        self.run_stage("migrate-existing", [epic()], apply=True)
+        digest = pm.plan_sha256(self.tmp / "migrate-existing.json")
+        self.assertEqual(json.loads((self.tmp / "ck.json").read_text())["plan_sha256"], digest)
+
     def test_dry_run_writes_no_checkpoint_and_does_not_wait(self):
         self.api.add_content("Issue", 181, state="CLOSED")
         waits = []
