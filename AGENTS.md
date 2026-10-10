@@ -78,7 +78,7 @@ Use the Bug report template when PRKS behaves incorrectly. Record reproducible s
 
 ### Research / evaluation
 
-Use Research / evaluation when the question is genuinely unsettled and the useful output is evidence plus a decision. State the decision to make, current state, viable options including keeping the current approach, load-bearing constraints/invariants, evaluation criteria, deliverables, validation evidence, non-goals, and related work. A completed research issue may conclude adopt, reject, defer, or keep the current approach. A proof of concept does not authorize a broad production migration unless the maintainer explicitly approved that implementation scope.
+Use Research / evaluation when the question is genuinely unsettled and the useful output is evidence plus a decision. Research issues carry the `research` label, which the template applies and which is their primary search key (Project #3's Research Queue filters on it); the `[Research]` title prefix is the human-readable fallback. State the decision to make, current state, viable options including keeping the current approach, load-bearing constraints/invariants, evaluation criteria, deliverables, validation evidence, non-goals, and related work. A completed research issue may conclude adopt, reject, defer, or keep the current approach. A proof of concept does not authorize a broad production migration unless the maintainer explicitly approved that implementation scope.
 
 ### Implementation issues
 
