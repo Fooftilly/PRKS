@@ -224,6 +224,17 @@ class DryRunAndGuards(Base):
             self.assertIn("must be", err.getvalue())
         self.assertEqual(self.api.calls, [])
 
+    def test_a_run_never_overwrites_its_plan_with_the_report_or_checkpoint(self):
+        plan = plan_file(self.tmp, "backfill", [])
+        before = plan.read_bytes()
+        for extra in (["--report-dir", str(self.tmp)], ["--report-dir", str(self.tmp / "o"), "--checkpoint", str(plan)]):
+            err = io.StringIO()
+            with unittest.mock.patch("sys.stderr", err):
+                self.assertEqual(pm.main(["backfill", "--plan", str(plan)] + extra, env={}, transport=self.api), 2, extra)
+            self.assertIn("would overwrite the plan", err.getvalue())
+        self.assertEqual(plan.read_bytes(), before)
+        self.assertEqual(self.api.calls, [])
+
     def test_a_run_needs_an_explicit_plan_and_apply_needs_its_hash(self):
         ok = str(plan_file(self.tmp, "backfill", []))
         for argv in (["backfill"], ["backfill", "--plan", ok, "--apply"], ["plan-backfill"],

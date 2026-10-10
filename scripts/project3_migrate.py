@@ -710,24 +710,34 @@ def _token_transport(env: dict) -> Optional[Transport]:
     return http_transport(token) if token else None
 
 
+def _checked_out_path(args: argparse.Namespace) -> dict[str, Path]:
+    if args.apply or args.plan:
+        raise MigrationError("plan-backfill only reads; it takes --out, not --plan or --apply")
+    if not args.out:
+        raise MigrationError("plan-backfill needs --out")
+    out_path = _confined(args.out, "--out", ".json")
+    if out_path.exists():
+        raise MigrationError(f"{out_path} exists; a reviewed plan is never overwritten")
+    return {"out": out_path}
+
+
 def _checked_paths(args: argparse.Namespace) -> dict[str, Path]:
     """Validate the command's options and confine every path it will touch."""
     if args.command == "plan-backfill":
-        if args.apply or args.plan:
-            raise MigrationError("plan-backfill only reads; it takes --out, not --plan or --apply")
-        if not args.out:
-            raise MigrationError("plan-backfill needs --out")
-        out_path = _confined(args.out, "--out", ".json")
-        if out_path.exists():
-            raise MigrationError(f"{out_path} exists; a reviewed plan is never overwritten")
-        return {"out": out_path}
+        return _checked_out_path(args)
     if not args.plan:
         raise MigrationError(f"{args.command} needs --plan (the reviewed plan file)")
     if args.apply and not args.plan_sha256:
         raise MigrationError("--apply needs --plan-sha256 from the reviewed dry-run")
     report_dir = _confined(args.report_dir, "--report-dir")
-    return {"plan": _confined(args.plan, "--plan", ".json"), "report_dir": report_dir,
-            "checkpoint": _confined(args.checkpoint or report_dir / f"{args.command}.checkpoint.json", "--checkpoint", ".json")}
+    plan = _confined(args.plan, "--plan", ".json")
+    checkpoint = _confined(args.checkpoint or report_dir / f"{args.command}.checkpoint.json", "--checkpoint", ".json")
+    # The report is written to <report-dir>/<stage>.json and .md, the same
+    # names the docs suggest for plans: never let a run overwrite its plan.
+    if plan in (checkpoint, report_dir / f"{args.command}.json", report_dir / f"{args.command}.md"):
+        raise MigrationError(f"the report or checkpoint would overwrite the plan {plan}; "
+                             "pass a different --report-dir or --checkpoint")
+    return {"plan": plan, "report_dir": report_dir, "checkpoint": checkpoint}
 
 
 def _write_backfill_plan(transport: Transport, out_path: Path) -> None:
