@@ -57,7 +57,7 @@ export function completenessText(c: Pick<RecoveryCandidateView, 'status' | 'body
   return c.body === null ? 'Unreadable' : 'Complete'
 }
 
-export function reasonText(c: Pick<RecoveryCandidateView, 'reason' | 'typedOnRevision'>): string {
+export function reasonText(c: Pick<RecoveryCandidateView, 'reason' | 'typedOnRevision'>, entityLabel = 'Work'): string {
   switch (c.reason) {
     case 'multiple-drafts':
       return 'More than one unsaved draft exists, so none was restored automatically.'
@@ -82,7 +82,7 @@ export function reasonText(c: Pick<RecoveryCandidateView, 'reason' | 'typedOnRev
     case 'body-missing':
       return 'Its text could not be read.'
     case 'dirty-session':
-      return 'This Work has unsaved changes in another pane. Finish there first.'
+      return `This ${entityLabel} has unsaved changes in another pane. Finish there first.`
     case 'editor-dirty':
       return 'The editor already shows other text. Compare before choosing.'
     case 'saved':

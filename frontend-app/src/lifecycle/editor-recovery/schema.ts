@@ -107,6 +107,9 @@ export interface DraftPipeline {
     opId: string
     textLength: number
     textFingerprint: string
+    /** Of what the server stores for that text, when it is not the text itself (a Folder field, #534). */
+    storedLength?: number
+    storedFingerprint?: string
     base: { revision: number | null; length: number | null; fingerprint: string | null }
   } | null
 }

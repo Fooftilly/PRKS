@@ -61,6 +61,13 @@ describe('Research Notes same-pane restore plan', () => {
     expect(colliding.cleanup).toEqual([])
   })
 
+  it('clears a draft the server stores as the note when the kind stores text trimmed (#534)', () => {
+    const stored = (text: string) => text.trim()
+    expect(plan([candidate(SERVER + '\n')], { stored })).toMatchObject({ cleanup: ['d-1'], restore: null, review: [] })
+    // A Work note is stored exactly: a trailing newline is a change.
+    expect(plan([candidate(SERVER + '\n')]).cleanup).toEqual([])
+  })
+
   it('leaves a draft already queued as that exact row for the row\'s acknowledgement', () => {
     const pipeline: DraftPipeline = { state: 'queued', queuedOpId: 'op-1', queuedGeneration: 4, blockedBase: null, ownQueued: null }
     const p = plan([candidate('Queued body', { pipeline })], { queue: [{ opId: 'op-1', text: 'Queued body' }], base: { ...K, source: 'cache' } })
@@ -288,6 +295,21 @@ describe('Research Notes same-pane restore plan', () => {
     it('rejects a queued row of the predecessor\'s length whose fingerprint differs', () => {
       const p = plan([candidate(B, { pipeline: blocked() })], { queue: [{ opId: 'op-a', text: 'Saved note. Z' }] })
       expect(p.review).toMatchObject([{ reason: 'foreign-queue' }])
+    })
+
+    it('resumes on what the server stores for its predecessor, never on the raw text alone (#534)', () => {
+      const raw = OWN_A + '\n'
+      const trimmed = { ...ownQueued('op-a', raw)!, storedLength: OWN_A.length, storedFingerprint: fingerprintText(OWN_A) }
+      const stored = (text: string) => text.trim()
+      const acked = { base: { value: OWN_A, revision: 6, source: 'server' as const }, stored }
+      expect(plan([candidate(B, { pipeline: blocked({ ownQueued: trimmed }) })], acked).restore)
+        .toMatchObject({ body: B, predecessor: null })
+      // Without the stored identity the raw text is all it has, which the server does not hold.
+      expect(plan([candidate(B, { pipeline: blocked({ ownQueued: ownQueued('op-a', raw) }) })], acked).review)
+        .toMatchObject([{ reason: 'base-advanced' }])
+      // The queued row is still matched by its exact text.
+      expect(plan([candidate(B, { pipeline: blocked({ ownQueued: trimmed }) })], { queue: [{ opId: 'op-a', text: OWN_A }], stored }).review)
+        .toMatchObject([{ reason: 'foreign-queue' }])
     })
   })
 })

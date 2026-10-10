@@ -18,7 +18,9 @@
  * never "saved": no status here reads as saved because of it.
  *
  * `entry.recoveryBase` is the acknowledged body this session's text was typed
- * on. It is set from the observed base when a lineage starts and advanced
+ * on. It is set when a lineage starts, from the kind's `editBase(owner, entry)`
+ * when it has one (a Folder session's pinned base) or else from the observed
+ * base, and advanced
  * only by the acknowledgement of this session's own queued operation, never
  * by another pane's or tab's, so a foreign edit is never silently treated as
  * the base. The record is cleared only by the exact acknowledged generation
@@ -46,6 +48,21 @@
  * - publish(ctx): repaint the pane's notice; owners(fn): fn(ctx, workId) for
  *   every pane that mounts this editor;
  * - forget(entry): drop a session entry of a deleted Work and release its writer.
+ *
+ * A kind on another entity (Folder Reminders, #534) also supplies what the
+ * Work defaults below assume; each is optional for a Work kind:
+ * - entityType: 'work' by default; idOf(entry): the entity id of an entry;
+ * - observed(owner): the pane's observed acknowledged base;
+ * - ack(event): `{opId, entityId, text, stored, revision}` for an acknowledged
+ *   row of this kind, else null (`text` is the row's exact body, `stored` what
+ *   the server now holds);
+ * - queueRows(rows, id): the unsettled rows of this kind for one entity, as
+ *   `{opId, text}`; readRows(): every unsettled row, or null when unreadable;
+ *   refreshRows(): the same, for conflict marking;
+ * - verifyBase(id, base): whether the server holds `base` exactly;
+ * - unchanged(result): a save that proved the body equals the acknowledged note;
+ * - stored(text): what the server stores for a saved body (identity for a Work
+ *   note; a Folder field is stored trimmed), which is what a base holds.
  */
 (function (root) {
     'use strict';
@@ -107,7 +124,80 @@
     /* Every adapter built on this page, so a confirmed Work deletion reaches each kind. */
     const adapters = [];
 
-    function create(K) {
+    function workAck(K, event) {
+        const op = event && event.op;
+        if (!event || !event.acknowledged || !op || op.operation !== K.operation) return null;
+        const text = op.payload && typeof op.payload.text === 'string' ? op.payload.text : null;
+        const rev = event.acknowledged.server_revision;
+        if (text === null || !Number.isSafeInteger(rev)) return null;
+        return { opId: op.op_id, entityId: op.entity_id, text: text, stored: text, revision: rev };
+    }
+
+    function workQueueRows(K, rows, id) {
+        return typeof root.prksWorkNoteOperations === 'function'
+            ? root.prksWorkNoteOperations(rows, id, K.kind).map(function (row) {
+                return { opId: row.op_id, text: row.payload && typeof row.payload.text === 'string' ? row.payload.text : '' };
+            })
+            : null;
+    }
+
+    /**
+     * Whether the server holds `base.value` at `base.revision` for a Work note.
+     * The revision was read after the body, so the body is read again and then
+     * the revision: when that revision still equals `base.revision`, the body
+     * read between the two is the note at that revision. Any failed or cached
+     * read is unverified.
+     */
+    async function verifyWorkBase(K, id, base) {
+        if (typeof root.prksOfflineReadEntity !== 'function' || typeof root.prksReadWorkNotesState !== 'function') {
+            return false;
+        }
+        try {
+            const work = await root.prksOfflineReadEntity('work', id, '/api/works/' + encodeURIComponent(id), {});
+            if (!work || work.source !== 'server' || !work.value) return false;
+            const raw = work.value[K.bodyField];
+            const body = typeof raw === 'string' ? raw : '';
+            if (body !== base.value) return false;
+            const state = await root.prksReadWorkNotesState(id);
+            return !!(state && state.source === 'server' && state.value &&
+                state.value[K.revisionField] === base.revision);
+        } catch (_e) {
+            return false;
+        }
+    }
+
+    /* The Work defaults for what a kind on another entity supplies itself. */
+    function withDefaults(kind) {
+        const K = Object.assign({}, kind);
+        if (!K.entityType) K.entityType = 'work';
+        if (!K.idOf) K.idOf = function (entry) { return entry ? entry.workId : undefined; };
+        if (!K.observed) {
+            K.observed = function (owner) {
+                return typeof root.prksWorkNoteObserved === 'function' ? root.prksWorkNoteObserved(owner, K.kind) : null;
+            };
+        }
+        if (!K.ack) K.ack = function (event) { return workAck(K, event); };
+        if (!K.queueRows) K.queueRows = function (rows, id) { return workQueueRows(K, rows, id); };
+        if (!K.readRows) {
+            K.readRows = function () {
+                return typeof root.prksReadPendingWorkNotesSnapshot === 'function'
+                    ? root.prksReadPendingWorkNotesSnapshot() : Promise.resolve(null);
+            };
+        }
+        if (!K.refreshRows) {
+            K.refreshRows = function () {
+                return typeof root.prksRefreshPendingWorkNotes === 'function'
+                    ? root.prksRefreshPendingWorkNotes() : null;
+            };
+        }
+        if (!K.verifyBase) K.verifyBase = function (id, base) { return verifyWorkBase(K, id, base); };
+        if (!K.unchanged) K.unchanged = function (result) { return !!result && result.code === 'saved' && !result.opId; };
+        if (!K.stored) K.stored = function (text) { return text; };
+        return K;
+    }
+
+    function create(kind) {
+        const K = withDefaults(kind);
         /* Represented drafts (already the exact body of a queued row): op id -> list,
          * cleared on that row's acknowledgement. One from this pane before reload is
          * adopted (`writer`, `key`): the pane's next edit continues that lineage, so
@@ -124,7 +214,7 @@
         }
 
         function observedBase(owner) {
-            const slot = typeof root.prksWorkNoteObserved === 'function' ? root.prksWorkNoteObserved(owner, K.kind) : null;
+            const slot = K.observed(owner);
             if (!slot || typeof slot.value !== 'string' || !Number.isSafeInteger(slot.revision)) return null;
             return { value: slot.value, revision: slot.revision, source: slot.source || 'server' };
         }
@@ -170,15 +260,16 @@
                 if (!writer) {
                     writer = r.rt.writers.openWriter({
                         kind: K.kind,
-                        entityType: 'work',
-                        entityId: entry.workId,
+                        entityType: K.entityType,
+                        entityId: K.idOf(entry),
                         paneId: entry.ownerTabId,
                     });
                     entry.recovery = writer;
                 }
                 if (writer.state() === 'clean') {
-                    /* A fresh lineage: typed on the acknowledged body this pane observes now. */
-                    entry.recoveryBase = observedBase(owner);
+                    /* A fresh lineage: typed on the base the session pinned for this
+                     * text, or on the acknowledged body this pane observes now. */
+                    entry.recoveryBase = K.editBase ? K.editBase(owner, entry) : observedBase(owner);
                     entry.recoveryQueued = null;
                     entry.recoveryPipeline = null;
                     entry.recoveryPipelineStored = false;
@@ -236,7 +327,7 @@
             }
             const done = [];
             entriesArray().forEach(function (entry) {
-                if (!entry || String(entry.workId) !== id || !entry.recovery || shown.has(String(entry.ownerTabId))) return;
+                if (!entry || String(K.idOf(entry)) !== id || !entry.recovery || shown.has(String(entry.ownerTabId))) return;
                 const writer = entry.recovery;
                 K.forget(entry);
                 done.push(writer.release().catch(function () {}));
@@ -271,16 +362,19 @@
             if (!r || !entry || !entry.recovery || !opId) return;
             try {
                 entry.recoveryQueued = { opId: opId, generation: generation, text: text };
-                pipeline(entry, {
-                    queuedOpId: opId,
-                    queuedGeneration: generation,
-                    ownQueued: {
-                        opId: opId,
-                        textLength: text.length,
-                        textFingerprint: print(r.api, text),
-                        base: identity(r.api, base) || { revision: null, length: null, fingerprint: null },
-                    },
-                });
+                const own = {
+                    opId: opId,
+                    textLength: text.length,
+                    textFingerprint: print(r.api, text),
+                    base: identity(r.api, base) || { revision: null, length: null, fingerprint: null },
+                };
+                /* Its acknowledgement makes the base what the server stores for it. */
+                const kept = K.stored(text);
+                if (kept !== text) {
+                    own.storedLength = kept.length;
+                    own.storedFingerprint = print(r.api, kept);
+                }
+                pipeline(entry, { queuedOpId: opId, queuedGeneration: generation, ownQueued: own });
             } catch (_e) { /* recovery is best-effort beside the save path */ }
         }
 
@@ -297,10 +391,10 @@
                 pipeline(entry, patch);
                 /* Nothing queued and the body is the acknowledged note (A -> B -> A,
                  * or a save of an unchanged body): proven equal, so clear it. */
-                if (code === 'saved' && saved && !result.opId && entry.state === 'committed' &&
+                if (K.unchanged(result) && saved && entry.state === 'committed' &&
                     entry.editGeneration === saved.generation && K.paintable(owner, id)) {
                     const slot = observedBase(owner);
-                    if (slot && slot.source === 'server' && slot.value === saved.text) {
+                    if (slot && slot.source === 'server' && slot.value === K.stored(saved.text)) {
                         /* No queued row will acknowledge it, so repaint here: a warning
                          * shown while recovery storage failed goes once the text is clean. */
                         void entry.recovery.acknowledged(saved.generation, saved.text).then(function () {
@@ -358,13 +452,12 @@
         function onSync(event) {
             const r = recovery();
             if (!r) return;
-            const op = event && event.op;
-            if (event && event.acknowledged && op && op.operation === K.operation) {
-                const text = op.payload && typeof op.payload.text === 'string' ? op.payload.text : null;
-                const rev = event.acknowledged.server_revision;
-                if (text === null || !Number.isSafeInteger(rev)) return;
-                const watches = ackWatch.get(op.op_id) || [];
-                ackWatch.delete(op.op_id);
+            const ack = K.ack(event);
+            if (ack) {
+                const text = ack.text;
+                const rev = ack.revision;
+                const watches = ackWatch.get(ack.opId) || [];
+                ackWatch.delete(ack.opId);
                 watches.forEach(function (watched) {
                     watched.acknowledged = true;
                     /* An adoption still in flight settles first, so the writer it
@@ -383,12 +476,12 @@
                 });
                 entriesArray().forEach(function (entry) {
                     const q = entry.recoveryQueued;
-                    if (!entry.recovery || entry.workId !== op.entity_id || !q) return;
-                    if (q.opId !== op.op_id || q.text !== text) return;
-                    /* This session's own operation: its text is now the base the
-                     * session's newer text was typed on. */
+                    if (!entry.recovery || String(K.idOf(entry)) !== String(ack.entityId) || !q) return;
+                    if (q.opId !== ack.opId || q.text !== text) return;
+                    /* This session's own operation: what the server stores for it is
+                     * now the base the session's newer text was typed on. */
                     entry.recoveryQueued = null;
-                    entry.recoveryBase = { value: text, revision: rev, source: 'server' };
+                    entry.recoveryBase = { value: ack.stored, revision: rev, source: 'server' };
                     try {
                         entry.recovery.setBase(draftBase(r.api, entry.recoveryBase));
                         pipeline(entry, { state: stateOf(entry), queuedOpId: null, queuedGeneration: 0 });
@@ -403,8 +496,9 @@
                 return;
             }
             if (!entriesArray().some(function (entry) { return entry.recovery && entry.recoveryQueued; })) return;
-            if (typeof root.prksRefreshPendingWorkNotes !== 'function') return;
-            void root.prksRefreshPendingWorkNotes().then(function (rows) {
+            const refreshing = K.refreshRows();
+            if (!refreshing) return;
+            void Promise.resolve(refreshing).then(function (rows) {
                 const conflicted = new Set((rows || []).filter(function (row) {
                     return row && row.status === 'conflict';
                 }).map(function (row) { return row.op_id; }));
@@ -483,18 +577,14 @@
 
         /* Unsettled rows of this kind for one Work; null when the queue could not be read. */
         async function readQueue(id) {
-            const rows = typeof root.prksReadPendingWorkNotesSnapshot === 'function' ? await root.prksReadPendingWorkNotesSnapshot() : null;
+            const rows = await K.readRows();
             /* An unread queue is unknown, never empty. */
-            return rows && typeof root.prksWorkNoteOperations === 'function'
-                ? root.prksWorkNoteOperations(rows, id, K.kind).map(function (row) {
-                    return { opId: row.op_id, text: row.payload && typeof row.payload.text === 'string' ? row.payload.text : '' };
-                })
-                : null;
+            return rows ? K.queueRows(rows, id) : null;
         }
 
         function otherDirty(id, key) {
             return entriesArray().some(function (entry) {
-                return entry.workId === id && entry.key !== key && entry.state !== 'committed';
+                return String(K.idOf(entry)) === id && entry.key !== key && entry.state !== 'committed';
             });
         }
 
@@ -563,6 +653,7 @@
                     otherDirtySession: dirtyElsewhere,
                     /* Never replace what an open editor shows; Review recomputes exactly. */
                     editorDirty: reviewOnly,
+                    stored: K.stored,
                 });
             };
             let plan = planWith(base);
@@ -575,9 +666,11 @@
             }
             if (!current()) return bail();
             for (const draftId of plan.cleanup) {
-                const record = candidates.find(function (c) { return c.record.draftId === draftId; }).record;
-                /* Only the generation it read, and only while no page has adopted it since. */
-                void rt.store.deleteIfAcknowledged(draftId, record.generation, base.value, record.owner.pageInstanceId)
+                const candidate = candidates.find(function (c) { return c.record.draftId === draftId; });
+                const record = candidate.record;
+                /* Only the generation and body it read (which the server stores as
+                 * the note), and only while no page has adopted it since. */
+                void rt.store.deleteIfAcknowledged(draftId, record.generation, candidate.body, record.owner.pageInstanceId)
                     .catch(function () {});
             }
             const paneId = paneOf(ctx);
@@ -650,26 +743,11 @@
             return { restored: restored, review: plan.review };
         }
 
-        /**
-         * Whether the server holds `base.value` at `base.revision`. The revision was
-         * read after the body, so the body is read again and then the revision: when
-         * that revision still equals `base.revision`, the body read between the two
-         * is the note at that revision. Any failed or cached read is unverified.
-         */
+        /** Whether the server holds `base.value` at `base.revision` (the kind's `verifyBase`). */
         async function verifyBase(id, base) {
-            if (!base || base.source !== 'server' || typeof root.prksOfflineReadEntity !== 'function' ||
-                typeof root.prksReadWorkNotesState !== 'function') {
-                return false;
-            }
+            if (!base || base.source !== 'server') return false;
             try {
-                const work = await root.prksOfflineReadEntity('work', id, '/api/works/' + encodeURIComponent(id), {});
-                if (!work || work.source !== 'server' || !work.value) return false;
-                const raw = work.value[K.bodyField];
-                const body = typeof raw === 'string' ? raw : '';
-                if (body !== base.value) return false;
-                const state = await root.prksReadWorkNotesState(id);
-                return !!(state && state.source === 'server' && state.value &&
-                    state.value[K.revisionField] === base.revision);
+                return !!(await K.verifyBase(id, base));
             } catch (_e) {
                 return false;
             }
@@ -692,8 +770,9 @@
             if (verifyServer && base && base.source === 'server' && !(await verifyBase(id, base))) {
                 return 'base-advanced';
             }
-            const rows = typeof root.prksReadPendingWorkNotesSnapshot === 'function' ? await root.prksReadPendingWorkNotesSnapshot() : null;
-            if (!rows || !queue || typeof root.prksWorkNoteOperations !== 'function') return 'queue-unknown';
+            const rows = await K.readRows();
+            const now = rows ? K.queueRows(rows, id) : null;
+            if (!now || !queue) return 'queue-unknown';
             const observed = observedBase(ctx);
             /* No base was observed at plan time: one appearing since is an advance; the queue and other panes still count. */
             if (!base) {
@@ -702,9 +781,8 @@
                 observed.source !== base.source) {
                 return 'base-advanced';
             }
-            const now = root.prksWorkNoteOperations(rows, id, K.kind);
             const sameQueue = now.length === queue.length && now.every(function (row, i) {
-                return row.op_id === queue[i].opId && row.payload && row.payload.text === queue[i].text;
+                return row.opId === queue[i].opId && row.text === queue[i].text;
             });
             if (!sameQueue) return 'foreign-queue';
             return otherDirty(id, key) ? 'dirty-session' : null;
@@ -735,7 +813,7 @@
          */
         function view(ctx) {
             if (!ctx || !ctx.ui || ctx.destroyed) return null;
-            const live = ctx.getEntity ? ctx.getEntity('work') : null;
+            const live = ctx.getEntity ? ctx.getEntity(K.entityType) : null;
             if (!live || live.id == null) return null;
             const id = String(live.id);
             const review = ctx.ui[K.reportSlot];
@@ -765,8 +843,8 @@
             if (!entry || typeof root.prksForEachLiveTabContext !== 'function') return;
             root.prksForEachLiveTabContext(function (ctx) {
                 if (paneOf(ctx) !== String(entry.ownerTabId)) return;
-                const work = ctx.getEntity ? ctx.getEntity('work') : null;
-                if (work && String(work.id) === entry.workId) K.publish(ctx);
+                const shown = ctx.getEntity ? ctx.getEntity(K.entityType) : null;
+                if (shown && String(shown.id) === String(K.idOf(entry))) K.publish(ctx);
             });
         }
 
@@ -842,7 +920,7 @@
                 /* Each judged on its own: the reviewer weighs them against each other. */
                 const plan = r.api.planResearchNotesRestore({
                     paneId: paneId, candidates: [c], base: base, queue: queue,
-                    otherDirtySession: dirtyElsewhere, editorDirty: dirtyHere,
+                    otherDirtySession: dirtyElsewhere, editorDirty: dirtyHere, stored: K.stored,
                 });
                 const judged = plan.review[0];
                 let reason = judged ? judged.reason : 'restorable';
@@ -903,6 +981,7 @@
                     queue: queue,
                     otherDirtySession: otherDirty(id, key),
                     editorDirty: dirtyHere,
+                    stored: K.stored,
                 });
             };
             let plan = planWith(observed);
@@ -991,7 +1070,7 @@
                 generation: expect.generation,
                 status: expect.status,
                 kind: K.kind,
-                entityType: 'work',
+                entityType: K.entityType,
                 entityId: id,
             }).catch(function () { return 'kept'; });
             return { ok: true };
@@ -1015,7 +1094,7 @@
                 generation: expect.generation,
                 status: expect.status,
                 kind: K.kind,
-                entityType: 'work',
+                entityType: K.entityType,
                 entityId: id,
             });
             return outcome === 'deleted' ? { ok: true } : { ok: false, code: 'changed' };
@@ -1026,7 +1105,7 @@
             const out = chain.then(fn).catch(function () {
                 return { ok: false, code: 'failed' };
             }).then(async function (result) {
-                const live = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
+                const live = ctx && ctx.getEntity ? ctx.getEntity(K.entityType) : null;
                 if (live && String(live.id) === String(workId || '')) {
                     await restoreNow(ctx, live, null, { reviewOnly: true }).catch(function () {});
                 }
@@ -1042,6 +1121,7 @@
 
         const adapter = {
             kind: K.kind,
+            entityType: K.entityType,
             observedBase: observedBase,
             draftBase: draftBase,
             pipeline: pipeline,
@@ -1109,7 +1189,9 @@
      * counts as one). */
     root.prksForgetDeletedWorkNotes = function (workId, options) {
         const evenShown = !!(options && options.evenShown);
-        return Promise.all(adapters.map(function (adapter) {
+        return Promise.all(adapters.filter(function (adapter) {
+            return adapter.entityType === 'work';
+        }).map(function (adapter) {
             try {
                 return adapter.forgetDeleted(workId, evenShown).catch(function () { return 1; });
             } catch (_e) {

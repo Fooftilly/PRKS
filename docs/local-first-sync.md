@@ -168,8 +168,20 @@ coordinator names no family: adding one is a registration.
   no blocked state: text typed behind its own sent predecessor waits for it
   through the existing scope_busy retry. A queued Reminders row is not a
   saved note: the record and the leave guard stay until its acknowledgement.
-  Folder private notes have no recovery yet (#534). Their save contract is
-  in place: `prksSaveFolderPrivateNoteDurably` (`folder-state.js`) saves
+  Folder Reminders (#534) use the same runtime through the same adapter
+  (kind `folder-private-note`, entity type `folder`), with the same
+  restore, Review, acknowledgement, tombstone and superseded rules. What the
+  Folder kind supplies differs only in what it measures against: its base is
+  the pane's observed `private_notes` Folder field (value, Folder field
+  revision, source), its queued rows are `SET_FOLDER_FIELD` rows for that
+  field, a base is verified by reading the Folder body and then its field
+  revision from the server, and an acknowledgement is matched by op id and
+  exact payload text while the base becomes what the server stores. A
+  Folder field revision is never compared with a Work note revision. The
+  Folder route restores once the base and the pending rows are read
+  (`prksOpenFolderPrivateNotes`); the Folder Reminders card shows the shared
+  notice and Review (`features/folder-detail/private-notes-recovery.ts`).
+  Their save contract: `prksSaveFolderPrivateNoteDurably` (`folder-state.js`) saves
   only the `private_notes` field against that field's own revision (the
   Folder field revision, never a Work note revision) and answers with a
   code and the exact queued row (`queued` + `opId`, `unchanged`,

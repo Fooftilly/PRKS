@@ -33,8 +33,10 @@ import type { RecoveryActionResult, RecoveryCandidateView, RecoveryDetails, Revi
 const props = defineProps<{
   /** e.g. "Research Notes". */
   subject: string
-  /** The Work's title, for identity. */
+  /** The Work's or Folder's title, for identity. */
   entityTitle: string
+  /** What the editor belongs to, e.g. "Work" (the default) or "Folder". */
+  entityLabel?: string
   actions: ReviewActions
   /** Receives this dialog's close request, for Escape. */
   bindClose?: (request: () => void) => void
@@ -345,7 +347,7 @@ onBeforeUnmount(() => {
               <dt>When left</dt>
               <dd>{{ pipelineText(selected.pipelineState) }}<template v-if="selected.typedOnRevision !== null">, typed on revision {{ selected.typedOnRevision }}</template></dd>
               <dt>Why it is here</dt>
-              <dd data-prks-role="editor-recovery-reason">{{ reasonText(selected) }}</dd>
+              <dd data-prks-role="editor-recovery-reason">{{ reasonText(selected, entityLabel || 'Work') }}</dd>
             </dl>
             <div v-if="comparing && details" class="editor-recovery-review__compare" data-prks-role="editor-recovery-compare">
               <label class="editor-recovery-review__column">
