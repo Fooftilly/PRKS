@@ -237,6 +237,43 @@ describe('Folder Reminders observed base', () => {
     }
   })
 
+  it('never saves over a queued row it could not read, once the queue reads again', async () => {
+    installShell()
+    const { ownerA } = mountPair()
+    /* A never-sent row from an earlier page, queued on revision 4. */
+    queue.foreign(FA, 'private_notes', 'B, queued earlier', 4)
+    const listOperations = queue.store.listOperations
+    queue.store.listOperations = async () => { throw new Error('IndexedDB unavailable') }
+    await w.prksRefreshPendingFolderNotes()
+    await openFolder(ownerA, FA)
+    const { field, status } = mountCard(ownerA, FA)
+    await settle()
+    expect(field.value).toBe('Server A')
+    type(field, 'C')
+    expect(session(ownerA)?.editBase?.revision).toBeNull()
+    /* Storage recovers before the save. */
+    queue.store.listOperations = listOperations
+    w.prksFlushPendingPrivateNotes(ownerA)
+    await settle()
+    expect(noteRows().map((r) => r.payload.value)).toEqual(['B, queued earlier'])
+    expect(status.textContent).toBe('Reminders changed elsewhere — copy your text, then reopen this folder')
+  })
+
+  it('text typed while the queue is unreadable saves once a read shows nothing it did not show', async () => {
+    installShell()
+    const { ownerA } = mountPair()
+    const listOperations = queue.store.listOperations
+    queue.store.listOperations = async () => { throw new Error('IndexedDB unavailable') }
+    await w.prksRefreshPendingFolderNotes()
+    await openFolder(ownerA, FA)
+    const { field } = mountCard(ownerA, FA)
+    type(field, 'C')
+    queue.store.listOperations = listOperations
+    w.prksFlushPendingPrivateNotes(ownerA)
+    await settle()
+    expect(noteRows().map((r) => [r.payload.value, r.base_revision])).toEqual([['C', 4]])
+  })
+
   it('has no base when the revision is unknown, and never guesses one', async () => {
     installShell()
     const { ownerA } = mountPair()

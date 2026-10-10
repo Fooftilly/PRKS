@@ -2905,10 +2905,13 @@ function prksOpenFolderPrivateNotes(ctx, read, source) {
  * row's text is only while the row is still on its way and was queued on that
  * same revision. A row that conflicted, failed, or was queued on another
  * revision shows text the server never held at this revision, so it proves
- * nothing about the newer body.
+ * nothing about the newer body. Nothing is proven while the queue could not be
+ * read: a row it holds may be missing from the paint.
  */
 function prksFolderNotePaint(folderId, observed) {
     const row = typeof prksPendingFolderNoteRow === 'function' ? prksPendingFolderNoteRow(String(folderId)) : null;
+    const read = typeof prksPendingFolderNotesRead === 'function' && prksPendingFolderNotesRead();
+    if (!read) return { text: row ? row.text : observed.value, proves: false };
     if (!row) return { text: observed.value, proves: true };
     const live = row.status === 'pending' || row.status === 'syncing';
     return { text: row.text, proves: live && row.baseRevision === observed.revision };
@@ -3527,6 +3530,8 @@ async function prksSaveFolderPrivateNoteForSession(editor, entityId, content, se
     /* No fallback to the stored Folder: its body may be newer than the text
      * this pane shows, and saving against it would replace that newer text. */
     if (pin && observed) {
+        /* Resolve on the queue as it is now, not on the rows last painted. */
+        await PRKS_PRIVATE_NOTE_FAMILIES.folder.refreshPending();
         const resolved = prksFolderEditBaseFrom(entityId, observed, pin.start);
         if (!Number.isSafeInteger(resolved.revision)) {
             return { result: { code: 'changed_elsewhere', opId: null }, base: null };
