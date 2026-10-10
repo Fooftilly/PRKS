@@ -101,6 +101,10 @@ class FakeBoard:
         """A changes-requested review with no native rule: only the time is recorded."""
         self.changes_by[reviewer] = at
 
+    def dismiss(self, reviewer: str = "alice") -> None:
+        """A maintainer dismissed the reviewer's change request."""
+        self.changes_by.pop(reviewer, None)
+
     def approve(self, reviewer: str = "alice") -> None:
         """The reviewer's latest opinionated review is no longer a change request."""
         self.changes_by.pop(reviewer, None)
@@ -234,7 +238,7 @@ class LifecycleTests(unittest.TestCase):
             ("ready_for_review", False),
             ("converted_to_draft", True),
             ("review_requested", False),
-            ("changes_requested", False),
+            ("review_changed", False),
         ):
             for status in ("Blocked", "Done"):
                 board = FakeBoard(draft=draft)
@@ -301,7 +305,7 @@ class ChangesRequestedTests(unittest.TestCase):
             if start:
                 board.person_sets(start)
             board.submit_changes_review("2026-10-10T12:00:00Z")
-            audit = sync(board, "changes_requested")
+            audit = sync(board, "review_changed")
             self.assertEqual(audit.outcome, "updated", start)
             self.assertEqual(board.pr_status, "Changes requested")
 
@@ -311,7 +315,7 @@ class ChangesRequestedTests(unittest.TestCase):
             board.native_auto_add()
             board.person_sets(start)
             board.submit_changes_review("2026-10-10T12:00:00Z")
-            self.assertEqual(sync(board, "changes_requested").outcome, "skipped", start)
+            self.assertEqual(sync(board, "review_changed").outcome, "skipped", start)
             self.assertEqual(board.pr_status, start)
             self.assertFalse([m for m in board.mutations if m[0] == "set"])
 
@@ -319,7 +323,7 @@ class ChangesRequestedTests(unittest.TestCase):
         board = FakeBoard(draft=False)
         board.native_auto_add()
         board.person_sets("Review")
-        audit = sync(board, "changes_requested")
+        audit = sync(board, "review_changed")
         self.assertEqual(audit.outcome, "skipped")
         self.assertIn("no changes-requested review", audit.reason)
         self.assertEqual(board.pr_status, "Review")
@@ -333,9 +337,9 @@ class ChangesRequestedTests(unittest.TestCase):
         board.submit_changes_review("2026-10-10T11:00:00Z")
         board.request_review("2026-10-10T12:00:00Z")
         self.assertEqual(sync(board, "review_requested").outcome, "updated")
-        audit = sync(board, "changes_requested")
+        audit = sync(board, "review_changed")
         self.assertEqual(audit.outcome, "skipped")
-        self.assertIn("followed by a re-request", audit.reason)
+        self.assertIn("no changes-requested review is unanswered", audit.reason)
         self.assertEqual(board.pr_status, "Review")
 
     def test_delayed_review_run_cannot_undo_a_newer_draft_conversion(self):
@@ -345,7 +349,7 @@ class ChangesRequestedTests(unittest.TestCase):
         board.submit_changes_review("2026-10-10T11:00:00Z")
         board.convert_to_draft("2026-10-10T12:00:00Z")
         self.assertEqual(sync(board, "converted_to_draft").outcome, "updated")
-        self.assertEqual(sync(board, "changes_requested").outcome, "skipped")
+        self.assertEqual(sync(board, "review_changed").outcome, "skipped")
         self.assertEqual(board.pr_status, "In Progress")
 
     def test_a_request_at_the_same_instant_does_not_answer_the_review(self):
@@ -355,7 +359,7 @@ class ChangesRequestedTests(unittest.TestCase):
         board.person_sets("Review")
         board.request_review("2026-10-10T12:00:00Z")
         board.submit_changes_review("2026-10-10T12:00:00Z")
-        self.assertEqual(sync(board, "changes_requested").outcome, "updated")
+        self.assertEqual(sync(board, "review_changed").outcome, "updated")
         self.assertEqual(sync(board, "review_requested").outcome, "skipped")
         self.assertEqual(board.pr_status, "Changes requested")
 
@@ -395,7 +399,7 @@ class ChangesRequestedTests(unittest.TestCase):
         board.person_sets("Review")
         board.submit_changes_review("2026-10-10T11:00:00Z")
         board.request_review("2026-10-10T12:00:00Z")
-        self.assertEqual(sync(board, "changes_requested").outcome, "skipped")
+        self.assertEqual(sync(board, "review_changed").outcome, "skipped")
         self.assertEqual(board.pr_status, "Review")
 
     def test_a_later_approval_by_the_same_reviewer_withdraws_the_request(self):
@@ -404,30 +408,87 @@ class ChangesRequestedTests(unittest.TestCase):
         board.person_sets("Review")
         board.submit_changes_review("2026-10-10T11:00:00Z")
         board.approve()
-        self.assertEqual(sync(board, "changes_requested").outcome, "skipped")
+        self.assertEqual(sync(board, "review_changed").outcome, "skipped")
+        self.assertEqual(board.pr_status, "Review")
+
+    def test_a_dismissed_review_releases_changes_requested(self):
+        for draft, expected in ((False, "Review"), (True, "In Progress")):
+            board = FakeBoard(draft=draft)
+            board.native_auto_add()
+            board.submit_changes_review("2026-10-10T11:00:00Z")
+            self.assertEqual(sync(board, "review_changed").outcome, "updated")
+            self.assertEqual(board.pr_status, "Changes requested")
+            board.dismiss()
+            audit = sync(board, "review_changed")
+            self.assertEqual(audit.outcome, "updated", draft)
+            self.assertIn("no changes-requested review is unanswered", audit.reason)
+            self.assertEqual(board.pr_status, expected)
+
+    def test_a_later_approval_releases_changes_requested(self):
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.person_sets("Changes requested")
+        board.submit_changes_review("2026-10-10T11:00:00Z")
+        board.approve()
+        self.assertEqual(sync(board, "review_changed").outcome, "updated")
+        self.assertEqual(board.pr_status, "Review")
+
+    def test_dismissing_one_of_two_change_requests_keeps_changes_requested(self):
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.person_sets("Changes requested")
+        board.submit_changes_review("2026-10-10T11:00:00Z", reviewer="alice")
+        board.submit_changes_review("2026-10-10T11:30:00Z", reviewer="bob")
+        board.dismiss(reviewer="alice")
+        audit = sync(board, "review_changed")
+        self.assertEqual(audit.outcome, "unchanged")
+        self.assertEqual(board.pr_status, "Changes requested")
+
+    def test_release_only_moves_changes_requested(self):
+        # With no unanswered review the run leaves every other Status alone.
+        for start in (None, "Inbox", "Ready", "In Progress", "Review", "Blocked", "Done"):
+            board = FakeBoard(draft=False)
+            board.native_auto_add()
+            if start:
+                board.person_sets(start)
+            board.submit_changes_review("2026-10-10T11:00:00Z")
+            board.dismiss()
+            self.assertEqual(sync(board, "review_changed").outcome, "skipped", start)
+            self.assertEqual(board.pr_status, start)
+            self.assertFalse([m for m in board.mutations if m[0] == "set"])
+
+    def test_a_delayed_review_run_and_a_dismissal_end_released_in_either_order(self):
+        # Both relay runs re-derive the state, so the later run's history wins.
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.person_sets("Review")
+        board.submit_changes_review("2026-10-10T11:00:00Z")
+        board.dismiss()
+        sync(board, "review_changed")
+        sync(board, "review_changed")
         self.assertEqual(board.pr_status, "Review")
 
     def test_review_run_after_the_re_review_run_in_either_order_ends_right(self):
         # Changes at T1, re-review at T2: whichever run executes first, the
         # PR ends in Review. Changes at T2 after a re-review at T1: it ends
         # in Changes requested.
-        for first in ("changes_requested", "review_requested"):
+        for first in ("review_changed", "review_requested"):
             board = FakeBoard(draft=False)
             board.native_auto_add()
             board.person_sets("Review")
             board.submit_changes_review("2026-10-10T11:00:00Z")
             board.request_review("2026-10-10T12:00:00Z")
-            second = "review_requested" if first == "changes_requested" else "changes_requested"
+            second = "review_requested" if first == "review_changed" else "review_changed"
             sync(board, first)
             sync(board, second)
             self.assertEqual(board.pr_status, "Review", first)
-        for first in ("changes_requested", "review_requested"):
+        for first in ("review_changed", "review_requested"):
             board = FakeBoard(draft=False)
             board.native_auto_add()
             board.person_sets("Changes requested")
             board.request_review("2026-10-10T11:00:00Z")
             board.submit_changes_review("2026-10-10T12:00:00Z")
-            second = "review_requested" if first == "changes_requested" else "changes_requested"
+            second = "review_requested" if first == "review_changed" else "review_changed"
             sync(board, first)
             sync(board, second)
             self.assertEqual(board.pr_status, "Changes requested", first)
@@ -463,7 +524,7 @@ class ChangesRequestedTests(unittest.TestCase):
     def test_adds_a_missing_item_and_sets_changes_requested(self):
         board = FakeBoard(draft=False)
         board.submit_changes_review("2026-10-10T12:00:00Z")
-        audit = sync(board, "changes_requested")
+        audit = sync(board, "review_changed")
         self.assertTrue(audit.item_added)
         self.assertEqual(board.pr_status, "Changes requested")
 
@@ -473,7 +534,7 @@ class ChangesRequestedTests(unittest.TestCase):
         board.person_sets("Review")
         board.submit_changes_review("2026-10-10T12:00:00Z")
         board.after_set = board.merge
-        self.assertEqual(sync(board, "changes_requested").outcome, "corrected")
+        self.assertEqual(sync(board, "review_changed").outcome, "corrected")
         self.assertEqual(board.pr_status, "Done")
 
     def test_closed_pr_is_skipped(self):
@@ -483,7 +544,7 @@ class ChangesRequestedTests(unittest.TestCase):
         board.submit_changes_review("2026-10-10T12:00:00Z")
         board.merge(merged=False)
         board.flush_native()
-        self.assertEqual(sync(board, "changes_requested").outcome, "skipped")
+        self.assertEqual(sync(board, "review_changed").outcome, "skipped")
         self.assertEqual(board.pr_status, "Done")
 
 
@@ -930,7 +991,7 @@ class WorkflowShapeTests(unittest.TestCase):
         ):
             self.assertIn(condition, job_if)
         self.assertIn(
-            "EVENT_ACTION: ${{ github.event_name == 'workflow_run' && 'changes_requested' || github.event.action }}",
+            "EVENT_ACTION: ${{ github.event_name == 'workflow_run' && 'review_changed' || github.event.action }}",
             self.text,
         )
         self.assertIn(
@@ -981,8 +1042,8 @@ class SignalWorkflowShapeTests(unittest.TestCase):
     def test_name_matches_the_workflow_run_trigger(self):
         self.assertTrue(self.text.startswith("name: Project sync review signal\n"))
 
-    def test_triggers_only_on_submitted_reviews(self):
-        self.assertIn("on:\n  pull_request_review:\n    types: [submitted]\n\n", self.text)
+    def test_triggers_only_on_submitted_and_dismissed_reviews(self):
+        self.assertIn("on:\n  pull_request_review:\n    types: [submitted, dismissed]\n\n", self.text)
 
     def test_holds_no_permission_secret_or_checkout(self):
         self.assertIn("\npermissions: {}\n", self.text)
@@ -994,7 +1055,12 @@ class SignalWorkflowShapeTests(unittest.TestCase):
         # Only an optimization: if a skipped run still counts as success,
         # project-sync re-derives the state from the review history (see
         # test_a_later_approval_by_the_same_reviewer_withdraws_the_request).
-        self.assertIn("    if: github.event.review.state == 'changes_requested'\n", self.text)
+        self.assertIn(
+            "    if: >-\n      github.event.action == 'dismissed' ||\n"
+            "      github.event.review.state == 'changes_requested' ||\n"
+            "      github.event.review.state == 'approved'\n",
+            self.text,
+        )
 
     def test_no_expressions_in_run_blocks(self):
         for block in re.findall(r"(?ms)^ +run: (.*?)(?=^ +- |\Z)", self.text):

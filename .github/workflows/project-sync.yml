@@ -1,6 +1,6 @@
 name: Project sync
 
-run-name: "Project sync: ${{ github.event_name == 'workflow_run' && 'changes requested' || github.event.action }}"
+run-name: "Project sync: ${{ github.event_name == 'workflow_run' && 'review changed' || github.event.action }}"
 
 # Sets the Project #3 Status of a pull request for the transitions owned by
 # project-sync in docs/agent-workflows/project-3.md (section 6), and adds a
@@ -8,7 +8,7 @@ run-name: "Project sync: ${{ github.event_name == 'workflow_run' && 'changes req
 # exactly "apply". It never checks out or runs pull-request code, never
 # merges or approves, and never reads CI results.
 #
-# A changes-requested review has no pull_request_target action, so the
+# A submitted or dismissed review has no pull_request_target action, so the
 # unprivileged "Project sync review signal" workflow relays it: workflow_run
 # always runs this file from the default branch, with the PR number taken
 # from GitHub's own record of that run, never from its output.
@@ -57,7 +57,7 @@ jobs:
         env:
           PROJECT_SYNC_TOKEN: ${{ secrets.PROJECT_SYNC_TOKEN }}
           PROJECT_SYNC_MODE: ${{ vars.PROJECT_SYNC_MODE }}
-          EVENT_ACTION: ${{ github.event_name == 'workflow_run' && 'changes_requested' || github.event.action }}
+          EVENT_ACTION: ${{ github.event_name == 'workflow_run' && 'review_changed' || github.event.action }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number }}
           EVENT_REPOSITORY: ${{ github.repository }}
         run: python3 scripts/project_sync.py

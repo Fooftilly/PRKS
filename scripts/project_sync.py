@@ -2,25 +2,30 @@
 """Keep a pull request's Project #3 Status in step with its review lifecycle.
 
 Runs from ``.github/workflows/project-sync.yml`` on four ``pull_request_target``
-actions, plus ``changes_requested`` relayed through ``workflow_run`` from a
-submitted review, and covers only the PR rows owned by ``project-sync`` in
-``docs/agent-workflows/project-3.md`` section 6:
+actions, plus ``review_changed`` relayed through ``workflow_run`` from a
+submitted or dismissed review, and covers only the PR rows owned by
+``project-sync`` in ``docs/agent-workflows/project-3.md`` section 6:
 
 * ``opened``             -> In Progress (draft) or Review, from empty or Inbox
 * ``ready_for_review``   -> Review, from empty, Inbox, Ready or In Progress
 * ``converted_to_draft`` -> In Progress, from Review or Changes requested
 * ``review_requested``   -> Review, from Changes requested
-* ``changes_requested``  -> Changes requested, from empty, In Progress or Review
+* ``review_changed``     -> Changes requested, from empty, In Progress or Review,
+  while a review is unanswered; otherwise In Progress (draft) or Review, from
+  Changes requested
 
 A changes-requested review is *unanswered* until the same reviewer is
-requested again, or the PR is converted to draft, after it.
+requested again, or the PR is converted to draft, after it. A dismissed
+review, or one followed by the same reviewer's approval, is no longer the
+reviewer's latest change request and does not count.
 ``review_requested`` applies only when no review is unanswered, so
 requesting another reviewer or a delayed run never hides requested changes.
 ``converted_to_draft`` applies only when the conversion is newer than the
-latest changes-requested review. ``changes_requested`` applies only while a
-review is unanswered, so a delayed review run never undoes a re-request. If a
-review is unanswered when ``opened`` or ``ready_for_review`` runs, the run
-sets Changes requested instead of In Progress or Review.
+latest changes-requested review. ``review_changed`` re-derives the state from
+the review history, so a delayed review run never undoes a re-request and a
+dismissal releases Changes requested. If a review is unanswered when
+``opened`` or ``ready_for_review`` runs, the run sets Changes requested
+instead of In Progress or Review.
 
 Any other current Status, Blocked and Done included, is left alone. The event
 only says which rule to consider: the PR's draft and open state are re-read
@@ -61,7 +66,8 @@ RULES: dict[str, tuple[Optional[str], Optional[str], frozenset[Optional[str]]]] 
     "ready_for_review": (None, "review", frozenset({None, "inbox", "ready", "in_progress"})),
     "converted_to_draft": ("in_progress", None, frozenset({"review", "changes_requested"})),
     "review_requested": (None, "review", frozenset({"changes_requested"})),
-    "changes_requested": (
+    # While a review is unanswered; see decide() for the release direction.
+    "review_changed": (
         "changes_requested",
         "changes_requested",
         frozenset({None, "in_progress", "review"}),
@@ -248,17 +254,10 @@ def event_is_current(action: str, pr: PullRequest) -> tuple[bool, str]:
     ``review_requested`` applies only when every changes-requested review is
     answered, so requesting another reviewer or a stale run never hides one.
     ``converted_to_draft`` applies only when the latest conversion is newer
-    than the latest changes-requested review. ``changes_requested`` applies
-    only while some changes-requested review is unanswered. Each fails closed
-    when the event it relies on is not recorded. ``opened`` and
-    ``ready_for_review`` are not gated here (see ``decide``).
+    than the latest changes-requested review. Each fails closed when the event
+    it relies on is not recorded. ``opened``, ``ready_for_review`` and
+    ``review_changed`` are not gated here (see ``decide``).
     """
-    if action == "changes_requested":
-        if not pr.changes_requested:
-            return False, "no changes-requested review is recorded on the PR"
-        if not unanswered_changes(pr):
-            return False, "stale event: each changes-requested review was followed by a re-request or conversion to draft"
-        return True, ""
     if action == "review_requested":
         if pr.last_review_requested_at is None:
             return False, "no review request is recorded on the PR"
@@ -279,6 +278,8 @@ def event_is_current(action: str, pr: PullRequest) -> tuple[bool, str]:
 
 def decide(config: Config, action: str, pr: PullRequest) -> tuple[Optional[str], str]:
     """Return the Status key to set, or None with the reason nothing applies."""
+    if action == "review_changed":
+        return _decide_review(config, pr)
     draft_target, ready_target, allowed = RULES[action]
     target = draft_target if pr.is_draft else ready_target
     if target is None:
@@ -301,6 +302,33 @@ def decide(config: Config, action: str, pr: PullRequest) -> tuple[Optional[str],
     if outstanding:
         return target, f"a changes-requested review is still outstanding, so `{action}` sets {config.statuses[target]}"
     return target, f"`{action}` moves the PR to {config.statuses[target]}"
+
+
+def _decide_review(config: Config, pr: PullRequest) -> tuple[Optional[str], str]:
+    """A review was submitted or dismissed: re-derive the state from the history.
+
+    While a changes-requested review is unanswered the PR moves to Changes
+    requested. Once none is (dismissed, followed by the same reviewer's
+    approval, or answered by a re-request or draft conversion), only an item
+    in Changes requested moves on, to In Progress or Review.
+    """
+    current = config.key_of(_status_of(pr))
+    pending = unanswered_changes(pr)
+    if pending:
+        target = "changes_requested"
+        allowed = RULES["review_changed"][2]
+        reason = f"changes requested by {', '.join(pending)} are unanswered"
+    else:
+        target = "in_progress" if pr.is_draft else "review"
+        allowed = frozenset({"changes_requested"})
+        reason = "no changes-requested review is unanswered"
+        if current != "changes_requested":
+            return None, reason
+    if current == target:
+        return target, "already set"
+    if current not in allowed:
+        return None, f"current Status {_status_of(pr)!r} is not one `review_changed` may change"
+    return target, f"{reason}, so the PR moves to {config.statuses[target]}"
 
 
 def _skip_reason(pr: PullRequest) -> Optional[str]:
@@ -384,8 +412,8 @@ def _verify(
 
     A merge or close sets Done. For ``review_requested`` and
     ``converted_to_draft``, a changes-requested review submitted during the
-    write restores Changes requested. A newer event after a
-    ``changes_requested`` write needs no repair here: its own run is queued
+    write restores Changes requested. A newer review event after a
+    ``review_changed`` write needs no repair here: its own run is queued
     behind this one and applies next.
     """
     after = api.load_pr(config, event.number, project.id)
