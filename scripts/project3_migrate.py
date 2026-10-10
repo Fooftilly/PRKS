@@ -1,10 +1,20 @@
 #!/usr/bin/env python3
 """One-off Project #3 migration and backfill, dry-run by default (#441).
 
-Stages (approved and run independently):
+Commands:
 
-  migrate-existing  set Status / Roadmap Stage on the original 44 items
-  backfill          add missing issues and PRs, then set the listed Status
+  plan-backfill     read live PRKS issues/PRs and Project #3 membership and
+                    write a backfill plan for review (read-only)
+  migrate-existing  run a reviewed plan that sets Status / Roadmap Stage on
+                    items already on Project #3
+  backfill          run a reviewed backfill plan: add the listed items, then
+                    set the listed Status
+
+Plans are local files the maintainer reviews; they are never checked in.
+The migrate-existing plan carries the human decisions (for example the
+pre-rename Planned epics, which the live Ready option cannot tell apart).
+``--apply`` runs only the exact file that was reviewed: it requires
+``--plan-sha256`` to match the file, and never regenerates a plan.
 
 Safety contract (enforced here, not only documented):
 
@@ -13,20 +23,20 @@ Safety contract (enforced here, not only documented):
   ``updateProjectV2ItemFieldValue`` (single-select). Anything else is refused
   by ``GraphQL.mutate``. No deletes, clears, archives, closes, merges.
 * Scope: owner Fooftilly, project 3, node id PVT_kwHOAsc2_s4BkAo3, content
-  from Fooftilly/PRKS only. The manifest must name the same scope.
+  from Fooftilly/PRKS only. The plan must name the same scope.
 * Field and option IDs are resolved by name at run time. ``--apply`` refuses
   to run unless the Roadmap Stage and Execution fields and the Backlog Status
-  option exist, and every option the manifest uses exists.
+  option exist, and every option the plan uses exists.
 * Drift: a field is written only when its current value equals the
-  manifest's ``expected_before`` value (None = empty) and the issue/PR state
+  plan's ``expected_before`` value (None = empty) and the issue/PR state
   matches. The item is re-read immediately before every write, not only in
   the initial snapshot, so a change made while the run is in progress is
   never overwritten. In the backfill stage Inbox also counts as an expected
   Status, because the native "Item added" workflow sets it on any item that
   auto-add or this tool adds. Otherwise the item is skipped and reported.
-  Fields the manifest does not list are never touched. Items with
+  Fields the plan does not list are never touched. Items with
   ``approved: false`` are held.
-* PR items are never set to Inbox (manifest validation).
+* PR items are never set to Inbox (plan validation).
 * After the writes, every item this run added is re-read once the native
   workflows have had ``--settle-seconds`` to run. A late "Item added" Inbox
   that replaced the written Status is written over once; any other change
@@ -36,12 +46,17 @@ Safety contract (enforced here, not only documented):
   it. A rerun only repairs a late native Inbox on an item this tool added.
   A failure stops the run, writes the report and checkpoint, and exits 1.
 
+* Paths are confined to the home and temp directories and refused inside
+  this repository, so plans, reports and checkpoints stay out of version
+  control and an argument cannot point the tool at an arbitrary file.
+
 Token: ``PROJECT3_MIGRATION_TOKEN`` or ``GH_TOKEN`` / ``GITHUB_TOKEN``. Never
 printed. Needs the classic ``project`` scope for --apply (read for dry-run).
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -60,17 +75,13 @@ REQUIRED_FIELDS = ("Status", "Roadmap Stage", "Execution")
 REQUIRED_STATUS_OPTIONS = ("Backlog",)
 ALLOWED_MUTATIONS = ("addProjectV2ItemById", "updateProjectV2ItemFieldValue")
 STAGES = ("migrate-existing", "backfill")
+COMMANDS = ("plan-backfill",) + STAGES
+RESEARCH_LABEL = "research"
 # The Status the native "Item added" workflow gives a newly added issue (§5).
 NATIVE_ENTRY_STATUS = "Inbox"
 DEFAULT_SETTLE_SECONDS = 30.0
-_DOCS = Path(__file__).resolve().parents[1] / "docs" / "agent-workflows" / "project-3-migration"
-# CLI paths are confined: manifests are read from the checked-in manifest
-# directory or a temp directory, and reports and checkpoints are written only
-# under a temp directory, so a mistyped or injected argument cannot read or
-# overwrite an arbitrary file.
-_TEMP_ROOTS = (Path(tempfile.gettempdir()).resolve(),)
+_REPO = Path(__file__).resolve().parents[1]
 DEFAULT_REPORT_DIR = Path(tempfile.gettempdir()) / "prks-project3-migration"
-DEFAULT_MANIFEST = {"migrate-existing": _DOCS / "existing-items.json", "backfill": _DOCS / "backfill.json"}
 
 
 class MigrationError(Exception):
@@ -137,25 +148,33 @@ ITEM_Q = "query($id:ID!){node(id:$id){... on ProjectV2Item{project{id} " + ITEM_
 CONTENT_Q = """query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issueOrPullRequest(number:$number){
 __typename ... on Issue{id number state} ... on PullRequest{id number state}}}}"""
 
+_REPO_PAGE = "pageInfo{hasNextPage endCursor} nodes{number title state labels(first:30){nodes{name}}}"
+
+REPO_ISSUES_Q = ("query($owner:String!,$name:String!,$states:[IssueState!],$labels:[String!],$after:String){"
+                 "repository(owner:$owner,name:$name){issues(first:100,after:$after,states:$states,labels:$labels){" + _REPO_PAGE + "}}}")
+
+REPO_PRS_Q = ("query($owner:String!,$name:String!,$after:String){"
+              "repository(owner:$owner,name:$name){pullRequests(first:100,after:$after,states:[OPEN]){" + _REPO_PAGE + "}}}")
+
 ADD_M = """mutation($project:ID!,$content:ID!){addProjectV2ItemById(input:{projectId:$project,contentId:$content}){item{id}}}"""
 
 SET_M = """mutation($project:ID!,$item:ID!,$field:ID!,$option:String!){updateProjectV2ItemFieldValue(input:{projectId:$project,itemId:$item,fieldId:$field,value:{singleSelectOptionId:$option}}){projectV2Item{id}}}"""
 
 
-def load_manifest(path: Path, stage: str) -> dict:
+def load_plan(path: Path, stage: str) -> dict:
     data = json.loads(path.read_text(encoding="utf-8"))
     scope = data.get("scope", {})
     expected = {"owner": OWNER, "repository": REPOSITORY, "project_number": PROJECT_NUMBER, "project_id": PROJECT_ID}
     for key, value in expected.items():
         if scope.get(key) != value:
-            raise MigrationError(f"manifest scope {key}={scope.get(key)!r}, expected {value!r}")
+            raise MigrationError(f"plan scope {key}={scope.get(key)!r}, expected {value!r}")
     if data.get("stage") != stage:
-        raise MigrationError(f"manifest is for stage {data.get('stage')!r}, not {stage!r}")
+        raise MigrationError(f"plan is for stage {data.get('stage')!r}, not {stage!r}")
     seen = set()
     for item in data["items"]:
         key = (item["type"], item["number"])
         if key in seen:
-            raise MigrationError(f"duplicate manifest entry {key}")
+            raise MigrationError(f"duplicate plan entry {key}")
         seen.add(key)
         if item["type"] == "PullRequest" and item.get("set", {}).get("Status") == "Inbox":
             raise MigrationError(f"PR #{item['number']} may not be set to Inbox")
@@ -208,11 +227,11 @@ class Project:
         parsed = _parse_item(node)
         return parsed[1] if parsed else None
 
-    def missing_requirements(self, manifest: dict) -> list[str]:
+    def missing_requirements(self, plan: dict) -> list[str]:
         problems = [f"field {f!r} missing" for f in REQUIRED_FIELDS if f not in self.fields]
         status_opts = self.fields.get("Status", {}).get("options", {})
         problems += [f"Status option {o!r} missing" for o in REQUIRED_STATUS_OPTIONS if o not in status_opts]
-        for item in manifest["items"]:
+        for item in plan["items"]:
             for field, value in item.get("set", {}).items():
                 if field in self.fields and value not in self.fields[field]["options"]:
                     problems.append(f"{field} option {value!r} missing")
@@ -287,7 +306,7 @@ def plan_item(project: Project, item: dict, stage: str, checkpoint: Checkpoint) 
     key = f"{item['type']}#{item['number']}"
     rec: dict[str, Any] = {"item": key, "title": item.get("title", ""), "set": item.get("set", {}), "writes": [], "outcome": None, "detail": ""}
     if not item.get("approved", True):
-        rec.update(outcome="held", detail="approved=false in manifest")
+        rec.update(outcome="held", detail="approved=false in plan")
         return rec
     live = project.items.get((item["type"], item["number"]))
     if key in checkpoint.done:
@@ -302,7 +321,7 @@ def plan_item(project: Project, item: dict, stage: str, checkpoint: Checkpoint) 
     before = {} if live is None else live["values"]
     rec["before"] = {f: before.get(f) for f in item.get("set", {})}
     if live is not None and not _state_ok(item, live["state"]):
-        rec.update(outcome="drift", detail=f"GitHub state is {live['state']}, manifest expects {item.get('github_state') or item.get('state')}")
+        rec.update(outcome="drift", detail=f"GitHub state is {live['state']}, plan expects {item.get('github_state') or item.get('state')}")
         return rec
     rec["writes"], drift = _planned_writes(item, before, stage)
     if drift:
@@ -370,12 +389,12 @@ def apply_item(project: Project, item: dict, rec: dict, stage: str, checkpoint: 
         rec["outcome"] = "repaired" if written else "unchanged"
 
 
-def verify_added(project: Project, manifest_items: dict, records: list, checkpoint: Checkpoint) -> None:
+def verify_added(project: Project, plan_items: dict, records: list, checkpoint: Checkpoint) -> None:
     """Undo a late native "Item added" Inbox once; report anything else."""
     for rec in records:
         if rec["outcome"] not in ("changed", "repaired") or rec["item"] not in checkpoint.added:
             continue
-        item = manifest_items[rec["item"]]
+        item = plan_items[rec["item"]]
         fresh = project.refresh(rec["item_id"])
         values = fresh["values"] if fresh else {}
         if _late_native_inbox(rec["item"], item, values, checkpoint):
@@ -389,19 +408,27 @@ def verify_added(project: Project, manifest_items: dict, records: list, checkpoi
             checkpoint.done.discard(rec["item"])
 
 
-def run(stage: str, manifest_path: Path, *, apply: bool, transport: Transport, checkpoint: Path, report_dir: Path,
-        out=sys.stdout, settle_seconds: float = DEFAULT_SETTLE_SECONDS, sleep: Callable[[float], None] = time.sleep) -> dict:
-    manifest = load_manifest(manifest_path, stage)
+def plan_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def run(stage: str, plan_path: Path, *, apply: bool, transport: Transport, checkpoint: Path, report_dir: Path,
+        out=sys.stdout, settle_seconds: float = DEFAULT_SETTLE_SECONDS, sleep: Callable[[float], None] = time.sleep,
+        expected_sha256: Optional[str] = None) -> dict:
+    digest = plan_sha256(plan_path)
+    if apply and expected_sha256 != digest:
+        raise MigrationError(f"refusing --apply: --plan-sha256 does not match the plan file ({digest})")
+    plan = load_plan(plan_path, stage)
     gql = GraphQL(transport, allow_mutations=apply)
     project = Project(gql)
-    missing = project.missing_requirements(manifest)
+    missing = project.missing_requirements(plan)
     if apply and missing:
         raise MigrationError("refusing --apply: " + "; ".join(missing))
     ck = Checkpoint(checkpoint, stage)
-    by_key = {f"{i['type']}#{i['number']}": i for i in manifest["items"]}
+    by_key = {f"{i['type']}#{i['number']}": i for i in plan["items"]}
     records: list[dict] = []
     failed = False
-    for item in manifest["items"]:
+    for item in plan["items"]:
         rec = plan_item(project, item, stage, ck)
         records.append(rec)
         if failed:
@@ -417,6 +444,11 @@ def run(stage: str, manifest_path: Path, *, apply: bool, transport: Transport, c
             if rec["outcome"] in ("changed", "repaired"):
                 ck.done.add(rec["item"])
                 ck.save()
+    if stage == "migrate-existing":
+        planned = {(i["type"], i["number"]) for i in plan["items"]}
+        for (kind, number) in sorted(set(project.items) - planned):
+            records.append({"item": f"{kind}#{number}", "title": "", "set": {}, "writes": [], "outcome": "not-in-plan",
+                            "detail": "on Project #3 but not in the reviewed plan; not touched"})
     if apply and not failed and any(r["outcome"] in ("changed", "repaired") and r["item"] in ck.added for r in records):
         sleep(settle_seconds)
         try:
@@ -428,59 +460,145 @@ def run(stage: str, manifest_path: Path, *, apply: bool, transport: Transport, c
     counts: dict[str, int] = {}
     for r in records:
         counts[r["outcome"]] = counts.get(r["outcome"], 0) + 1
-    report = {"stage": stage, "mode": "apply" if apply else "dry-run", "requirements_missing": missing, "counts": counts,
+    report = {"stage": stage, "mode": "apply" if apply else "dry-run", "plan_sha256": digest, "requirements_missing": missing, "counts": counts,
               "ok": not failed and "failed" not in counts and "verify-failed" not in counts, "items": records}
     report_dir.mkdir(parents=True, exist_ok=True)
     (report_dir / f"{stage}.json").write_text(json.dumps(report, indent=1, ensure_ascii=False, default=list))
-    lines = [f"# Project #3 {stage} ({report['mode']})", "", "Missing requirements: " + (", ".join(missing) or "none"), "",
+    lines = [f"# Project #3 {stage} ({report['mode']})", "", f"Plan sha256: `{digest}`", "",
+             "Missing requirements: " + (", ".join(missing) or "none"), "",
              "| Outcome | Count |", "|---|---|"] + [f"| {k} | {v} |" for k, v in sorted(counts.items())]
     lines += ["", "| Item | Outcome | Add | Before | After | Detail |", "|---|---|---|---|---|---|"]
     for r in records:
         lines.append(f"| {r['item']} | {r['outcome']} | {'yes' if r.get('add') else ''} | {r.get('before', '')} | {dict(r['writes']) or ''} | {r['detail']} |")
     (report_dir / f"{stage}.md").write_text("\n".join(lines) + "\n")
     print(f"{stage} ({report['mode']}): " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())), file=out)
+    print(f"plan sha256: {digest}", file=out)
     if missing:
         print("missing requirements: " + "; ".join(missing), file=out)
     return report
 
 
-def _confined(path: Path, roots: tuple, what: str, suffix: Optional[str] = None) -> Path:
+def _repo_pages(gql: GraphQL, query: str, variables: dict, connection: str) -> list[dict]:
+    nodes: list[dict] = []
+    after: Optional[str] = None
+    while True:
+        page = gql.query(query, dict(variables, after=after))["repository"][connection]
+        nodes += page["nodes"]
+        if not page["pageInfo"]["hasNextPage"]:
+            return nodes
+        after = page["pageInfo"]["endCursor"]
+
+
+def plan_backfill(transport: Transport, *, generated_at: str) -> dict:
+    """Read-only: propose adding what Project #3 is missing, from live data.
+
+    Open issues get Inbox, open PRs get no Status (project-sync owns PR
+    Status), and closed issues labelled ``research`` get Done, because
+    "Item closed" does not fire when a closed item is added.
+    """
+    gql = GraphQL(transport, allow_mutations=False)
+    project = Project(gql)
+    owner, name = REPOSITORY.split("/")
+    base = {"owner": owner, "name": name}
+    on_project = set(project.items)
+    candidates = [
+        ("Issue", node, "open-issue", {"Status": "Inbox"}, "Open issue missing from Project #3.")
+        for node in _repo_pages(gql, REPO_ISSUES_Q, dict(base, states=["OPEN"], labels=None), "issues")
+    ] + [
+        ("PullRequest", node, "open-pr", {}, "Open PR missing from Project #3; project-sync sets its Status.")
+        for node in _repo_pages(gql, REPO_PRS_Q, base, "pullRequests")
+    ] + [
+        ("Issue", node, "closed-research", {"Status": "Done"}, "Closed research issue for Research History; Done is set explicitly.")
+        for node in _repo_pages(gql, REPO_ISSUES_Q, dict(base, states=["CLOSED"], labels=[RESEARCH_LABEL]), "issues")
+    ]
+    items = []
+    for kind, node, category, target, reason in candidates:
+        if (kind, node["number"]) in on_project:
+            continue
+        items.append({"number": node["number"], "type": kind, "title": node["title"], "state": node["state"],
+                      "labels": sorted(label["name"] for label in node["labels"]["nodes"]),
+                      "expected_before": {field: None for field in target}, "set": target,
+                      "category": category, "reason": reason})
+    items.sort(key=lambda i: (i["category"], i["number"]))
+    counts: dict[str, int] = {}
+    for item in items:
+        counts[item["category"]] = counts.get(item["category"], 0) + 1
+    return {"schema": 1, "scope": {"owner": OWNER, "repository": REPOSITORY, "project_number": PROJECT_NUMBER, "project_id": PROJECT_ID},
+            "stage": "backfill", "generated_at": generated_at, "source": "live read-only snapshot", "counts": counts, "items": items}
+
+
+def _allowed_roots() -> tuple:
+    return tuple({Path(tempfile.gettempdir()).resolve(), Path.home().resolve()})
+
+
+def _confined(path: Path, what: str, suffix: Optional[str] = None) -> Path:
+    """Keep plans, reports and checkpoints in the home or temp directory and
+    out of this repository."""
     resolved = path.expanduser().resolve()
+    roots = _allowed_roots()
     if not any(resolved == root or resolved.is_relative_to(root) for root in roots):
         raise MigrationError(f"{what} must be under {' or '.join(str(r) for r in roots)}: {resolved}")
+    if resolved == _REPO or resolved.is_relative_to(_REPO):
+        raise MigrationError(f"{what} must be outside this repository (plans and reports are never checked in): {resolved}")
     if suffix and resolved.suffix != suffix:
         raise MigrationError(f"{what} must be a {suffix} file: {resolved}")
     return resolved
 
 
+def _token_transport(env: dict) -> Optional[Transport]:
+    token = env.get("PROJECT3_MIGRATION_TOKEN") or env.get("GH_TOKEN") or env.get("GITHUB_TOKEN")
+    return http_transport(token) if token else None
+
+
 def main(argv: Optional[list[str]] = None, env: Optional[dict] = None, transport: Optional[Transport] = None) -> int:
     env = dict(os.environ) if env is None else env
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("stage", choices=STAGES)
-    parser.add_argument("--manifest", type=Path)
+    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
+    parser.add_argument("command", choices=COMMANDS)
+    parser.add_argument("--plan", type=Path, help="the reviewed plan to run (migrate-existing, backfill)")
+    parser.add_argument("--out", type=Path, help="where plan-backfill writes the new plan; never overwritten")
     parser.add_argument("--apply", action="store_true", help="perform writes (default: dry-run)")
+    parser.add_argument("--plan-sha256", help="required with --apply: the sha256 of the reviewed plan file")
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--report-dir", type=Path, default=DEFAULT_REPORT_DIR,
-                        help="under the system temp directory (default: %(default)s)")
+                        help="outside the repository, under the home or temp directory (default: %(default)s)")
     parser.add_argument("--settle-seconds", type=float, default=DEFAULT_SETTLE_SECONDS,
                         help="wait before re-reading added items for a late native Inbox (default: %(default)s)")
     args = parser.parse_args(argv)
     try:
-        manifest = _confined(args.manifest or DEFAULT_MANIFEST[args.stage], (_DOCS.resolve(),) + _TEMP_ROOTS, "--manifest", ".json")
-        report_dir = _confined(args.report_dir, _TEMP_ROOTS, "--report-dir")
-        checkpoint = _confined(args.checkpoint or report_dir / f"{args.stage}.checkpoint.json", _TEMP_ROOTS, "--checkpoint", ".json")
+        if args.command == "plan-backfill":
+            if args.apply or args.plan:
+                raise MigrationError("plan-backfill only reads; it takes --out, not --plan or --apply")
+            if not args.out:
+                raise MigrationError("plan-backfill needs --out")
+            out_path = _confined(args.out, "--out", ".json")
+            if out_path.exists():
+                raise MigrationError(f"{out_path} exists; a reviewed plan is never overwritten")
+        else:
+            if not args.plan:
+                raise MigrationError(f"{args.command} needs --plan (the reviewed plan file)")
+            plan_path = _confined(args.plan, "--plan", ".json")
+            report_dir = _confined(args.report_dir, "--report-dir")
+            checkpoint = _confined(args.checkpoint or report_dir / f"{args.command}.checkpoint.json", "--checkpoint", ".json")
+            if args.apply and not args.plan_sha256:
+                raise MigrationError("--apply needs --plan-sha256 from the reviewed dry-run")
     except MigrationError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    transport = transport or _token_transport(env)
     if transport is None:
-        token = env.get("PROJECT3_MIGRATION_TOKEN") or env.get("GH_TOKEN") or env.get("GITHUB_TOKEN")
-        if not token:
-            print("error: set PROJECT3_MIGRATION_TOKEN (or GH_TOKEN)", file=sys.stderr)
-            return 2
-        transport = http_transport(token)
+        print("error: set PROJECT3_MIGRATION_TOKEN (or GH_TOKEN)", file=sys.stderr)
+        return 2
     try:
-        report = run(args.stage, manifest, apply=args.apply, transport=transport, checkpoint=checkpoint,
-                     report_dir=report_dir, settle_seconds=args.settle_seconds)
+        if args.command == "plan-backfill":
+            plan = plan_backfill(transport, generated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(out_path, "x", encoding="utf-8") as handle:
+                handle.write(json.dumps(plan, indent=1, ensure_ascii=False) + "\n")
+            print(f"plan-backfill: {plan['counts']} -> {out_path}")
+            print(f"plan sha256: {plan_sha256(out_path)}")
+            return 0
+        report = run(args.command, plan_path, apply=args.apply, transport=transport, checkpoint=checkpoint,
+                     report_dir=report_dir, settle_seconds=args.settle_seconds, expected_sha256=args.plan_sha256)
     except MigrationError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

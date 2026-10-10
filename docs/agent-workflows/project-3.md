@@ -28,7 +28,7 @@ Sources: the maintainer's baseline export (44 items, `hasNextPage: false`, taken
 |---|---|
 | Idea, Research / Design, **Planned** (`cff9bdb9`), Ready for Agent, In Progress, Review, Ready to Merge, Done, Parked | Idea, Research / Design, **Ready** (`cff9bdb9`, the renamed Planned), Ready for Agent, In Progress, Review, Ready to Merge, Done, Parked, Inbox, Changes requested, Blocked, Backlog |
 
-Renaming Planned to Ready kept the option ID, so the 23 epics that were Planned now read Ready. The baseline export is the record of which they were. `project-3-migration/baseline-planned.json` lists them, and §13 restores the distinction through Roadmap Stage = Planned with Status Backlog.
+Renaming Planned to Ready kept the option ID, so the 23 epics that were Planned now read Ready, and the live option cannot tell them apart from items that are really Ready. The maintainer's pre-rename baseline export is the only record of which they were. It is kept outside the repository, and the reviewed migration plan (§13) carries those 23 assignments, which become Roadmap Stage = Planned with Status Backlog.
 
 **Native workflows.** Baseline (API): Auto-add sub-issues **on**, Auto-close issue on, Item added to project **off**, Item closed on, Item reopened on, Pull request linked to issue on, Pull request merged on. "Auto-add to project", "Auto-archive items", "Code changes requested" and "Code review approved" were not returned by the API. As reported by the maintainer since then (not verifiable via the API): Auto-close issue **off**, Pull request linked to issue **off**, Item reopened = Issues only → Ready.
 
@@ -113,7 +113,7 @@ The settings live under Project #3 → ⋯ → **Workflows**. Each built-in work
 
 1. **Item added to project:** under **When**, select Issues and clear Pull requests. Set Status to Inbox. Save, and turn it on.
 2. **Auto-add to project:** select the `Fooftilly/PRKS` repository. Use a filter that matches both issues and PRs, for example `is:issue,pr`, with no label condition, so dependency PRs are added too. Turn it on. Auto-add only acts on items created or updated afterwards; it does not add existing ones.
-3. **One-time membership backfill:** run the `backfill` stage of `scripts/project3_migrate.py` (§13) from its reviewed manifest, which compares Project #3's items with the repository's open issues and PRs and the closed research issues for Research History (§7). Added open issues get Status Inbox; added open PRs stay without Status until their next `project-sync` event or a person sets one. "Item closed" fires only on the close event, not on add, so the backfill sets **Done explicitly on every closed item it adds** (#181, #234 and #246), and its settle check keeps a late "Item added" Inbox from replacing that Done. A closed issue left off the board that is reopened later is added by auto-add on that update, after "Item reopened" had no item to move, so it arrives in Inbox and is triaged like a new issue. That is intended: an issue nobody tracked on the board gets a fresh triage instead of going straight to Ready.
+3. **One-time membership backfill:** generate a backfill plan with the read-only `plan-backfill` command of `scripts/project3_migrate.py` (§13), which compares Project #3's live items with the repository's open issues and PRs and its closed research issues for Research History (§7). Review that plan, then run the `backfill` stage with it, passing the plan's sha256 so only the reviewed file is executed. Added open issues get Status Inbox; added open PRs stay without Status until their next `project-sync` event or a person sets one. "Item closed" fires only on the close event, not on add, so the backfill sets **Done explicitly on every closed item it adds**, and its settle check keeps a late "Item added" Inbox from replacing that Done. A closed issue left off the board that is reopened later is added by auto-add on that update, after "Item reopened" had no item to move, so it arrives in Inbox and is triaged like a new issue. That is intended: an issue nobody tracked on the board gets a fresh triage instead of going straight to Ready.
 4. **Item closed**, **Pull request merged** and **Item reopened:** set the values in the table above. Where a **When** selector is shown, choose the item types listed there.
 5. **Code review approved**, **Auto-close issue** and **Pull request linked to issue:** record their current settings from the screenshots, then turn them off now. Also record the current setting of **Code changes requested**, but leave it as it is until the `PROJECT_SYNC_MODE=apply` cutover, and turn it off in that same step, so the transition always has exactly one owner. Until then the native rule may still move a Blocked PR; that is the accepted interim state.
 6. **Auto-archive items:** leave it off.
@@ -264,61 +264,78 @@ Implementation: `scripts/project_sync.py`, `.github/workflows/project-sync.yml`,
 
 ## 13. One-time migration and backfill (Proposed; dry-run only until approved)
 
-Tool: `scripts/project3_migrate.py`, tested by `tests/test_project3_migrate.py`. Manifests are in `docs/agent-workflows/project-3-migration/`: `existing-items.json` (all 44 items with expected-before value, target values, reason and flags), `backfill.json`, `baseline-planned.json` and `counts.json`. The latest read-only dry-run is in `dry-run-summary.md`.
+Tool: `scripts/project3_migrate.py`, tested with synthetic fixtures in `tests/test_project3_migrate.py`. GitHub is the source of truth for issues, PRs and Project membership, so **no inventory, plan or report is checked in**. Plans are local JSON files that the maintainer reviews and keeps outside the repository; the tool refuses any plan, report or checkpoint path inside the repository.
+
+**Two inputs:**
+- **Backfill plan:** generated read-only from live data by `plan-backfill`. It compares the current PRKS issues and PRs with the current Project #3 membership. Open issues get Status Inbox; open PRs get no Status (Maintenance view; `project-sync` owns PR Status); closed issues labelled `research` get Done, because "Item closed" does not fire on add. Counts, labels, states and the list of closed research issues are read at run time, never hardcoded.
+- **Migrate-existing plan:** the maintainer's reviewed decisions for items already on the board, written by hand or from the baseline export. Historic and judgement calls live here, because live data cannot reproduce them, for example the 23 pre-rename Planned epics.
+
+Both plans use the same schema:
+
+```json
+{
+ "scope": {"owner": "Fooftilly", "repository": "Fooftilly/PRKS", "project_number": 3, "project_id": "PVT_kwHOAsc2_s4BkAo3"},
+ "stage": "migrate-existing",
+ "items": [
+  {"number": 38, "type": "Issue", "github_state": "OPEN",
+   "expected_before": {"Status": "Ready", "Roadmap Stage": null},
+   "set": {"Status": "Backlog", "Roadmap Stage": "Planned"},
+   "approved": true, "reason": "Planned in the baseline export"}
+ ]
+}
+```
+
+`expected_before` is the value the reviewer saw (`null` = empty). `set` may name only Status and Roadmap Stage. An item with `approved: false` is held, and a `set` of `{}` writes nothing. A backfill plan uses `"stage": "backfill"` and `state` in place of `github_state`.
 
 **Guarantees enforced by the tool:**
-- Dry-run unless `--apply` is given.
-- The only mutations it can send are `addProjectV2ItemById` and `updateProjectV2ItemFieldValue`. Nothing is ever deleted, cleared, archived, closed, reopened, approved or merged.
+- Dry-run unless `--apply` is given. A dry-run, and `plan-backfill`, only send queries.
+- `--apply` runs exactly the reviewed file. It requires `--plan-sha256`, which must match the plan's hash as printed by the dry-run and `plan-backfill`, and it never regenerates a plan. `plan-backfill` never overwrites an existing plan file.
+- The only mutations it can send are `addProjectV2ItemById` and `updateProjectV2ItemFieldValue`. Nothing is ever deleted, cleared, archived, closed, reopened, approved or merged. It never reads or writes repository settings, secrets or `project-sync` variables.
 - Scope is checked against owner `Fooftilly`, project 3, node `PVT_kwHOAsc2_s4BkAo3` and content from `Fooftilly/PRKS`.
 - Field and option IDs are resolved by name. `--apply` refuses to run until Roadmap Stage, Execution and the Backlog option exist.
-- Only listed fields are written (Status, Roadmap Stage; never Execution), and only when the current value equals the manifest's expected-before value. Any other value, or a changed issue state, is reported as drift and skipped.
+- Only listed fields are written (Status, Roadmap Stage; never Execution), and only when the current value equals the plan's expected-before value. Any other value, or a changed issue state, is reported as drift and skipped.
 - The item is re-read immediately before each field write, not only in the snapshot taken when the run starts. A Status, Roadmap Stage or issue state changed while the run is in progress is reported as drift and never overwritten.
-- In the backfill, Inbox also counts as an expected Status. The native "Item added" workflow sets Inbox on any item that auto-add or the tool adds, so whether it runs before or after the add, the item still gets its manifest Status.
-- After the writes, the tool waits `--settle-seconds` (default 30) and re-reads every item it added. If a late "Item added" Inbox replaced the Status it wrote (for example Done on #181, #234 or #246), it writes the Status again once. Any other value is reported as `verify-failed` and left alone.
-- `approved: false` items are held.
+- In the backfill, Inbox also counts as an expected Status. The native "Item added" workflow sets Inbox on any item that auto-add or the tool adds, so whether it runs before or after the add, the item still gets its planned Status.
+- After the writes, the tool waits `--settle-seconds` (default 30) and re-reads every item it added. If a late "Item added" Inbox replaced the Status it wrote (for example Done on a closed research issue), it writes the Status again once. Any other value is reported as `verify-failed` and left alone.
+- Items on the board that a migrate-existing plan does not list are reported as `not-in-plan` and never touched.
 - PRs are never set to Inbox.
-- Paths are confined. `--manifest` must be a `.json` file in `docs/agent-workflows/project-3-migration/` or the system temp directory. `--report-dir` and `--checkpoint` must be under the temp directory. By default the reports and checkpoint go to `prks-project3-migration` in the system temp directory.
+- Plans, reports and checkpoints must be under the home or temp directory and outside this repository. By default reports and the checkpoint go to `prks-project3-migration` in the system temp directory.
 - A checkpoint records the items the tool added and completed. A rerun skips completed items, so a value a person changed afterwards is never rewritten. The only exception is a late native Inbox on an item the tool added, which a rerun repairs. A checkpoint from the other stage is refused.
 - A failed call stops the run. The report and checkpoint are still written, the remaining items are marked `not-run`, and the command exits 1. A rerun continues from the live state.
 
-**Existing items (stage `migrate-existing`):**
+**Reviewed decisions for the existing items (2026-10-10):**
 
-| Group | Items | Status → | Roadmap Stage → |
-|---|---|---|---|
-| Formerly Planned epics | 23 (baseline-planned.json) | Backlog | Planned |
-| Research / Design epics | #49, #51, #52, #60, #142, #317, #318 | Backlog | Research / Design |
-| Idea items | #53, #423, #431, #472 | Inbox | Idea |
-| No Status | #75, #81, #82, #87, #102 | Inbox | – |
-| #35 (`accepted`, not necessarily actionable) | | Backlog (maintainer decision 2026-10-10) | – |
-| #179 | | keep In Progress | Planned (body: "Active roadmap/planning item — implementation is proceeding"; accepted, Committed) |
-| #39 | | **held**: nothing is written | – |
-| #85, #91 | | keep Done | – |
+| Group | Status → | Roadmap Stage → |
+|---|---|---|
+| The 23 epics that were Planned before the rename (from the baseline export) | Backlog | Planned |
+| Research / Design epics | Backlog | Research / Design |
+| Idea items | Inbox | Idea |
+| Items with no Status, except #35 | Inbox | – |
+| #35 (`accepted`, not necessarily actionable) | Backlog | – |
+| #52 (open native blockers #45 and #46) | Backlog, not Blocked (§9) | Research / Design |
+| #179 | keep In Progress | Planned |
+| #39 | **held**: nothing is written | – |
+| Items already Done | keep Done | – |
 
-**Exceptions needing the maintainer's decision:**
-- **#39** was closed by `cursor[bot]` on 2026-10-01 with no closing commit or comment, and all 9 scope boxes unchecked. The `Fooftilly` account reopened it on 2026-10-10. Its manifest entry is held with no writes, and its current Project Status is not assumed, because the native "Item reopened" rule may have changed it. The maintainer chooses its Status and Roadmap Stage before it is approved.
-- **#52** has open native blockers (#45, #46). It stays Backlog with Roadmap Stage Research / Design; it is not moved to Blocked (§9).
-- **#179** keeps In Progress and gets Roadmap Stage Planned.
+#39 was closed by `cursor[bot]` on 2026-10-01 with no closing commit or comment and all 9 scope boxes unchecked, and the `Fooftilly` account reopened it on 2026-10-10. It stays held, and no current Status is assumed, because the native "Item reopened" rule may have changed it. The maintainer chooses its Status and Roadmap Stage before approving it.
 
-**Backfill (stage `backfill`):**
-- 215 open issues → add, Status Inbox.
-- 12 open dependency PRs (11 Dependabot and #335) → add with **no Status** (Maintenance).
-- Closed research #181, #234, #246 → add, Status Done. "Item closed" does not fire on add, so Done is set explicitly.
-- No other closed research-labelled issues exist. #295 is excluded: "Research" in its title, but it is a feature.
-- Regenerate the manifest right before applying if the repository has changed.
-
-**Commands** (run by the maintainer only after approval, with a classic token that has the `project` scope, exported as `PROJECT3_MIGRATION_TOKEN`; never committed or printed):
+**Commands** (run by the maintainer only after approval, with a classic token that has the `project` scope, exported as `PROJECT3_MIGRATION_TOKEN`; never committed or printed). Keep the plan files somewhere outside the repository, such as `~/prks-project3/`:
 
 ```bash
-python scripts/project3_migrate.py migrate-existing          # dry-run
-python scripts/project3_migrate.py migrate-existing --apply  # after approval
-python scripts/project3_migrate.py backfill                  # dry-run
-python scripts/project3_migrate.py backfill --apply          # after approval
+# Existing items: review the plan, dry-run it, note the printed sha256, then apply that exact file.
+python scripts/project3_migrate.py migrate-existing --plan ~/prks-project3/migrate-existing.json
+python scripts/project3_migrate.py migrate-existing --plan ~/prks-project3/migrate-existing.json --apply --plan-sha256 <sha256>
+
+# Backfill: generate from live data, review, dry-run, then apply that exact file.
+python scripts/project3_migrate.py plan-backfill --out ~/prks-project3/backfill.json
+python scripts/project3_migrate.py backfill --plan ~/prks-project3/backfill.json
+python scripts/project3_migrate.py backfill --plan ~/prks-project3/backfill.json --apply --plan-sha256 <sha256>
 ```
 
 Order:
 1. Create the fields.
 2. Run `migrate-existing`, dry-run then apply.
 3. Configure the native workflows (§5.1). The backfill works whether "Item added" is enabled before or after it, because of the Inbox rule and the settle check above.
-4. Run `backfill`, dry-run then apply.
+4. Generate the backfill plan, review it, then dry-run and apply it.
 5. Change the views (§7).
 6. Retire legacy options only after a separate approval.

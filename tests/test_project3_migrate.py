@@ -40,6 +40,9 @@ class FakeAPI:
         self.item_added = None
         self.pending: list = []
         self.fail_next_set = 0
+        # Repository issues and PRs for plan-backfill: number -> (title, state, labels)
+        self.repo_issues: dict[int, tuple] = {}
+        self.repo_prs: dict[int, tuple] = {}
 
     def settle(self, _seconds):
         while self.pending:
@@ -89,6 +92,20 @@ class FakeAPI:
             field = next(f for f in self.fields if self._fid(f) == variables["field"])
             item["values"][field] = variables["option"].split(":", 1)[1]
             return {name: {"projectV2Item": {"id": variables["item"]}}}
+        if "pullRequests(first" in query or "issues(first" in query:
+            prs = "pullRequests(first" in query
+            source = self.repo_prs if prs else self.repo_issues
+            states = ["OPEN"] if prs else variables["states"]
+            labels = None if prs else variables["labels"]
+            nodes = [{"number": n, "title": t, "state": st, "labels": {"nodes": [{"name": x} for x in lb]}}
+                     for n, (t, st, lb) in sorted(source.items())
+                     if st in states and (not labels or set(labels) & set(lb))]
+            # two pages, to exercise pagination
+            half = len(nodes) // 2
+            first = variables.get("after") is None
+            page = nodes[:half] if first else nodes[half:]
+            return {"repository": {"pullRequests" if prs else "issues": {
+                "pageInfo": {"hasNextPage": first and half > 0, "endCursor": "c1"}, "nodes": page if half else nodes}}}
         if "issueOrPullRequest" in query:
             c = self.content[variables["number"]]
             return {"repository": {"issueOrPullRequest": {k: c[k] for k in ("__typename", "id", "number", "state")}}}
@@ -104,7 +121,7 @@ class FakeAPI:
         return {"user": {"projectV2": {"id": self.project_id, "number": 3, "owner": {"login": "Fooftilly"}, "fields": {"nodes": fields}}}}
 
 
-def manifest(tmp: Path, stage: str, items, scope=SCOPE) -> Path:
+def plan_file(tmp: Path, stage: str, items, scope=SCOPE) -> Path:
     p = tmp / f"{stage}.json"
     p.write_text(json.dumps({"scope": scope, "stage": stage, "items": items}))
     return p
@@ -127,15 +144,16 @@ class Base(unittest.TestCase):
         self._tmp.cleanup()
 
     def run_stage(self, stage, items, apply=False, **kw):
-        return pm.run(stage, manifest(self.tmp, stage, items, **kw), apply=apply, transport=self.api,
+        path = plan_file(self.tmp, stage, items, **kw)
+        return pm.run(stage, path, apply=apply, transport=self.api,
                       checkpoint=self.tmp / "ck.json", report_dir=self.tmp / "out", out=io.StringIO(),
-                      settle_seconds=0, sleep=self.api.settle)
+                      settle_seconds=0, sleep=self.api.settle, expected_sha256=pm.plan_sha256(path))
 
 
 class DryRunAndGuards(Base):
     def test_dry_run_is_default_and_sends_no_mutation(self):
         self.api.put("Issue", 38, Status="Ready")
-        rc = pm.main(["migrate-existing", "--manifest", str(manifest(self.tmp, "migrate-existing", [epic()])), "--report-dir", str(self.tmp / "o")], env={}, transport=self.api)
+        rc = pm.main(["migrate-existing", "--plan", str(plan_file(self.tmp, "migrate-existing", [epic()])), "--report-dir", str(self.tmp / "o")], env={}, transport=self.api)
         self.assertEqual(rc, 0)
         self.assertEqual(self.api.mutations, [])
         self.assertFalse(any(q.lstrip().startswith("mutation") for q in self.api.calls))
@@ -150,7 +168,7 @@ class DryRunAndGuards(Base):
                 self.run_stage("migrate-existing", [epic()], apply=True)
             self.assertEqual(self.api.mutations, [])
 
-    def test_apply_refused_when_manifest_option_missing(self):
+    def test_apply_refused_when_plan_option_missing(self):
         self.api.fields["Roadmap Stage"] = ["Idea"]
         self.api.put("Issue", 38, Status="Ready")
         with self.assertRaisesRegex(pm.MigrationError, "Planned"):
@@ -161,25 +179,47 @@ class DryRunAndGuards(Base):
         with self.assertRaises(pm.MigrationError):
             self.run_stage("migrate-existing", [epic()], scope=bad)
         with self.assertRaises(pm.MigrationError):
-            pm.load_manifest(manifest(self.tmp, "migrate-existing", [epic()]), "backfill")
+            pm.load_plan(plan_file(self.tmp, "migrate-existing", [epic()]), "backfill")
         self.api = FakeAPI(project_id="PVT_other")
         with self.assertRaisesRegex(pm.MigrationError, "scope"):
             self.run_stage("migrate-existing", [epic()])
 
-    def test_cli_paths_are_confined(self):
-        ok = str(manifest(self.tmp, "backfill", []))
-        for argv in (["--manifest", str(_ROOT / "README.md")],
-                     ["--manifest", str(_ROOT / ".github" / "project-sync.json")],
-                     ["--manifest", ok, "--report-dir", str(_ROOT / "docs")],
-                     ["--manifest", ok, "--report-dir", str(self.tmp), "--checkpoint", str(_ROOT / "ck.json")]):
+    def test_cli_paths_are_confined_and_kept_out_of_the_repository(self):
+        ok = str(plan_file(self.tmp, "backfill", []))
+        for argv in (["backfill", "--plan", str(_ROOT / "README.md")],
+                     ["backfill", "--plan", str(_ROOT / ".github" / "project-sync.json")],
+                     ["backfill", "--plan", "/etc/hostname.json"],
+                     ["backfill", "--plan", ok, "--report-dir", str(_ROOT / "docs")],
+                     ["backfill", "--plan", ok, "--report-dir", str(self.tmp), "--checkpoint", str(_ROOT / "ck.json")],
+                     ["plan-backfill", "--out", str(_ROOT / "docs" / "plan.json")]):
             err = io.StringIO()
             with unittest.mock.patch("sys.stderr", err):
-                self.assertEqual(pm.main(["backfill", *argv], env={}, transport=self.api), 2, argv)
+                self.assertEqual(pm.main(argv, env={}, transport=self.api), 2, argv)
             self.assertIn("must be", err.getvalue())
         self.assertEqual(self.api.calls, [])
 
+    def test_a_run_needs_an_explicit_plan_and_apply_needs_its_hash(self):
+        ok = str(plan_file(self.tmp, "backfill", []))
+        for argv in (["backfill"], ["backfill", "--plan", ok, "--apply"], ["plan-backfill"],
+                     ["plan-backfill", "--out", str(self.tmp / "p.json"), "--apply"]):
+            with unittest.mock.patch("sys.stderr", io.StringIO()):
+                self.assertEqual(pm.main(argv, env={}, transport=self.api), 2, argv)
+        self.assertEqual(self.api.calls, [])
+
+    def test_apply_refuses_a_plan_that_differs_from_the_reviewed_one(self):
+        self.api.put("Issue", 38, Status="Ready")
+        path = plan_file(self.tmp, "migrate-existing", [epic()])
+        reviewed = pm.plan_sha256(path)
+        path.write_text(path.read_text().replace('"Planned"', '"Parked"'))
+        with self.assertRaisesRegex(pm.MigrationError, "sha256"):
+            pm.run("migrate-existing", path, apply=True, transport=self.api, checkpoint=self.tmp / "ck.json",
+                   report_dir=self.tmp / "out", out=io.StringIO(), sleep=self.api.settle, expected_sha256=reviewed)
+        self.assertEqual(self.api.mutations, [])
+
     def test_missing_token_fails_cleanly(self):
-        self.assertEqual(pm.main(["backfill"], env={}), 2)
+        ok = str(plan_file(self.tmp, "backfill", []))
+        with unittest.mock.patch("sys.stderr", io.StringIO()):
+            self.assertEqual(pm.main(["backfill", "--plan", ok, "--report-dir", str(self.tmp)], env={}), 2)
 
 
 class Writes(Base):
@@ -387,7 +427,8 @@ class PartialFailure(Base):
     def test_main_exits_non_zero_after_a_failure(self):
         self.api.add_content("Issue", 181, state="CLOSED")
         self.api.fail_next_set = 1
-        rc = pm.main(["backfill", "--apply", "--settle-seconds", "0", "--manifest", str(manifest(self.tmp, "backfill", [research()])),
+        path = plan_file(self.tmp, "backfill", [research()])
+        rc = pm.main(["backfill", "--apply", "--settle-seconds", "0", "--plan", str(path), "--plan-sha256", pm.plan_sha256(path),
                       "--report-dir", str(self.tmp / "o")], env={}, transport=self.api)
         self.assertEqual(rc, 1)
 
@@ -400,7 +441,7 @@ class PartialFailure(Base):
     def test_dry_run_writes_no_checkpoint_and_does_not_wait(self):
         self.api.add_content("Issue", 181, state="CLOSED")
         waits = []
-        pm.run("backfill", manifest(self.tmp, "backfill", [research()]), apply=False, transport=self.api,
+        pm.run("backfill", plan_file(self.tmp, "backfill", [research()]), apply=False, transport=self.api,
                checkpoint=self.tmp / "ck.json", report_dir=self.tmp / "out", out=io.StringIO(), sleep=waits.append)
         self.assertEqual((waits, self.api.mutations), ([], []))
         self.assertFalse((self.tmp / "ck.json").exists())
@@ -430,46 +471,79 @@ class NeverMutations(unittest.TestCase):
         with self.assertRaises(pm.MigrationError):
             pm.GraphQL(lambda q, v: {}, allow_mutations=False).mutate("addProjectV2ItemById", pm.ADD_M, {})
 
-    def test_committed_manifests_are_valid(self):
-        for stage, path in pm.DEFAULT_MANIFEST.items():
-            data = pm.load_manifest(path, stage)
-            self.assertTrue(data["items"])
-        existing = pm.load_manifest(pm.DEFAULT_MANIFEST["migrate-existing"], "migrate-existing")["items"]
-        self.assertEqual(len(existing), 44)
-        self.assertFalse(next(i for i in existing if i["number"] == 39)["approved"])
 
-
-class CommittedManifests(unittest.TestCase):
-    """Pins the counts and the maintainer's mapping decisions (2026-10-10)."""
+class PlanBackfill(Base):
+    """plan-backfill reads live data only; counts and lists are runtime inputs."""
 
     def setUp(self):
-        self.existing = {i["number"]: i for i in pm.load_manifest(pm.DEFAULT_MANIFEST["migrate-existing"], "migrate-existing")["items"]}
-        self.backfill = pm.load_manifest(pm.DEFAULT_MANIFEST["backfill"], "backfill")["items"]
+        super().setUp()
+        self.api.put("Issue", 38, Status="Ready")              # already on the board
+        self.api.repo_issues = {
+            38: ("Roadmap", "OPEN", ["roadmap"]),
+            500: ("Open finding", "OPEN", ["audit-finding"]),
+            501: ("Another", "OPEN", []),
+            181: ("Old research", "CLOSED", ["research"]),
+            295: ("Research-y feature", "CLOSED", ["enhancement"]),
+        }
+        self.api.repo_prs = {480: ("Bump x", "OPEN", ["dependencies"])}
 
-    def test_counts(self):
-        self.assertEqual(len(self.existing), 44)
-        self.assertEqual(sum(i["baseline"]["Work Type"] == "Epic" for i in self.existing.values()), 35)
-        planned = json.loads((pm._DOCS / "baseline-planned.json").read_text())
-        planned_numbers = sorted(i["number"] if isinstance(i, dict) else i for i in planned["items"])
-        self.assertEqual(planned_numbers, sorted(n for n, i in self.existing.items() if i["baseline"]["Status"] == "Planned"))
-        self.assertEqual(len(planned_numbers), 23)
-        self.assertEqual(len(self.backfill), 230)
-        kinds = {}
-        for i in self.backfill:
-            kinds[(i["type"], i["state"])] = kinds.get((i["type"], i["state"]), 0) + 1
-        self.assertEqual(kinds, {("Issue", "OPEN"): 215, ("PullRequest", "OPEN"): 12, ("Issue", "CLOSED"): 3})
-        self.assertFalse({(i["type"], i["number"]) for i in self.backfill} & {("Issue", n) for n in self.existing})
+    def plan(self):
+        return pm.plan_backfill(self.api, generated_at="2026-01-01T00:00:00Z")
 
-    def test_maintainer_decisions(self):
-        self.assertEqual(self.existing[35]["set"], {"Status": "Backlog"})
-        self.assertEqual(self.existing[52]["set"], {"Status": "Backlog", "Roadmap Stage": "Research / Design"})
-        self.assertEqual(self.existing[179]["set"], {"Roadmap Stage": "Planned"})
-        self.assertEqual(self.existing[179]["expected_before"]["Status"], "In Progress")
-        self.assertFalse(self.existing[39]["approved"])
-        self.assertEqual(self.existing[39]["set"], {})
-        closed_research = sorted(i["number"] for i in self.backfill if i["state"] == "CLOSED")
-        self.assertEqual(closed_research, [181, 234, 246])
-        self.assertTrue(all(i["set"] == {} for i in self.backfill if i["type"] == "PullRequest"))
+    def test_proposes_only_what_is_missing_with_the_right_target(self):
+        plan = self.plan()
+        got = {(i["type"], i["number"]): i["set"] for i in plan["items"]}
+        self.assertEqual(got, {("Issue", 500): {"Status": "Inbox"}, ("Issue", 501): {"Status": "Inbox"},
+                               ("PullRequest", 480): {}, ("Issue", 181): {"Status": "Done"}})
+        self.assertEqual(plan["counts"], {"open-issue": 2, "open-pr": 1, "closed-research": 1})
+        self.assertEqual(self.api.mutations, [])
+        self.assertFalse(any(q.lstrip().startswith("mutation") for q in self.api.calls))
+
+    def test_the_generated_plan_runs_and_validates(self):
+        path = self.tmp / "plan.json"
+        path.write_text(json.dumps(self.plan()))
+        pm.load_plan(path, "backfill")
+        for n, state in ((500, "OPEN"), (501, "OPEN"), (181, "CLOSED")):
+            self.api.add_content("Issue", n, state=state)
+        self.api.add_content("PullRequest", 480)
+        r = pm.run("backfill", path, apply=True, transport=self.api, checkpoint=self.tmp / "ck.json", report_dir=self.tmp / "out",
+                   out=io.StringIO(), settle_seconds=0, sleep=self.api.settle, expected_sha256=pm.plan_sha256(path))
+        self.assertEqual(r["counts"], {"changed": 4})
+        self.assertEqual(self.api.items["I181"]["values"], {"Status": "Done"})
+        self.assertEqual(self.api.items["I480"]["values"], {})
+
+    def test_cli_writes_a_new_plan_and_never_overwrites_one(self):
+        out = self.tmp / "plans" / "backfill.json"
+        buf = io.StringIO()
+        with unittest.mock.patch("sys.stdout", buf):
+            self.assertEqual(pm.main(["plan-backfill", "--out", str(out)], env={}, transport=self.api), 0)
+        self.assertIn(pm.plan_sha256(out), buf.getvalue())
+        before = out.read_bytes()
+        with unittest.mock.patch("sys.stderr", io.StringIO()):
+            self.assertEqual(pm.main(["plan-backfill", "--out", str(out)], env={}, transport=self.api), 2)
+        self.assertEqual(out.read_bytes(), before)
+
+
+class ReviewedMigratePlan(Base):
+    """The migrate-existing plan is the maintainer's reviewed decisions."""
+
+    def test_items_on_the_board_but_not_in_the_plan_are_reported_and_untouched(self):
+        self.api.put("Issue", 38, Status="Ready")
+        self.api.put("Issue", 77, Status="Ready")
+        r = self.run_stage("migrate-existing", [epic(38)], apply=True)
+        self.assertEqual(r["counts"], {"changed": 1, "not-in-plan": 1})
+        self.assertEqual(self.api.items["I77"]["values"], {"Status": "Ready"})
+
+    def test_a_held_decision_and_a_keep_status_decision(self):
+        self.api.put("Issue", 39, Status="Ready")
+        self.api.put("Issue", 179, Status="In Progress")
+        held = {"number": 39, "type": "Issue", "github_state": "OPEN", "expected_before": {}, "set": {}, "approved": False}
+        keep = {"number": 179, "type": "Issue", "github_state": "OPEN", "expected_before": {"Status": "In Progress", "Roadmap Stage": None},
+                "set": {"Roadmap Stage": "Planned"}, "approved": True}
+        r = self.run_stage("migrate-existing", [held, keep], apply=True)
+        self.assertEqual(r["counts"], {"held": 1, "changed": 1})
+        self.assertEqual(self.api.items["I39"]["values"], {"Status": "Ready"})
+        self.assertEqual(self.api.items["I179"]["values"], {"Status": "In Progress", "Roadmap Stage": "Planned"})
 
 
 class ProjectSyncLeavesBacklogAlone(unittest.TestCase):
