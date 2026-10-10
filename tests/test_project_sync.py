@@ -868,6 +868,34 @@ class GraphQLApiTests(unittest.TestCase):
         self.assertEqual(calls[0][1], {"project": PROJECT_ID, "content": PR_ID})
         self.assertIn("updateProjectV2ItemFieldValue", calls[1][0])
 
+    def test_transport_failures_and_bad_bodies_become_api_errors(self):
+        import http.client
+        from unittest import mock
+
+        class Body:
+            def __init__(self, raw):
+                self.raw = raw
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return None
+
+            def read(self):
+                return self.raw
+
+        send = ps.http_transport("t")
+        for failure in (TimeoutError("t"), ConnectionResetError("r"), http.client.RemoteDisconnected("c"),
+                        http.client.IncompleteRead(b"x")):
+            with mock.patch.object(ps.urllib.request, "urlopen", side_effect=failure):
+                with self.assertRaises(ps.ApiError, msg=type(failure).__name__):
+                    send("query", {})
+        for raw in (b"<html>", b"[1]"):
+            with mock.patch.object(ps.urllib.request, "urlopen", return_value=Body(raw)):
+                with self.assertRaises(ps.ApiError, msg=raw):
+                    send("query", {})
+
     def test_non_https_url_is_refused(self):
         with self.assertRaises(ps.ApiError):
             ps.http_transport("t", "http://api.github.com/graphql")

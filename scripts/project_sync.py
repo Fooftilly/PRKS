@@ -36,6 +36,7 @@ approves, or reads CI results. Standard library only.
 """
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import re
@@ -511,8 +512,12 @@ def http_transport(token: str, url: str = GRAPHQL_URL) -> Transport:
                 payload = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as error:
             raise ApiError(f"GraphQL HTTP {error.code}") from None
-        except (urllib.error.URLError, ValueError) as error:
+        except (OSError, http.client.HTTPException, ValueError) as error:
+            # URLError, read timeouts, connection resets, truncated reads and
+            # bodies that are not JSON.
             raise ApiError(f"GraphQL request failed: {type(error).__name__}") from None
+        if not isinstance(payload, dict):
+            raise ApiError("GraphQL response is not an object")
         if payload.get("errors"):
             messages = "; ".join(str(e.get("message", "")) for e in payload["errors"] if isinstance(e, dict))
             raise ApiError(f"GraphQL error: {messages or 'unknown'}")
