@@ -733,9 +733,11 @@ def _checked_paths(args: argparse.Namespace) -> dict[str, Path]:
     plan = _confined(args.plan, "--plan", ".json")
     checkpoint = _confined(args.checkpoint or report_dir / f"{args.command}.checkpoint.json", "--checkpoint", ".json")
     # The report is written to <report-dir>/<stage>.json and .md, the same
-    # names the docs suggest for plans: never let a run overwrite its plan.
-    if plan in (checkpoint, report_dir / f"{args.command}.json", report_dir / f"{args.command}.md"):
-        raise MigrationError(f"the report or checkpoint would overwrite the plan {plan}; "
+    # names the docs suggest for plans: the plan, the checkpoint and the two
+    # report files must be four different files, or one would overwrite another.
+    files = (plan, checkpoint, report_dir / f"{args.command}.json", report_dir / f"{args.command}.md")
+    if len(set(files)) < len(files) or checkpoint == report_dir:
+        raise MigrationError("the plan, checkpoint and report files must all be different paths; "
                              "pass a different --report-dir or --checkpoint")
     return {"plan": plan, "report_dir": report_dir, "checkpoint": checkpoint}
 
