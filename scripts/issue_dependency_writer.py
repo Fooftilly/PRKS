@@ -64,10 +64,20 @@ class Client(Protocol):
     def post(self, path: str, body: dict[str, Any]) -> Any: ...
 
 
+def _error_message(error: urllib.error.HTTPError) -> str:
+    try:
+        payload = json.loads(error.read() or b"{}")
+    except ValueError:
+        return ""
+    return str(payload.get("message", ""))[:200] if isinstance(payload, dict) else ""
+
+
 class GitHubClient:
     """Minimal REST client. ``path`` is relative to the API root."""
 
     def __init__(self, token: str, api_url: str = "https://api.github.com") -> None:
+        if not api_url.startswith("https://"):
+            raise ApiError(0, "INIT", api_url, "the API URL must use https")
         self._token = token
         self._api_url = api_url.rstrip("/")
 
@@ -86,15 +96,11 @@ class GitHubClient:
             },
         )
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:
+            # The URL is always https (checked in __init__).
+            with urllib.request.urlopen(request, timeout=30) as response:  # nosec B310
                 raw = response.read()
         except urllib.error.HTTPError as error:
-            detail = ""
-            try:
-                detail = str(json.loads(error.read() or b"{}").get("message", ""))[:200]
-            except (ValueError, AttributeError):
-                pass
-            raise ApiError(error.code, method, path, detail) from None
+            raise ApiError(error.code, method, path, _error_message(error)) from None
         except urllib.error.URLError as error:
             raise ApiError(0, method, path, str(error.reason)[:200]) from None
         return json.loads(raw) if raw else None
@@ -401,8 +407,12 @@ def main(argv: list[str] | None = None, env: dict[str, str] | None = None,
         audit.outcome, audit.reason, status = "failed", "GITHUB_TOKEN is not set", 2
     else:
         factory = client_factory or (lambda tok, url: GitHubClient(tok, url))
-        client = factory(token, env.get("GITHUB_API_URL", "https://api.github.com"))
-        status = run(client, request, audit)
+        try:
+            client = factory(token, env.get("GITHUB_API_URL", "https://api.github.com"))
+        except ApiError as error:
+            audit.outcome, audit.reason, status = "failed", str(error), 2
+        else:
+            status = run(client, request, audit)
 
     print(json.dumps(audit.record(), sort_keys=True))
     summary_path = env.get("GITHUB_STEP_SUMMARY")

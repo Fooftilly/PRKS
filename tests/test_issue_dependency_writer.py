@@ -282,6 +282,33 @@ class MainTests(unittest.TestCase):
         self.assertEqual(status, 1)
 
 
+class GitHubClientTests(unittest.TestCase):
+    def test_a_non_https_api_url_is_refused_before_any_request(self) -> None:
+        from contextlib import redirect_stdout
+        from io import StringIO
+
+        out = StringIO()
+        with redirect_stdout(out):
+            status = writer.main(
+                ["--blocked", "10", "--blocking", "20", "--justification", "x" * 20],
+                {"GITHUB_TOKEN": "t", "GITHUB_REPOSITORY": REPO, "GITHUB_ACTOR": "Fooftilly",
+                 "GITHUB_API_URL": "http://example.test"},
+            )
+        self.assertEqual(status, 2)
+        self.assertIn("https", json.loads(out.getvalue().strip().splitlines()[-1])["reason"])
+
+    def test_error_message_tolerates_non_json_bodies(self) -> None:
+        import io
+        import urllib.error
+
+        def http_error(body: bytes) -> urllib.error.HTTPError:
+            return urllib.error.HTTPError("https://x", 422, "x", {}, io.BytesIO(body))  # type: ignore[arg-type]
+
+        self.assertEqual(writer._error_message(http_error(b'{"message": "Validation failed"}')), "Validation failed")
+        self.assertEqual(writer._error_message(http_error(b"<html>")), "")
+        self.assertEqual(writer._error_message(http_error(b"[1]")), "")
+
+
 class WorkflowShapeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.text = _WORKFLOW.read_text(encoding="utf-8")
