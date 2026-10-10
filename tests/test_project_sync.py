@@ -433,6 +433,39 @@ class ChangesRequestedTests(unittest.TestCase):
         self.assertIn("alice was requested again", audit.reason)
         self.assertEqual(board.pr_status, "Review")
 
+    def test_a_repeat_re_request_keeps_a_hand_set_status(self):
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.submit_changes_review("2026-10-10T10:00:00Z")
+        board.person_sets("Changes requested", at="2026-10-10T10:00:05Z")  # the review's own run
+        board.request_review("2026-10-10T11:00:00Z")
+        self.assertEqual(sync(board, "review_requested").outcome, "updated")
+        self.assertEqual(board.pr_status, "Review")
+        # A person sets Changes requested for another reason, then Alice is
+        # requested again with no new change request: that answers nothing new.
+        board.person_sets("Changes requested", at="2026-10-10T12:00:00Z")
+        board.request_review("2026-10-10T13:00:00Z")
+        audit = sync(board, "review_requested")
+        self.assertEqual(audit.outcome, "skipped")
+        self.assertEqual(board.pr_status, "Changes requested")
+        # A new change request answered by a new re-request still releases it.
+        board.submit_changes_review("2026-10-10T14:00:00Z")
+        board.person_sets("Changes requested", at="2026-10-10T14:00:05Z")
+        board.request_review("2026-10-10T15:00:00Z")
+        self.assertEqual(sync(board, "review_requested").outcome, "updated")
+        self.assertEqual(board.pr_status, "Review")
+
+    def test_a_re_request_after_a_draft_conversion_answered_the_review_keeps_a_hand_set_status(self):
+        board = FakeBoard(draft=False)
+        board.native_auto_add()
+        board.submit_changes_review("2026-10-10T10:00:00Z")
+        board.convert_to_draft("2026-10-10T11:00:00Z")
+        board.pr["draft"] = False  # marked ready again
+        board.person_sets("Changes requested", at="2026-10-10T12:00:00Z")
+        board.request_review("2026-10-10T13:00:00Z")
+        self.assertEqual(sync(board, "review_requested").outcome, "skipped")
+        self.assertEqual(board.pr_status, "Changes requested")
+
     def test_a_delayed_draft_conversion_run_keeps_a_later_hand_set_status(self):
         board = FakeBoard(draft=False)
         board.native_auto_add()

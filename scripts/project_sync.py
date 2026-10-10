@@ -10,8 +10,9 @@ submitted or dismissed review, and covers only the PR rows owned by
 * ``ready_for_review``   -> Review, from empty, Inbox, Ready or In Progress
 * ``converted_to_draft`` -> In Progress, from Review or Changes requested, when
   the conversion is newer than the current Status
-* ``review_requested``   -> Review, from Changes requested, only for a re-request
-  of a reviewer who requested changes, made after that Status was set
+* ``review_requested``   -> Review, from Changes requested, only for the
+  re-request that first answers a reviewer's change request, made after that
+  Status was set; a repeat request answers nothing new
 * ``review_changed``     -> Changes requested, from empty, In Progress or Review,
   while a review is unanswered; otherwise In Progress (draft) or Review, from
   Changes requested, once a change request was dismissed or withdrawn by an
@@ -254,6 +255,12 @@ def unanswered_changes(pr: PullRequest) -> list[str]:
     )
 
 
+def _first_re_request(pr: PullRequest, reviewer: str, changes_at: str) -> Optional[str]:
+    """The time of the first request of ``reviewer`` after their change request."""
+    following = [when for who, when in pr.review_requests if who == reviewer and _after(when, changes_at)]
+    return min(following, key=lambda when: _time(when) or datetime.min) if following else None
+
+
 # Actions whose run must not hide a changes-requested review.
 ORDERED_ACTIONS = frozenset({"review_requested", "converted_to_draft"})
 
@@ -314,18 +321,21 @@ def decide(config: Config, action: str, pr: PullRequest) -> tuple[Optional[str],
         if not _after(pr.last_converted_to_draft_at, pr.item.status_updated_at):
             return None, "stale event: the current Status was set after the latest conversion to draft"
     if action == "review_requested":
-        # Only a re-request of a reviewer whose change request stands, made
-        # after Changes requested was set, releases it. A request of anyone
-        # else, or one older than the Status (a delayed run, or a Status set
-        # by hand later), leaves it alone.
+        # Only the re-request that first answers a reviewer's change request,
+        # made after Changes requested was set, releases it. A request of
+        # anyone else, a repeat request after the change request was already
+        # answered (by an earlier re-request or a conversion to draft), or one
+        # older than the Status (a delayed run, or a Status set by hand
+        # later) leaves it alone.
         assert pr.item is not None
         since = pr.item.status_updated_at
         released = sorted(
             {
-                who
-                for who, asked in pr.review_requests
+                by
                 for by, at in pr.changes_requested
-                if who == by and _after(asked, at) and (since is None or _after(asked, since))
+                if (answer := _first_re_request(pr, by, at)) is not None
+                and not (_after(pr.last_converted_to_draft_at, at) and _after(answer, pr.last_converted_to_draft_at))
+                and (since is None or _after(answer, since))
             }
         )
         if not released:
