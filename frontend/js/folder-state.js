@@ -734,20 +734,32 @@
 
     /* RAM copy of the durable queue for synchronous paints (Work notes do the same). */
     let pendingNoteRows = [];
+    /* Whether the latest read of the queue succeeded: until one does, and
+     * after one fails, `pendingNoteRows` may be missing rows the queue holds. */
+    let pendingNoteRowsRead = false;
 
     async function refreshPendingFolderNotes() {
         const runtime = root.prksSync;
         if (!runtime || !runtime.store || typeof runtime.store.listOperations !== 'function') {
             pendingNoteRows = [];
+            pendingNoteRowsRead = false;
             return pendingNoteRows;
         }
         try {
             pendingNoteRows = privateNoteOperations(await runtime.store.listOperations(), null);
+            pendingNoteRowsRead = true;
         } catch (_e) {
             /* An unreadable queue is not an empty one: keep the last rows read,
-             * so a paint never hides unsynchronized text it already knew. */
+             * so a paint never hides unsynchronized text it already knew, and
+             * say they are unverified. */
+            pendingNoteRowsRead = false;
         }
         return pendingNoteRows;
+    }
+
+    /** True when the Reminders rows above come from a read that succeeded (an empty one too). */
+    function pendingFolderNotesRead() {
+        return pendingNoteRowsRead;
     }
 
     /**
@@ -999,6 +1011,7 @@
         prksReadPendingFolderNotesSnapshot: readPendingFolderNotesSnapshot,
         prksVerifyFolderNoteBase: verifyFolderNoteBase,
         prksPendingFolderNoteRow: pendingFolderNoteRow,
+        prksPendingFolderNotesRead: pendingFolderNotesRead,
         /* What the server stores for Reminders text (`str.strip()` parity). */
         prksCanonicalFolderNoteText: text => canonicalFieldValue(PRIVATE_NOTES_FIELD, text),
         prksBindFolderNotesSync: bindFolderNotesSync,
