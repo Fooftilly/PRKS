@@ -19,7 +19,7 @@ Actions → **Issue dependency writer** → Run workflow, on the default branch:
 
 Start with `dry-run`, read the job summary, then run the same inputs with `apply`.
 
-Every run first runs a read-only check job. The write job runs only for `apply`, holds the only `issues: write` permission, and re-checks live state immediately before writing. Runs are serialized repository-wide, so two runs never race a check.
+Every run first runs a read-only check job. The write job runs only for `apply`, holds the only `issues: write` permission, and re-checks live state immediately before writing. Runs are serialized repository-wide, so two runs never race a check. The workflow uses `concurrency.queue: max`: up to 100 runs wait their turn instead of a newer dispatch replacing the pending one. GitHub does not document what happens past 100 pending runs, so if a dispatch does not appear in the run list, start it again; repeating a request is safe.
 
 A request is refused, and nothing is written, when:
 

@@ -327,8 +327,13 @@ class WorkflowShapeTests(unittest.TestCase):
         for forbidden in ("pull-requests: write", "contents: write", "repository-projects", "id-token"):
             self.assertNotIn(forbidden, self.text)
 
-    def test_runs_are_serialized_and_never_cancelled(self) -> None:
-        self.assertIn("group: issue-dependency-writer\n  cancel-in-progress: false", self.text)
+    def test_runs_are_serialized_and_pending_runs_are_queued_not_replaced(self) -> None:
+        # The default queue keeps one pending run and a newer dispatch cancels
+        # it, which could drop an approved apply request.
+        self.assertIn(
+            "concurrency:\n  group: issue-dependency-writer\n  cancel-in-progress: false\n  queue: max\n",
+            self.text,
+        )
 
     def test_both_jobs_require_the_default_branch(self) -> None:
         guard = "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"

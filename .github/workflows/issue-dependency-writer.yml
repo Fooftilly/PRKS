@@ -36,10 +36,15 @@ on:
 permissions: {}
 
 # One writer at a time across the repository, so a re-check is never raced by
-# another run of this workflow. Queued runs wait; none are cancelled.
+# another run of this workflow. Without "queue: max" GitHub keeps only one
+# pending run per group and a newer dispatch cancels it; with it, up to 100
+# runs wait. Past that limit GitHub does not document the behavior,
+# so a dispatch that does not appear as a run must be repeated (it is
+# idempotent).
 concurrency:
   group: issue-dependency-writer
   cancel-in-progress: false
+  queue: max
 
 jobs:
   plan:
