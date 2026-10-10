@@ -22,7 +22,7 @@ env/
 tools/pdf-viewer/node_modules/
 tools/research-graph/node_modules/
 tools/frontend-vendor/node_modules/
-frontend-app/node_modules/
+frontend-app/node_modules
 frontend-app/storybook-static/
 frontend-app/.workspace-model-build/
 frontend-app/.work-route-build/

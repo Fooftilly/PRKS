@@ -3175,6 +3175,8 @@ function prksPrivateRecoveryKind(family) {
             return typeof prksVerifyFolderNoteBase === 'function' ? prksVerifyFolderNoteBase(id, base) : false;
         },
         unchanged: function (result) { return !!result && result.code === 'unchanged'; },
+        /* The server keeps the field trimmed: that is what a base holds. */
+        stored: prksCanonicalFolderNote,
         publish: function (ctx) {
             if (typeof window.prksVueUpdateFolderPrivateNotesRecovery === 'function') window.prksVueUpdateFolderPrivateNotesRecovery(ctx);
         },

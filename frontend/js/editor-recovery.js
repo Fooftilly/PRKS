@@ -2609,7 +2609,7 @@ var prksEditorRecovery = (function(exports) {
 				continue;
 			}
 			const inactive = c.lineage === "same-runtime-orphan" || c.lineage === "dead-runtime";
-			if (inactive && K && K.source === "server" && queue && !queue.length && c.body === K.value) {
+			if (inactive && K && K.source === "server" && queue && !queue.length && stored(input)(c.body) === K.value) {
 				plan.cleanup.push(c.record.draftId);
 				continue;
 			}
@@ -2637,6 +2637,9 @@ var prksEditorRecovery = (function(exports) {
 		if ("reason" in judged) review(c, judged.reason);
 		else plan.restore = judged;
 		return plan;
+	}
+	function stored(input) {
+		return input.stored || ((text) => text);
 	}
 	/** Fingerprints the note once however many candidates are judged against it. */
 	function memoized(print) {
@@ -2678,7 +2681,7 @@ var prksEditorRecovery = (function(exports) {
 		if (predecessor) {
 			if (!unchanged || !own || !sameBaseIdentity(own.base, k)) return { reason: "base-advanced" };
 		} else if (!unchanged) {
-			if (!(!!own && !!K && !!k && sameBaseIdentity(own.base, typedOn) && typedOn.revision !== null && K.revision > typedOn.revision && k.length === own.textLength && k.fingerprint === own.textFingerprint)) return { reason: "base-advanced" };
+			if (!(!!own && !!K && !!k && sameBaseIdentity(own.base, typedOn) && typedOn.revision !== null && K.revision > typedOn.revision && k.length === (own.storedLength ?? own.textLength) && k.fingerprint === (own.storedFingerprint ?? own.textFingerprint))) return { reason: "base-advanced" };
 		}
 		return {
 			record,

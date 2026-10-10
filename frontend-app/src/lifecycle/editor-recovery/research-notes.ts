@@ -59,6 +59,12 @@ export interface RestoreInput {
   editorDirty?: boolean
   /** Injected in tests to force collisions. */
   fingerprint?: (text: string) => string
+  /**
+   * What the server stores for a saved body. Identity for a Work note, which
+   * is stored exactly; a Folder field is stored trimmed (#534). The base `K`
+   * is always what the server stores.
+   */
+  stored?: (text: string) => string
 }
 
 export type ReviewReason =
@@ -100,7 +106,7 @@ export interface ReviewCandidate {
 
 export interface RestorePlan {
   /**
-   * Bodies exactly equal to the server's acknowledged note while nothing is
+   * Bodies the server stores as exactly its acknowledged note while nothing is
    * queued that could still change it, from a lineage no live editor can
    * still own: compare-and-delete.
    */
@@ -168,7 +174,7 @@ export function planResearchNotesRestore(input: RestoreInput): RestorePlan {
     // Equal to the note only proves it saved while no queued row can still
     // replace that note, and only for a lineage no live editor may still own.
     const inactive = c.lineage === 'same-runtime-orphan' || c.lineage === 'dead-runtime'
-    if (inactive && K && K.source === 'server' && queue && !queue.length && c.body === K.value) {
+    if (inactive && K && K.source === 'server' && queue && !queue.length && stored(input)(c.body) === K.value) {
       plan.cleanup.push(c.record.draftId)
       continue
     }
@@ -200,6 +206,10 @@ export function planResearchNotesRestore(input: RestoreInput): RestorePlan {
   if ('reason' in judged) review(c, judged.reason)
   else plan.restore = judged
   return plan
+}
+
+function stored(input: RestoreInput): (text: string) => string {
+  return input.stored || ((text) => text)
 }
 
 /** Fingerprints the note once however many candidates are judged against it. */
@@ -249,6 +259,7 @@ function judge(c: RestoreCandidate, input: RestoreInput, liveElsewhere: boolean,
     // the base it was queued from.
     if (!unchanged || !own || !sameBaseIdentity(own.base, k)) return { reason: 'base-advanced' }
   } else if (!unchanged) {
+    // The acknowledged row is now the note as the server stores it.
     const advancedByOwn =
       !!own &&
       !!K &&
@@ -256,8 +267,8 @@ function judge(c: RestoreCandidate, input: RestoreInput, liveElsewhere: boolean,
       sameBaseIdentity(own.base, typedOn) &&
       typedOn.revision !== null &&
       K.revision > typedOn.revision &&
-      k.length === own.textLength &&
-      k.fingerprint === own.textFingerprint
+      k.length === (own.storedLength ?? own.textLength) &&
+      k.fingerprint === (own.storedFingerprint ?? own.textFingerprint)
     if (!advancedByOwn) return { reason: 'base-advanced' }
   }
 

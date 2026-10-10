@@ -60,7 +60,9 @@
  *   `{opId, text}`; readRows(): every unsettled row, or null when unreadable;
  *   refreshRows(): the same, for conflict marking;
  * - verifyBase(id, base): whether the server holds `base` exactly;
- * - unchanged(result): a save that proved the body equals the acknowledged note.
+ * - unchanged(result): a save that proved the body equals the acknowledged note;
+ * - stored(text): what the server stores for a saved body (identity for a Work
+ *   note; a Folder field is stored trimmed), which is what a base holds.
  */
 (function (root) {
     'use strict';
@@ -190,6 +192,7 @@
         }
         if (!K.verifyBase) K.verifyBase = function (id, base) { return verifyWorkBase(K, id, base); };
         if (!K.unchanged) K.unchanged = function (result) { return !!result && result.code === 'saved' && !result.opId; };
+        if (!K.stored) K.stored = function (text) { return text; };
         return K;
     }
 
@@ -359,16 +362,19 @@
             if (!r || !entry || !entry.recovery || !opId) return;
             try {
                 entry.recoveryQueued = { opId: opId, generation: generation, text: text };
-                pipeline(entry, {
-                    queuedOpId: opId,
-                    queuedGeneration: generation,
-                    ownQueued: {
-                        opId: opId,
-                        textLength: text.length,
-                        textFingerprint: print(r.api, text),
-                        base: identity(r.api, base) || { revision: null, length: null, fingerprint: null },
-                    },
-                });
+                const own = {
+                    opId: opId,
+                    textLength: text.length,
+                    textFingerprint: print(r.api, text),
+                    base: identity(r.api, base) || { revision: null, length: null, fingerprint: null },
+                };
+                /* Its acknowledgement makes the base what the server stores for it. */
+                const kept = K.stored(text);
+                if (kept !== text) {
+                    own.storedLength = kept.length;
+                    own.storedFingerprint = print(r.api, kept);
+                }
+                pipeline(entry, { queuedOpId: opId, queuedGeneration: generation, ownQueued: own });
             } catch (_e) { /* recovery is best-effort beside the save path */ }
         }
 
@@ -388,7 +394,7 @@
                 if (K.unchanged(result) && saved && entry.state === 'committed' &&
                     entry.editGeneration === saved.generation && K.paintable(owner, id)) {
                     const slot = observedBase(owner);
-                    if (slot && slot.source === 'server' && slot.value === saved.text) {
+                    if (slot && slot.source === 'server' && slot.value === K.stored(saved.text)) {
                         /* No queued row will acknowledge it, so repaint here: a warning
                          * shown while recovery storage failed goes once the text is clean. */
                         void entry.recovery.acknowledged(saved.generation, saved.text).then(function () {
@@ -647,6 +653,7 @@
                     otherDirtySession: dirtyElsewhere,
                     /* Never replace what an open editor shows; Review recomputes exactly. */
                     editorDirty: reviewOnly,
+                    stored: K.stored,
                 });
             };
             let plan = planWith(base);
@@ -659,9 +666,11 @@
             }
             if (!current()) return bail();
             for (const draftId of plan.cleanup) {
-                const record = candidates.find(function (c) { return c.record.draftId === draftId; }).record;
-                /* Only the generation it read, and only while no page has adopted it since. */
-                void rt.store.deleteIfAcknowledged(draftId, record.generation, base.value, record.owner.pageInstanceId)
+                const candidate = candidates.find(function (c) { return c.record.draftId === draftId; });
+                const record = candidate.record;
+                /* Only the generation and body it read (which the server stores as
+                 * the note), and only while no page has adopted it since. */
+                void rt.store.deleteIfAcknowledged(draftId, record.generation, candidate.body, record.owner.pageInstanceId)
                     .catch(function () {});
             }
             const paneId = paneOf(ctx);
@@ -911,7 +920,7 @@
                 /* Each judged on its own: the reviewer weighs them against each other. */
                 const plan = r.api.planResearchNotesRestore({
                     paneId: paneId, candidates: [c], base: base, queue: queue,
-                    otherDirtySession: dirtyElsewhere, editorDirty: dirtyHere,
+                    otherDirtySession: dirtyElsewhere, editorDirty: dirtyHere, stored: K.stored,
                 });
                 const judged = plan.review[0];
                 let reason = judged ? judged.reason : 'restorable';
@@ -972,6 +981,7 @@
                     queue: queue,
                     otherDirtySession: otherDirty(id, key),
                     editorDirty: dirtyHere,
+                    stored: K.stored,
                 });
             };
             let plan = planWith(observed);

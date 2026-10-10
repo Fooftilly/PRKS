@@ -548,6 +548,38 @@ describe('Folder Reminders restore', () => {
     await waitFor(() => noteRows().some((r) => r.payload.value === 'Saved reminder. Queued and newer'), 'newer text saved after its predecessor')
   })
 
+  it('clears a draft whose text the server stored trimmed while the page was gone', async () => {
+    const { ctx, ta } = await openFolder()
+    type(ctx, ta!, 'Saved reminder. Ends a line\n')
+    win.prksFlushPendingPrivateNotes(ctx)
+    const opId = await queuedAs('Saved reminder. Ends a line\n')
+    await reload(true)
+    // Another tab sends the row; the server keeps it without the newline.
+    sync.ack(opId, 6)
+    expect(server[FA]).toMatchObject({ private_notes: 'Saved reminder. Ends a line', revision: 6 })
+    const { ctx: fresh, ta: field, result } = await openAndRestore()
+    expect(result).toMatchObject({ restored: false, review: [] })
+    expect(field!.value).toBe('Saved reminder. Ends a line')
+    await waitFor(async () => (await records()).length === 0, 'saved draft cleaned up')
+    await waitFor(() => win.prksFolderPrivateNotesRecoveryView(fresh) === null, 'no notice')
+  })
+
+  it('restores newer text over its own predecessor that the server stored trimmed', async () => {
+    const { ctx, ta } = await openFolder()
+    type(ctx, ta!, 'Line one\n')
+    win.prksFlushPendingPrivateNotes(ctx)
+    const first = await queuedAs('Line one\n')
+    await type(ctx, ta!, 'Line one\nLine two').recovery!.flush()
+    await reload(true)
+    sync.ack(first, 6)
+    expect(server[FA]).toMatchObject({ private_notes: 'Line one', revision: 6 })
+    const { ta: field, result } = await openAndRestore()
+    expect(result).toMatchObject({ restored: true })
+    expect(field!.value).toBe('Line one\nLine two')
+    await waitFor(() => noteRows().some((r) => r.payload.value === 'Line one\nLine two' && r.base_revision === 6),
+      'saved on the revision its own predecessor became')
+  })
+
   it('restored text replaces its own never-sent predecessor, and only that row', async () => {
     const { ctx, ta } = await openFolder()
     type(ctx, ta!, 'Saved reminder. Queued')
