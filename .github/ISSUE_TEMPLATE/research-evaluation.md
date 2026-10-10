@@ -2,7 +2,7 @@
 name: Research / evaluation
 about: Run a bounded investigation or proof of concept where the decision or implementation direction is not yet settled
 title: "[Research] "
-labels: ""
+labels: "research"
 assignees: ""
 ---
 
