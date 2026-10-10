@@ -1,0 +1,103 @@
+name: Issue dependency writer
+
+# Records one maintainer-approved native "Blocked by" issue relationship (#441).
+# Runs only on an explicit workflow_dispatch from the default branch by an
+# allowed actor. The plan job is read-only; only the apply job holds
+# issues: write, and only when mode is "apply". It adds a relationship and
+# nothing else: no removals, comments, labels, pull requests or Project #3
+# fields. Operating and revoking it: docs/agent-workflows/issue-dependencies.md.
+
+run-name: "Issue dependency (${{ inputs.mode }})"
+
+on:
+  workflow_dispatch:
+    inputs:
+      blocked:
+        description: "Issue number that cannot proceed (is blocked)"
+        required: true
+        type: string
+      blocking:
+        description: "Issue number it is blocked by (the prerequisite)"
+        required: true
+        type: string
+      justification:
+        description: "Why the blocked issue cannot meaningfully proceed first (10-1000 characters)"
+        required: true
+        type: string
+      mode:
+        description: "dry-run reports the change; apply writes it"
+        required: true
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - apply
+
+permissions: {}
+
+# One writer at a time across the repository, so a re-check is never raced by
+# another run of this workflow. Queued runs wait; none are cancelled.
+concurrency:
+  group: issue-dependency-writer
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Check and report (read-only)
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    permissions:
+      contents: read # check out the writer script
+      issues: read # read both issues and their dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Dry run
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BLOCKED: ${{ inputs.blocked }}
+          BLOCKING: ${{ inputs.blocking }}
+          JUSTIFICATION: ${{ inputs.justification }}
+          ALLOWED_ACTORS: ${{ vars.ISSUE_DEPENDENCY_WRITERS }}
+        run: >-
+          python3 scripts/issue_dependency_writer.py
+          --blocked "${BLOCKED}"
+          --blocking "${BLOCKING}"
+          --justification "${JUSTIFICATION}"
+          --allowed-actors "${ALLOWED_ACTORS}"
+
+  apply:
+    name: Write the relationship
+    needs: plan
+    if: >-
+      inputs.mode == 'apply' &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    permissions:
+      contents: read # check out the writer script
+      issues: write # add the blocked-by relationship
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Re-check and write
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BLOCKED: ${{ inputs.blocked }}
+          BLOCKING: ${{ inputs.blocking }}
+          JUSTIFICATION: ${{ inputs.justification }}
+          ALLOWED_ACTORS: ${{ vars.ISSUE_DEPENDENCY_WRITERS }}
+        run: >-
+          python3 scripts/issue_dependency_writer.py
+          --apply
+          --blocked "${BLOCKED}"
+          --blocking "${BLOCKING}"
+          --justification "${JUSTIFICATION}"
+          --allowed-actors "${ALLOWED_ACTORS}"
