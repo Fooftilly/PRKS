@@ -236,6 +236,17 @@ class DryRunAndGuards(Base):
         self.assertEqual(plan.read_bytes(), before)
         self.assertEqual(self.api.calls, [])
 
+    def test_an_output_directory_that_is_a_file_is_refused_before_anything_runs(self):
+        plan = plan_file(self.tmp, "backfill", [])
+        for report_dir in (plan, plan / "reports"):
+            err = io.StringIO()
+            with unittest.mock.patch("sys.stderr", err):
+                rc = pm.main(["backfill", "--plan", str(plan), "--report-dir", str(report_dir),
+                              "--checkpoint", str(self.tmp / "ck.json")], env={}, transport=self.api)
+            self.assertEqual(rc, 2, report_dir)
+            self.assertIn("cannot use", err.getvalue())
+        self.assertEqual(self.api.calls, [])
+
     def test_a_run_needs_an_explicit_plan_and_apply_needs_its_hash(self):
         ok = str(plan_file(self.tmp, "backfill", []))
         for argv in (["backfill"], ["backfill", "--plan", ok, "--apply"], ["plan-backfill"],

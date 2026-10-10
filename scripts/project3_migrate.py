@@ -780,7 +780,18 @@ def _checked_paths(args: argparse.Namespace) -> dict[str, Path]:
     if len(set(files)) < len(files) or checkpoint == report_dir:
         raise MigrationError("the plan, checkpoint and report files must all be different paths; "
                              "pass a different --report-dir or --checkpoint")
+    _make_output_dirs(report_dir, checkpoint.parent)
     return {"plan": plan, "report_dir": report_dir, "checkpoint": checkpoint}
+
+
+def _make_output_dirs(*dirs: Path) -> None:
+    """Create the report and checkpoint directories now, so a path that cannot
+    hold them (the plan file itself, or a file on the way) fails before any write."""
+    for d in dirs:
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise MigrationError(f"cannot use {d} as an output directory: {type(exc).__name__}: {exc}") from exc
 
 
 def _write_backfill_plan(transport: Transport, out_path: Path) -> None:
