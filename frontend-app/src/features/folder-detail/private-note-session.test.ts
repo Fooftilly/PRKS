@@ -699,6 +699,58 @@ describe('Folder Reminders edit base', () => {
     expect(status.textContent).toBe('Saved')
   })
 
+  it('a conflicted row\'s text never proves the newer server body, through Discard, a retry and a return', async () => {
+    installShell()
+    const { ownerA } = mountPair()
+    /* The server holds B at 5; an older row with A, queued on 4, conflicted. */
+    server[FA] = { private_notes: 'B', revision: 5 }
+    const stale = queue.foreign(FA, 'private_notes', 'A', 4)
+    stale.status = 'conflict'
+    await w.prksRefreshPendingFolderNotes()
+    await openFolder(ownerA, FA)
+    expect(w.prksFolderNoteObserved(ownerA, FA)).toMatchObject({ value: 'B', revision: 5 })
+    const { field, status } = mountCard(ownerA, FA)
+    expect(field.value).toBe('A')
+    type(field, 'A+')
+    expect(session(ownerA)?.editBase).toEqual({ value: null, revision: null, source: 'unknown', start: 'A' })
+    w.prksFlushPendingPrivateNotes(ownerA)
+    await settle()
+    expect(status.textContent).toBe('Reminders changed elsewhere — copy your text, then reopen this folder')
+
+    /* Diagnostics: Discard local change. */
+    queue.rows().splice(queue.rows().indexOf(stale), 1)
+    await w.prksRefreshPendingFolderNotes()
+    type(field, 'A++')
+    w.prksFlushPendingPrivateNotes(ownerA)
+    await settle()
+    expect(noteRows()).toEqual([])
+
+    /* Away and back: the held text keeps its unproven base. */
+    await openFolder(ownerA, FB)
+    mountCard(ownerA, FB)
+    await openFolder(ownerA, FA)
+    const back = mountCard(ownerA, FA)
+    expect(back.field.value).toBe('A++')
+    w.prksFlushPendingPrivateNotes(ownerA)
+    await settle()
+    expect(noteRows().filter((r) => r.entity_id === FA)).toEqual([])
+    expect(server[FA]).toMatchObject({ private_notes: 'B', revision: 5 })
+  })
+
+  it('a queued row\'s text typed on proves its own revision only', async () => {
+    installShell()
+    const { ownerA } = mountPair()
+    /* A row still on its way, but queued on revision 4 while the server is at 5. */
+    server[FA] = { private_notes: 'B', revision: 5 }
+    queue.foreign(FA, 'private_notes', 'A', 4)
+    await w.prksRefreshPendingFolderNotes()
+    await openFolder(ownerA, FA)
+    const { field } = mountCard(ownerA, FA)
+    expect(field.value).toBe('A')
+    type(field, 'A+')
+    expect(session(ownerA)?.editBase?.revision).toBeNull()
+  })
+
   it('a held draft keeps the base it was typed on when the Folder changes while it is held', async () => {
     installShell()
     const { ownerA } = mountPair()

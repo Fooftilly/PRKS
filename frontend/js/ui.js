@@ -2922,21 +2922,28 @@ function prksOpenFolderPrivateNotes(ctx, read, source) {
 }
 
 /**
- * The text a Folder base would show in this pane: its body under the newest
- * unsettled Reminders row (this pane's, or one it painted from another).
+ * What a pane paints for a Folder over `observed`, and whether text typed on
+ * that paint was typed on `observed`'s revision. A body is; an unsettled
+ * row's text is only while the row is still on its way and was queued on that
+ * same revision. A row that conflicted, failed, or was queued on another
+ * revision shows text the server never held at this revision, so it proves
+ * nothing about the newer body.
  */
-function prksFolderNoteBaseShows(folderId, observed) {
-    return typeof prksPendingFolderNoteText === 'function'
-        ? prksPendingFolderNoteText(String(folderId), observed.value) : observed.value;
+function prksFolderNotePaint(folderId, observed) {
+    const row = typeof prksPendingFolderNoteRow === 'function' ? prksPendingFolderNoteRow(String(folderId)) : null;
+    if (!row) return { text: observed.value, proves: true };
+    const live = row.status === 'pending' || row.status === 'syncing';
+    return { text: row.text, proves: live && row.baseRevision === observed.revision };
 }
 
 function prksFolderEditBaseFrom(folderId, observed, start) {
     const known = !!(observed && typeof observed.value === 'string' && Number.isSafeInteger(observed.revision));
+    const paint = known ? prksFolderNotePaint(folderId, observed) : null;
     /* Compared as the server stores them: an acknowledged base is the
      * stripped text, the field keeps the whitespace that was typed. */
-    if (known && (start == null ||
-        prksCanonicalFolderNote(prksFolderNoteBaseShows(folderId, observed)) === prksCanonicalFolderNote(start))) {
-        const shown = start == null ? prksFolderNoteBaseShows(folderId, observed) : start;
+    if (paint && paint.proves &&
+        (start == null || prksCanonicalFolderNote(paint.text) === prksCanonicalFolderNote(start))) {
+        const shown = start == null ? paint.text : start;
         return { value: observed.value, revision: observed.revision, source: observed.source || 'unknown', start: shown };
     }
     /* No base yet, or the pane's base no longer shows the text being edited

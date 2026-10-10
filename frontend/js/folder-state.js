@@ -750,6 +750,21 @@
         return pendingNoteRows;
     }
 
+    /**
+     * The newest unsettled Reminders row of a Folder, as `{text, baseRevision,
+     * status}`, or null: the row whose text a pane paints over the body.
+     */
+    function pendingFolderNoteRow(folderId) {
+        const rows = privateNoteOperations(pendingNoteRows, folderId);
+        const row = rows.length ? rows[rows.length - 1] : null;
+        if (!row || rowText(row) === null) return null;
+        return {
+            text: rowText(row),
+            baseRevision: Number.isSafeInteger(row.base_revision) ? row.base_revision : null,
+            status: String(row.status || ''),
+        };
+    }
+
     /** The newest unsettled Reminders text of a Folder, or `fallback`. */
     function pendingFolderNoteText(folderId, fallback) {
         const rows = privateNoteOperations(pendingNoteRows, folderId);
@@ -983,6 +998,7 @@
         prksPendingFolderNoteText: pendingFolderNoteText,
         prksReadPendingFolderNotesSnapshot: readPendingFolderNotesSnapshot,
         prksVerifyFolderNoteBase: verifyFolderNoteBase,
+        prksPendingFolderNoteRow: pendingFolderNoteRow,
         /* What the server stores for Reminders text (`str.strip()` parity). */
         prksCanonicalFolderNoteText: text => canonicalFieldValue(PRIVATE_NOTES_FIELD, text),
         prksBindFolderNotesSync: bindFolderNotesSync,
