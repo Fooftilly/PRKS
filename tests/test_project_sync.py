@@ -500,6 +500,17 @@ class ChangesRequestedTests(unittest.TestCase):
             self.assertEqual(sync(board, "review_changed").outcome, "skipped")  # the dismissal's own run
             self.assertEqual(board.pr_status, expected)
 
+    def test_an_approval_during_a_late_opened_runs_write_is_undone(self):
+        # The late `opened` run retargets to Changes requested; Alice approves
+        # before the write lands.
+        board = FakeBoard(draft=False)
+        board.submit_changes_review("2026-10-10T10:00:00Z")
+        board.before_set = lambda: board.approve(at="2026-10-10T10:01:00Z")
+        audit = sync(board, "opened")
+        self.assertTrue(audit.item_added)
+        self.assertEqual(audit.outcome, "corrected")
+        self.assertEqual(board.pr_status, "Review")
+
     def test_release_only_moves_changes_requested(self):
         # With no unanswered review the run leaves every other Status alone.
         for start in (None, "Inbox", "Ready", "In Progress", "Review", "Blocked", "Done"):
