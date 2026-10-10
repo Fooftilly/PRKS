@@ -120,6 +120,7 @@ E2E_MODULES = (
     "tests.e2e.test_editor_recovery_store",
     "tests.e2e.test_folders_offline",
     "tests.e2e.test_folders_durable",
+    "tests.e2e.test_folder_reminders",
     "tests.e2e.test_library_nav_folders",
     "tests.e2e.test_person_groups_offline",
     "tests.e2e.test_person_groups_durable",

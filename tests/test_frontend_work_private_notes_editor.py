@@ -34,16 +34,26 @@ class WorkPrivateNotesEditorContractTests(unittest.TestCase):
         self.assertIn("workPrivateNoteHolds", _UI)
 
     def test_work_save_stays_on_the_owner_session(self):
+        families = _UI[_UI.index("const PRKS_PRIVATE_NOTE_FAMILIES"):_UI.index("function prksPrivateNoteFamily(")]
+        work = families[families.index("work: Object.freeze({"):families.index("folder: Object.freeze({")]
+        self.assertIn("sessionSlot: 'workPrivateNoteSession',", work)
+        self.assertIn("save: prksSaveWorkPrivateNoteForSession,", work)
+        start = _UI.index("async function prksSaveWorkPrivateNoteForSession(")
+        save = _UI[start:_UI.index("\n}\n", start)]
+        self.assertIn("prksSaveWorkNoteDurably", save)
         start = _UI.index("function prksEnqueueWorkPrivateNoteSave(")
-        body = _UI[start:_UI.index("function prksEnqueuePrivateNotesSave(", start)]
-        self.assertIn("prksSaveWorkNoteDurably", body)
-        self.assertIn("workPrivateNoteSession", body)
+        wrapper = _UI[start:_UI.index("function prksEnqueuePrivateNotesSave(", start)]
+        self.assertIn("PRKS_PRIVATE_NOTE_FAMILIES.work", wrapper)
+        start = _UI.index("function prksEnqueuePrivateNoteSave(family, editor)")
+        body = _UI[start:_UI.index("function prksEnqueueWorkPrivateNoteSave(", start)]
+        self.assertIn("editor.ctx.ui[family.sessionSlot]", body)
         self.assertIn("scope_busy", body)
         self.assertIn("prksSchedulePrivateNoteBusyRetry", body)
-        self.assertIn("prksReconcileSavedWorkPrivateNote", body)
+        self.assertIn("prksReconcileSavedPrivateNote", body)
         self.assertIn("editor.dirty = true", body)
-        self.assertNotIn("prksRequest(", body)
-        self.assertNotIn("prksOfflineMarkEntityChanged", body)
+        for text in (save, body):
+            self.assertNotIn("prksRequest(", text)
+            self.assertNotIn("prksOfflineMarkEntityChanged", text)
         reset = _CONTEXT.split("function resetEditUi(ui)", 1)[1].split("function safeCall", 1)[0]
         self.assertNotIn("workPrivateNoteSession = null", reset)
         self.assertIn("workPrivateNoteSession: null", _CONTEXT)

@@ -2287,10 +2287,28 @@
                 });
         }
 
-        /** One Save, however many of a folder's fields it touched. */
-        function saveFolderFields(folderId, changes, base) {
+        /**
+         * One Save, however many of a folder's fields it touched.
+         *
+         * `expected` (optional) names, per field, the unsettled row the caller
+         * owns: its op id, or null for none. A field it names may replace only
+         * that row; any other unsettled row of the field is someone else's
+         * intent and makes the save `scope_busy` (`prksBusyForeign`), checked
+         * in this transaction so no read before it can race. Fields it does
+         * not name keep coalescing over a never-sent row as before.
+         */
+        function saveFolderFields(folderId, changes, base, expected) {
             if (!isNonBlankString(folderId) || !isPlainObject(changes) || !isPlainObject(base)) {
                 return Promise.reject(localStoreError('invalid_envelope', 'Invalid folder save.'));
+            }
+            if (expected !== undefined && !isPlainObject(expected)) {
+                return Promise.reject(localStoreError('invalid_envelope', 'Invalid folder save.'));
+            }
+            const owns = expected || {};
+            for (const field of Object.keys(owns)) {
+                if (owns[field] !== null && !isNonBlankString(owns[field])) {
+                    return Promise.reject(localStoreError('invalid_envelope', 'Invalid folder save.'));
+                }
             }
             for (const field of Object.keys(changes)) {
                 const observed = base[field];
@@ -2319,13 +2337,17 @@
                             r.entity_type === 'folder' && r.entity_id === folderId &&
                             r.payload.field === field && r.status !== STATUS_ACKNOWLEDGED);
                         if (existing) {
-                            if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
+                            const foreign = Object.prototype.hasOwnProperty.call(owns, field) &&
+                                owns[field] !== existing.op_id;
+                            if (foreign || existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
                                 /* Names the row holding the field, so a caller can
-                                 * tell one in flight from one that needs resolution. */
+                                 * tell one in flight from one that needs resolution,
+                                 * and its own row from someone else's. */
                                 throw Object.assign(localStoreError('scope_busy',
                                     'This field is syncing or needs resolution.'), {
                                     prksBusyOpId: existing.op_id,
                                     prksBusyStatus: existing.status,
+                                    prksBusyForeign: foreign,
                                 });
                             }
                             if (existing.payload.value === desired) {

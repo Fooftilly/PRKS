@@ -3807,6 +3807,10 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                 await prksHydratePendingWorkMetadata();
                 if (stale()) return;
                 ctx.setEntity('folder', folder);
+                if (folder && typeof prksOpenFolderPrivateNotes === 'function') {
+                    void prksOpenFolderPrivateNotes(ctx, resolvedFolder.folder,
+                        folderUnsent ? 'pending-create' : offlineFolder.source);
+                }
                 prksPresentVueRoute(ctx, contentDiv, 'folder-detail', {
                     availability: folder ? 'ready' : 'not-found',
                     folder: folder,

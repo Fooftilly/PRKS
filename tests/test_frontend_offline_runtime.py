@@ -1096,7 +1096,8 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         """A raw Folder write anywhere else silently reopens the guard gap.
 
         api.js holds the canonical wrappers. Folder private-notes autosave
-        goes through patchFolder (SET_FOLDER_FIELD). Everywhere else must
+        goes through the Folder Reminders save contract in folder-state.js
+        (SET_FOLDER_FIELD for `private_notes`, #534). Everywhere else must
         also go through a wrapper — never a raw /api/folders mutation.
         """
         for name in ("app.js", "components/folders.js", "components/processing-files.js",
@@ -1110,9 +1111,15 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
                         self.assertNotIn(method, window,
                                          "%s writes /api/folders directly" % name)
         ui = _read(os.path.join(_FRONTEND, "js", "ui.js"))
-        folder_notes = _fn_body(ui, "function prksEnqueuePrivateNotesSave(")
-        self.assertIn("patchFolder(", folder_notes)
+        folder_notes = _fn_body(ui, "async function prksSaveFolderPrivateNoteForSession(")
+        self.assertIn("prksSaveFolderPrivateNoteInOrder(", folder_notes)
         self.assertNotIn("prksRequest(", folder_notes)
+        durable = _fn_body(ui, "function prksFolderSaveDurably(")
+        self.assertIn("prksSaveFolderPrivateNoteDurably(", durable)
+        self.assertNotIn("prksRequest(", durable)
+        in_order = _fn_body(ui, "async function prksSaveFolderPrivateNoteInOrder(")
+        self.assertIn("prksFolderSaveDurably(", in_order)
+        self.assertNotIn("prksRequest(", in_order)
         self.assertNotIn("Documented exception to the canonical-Folder-wrapper rule", ui)
 
     def test_folder_title_rename_evicts_member_work_snapshots(self):

@@ -544,7 +544,8 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
             'features/folder-detail': '\n'.join(
                 path.read_text()
                 for path in sorted((ROOT / 'frontend-app' / 'src' / 'features' / 'folder-detail').rglob('*'))
-                if path.suffix in {'.ts', '.vue'} and '.test.' not in path.name
+                # Test doubles of the durable queue (test-support/) are not components.
+                if path.suffix in {'.ts', '.vue'} and '.test.' not in path.name and 'test-support' not in path.parts
             ),
             'features/recent': '\n'.join(
                 path.read_text()

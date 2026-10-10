@@ -2612,92 +2612,177 @@ function renderPrksPrivateNotesCard(entityType, entityId, initialText) {
     return `<div data-prks-role="work-private-notes-anchor">${card}</div>`;
 }
 
-const PRKS_PRIVATE_DRAFT_MAX_COMMITTED = 64;
-const prksPrivateNoteDrafts = new Map();
+/*
+ * Reminders sessions, one per pane and entity family (#474, #534).
+ *
+ * Work and Folder Reminders keep their unsaved text on the owning TabContext,
+ * in one session slot per family (`ctx.ui[family.sessionSlot]`), with the
+ * owner tab and generation it was typed under. Leaving the entity, or
+ * advancing the generation, replaces the slot; a replaced session that still
+ * holds unsaved text leaves a copy in the pane's holds
+ * (`ctx.ui[family.holdsSlot]`), which a later session for the same entity in
+ * the same pane carries on. A flushed durable note stays shared entity state.
+ *
+ * A Folder session also carries the base its text was typed on
+ * (`session.editBase`, held with the text in `ctx.ui[family.holdBasesSlot]`),
+ * pinned when a clean session is first edited. Later reads and other panes'
+ * acknowledgements never move it, so a save can conflict but never replace
+ * text this pane did not show (#534).
+ *
+ * The family supplies what differs: the entity type and the field naming its
+ * id on the session, the acknowledged base and the durable save, the pending
+ * overlay, and the Work-only recovery hooks. A Folder's Reminders are the
+ * `private_notes` Folder field (folder-state.js), measured against that
+ * field's revision; a Work's are the Work private note with its own revision.
+ */
+const PRKS_PRIVATE_NOTE_FAMILIES = Object.freeze({
+    work: Object.freeze({
+        entityType: 'work',
+        idField: 'workId',
+        sessionSlot: 'workPrivateNoteSession',
+        holdsSlot: 'workPrivateNoteHolds',
+        holdBasesSlot: null,
+        unknownBaseStatus: 'Reminders cannot be saved yet — open this file while connected once',
+        pendingText: function (id, fallback) {
+            return typeof prksPendingWorkNoteText === 'function'
+                ? prksPendingWorkNoteText(id, 'work-private-note', fallback) : fallback;
+        },
+        refreshPending: function () {
+            return typeof prksRefreshPendingWorkNotes === 'function' ? prksRefreshPendingWorkNotes() : null;
+        },
+        bindSync: function (ctx) {
+            if (typeof prksBindWorkNotesSync === 'function') prksBindWorkNotesSync(ctx);
+        },
+        pin: null,
+        save: prksSaveWorkPrivateNoteForSession,
+        ok: function (code) { return code === 'saved'; },
+        /* Work keeps its queued row on the recovery lineage (`recoveryQueued`). */
+        tracksOwnQueued: false,
+        recovery: {
+            leave: function (session) { prksWorkPrivateRecoveryLeave(session); },
+            inherit: function (session) { prksWorkPrivateRecoveryInherit(session); },
+            drop: function (session) { prksWorkPrivateRecoveryDrop(session); },
+            edit: function (ctx, session) { prksWorkPrivateRecoveryEdit(ctx, session); },
+            beforeSave: function (session) { prksWorkPrivateRecoveryBeforeSave(session); },
+            queued: function (session, opId, generation, text, base) {
+                prksWorkPrivateRecoveryQueued(session, opId, generation, text, base);
+            },
+            settled: function (ctx, id, session, result, generation, text) {
+                prksWorkPrivateRecoverySettled(ctx, id, session, result, generation, text);
+            },
+        },
+    }),
+    folder: Object.freeze({
+        entityType: 'folder',
+        idField: 'folderId',
+        sessionSlot: 'folderPrivateNoteSession',
+        holdsSlot: 'folderPrivateNoteHolds',
+        holdBasesSlot: 'folderPrivateNoteHoldBases',
+        unknownBaseStatus: 'Reminders cannot be saved yet — open this folder while connected once',
+        pendingText: function (id, fallback) {
+            return typeof prksPendingFolderNoteText === 'function' ? prksPendingFolderNoteText(id, fallback) : fallback;
+        },
+        refreshPending: function () {
+            return typeof prksRefreshPendingFolderNotes === 'function' ? prksRefreshPendingFolderNotes() : null;
+        },
+        bindSync: function (ctx) {
+            if (typeof prksBindFolderNotesSync === 'function') prksBindFolderNotesSync(ctx, prksFolderPrivateNoteAcknowledged);
+        },
+        pin: prksPinFolderPrivateNoteBase,
+        save: prksSaveFolderPrivateNoteForSession,
+        ok: function (code) { return code === 'queued' || code === 'unchanged'; },
+        tracksOwnQueued: true,
+        recovery: null,
+    }),
+});
 
-function prksPrivateNoteKey(entityType, entityId) {
-    return String(entityType || '') + ':' + String(entityId == null ? '' : entityId);
+function prksPrivateNoteFamily(entityType) {
+    const key = String(entityType || '');
+    return Object.prototype.hasOwnProperty.call(PRKS_PRIVATE_NOTE_FAMILIES, key) ? PRKS_PRIVATE_NOTE_FAMILIES[key] : null;
 }
 
-function prksPrivateNoteDraft(entityType, entityId, text) {
-    const key = prksPrivateNoteKey(entityType, entityId);
-    let entry = prksPrivateNoteDrafts.get(key);
-    if (!entry) {
-        entry = {
-            key: key,
-            entityType: String(entityType),
-            entityId: String(entityId),
-            draftText: String(text == null ? '' : text),
-            editGeneration: 0,
-            saveSequence: 0,
-            latestSaveToken: 0,
-            latestSaveEditGeneration: 0,
-            settledSaveToken: 0,
-            state: 'committed',
-            saveError: false,
-            promise: null,
-            updatedAt: Date.now(),
-        };
-        prksPrivateNoteDrafts.set(key, entry);
-    }
-    return entry;
+function prksPrivateNoteRecoveryHook(family, name) {
+    return family && family.recovery && typeof family.recovery[name] === 'function' ? family.recovery[name] : null;
 }
 
-function prksPrunePrivateNoteDrafts() {
-    const committed = Array.from(prksPrivateNoteDrafts.values())
-        .filter((entry) => entry.state === 'committed' && !entry.promise)
-        .sort((a, b) => a.updatedAt - b.updatedAt);
-    while (committed.length > PRKS_PRIVATE_DRAFT_MAX_COMMITTED) {
-        const old = committed.shift();
-        if (old) prksPrivateNoteDrafts.delete(old.key);
-    }
+function prksPrivateNoteSessionKey(family, tabId, id) {
+    const key = String(tabId == null ? '' : tabId) + '\0' + String(id == null ? '' : id);
+    /* Work keys are unchanged (recovery records name them); other families are prefixed. */
+    return family && family.entityType !== 'work' ? family.entityType + '\0' + key : key;
 }
 
-function prksWorkPrivateNoteSessionCurrent(session, ctx, workId) {
+function prksPrivateNoteSessionCurrent(family, session, ctx, id) {
     return !!(
-        session && ctx && ctx.ui &&
-        String(session.workId) === String(workId) &&
+        family && session && ctx && ctx.ui &&
+        session.entityType === family.entityType &&
+        String(session.entityId) === String(id) &&
         String(session.ownerTabId) === String(ctx.tabId) &&
         String(session.ownerGeneration) === String(ctx.generation)
     );
 }
 
-function prksWorkPrivateNoteUnsaved(session) {
+function prksWorkPrivateNoteSessionCurrent(session, ctx, workId) {
+    return prksPrivateNoteSessionCurrent(PRKS_PRIVATE_NOTE_FAMILIES.work, session, ctx, workId);
+}
+
+function prksPrivateNoteUnsaved(session) {
     return !!(session && !session.retired && (
         session.dirty || session.promise ||
         session.state === 'drafting' || session.state === 'saving' || session.state === 'error'
     ));
 }
 
-function prksRememberUnsavedWorkPrivateNote(ctx, session) {
-    if (!ctx || !ctx.ui || !prksWorkPrivateNoteUnsaved(session)) return;
-    if (String(session.ownerTabId) !== String(ctx.tabId)) return;
-    if (!ctx.ui.workPrivateNoteHolds) ctx.ui.workPrivateNoteHolds = Object.create(null);
-    ctx.ui.workPrivateNoteHolds[String(session.workId)] = String(session.draftText || '');
+function prksWorkPrivateNoteUnsaved(session) {
+    return prksPrivateNoteUnsaved(session);
 }
 
-function prksTakeRememberedWorkPrivateNote(ctx, workId) {
-    const holds = ctx && ctx.ui ? ctx.ui.workPrivateNoteHolds : null;
-    const key = String(workId);
+function prksRememberUnsavedPrivateNote(family, ctx, session) {
+    if (!ctx || !ctx.ui || !prksPrivateNoteUnsaved(session)) return;
+    if (String(session.ownerTabId) !== String(ctx.tabId)) return;
+    if (!ctx.ui[family.holdsSlot]) ctx.ui[family.holdsSlot] = Object.create(null);
+    /* A hold is text no durable row holds yet, so it is never evicted: it
+     * leaves only when the pane takes it back or its exact text is saved.
+     * The holds stay bounded by the entities with unsaved text, not by the
+     * entities a pane visited. */
+    ctx.ui[family.holdsSlot][String(session.entityId)] = String(session.draftText || '');
+    if (!family.holdBasesSlot) return;
+    if (!ctx.ui[family.holdBasesSlot]) ctx.ui[family.holdBasesSlot] = Object.create(null);
+    /* The text keeps the base it was typed on: back on this entity, a newer
+     * server body makes its save conflict instead of replacing that body. */
+    ctx.ui[family.holdBasesSlot][String(session.entityId)] = session.editBase ? Object.assign({}, session.editBase) : null;
+}
+
+function prksForgetPrivateNoteHoldBase(family, ctx, key) {
+    const bases = family.holdBasesSlot && ctx && ctx.ui ? ctx.ui[family.holdBasesSlot] : null;
+    if (bases) delete bases[key];
+}
+
+function prksTakeRememberedPrivateNote(family, ctx, id) {
+    const holds = ctx && ctx.ui ? ctx.ui[family.holdsSlot] : null;
+    const key = String(id);
     if (!holds || !Object.prototype.hasOwnProperty.call(holds, key)) return null;
     const text = String(holds[key]);
     delete holds[key];
-    return text;
+    const bases = family.holdBasesSlot ? ctx.ui[family.holdBasesSlot] : null;
+    const base = bases && bases[key] ? bases[key] : null;
+    prksForgetPrivateNoteHoldBase(family, ctx, key);
+    return { text: text, base: base };
 }
 
-function prksReconcileSavedWorkPrivateNote(ctx, settledSession, workId, content) {
+function prksReconcileSavedPrivateNote(family, ctx, settledSession, id, content) {
     if (!ctx || !ctx.ui) return;
     const saved = String(content);
-    const key = String(workId);
-    const holds = ctx.ui.workPrivateNoteHolds;
+    const key = String(id);
+    const holds = ctx.ui[family.holdsSlot];
     if (holds && Object.prototype.hasOwnProperty.call(holds, key) && String(holds[key]) === saved) {
         delete holds[key];
+        prksForgetPrivateNoteHoldBase(family, ctx, key);
     }
-    const current = ctx.ui.workPrivateNoteSession;
+    const current = ctx.ui[family.sessionSlot];
     /* The in-flight session stays untouched until this settlement. A carried
      * session is a later generation's copy and still looks dirty. */
     if (!current || current === settledSession) return;
-    if (String(current.workId) !== key || String(current.ownerTabId) !== String(ctx.tabId)) return;
+    if (String(current.entityId) !== key || String(current.ownerTabId) !== String(ctx.tabId)) return;
     if (current.promise || current.editGeneration > (current.inheritedGeneration || 0)) return;
     if (String(current.draftText) !== saved) return;
     current.dirty = false;
@@ -2705,30 +2790,32 @@ function prksReconcileSavedWorkPrivateNote(ctx, settledSession, workId, content)
     current.saveError = false;
     current.updatedAt = Date.now();
     const live = typeof ctx.getResource === 'function' ? ctx.getResource('privateNotesEditor') : null;
-    if (!live || String(live.entityType) !== 'work' || String(live.entityId) !== key) return;
+    if (!live || String(live.entityType) !== family.entityType || String(live.entityId) !== key) return;
     const shown = live.textarea && live.textarea.isConnected ? String(live.textarea.value) : null;
     if (shown == null || shown === saved) live.dirty = false;
 }
 
-function prksEnsureWorkPrivateNoteSession(ctx, workId, initialText) {
-    if (!ctx || !ctx.ui || workId == null || String(workId) === '') return null;
-    const existing = ctx.ui.workPrivateNoteSession;
-    if (prksWorkPrivateNoteSessionCurrent(existing, ctx, workId)) return existing;
-    /* Leaving this Work, or advancing generation, replaces the one session slot
-     * before an in-flight write can fail. Keep that pre-enqueue draft on this
-     * TabContext only. A flushed durable note stays shared Work state. */
+function prksEnsurePrivateNoteSession(family, ctx, id, initialText) {
+    if (!family || !ctx || !ctx.ui || id == null || String(id) === '') return null;
+    const existing = ctx.ui[family.sessionSlot];
+    if (prksPrivateNoteSessionCurrent(family, existing, ctx, id)) return existing;
+    /* Leaving this entity, or advancing generation, replaces the one session
+     * slot before an in-flight write can fail. Keep that pre-enqueue draft on
+     * this TabContext only. */
     if (existing && String(existing.ownerTabId) === String(ctx.tabId)) {
-        prksRememberUnsavedWorkPrivateNote(ctx, existing);
-        prksWorkPrivateRecoveryLeave(existing);
+        prksRememberUnsavedPrivateNote(family, ctx, existing);
+        const leave = prksPrivateNoteRecoveryHook(family, 'leave');
+        if (leave) leave(existing);
     }
-    const remembered = prksTakeRememberedWorkPrivateNote(ctx, workId);
+    const remembered = prksTakeRememberedPrivateNote(family, ctx, id);
     const carried = remembered != null;
     const session = {
-        key: prksWorkPrivateNoteSessionKey(ctx.tabId, workId),
-        workId: String(workId),
+        key: prksPrivateNoteSessionKey(family, ctx.tabId, id),
+        entityType: family.entityType,
+        entityId: String(id),
         ownerTabId: String(ctx.tabId),
         ownerGeneration: ctx.generation,
-        draftText: carried ? remembered : String(initialText == null ? '' : initialText),
+        draftText: carried ? remembered.text : String(initialText == null ? '' : initialText),
         editGeneration: 0,
         saveSequence: 0,
         latestSaveToken: 0,
@@ -2739,47 +2826,246 @@ function prksEnsureWorkPrivateNoteSession(ctx, workId, initialText) {
         dirty: carried,
         retired: false,
         promise: null,
+        /* This session's own queued row: `{opId, generation, text}` until that row's acknowledgement. */
+        ownQueued: null,
+        /* The base this session's text was typed on, `{value, revision, source, start}`
+         * (Folder only): `start` is the text the field showed when editing
+         * began, and a null revision is resolved at save. */
+        editBase: carried ? remembered.base : null,
         statusText: '',
         updatedAt: Date.now(),
     };
-    ctx.ui.workPrivateNoteSession = session;
-    if (carried) prksWorkPrivateRecoveryInherit(session);
+    session[family.idField] = String(id);
+    if (family.tracksOwnQueued) session.ownQueued = prksFolderInheritedOwnRow(ctx, id);
+    ctx.ui[family.sessionSlot] = session;
+    if (carried) {
+        const inherit = prksPrivateNoteRecoveryHook(family, 'inherit');
+        if (inherit) inherit(session);
+    }
     return session;
 }
 
-function prksWorkPrivateNoteText(ctx, entityId, serverText) {
+function prksEnsureWorkPrivateNoteSession(ctx, workId, initialText) {
+    return prksEnsurePrivateNoteSession(PRKS_PRIVATE_NOTE_FAMILIES.work, ctx, workId, initialText);
+}
+
+function prksPrivateNoteText(family, ctx, id, serverText) {
     const server = String(serverText == null ? '' : serverText);
-    let acknowledged = server;
-    if (typeof prksPendingWorkNoteText === 'function') {
-        acknowledged = prksPendingWorkNoteText(entityId, 'work-private-note', server);
-    }
-    const session = ctx && ctx.ui ? ctx.ui.workPrivateNoteSession : null;
-    if (!prksWorkPrivateNoteSessionCurrent(session, ctx, entityId) || session.retired) return acknowledged;
+    const acknowledged = family.pendingText(id, server);
+    const session = ctx && ctx.ui ? ctx.ui[family.sessionSlot] : null;
+    if (!prksPrivateNoteSessionCurrent(family, session, ctx, id) || session.retired) return acknowledged;
     /* Drop the draft only when the stored body matches it. A pending overlay
      * can equal the draft and then clear before that body is updated; retiring
      * on the overlay lets the next Reminders paint show the stale text. */
     if (session.state === 'committed' && !session.promise && session.draftText === server) {
         session.retired = true;
-        prksWorkPrivateRecoveryDrop(session);
+        const drop = prksPrivateNoteRecoveryHook(family, 'drop');
+        if (drop) drop(session);
         return acknowledged;
     }
     return session.draftText;
 }
 
+function prksWorkPrivateNoteText(ctx, entityId, serverText) {
+    return prksPrivateNoteText(PRKS_PRIVATE_NOTE_FAMILIES.work, ctx, entityId, serverText);
+}
+
 function prksPrivateNotesTextForEntity(entityType, entityId, serverText) {
-    const server = String(serverText == null ? '' : serverText);
-    if (entityType === 'work') {
-        const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
-        return prksWorkPrivateNoteText(ctx, entityId, server);
+    const family = prksPrivateNoteFamily(entityType);
+    if (!family) return String(serverText == null ? '' : serverText);
+    const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    return prksPrivateNoteText(family, ctx, entityId, serverText);
+}
+
+/** The pane's Folder Reminders follow its acknowledgements from the route on, mounted or not (#534). */
+function prksBindFolderPrivateNotesSync(ctx) {
+    PRKS_PRIVATE_NOTE_FAMILIES.folder.bindSync(ctx);
+}
+
+/**
+ * The Folder route read `read` for this pane (#534): its Reminders body as
+ * read (before pending rows are overlaid, with where it came from), then that
+ * field's revision, as the pane's observed base. A cached body is never
+ * verified against the server's revision. Resolves once the base and the
+ * pending rows are read.
+ */
+function prksOpenFolderPrivateNotes(ctx, read, source) {
+    if (!ctx || !read) return Promise.resolve(null);
+    if (typeof prksRememberFolderNotesCanonical === 'function') prksRememberFolderNotesCanonical(ctx, read, source);
+    prksBindFolderPrivateNotesSync(ctx);
+    return Promise.all([
+        typeof prksEnsureFolderNotesBase === 'function'
+            ? prksEnsureFolderNotesBase(ctx, read, { pendingCreate: source === 'pending-create' }) : null,
+        PRKS_PRIVATE_NOTE_FAMILIES.folder.refreshPending(),
+    ]).then(function (out) { return out[0]; }).catch(function () { return null; });
+}
+
+/**
+ * What a pane paints for a Folder over `observed`, and whether text typed on
+ * that paint was typed on `observed`'s revision. A body is; an unsettled
+ * row's text is only while the row is still on its way and was queued on that
+ * same revision. A row that conflicted, failed, or was queued on another
+ * revision shows text the server never held at this revision, so it proves
+ * nothing about the newer body. Nothing is proven while the queue could not be
+ * read: a row it holds may be missing from the paint.
+ */
+function prksFolderNotePaint(folderId, observed) {
+    const row = typeof prksPendingFolderNoteRow === 'function' ? prksPendingFolderNoteRow(String(folderId)) : null;
+    const read = typeof prksPendingFolderNotesRead === 'function' && prksPendingFolderNotesRead();
+    if (!read) return { text: row ? row.text : observed.value, proves: false };
+    if (!row) return { text: observed.value, proves: true };
+    const live = row.status === 'pending' || row.status === 'syncing';
+    return { text: row.text, proves: live && row.baseRevision === observed.revision };
+}
+
+function prksFolderEditBaseFrom(folderId, observed, start) {
+    const known = !!(observed && typeof observed.value === 'string' && Number.isSafeInteger(observed.revision));
+    const paint = known ? prksFolderNotePaint(folderId, observed) : null;
+    /* Compared as the server stores them: an acknowledged base is the
+     * stripped text, the field keeps the whitespace that was typed. */
+    if (paint && paint.proves &&
+        (start == null || prksCanonicalFolderNote(paint.text) === prksCanonicalFolderNote(start))) {
+        const shown = start == null ? paint.text : start;
+        return { value: observed.value, revision: observed.revision, source: observed.source || 'unknown', start: shown };
     }
-    let acknowledged = server;
-    const entry = prksPrivateNoteDrafts.get(prksPrivateNoteKey(entityType, entityId));
-    if (!entry) return acknowledged;
-    if (entry.state === 'committed' && !entry.promise && entry.draftText === server) {
-        prksPrivateNoteDrafts.delete(entry.key);
-        return acknowledged;
+    /* No base yet, or the pane's base no longer shows the text being edited
+     * (it advanced under a field that was not repainted): resolved at save. */
+    return { value: null, revision: null, source: 'unknown', start: start == null ? null : String(start) };
+}
+
+/**
+ * A clean Folder session is edited (#534): its text is now typed on the
+ * pane's observed base, as long as that base shows what the field showed
+ * when editing began (`start`).
+ */
+function prksPinFolderPrivateNoteBase(ctx, session, start) {
+    const observed = typeof prksFolderNoteObserved === 'function'
+        ? prksFolderNoteObserved(ctx, session.entityId) : null;
+    session.editBase = prksFolderEditBaseFrom(session.entityId, observed, start);
+}
+
+function prksCanonicalFolderNote(text) {
+    return typeof prksCanonicalFolderNoteText === 'function' ? prksCanonicalFolderNoteText(text) : String(text).trim();
+}
+
+/**
+ * A Folder Reminders row was acknowledged in this pane's tab (#534). Only the
+ * session's own row, by exact op id and text, stops being its queued
+ * predecessor, and an older row of this session never clears a newer edit.
+ *
+ * The session's edit base moves only to text its own lineage holds: its own
+ * row, or a row that stored exactly the text its editing began from. Another
+ * pane's or tab's row with other text leaves the base where the text was
+ * typed, so this pane's save conflicts instead of replacing that text. A
+ * clean session takes the acknowledged text into its field.
+ */
+function prksFolderPrivateNoteAcknowledged(ctx, ack) {
+    if (!ctx || !ctx.ui || !ack) return;
+    prksFolderRememberAck(ctx, ack);
+    const rows = prksFolderOwnRows(ctx);
+    const paneOwn = rows[String(ack.folderId)];
+    if (paneOwn && paneOwn.opId === ack.opId) delete rows[String(ack.folderId)];
+    const session = ctx.ui.folderPrivateNoteSession;
+    if (!session || String(session.entityId) !== String(ack.folderId)) return;
+    if (String(session.ownerTabId) !== String(ctx.tabId)) return;
+    const own = session.ownQueued;
+    const pin = session.editBase;
+    const newer = !pin || pin.revision == null || ack.revision > pin.revision;
+    if (own && own.opId === ack.opId && own.text === ack.text) {
+        session.ownQueued = null;
+        if (pin && newer) session.editBase = { value: ack.stored, revision: ack.revision, source: 'server', start: own.text };
+        session.updatedAt = Date.now();
+        return;
     }
-    return entry.draftText;
+    if (pin && newer && pin.start != null && prksCanonicalFolderNote(pin.start) === ack.stored) {
+        session.editBase = { value: ack.stored, revision: ack.revision, source: 'server', start: pin.start };
+        session.updatedAt = Date.now();
+        return;
+    }
+    if (session.retired || prksPrivateNoteUnsaved(session) || session.ownQueued) return;
+    /* Clean: nothing of this pane's is unsaved, so the field shows the Folder's
+     * text again and the next edit is typed on it. */
+    session.retired = true;
+    session.editBase = null;
+    session.updatedAt = Date.now();
+    const drop = prksPrivateNoteRecoveryHook(PRKS_PRIVATE_NOTE_FAMILIES.folder, 'drop');
+    if (drop) drop(session);
+    prksRepaintCleanPrivateNotes(PRKS_PRIVATE_NOTE_FAMILIES.folder, ctx, session.entityId);
+}
+
+/*
+ * This pane's unsettled Folder Reminders row per Folder, `{opId, text}`
+ * (#534): the one row its saves may replace, whichever of its sessions queued
+ * it, until that row's acknowledgement. Any other unsettled row is another
+ * pane's or tab's, and the store refuses to replace it.
+ */
+function prksFolderOwnRows(ctx) {
+    if (!ctx.ui.folderPrivateNoteOwnRows) ctx.ui.folderPrivateNoteOwnRows = Object.create(null);
+    return ctx.ui.folderPrivateNoteOwnRows;
+}
+
+/*
+ * The pane's own row for a session it opens, while the queue still holds it.
+ * Its acknowledgement may have landed while the pane showed another Folder;
+ * a row the queue no longer holds is no predecessor. Kept while the queue
+ * could not be read: a row it names is never someone else's.
+ */
+function prksFolderInheritedOwnRow(ctx, id) {
+    const rows = prksFolderOwnRows(ctx);
+    const own = rows[String(id)];
+    if (!own) return null;
+    const read = typeof prksPendingFolderNotesRead === 'function' && prksPendingFolderNotesRead();
+    const row = typeof prksPendingFolderNoteRow === 'function' ? prksPendingFolderNoteRow(String(id)) : null;
+    if (read && (!row || row.opId !== own.opId)) {
+        delete rows[String(id)];
+        return null;
+    }
+    return { opId: own.opId, generation: 0, text: own.text };
+}
+
+const PRKS_FOLDER_RECENT_ACKS = 16;
+
+/* The pane's latest Reminders acknowledgements, for a save that learns its op id after its row was acknowledged. */
+function prksFolderRememberAck(ctx, ack) {
+    if (!ctx.ui.folderPrivateNoteRecentAcks) ctx.ui.folderPrivateNoteRecentAcks = [];
+    const recent = ctx.ui.folderPrivateNoteRecentAcks;
+    if (recent.some(function (seen) { return seen.opId === ack.opId; })) return;
+    recent.push(ack);
+    if (recent.length > PRKS_FOLDER_RECENT_ACKS) recent.shift();
+}
+
+/*
+ * A save of `session` queued `opId` with `text`, or left no row (`opId`
+ * null): the pane's own row for the Folder, recorded before the save
+ * resolves so an acknowledgement that follows finds it. One that already
+ * landed is applied now.
+ */
+function prksFolderOwnRowQueued(ctx, session, id, opId, text, generation) {
+    const rows = prksFolderOwnRows(ctx);
+    const own = opId ? { opId: opId, generation: generation, text: text } : null;
+    if (own) rows[id] = { opId: opId, text: text };
+    else delete rows[id];
+    session.ownQueued = own;
+    const current = ctx.ui.folderPrivateNoteSession;
+    if (current && current !== session && String(current.entityId) === id &&
+        String(current.ownerTabId) === String(ctx.tabId)) {
+        current.ownQueued = own ? Object.assign({}, own) : null;
+    }
+    const early = own && ctx.ui.folderPrivateNoteRecentAcks
+        ? ctx.ui.folderPrivateNoteRecentAcks.find(function (ack) { return ack.opId === opId; }) : null;
+    if (early) prksFolderPrivateNoteAcknowledged(ctx, early);
+}
+
+/* Shows the entity's text in this pane's clean Reminders field, if it is installed. */
+function prksRepaintCleanPrivateNotes(family, ctx, id) {
+    const editor = ctx && typeof ctx.getResource === 'function' ? ctx.getResource('privateNotesEditor') : null;
+    if (!editor || editor.dirty || String(editor.entityType) !== family.entityType || String(editor.entityId) !== String(id)) return;
+    if (!editor.textarea || !editor.textarea.isConnected) return;
+    const live = ctx.getEntity ? ctx.getEntity(family.entityType) : null;
+    if (!live || String(live.id) !== String(id)) return;
+    const next = prksPrivateNoteText(family, ctx, id, live.private_notes);
+    if (editor.textarea.value !== next) editor.textarea.value = next;
+    editor.shownText = next;
 }
 
 /*
@@ -3098,35 +3384,35 @@ function prksPrivateNotesOwnerCurrent(editor) {
 }
 
 function prksPrivateNotesSetStatus(editor, text) {
-    if (editor && editor.entityType === 'work' && editor.ctx && editor.ctx.ui) {
-        const session = editor.ctx.ui.workPrivateNoteSession;
-        if (session && String(session.workId) === String(editor.entityId)) session.statusText = text;
+    const family = editor ? prksPrivateNoteFamily(editor.entityType) : null;
+    if (family && editor.ctx && editor.ctx.ui) {
+        const session = editor.ctx.ui[family.sessionSlot];
+        if (session && String(session.entityId) === String(editor.entityId)) session.statusText = text;
     }
     if (!editor || !editor.statusEl || !prksRightPanelOwnedBy(editor.ctx, editor.statusEl)) return;
     editor.statusEl.textContent = text;
 }
 
 function prksPrivateNoteLatestSaveToken(editor) {
-    if (!editor) return 0;
-    if (editor.entityType === 'work' && editor.ctx && editor.ctx.ui) {
-        const session = editor.ctx.ui.workPrivateNoteSession;
-        if (session && String(session.workId) === String(editor.entityId) &&
-            String(session.ownerTabId) === String(editor.ctx.tabId) &&
-            String(session.ownerGeneration) === String(editor.generation)) {
-            return session.latestSaveToken;
-        }
-        return 0;
+    const family = editor ? prksPrivateNoteFamily(editor.entityType) : null;
+    if (!family || !editor.ctx || !editor.ctx.ui) return 0;
+    const session = editor.ctx.ui[family.sessionSlot];
+    if (session && String(session.entityId) === String(editor.entityId) &&
+        String(session.ownerTabId) === String(editor.ctx.tabId) &&
+        String(session.ownerGeneration) === String(editor.generation)) {
+        return session.latestSaveToken;
     }
-    return (prksPrivateNoteDrafts.get(editor.key) || {}).latestSaveToken;
+    return 0;
 }
 
-function prksPrivateNotesStatusForResult(code) {
-    if (code === 'saved') return 'Saved';
-    if (code === 'scope_busy') return 'Still syncing — wait or resolve the conflict in Diagnostics';
+function prksPrivateNotesStatusForResult(code, family) {
+    if (code === 'saved' || code === 'queued' || code === 'unchanged') return 'Saved';
+    if (code === 'scope_busy' || code === 'conflict') return 'Still syncing — wait or resolve the conflict in Diagnostics';
     if (code === 'unknown_base') {
-        return 'Reminders cannot be saved yet — open this file while connected once';
+        return (family || PRKS_PRIVATE_NOTE_FAMILIES.work).unknownBaseStatus;
     }
     if (code === 'too-long') return 'This reminder is too large to save';
+    if (code === 'changed_elsewhere') return 'Reminders changed elsewhere — copy your text, then reopen this folder';
     if (code === 'unavailable') return 'Local changes could not be read from browser storage';
     return 'Could not save';
 }
@@ -3142,11 +3428,12 @@ function prksPrivateNotesRetryTarget(editor) {
     if (!editor || !editor.ctx || typeof editor.ctx.getResource !== 'function') return null;
     const live = editor.ctx.getResource('privateNotesEditor');
     if (!live) {
-        /* Warm park disposed the editor; the Work draft is still on the
+        /* Warm park disposed the editor; the draft is still on the pane's
          * session and is retried from there while this generation holds. */
-        if (String(editor.entityType) !== 'work') return null;
+        const family = prksPrivateNoteFamily(editor.entityType);
+        if (!family) return null;
         if (String(editor.generation) !== String(editor.ctx.generation)) return null;
-        return prksWorkPrivateNoteSessionSaver(editor.ctx, editor.entityId);
+        return prksPrivateNoteSessionSaver(family, editor.ctx, editor.entityId);
     }
     if (live.ctx !== editor.ctx) return null;
     if (String(live.entityType) !== String(editor.entityType)) return null;
@@ -3157,22 +3444,22 @@ function prksPrivateNotesRetryTarget(editor) {
 }
 
 /**
- * A paint-less save target for the owner's current Work Reminders session
- * when no editor is installed (warm park or a focus switch disposed it).
- * It never matches the installed slot, so its saves do not paint.
+ * A paint-less save target for the owner's current Reminders session when no
+ * editor is installed (warm park or a focus switch disposed it). It never
+ * matches the installed slot, so its saves do not paint.
  */
-function prksWorkPrivateNoteSessionSaver(ctx, workId) {
-    if (!ctx || ctx.destroyed || !ctx.ui || typeof ctx.isCurrent !== 'function') return null;
+function prksPrivateNoteSessionSaver(family, ctx, id) {
+    if (!family || !ctx || ctx.destroyed || !ctx.ui || typeof ctx.isCurrent !== 'function') return null;
     if (!ctx.isCurrent(ctx.generation)) return null;
-    const work = ctx.getEntity ? ctx.getEntity('work') : null;
-    if (!work || String(work.id) !== String(workId)) return null;
-    const session = ctx.ui.workPrivateNoteSession;
-    if (!prksWorkPrivateNoteSessionCurrent(session, ctx, work.id)) return null;
-    const id = String(work.id);
+    const entity = ctx.getEntity ? ctx.getEntity(family.entityType) : null;
+    if (!entity || String(entity.id) !== String(id)) return null;
+    const session = ctx.ui[family.sessionSlot];
+    if (!prksPrivateNoteSessionCurrent(family, session, ctx, entity.id)) return null;
+    const entityId = String(entity.id);
     return {
-        key: prksPrivateNotesEditorKey('work', id, ctx),
-        entityType: 'work',
-        entityId: id,
+        key: prksPrivateNotesEditorKey(family.entityType, entityId, ctx),
+        entityType: family.entityType,
+        entityId: entityId,
         ctx: ctx,
         generation: ctx.generation,
         textarea: null,
@@ -3181,12 +3468,17 @@ function prksWorkPrivateNoteSessionSaver(ctx, workId) {
     };
 }
 
+function prksWorkPrivateNoteSessionSaver(ctx, workId) {
+    return prksPrivateNoteSessionSaver(PRKS_PRIVATE_NOTE_FAMILIES.work, ctx, workId);
+}
+
 function prksPrivateNotesRetryStillDirty(live) {
     if (!live) return false;
     if (live.dirty) return true;
-    if (String(live.entityType) !== 'work' || !live.ctx || !live.ctx.ui) return false;
-    const session = live.ctx.ui.workPrivateNoteSession;
-    if (!prksWorkPrivateNoteSessionCurrent(session, live.ctx, live.entityId) || !session.dirty) return false;
+    const family = prksPrivateNoteFamily(live.entityType);
+    if (!family || !live.ctx || !live.ctx.ui) return false;
+    const session = live.ctx.ui[family.sessionSlot];
+    if (!prksPrivateNoteSessionCurrent(family, session, live.ctx, live.entityId) || !session.dirty) return false;
     live.dirty = true;
     return true;
 }
@@ -3195,8 +3487,14 @@ function prksPrivateNotesRetryStillDirty(live) {
 // still stops the previous retry listener for the same note.
 const prksPrivateNoteBusyRetryStops = new WeakMap();
 
-function prksSchedulePrivateNoteBusyRetry(editor, token) {
+/* Behind another pane's or tab's row (`foreign`), waiting backs off from 2 s to 30 s;
+ * that row's acknowledgement, which this tab may never hear, is otherwise the cue. */
+const PRKS_PRIVATE_NOTE_BUSY_RETRY_MS = 400;
+const PRKS_PRIVATE_NOTE_FOREIGN_RETRY_MS = [2000, 4000, 8000, 16000, 30000];
+
+function prksSchedulePrivateNoteBusyRetry(editor, token, delayMs) {
     if (!editor || !editor.ctx || editor.ctx.destroyed) return;
+    const delay = Number.isFinite(delayMs) && delayMs > 0 ? delayMs : PRKS_PRIVATE_NOTE_BUSY_RETRY_MS;
     const timerKey = 'privateNotesBusyRetry:' + editor.key;
     editor.ctx.clearTimer(timerKey);
     let retryStops = prksPrivateNoteBusyRetryStops.get(editor.ctx);
@@ -3253,22 +3551,115 @@ function prksSchedulePrivateNoteBusyRetry(editor, token) {
         }
         stopRetry();
         tryAgain();
-    }, 400);
+    }, delay);
     editor.ctx.setTimer(timerKey, timer);
 }
 
-function prksEnqueueWorkPrivateNoteSave(editor) {
-    if (!editor || !editor.ctx || !editor.ctx.ui) return null;
+/**
+ * The Work Reminders durable save for one session: the base comes from the
+ * pane's observed Work notes, loaded once when missing. Resolves to the
+ * save's `{code, opId}` and the base it was measured against.
+ */
+async function prksSaveWorkPrivateNoteForSession(editor, entityId, content) {
+    if (typeof prksEnsureWorkNotesBase === 'function' &&
+        typeof prksWorkNoteObserved === 'function' &&
+        !prksWorkNoteObserved(editor.ctx, 'work-private-note')) {
+        const work = editor.ctx && editor.ctx.getEntity ? editor.ctx.getEntity('work') : null;
+        await prksEnsureWorkNotesBase(
+            editor.ctx,
+            (editor.ctx.getResource && editor.ctx.getResource('workNotesCanonical')) || work
+        );
+    }
+    const observed = typeof prksWorkNoteObserved === 'function'
+        ? prksWorkNoteObserved(editor.ctx, 'work-private-note')
+        : null;
+    if (typeof prksSaveWorkNoteDurably !== 'function') return { result: { code: 'unavailable' }, base: null };
+    const base = observed ? { value: observed.value, revision: observed.revision } : null;
+    return { result: await prksSaveWorkNoteDurably(entityId, 'work-private-note', content, observed), base: base };
+}
+
+/**
+ * The Folder Reminders durable save for one session (#534): the
+ * `private_notes` field against its Folder field revision. The base is the
+ * session's edit base, the one its text was typed on, wherever the pane is
+ * now. A session with no base yet takes the pane's observed one while the
+ * pane still shows this Folder, and only when it shows the text editing
+ * began from; never another Folder's.
+ */
+async function prksSaveFolderPrivateNoteForSession(editor, entityId, content, session) {
+    if (typeof prksSaveFolderPrivateNoteDurably !== 'function') return { result: { code: 'unavailable' }, base: null };
+    const ctx = editor.ctx;
+    const id = String(entityId);
+    const generation = session ? session.editGeneration : 0;
+    /* One save at a time per pane and Folder: each names the row the one
+     * before it queued as the row it may replace. */
+    if (!ctx.ui.folderPrivateNoteSaveChains) ctx.ui.folderPrivateNoteSaveChains = Object.create(null);
+    const chains = ctx.ui.folderPrivateNoteSaveChains;
+    const prior = chains[id] || null;
+    const run = (async function () {
+        if (prior) await prior;
+        const out = await prksSaveFolderPrivateNoteInOrder(editor, id, content, session);
+        const code = out.result && out.result.code;
+        if (code === 'queued' || code === 'unchanged') {
+            prksFolderOwnRowQueued(ctx, session, id, code === 'queued' ? out.result.opId : null, content, generation);
+        }
+        return out;
+    })();
+    const done = run.then(function () {}, function () {});
+    chains[id] = done;
+    void done.then(function () { if (chains[id] === done) delete chains[id]; });
+    return run;
+}
+
+function prksFolderSaveDurably(ctx, id, content, base) {
+    const own = prksFolderOwnRows(ctx)[id];
+    return prksSaveFolderPrivateNoteDurably(id, content, base, { ownOpId: own ? own.opId : null });
+}
+
+async function prksSaveFolderPrivateNoteInOrder(editor, entityId, content, session) {
+    const ctx = editor.ctx;
+    const pin = session && String(session.entityId) === String(entityId) ? session.editBase : null;
+    if (pin && Number.isSafeInteger(pin.revision)) {
+        const pinned = { value: pin.value, revision: pin.revision };
+        return { result: await prksFolderSaveDurably(ctx, entityId, content, pinned), base: pinned };
+    }
+    let observed = typeof prksFolderNoteObserved === 'function' ? prksFolderNoteObserved(ctx, entityId) : null;
+    const live = ctx && ctx.getEntity ? ctx.getEntity('folder') : null;
+    if (!observed && live && String(live.id) === String(entityId) && typeof prksEnsureFolderNotesBase === 'function') {
+        const canonical = ctx.getResource ? ctx.getResource('folderNotesCanonical') : null;
+        const held = canonical && canonical.id === String(entityId) ? canonical : null;
+        observed = await prksEnsureFolderNotesBase(ctx, held || live,
+            { pendingCreate: !!(held && held.source === 'pending-create') });
+    }
+    /* No fallback to the stored Folder: its body may be newer than the text
+     * this pane shows, and saving against it would replace that newer text. */
+    if (pin && observed) {
+        /* Resolve on the queue as it is now, not on the rows last painted. */
+        await PRKS_PRIVATE_NOTE_FAMILIES.folder.refreshPending();
+        const resolved = prksFolderEditBaseFrom(entityId, observed, pin.start);
+        if (!Number.isSafeInteger(resolved.revision)) {
+            return { result: { code: 'changed_elsewhere', opId: null }, base: null };
+        }
+        /* Re-read: a newer save may have pinned the session meanwhile. */
+        if (session.editBase === pin) session.editBase = resolved;
+    }
+    const base = observed ? { value: observed.value, revision: observed.revision } : null;
+    return { result: await prksFolderSaveDurably(ctx, entityId, content, base), base: base };
+}
+
+function prksEnqueuePrivateNoteSave(family, editor) {
+    if (!family || !editor || !editor.ctx || !editor.ctx.ui) return null;
     const entityId = String(editor.entityId);
-    let session = editor.ctx.ui.workPrivateNoteSession;
-    if (!prksWorkPrivateNoteSessionCurrent(session, editor.ctx, entityId)) {
-        session = prksEnsureWorkPrivateNoteSession(
+    let session = editor.ctx.ui[family.sessionSlot];
+    if (!prksPrivateNoteSessionCurrent(family, session, editor.ctx, entityId)) {
+        session = prksEnsurePrivateNoteSession(
+            family,
             editor.ctx,
             entityId,
             editor.textarea ? editor.textarea.value : ''
         );
     }
-    if (!session || String(session.workId) !== entityId ||
+    if (!session || String(session.entityId) !== entityId ||
         String(session.ownerTabId) !== String(editor.ctx.tabId)) {
         return null;
     }
@@ -3287,42 +3678,37 @@ function prksEnqueueWorkPrivateNoteSave(editor) {
     session.saveError = false;
     session.retired = false;
     session.updatedAt = Date.now();
-    prksPrivateNotesSetStatus(editor, 'Saving…');
+    /* A retry behind another pane's row keeps saying it waits, not "Saving…" each time. */
+    if (!session.foreignWaits) prksPrivateNotesSetStatus(editor, 'Saving…');
     /* The queue never holds a body newer than recovery storage. */
-    prksWorkPrivateRecoveryBeforeSave(session);
+    const beforeSave = prksPrivateNoteRecoveryHook(family, 'beforeSave');
+    if (beforeSave) beforeSave(session);
+    const queued = prksPrivateNoteRecoveryHook(family, 'queued');
+    const settled = prksPrivateNoteRecoveryHook(family, 'settled');
     let usedBase = null;
-    /* prksSaveWorkNoteDurably wakes sync before this completion settles the UI. */
+    /* The durable save wakes sync before this completion settles the UI. */
     const promise = (async function () {
-        if (typeof prksEnsureWorkNotesBase === 'function' &&
-            typeof prksWorkNoteObserved === 'function' &&
-            !prksWorkNoteObserved(editor.ctx, 'work-private-note')) {
-            const work = editor.ctx && editor.ctx.getEntity ? editor.ctx.getEntity('work') : null;
-            await prksEnsureWorkNotesBase(
-                editor.ctx,
-                (editor.ctx.getResource && editor.ctx.getResource('workNotesCanonical')) || work
-            );
-        }
-        const observed = typeof prksWorkNoteObserved === 'function'
-            ? prksWorkNoteObserved(editor.ctx, 'work-private-note')
-            : null;
-        if (typeof prksSaveWorkNoteDurably !== 'function') return { code: 'unavailable' };
-        usedBase = observed ? { value: observed.value, revision: observed.revision } : null;
-        return prksSaveWorkNoteDurably(entityId, 'work-private-note', content, observed);
+        const out = await family.save(editor, entityId, content, session);
+        usedBase = out.base;
+        return out.result;
     })();
     session.promise = promise;
     void promise
         .then(async function (result) {
             const code = result && result.code;
-            const ok = code === 'saved';
+            const ok = family.ok(code);
             /* Recorded whether or not a newer save has taken over: a newer body was typed on it. */
-            if (ok && result.opId) prksWorkPrivateRecoveryQueued(session, result.opId, savedGeneration, content, usedBase);
-            if (ok && typeof prksRefreshPendingWorkNotes === 'function') {
-                await prksRefreshPendingWorkNotes();
+            if (ok && result.opId && queued) queued(session, result.opId, savedGeneration, content, usedBase);
+            if (ok) {
+                const refreshing = family.refreshPending();
+                if (refreshing) await refreshing;
             }
             if (token !== session.latestSaveToken) return;
             const hasNewerDraft = session.editGeneration > session.latestSaveEditGeneration;
             session.settledSaveToken = token;
             session.promise = null;
+            const foreign = code === 'scope_busy' && result.foreign === true;
+            session.foreignWaits = foreign && !hasNewerDraft ? (session.foreignWaits || 0) + 1 : 0;
             if (code === 'scope_busy' && !hasNewerDraft) {
                 // Park-flush may still be in flight; keep this body and retry.
                 session.saveError = false;
@@ -3330,23 +3716,29 @@ function prksEnqueueWorkPrivateNoteSave(editor) {
                 session.dirty = true;
                 session.updatedAt = Date.now();
                 editor.dirty = true;
-                prksWorkPrivateRecoverySettled(editor.ctx, entityId, session, result, savedGeneration, content);
+                if (settled) settled(editor.ctx, entityId, session, result, savedGeneration, content);
                 if (prksPrivateNotesOwnerCurrent(editor)) {
                     const liveEditor = editor.ctx.getResource ? editor.ctx.getResource('privateNotesEditor') : null;
                     if (liveEditor === editor) {
-                        prksPrivateNotesSetStatus(editor, prksPrivateNotesStatusForResult(code));
+                        prksPrivateNotesSetStatus(editor, prksPrivateNotesStatusForResult(code, family));
                     }
                 }
-                prksSchedulePrivateNoteBusyRetry(editor, token);
+                const waits = PRKS_PRIVATE_NOTE_FOREIGN_RETRY_MS;
+                prksSchedulePrivateNoteBusyRetry(editor, token,
+                    foreign ? waits[Math.min(session.foreignWaits, waits.length) - 1] : PRKS_PRIVATE_NOTE_BUSY_RETRY_MS);
                 return;
             }
+            /* A row that needs resolution: the text stays unsaved, and the next
+             * edit, blur or leave tries again; a timer would only meet it again. */
+            const keepDirty = code === 'conflict' && !hasNewerDraft;
             session.saveError = !ok && !hasNewerDraft;
             session.state = hasNewerDraft ? 'drafting' : !ok ? 'error' : 'committed';
-            session.dirty = hasNewerDraft;
+            session.dirty = hasNewerDraft || keepDirty;
+            if (keepDirty) editor.dirty = true;
             session.updatedAt = Date.now();
-            prksWorkPrivateRecoverySettled(editor.ctx, entityId, session, result, savedGeneration, content);
+            if (settled) settled(editor.ctx, entityId, session, result, savedGeneration, content);
             if (ok && !hasNewerDraft) {
-                prksReconcileSavedWorkPrivateNote(editor.ctx, session, entityId, content);
+                prksReconcileSavedPrivateNote(family, editor.ctx, session, entityId, content);
             }
             if (!prksPrivateNotesOwnerCurrent(editor)) return;
             const liveEditor = editor.ctx.getResource ? editor.ctx.getResource('privateNotesEditor') : null;
@@ -3356,7 +3748,7 @@ function prksEnqueueWorkPrivateNoteSave(editor) {
                 return;
             }
             if (!ok) {
-                prksPrivateNotesSetStatus(editor, prksPrivateNotesStatusForResult(code));
+                prksPrivateNotesSetStatus(editor, prksPrivateNotesStatusForResult(code, family));
                 return;
             }
             prksPrivateNotesSetStatus(editor, 'Saved');
@@ -3371,13 +3763,14 @@ function prksEnqueueWorkPrivateNoteSave(editor) {
         .catch(function () {
             if (token !== session.latestSaveToken) return;
             const hasNewerDraft = session.editGeneration > session.latestSaveEditGeneration;
+            session.foreignWaits = 0;
             session.settledSaveToken = token;
             session.promise = null;
             session.saveError = !hasNewerDraft;
             session.state = hasNewerDraft ? 'drafting' : 'error';
             session.dirty = hasNewerDraft;
             session.updatedAt = Date.now();
-            prksWorkPrivateRecoverySettled(editor.ctx, entityId, session, { code: 'failed' }, savedGeneration, content);
+            if (settled) settled(editor.ctx, entityId, session, { code: 'failed' }, savedGeneration, content);
             if (prksPrivateNotesOwnerCurrent(editor)) {
                 prksPrivateNotesSetStatus(editor, hasNewerDraft ? 'Drafting…' : 'Could not save');
             }
@@ -3385,80 +3778,13 @@ function prksEnqueueWorkPrivateNoteSave(editor) {
     return promise;
 }
 
+function prksEnqueueWorkPrivateNoteSave(editor) {
+    return prksEnqueuePrivateNoteSave(PRKS_PRIVATE_NOTE_FAMILIES.work, editor);
+}
+
 function prksEnqueuePrivateNotesSave(editor) {
     if (!editor) return null;
-    if (editor.entityType === 'work') {
-        return prksEnqueueWorkPrivateNoteSave(editor);
-    }
-    const entry = prksPrivateNoteDraft(editor.entityType, editor.entityId, editor.textarea.value);
-    const content = String(entry.draftText);
-    editor.dirty = false;
-    entry.saveSequence += 1;
-    const token = entry.saveSequence;
-    entry.latestSaveToken = token;
-    entry.latestSaveEditGeneration = entry.editGeneration;
-    entry.state = 'saving';
-    entry.saveError = false;
-    entry.updatedAt = Date.now();
-    prksPrivateNotesSetStatus(editor, 'Saving…');
-    // Folder private notes are SET_FOLDER_FIELD via the canonical patchFolder
-    // wrapper (durable). Coalesce lives in the local-store field saver.
-    const promise = (async function () {
-        if (typeof patchFolder !== 'function') return { ok: false };
-        try {
-            await patchFolder(editor.entityId, { private_notes: content });
-            return { ok: true };
-        } catch (_e) {
-            return { ok: false };
-        }
-    })();
-    entry.promise = promise;
-    void promise
-        .then(async function (result) {
-            const ok = !!(result && result.ok);
-            if (token !== entry.latestSaveToken) return;
-            const hasNewerDraft = entry.editGeneration > entry.latestSaveEditGeneration;
-            entry.settledSaveToken = token;
-            entry.promise = null;
-            entry.saveError = !ok && !hasNewerDraft;
-            entry.state = hasNewerDraft ? 'drafting' : !ok ? 'error' : 'committed';
-            entry.updatedAt = Date.now();
-            prksPrunePrivateNoteDrafts();
-            if (!prksPrivateNotesOwnerCurrent(editor)) return;
-            const liveEditor = editor.ctx.getResource ? editor.ctx.getResource('privateNotesEditor') : null;
-            if (liveEditor !== editor) return;
-            if (hasNewerDraft) {
-                prksPrivateNotesSetStatus(editor, 'Drafting…');
-                return;
-            }
-            if (!ok) {
-                prksPrivateNotesSetStatus(editor, 'Could not save');
-                return;
-            }
-            const live = editor.ctx.getEntity(editor.entityType);
-            if (live) live.private_notes = content;
-            prksPrivateNotesSetStatus(editor, 'Saved');
-            const timer = window.setTimeout(function () {
-                if (editor.ctx && editor.ctx.timers && editor.ctx.timers.get('privateNotesStatus') === timer) {
-                    editor.ctx.clearTimer('privateNotesStatus');
-                }
-                if (editor.statusEl && editor.statusEl.textContent === 'Saved') editor.statusEl.textContent = '';
-            }, 1800);
-            editor.ctx.setTimer('privateNotesStatus', timer);
-        })
-        .catch(function () {
-            if (token !== entry.latestSaveToken) return;
-            const hasNewerDraft = entry.editGeneration > entry.latestSaveEditGeneration;
-            entry.settledSaveToken = token;
-            entry.promise = null;
-            entry.saveError = !hasNewerDraft;
-            entry.state = hasNewerDraft ? 'drafting' : 'error';
-            entry.updatedAt = Date.now();
-            if (prksPrivateNotesOwnerCurrent(editor)) {
-                prksPrivateNotesSetStatus(editor, hasNewerDraft ? 'Drafting…' : 'Could not save');
-            }
-        });
-    return promise;
+    return prksEnqueuePrivateNoteSave(prksPrivateNoteFamily(editor.entityType), editor);
 }
 
 function prksFlushPendingPrivateNotes(ctx) {
@@ -3470,16 +3796,19 @@ function prksFlushPendingPrivateNotes(ctx) {
         prksEnqueuePrivateNotesSave(editor);
         return;
     }
-    /* The Work draft outlives its editor: warm park and a focus switch
-     * dispose the editor, and a scope_busy settlement can leave the session
-     * dirty after that. Flush it from the session so closing or leaving
-     * this owner does not drop it. The save never paints: no editor is
-     * installed for it to own. */
-    const session = ctx.ui ? ctx.ui.workPrivateNoteSession : null;
-    const work = ctx.getEntity ? ctx.getEntity('work') : null;
-    if (!work || !session || !session.dirty || session.promise) return;
-    const saver = prksWorkPrivateNoteSessionSaver(ctx, work.id);
-    if (saver) void prksEnqueueWorkPrivateNoteSave(saver);
+    /* The draft outlives its editor: warm park and a focus switch dispose
+     * the editor, and a scope_busy settlement can leave the session dirty
+     * after that. Flush it from the session so closing or leaving this owner
+     * does not drop it. The save never paints: no editor is installed for it
+     * to own. */
+    Object.keys(PRKS_PRIVATE_NOTE_FAMILIES).forEach(function (name) {
+        const family = PRKS_PRIVATE_NOTE_FAMILIES[name];
+        const session = ctx.ui ? ctx.ui[family.sessionSlot] : null;
+        const entity = ctx.getEntity ? ctx.getEntity(family.entityType) : null;
+        if (!entity || !session || !session.dirty || session.promise) return;
+        const saver = prksPrivateNoteSessionSaver(family, ctx, entity.id);
+        if (saver) void prksEnqueuePrivateNoteSave(family, saver);
+    });
 }
 
 /** Work and Folder private notes are durable SET_* paths. */
@@ -3497,36 +3826,32 @@ if (typeof prksOfflineRuntimeSubscribe === 'function') {
 }
 
 function prksPrivateNotesEditorKey(entityType, entityId, ctx) {
-    if (String(entityType) === 'work' && ctx) {
-        return 'work:' + String(ctx.tabId) + ':' + String(ctx.generation) + ':' + String(entityId);
-    }
-    return prksPrivateNoteKey(entityType, entityId);
+    return String(entityType) + ':' + String(ctx ? ctx.tabId : '') + ':' +
+        String(ctx ? ctx.generation : '') + ':' + String(entityId);
 }
 
 /** The field's text is a new edit: record it on the draft and arm the ordinary save. */
 function prksPrivateNotesNoteEdit(editor) {
     const ctx = editor.ctx;
     const ta = editor.textarea;
-    if (editor.entityType === 'work') {
-        const liveSession = prksEnsureWorkPrivateNoteSession(ctx, editor.entityId, ta.value);
-        if (liveSession) {
-            liveSession.draftText = String(ta.value);
-            liveSession.editGeneration += 1;
-            liveSession.state = 'drafting';
-            liveSession.saveError = false;
-            liveSession.retired = false;
-            liveSession.dirty = true;
-            liveSession.updatedAt = Date.now();
-            /* Every generation reaches recovery storage before the save debounce ends (#474). */
-            prksWorkPrivateRecoveryEdit(ctx, liveSession);
-        }
-    } else {
-        const draft = prksPrivateNoteDraft(editor.entityType, editor.entityId, ta.value);
-        draft.draftText = ta.value;
-        draft.editGeneration += 1;
-        draft.state = 'drafting';
-        draft.saveError = false;
-        draft.updatedAt = Date.now();
+    const family = prksPrivateNoteFamily(editor.entityType);
+    const liveSession = prksEnsurePrivateNoteSession(family, ctx, editor.entityId, ta.value);
+    const start = typeof editor.shownText === 'string' ? editor.shownText : null;
+    editor.shownText = String(ta.value);
+    if (liveSession) {
+        /* A clean session's first edit is typed on what the field showed. */
+        const pin = family.pin && !prksPrivateNoteUnsaved(liveSession) ? family.pin : null;
+        liveSession.draftText = String(ta.value);
+        liveSession.editGeneration += 1;
+        liveSession.state = 'drafting';
+        liveSession.saveError = false;
+        liveSession.retired = false;
+        liveSession.dirty = true;
+        liveSession.updatedAt = Date.now();
+        if (pin) pin(ctx, liveSession, start);
+        /* Every generation reaches recovery storage before the save debounce ends (#474). */
+        const edit = prksPrivateNoteRecoveryHook(family, 'edit');
+        if (edit) edit(ctx, liveSession);
     }
     editor.dirty = true;
     prksPrivateNotesSetStatus(editor, 'Drafting…');
@@ -3552,6 +3877,8 @@ function prksPrivateNotesArmSave(editor) {
  * `prksEnqueuePrivateNotesSave`; flushing stays on the leave path.
  */
 function prksBindPrivateNotesField(entityType, entityId, ownerCtx) {
+    const family = prksPrivateNoteFamily(entityType);
+    if (!family) return;
     const idSuffix = `${entityType}-${entityId}`;
     const ctx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
     if (!ctx || !prksRightPanelOwnedBy(ctx)) return;
@@ -3562,29 +3889,26 @@ function prksBindPrivateNotesField(entityType, entityId, ownerCtx) {
     if (!ta || ta.dataset.prksNotesBound === '1') return;
     const statusEl = panel.querySelector(`#prks-private-notes-status-${idSuffix}`);
     const editorKey = prksPrivateNotesEditorKey(entityType, entityId, ctx);
-    let session = null;
-    let entry = null;
-    if (String(entityType) === 'work') {
-        const live = ctx.getEntity && ctx.getEntity('work');
-        const painted = prksWorkPrivateNoteText(ctx, entityId, live && live.private_notes);
-        session = prksEnsureWorkPrivateNoteSession(ctx, entityId, painted);
-        ta.value = session && !session.retired ? session.draftText : painted;
-    } else {
-        entry = prksPrivateNoteDrafts.get(prksPrivateNoteKey(entityType, entityId));
-        if (entry) ta.value = entry.draftText;
-    }
+    const shownEntity = function () {
+        const live = ctx.getEntity && ctx.getEntity(family.entityType);
+        return live && String(live.id) === String(entityId) ? live : null;
+    };
+    const entity = shownEntity();
+    const painted = prksPrivateNoteText(family, ctx, entityId, entity && entity.private_notes);
+    const session = prksEnsurePrivateNoteSession(family, ctx, entityId, painted);
+    ta.value = session && !session.retired ? session.draftText : painted;
     const editor = {
         key: editorKey,
-        entityType: String(entityType),
+        entityType: family.entityType,
         entityId: String(entityId),
         ctx: ctx,
         generation: ctx.generation,
         textarea: ta,
         statusEl: statusEl,
         timerKey: 'privateNotesDebounce:' + editorKey,
-        dirty: String(entityType) === 'work'
-            ? !!(session && (session.state === 'drafting' || session.dirty))
-            : !!(entry && entry.state === 'drafting'),
+        dirty: !!(session && (session.state === 'drafting' || session.dirty)),
+        /* What the field shows, so an edit knows the text it began from. */
+        shownText: String(ta.value),
     };
     const schedule = function () {
         prksPrivateNotesNoteEdit(editor);
@@ -3613,22 +3937,22 @@ function prksBindPrivateNotesField(entityType, entityId, ownerCtx) {
     ta.dataset.prksNotesBound = '1';
     ta.addEventListener('input', schedule);
     ta.addEventListener('blur', blur);
-    if (editor.entityType === 'work' && typeof prksRefreshPendingWorkNotes === 'function') {
-        void prksRefreshPendingWorkNotes().then(function () {
+    const refreshing = family.refreshPending();
+    if (refreshing) {
+        void Promise.resolve(refreshing).then(function () {
             if (!ctx.isCurrent(editor.generation)) return;
             if (editor.dirty) return;
             if (document.activeElement === ta) return;
             const liveEditor = ctx.getResource && ctx.getResource('privateNotesEditor');
             if (liveEditor !== editor) return;
-            const live = ctx.getEntity && ctx.getEntity('work');
-            const next = prksWorkPrivateNoteText(ctx, entityId, live && live.private_notes);
+            const live = shownEntity();
+            const next = prksPrivateNoteText(family, ctx, entityId, live && live.private_notes);
             if (ta.value === next) return;
             ta.value = next;
+            editor.shownText = next;
         });
     }
-    if (editor.entityType === 'work' && typeof prksBindWorkNotesSync === 'function') {
-        prksBindWorkNotesSync(ctx);
-    }
+    family.bindSync(ctx);
 }
 
 function initPrksPrivateNotesEditor(entityType, entityId, ownerCtx) {
@@ -3645,16 +3969,17 @@ window.prksEnsureWorkPrivateNoteSession = prksEnsureWorkPrivateNoteSession;
 window.prksFlushPendingPrivateNotes = prksFlushPendingPrivateNotes;
 window.prksPrivateNotesTextForEntity = prksPrivateNotesTextForEntity;
 window.prksResetPrivateNoteDraftsForTest = function () {
-    prksPrivateNoteDrafts.clear();
     prksWorkPrivateRecoverySessions.forEach(prksWorkPrivateRecoveryDrop);
     prksWorkPrivateRecoverySessions.clear();
     if (prksWorkPrivateNotesRecoveryAdapter) prksWorkPrivateNotesRecoveryAdapter.resetForTest();
     if (typeof prksForEachLiveTabContext !== 'function') return;
     prksForEachLiveTabContext(function (ctx) {
-        if (ctx && ctx.ui) {
-            ctx.ui.workPrivateNoteSession = null;
-            ctx.ui.workPrivateNoteHolds = null;
-        }
+        if (!ctx || !ctx.ui) return;
+        Object.keys(PRKS_PRIVATE_NOTE_FAMILIES).forEach(function (name) {
+            ctx.ui[PRKS_PRIVATE_NOTE_FAMILIES[name].sessionSlot] = null;
+            ctx.ui[PRKS_PRIVATE_NOTE_FAMILIES[name].holdsSlot] = null;
+            if (PRKS_PRIVATE_NOTE_FAMILIES[name].holdBasesSlot) ctx.ui[PRKS_PRIVATE_NOTE_FAMILIES[name].holdBasesSlot] = null;
+        });
     });
 };
 
@@ -5291,6 +5616,11 @@ async function prksReloadEntityTagsUI(entityType, entityId, ownerCtx, coherenceT
             return;
         }
         if (typeof ctx.setEntity === 'function') ctx.setEntity('folder', _tf);
+        /* A fresh Folder read refreshes the Reminders base (#534). */
+        if (_tf && typeof prksRememberFolderNotesCanonical === 'function') {
+            prksRememberFolderNotesCanonical(ctx, _tf, 'server');
+            if (typeof prksEnsureFolderNotesBase === 'function') void prksEnsureFolderNotesBase(ctx, _tf);
+        }
         if (ctx.root && ctx.mounted) {
             prksPresentVueRoute(ctx, ctx.root, 'folder-detail', {
                 availability: 'ready',
