@@ -68,15 +68,25 @@ Every setting is checked against its current configuration (§1) before it is ch
 | Workflow | Proposed setting | Why |
 |---|---|---|
 | Auto-add to project | On. Filter: all issues and PRs in `Fooftilly/PRKS`, including dependency PRs | Everything enters without manual adding. Dependency PRs are kept out of the ordinary views by their filters (§7), not by auto-add. |
-| Item added to project | Status: Inbox, **issues only** (filter `is:issue`) | Default entry state for issues. PR items get their first Status from `project-sync` instead (§10.1), so a delayed native run cannot reset a classified PR. |
+| Item added to project | **When:** Issues only (Pull requests unchecked). **Set:** Status Inbox. Approved 2026-10-10 | Default entry state for issues. PR items get their first Status from `project-sync` instead (§10.1), so a delayed native run cannot reset a classified PR. |
 | Item closed | Status: Done | The item itself is complete. |
 | Pull request merged | Status: Done | Applies to the PR item only. |
-| Item reopened | Status: Ready, issues only | Reopened work is actionable again. Whether an explicitly set state should be preserved is checked against the native workflow's behavior first. A reopened PR keeps its Status until a person or `project-sync` event changes it. |
+| Item reopened | **When:** Issues only, if the workflow offers the selector (checked against the screenshots). **Set:** Status Ready | Reopened work is actionable again. Whether an explicitly set state should be preserved is checked against the native workflow's behavior first. A reopened PR keeps its Status until a person or `project-sync` event changes it. |
 | Code changes requested | Status: Changes requested | |
 | Code review approved | **Off** (provisional) | A bot approval would move Status, and approval is not authorization. |
 | Auto-close issue | **Off** (provisional) | Moving a controller issue to Done must not close it. |
 | Pull request linked to issue | **Off** (provisional) | One slice PR must not move its controller issue. |
 | Auto-archive items | **Off for issues** (§8) | Issues stay discoverable. |
+
+### 5.1 Applying these settings (only after the rollout is approved)
+
+The settings live under Project #3 → ⋯ → **Workflows**. Each built-in workflow has its own page with a **When** selector for the item type, a **Set** value, and an on/off toggle; auto-add and auto-archive use a filter text box instead. Nothing here is applied until the inventory has been reviewed and the rollout approved.
+
+1. **Item added to project:** under **When**, select Issues and clear Pull requests. Set Status to Inbox. Save, and turn it on.
+2. **Auto-add to project:** select the `Fooftilly/PRKS` repository. Use a filter that matches both issues and PRs, for example `is:issue,pr`, with no label condition, so dependency PRs are added too. Turn it on.
+3. **Item closed**, **Pull request merged**, **Item reopened** and **Code changes requested:** set the values in the table above. Where a **When** selector is shown, choose the item types listed there.
+4. **Code review approved**, **Auto-close issue** and **Pull request linked to issue:** record their current settings from the screenshots, then turn them off.
+5. **Auto-archive items:** leave it off.
 
 ## 6. Event → Status mapping
 
@@ -134,14 +144,14 @@ Agent Queue separates ready work from work blocked by an unresolved prerequisite
 
 Prerequisites are GitHub's native **Blocked by / Blocking** relationships, recorded only through the maintainer-dispatched writer described in `docs/agent-workflows/issue-dependencies.md`. Project #3 reads them as they are; nothing copies them into labels, comments or Status. A relationship never forces an item's Status backwards. Agent Queue and triage reports treat an issue with an open blocker as not ready (§7).
 
-## 10. `project-sync` design (Proposed; not built yet)
+## 10. `project-sync` design (approved design; ships in dry-run)
 
 A checked-in workflow, `.github/workflows/project-sync.yml`, covering only the four PR rows marked `project-sync` in §6.
 
 - **Events:** `pull_request_target` (`opened`, `ready_for_review`, `converted_to_draft`, `review_requested`). Nothing checks out or runs pull-request code. The PR's number from the event is the only input; the PR's state is re-read from the API.
 - **Scope:** PR items only. Field and option IDs are resolved at run time from names kept in one config file (`.github/project-sync.json`). If any name is missing, the run fails clearly.
 - **Behavior:** applies the "allowed from" rules in §6, so a repeated run makes no change. Each run logs one audit record (PR, event, Status before and after, outcome) and a job summary.
-- **Default:** dry-run. Writing is enabled only after the credential and the workflow have been reviewed.
+- **Default:** dry-run. Writing is enabled only after the credential, the configuration and the workflow have been reviewed and the maintainer authorizes it.
 - **Missing items (approved):** if auto-add has not yet created the PR's item, `project-sync` adds it with `addProjectV2ItemById`, using the PR's own node ID. It first looks for an existing item. GitHub documents that adding an item that already exists returns the existing item, so repeated or concurrent adds converge to one item. It only adds PRs whose repository is `Fooftilly/PRKS`, only to Project #3, and never adds or edits the linked issue.
 
 ### 10.1 Race between native auto-add, "Item added" and `project-sync`
@@ -159,12 +169,12 @@ The PR is now wrongly back in Inbox. GitHub does not document whether "Item adde
 | Concern | Owner |
 |---|---|
 | Putting the PR on the board | native auto-add, with `project-sync` as an idempotent fallback |
-| Inbox for new issues | native "Item added", **scoped to `is:issue`** |
+| Inbox for new issues | native "Item added", **When: Issues only** |
 | First Status of a PR (In Progress or Review) | `project-sync` only; a PR with no Status counts as unclassified |
 | Changes requested, merged → Done | native |
 | The four PR transitions in §6 | `project-sync` |
 
-With "Item added" scoped to issues, nothing native ever writes Inbox to a PR, so no delay can reset one. If the screenshots show that "Item added" cannot be scoped to issues, the fallback is to turn it off and let an empty Status mean Inbox in the views (`no:status`), rather than letting it touch PRs.
+This division was approved on 2026-10-10. With "Item added" limited to issues through its **When** selector, nothing native ever writes Inbox to a PR, so no delay can reset one.
 
 Remaining races and how `project-sync` handles them:
 
