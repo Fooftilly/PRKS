@@ -285,7 +285,7 @@ Both plans use the same schema:
 }
 ```
 
-`expected_before` is the value the reviewer saw (`null` = empty). `set` may name only Status and Roadmap Stage. An item with `approved: false` is held, and a `set` of `{}` writes nothing. A backfill plan uses `"stage": "backfill"` and `state` in place of `github_state`. Every other row, and every backfill row (each one can add its item, even with an empty `set`), is checked before anything is read or written: it must give `github_state` (or `state`) as OPEN, CLOSED or MERGED, and an explicit `expected_before` entry for every field in `set`. A missing entry is refused rather than read as empty, so a hand-written row cannot switch off the drift checks.
+`expected_before` is the value the reviewer saw (`null` = empty). `set` may name only Status and Roadmap Stage. An item with `approved: false` is held, and a `set` of `{}` writes nothing. A backfill plan uses `"stage": "backfill"` and `state` in place of `github_state`. Every other row, and every backfill row (each one can add its item, even with an empty `set`), is checked before anything is read or written: it must give `github_state` (or `state`) as OPEN, CLOSED or MERGED, matched exactly (a PR reviewed as CLOSED that was merged since is drift), and an explicit `expected_before` entry for every field in `set`. A missing entry is refused rather than read as empty, so a hand-written row cannot switch off the drift checks.
 
 **Guarantees enforced by the tool:**
 - Dry-run unless `--apply` is given. A dry-run, and `plan-backfill`, only send queries.

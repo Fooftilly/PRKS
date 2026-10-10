@@ -385,6 +385,14 @@ class Backfill(Base):
         row = {"number": 480, "type": "PullRequest", "expected_before": {}, "set": {}}
         self._refused_before_any_call("backfill", row, "PullRequest#480: .*state")
 
+    def test_a_pr_reviewed_as_closed_and_merged_since_is_drift(self):
+        self.api.put("PullRequest", 470, state="MERGED", Status="Done")
+        row = {"number": 470, "type": "PullRequest", "github_state": "CLOSED", "expected_before": {"Status": "Done"}, "set": {"Status": "Backlog"}}
+        r = self.run_stage("migrate-existing", [row], apply=True)
+        self.assertEqual(r["counts"], {"drift": 1})
+        self.assertFalse(r["ok"])
+        self.assertEqual(self.api.mutations, [])
+
     def test_an_add_only_backfill_row_for_a_pr_merged_since_is_not_added(self):
         self.api.add_content("PullRequest", 480, state="MERGED")
         r = self.run_stage("backfill", [{"number": 480, "type": "PullRequest", "state": "OPEN", "set": {}}], apply=True)

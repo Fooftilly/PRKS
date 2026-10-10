@@ -300,7 +300,9 @@ class Checkpoint:
 
 def _state_ok(item: dict, live_state: str) -> bool:
     want = item.get("github_state") or item.get("state")
-    return want is None or want == live_state or (want == "CLOSED" and live_state == "MERGED")
+    # Exact: MERGED is its own plan state, so a PR reviewed as CLOSED that was
+    # reopened and merged since is drift, not a match.
+    return want is None or want == live_state
 
 
 def _expected(item: dict, field: str, stage: str) -> set:
