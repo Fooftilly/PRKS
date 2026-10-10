@@ -324,10 +324,17 @@ class Checkpoint:
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_name(self.path.name + ".tmp")
-        tmp.write_text(json.dumps({"stage": self.stage, "project_id": PROJECT_ID, "plan_sha256": self.plan_digest,
-                                   "added": sorted(self.added), "done": sorted(self.done)}, indent=1))
-        tmp.replace(self.path)
+        # A fresh, exclusively created temp file: a stale or planted
+        # <checkpoint>.tmp symlink is never followed.
+        fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix=self.path.name + ".", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump({"stage": self.stage, "project_id": PROJECT_ID, "plan_sha256": self.plan_digest,
+                           "added": sorted(self.added), "done": sorted(self.done)}, handle, indent=1)
+            os.replace(tmp, self.path)
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
 
 
 def _state_ok(item: dict, live_state: str) -> bool:
@@ -783,7 +790,8 @@ def _checked_paths(args: argparse.Namespace) -> dict[str, Path]:
     # Resolve the report files too, so a symlink left at one of them cannot
     # point the report at the plan or outside the permitted roots.
     files = (plan, checkpoint) + tuple(_confined(report_dir / f"{args.command}{ext}", "report file") for ext in (".json", ".md"))
-    if len(set(files)) < len(files) or checkpoint == report_dir:
+    nested = any(a in b.parents for a in files for b in files)
+    if len(set(files)) < len(files) or nested or checkpoint == report_dir:
         raise MigrationError("the plan, checkpoint and report files must all be different paths; "
                              "pass a different --report-dir or --checkpoint")
     _make_output_dirs(report_dir, checkpoint.parent)

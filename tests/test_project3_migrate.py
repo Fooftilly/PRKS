@@ -227,14 +227,31 @@ class DryRunAndGuards(Base):
     def test_the_plan_checkpoint_and_report_never_overwrite_each_other(self):
         plan = plan_file(self.tmp, "backfill", [])
         before = plan.read_bytes()
-        for extra in (["--report-dir", str(self.tmp)], ["--report-dir", str(self.tmp / "o"), "--checkpoint", str(plan)],
-                      ["--report-dir", str(self.tmp / "o"), "--checkpoint", str(self.tmp / "o" / "backfill.json")]):
+        for extra in (["--report-dir", str(self.tmp)], ["--report-dir", str(plan), "--checkpoint", str(self.tmp / "ck.json")],
+                      ["--report-dir", str(self.tmp / "o"), "--checkpoint", str(plan)],
+                      ["--report-dir", str(self.tmp / "o"), "--checkpoint", str(self.tmp / "o" / "backfill.json")],
+                      ["--report-dir", str(self.tmp / "o"), "--checkpoint", str(self.tmp / "o" / "backfill.json" / "ck.json")],
+                      ["--report-dir", str(self.tmp / "o"), "--checkpoint", str(self.tmp / "o" / "backfill.md" / "ck.json")]):
             err = io.StringIO()
             with unittest.mock.patch("sys.stderr", err):
                 self.assertEqual(pm.main(["backfill", "--plan", str(plan)] + extra, env={}, transport=self.api), 2, extra)
             self.assertIn("must all be different paths", err.getvalue())
         self.assertEqual(plan.read_bytes(), before)
         self.assertEqual(self.api.calls, [])
+
+    def test_a_checkpoint_tmp_symlink_is_never_followed(self):
+        plan = plan_file(self.tmp, "migrate-existing", [epic()])
+        before = plan.read_bytes()
+        ck_path = self.tmp / "ck" / "migrate-existing.checkpoint.json"
+        ck_path.parent.mkdir()
+        ck_path.with_name(ck_path.name + ".tmp").symlink_to(plan)
+        ck = pm.Checkpoint(ck_path, "migrate-existing", "d" * 64)
+        ck.done.add("Issue#38")
+        ck.save()
+        self.assertEqual(plan.read_bytes(), before)
+        self.assertEqual(json.loads(ck_path.read_text())["done"], ["Issue#38"])
+        self.assertEqual(sorted(p.name for p in ck_path.parent.iterdir()),
+                         [ck_path.name, ck_path.name + ".tmp"])
 
     def test_a_report_file_symlink_cannot_redirect_the_report(self):
         plan = plan_file(self.tmp, "backfill", [])
@@ -255,7 +272,9 @@ class DryRunAndGuards(Base):
 
     def test_an_output_directory_that_is_a_file_is_refused_before_anything_runs(self):
         plan = plan_file(self.tmp, "backfill", [])
-        for report_dir in (plan, plan / "reports"):
+        other = self.tmp / "notes.txt"
+        other.write_text("x")
+        for report_dir in (other, other / "reports"):
             err = io.StringIO()
             with unittest.mock.patch("sys.stderr", err):
                 rc = pm.main(["backfill", "--plan", str(plan), "--report-dir", str(report_dir),
