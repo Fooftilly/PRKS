@@ -130,7 +130,7 @@ class FrontendOfflineNotesGuardTests(unittest.TestCase):
         self.assertIn("prksEnqueuePrivateNoteSave(PRKS_PRIVATE_NOTE_FAMILIES.work, editor)", wrapper)
         start = src.index("function prksEnqueuePrivateNoteSave(family, editor)")
         body = src[start : src.index("function prksEnqueueWorkPrivateNoteSave(", start)]
-        self.assertIn("family.save(editor, entityId, content)", body)
+        self.assertIn("family.save(editor, entityId, content, session)", body)
         for text in (save, body):
             self.assertNotIn("prksRequest(", text)
             self.assertNotIn("prksOfflineMarkEntityChanged", text)
@@ -162,6 +162,8 @@ class FrontendOfflineNotesGuardTests(unittest.TestCase):
         # whose body may be newer than the text the pane shows (#534).
         self.assertIn("prksFolderNoteObserved(", body)
         self.assertNotIn("prksAcknowledgedFolderBase(", body)
+        # A session saves on the base its text was typed on (#534).
+        self.assertIn("session.editBase", body)
         self.assertNotIn("/api/folders/", body)
         self.assertNotIn("prksRequest(", body)
         self.assertNotIn("Offline — notes are read-only", body)

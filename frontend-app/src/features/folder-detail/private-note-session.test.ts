@@ -23,6 +23,7 @@ type Session = {
   ownerGeneration: number
   editGeneration: number
   ownQueued: { opId: string; generation: number; text: string } | null
+  editBase: { value: string | null; revision: number | null; source: string; start: string | null } | null
 }
 
 type Observed = { folderId: string; value: string; revision: number; source: string }
@@ -606,5 +607,123 @@ describe('Folder Reminders sessions', () => {
     expect(w.prksPrivateNotesTextForEntity('folder', FA, 'Server A')).toBe('Main only')
     workspace.focusedTabId = 'tab-b'
     expect(w.prksPrivateNotesTextForEntity('folder', FA, 'Server A')).toBe('Server A')
+  })
+})
+
+describe('Folder Reminders edit base', () => {
+  it('another pane\'s acknowledgement never moves the base of text this pane is still typing', async () => {
+    installShell()
+    const { workspace, ownerA, ownerB } = mountPair()
+    await openFolder(ownerA, FA)
+    await openFolder(ownerB, FA)
+    /* Main types inside the debounce; nothing is saved yet. */
+    const a = mountCard(ownerA, FA)
+    type(a.field, 'A edit')
+    expect(session(ownerA)?.editBase).toEqual({ value: 'Server A', revision: 4, source: 'server', start: 'Server A' })
+
+    ownerA.clearResource('privateNotesEditor')
+    workspace.focusedTabId = 'tab-b'
+    const b = mountCard(ownerB, FA)
+    type(b.field, 'B edit')
+    w.prksFlushPendingPrivateNotes(ownerB)
+    await settle()
+    const [bRow] = noteRows()
+    queue.ack(bRow.op_id, 5)
+    expect(server[FA]).toMatchObject({ private_notes: 'B edit', revision: 5 })
+    /* Main's pane learns what the server holds; its unsaved text keeps its base. */
+    expect(w.prksFolderNoteObserved(ownerA, FA)).toMatchObject({ value: 'B edit', revision: 5 })
+    expect(session(ownerA)?.editBase).toEqual({ value: 'Server A', revision: 4, source: 'server', start: 'Server A' })
+    expect(session(ownerA)?.draftText).toBe('A edit')
+
+    w.prksFlushPendingPrivateNotes(ownerA)
+    await settle()
+    /* Typed on revision 4, so the server answers with a conflict, never an overwrite. */
+    expect(queue.saves.at(-1)).toEqual({
+      folderId: FA,
+      changes: { private_notes: 'A edit' },
+      base: { private_notes: { value: 'Server A', revision: 4 } },
+    })
+    expect(noteRows().map((r) => [r.payload.value, r.base_revision])).toEqual([['A edit', 4]])
+  })
+
+  it('a held draft keeps the base it was typed on when the Folder changes while it is held', async () => {
+    installShell()
+    const { ownerA } = mountPair()
+    await openFolder(ownerA, FA)
+    const a = mountCard(ownerA, FA)
+    queue.failNext(1)
+    type(a.field, 'A, typed on 4')
+    w.prksFlushPendingPrivateNotes(ownerA)
+    await openFolder(ownerA, FB)
+    mountCard(ownerA, FB)
+    await settle()
+    expect(ownerA.ui.folderPrivateNoteHolds?.[FA]).toBe('A, typed on 4')
+
+    /* Another device saves the Folder while the text is held. */
+    server[FA] = { private_notes: 'Saved on another device', revision: 5 }
+    await openFolder(ownerA, FA)
+    expect(w.prksFolderNoteObserved(ownerA, FA)).toMatchObject({ value: 'Saved on another device', revision: 5 })
+    const back = mountCard(ownerA, FA)
+    expect(back.field.value).toBe('A, typed on 4')
+    expect(session(ownerA)?.editBase).toEqual({ value: 'Server A', revision: 4, source: 'server', start: 'Server A' })
+    w.prksFlushPendingPrivateNotes(ownerA)
+    await settle()
+    expect(noteRows().map((r) => [r.payload.value, r.base_revision])).toEqual([['A, typed on 4', 4]])
+  })
+
+  it('a clean field shows another tab\'s acknowledged text, and the next edit is typed on it', async () => {
+    installShell()
+    const { ownerA } = mountPair()
+    await openFolder(ownerA, FA)
+    const { field } = mountCard(ownerA, FA)
+    expect(field.value).toBe('Server A')
+    const foreign = queue.foreign(FA, 'private_notes', 'From another tab', 4)
+    queue.ack(foreign.op_id, 5)
+    expect(field.value).toBe('From another tab')
+    type(field, 'From another tab, and mine')
+    expect(session(ownerA)?.editBase).toEqual({ value: 'From another tab', revision: 5, source: 'server', start: 'From another tab' })
+    w.prksFlushPendingPrivateNotes(ownerA)
+    await settle()
+    expect(noteRows().map((r) => [r.payload.value, r.base_revision])).toEqual([['From another tab, and mine', 5]])
+  })
+
+  it('text typed before any base is known never takes a base that shows other text', async () => {
+    installShell()
+    const { ownerA } = mountPair()
+    reads = { state: 'unavailable', body: 'server' }
+    await openFolder(ownerA, FA)
+    const { field, status } = mountCard(ownerA, FA)
+    type(field, 'Typed offline')
+    expect(session(ownerA)?.editBase).toEqual({ value: null, revision: null, source: 'unknown', start: 'Server A' })
+    w.prksFlushPendingPrivateNotes(ownerA)
+    await settle()
+    expect(status.textContent).toBe('Reminders cannot be saved yet — open this folder while connected once')
+
+    /* Another tab's save is acknowledged: the pane now knows a base, but not the one this text was typed on. */
+    const foreign = queue.foreign(FA, 'private_notes', 'Elsewhere', 4)
+    queue.ack(foreign.op_id, 5)
+    expect(w.prksFolderNoteObserved(ownerA, FA)).toMatchObject({ value: 'Elsewhere', revision: 5 })
+    type(field, 'Typed offline, still')
+    w.prksFlushPendingPrivateNotes(ownerA)
+    await settle()
+    expect(noteRows()).toEqual([])
+    expect(status.textContent).toBe('Reminders changed elsewhere — copy your text, then reopen this folder')
+    expect(session(ownerA)?.draftText).toBe('Typed offline, still')
+    expect(server[FA]!.private_notes).toBe('Elsewhere')
+  })
+
+  it('text typed before the base is read saves on it once it is, when it shows the same text', async () => {
+    installShell()
+    const { ownerA } = mountPair()
+    reads = { state: 'unavailable', body: 'server' }
+    await openFolder(ownerA, FA)
+    const { field } = mountCard(ownerA, FA)
+    type(field, 'Typed early')
+    reads = { state: 'server', body: 'server' }
+    await w.prksEnsureFolderNotesBase(ownerA, folder(FA))
+    w.prksFlushPendingPrivateNotes(ownerA)
+    await settle()
+    expect(noteRows().map((r) => [r.payload.value, r.base_revision])).toEqual([['Typed early', 4]])
+    expect(session(ownerA)?.editBase).toEqual({ value: 'Server A', revision: 4, source: 'server', start: 'Server A' })
   })
 })

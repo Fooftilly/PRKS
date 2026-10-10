@@ -2623,6 +2623,12 @@ function renderPrksPrivateNotesCard(entityType, entityId, initialText) {
  * (`ctx.ui[family.holdsSlot]`), which a later session for the same entity in
  * the same pane carries on. A flushed durable note stays shared entity state.
  *
+ * A Folder session also carries the base its text was typed on
+ * (`session.editBase`, held with the text in `ctx.ui[family.holdBasesSlot]`),
+ * pinned when a clean session is first edited. Later reads and other panes'
+ * acknowledgements never move it, so a save can conflict but never replace
+ * text this pane did not show (#534).
+ *
  * The family supplies what differs: the entity type and the field naming its
  * id on the session, the acknowledged base and the durable save, the pending
  * overlay, and the Work-only recovery hooks. A Folder's Reminders are the
@@ -2635,6 +2641,7 @@ const PRKS_PRIVATE_NOTE_FAMILIES = Object.freeze({
         idField: 'workId',
         sessionSlot: 'workPrivateNoteSession',
         holdsSlot: 'workPrivateNoteHolds',
+        holdBasesSlot: null,
         unknownBaseStatus: 'Reminders cannot be saved yet — open this file while connected once',
         pendingText: function (id, fallback) {
             return typeof prksPendingWorkNoteText === 'function'
@@ -2646,6 +2653,7 @@ const PRKS_PRIVATE_NOTE_FAMILIES = Object.freeze({
         bindSync: function (ctx) {
             if (typeof prksBindWorkNotesSync === 'function') prksBindWorkNotesSync(ctx);
         },
+        pin: null,
         save: prksSaveWorkPrivateNoteForSession,
         ok: function (code) { return code === 'saved'; },
         /* Work keeps its queued row on the recovery lineage (`recoveryQueued`). */
@@ -2669,6 +2677,7 @@ const PRKS_PRIVATE_NOTE_FAMILIES = Object.freeze({
         idField: 'folderId',
         sessionSlot: 'folderPrivateNoteSession',
         holdsSlot: 'folderPrivateNoteHolds',
+        holdBasesSlot: 'folderPrivateNoteHoldBases',
         unknownBaseStatus: 'Reminders cannot be saved yet — open this folder while connected once',
         pendingText: function (id, fallback) {
             return typeof prksPendingFolderNoteText === 'function' ? prksPendingFolderNoteText(id, fallback) : fallback;
@@ -2679,6 +2688,7 @@ const PRKS_PRIVATE_NOTE_FAMILIES = Object.freeze({
         bindSync: function (ctx) {
             if (typeof prksBindFolderNotesSync === 'function') prksBindFolderNotesSync(ctx, prksFolderPrivateNoteAcknowledged);
         },
+        pin: prksPinFolderPrivateNoteBase,
         save: prksSaveFolderPrivateNoteForSession,
         ok: function (code) { return code === 'queued' || code === 'unchanged'; },
         tracksOwnQueued: true,
@@ -2735,6 +2745,16 @@ function prksRememberUnsavedPrivateNote(family, ctx, session) {
      * The holds stay bounded by the entities with unsaved text, not by the
      * entities a pane visited. */
     ctx.ui[family.holdsSlot][String(session.entityId)] = String(session.draftText || '');
+    if (!family.holdBasesSlot) return;
+    if (!ctx.ui[family.holdBasesSlot]) ctx.ui[family.holdBasesSlot] = Object.create(null);
+    /* The text keeps the base it was typed on: back on this entity, a newer
+     * server body makes its save conflict instead of replacing that body. */
+    ctx.ui[family.holdBasesSlot][String(session.entityId)] = session.editBase ? Object.assign({}, session.editBase) : null;
+}
+
+function prksForgetPrivateNoteHoldBase(family, ctx, key) {
+    const bases = family.holdBasesSlot && ctx && ctx.ui ? ctx.ui[family.holdBasesSlot] : null;
+    if (bases) delete bases[key];
 }
 
 function prksTakeRememberedPrivateNote(family, ctx, id) {
@@ -2743,7 +2763,10 @@ function prksTakeRememberedPrivateNote(family, ctx, id) {
     if (!holds || !Object.prototype.hasOwnProperty.call(holds, key)) return null;
     const text = String(holds[key]);
     delete holds[key];
-    return text;
+    const bases = family.holdBasesSlot ? ctx.ui[family.holdBasesSlot] : null;
+    const base = bases && bases[key] ? bases[key] : null;
+    prksForgetPrivateNoteHoldBase(family, ctx, key);
+    return { text: text, base: base };
 }
 
 function prksReconcileSavedPrivateNote(family, ctx, settledSession, id, content) {
@@ -2753,6 +2776,7 @@ function prksReconcileSavedPrivateNote(family, ctx, settledSession, id, content)
     const holds = ctx.ui[family.holdsSlot];
     if (holds && Object.prototype.hasOwnProperty.call(holds, key) && String(holds[key]) === saved) {
         delete holds[key];
+        prksForgetPrivateNoteHoldBase(family, ctx, key);
     }
     const current = ctx.ui[family.sessionSlot];
     /* The in-flight session stays untouched until this settlement. A carried
@@ -2791,7 +2815,7 @@ function prksEnsurePrivateNoteSession(family, ctx, id, initialText) {
         entityId: String(id),
         ownerTabId: String(ctx.tabId),
         ownerGeneration: ctx.generation,
-        draftText: carried ? remembered : String(initialText == null ? '' : initialText),
+        draftText: carried ? remembered.text : String(initialText == null ? '' : initialText),
         editGeneration: 0,
         saveSequence: 0,
         latestSaveToken: 0,
@@ -2804,6 +2828,10 @@ function prksEnsurePrivateNoteSession(family, ctx, id, initialText) {
         promise: null,
         /* This session's own queued row: `{opId, generation, text}` until that row's acknowledgement. */
         ownQueued: null,
+        /* The base this session's text was typed on, `{value, revision, source, start}`
+         * (Folder only): `start` is the text the field showed when editing
+         * began, and a null revision is resolved at save. */
+        editBase: carried ? remembered.base : null,
         statusText: '',
         updatedAt: Date.now(),
     };
@@ -2872,18 +2900,88 @@ function prksOpenFolderPrivateNotes(ctx, read, source) {
 }
 
 /**
+ * The text a Folder base would show in this pane: its body under the newest
+ * unsettled Reminders row (this pane's, or one it painted from another).
+ */
+function prksFolderNoteBaseShows(folderId, observed) {
+    return typeof prksPendingFolderNoteText === 'function'
+        ? prksPendingFolderNoteText(String(folderId), observed.value) : observed.value;
+}
+
+function prksFolderEditBaseFrom(folderId, observed, start) {
+    const known = !!(observed && typeof observed.value === 'string' && Number.isSafeInteger(observed.revision));
+    if (known && (start == null || prksFolderNoteBaseShows(folderId, observed) === start)) {
+        const shown = start == null ? prksFolderNoteBaseShows(folderId, observed) : start;
+        return { value: observed.value, revision: observed.revision, source: observed.source || 'unknown', start: shown };
+    }
+    /* No base yet, or the pane's base no longer shows the text being edited
+     * (it advanced under a field that was not repainted): resolved at save. */
+    return { value: null, revision: null, source: 'unknown', start: start == null ? null : String(start) };
+}
+
+/**
+ * A clean Folder session is edited (#534): its text is now typed on the
+ * pane's observed base, as long as that base shows what the field showed
+ * when editing began (`start`).
+ */
+function prksPinFolderPrivateNoteBase(ctx, session, start) {
+    const observed = typeof prksFolderNoteObserved === 'function'
+        ? prksFolderNoteObserved(ctx, session.entityId) : null;
+    session.editBase = prksFolderEditBaseFrom(session.entityId, observed, start);
+}
+
+function prksCanonicalFolderNote(text) {
+    return typeof prksCanonicalFolderNoteText === 'function' ? prksCanonicalFolderNoteText(text) : String(text).trim();
+}
+
+/**
  * A Folder Reminders row was acknowledged in this pane's tab (#534). Only the
  * session's own row, by exact op id and text, stops being its queued
- * predecessor; another pane's or tab's row is foreign and changes nothing
- * here, and an older row of this session never clears a newer edit.
+ * predecessor, and an older row of this session never clears a newer edit.
+ *
+ * The session's edit base moves only to text its own lineage holds: its own
+ * row, or a row that stored exactly the text its editing began from. Another
+ * pane's or tab's row with other text leaves the base where the text was
+ * typed, so this pane's save conflicts instead of replacing that text. A
+ * clean session takes the acknowledged text into its field.
  */
 function prksFolderPrivateNoteAcknowledged(ctx, ack) {
     const session = ctx && ctx.ui ? ctx.ui.folderPrivateNoteSession : null;
     if (!session || !ack || String(session.entityId) !== String(ack.folderId)) return;
+    if (String(session.ownerTabId) !== String(ctx.tabId)) return;
     const own = session.ownQueued;
-    if (!own || own.opId !== ack.opId || own.text !== ack.text) return;
-    session.ownQueued = null;
+    const pin = session.editBase;
+    const newer = !pin || pin.revision == null || ack.revision > pin.revision;
+    if (own && own.opId === ack.opId && own.text === ack.text) {
+        session.ownQueued = null;
+        if (pin && newer) session.editBase = { value: ack.stored, revision: ack.revision, source: 'server', start: own.text };
+        session.updatedAt = Date.now();
+        return;
+    }
+    if (pin && newer && pin.start != null && prksCanonicalFolderNote(pin.start) === ack.stored) {
+        session.editBase = { value: ack.stored, revision: ack.revision, source: 'server', start: pin.start };
+        session.updatedAt = Date.now();
+        return;
+    }
+    if (session.retired || prksPrivateNoteUnsaved(session) || session.ownQueued) return;
+    /* Clean: nothing of this pane's is unsaved, so the field shows the Folder's
+     * text again and the next edit is typed on it. */
+    session.retired = true;
+    session.editBase = null;
     session.updatedAt = Date.now();
+    prksRepaintCleanPrivateNotes(PRKS_PRIVATE_NOTE_FAMILIES.folder, ctx, session.entityId);
+}
+
+/* Shows the entity's text in this pane's clean Reminders field, if it is installed. */
+function prksRepaintCleanPrivateNotes(family, ctx, id) {
+    const editor = ctx && typeof ctx.getResource === 'function' ? ctx.getResource('privateNotesEditor') : null;
+    if (!editor || editor.dirty || String(editor.entityType) !== family.entityType || String(editor.entityId) !== String(id)) return;
+    if (!editor.textarea || !editor.textarea.isConnected) return;
+    const live = ctx.getEntity ? ctx.getEntity(family.entityType) : null;
+    if (!live || String(live.id) !== String(id)) return;
+    const next = prksPrivateNoteText(family, ctx, id, live.private_notes);
+    if (editor.textarea.value !== next) editor.textarea.value = next;
+    editor.shownText = next;
 }
 
 /*
@@ -3230,6 +3328,7 @@ function prksPrivateNotesStatusForResult(code, family) {
         return (family || PRKS_PRIVATE_NOTE_FAMILIES.work).unknownBaseStatus;
     }
     if (code === 'too-long') return 'This reminder is too large to save';
+    if (code === 'changed_elsewhere') return 'Reminders changed elsewhere — copy your text, then reopen this folder';
     if (code === 'unavailable') return 'Local changes could not be read from browser storage';
     return 'Could not save';
 }
@@ -3392,12 +3491,18 @@ async function prksSaveWorkPrivateNoteForSession(editor, entityId, content) {
 /**
  * The Folder Reminders durable save for one session (#534): the
  * `private_notes` field against its Folder field revision. The base is the
- * pane's observed one while the pane still shows this Folder; a save that
- * outlived its Folder (the pane moved on) measures against the acknowledged
- * Folder base, never against another Folder's.
+ * session's edit base, the one its text was typed on, wherever the pane is
+ * now. A session with no base yet takes the pane's observed one while the
+ * pane still shows this Folder, and only when it shows the text editing
+ * began from; never another Folder's.
  */
-async function prksSaveFolderPrivateNoteForSession(editor, entityId, content) {
+async function prksSaveFolderPrivateNoteForSession(editor, entityId, content, session) {
     if (typeof prksSaveFolderPrivateNoteDurably !== 'function') return { result: { code: 'unavailable' }, base: null };
+    const pin = session && String(session.entityId) === String(entityId) ? session.editBase : null;
+    if (pin && Number.isSafeInteger(pin.revision)) {
+        const pinned = { value: pin.value, revision: pin.revision };
+        return { result: await prksSaveFolderPrivateNoteDurably(String(entityId), content, pinned), base: pinned };
+    }
     const ctx = editor.ctx;
     let observed = typeof prksFolderNoteObserved === 'function' ? prksFolderNoteObserved(ctx, entityId) : null;
     const live = ctx && ctx.getEntity ? ctx.getEntity('folder') : null;
@@ -3409,6 +3514,14 @@ async function prksSaveFolderPrivateNoteForSession(editor, entityId, content) {
     }
     /* No fallback to the stored Folder: its body may be newer than the text
      * this pane shows, and saving against it would replace that newer text. */
+    if (pin && observed) {
+        const resolved = prksFolderEditBaseFrom(entityId, observed, pin.start);
+        if (!Number.isSafeInteger(resolved.revision)) {
+            return { result: { code: 'changed_elsewhere', opId: null }, base: null };
+        }
+        /* Re-read: a newer save may have pinned the session meanwhile. */
+        if (session.editBase === pin) session.editBase = resolved;
+    }
     const base = observed ? { value: observed.value, revision: observed.revision } : null;
     return { result: await prksSaveFolderPrivateNoteDurably(String(entityId), content, base), base: base };
 }
@@ -3453,7 +3566,7 @@ function prksEnqueuePrivateNoteSave(family, editor) {
     let usedBase = null;
     /* The durable save wakes sync before this completion settles the UI. */
     const promise = (async function () {
-        const out = await family.save(editor, entityId, content);
+        const out = await family.save(editor, entityId, content, session);
         usedBase = out.base;
         return out.result;
     })();
@@ -3599,7 +3712,11 @@ function prksPrivateNotesNoteEdit(editor) {
     const ta = editor.textarea;
     const family = prksPrivateNoteFamily(editor.entityType);
     const liveSession = prksEnsurePrivateNoteSession(family, ctx, editor.entityId, ta.value);
+    const start = typeof editor.shownText === 'string' ? editor.shownText : null;
+    editor.shownText = String(ta.value);
     if (liveSession) {
+        /* A clean session's first edit is typed on what the field showed. */
+        const pin = family.pin && !prksPrivateNoteUnsaved(liveSession) ? family.pin : null;
         liveSession.draftText = String(ta.value);
         liveSession.editGeneration += 1;
         liveSession.state = 'drafting';
@@ -3607,6 +3724,7 @@ function prksPrivateNotesNoteEdit(editor) {
         liveSession.retired = false;
         liveSession.dirty = true;
         liveSession.updatedAt = Date.now();
+        if (pin) pin(ctx, liveSession, start);
         /* Every generation reaches recovery storage before the save debounce ends (#474). */
         const edit = prksPrivateNoteRecoveryHook(family, 'edit');
         if (edit) edit(ctx, liveSession);
@@ -3665,6 +3783,8 @@ function prksBindPrivateNotesField(entityType, entityId, ownerCtx) {
         statusEl: statusEl,
         timerKey: 'privateNotesDebounce:' + editorKey,
         dirty: !!(session && (session.state === 'drafting' || session.dirty)),
+        /* What the field shows, so an edit knows the text it began from. */
+        shownText: String(ta.value),
     };
     const schedule = function () {
         prksPrivateNotesNoteEdit(editor);
@@ -3705,6 +3825,7 @@ function prksBindPrivateNotesField(entityType, entityId, ownerCtx) {
             const next = prksPrivateNoteText(family, ctx, entityId, live && live.private_notes);
             if (ta.value === next) return;
             ta.value = next;
+            editor.shownText = next;
         });
     }
     family.bindSync(ctx);
@@ -3733,6 +3854,7 @@ window.prksResetPrivateNoteDraftsForTest = function () {
         Object.keys(PRKS_PRIVATE_NOTE_FAMILIES).forEach(function (name) {
             ctx.ui[PRKS_PRIVATE_NOTE_FAMILIES[name].sessionSlot] = null;
             ctx.ui[PRKS_PRIVATE_NOTE_FAMILIES[name].holdsSlot] = null;
+            if (PRKS_PRIVATE_NOTE_FAMILIES[name].holdBasesSlot) ctx.ui[PRKS_PRIVATE_NOTE_FAMILIES[name].holdBasesSlot] = null;
         });
     });
 };

@@ -930,6 +930,8 @@
         prksAcceptFolderNoteAck: acceptFolderNoteAck,
         prksRefreshPendingFolderNotes: refreshPendingFolderNotes,
         prksPendingFolderNoteText: pendingFolderNoteText,
+        /* What the server stores for Reminders text (`str.strip()` parity). */
+        prksCanonicalFolderNoteText: text => canonicalFieldValue(PRIVATE_NOTES_FIELD, text),
         prksBindFolderNotesSync: bindFolderNotesSync,
         prksDeleteFolderDurably: deleteFolderDurably,
         prksFolderCreateSyncHandler: createHandler,
