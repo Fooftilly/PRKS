@@ -563,6 +563,11 @@ def _run_items(project: Project, plan: dict, stage: str, ck: Checkpoint, apply: 
         if failed:
             rec.update(outcome="not-run", detail="stopped after an earlier failure", writes=[])
             continue
+        if apply and stage == "backfill" and rec["outcome"] == "unchanged":
+            # Already at its target, e.g. auto-added and closed before this
+            # run: a late "Item added" Inbox can still follow, so settle-check it.
+            failed = not _record_unchanged(rec, ck)
+            continue
         if not (apply and rec["outcome"] == "would-change"):
             continue
         try:
@@ -577,6 +582,15 @@ def _run_items(project: Project, plan: dict, stage: str, ck: Checkpoint, apply: 
             rec.update(outcome="failed", detail=f"written, but the checkpoint could not be saved: {type(exc).__name__}: {exc}")
             failed = True
     return records, failed
+
+
+def _record_unchanged(rec: dict, ck: Checkpoint) -> bool:
+    try:
+        _record_added(rec["item"], ck)
+    except OSError as exc:
+        rec.update(outcome="failed", detail=f"checkpoint could not be saved: {type(exc).__name__}: {exc}")
+        return False
+    return True
 
 
 def _checkpoint_written(rec: dict, ck: Checkpoint) -> None:

@@ -671,6 +671,15 @@ class NativeWorkflowRaces(Base):
         self.assertEqual(self.api.items["I246"]["values"], {"Status": "Done"})
         self.assertEqual(json.loads((self.tmp / "ck.json").read_text())["done"], ["Issue#181", "Issue#246"])
 
+    def test_an_item_auto_added_and_already_done_is_still_settle_checked(self):
+        self.api.put("Issue", 181, state="CLOSED", Status="Done")   # auto-added, then closed, before the run
+        self.api.pending.append(lambda: self.api.items["I181"]["values"].update(Status="Inbox"))   # late "Item added"
+        r = self.run_stage("backfill", [research()], apply=True)
+        self.assertEqual(r["counts"], {"unchanged": 1})
+        self.assertTrue(r["ok"])
+        self.assertEqual(self.api.items["I181"]["values"], {"Status": "Done"})   # the late Inbox was written over
+        self.assertEqual(json.loads((self.tmp / "ck.json").read_text())["done"], ["Issue#181"])
+
     def test_an_added_item_is_done_once_it_verifies(self):
         self.api.add_content("Issue", 181, state="CLOSED")
         self.run_stage("backfill", [research()], apply=True)
