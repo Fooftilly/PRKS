@@ -68,44 +68,9 @@ class FakeAPI:
     def __call__(self, query, variables):
         self.calls.append(query)
         if query.lstrip().startswith("mutation"):
-            name = re.search(r"\{(\w+)\(", query).group(1)
-            if self.before_mutation:
-                self.before_mutation(name, variables)
-            if name == "updateProjectV2ItemFieldValue" and self.fail_next_set:
-                self.fail_next_set -= 1
-                raise pm.MigrationError("GraphQL error: simulated outage")
-            self.mutations.append((name, variables))
-            if name == "addProjectV2ItemById":
-                n = int(variables["content"][1:])
-                iid = f"I{n}"
-                if iid not in self.items:  # the real API returns an existing item unchanged
-                    self.items[iid] = {"number": n, "archived": False, "values": {}}
-                    if self.item_added and self.content[n]["__typename"] == "Issue":
-                        def native(item=self.items[iid]):
-                            item["values"]["Status"] = "Inbox"
-                        if self.item_added == "now":
-                            native()
-                        else:
-                            self.pending.append(native)
-                return {name: {"item": {"id": iid}}}
-            item = self.items[variables["item"]]
-            field = next(f for f in self.fields if self._fid(f) == variables["field"])
-            item["values"][field] = variables["option"].split(":", 1)[1]
-            return {name: {"projectV2Item": {"id": variables["item"]}}}
+            return self._mutation(query, variables)
         if "pullRequests(first" in query or "issues(first" in query:
-            prs = "pullRequests(first" in query
-            source = self.repo_prs if prs else self.repo_issues
-            states = ["OPEN"] if prs else variables["states"]
-            labels = None if prs else variables["labels"]
-            nodes = [{"number": n, "title": t, "state": st, "labels": {"nodes": [{"name": x} for x in lb]}}
-                     for n, (t, st, lb) in sorted(source.items())
-                     if st in states and (not labels or set(labels) & set(lb))]
-            # two pages, to exercise pagination
-            half = len(nodes) // 2
-            first = variables.get("after") is None
-            page = nodes[:half] if first else nodes[half:]
-            return {"repository": {"pullRequests" if prs else "issues": {
-                "pageInfo": {"hasNextPage": first and half > 0, "endCursor": "c1"}, "nodes": page if half else nodes}}}
+            return self._repo_page(query, variables)
         if "issueOrPullRequest" in query:
             c = self.content[variables["number"]]
             return {"repository": {"issueOrPullRequest": {k: c[k] for k in ("__typename", "id", "number", "state")}}}
@@ -119,6 +84,50 @@ class FakeAPI:
             return {"node": dict(self._node(iid), project={"id": pm.PROJECT_ID})}
         fields = [{"id": self._fid(n), "name": n, "dataType": "SINGLE_SELECT", "options": [{"id": f"{n}:{o}", "name": o} for o in opts]} for n, opts in self.fields.items()]
         return {"user": {"projectV2": {"id": self.project_id, "number": 3, "owner": {"login": "Fooftilly"}, "fields": {"nodes": fields}}}}
+
+    def _mutation(self, query, variables):
+        name = re.search(r"\{(\w+)\(", query).group(1)
+        if self.before_mutation:
+            self.before_mutation(name, variables)
+        if name == "updateProjectV2ItemFieldValue" and self.fail_next_set:
+            self.fail_next_set -= 1
+            raise pm.MigrationError("GraphQL error: simulated outage")
+        self.mutations.append((name, variables))
+        if name == "addProjectV2ItemById":
+            return {name: {"item": {"id": self._add(int(variables["content"][1:]))}}}
+        item = self.items[variables["item"]]
+        field = next(f for f in self.fields if self._fid(f) == variables["field"])
+        item["values"][field] = variables["option"].split(":", 1)[1]
+        return {name: {"projectV2Item": {"id": variables["item"]}}}
+
+    def _add(self, n):
+        iid = f"I{n}"
+        if iid in self.items:  # the real API returns an existing item unchanged
+            return iid
+        self.items[iid] = {"number": n, "archived": False, "values": {}}
+        if self.item_added and self.content[n]["__typename"] == "Issue":
+            def native(item=self.items[iid]):
+                item["values"]["Status"] = "Inbox"
+            if self.item_added == "now":
+                native()
+            else:
+                self.pending.append(native)
+        return iid
+
+    def _repo_page(self, query, variables):
+        prs = "pullRequests(first" in query
+        source = self.repo_prs if prs else self.repo_issues
+        states = ["OPEN"] if prs else variables["states"]
+        labels = None if prs else variables["labels"]
+        nodes = [{"number": n, "title": t, "state": st, "labels": {"nodes": [{"name": x} for x in lb]}}
+                 for n, (t, st, lb) in sorted(source.items())
+                 if st in states and (not labels or set(labels) & set(lb))]
+        # two pages, to exercise pagination
+        half = len(nodes) // 2
+        first = variables.get("after") is None
+        page = nodes[:half] if first else nodes[half:]
+        return {"repository": {"pullRequests" if prs else "issues": {
+            "pageInfo": {"hasNextPage": first and half > 0, "endCursor": "c1"}, "nodes": page if half else nodes}}}
 
 
 def plan_file(tmp: Path, stage: str, items, scope=SCOPE) -> Path:

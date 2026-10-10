@@ -412,6 +412,57 @@ def plan_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+_RUN_ERRORS = (MigrationError, urllib.error.URLError, OSError, KeyError, TypeError)
+
+
+def _run_items(project: Project, plan: dict, stage: str, ck: Checkpoint, apply: bool) -> tuple[list[dict], bool]:
+    """Plan every item and, with --apply, write it; stop writing at the first failure."""
+    records: list[dict] = []
+    failed = False
+    for item in plan["items"]:
+        rec = plan_item(project, item, stage, ck)
+        records.append(rec)
+        if failed:
+            rec.update(outcome="not-run", detail="stopped after an earlier failure", writes=[])
+            continue
+        if not (apply and rec["outcome"] == "would-change"):
+            continue
+        try:
+            apply_item(project, item, rec, stage, ck)
+        except _RUN_ERRORS as exc:
+            rec.update(outcome="failed", detail=f"{type(exc).__name__}: {exc}")
+            failed = True
+            continue
+        if rec["outcome"] in ("changed", "repaired"):
+            ck.done.add(rec["item"])
+            ck.save()
+    return records, failed
+
+
+def _not_in_plan(project: Project, plan: dict) -> list[dict]:
+    planned = {(i["type"], i["number"]) for i in plan["items"]}
+    return [{"item": f"{kind}#{number}", "title": "", "set": {}, "writes": [], "outcome": "not-in-plan",
+             "detail": "on Project #3 but not in the reviewed plan; not touched"}
+            for (kind, number) in sorted(set(project.items) - planned)]
+
+
+def _write_report(report: dict, report_dir: Path, out) -> None:
+    stage, digest, counts, missing = report["stage"], report["plan_sha256"], report["counts"], report["requirements_missing"]
+    report_dir.mkdir(parents=True, exist_ok=True)
+    (report_dir / f"{stage}.json").write_text(json.dumps(report, indent=1, ensure_ascii=False, default=list))
+    lines = [f"# Project #3 {stage} ({report['mode']})", "", f"Plan sha256: `{digest}`", "",
+             "Missing requirements: " + (", ".join(missing) or "none"), "",
+             "| Outcome | Count |", "|---|---|"] + [f"| {k} | {v} |" for k, v in sorted(counts.items())]
+    lines += ["", "| Item | Outcome | Add | Before | After | Detail |", "|---|---|---|---|---|---|"]
+    for r in report["items"]:
+        lines.append(f"| {r['item']} | {r['outcome']} | {'yes' if r.get('add') else ''} | {r.get('before', '')} | {dict(r['writes']) or ''} | {r['detail']} |")
+    (report_dir / f"{stage}.md").write_text("\n".join(lines) + "\n")
+    print(f"{stage} ({report['mode']}): " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())), file=out)
+    print(f"plan sha256: {digest}", file=out)
+    if missing:
+        print("missing requirements: " + "; ".join(missing), file=out)
+
+
 def run(stage: str, plan_path: Path, *, apply: bool, transport: Transport, checkpoint: Path, report_dir: Path,
         out=sys.stdout, settle_seconds: float = DEFAULT_SETTLE_SECONDS, sleep: Callable[[float], None] = time.sleep,
         expected_sha256: Optional[str] = None) -> dict:
@@ -425,35 +476,14 @@ def run(stage: str, plan_path: Path, *, apply: bool, transport: Transport, check
     if apply and missing:
         raise MigrationError("refusing --apply: " + "; ".join(missing))
     ck = Checkpoint(checkpoint, stage)
-    by_key = {f"{i['type']}#{i['number']}": i for i in plan["items"]}
-    records: list[dict] = []
-    failed = False
-    for item in plan["items"]:
-        rec = plan_item(project, item, stage, ck)
-        records.append(rec)
-        if failed:
-            rec.update(outcome="not-run", detail="stopped after an earlier failure", writes=[])
-            continue
-        if apply and rec["outcome"] == "would-change":
-            try:
-                apply_item(project, item, rec, stage, ck)
-            except (MigrationError, urllib.error.URLError, OSError, KeyError, TypeError) as exc:
-                rec.update(outcome="failed", detail=f"{type(exc).__name__}: {exc}")
-                failed = True
-                continue
-            if rec["outcome"] in ("changed", "repaired"):
-                ck.done.add(rec["item"])
-                ck.save()
+    records, failed = _run_items(project, plan, stage, ck, apply)
     if stage == "migrate-existing":
-        planned = {(i["type"], i["number"]) for i in plan["items"]}
-        for (kind, number) in sorted(set(project.items) - planned):
-            records.append({"item": f"{kind}#{number}", "title": "", "set": {}, "writes": [], "outcome": "not-in-plan",
-                            "detail": "on Project #3 but not in the reviewed plan; not touched"})
+        records += _not_in_plan(project, plan)
     if apply and not failed and any(r["outcome"] in ("changed", "repaired") and r["item"] in ck.added for r in records):
         sleep(settle_seconds)
         try:
-            verify_added(project, by_key, records, ck)
-        except (MigrationError, urllib.error.URLError, OSError, KeyError, TypeError) as exc:
+            verify_added(project, {f"{i['type']}#{i['number']}": i for i in plan["items"]}, records, ck)
+        except _RUN_ERRORS as exc:
             failed = True
             print(f"verification failed: {type(exc).__name__}: {exc}", file=out)
         ck.save()
@@ -462,19 +492,7 @@ def run(stage: str, plan_path: Path, *, apply: bool, transport: Transport, check
         counts[r["outcome"]] = counts.get(r["outcome"], 0) + 1
     report = {"stage": stage, "mode": "apply" if apply else "dry-run", "plan_sha256": digest, "requirements_missing": missing, "counts": counts,
               "ok": not failed and "failed" not in counts and "verify-failed" not in counts, "items": records}
-    report_dir.mkdir(parents=True, exist_ok=True)
-    (report_dir / f"{stage}.json").write_text(json.dumps(report, indent=1, ensure_ascii=False, default=list))
-    lines = [f"# Project #3 {stage} ({report['mode']})", "", f"Plan sha256: `{digest}`", "",
-             "Missing requirements: " + (", ".join(missing) or "none"), "",
-             "| Outcome | Count |", "|---|---|"] + [f"| {k} | {v} |" for k, v in sorted(counts.items())]
-    lines += ["", "| Item | Outcome | Add | Before | After | Detail |", "|---|---|---|---|---|---|"]
-    for r in records:
-        lines.append(f"| {r['item']} | {r['outcome']} | {'yes' if r.get('add') else ''} | {r.get('before', '')} | {dict(r['writes']) or ''} | {r['detail']} |")
-    (report_dir / f"{stage}.md").write_text("\n".join(lines) + "\n")
-    print(f"{stage} ({report['mode']}): " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())), file=out)
-    print(f"plan sha256: {digest}", file=out)
-    if missing:
-        print("missing requirements: " + "; ".join(missing), file=out)
+    _write_report(report, report_dir, out)
     return report
 
 
@@ -550,6 +568,35 @@ def _token_transport(env: dict) -> Optional[Transport]:
     return http_transport(token) if token else None
 
 
+def _checked_paths(args: argparse.Namespace) -> dict[str, Path]:
+    """Validate the command's options and confine every path it will touch."""
+    if args.command == "plan-backfill":
+        if args.apply or args.plan:
+            raise MigrationError("plan-backfill only reads; it takes --out, not --plan or --apply")
+        if not args.out:
+            raise MigrationError("plan-backfill needs --out")
+        out_path = _confined(args.out, "--out", ".json")
+        if out_path.exists():
+            raise MigrationError(f"{out_path} exists; a reviewed plan is never overwritten")
+        return {"out": out_path}
+    if not args.plan:
+        raise MigrationError(f"{args.command} needs --plan (the reviewed plan file)")
+    if args.apply and not args.plan_sha256:
+        raise MigrationError("--apply needs --plan-sha256 from the reviewed dry-run")
+    report_dir = _confined(args.report_dir, "--report-dir")
+    return {"plan": _confined(args.plan, "--plan", ".json"), "report_dir": report_dir,
+            "checkpoint": _confined(args.checkpoint or report_dir / f"{args.command}.checkpoint.json", "--checkpoint", ".json")}
+
+
+def _write_backfill_plan(transport: Transport, out_path: Path) -> None:
+    plan = plan_backfill(transport, generated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "x", encoding="utf-8") as handle:
+        handle.write(json.dumps(plan, indent=1, ensure_ascii=False) + "\n")
+    print(f"plan-backfill: {plan['counts']} -> {out_path}")
+    print(f"plan sha256: {plan_sha256(out_path)}")
+
+
 def main(argv: Optional[list[str]] = None, env: Optional[dict] = None, transport: Optional[Transport] = None) -> int:
     env = dict(os.environ) if env is None else env
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
@@ -565,22 +612,7 @@ def main(argv: Optional[list[str]] = None, env: Optional[dict] = None, transport
                         help="wait before re-reading added items for a late native Inbox (default: %(default)s)")
     args = parser.parse_args(argv)
     try:
-        if args.command == "plan-backfill":
-            if args.apply or args.plan:
-                raise MigrationError("plan-backfill only reads; it takes --out, not --plan or --apply")
-            if not args.out:
-                raise MigrationError("plan-backfill needs --out")
-            out_path = _confined(args.out, "--out", ".json")
-            if out_path.exists():
-                raise MigrationError(f"{out_path} exists; a reviewed plan is never overwritten")
-        else:
-            if not args.plan:
-                raise MigrationError(f"{args.command} needs --plan (the reviewed plan file)")
-            plan_path = _confined(args.plan, "--plan", ".json")
-            report_dir = _confined(args.report_dir, "--report-dir")
-            checkpoint = _confined(args.checkpoint or report_dir / f"{args.command}.checkpoint.json", "--checkpoint", ".json")
-            if args.apply and not args.plan_sha256:
-                raise MigrationError("--apply needs --plan-sha256 from the reviewed dry-run")
+        paths = _checked_paths(args)
     except MigrationError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -590,15 +622,10 @@ def main(argv: Optional[list[str]] = None, env: Optional[dict] = None, transport
         return 2
     try:
         if args.command == "plan-backfill":
-            plan = plan_backfill(transport, generated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(out_path, "x", encoding="utf-8") as handle:
-                handle.write(json.dumps(plan, indent=1, ensure_ascii=False) + "\n")
-            print(f"plan-backfill: {plan['counts']} -> {out_path}")
-            print(f"plan sha256: {plan_sha256(out_path)}")
+            _write_backfill_plan(transport, paths["out"])
             return 0
-        report = run(args.command, plan_path, apply=args.apply, transport=transport, checkpoint=checkpoint,
-                     report_dir=report_dir, settle_seconds=args.settle_seconds, expected_sha256=args.plan_sha256)
+        report = run(args.command, paths["plan"], apply=args.apply, transport=transport, checkpoint=paths["checkpoint"],
+                     report_dir=paths["report_dir"], settle_seconds=args.settle_seconds, expected_sha256=args.plan_sha256)
     except MigrationError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
