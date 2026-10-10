@@ -1,7 +1,8 @@
 /**
  * A minimal durable queue for Folder Reminders tests (#534): `window.prksSync`
  * reduced to what Folder fields use, with the local store's coalescing and
- * scope_busy rules for SET_FOLDER_FIELD (`saveFolderFields`). An
+ * scope_busy rules for SET_FOLDER_FIELD (`saveFolderFields`), including
+ * its expected-row check. An
  * acknowledgement updates `server` and is emitted as the sync runtime emits it.
  */
 export type FolderRow = {
@@ -25,16 +26,30 @@ export function createFolderQueue(server: FolderServer) {
   let seq = 0
   let failNext = 0
   const listeners = new Set<(event: unknown) => void>()
-  const saves: { folderId: string; changes: Record<string, string>; base: Record<string, Observed> }[] = []
-  const busy = (row: FolderRow) =>
+  const saves: {
+    folderId: string
+    changes: Record<string, string>
+    base: Record<string, Observed>
+    expected?: Record<string, string | null>
+  }[] = []
+  const busy = (row: FolderRow, foreign = false) =>
     Object.assign(new Error('This field is syncing or needs resolution.'), {
       prksLocalStoreCode: 'scope_busy',
       prksBusyOpId: row.op_id,
       prksBusyStatus: row.status,
+      prksBusyForeign: foreign,
     })
   const store = {
-    async saveFolderFields(folderId: string, changes: Record<string, string>, base: Record<string, Observed>) {
-      saves.push({ folderId, changes: { ...changes }, base: JSON.parse(JSON.stringify(base)) })
+    async saveFolderFields(
+      folderId: string,
+      changes: Record<string, string>,
+      base: Record<string, Observed>,
+      expected?: Record<string, string | null>,
+    ) {
+      saves.push({
+        folderId, changes: { ...changes }, base: JSON.parse(JSON.stringify(base)),
+        expected: expected ? { ...expected } : undefined,
+      })
       if (failNext > 0) {
         failNext -= 1
         throw Object.assign(new Error('refused'), { prksLocalStoreCode: 'write_failed' })
@@ -45,7 +60,9 @@ export function createFolderQueue(server: FolderServer) {
         const observed = base[field]
         const existing = rows.find((r) => r.entity_id === folderId && r.payload.field === field)
         if (existing) {
-          if (existing.status !== 'pending' || existing.attempt_count > 0) throw busy(existing)
+          const foreign = !!expected && Object.prototype.hasOwnProperty.call(expected, field) &&
+            expected[field] !== existing.op_id
+          if (foreign || existing.status !== 'pending' || existing.attempt_count > 0) throw busy(existing, foreign)
           if (existing.payload.value === desired) {
             written.push(existing)
             continue

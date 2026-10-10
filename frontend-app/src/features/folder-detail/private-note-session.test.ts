@@ -375,6 +375,7 @@ describe('Folder Reminders sessions', () => {
       folderId: FA,
       changes: { private_notes: 'Buy toner' },
       base: { private_notes: { value: 'Server A', revision: 4 } },
+      expected: { private_notes: null },
     }])
     await vi.advanceTimersByTimeAsync(0)
     expect(status.textContent).toBe('Saved')
@@ -464,36 +465,188 @@ describe('Folder Reminders sessions', () => {
     expect(session(ownerB)?.draftText).toBe('Typed in Secondary')
   })
 
-  it('two panes editing the same Folder keep separate sessions; only its own row is a pane\'s predecessor', async () => {
-    installShell()
-    const { workspace, ownerA, ownerB } = mountPair()
-    await openFolder(ownerA, FA)
-    await openFolder(ownerB, FA)
-    const a = mountCard(ownerA, FA)
-    type(a.field, 'From Main')
-    w.prksFlushPendingPrivateNotes(ownerA)
-    await settle()
-    const [mainRow] = noteRows()
-    expect(session(ownerA)?.ownQueued?.opId).toBe(mainRow.op_id)
+  describe('two panes on one Folder', () => {
+    /* Main queues a never-sent "From Main"; Secondary, showing that row, types on it. */
+    async function mainQueuedThenSecondaryTypes() {
+      installShell()
+      const pair = mountPair()
+      const { workspace, ownerA, ownerB } = pair
+      await openFolder(ownerA, FA)
+      await openFolder(ownerB, FA)
+      const a = mountCard(ownerA, FA)
+      type(a.field, 'From Main')
+      w.prksFlushPendingPrivateNotes(ownerA)
+      await vi.advanceTimersByTimeAsync(0)
+      const [mainRow] = noteRows()
+      expect(session(ownerA)?.ownQueued?.opId).toBe(mainRow.op_id)
 
-    ownerA.clearResource('privateNotesEditor')
-    workspace.focusedTabId = 'tab-b'
-    const b = mountCard(ownerB, FA)
-    type(b.field, 'From Secondary')
-    w.prksFlushPendingPrivateNotes(ownerB)
-    await settle()
-    const [secondaryRow] = noteRows()
-    expect(secondaryRow.payload.value).toBe('From Secondary')
-    expect(session(ownerB)?.ownQueued?.opId).toBe(secondaryRow.op_id)
-    expect(session(ownerA)?.ownQueued?.opId).toBe(mainRow.op_id)
+      ownerA.clearResource('privateNotesEditor')
+      workspace.focusedTabId = 'tab-b'
+      const b = mountCard(ownerB, FA)
+      expect(b.field.value).toBe('From Main')
+      type(b.field, 'From Secondary')
+      await vi.advanceTimersByTimeAsync(850)
+      return { ...pair, a, b, mainRow }
+    }
 
-    queue.ack(secondaryRow.op_id, 5)
-    expect(session(ownerB)?.ownQueued).toBeNull()
-    expect(session(ownerA)?.ownQueued?.opId).toBe(mainRow.op_id)
-    expect(session(ownerA)?.draftText).toBe('From Main')
-    /* Both panes show the Folder, so both learn what the server now holds. */
-    expect(w.prksFolderNoteObserved(ownerA, FA)?.value).toBe('From Secondary')
-    expect(w.prksFolderNoteObserved(ownerB, FA)?.value).toBe('From Secondary')
+    it('another pane\'s never-sent row is never replaced; that pane\'s text waits', async () => {
+      vi.useFakeTimers()
+      const { b, ownerA, ownerB, mainRow } = await mainQueuedThenSecondaryTypes()
+      /* The store refused in its transaction: Main's row and op id survive. */
+      expect(queue.saves.at(-1)).toMatchObject({
+        changes: { private_notes: 'From Secondary' },
+        expected: { private_notes: null },
+      })
+      expect(noteRows().map((r) => [r.op_id, r.payload.value])).toEqual([[mainRow.op_id, 'From Main']])
+      expect(session(ownerA)?.ownQueued?.opId).toBe(mainRow.op_id)
+      expect(session(ownerB)?.ownQueued).toBeNull()
+      expect(session(ownerB)?.dirty).toBe(true)
+      expect(session(ownerB)?.draftText).toBe('From Secondary')
+      expect(b.field.value).toBe('From Secondary')
+      expect(b.status.textContent).toBe('Still syncing — wait or resolve the conflict in Diagnostics')
+
+      /* Waiting is retried, and keeps refusing while Main's row is unsettled. */
+      await vi.advanceTimersByTimeAsync(400)
+      expect(noteRows().map((r) => r.op_id)).toEqual([mainRow.op_id])
+      expect(session(ownerB)?.dirty).toBe(true)
+    })
+
+    it('on the acknowledgement of the row it was typed on, the waiting text saves on that revision', async () => {
+      vi.useFakeTimers()
+      const { ownerA, ownerB, mainRow } = await mainQueuedThenSecondaryTypes()
+      expect(session(ownerB)?.editBase).toMatchObject({ revision: 4, start: 'From Main' })
+      queue.ack(mainRow.op_id, 5)
+      expect(session(ownerA)?.ownQueued).toBeNull()
+      expect(session(ownerB)?.editBase).toMatchObject({ value: 'From Main', revision: 5 })
+      await vi.advanceTimersByTimeAsync(0)
+      const [secondaryRow] = noteRows()
+      expect([secondaryRow.payload.value, secondaryRow.base_revision]).toEqual(['From Secondary', 5])
+      expect(session(ownerB)?.ownQueued?.opId).toBe(secondaryRow.op_id)
+      expect(session(ownerB)?.dirty).toBe(false)
+      /* Both panes show the Folder, so both learn what the server now holds. */
+      queue.ack(secondaryRow.op_id, 6)
+      expect(w.prksFolderNoteObserved(ownerA, FA)?.value).toBe('From Secondary')
+      expect(w.prksFolderNoteObserved(ownerB, FA)?.value).toBe('From Secondary')
+    })
+
+    it('a predecessor that conflicts is never overwritten by the waiting text', async () => {
+      vi.useFakeTimers()
+      const { b, ownerB, mainRow } = await mainQueuedThenSecondaryTypes()
+      queue.conflict(mainRow.op_id)
+      await vi.advanceTimersByTimeAsync(400)
+      expect(noteRows().map((r) => [r.op_id, r.payload.value, r.status])).toEqual([[mainRow.op_id, 'From Main', 'conflict']])
+      expect(session(ownerB)?.dirty).toBe(true)
+      expect(b.field.value).toBe('From Secondary')
+      expect(b.status.textContent).toBe('Still syncing — wait or resolve the conflict in Diagnostics')
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(noteRows().map((r) => r.op_id)).toEqual([mainRow.op_id])
+    })
+
+    it('a predecessor replaced by an unseen edit leaves the waiting text on the base it was typed on', async () => {
+      vi.useFakeTimers()
+      const { workspace, ownerA, ownerB, mainRow } = await mainQueuedThenSecondaryTypes()
+      /* Main changes its own never-sent row after Secondary typed on it. */
+      ownerB.clearResource('privateNotesEditor')
+      workspace.focusedTabId = 'tab-a'
+      const again = mountCard(ownerA, FA)
+      type(again.field, 'Main again')
+      w.prksFlushPendingPrivateNotes(ownerA)
+      await vi.advanceTimersByTimeAsync(0)
+      const [mainAgain] = noteRows()
+      expect(mainAgain.payload.value).toBe('Main again')
+      expect(mainAgain.op_id).not.toBe(mainRow.op_id)
+      expect(session(ownerA)?.ownQueued?.opId).toBe(mainAgain.op_id)
+
+      queue.ack(mainAgain.op_id, 5)
+      /* Secondary never saw "Main again": its base stays where its text was typed. */
+      expect(session(ownerB)?.editBase).toMatchObject({ revision: 4, start: 'From Main' })
+      ownerA.clearResource('privateNotesEditor')
+      workspace.focusedTabId = 'tab-b'
+      const b = mountCard(ownerB, FA)
+      expect(b.field.value).toBe('From Secondary')
+      w.prksFlushPendingPrivateNotes(ownerB)
+      await vi.advanceTimersByTimeAsync(0)
+      /* Queued on revision 4, so the server answers with a conflict, never an overwrite. */
+      expect(noteRows().map((r) => [r.payload.value, r.base_revision])).toEqual([['From Secondary', 4]])
+    })
+
+    it('a pane\'s own never-sent row still coalesces, back to the base included', async () => {
+      installShell()
+      const { ownerA } = mountPair()
+      await openFolder(ownerA, FA)
+      const { field } = mountCard(ownerA, FA)
+      type(field, 'First')
+      w.prksFlushPendingPrivateNotes(ownerA)
+      await settle()
+      const [first] = noteRows()
+      type(field, 'Second')
+      w.prksFlushPendingPrivateNotes(ownerA)
+      await settle()
+      expect(queue.saves.at(-1)?.expected).toEqual({ private_notes: first.op_id })
+      const [second] = noteRows()
+      expect(second.payload.value).toBe('Second')
+      expect(session(ownerA)?.ownQueued?.opId).toBe(second.op_id)
+
+      type(field, 'Server A')
+      w.prksFlushPendingPrivateNotes(ownerA)
+      await settle()
+      expect(noteRows()).toEqual([])
+      expect(session(ownerA)?.ownQueued).toBeNull()
+      expect(session(ownerA)?.dirty).toBe(false)
+    })
+
+    it('a pane keeps its own row across leaving and returning to the Folder', async () => {
+      installShell()
+      const { ownerA } = mountPair()
+      await openFolder(ownerA, FA)
+      const first = mountCard(ownerA, FA)
+      type(first.field, 'Before leaving')
+      w.prksFlushPendingPrivateNotes(ownerA)
+      await settle()
+      const [row] = noteRows()
+      await openFolder(ownerA, FB)
+      mountCard(ownerA, FB)
+      await openFolder(ownerA, FA)
+      const back = mountCard(ownerA, FA)
+      expect(session(ownerA)?.ownQueued?.opId).toBe(row.op_id)
+      type(back.field, 'After returning')
+      w.prksFlushPendingPrivateNotes(ownerA)
+      await settle()
+      expect(noteRows().map((r) => r.payload.value)).toEqual(['After returning'])
+    })
+
+    it('an acknowledgement that lands before its save resolves still clears the row, and the waiting pane saves', async () => {
+      vi.useFakeTimers()
+      installShell()
+      const { workspace, ownerA, ownerB } = mountPair()
+      await openFolder(ownerA, FA)
+      await openFolder(ownerB, FA)
+      const a = mountCard(ownerA, FA)
+      /* The sync runtime acknowledges Main's row inside the store write, before its save resolves. */
+      const save = queue.store.saveFolderFields
+      queue.store.saveFolderFields = async (...args: Parameters<typeof save>) => {
+        const written = await save(...args)
+        queue.store.saveFolderFields = save
+        await w.prksRefreshPendingFolderNotes()
+        queue.ack(written[0].op_id, 5)
+        return written
+      }
+      type(a.field, 'From Main')
+      w.prksFlushPendingPrivateNotes(ownerA)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(noteRows()).toEqual([])
+      expect(session(ownerA)?.ownQueued).toBeNull()
+      expect(session(ownerA)?.editBase).toMatchObject({ value: 'From Main', revision: 5 })
+
+      ownerA.clearResource('privateNotesEditor')
+      workspace.focusedTabId = 'tab-b'
+      const b = mountCard(ownerB, FA)
+      expect(b.field.value).toBe('From Main')
+      type(b.field, 'From Secondary')
+      await vi.advanceTimersByTimeAsync(850)
+      expect(noteRows().map((r) => [r.payload.value, r.base_revision])).toEqual([['From Secondary', 5]])
+      expect(session(ownerB)?.dirty).toBe(false)
+    })
   })
 
   it('an older acknowledgement never clears a newer edit', async () => {
@@ -710,6 +863,7 @@ describe('Folder Reminders edit base', () => {
       folderId: FA,
       changes: { private_notes: 'A edit' },
       base: { private_notes: { value: 'Server A', revision: 4 } },
+      expected: { private_notes: null },
     })
     expect(noteRows().map((r) => [r.payload.value, r.base_revision])).toEqual([['A edit', 4]])
   })

@@ -156,8 +156,13 @@ class FrontendOfflineNotesGuardTests(unittest.TestCase):
         folder = families[families.index("folder: Object.freeze({"):]
         self.assertIn("save: prksSaveFolderPrivateNoteForSession,", folder)
         start = src.index("async function prksSaveFolderPrivateNoteForSession(")
-        body = src[start : src.index("\n}\n", start)]
+        in_order = src.index("async function prksSaveFolderPrivateNoteInOrder(", start)
+        body = src[start : src.index("\n}\n", in_order)]
         self.assertIn("prksSaveFolderPrivateNoteDurably(", body)
+        # Each save names the one row its pane may replace, checked in the
+        # store transaction, so another pane's row is never coalesced (#534).
+        self.assertIn("ownOpId:", body)
+        self.assertIn("prksFolderOwnRows(ctx)", body)
         # The base is the pane's observed snapshot, never the stored Folder,
         # whose body may be newer than the text the pane shows (#534).
         self.assertIn("prksFolderNoteObserved(", body)
@@ -172,6 +177,7 @@ class FrontendOfflineNotesGuardTests(unittest.TestCase):
         start = state.index("async function saveFolderPrivateNoteDurably(")
         durable = state[start : state.index("\n    }\n", start)]
         self.assertIn("runtime.store.saveFolderFields(", durable)
+        self.assertIn("{ private_notes: base }, owns)", durable)
         self.assertIn("PRIVATE_NOTES_FIELD", durable)
         self.assertNotIn("prksRequest(", durable)
 

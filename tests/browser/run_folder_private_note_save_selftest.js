@@ -140,10 +140,54 @@ async function aRowInFlightIsBusyAndNamed() {
     const first = await save("One", { value: "", revision: 0 });
     await store.claimOperation(first.opId);
     const busy = await save("One and two", { value: "", revision: 0 });
-    assert.deepEqual(busy, { code: "scope_busy", opId: first.opId },
+    assert.deepEqual(busy, { code: "scope_busy", opId: first.opId, foreign: false },
         "a sent row is never rewritten, and the save says which row holds the field");
     const [still] = await noteRows(store);
     assert.equal(still.payload.value, "One", "nothing was written");
+}
+
+/* A session save names the unsettled row it owns (`ownOpId`); the store checks
+ * it in the write's own transaction. */
+async function onlyTheOwnersRowIsReplaced() {
+    const store = newStore();
+    install(store);
+    const base = { value: "", revision: 3 };
+    const owned = (opId) => ({ ownOpId: opId });
+    const first = await globalThis.prksSaveFolderPrivateNoteDurably(FOLDER, "Main", base, owned(null));
+    assert.equal(first.code, "queued");
+
+    const other = await globalThis.prksSaveFolderPrivateNoteDurably(FOLDER, "Secondary", base, owned(null));
+    assert.deepEqual(other, { code: "scope_busy", opId: first.opId, foreign: true },
+        "a save that owns no row never replaces one that is there");
+    const stale = await globalThis.prksSaveFolderPrivateNoteDurably(FOLDER, "Secondary", base, owned("op-gone"));
+    assert.deepEqual(stale, { code: "scope_busy", opId: first.opId, foreign: true },
+        "nor does a save owning another row");
+    let [row] = await noteRows(store);
+    assert.deepEqual([row.op_id, row.payload.value], [first.opId, "Main"], "the owner's row and op id survive");
+
+    const again = await globalThis.prksSaveFolderPrivateNoteDurably(FOLDER, "Main again", base, owned(first.opId));
+    assert.equal(again.code, "queued", "the owner's own never-sent row still coalesces");
+    [row] = await noteRows(store);
+    assert.deepEqual([row.op_id, row.payload.value], [again.opId, "Main again"]);
+    const back = await globalThis.prksSaveFolderPrivateNoteDurably(FOLDER, "", base, owned(again.opId));
+    assert.equal(back.code, "unchanged", "back to the base, its row is withdrawn");
+    assert.equal((await noteRows(store)).length, 0);
+
+    const free = await globalThis.prksSaveFolderPrivateNoteDurably(FOLDER, "Secondary", base, owned("op-gone"));
+    assert.equal(free.code, "queued", "with no row there, nothing is anyone else's");
+
+    await store.updateOperationSyncState(free.opId, {
+        status: "conflict", server_result: { code: "REVISION_CONFLICT", current_revision: 4 },
+    });
+    const behindConflict = await globalThis.prksSaveFolderPrivateNoteDurably(FOLDER, "Third", base, owned(null));
+    assert.deepEqual(behindConflict, { code: "conflict", opId: free.opId, foreign: true });
+
+    await assert.rejects(store.saveFolderFields(FOLDER, { private_notes: "x" },
+        { private_notes: base }, { private_notes: 5 }),
+    error => error.prksLocalStoreCode === "invalid_envelope", "an expected row is an op id or null");
+    await assert.rejects(store.saveFolderFields(FOLDER, { private_notes: "x" },
+        { private_notes: base }, "op-1"),
+    error => error.prksLocalStoreCode === "invalid_envelope");
 }
 
 async function aRowNeedingResolutionIsAConflict() {
@@ -154,7 +198,7 @@ async function aRowNeedingResolutionIsAConflict() {
         status: "conflict", server_result: { code: "REVISION_CONFLICT", current_revision: 4 },
     });
     const refused = await save("Two", { value: "", revision: 0 });
-    assert.deepEqual(refused, { code: "conflict", opId: first.opId });
+    assert.deepEqual(refused, { code: "conflict", opId: first.opId, foreign: false });
 }
 
 async function aStoreFailureIsACodeNotAThrow() {
@@ -228,7 +272,7 @@ async function anOlderAckNeverCoversANewerEdit() {
     const sending = runtime.wake();
     await settle();
     const newer = await save("Generation two", { value: "", revision: 7 });
-    assert.deepEqual(newer, { code: "scope_busy", opId: older.opId },
+    assert.deepEqual(newer, { code: "scope_busy", opId: older.opId, foreign: false },
         "the newer edit cannot ride on the row already sent");
 
     release();
@@ -291,6 +335,7 @@ async function main() {
     await theOrdinaryFolderSaveIsUnchanged();
     await aRowInFlightIsBusyAndNamed();
     await aRowNeedingResolutionIsAConflict();
+    await onlyTheOwnersRowIsReplaced();
     await aStoreFailureIsACodeNotAThrow();
     await noBaseNoSave();
     await anUnprovenRowIsNotPassedOffAsTheText();
