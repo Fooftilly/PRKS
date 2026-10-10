@@ -25,7 +25,7 @@ A request is refused, and nothing is written, when:
 
 - the person who started or re-ran the run is not an allowed actor;
 - the run is not from the default branch (the check job refuses before checking out any code, so the run fails with a `refused` record and the write job is skipped);
-- either number is missing, a pull request, or a closed issue;
+- either number is not a valid issue number, is missing, is a pull request or a closed issue, or was transferred to another repository (GitHub redirects it, and writing that number here would hit an unrelated issue);
 - both numbers are the same;
 - the blocking issue is already (transitively) blocked by the blocked issue, so the edge would close a cycle (the summary shows the path);
 - the dependency graph above the blocking issue is larger than the writer will check (500 issues).
@@ -38,7 +38,7 @@ It only adds one relationship per run. It never removes or rewrites relationship
 
 ## Audit
 
-Each run prints one JSON record and a job summary with the actor, mode, pair, justification, the blocked issue's blocked-by list before and after, and the outcome (`dry-run`, `written`, `converged`, `no-op`, `refused` or `failed`).
+Each run prints one JSON record and a job summary with the actor, mode, pair, justification, the blocked issue's blocked-by list before and after, and the outcome (`dry-run`, `written`, `converged`, `no-op`, `refused` or `failed`). A request that cannot be parsed, such as a malformed number or an invalid allowed-actor login, still gets a `refused` record and job summary, with only the reason.
 
 ## Allowed actors and revoking
 

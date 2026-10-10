@@ -217,6 +217,29 @@ class IssueDependencyWriterTests(unittest.TestCase):
         self.gh.add(60, state="closed")
         self.assertRefused(request(10, 60, apply=True), "closed")
 
+    def test_transferred_issue_is_refused_without_writing(self) -> None:
+        # GitHub redirects a transferred issue to its new home; the body then
+        # names another repository and number.
+        for role, req in (("blocked issue", request(10, 20, apply=True)), ("blocking issue", request(30, 10, apply=True))):
+            gh = FakeGitHub()
+            for number in (10, 20, 30):
+                gh.add(number)
+            gh.issues[10] = {
+                "number": 77,
+                "id": 5077,
+                "state": "open",
+                "repository_url": "https://api.github.com/repos/Fooftilly/elsewhere",
+            }
+            status, audit = run(gh, req)
+            self.assertEqual((status, audit.outcome), (1, "refused"), role)
+            self.assertIn(f"{role} #10 was transferred to Fooftilly/elsewhere#77", audit.reason)
+            self.assertEqual(gh.posts, [])
+
+    def test_write_targets_the_checked_issue(self) -> None:
+        status, _ = run(self.gh, request(apply=True))
+        self.assertEqual(status, 0)
+        self.assertEqual(self.gh.posts[0][0], f"repos/{REPO}/issues/10/dependencies/blocked_by")
+
     def test_unlisted_actor_is_refused(self) -> None:
         self.assertRefused(request(actor="someone-else", apply=True), "not allowed")
 
@@ -280,6 +303,25 @@ class MainTests(unittest.TestCase):
                 factory,
             )
         self.assertEqual(status, 1)
+
+    def test_parse_refusal_is_written_to_the_job_summary(self) -> None:
+        from contextlib import redirect_stdout
+        from io import StringIO
+
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = Path(tmp) / "summary.md"
+            out = StringIO()
+            with redirect_stdout(out):
+                status = writer.main(
+                    ["--blocked", "ten", "--blocking", "20", "--justification", "x" * 20],
+                    {"GITHUB_TOKEN": "t", "GITHUB_REPOSITORY": REPO, "GITHUB_STEP_SUMMARY": str(summary)},
+                    lambda token, url: FakeGitHub(),
+                )
+            self.assertEqual(status, 1)
+            self.assertEqual(json.loads(out.getvalue().strip())["outcome"], "refused")
+            text = summary.read_text()
+            self.assertIn("**refused**", text)
+            self.assertIn("blocked must be an issue number", text)
 
 
 class GitHubClientTests(unittest.TestCase):

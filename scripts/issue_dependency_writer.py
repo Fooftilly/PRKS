@@ -237,7 +237,12 @@ def fetch_open_issue(client: Client, repo: str, number: int, role: str) -> Issue
         raise Refused(f"{role} #{number} is a pull request, not an issue")
     if issue.get("state") != "open":
         raise Refused(f"{role} #{number} is {issue.get('state')}; only open issues are linked")
-    return _ref(issue, repo)
+    ref = _ref(issue, repo)
+    # A transferred issue answers with a redirect to its new home. Writing
+    # against that number in this repository would hit an unrelated issue.
+    if ref.repo.lower() != repo.lower() or ref.number != number:
+        raise Refused(f"{role} #{number} was transferred to {ref.repo}#{ref.number}")
+    return ref
 
 
 def _edges(client: Client, ref: IssueRef, direction: str) -> list[IssueRef]:
@@ -329,7 +334,7 @@ def _write(client: Client, request: Request, audit: Audit) -> int:
     write_error: ApiError | None = None
     try:
         client.post(
-            f"repos/{request.repo}/issues/{plan.blocked.number}/dependencies/blocked_by",
+            f"repos/{plan.blocked.repo}/issues/{plan.blocked.number}/dependencies/blocked_by",
             {"issue_id": plan.blocker.id},
         )
     except ApiError as error:
@@ -399,7 +404,18 @@ def main(argv: list[str] | None = None, env: dict[str, str] | None = None,
     try:
         request = build_request(args, env)
     except Refused as refusal:
+        # The request could not be parsed, so there is no full audit record;
+        # still report the refusal in the log and the job summary.
         print(json.dumps({"tool": "issue-dependency-writer", "outcome": "refused", "reason": str(refusal)}))
+        summary_path = env.get("GITHUB_STEP_SUMMARY")
+        if summary_path:
+            with open(summary_path, "a", encoding="utf-8") as summary:
+                summary.write(
+                    "## Issue dependency writer\n\n"
+                    f"- Outcome: **refused**: {str(refusal).replace('`', "'")}\n"
+                    "- Nothing was read or written.\n"
+                )
+        print(f"::error::refused: {refusal}", file=sys.stderr)
         return 1
     audit = Audit(request)
     token = env.get("GITHUB_TOKEN", "")
