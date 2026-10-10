@@ -97,6 +97,7 @@ The settings live under Project #3 → ⋯ → **Workflows**. Each built-in work
 | Triaged as actionable | issue | Ready | person | Inbox |
 | Work starts | issue | In Progress | person | Ready |
 | Draft PR opened | PR | In Progress | `project-sync` | empty, Inbox |
+| PR opened ready for review | PR | Review | `project-sync` | empty, Inbox |
 | PR marked ready for review | PR | Review | `project-sync` | empty, Inbox, Ready, In Progress |
 | PR converted back to draft | PR | In Progress | `project-sync` | Review, Changes requested |
 | Changes requested in a review | PR | Changes requested | native | (native rule) |
@@ -148,10 +149,11 @@ Prerequisites are GitHub's native **Blocked by / Blocking** relationships, recor
 
 A checked-in workflow, `.github/workflows/project-sync.yml`, covering only the four PR rows marked `project-sync` in §6.
 
-- **Events:** `pull_request_target` (`opened`, `ready_for_review`, `converted_to_draft`, `review_requested`). Nothing checks out or runs pull-request code. The PR's number from the event is the only input; the PR's state is re-read from the API.
+- **Events:** `pull_request_target` (`opened`, `ready_for_review`, `converted_to_draft`, `review_requested`). The job checks out only the default branch and never runs pull-request code. The PR's number from the event is the only input; the PR's draft and open state are re-read from the API, so a stale event changes nothing.
 - **Scope:** PR items only. Field and option IDs are resolved at run time from names kept in one config file (`.github/project-sync.json`). If any name is missing, the run fails clearly.
 - **Behavior:** applies the "allowed from" rules in §6, so a repeated run makes no change. Each run logs one audit record (PR, event, Status before and after, outcome) and a job summary.
-- **Default:** dry-run. Writing is enabled only after the credential, the configuration and the workflow have been reviewed and the maintainer authorizes it.
+- **Default:** dry-run. It writes only when the repository variable `PROJECT_SYNC_MODE` is exactly `apply`, which is set only after the credential, the configuration and the workflow have been reviewed and the maintainer authorizes it. Without `PROJECT_SYNC_TOKEN` a run reports `not-configured` and succeeds without calling the API, so PR checks stay green before rollout.
+- **Dependabot PRs:** GitHub gives `pull_request_target` runs triggered by Dependabot only Dependabot secrets, so these runs report `not-configured` unless the token is also added as a Dependabot secret. That choice is left to the rollout review.
 - **Missing items (approved):** if auto-add has not yet created the PR's item, `project-sync` adds it with `addProjectV2ItemById`, using the PR's own node ID. It first looks for an existing item. GitHub documents that adding an item that already exists returns the existing item, so repeated or concurrent adds converge to one item. It only adds PRs whose repository is `Fooftilly/PRKS`, only to Project #3, and never adds or edits the linked issue.
 
 ### 10.1 Race between native auto-add, "Item added" and `project-sync`
@@ -183,6 +185,8 @@ Remaining races and how `project-sync` handles them:
 - **A person changes Status at the same time.** A Status outside the "allowed from" list is left alone. If the person's write lands just after a `project-sync` read, the person's value wins, because it is the last write.
 
 **Testing.** The decision logic is a pure function of PR state, item state and event. Unit tests run it against a fake project that replays each ordering above: native add before and after, a delayed native "Item added", a duplicate concurrent add, a merge during the write, and Blocked or Done set by hand. The live check is a dry-run on the next ordinary PR after the configuration is approved. It does not use test PRs or arbitrary items.
+
+Implementation: `scripts/project_sync.py`, `.github/workflows/project-sync.yml` and `.github/project-sync.json`, with tests in `tests/test_project_sync.py`.
 
 ## 11. Credentials and permissions
 
