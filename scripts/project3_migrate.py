@@ -71,8 +71,13 @@ OWNER = "Fooftilly"
 REPOSITORY = "Fooftilly/PRKS"
 PROJECT_NUMBER = 3
 PROJECT_ID = "PVT_kwHOAsc2_s4BkAo3"
-REQUIRED_FIELDS = ("Status", "Roadmap Stage", "Execution")
-REQUIRED_STATUS_OPTIONS = ("Backlog",)
+# Single-select fields that must exist, with the options each must have,
+# before --apply (§2 and §3 of docs/agent-workflows/project-3.md).
+REQUIRED_OPTIONS = {
+    "Status": ("Backlog",),
+    "Roadmap Stage": ("Idea", "Research / Design", "Planned", "Parked"),
+    "Execution": ("Human", "Agent", "Mixed"),
+}
 ALLOWED_MUTATIONS = ("addProjectV2ItemById", "updateProjectV2ItemFieldValue")
 STAGES = ("migrate-existing", "backfill")
 COMMANDS = ("plan-backfill",) + STAGES
@@ -246,7 +251,8 @@ class Project:
         self.fields: dict[str, dict] = {}
         for node in data["fields"]["nodes"]:
             if node.get("name"):
-                self.fields[node["name"]] = {"id": node["id"], "options": {o["name"]: o["id"] for o in node.get("options") or []}}
+                self.fields[node["name"]] = {"id": node["id"], "type": node.get("dataType"),
+                                             "options": {o["name"]: o["id"] for o in node.get("options") or []}}
         self.items: dict[tuple[str, int], dict] = {}
         after: Optional[str] = None
         while True:
@@ -268,9 +274,15 @@ class Project:
         return parsed[1] if parsed else None
 
     def missing_requirements(self, plan: dict) -> list[str]:
-        problems = [f"field {f!r} missing" for f in REQUIRED_FIELDS if f not in self.fields]
-        status_opts = self.fields.get("Status", {}).get("options", {})
-        problems += [f"Status option {o!r} missing" for o in REQUIRED_STATUS_OPTIONS if o not in status_opts]
+        problems = []
+        for name, options in REQUIRED_OPTIONS.items():
+            field = self.fields.get(name)
+            if field is None:
+                problems.append(f"field {name!r} missing")
+                continue
+            if field["type"] != "SINGLE_SELECT":
+                problems.append(f"field {name!r} is {field['type']}, not single select")
+            problems += [f"{name} option {o!r} missing" for o in options if o not in field["options"]]
         for item in plan["items"]:
             for field, value in item.get("set", {}).items():
                 if field in self.fields and value not in self.fields[field]["options"]:

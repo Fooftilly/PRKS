@@ -84,7 +84,10 @@ class FakeAPI:
             if iid not in self.items:
                 return {"node": None}
             return {"node": dict(self._node(iid), project={"id": pm.PROJECT_ID})}
-        fields = [{"id": self._fid(n), "name": n, "dataType": "SINGLE_SELECT", "options": [{"id": f"{n}:{o}", "name": o} for o in opts]} for n, opts in self.fields.items()]
+        # A field whose options are None is a text field.
+        fields = [{"id": self._fid(n), "name": n, "dataType": "TEXT"} if opts is None else
+                  {"id": self._fid(n), "name": n, "dataType": "SINGLE_SELECT", "options": [{"id": f"{n}:{o}", "name": o} for o in opts]}
+                  for n, opts in self.fields.items()]
         return {"user": {"projectV2": {"id": self.project_id, "number": 3, "owner": {"login": "Fooftilly"}, "fields": {"nodes": fields}}}}
 
     def _mutation(self, query, variables):
@@ -178,6 +181,18 @@ class DryRunAndGuards(Base):
             with self.assertRaises(pm.MigrationError):
                 self.run_stage("migrate-existing", [epic()], apply=True)
             self.assertEqual(self.api.mutations, [])
+
+    def test_apply_refused_unless_every_new_field_is_a_complete_single_select(self):
+        cases = {"Execution": (None, "'Execution' is TEXT, not single select"),
+                 "Roadmap Stage": (["Planned"], "Roadmap Stage option 'Parked' missing")}
+        for field, (options, problem) in cases.items():
+            with self.subTest(field=field):
+                self.api = FakeAPI()
+                self.api.fields[field] = options
+                self.api.put("Issue", 38, Status="Ready")
+                with self.assertRaisesRegex(pm.MigrationError, re.escape(problem)):
+                    self.run_stage("migrate-existing", [epic()], apply=True)
+                self.assertEqual(self.api.mutations, [])
 
     def test_apply_refused_when_plan_option_missing(self):
         self.api.fields["Roadmap Stage"] = ["Idea"]

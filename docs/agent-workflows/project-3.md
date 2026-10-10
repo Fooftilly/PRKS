@@ -292,7 +292,7 @@ Both plans use the same schema:
 - `--apply` runs exactly the reviewed file. It requires `--plan-sha256`, which must match the plan's hash as printed by the dry-run and `plan-backfill`, and it never regenerates a plan. `plan-backfill` never overwrites an existing plan file.
 - The only mutations it can send are `addProjectV2ItemById` and `updateProjectV2ItemFieldValue`. Nothing is ever deleted, cleared, archived, closed, reopened, approved or merged. It never reads or writes repository settings, secrets or `project-sync` variables.
 - Scope is checked against owner `Fooftilly`, project 3, node `PVT_kwHOAsc2_s4BkAo3` and content from `Fooftilly/PRKS`.
-- Field and option IDs are resolved by name. `--apply` refuses to run until Roadmap Stage, Execution and the Backlog option exist.
+- Field and option IDs are resolved by name. `--apply` refuses to run until Status has the Backlog option and Roadmap Stage and Execution exist as single-select fields with every option in §3.
 - Only listed fields are written (Status, Roadmap Stage; never Execution), and only when the current value equals the plan's expected-before value. Any other value, or a changed issue state, is reported as drift and skipped.
 - The item is re-read immediately before each field write, not only in the snapshot taken when the run starts. A Status, Roadmap Stage or issue state changed while the run is in progress is reported as drift and never overwritten.
 - In the backfill, Inbox also counts as an expected Status. The native "Item added" workflow sets Inbox on any item that auto-add or the tool adds, so whether it runs before or after the add, the item still gets its planned Status.
