@@ -470,6 +470,13 @@ def _unsafe_to_touch(item: dict, fresh: Optional[dict]) -> Optional[str]:
     return None
 
 
+def _awaits_verify(rec: dict, checkpoint: Checkpoint) -> bool:
+    """An item this tool added that has not verified yet: written now, or
+    left unchanged by a rerun after an earlier run stopped before verifying."""
+    return (rec["outcome"] in ("changed", "repaired", "unchanged")
+            and rec["item"] in checkpoint.added and rec["item"] not in checkpoint.done)
+
+
 def verify_added(project: Project, plan_items: dict, records: list, checkpoint: Checkpoint) -> None:
     """Undo a late native "Item added" Inbox once; report anything else.
 
@@ -480,9 +487,11 @@ def verify_added(project: Project, plan_items: dict, records: list, checkpoint: 
     run that stops before or during verification re-plans it from live data.
     """
     for rec in records:
-        if rec["outcome"] not in ("changed", "repaired") or rec["item"] not in checkpoint.added:
+        if not _awaits_verify(rec, checkpoint):
             continue
         item = plan_items[rec["item"]]
+        if "item_id" not in rec:   # left unchanged by this run, so never written
+            rec["item_id"] = project.items[(item["type"], item["number"])]["id"]
         fresh = project.refresh(rec["item_id"])
         reason = _unsafe_to_touch(item, fresh)
         if reason:
@@ -591,7 +600,7 @@ def run(stage: str, plan_path: Path, *, apply: bool, transport: Transport, check
     records, failed = _run_items(project, plan, stage, ck, apply)
     if stage == "migrate-existing":
         records += _not_in_plan(project, plan)
-    if apply and not failed and any(r["outcome"] in ("changed", "repaired") and r["item"] in ck.added for r in records):
+    if apply and not failed and any(_awaits_verify(r, ck) for r in records):
         sleep(settle_seconds)
         try:
             verify_added(project, {f"{i['type']}#{i['number']}": i for i in plan["items"]}, records, ck)

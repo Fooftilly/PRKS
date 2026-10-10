@@ -610,6 +610,26 @@ class NativeWorkflowRaces(Base):
         self.assertEqual(r["counts"], {"repaired": 1})
         self.assertEqual(self.api.items["I181"]["values"], {"Status": "Done"})
 
+    def test_an_added_item_left_unchanged_by_a_retry_is_still_verified(self):
+        self.api.item_added = "late"
+        self.api.add_content("Issue", 181, state="CLOSED")
+        self.api.add_content("Issue", 246, state="CLOSED")
+
+        def fail_the_second_items_write(name, variables):
+            if name == "updateProjectV2ItemFieldValue" and variables["item"] == "I246":
+                self.api.before_mutation = None
+                raise pm.MigrationError("GraphQL error: simulated outage")
+        self.api.before_mutation = fail_the_second_items_write
+        r = self.run_stage("backfill", [research(181), research(246)], apply=True)
+        self.assertEqual(r["counts"], {"changed": 1, "failed": 1})
+        self.assertEqual(self.api.items["I181"]["values"], {"Status": "Done"})   # its late Inbox is still pending
+        r = self.run_stage("backfill", [research(181), research(246)], apply=True)
+        self.assertEqual(r["counts"], {"unchanged": 1, "changed": 1})
+        self.assertTrue(r["ok"])
+        self.assertEqual(self.api.items["I181"]["values"], {"Status": "Done"})   # the late Inbox was written over
+        self.assertEqual(self.api.items["I246"]["values"], {"Status": "Done"})
+        self.assertEqual(json.loads((self.tmp / "ck.json").read_text())["done"], ["Issue#181", "Issue#246"])
+
     def test_an_added_item_is_done_once_it_verifies(self):
         self.api.add_content("Issue", 181, state="CLOSED")
         self.run_stage("backfill", [research()], apply=True)
