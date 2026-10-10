@@ -97,9 +97,9 @@ The settings live under Project #3 → ⋯ → **Workflows**. Each built-in work
 | Triaged as actionable | issue | Ready | person | Inbox |
 | Work starts | issue | In Progress | person | Ready |
 | Draft PR opened | PR | In Progress | `project-sync` | empty, Inbox |
-| PR opened ready for review | PR | Review | `project-sync` | empty, Inbox |
+| PR opened ready for review (approved 2026-10-10) | PR | Review | `project-sync` | empty, Inbox |
 | PR marked ready for review | PR | Review | `project-sync` | empty, Inbox, Ready, In Progress |
-| PR converted back to draft | PR | In Progress | `project-sync` | Review, Changes requested |
+| PR converted back to draft | PR | In Progress | `project-sync` | Review, Changes requested, and only if the latest conversion to draft is newer than the latest changes-requested review |
 | Changes requested in a review | PR | Changes requested | native | (native rule) |
 | Re-review explicitly requested | PR | Review | `project-sync` | Changes requested, and only if the latest review request is newer than the latest changes-requested review |
 | New commits pushed | PR | no change | none | |
@@ -153,7 +153,7 @@ A checked-in workflow, `.github/workflows/project-sync.yml`, covering only the f
 - **Scope:** PR items only. Field and option IDs are resolved at run time from names kept in one config file (`.github/project-sync.json`). If any name is missing, the run fails clearly.
 - **Behavior:** applies the "allowed from" rules in §6, so a repeated run makes no change. Each run logs one audit record (PR, event, Status before and after, outcome) and a job summary.
 - **Default:** dry-run. It writes only when the repository variable `PROJECT_SYNC_MODE` is exactly `apply`, which is set only after the credential, the configuration and the workflow have been reviewed and the maintainer authorizes it. Without `PROJECT_SYNC_TOKEN` a run reports `not-configured` and succeeds without calling the API, so PR checks stay green before rollout.
-- **Dependabot PRs:** GitHub gives `pull_request_target` runs triggered by Dependabot only Dependabot secrets, so these runs report `not-configured` unless the token is also added as a Dependabot secret. That choice is left to the rollout review.
+- **Dependabot PRs (known limitation):** GitHub gives `pull_request_target` runs triggered by Dependabot only Dependabot secrets. `PROJECT_SYNC_TOKEN` is deliberately **not** added as a Dependabot secret for now, so these runs report `not-configured` and leave dependency PRs without a `project-sync` Status. Native auto-add still puts them on the board, where the Maintenance view shows them, and the native merged and closed rules still apply. A safe rollout strategy for them is evaluated after the inventory.
 - **Missing items (approved):** if auto-add has not yet created the PR's item, `project-sync` adds it with `addProjectV2ItemById`, using the PR's own node ID. It first looks for an existing item. GitHub documents that adding an item that already exists returns the existing item, so repeated or concurrent adds converge to one item. It only adds PRs whose repository is `Fooftilly/PRKS`, only to Project #3, and never adds or edits the linked issue.
 
 ### 10.1 Race between native auto-add, "Item added" and `project-sync`
@@ -182,9 +182,9 @@ Remaining races and how `project-sync` handles them:
 
 - **PR merged or closed while `project-sync` writes.** It re-reads the PR and the item's Status immediately before writing, and skips a merged or closed PR. The Projects API has no compare-and-set, so a short window remains. After writing, it re-reads the PR; if it was merged or closed in that window, it sets Done, which is what the native rule would have set, and logs the correction.
 - **PR merged or closed before its item is added.** The native Done rule had no item to update. If the item `project-sync` then adds has no Status, it sets Done; a Status set meanwhile is left alone.
-- **A delayed re-review request.** A `review_requested` run applies only when the latest review request is newer than the latest changes-requested review (dismissed reviews excluded), and fails closed without a recorded request. If a changes-requested review lands during the write, Changes requested is restored.
+- **A delayed re-review request or draft conversion.** A `review_requested` or `converted_to_draft` run applies only when the latest such event on the PR is newer than the latest changes-requested review (dismissed reviews excluded), and fails closed when no event is recorded or the times are equal. If a changes-requested review lands during the write, Changes requested is restored. `opened` and `ready_for_review` never move an item out of Changes requested, so they need no ordering check.
 - **Two `project-sync` runs for the same PR.** One concurrency group per PR, without cancellation, serializes them. Each re-reads before writing, so the later run sees the earlier result.
-- **A person changes Status at the same time.** A Status outside the "allowed from" list is left alone. If the person's write lands just after a `project-sync` read, the person's value wins, because it is the last write.
+- **A person changes Status at the same time.** A Status outside the "allowed from" list is left alone, and a person's write after the `project-sync` write stands. The Projects API offers no conditional write, so in the short window between the `project-sync` read and its write, the later write wins. The audit record keeps the before and after values for a manual fix.
 
 **Testing.** The decision logic is a pure function of PR state, item state and event. Unit tests run it against a fake project that replays each ordering above: native add before and after, a delayed native "Item added", a duplicate concurrent add, a merge during the write, and Blocked or Done set by hand. The live check is a dry-run on the next ordinary PR after the configuration is approved. It does not use test PRs or arbitrary items.
 
