@@ -236,6 +236,23 @@ class DryRunAndGuards(Base):
         self.assertEqual(plan.read_bytes(), before)
         self.assertEqual(self.api.calls, [])
 
+    def test_a_report_file_symlink_cannot_redirect_the_report(self):
+        plan = plan_file(self.tmp, "backfill", [])
+        before = plan.read_bytes()
+        for name, target, message in (("backfill.json", plan, "must all be different paths"),
+                                      ("backfill.md", _ROOT / "README.md", "report file must be")):
+            out = self.tmp / f"out-{name}"
+            out.mkdir()
+            (out / name).symlink_to(target)
+            err = io.StringIO()
+            with unittest.mock.patch("sys.stderr", err):
+                rc = pm.main(["backfill", "--plan", str(plan), "--report-dir", str(out),
+                              "--checkpoint", str(self.tmp / "ck.json")], env={}, transport=self.api)
+            self.assertEqual(rc, 2, name)
+            self.assertIn(message, err.getvalue())
+        self.assertEqual(plan.read_bytes(), before)
+        self.assertEqual(self.api.calls, [])
+
     def test_an_output_directory_that_is_a_file_is_refused_before_anything_runs(self):
         plan = plan_file(self.tmp, "backfill", [])
         for report_dir in (plan, plan / "reports"):
@@ -406,6 +423,13 @@ class Backfill(Base):
     def test_a_row_missing_one_expected_before_field_is_refused(self):
         row = epic(expected_before={"Status": "Ready"})
         self._refused_before_any_call("migrate-existing", row, "expected_before entry for Roadmap Stage")
+
+    def test_set_and_expected_before_values_must_be_option_names(self):
+        for row in (epic(expected_before={"Status": ["Ready"], "Roadmap Stage": None}),
+                    epic(expected_before={"Status": {"x": 1}, "Roadmap Stage": None}),
+                    epic(set={"Status": ["Backlog"], "Roadmap Stage": "Idea"})):
+            with self.subTest(row=row):
+                self._refused_before_any_call("migrate-existing", row, "must be option names")
 
     def test_a_backfill_row_without_state_is_refused(self):
         row = {"number": 500, "type": "Issue", "expected_before": {"Status": None}, "set": {"Status": "Inbox"}}

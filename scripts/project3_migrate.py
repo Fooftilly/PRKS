@@ -230,6 +230,10 @@ def _check_guards(item: dict, stage: str) -> None:
     missing = [f for f in target if not isinstance(before, dict) or f not in before]
     if missing:
         raise MigrationError(f"{key}: plan row needs an explicit expected_before entry for {', '.join(missing)} (null is allowed)")
+    bad = [f for f in target if not isinstance(target[f], str) or not (before[f] is None or isinstance(before[f], str))]
+    if bad:
+        raise MigrationError(f"{key}: set and expected_before values must be option names (strings; null allowed "
+                             f"in expected_before), not {', '.join(f'{f}={target[f]!r}/{before[f]!r}' for f in bad)}")
 
 
 def _parse_item(node: dict) -> Optional[tuple[tuple[str, int], dict]]:
@@ -776,7 +780,9 @@ def _checked_paths(args: argparse.Namespace) -> dict[str, Path]:
     # The report is written to <report-dir>/<stage>.json and .md, the same
     # names the docs suggest for plans: the plan, the checkpoint and the two
     # report files must be four different files, or one would overwrite another.
-    files = (plan, checkpoint, report_dir / f"{args.command}.json", report_dir / f"{args.command}.md")
+    # Resolve the report files too, so a symlink left at one of them cannot
+    # point the report at the plan or outside the permitted roots.
+    files = (plan, checkpoint) + tuple(_confined(report_dir / f"{args.command}{ext}", "report file") for ext in (".json", ".md"))
     if len(set(files)) < len(files) or checkpoint == report_dir:
         raise MigrationError("the plan, checkpoint and report files must all be different paths; "
                              "pass a different --report-dir or --checkpoint")
