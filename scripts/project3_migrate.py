@@ -378,11 +378,9 @@ def apply_item(project: Project, item: dict, rec: dict, stage: str, checkpoint: 
     written = []
     for field, target in item.get("set", {}).items():
         fresh = project.refresh(item_id)
-        if fresh is None or fresh["archived"]:
-            rec.update(outcome="drift", detail="item was removed or archived during the run", writes=written)
-            return
-        if not _state_ok(item, fresh["state"]):
-            rec.update(outcome="drift", detail=f"GitHub state changed to {fresh['state']} during the run", writes=written)
+        reason = _unsafe_to_touch(item, fresh)
+        if reason or fresh is None:
+            rec.update(outcome="drift", detail=f"{reason} during the run; not touched", writes=written)
             return
         current = fresh["values"].get(field)
         if current == target:
@@ -401,13 +399,34 @@ def apply_item(project: Project, item: dict, rec: dict, stage: str, checkpoint: 
         rec["outcome"] = "repaired" if written else "unchanged"
 
 
+def _unsafe_to_touch(item: dict, fresh: Optional[dict]) -> Optional[str]:
+    """Why an item may not be written now, or None: the same guard as apply_item."""
+    if fresh is None:
+        return "item was removed from the project"
+    if fresh["archived"]:
+        return "item was archived"
+    if not _state_ok(item, fresh["state"]):
+        return f"GitHub state changed to {fresh['state']}"
+    return None
+
+
 def verify_added(project: Project, plan_items: dict, records: list, checkpoint: Checkpoint) -> None:
-    """Undo a late native "Item added" Inbox once; report anything else."""
+    """Undo a late native "Item added" Inbox once; report anything else.
+
+    The repair is a write like any other, so the item's presence, archive
+    flag and GitHub state are re-checked right before it; if any changed
+    during the settle wait, nothing is written and the item is reported.
+    """
     for rec in records:
         if rec["outcome"] not in ("changed", "repaired") or rec["item"] not in checkpoint.added:
             continue
         item = plan_items[rec["item"]]
         fresh = project.refresh(rec["item_id"])
+        reason = _unsafe_to_touch(item, fresh)
+        if reason:
+            rec.update(outcome="verify-failed", detail=f"after settling: {reason}; not touched")
+            checkpoint.done.discard(rec["item"])
+            continue
         values = fresh["values"] if fresh else {}
         if _late_native_inbox(rec["item"], item, values, checkpoint):
             _set(project, rec["item_id"], "Status", item["set"]["Status"])

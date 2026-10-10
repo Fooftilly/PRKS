@@ -396,6 +396,42 @@ class NativeWorkflowRaces(Base):
         self.assertEqual(r["counts"], {"changed": 1})
         self.assertEqual(self.api.items["I181"]["values"], {"Status": "Done"})
 
+    def _settle_then(self, change):
+        """Backfill closed research #181 to Done; during the settle wait,
+        apply ``change`` and let its Status become Inbox."""
+        self.api.add_content("Issue", 181, state="CLOSED")
+
+        def during_settle():
+            change()
+            if "I181" in self.api.items:
+                self.api.items["I181"]["values"]["Status"] = "Inbox"
+        self.api.pending.append(during_settle)
+        r = self.run_stage("backfill", [research()], apply=True)
+        sets = [m for m in self.api.mutations if m[0] == "updateProjectV2ItemFieldValue"]
+        return r, sets
+
+    def test_verify_never_writes_done_onto_an_issue_reopened_while_settling(self):
+        r, sets = self._settle_then(lambda: self.api.content[181].update(state="OPEN"))
+        self.assertEqual(len(sets), 1)   # only the original Done, no repair
+        self.assertEqual(r["counts"], {"verify-failed": 1})
+        self.assertIn("GitHub state changed to OPEN", r["items"][0]["detail"])
+        self.assertFalse(r["ok"])
+        self.assertEqual(self.api.items["I181"]["values"], {"Status": "Inbox"})
+
+    def test_verify_never_writes_an_item_archived_while_settling(self):
+        r, sets = self._settle_then(lambda: self.api.items["I181"].update(archived=True))
+        self.assertEqual(len(sets), 1)
+        self.assertEqual(r["counts"], {"verify-failed": 1})
+        self.assertIn("archived", r["items"][0]["detail"])
+        self.assertEqual(self.api.items["I181"]["values"], {"Status": "Inbox"})
+
+    def test_verify_never_writes_an_item_removed_while_settling(self):
+        r, sets = self._settle_then(lambda: self.api.items.pop("I181"))
+        self.assertEqual(len(sets), 1)
+        self.assertEqual(r["counts"], {"verify-failed": 1})
+        self.assertIn("removed", r["items"][0]["detail"])
+        self.assertNotIn("Issue#181", json.loads((self.tmp / "ck.json").read_text())["done"])
+
     def test_a_person_changing_an_added_item_while_settling_is_reported_not_overwritten(self):
         self.api.add_content("Issue", 181, state="CLOSED")
         self.api.pending.append(lambda: self.api.items["I181"]["values"].update(Status="Ready"))
