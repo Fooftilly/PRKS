@@ -421,7 +421,8 @@ function initPrksConceptDetailReturnRefresh() {
 }
 
 /**
- * A Concept detail with every pending intent applied. Backlink rows name a
+ * A Concept detail with every pending intent applied, or null once `stale()`
+ * says its reader no longer owns the route. Backlink rows name a
  * Work's Title, so a pending rename has to reach them. The overlay is applied
  * here, so the Vue surface stays ignorant of durable operations and the cached
  * Concept is never rewritten. The Concept's own pending intent too -- its
@@ -429,10 +430,12 @@ function initPrksConceptDetailReturnRefresh() {
  * vocabulary supplies the NAME of a parent or child created on this device,
  * which no cache holds.
  */
-async function prksEffectiveConceptDetailView(item, conceptOps) {
+async function prksEffectiveConceptDetailView(item, conceptOps, stale) {
     await prksHydratePendingWorkMetadata();
+    if (stale()) return null;
     const conceptCatalogue = typeof prksEffectiveConceptCatalogue === 'function'
         ? await prksEffectiveConceptCatalogue(conceptOps) : [];
+    if (stale()) return null;
     const overlaid = typeof prksEffectiveConceptDetail === 'function'
         ? prksEffectiveConceptDetail(item, conceptOps, conceptCatalogue) : item;
     return typeof prksEffectiveWorkReferences === 'function'
@@ -472,8 +475,9 @@ async function prksReloadConceptDetail(ctx) {
     if (!owns()) return false;
     const resolved = prksResolveOfflineConcept(read, conceptId);
     if (resolved.unavailable || !resolved.concept) return false;
-    const effective = await prksEffectiveConceptDetailView(resolved.concept, conceptOps);
-    if (!owns()) return false;
+    const effective = await prksEffectiveConceptDetailView(resolved.concept, conceptOps,
+        () => !owns());
+    if (!effective || !owns()) return false;
     ctx.setEntity('concept', effective);
     prksPresentVueRoute(ctx, ctx.root, 'concept-detail', {
         availability: 'ready',
@@ -4905,8 +4909,8 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                         skipPageEnter: sameConceptsWorkspace,
                     };
                 } else {
-                    const effective = await prksEffectiveConceptDetailView(item, conceptOps);
-                    if (stale()) return;
+                    const effective = await prksEffectiveConceptDetailView(item, conceptOps, stale);
+                    if (!effective || stale()) return;
                     ctx.setEntity('concept', effective);
                     prksPresentVueRoute(ctx, contentDiv, 'concept-detail', {
                         availability: 'ready',

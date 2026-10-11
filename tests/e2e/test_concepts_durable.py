@@ -11,7 +11,6 @@ doomed request fail before the cache answers.
 """
 import json
 import os
-import time
 import unittest
 import urllib.request
 
@@ -464,19 +463,16 @@ class ConceptDefinitionTwoTabTests(unittest.TestCase):
     def definition_in_db(self, server, concept_id):
         return self.server_json(server, '/api/concepts/' + concept_id)['description']
 
-    def wait_for_definition(self, server, concept_id, expected, timeout=40.0, page=None):
-        """Polls with Playwright's own wait, never `time.sleep`: the harness
-        routes requests through this process, so a blocked test thread would
-        hold every browser request until the poll gives up."""
-        pump = page or self._pages[0]
-        deadline = time.monotonic() + timeout
-        while True:
-            current = self.definition_in_db(server, concept_id)
-            if current == expected:
-                return
-            if time.monotonic() > deadline:
-                self.fail('the server never had %r (it has %r)' % (expected, current))
-            pump.wait_for_timeout(250)
+    def wait_for_definition(self, server, concept_id, expected, timeout=40000):
+        """Polls the server from a page: the harness routes every browser
+        request through this test process, so a test thread blocked in a
+        Python sleep would hold the very save it is waiting for."""
+        wait_for_async(
+            self._pages[0],
+            """([path, want]) => fetch(path, { cache: 'no-store' })
+                .then(r => r.json()).then(c => c.description === want)""",
+            arg=['/api/concepts/' + concept_id, expected], timeout=timeout,
+            message='the server never had %r' % expected)
 
     def definition_writes(self, page):
         """Every SET_CONCEPT_FIELD this page sends, as sent."""
@@ -573,7 +569,6 @@ class ConceptDefinitionTwoTabTests(unittest.TestCase):
         page_b.locator('#prks-modal-confirm-cancel').click()
         # B now shows A's text rather than the original it was painting.
         o._wait_content_contains(page_b, 'Def A')
-        page_b.wait_for_timeout(1500)
         self.assertEqual(self.queued_definitions(page_b), [])
         self.assertEqual(self.definition_in_db(server, concept_id), 'Def A')
 
