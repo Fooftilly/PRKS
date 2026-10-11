@@ -2683,6 +2683,24 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
     let queueDrainPromise = Promise.resolve();
     let worker = null;
 
+    // Durable: a flush only materializes PDF bytes; it never settles a failed
+    // local annotation write. That edit stays unsaved in the popup until a
+    // later durable write records it (onAnnotationEvent), so keep
+    // 'local_save_failed', and with it the hasPendingSync() leave guard,
+    // across flush passes (#401). Legacy flushes POST the viewer state and
+    // own the error as before.
+    function keepsLocalSaveFailure() {
+        return !!runtime.annotationMutationDurable && syncState.lastError === 'local_save_failed';
+    }
+
+    function clearFlushError() {
+        if (!keepsLocalSaveFailure()) syncState.lastError = '';
+    }
+
+    function setFlushError(msg) {
+        if (!keepsLocalSaveFailure()) syncState.lastError = msg;
+    }
+
     async function drainFlushQueue() {
         while (queueRequested) {
             if (worker && worker.destroyed) {
@@ -2702,7 +2720,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             }
             queueRequested = false;
             syncState.inFlight = true;
-            syncState.lastError = '';
+            clearFlushError();
             renderSyncIndicator();
             const saveToken = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
             syncState.activeToken = saveToken;
@@ -2725,7 +2743,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                     syncState.lastSuccessAt = Date.now();
                 }
                 syncState.pendingChanges = queueRequested;
-                syncState.lastError = '';
+                clearFlushError();
             } catch (err) {
                 if (stillLive() && !(worker && worker.destroyed)) {
                     const msg = err && err.message ? String(err.message) : 'Save failed';
@@ -2736,12 +2754,12 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                         // coherent snapshot, and rerun catch-up.
                         runtime.pendingMaterializationRevision = null;
                         syncState.pendingChanges = false;
-                        syncState.lastError = msg;
+                        setFlushError(msg);
                         renderSyncIndicator();
                         void maybeCatchUpMaterialization();
                     } else {
                         syncState.pendingChanges = true;
-                        syncState.lastError = msg;
+                        setFlushError(msg);
                         if (worker && typeof worker.scheduleRetry === 'function') {
                             worker.scheduleRetry();
                         }

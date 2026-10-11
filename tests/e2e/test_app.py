@@ -3283,6 +3283,16 @@ def _sync_status_label(page):
     )
 
 
+def _pdf_has_pending_sync(page):
+    """The unsaved-edit leave guard (``hasPendingSync``) of the focused Work."""
+    return page.evaluate(
+        """() => {
+            const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+            return !!(pdf && pdf.hasPendingSync());
+        }"""
+    )
+
+
 class PdfAnnotationCommentEditTests(_BrowserE2E):
     """#401: every comment edit reaches the server, the PDF and a reload."""
 
@@ -3413,6 +3423,20 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
             ),
             "saved comment",
         )
+        self.assertTrue(_pdf_has_pending_sync(page))
+
+        # An empty flush (no materialization claim) writes nothing, so it must
+        # not clear the error or the unsaved-edit leave guard.
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf.flushAnnotations()).then(() => true);
+            }""",
+        )
+        self.assertEqual(_sync_status_label(page), "Could not save locally")
+        self.assertTrue(_pdf_has_pending_sync(page))
+        self.assertEqual(text.input_value(), "comment that failed")
 
         # Saving again from the same popup succeeds and clears the error.
         _wait_pdf_annotation_durable(page)
@@ -3429,6 +3453,7 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
             timeout=15000,
         )
         self.assertIn("comment that failed", _managed_pdf_annotation_contents(page, server, work_id))
+        self.assertFalse(_pdf_has_pending_sync(page))
 
 
 class RequestCoordinatorTests(_BrowserE2E):
