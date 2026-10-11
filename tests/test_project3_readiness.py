@@ -582,6 +582,11 @@ class WorkflowTests(unittest.TestCase):
     def test_only_the_default_branch_runs(self) -> None:
         self.assertIn("if: github.repository == 'Fooftilly/PRKS' && github.ref == 'refs/heads/master'", self.text)
 
+    def test_token_comes_from_the_master_only_environment(self) -> None:
+        job = self.text.split("\n  snapshot:\n", 1)[1].split("\n    steps:", 1)[0]
+        self.assertEqual(re.findall(r"(?m)^    environment: (.+)$", job), ["project-automation"])
+        self.assertEqual(self.text.count("environment:"), 1)
+
     def test_token_only_in_snapshot_step_and_actions_pinned(self) -> None:
         self.assertEqual(self.text.count("secrets."), 1)
         self.assertIn("PROJECT3_READINESS_TOKEN: ${{ secrets.PROJECT_SYNC_TOKEN }}", self.text)

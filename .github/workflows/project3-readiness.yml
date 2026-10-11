@@ -23,11 +23,14 @@ concurrency:
 jobs:
   snapshot:
     name: Project #3 readiness snapshot
-    # Skips dispatches of this file from other branches. Not a security
-    # boundary: a branch can edit this line. See project-3.md section 14.
+    # Skips dispatches of this file from other branches, which the
+    # environment would refuse anyway. The security boundary is the
+    # project-automation environment, which holds the token and admits only
+    # master (project-3.md section 11).
     if: github.repository == 'Fooftilly/PRKS' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    environment: project-automation
     permissions:
       contents: read
 

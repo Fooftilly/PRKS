@@ -247,13 +247,30 @@ Implementation: `scripts/project_sync.py`, `.github/workflows/project-sync.yml`,
 |---|---|---|
 | Issue dependency writer | `GITHUB_TOKEN` | `issues: read` (plan job), `issues: write` (apply job only) |
 | `project-sync` review relay (`project-sync-review.yml`) | none | `permissions: {}`; no secrets, no checkout, no writes |
-| Readiness snapshot (`project3-readiness.yml`, §14) | `PROJECT_SYNC_TOKEN`, passed to the one step that reads | Queries only; the job has `contents: read` and nothing else. |
-| `project-sync` | `PROJECT_SYNC_TOKEN` repository Actions secret: a classic personal access token with only the `project` scope (`GITHUB_TOKEN` cannot reach Projects) | Project read/write. Repository data it reads is public. |
+| Readiness snapshot (`project3-readiness.yml`, §14) | `PROJECT_SYNC_TOKEN` from the `project-automation` environment, passed to the one step that reads | Queries only; the job has `contents: read` and nothing else. |
+| `project-sync` | `PROJECT_SYNC_TOKEN` secret of the `project-automation` environment: a classic personal access token with only the `project` scope (`GITHUB_TOKEN` cannot reach Projects) | Project read/write. Repository data it reads is public. |
 
-- The token has an expiration date. To rotate it, create a new token with the same single scope, replace the secret, then revoke the old token.
-- To revoke it, delete the token in the account's developer settings and delete the secret. `project-sync` then fails closed without writing.
+- **Where the token lives (#597).** `PROJECT_SYNC_TOKEN` is a secret of the GitHub Environment `project-automation`, whose deployment branch rule admits only `master`. Both jobs that read it (`project-sync.yml` job `sync`, `project3-readiness.yml` job `snapshot`) declare `environment: project-automation`. A repository-level secret would reach any workflow that anyone with write access pushes on any branch, and a job's `if` cannot stop that, because a branch can edit its own copy of the file. The environment rule is checked by GitHub against the run's ref, so workflow code on any other branch cannot get the secret. Both jobs also carry `github.ref == 'refs/heads/master'` in their `if`, so a run the environment would refuse is skipped instead of failing. For `pull_request_target` the ref is the PR's **base** branch, so `project-sync` does not run for PRs into a branch other than `master` (stacked PRs); set their Status by hand. A relayed review runs through `workflow_run` on the default branch and is not affected. `PROJECT_SYNC_MODE` stays a repository variable.
+- The token has an expiration date. To rotate it, create a new token with the same single scope, replace the environment secret, then revoke the old token.
+- To revoke it, delete the token in the account's developer settings and delete the environment secret. `project-sync` then fails closed without writing.
 - The token never appears in repository files, workflow logs, PR comments or documentation. Only the job that needs it receives it, as an environment variable.
 - A classic `project` scope reaches every Project the account owns. That is inherent to classic tokens. The workflow only addresses Project #3 by number.
+
+### 11.1 Setting up the `project-automation` environment (maintainer, once)
+
+Only the maintainer changes these settings and handles the token's value; no automation or agent copies, prints or moves it. Do steps 1 and 2 before step 3: if a job names an environment that does not exist, GitHub creates it with no branch rule, and the jobs keep running on the repository secret without the protection. A job with an environment reads that environment's secret when one of the same name exists, and the repository secret otherwise.
+
+1. Settings → Environments → **New environment** `project-automation`. Deployment protection rules: no required reviewers, no wait timer (either would hold every PR event and the daily schedule). Deployment branches and tags: **Selected branches and tags**, one rule, branch `master`.
+2. In that environment, **Add environment secret** `PROJECT_SYNC_TOKEN` and paste the token. A secret's value cannot be read back, so either paste the current token from where you keep it, or create a new classic token with only the `project` scope and revoke the old one after step 6.
+3. Merge the PR that adds `environment: project-automation` to both workflows.
+4. Test on `master`, with the repository secret still present:
+   - Actions → **Project 3 readiness** → Run workflow on `master`. Expect success, an artifact `project3-readiness.json`, and `check --snapshot -` reporting it complete and fresh.
+   - Trigger `project-sync` with a covered event on a PR into `master`, for example convert a test PR to draft and back. Expect the same outcome as before in its current mode (a dry-run audit record unless `PROJECT_SYNC_MODE` is `apply`), not `not-configured`.
+   - Each run's job page shows `project-automation` as its environment.
+5. Delete the **repository** secret `PROJECT_SYNC_TOKEN` (Settings → Secrets and variables → Actions → Repository secrets).
+6. Repeat step 4. Both workflows must still succeed, now reading only the environment secret. Then revoke the old token if you rotated it.
+
+Rollback: if step 4 or 6 fails, revert the workflow PR; if the repository secret was already deleted, add it back first. Each successful run of a job with an environment also records a deployment to `project-automation` (visible under the repository's Deployments, and on a PR's timeline for `pull_request_target` runs); that record is expected and carries no code.
 
 ## 12. Recovery, rollback and troubleshooting
 
@@ -262,6 +279,7 @@ Implementation: `scripts/project_sync.py`, `.github/workflows/project-sync.yml`,
 - **A field or option was renamed:** runs fail with the missing name. Update `.github/project-sync.json` or rename it back.
 - **Dependency writer refused or failed:** see the job summary and `docs/agent-workflows/issue-dependencies.md`.
 - **A token expired or was revoked:** `project-sync` fails without writing. Rotate it as in §11.
+- **A job fails with "not allowed to deploy to project-automation":** the run's ref is not `master`. The job's `if` should have skipped it; check that the `github.ref` condition is still present.
 
 ## 13. One-time migration and backfill (Proposed; dry-run only until approved)
 
@@ -349,9 +367,9 @@ A triage that reads GitHub only through REST (such as the ChatGPT PRKS Daily Tri
 
 **What it does.** `scripts/project3_readiness.py snapshot` sends three GraphQL queries and nothing else: Project #3 itself, every page of its items, and every page of the repository's open issues. It cannot write. Every document passes a guard that refuses anything but a query, the file defines no mutation, and it imports neither `project_sync` nor `project3_migrate`. It never touches Status, Execution, Agent, dependencies, issues or PRs.
 
-**Triggers.** `workflow_dispatch`, and a daily schedule at 02:23 UTC. The job's `if` skips a manual dispatch of an unmodified workflow from any branch other than `master`. It is not a security boundary: a dispatch runs the workflow file at the selected ref, and `PROJECT_SYNC_TOKEN` is a repository secret, so a branch that edits this file (or adds its own workflow) can still read the token. Only a GitHub Environment limited to `master` that holds the secret would close that; it is not set up yet. GitHub can delay scheduled runs, sometimes by hours, or drop them, so the freshness limit below decides whether a snapshot can be used, never the schedule. A `workflow_dispatch` run needs the workflow file on the default branch.
+**Triggers.** `workflow_dispatch`, and a daily schedule at 02:23 UTC. The job runs in the `project-automation` environment, which admits only `master` and holds the token (§11), so a dispatch of any other branch, edited or not, never receives it. The job's `if` also skips such a dispatch, so it shows as skipped instead of failed. GitHub can delay scheduled runs, sometimes by hours, or drop them, so the freshness limit below decides whether a snapshot can be used, never the schedule. A `workflow_dispatch` run needs the workflow file on the default branch.
 
-**Credentials.** The existing `PROJECT_SYNC_TOKEN` (classic, `project` scope only), passed as `PROJECT3_READINESS_TOKEN` to the one step that reads. No new secret. It is never printed. Without it, or when GitHub rejects it (HTTP 401 or 403: expired, revoked or lacking a scope; a 403 can also be a rate limit), the run fails as `not-configured` and publishes nothing. The job has `contents: read` and no other permission.
+**Credentials.** The existing `PROJECT_SYNC_TOKEN` (classic, `project` scope only) from the `project-automation` environment, passed as `PROJECT3_READINESS_TOKEN` to the one step that reads. No new secret. It is never printed. Without it, or when GitHub rejects it (HTTP 401 or 403: expired, revoked or lacking a scope; a 403 can also be a rate limit), the run fails as `not-configured` and publishes nothing. The job has `contents: read` and no other permission.
 
 **Confidentiality.** This repository is public, so its Actions logs, job summaries and artifacts are readable by anyone (artifacts by any signed-in GitHub user). Project #3 field values are public data only when the project is public. The run therefore reads the project's `public` flag first and **refuses (exit 3) when Project #3 is private**, before it reads any item, and again after the last read, and publishes nothing: no artifact, no summary, no field values in the log. There is no override. The maintainer confirmed on 2026-10-11 that Project #3 is public (`gh project view 3 --owner Fooftilly` returned `public: true`, `closed: false`); the guard stays for future changes. Items from other repositories, PRs, draft issues and items the token cannot see are skipped and only counted. If Project #3 is private, the options are: make Project #3 public (every field on it becomes world-readable; the maintainer decides), or run the same script somewhere private, such as a private repository's workflow with its own copy of the token or the maintainer's machine, and give the triage access only there.
 
@@ -395,7 +413,7 @@ A triage that reads GitHub only through REST (such as the ChatGPT PRKS Daily Tri
 3. Download: `download_workflow_artifact` with that artifact ID. It follows the redirect and returns a file reference.
 4. Decode by **content**, not by name or stated type: bytes starting with `PK` are a ZIP that must hold exactly `project3-readiness.json`; anything else must be that JSON file itself (`archive: false`). `python scripts/project3_readiness.py check --snapshot - < <downloaded file>` does this decoding and every check below. Standard input works wherever the file is (for example under `/mnt/data`); a path given directly must be under the home or temp directory.
 
-Evidence so far (2026-10-11, maintainer): with the connected ChatGPT GitHub integration, `fetch_workflow_run_artifacts` listed an existing ordinary (zipped) PRKS artifact, `download_workflow_artifact` followed the redirect and returned a file, and the JSON inside the ZIP was read in the triage's working container. That proves the route for zipped artifacts. The `archive: false` file from this workflow is **not yet verified**; the first successful run after merge is the acceptance test, and its result is recorded here. Until then, and whenever any step fails, the triage treats readiness as unknown.
+Evidence so far (2026-10-11, maintainer): with the connected ChatGPT GitHub integration, `fetch_workflow_run_artifacts` listed an existing ordinary (zipped) PRKS artifact, `download_workflow_artifact` followed the redirect and returned a file, and the JSON inside the ZIP was read in the triage's working container. That proves the route for zipped artifacts. First run after merge (2026-10-11, workflow run 38176670057 on `master` at `1f96c96`): artifact 11716530295, 71,333 bytes; the REST download (`GET /repos/Fooftilly/PRKS/actions/artifacts/{id}/zip`) returned the JSON file itself, and `check --snapshot -` reported it complete and fresh (273 issues, all 266 open issues on Project #3). Retrieval of the `archive: false` file **through the ChatGPT connector is not yet verified** by the maintainer. Until then, and whenever any step fails, the triage treats readiness as unknown.
 
 **Freshness and use (consumer rules).**
 

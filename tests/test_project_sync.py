@@ -1436,6 +1436,35 @@ class WorkflowShapeTests(unittest.TestCase):
     def test_repository_guard(self):
         self.assertIn("      github.repository == 'Fooftilly/PRKS' &&\n", self.text)
 
+    def test_token_comes_from_the_master_only_environment(self):
+        job = self.text.split("\n  sync:\n", 1)[1].split("\n    steps:", 1)[0]
+        self.assertEqual(re.findall(r"(?m)^    environment: (.+)$", job), ["project-automation"])
+        self.assertEqual(self.text.count("environment:"), 1)
+        # The environment admits only master, so the job skips every other
+        # ref (a pull_request_target run's ref is the PR's base branch).
+        self.assertIn("      github.repository == 'Fooftilly/PRKS' &&\n      github.ref == 'refs/heads/master' &&\n", self.text)
+
+
+class TokenEnvironmentTests(unittest.TestCase):
+    """PROJECT_SYNC_TOKEN reaches only jobs bound to the master-only environment (#597)."""
+
+    def test_every_workflow_that_reads_the_token_uses_the_environment(self):
+        readers = {}
+        for path in sorted((_ROOT / ".github" / "workflows").glob("*.y*ml")):
+            text = path.read_text()
+            if "PROJECT_SYNC_TOKEN" in text:
+                readers[path.name] = text
+        self.assertEqual(sorted(readers), ["project-sync.yml", "project3-readiness.yml"])
+        for name, text in readers.items():
+            jobs = re.split(r"(?m)^  (?=[a-z][a-z0-9_-]*:\n)", text.split("\njobs:\n", 1)[1])
+            for job in filter(None, jobs):
+                if "PROJECT_SYNC_TOKEN" in job:
+                    self.assertRegex(job, r"(?m)^    environment: project-automation$", name)
+                    self.assertIn("github.ref == 'refs/heads/master'", job, name)
+
+    def test_the_unprivileged_relay_holds_no_environment(self):
+        self.assertNotIn("environment:", _SIGNAL.read_text())
+
 
 class SignalWorkflowShapeTests(unittest.TestCase):
     """The unprivileged relay: it runs the PR's copy of its file, so it must hold nothing."""
