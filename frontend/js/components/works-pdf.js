@@ -3123,7 +3123,10 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                     // Do NOT materialize PDF bytes here. Materialization runs
                     // only after semantic ACK of an acknowledged generation.
                 } catch (_err) {
-                    await rollbackFailedDurableAnnotation(intent.id);
+                    // Rollback removes a failed create from the viewer and a
+                    // redraw gets a new id, so nothing could settle its id:
+                    // any recorded write settles it instead.
+                    await rollbackFailedDurableAnnotation(evt.kind === 'create' ? null : intent.id);
                 }
             });
             return;

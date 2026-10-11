@@ -215,6 +215,11 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         self.assertNotIn("annotationCache", body)
         self.assertNotIn("catch (_e) {}", body)
         self.assertIn("prksReportPdfAnnotationEditNotSaved(pdf, ticket.annId)", body)
+        # A failed create may leave nothing with its id to save again, so any
+        # recorded write settles it; edits and deletes settle by their own id.
+        self.assertIn(
+            "await rollbackFailedDurableAnnotation(evt.kind === 'create' ? null : intent.id);", src
+        )
 
     def test_annotation_mutation_entry_points_are_guarded(self):
         src = _read(_WORKS_PDF)

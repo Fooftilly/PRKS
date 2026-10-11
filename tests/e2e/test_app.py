@@ -3466,6 +3466,48 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
         self.assertIn("comment that failed", _managed_pdf_annotation_contents(page, server, work_id))
         self.assertFalse(_pdf_has_pending_sync(page))
 
+    def test_a_failed_highlight_is_settled_by_saving_it_again(self):
+        server, page, _collector = self._start_app()
+        work_id = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        page.evaluate(
+            """() => {
+                const store = window.prksSync.store;
+                const real = store.savePdfAnnotation;
+                store.savePdfAnnotation = function () {
+                    store.savePdfAnnotation = real;
+                    return Promise.reject(Object.assign(new Error('disk full'), { code: 'write_failed' }));
+                };
+            }"""
+        )
+        _commit_pdf_highlight(page)
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf._annotationDurableWriteChain).then(() => pdf.hasPendingSync());
+            }""",
+        )
+        self.assertEqual(_sync_status_label(page), "Could not save locally")
+
+        # The unsaved highlight is still on the page; saving a comment on it
+        # records it and settles the failure.
+        ann_id = _only_viewer_annotation_id(page)
+        _wait_pdf_annotation_durable(page)
+        _save_annotation_comment(page, ann_id, "recovered highlight")
+        _wait_server_comment(page, work_id, ann_id, "recovered highlight")
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf._annotationDurableWriteChain).then(() => !pdf.hasPendingSync());
+            }""",
+        )
+        self.assertNotEqual(_sync_status_label(page), "Could not save locally")
+
     def test_another_annotations_save_does_not_settle_a_failed_edit(self):
         server, page, _collector = self._start_app()
         work_id = server.ids["work_a"]
