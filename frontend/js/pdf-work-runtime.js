@@ -596,7 +596,7 @@
             if (runtime.annotationMutationDurable === true) {
                 return !!(st && st.lastError === 'local_save_failed');
             }
-            return !!(st && (st.pendingChanges || st.inFlight));
+            return !!(st && (st.pendingChanges || st.inFlight || st.lastError === 'local_save_failed'));
         };
 
         runtime.flushAnnotations = async function () {
@@ -878,6 +878,7 @@
             const popup = runtime.annotationPopup;
             if (!popup.open) return false;
             if (annId != null && annId !== '' && String(annId) !== popup.annId) return false;
+            const closedAnnId = popup.annId;
             popup.epoch += 1;
             popup.open = false;
             popup.annId = '';
@@ -888,6 +889,12 @@
             popup.docId = null;
             popup.deletable = false;
             publishAnnotationEditorState();
+            // Closing discards any unsaved comment draft in the popup.
+            if (typeof runtime._onAnnotationPopupClosed === 'function') {
+                try {
+                    runtime._onAnnotationPopupClosed(closedAnnId);
+                } catch (_eClosed) {}
+            }
             return true;
         };
 
