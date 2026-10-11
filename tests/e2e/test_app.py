@@ -3369,6 +3369,52 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
         self.assertEqual(_popup_comment(page, ann_id), "imported second edit")
         self._edit_comment_repeatedly(page, server, work_id, ann_id, ["imported third edit"])
 
+    def test_failed_first_edit_of_imported_highlight_stays_until_saved(self):
+        server, page, _collector = self._start_app(seed_fn=seed_imported_highlight_library)
+        work_id = server.ids["work_b"]
+        _open_work_from_home(page, WORK_B_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        ann_id = _only_viewer_annotation_id(page)
+        page.evaluate(
+            """() => {
+                const store = window.prksSync.store;
+                const real = store.savePdfAnnotation;
+                store.savePdfAnnotation = function () {
+                    store.savePdfAnnotation = real;
+                    return Promise.reject(Object.assign(new Error('disk full'), { code: 'write_failed' }));
+                };
+            }"""
+        )
+        _wait_pdf_annotation_durable(page)
+        _save_annotation_comment(page, ann_id, "imported draft")
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf._annotationDurableWriteChain).then(() => pdf.hasPendingSync());
+            }""",
+        )
+        self.assertIsNone(_server_annotation(page, work_id, ann_id))
+
+        # The highlight has no stored row to roll back to, so closing its
+        # popup leaves it unsaved on the page: the warning stays.
+        _close_annotation_popup(page)
+        self.assertTrue(_pdf_has_pending_sync(page))
+        self.assertEqual(_sync_status_label(page), "Could not save locally")
+
+        _wait_pdf_annotation_durable(page)
+        _save_annotation_comment(page, ann_id, "imported retry")
+        _wait_server_comment(page, work_id, ann_id, "imported retry")
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf._annotationDurableWriteChain).then(() => !pdf.hasPendingSync());
+            }""",
+        )
+        _wait_local_save_warning_cleared(page)
+
     def _fail_comment_save(self, page, work_id, ann_id, text_value):
         """Save ``text_value`` from the popup while the local durable write
         fails once; return the still-open popup and its text field once the

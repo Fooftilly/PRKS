@@ -3205,8 +3205,12 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                     // only after semantic ACK of an acknowledged generation.
                 } catch (_err) {
                     // A failed create has no stored row: any recorded write
-                    // for it saves the highlight, whatever its comment.
-                    const created = evt.kind === 'create';
+                    // for it saves the highlight, whatever its comment. An
+                    // edit of an annotation only the imported PDF holds is a
+                    // create too, and no rollback can take it off the page.
+                    const created = evt.kind === 'create' || !!(
+                        intent.desired && !(intent.observed && intent.observed.present)
+                    );
                     await rollbackFailedDurableAnnotation(
                         intent.id,
                         created ? null : durableIntentComment(intent),
