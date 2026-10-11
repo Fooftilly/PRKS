@@ -3193,6 +3193,30 @@ def _wait_server_comment(page, work_id, ann_id, text, timeout=30000):
     )
 
 
+def _keep_imported_highlight_unadopted(page):
+    """Opening a Work adopts byte-only markup the viewer has already loaded,
+    which it may or may not have by then. These tests need the imported
+    highlight to have no stored row, so the adoption finds nothing."""
+    page.route(
+        "**/api/works/*/annotations/adopt",
+        lambda route: route.fulfill(
+            status=200, content_type="application/json", body='{"adopted_count": 0}'
+        ),
+    )
+
+
+def _wait_server_annotation(page, work_id, ann_id, timeout=30000):
+    """A new highlight's create is recorded and sent asynchronously."""
+    wait_for_async(
+        page,
+        """([workId, annId]) => (%s)([workId, annId]).then(row => !!row)"""
+        % _SERVER_ANNOTATION_JS,
+        arg=[work_id, ann_id],
+        timeout=timeout,
+        message="server never stored annotation %s" % ann_id,
+    )
+
+
 def _wait_pdf_materialized(page, work_id, timeout=30000):
     wait_for_async(
         page,
@@ -3460,6 +3484,7 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
     def test_repeated_comment_edits_on_imported_highlight_persist(self):
         server, page, _collector = self._start_app(seed_fn=seed_imported_highlight_library)
         work_id = server.ids["work_b"]
+        _keep_imported_highlight_unadopted(page)
         _open_work_from_home(page, WORK_B_TITLE)
         _wait_pdf_viewer(page)
         _wait_pdf_annotation_durable(page)
@@ -3481,6 +3506,7 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
     def test_failed_first_edit_of_imported_highlight_stays_until_saved(self):
         server, page, _collector = self._start_app(seed_fn=seed_imported_highlight_library)
         work_id = server.ids["work_b"]
+        _keep_imported_highlight_unadopted(page)
         _open_work_from_home(page, WORK_B_TITLE)
         _wait_pdf_viewer(page)
         _wait_pdf_annotation_durable(page)
@@ -3518,8 +3544,8 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
         _commit_pdf_highlight(page, _pdf_text_band_fractions(3, 6))
         other_ids = [i for i in _viewer_annotation_ids(page) if i != ann_id]
         self.assertEqual(len(other_ids), 1)
+        _wait_server_annotation(page, work_id, other_ids[0])
         _wait_pdf_annotation_ops_drained(page, work_id)
-        self.assertIsNotNone(_server_annotation(page, work_id, other_ids[0]))
         # Wait for its acknowledged generation to be claimed for (or already
         # written to) the PDF, then run a materialization pass.
         wait_for_async(
@@ -3572,6 +3598,7 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
     def test_failed_edit_of_an_unacknowledged_imported_highlight_is_an_edit(self):
         server, page, _collector = self._start_app(seed_fn=seed_imported_highlight_library)
         work_id = server.ids["work_b"]
+        _keep_imported_highlight_unadopted(page)
         _open_work_from_home(page, WORK_B_TITLE)
         _wait_pdf_viewer(page)
         _wait_pdf_annotation_durable(page)
@@ -3932,8 +3959,8 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
         _commit_pdf_highlight(page, _pdf_text_band_fractions(3, 6))
         other_ids = [i for i in _viewer_annotation_ids(page) if i != ann_id]
         self.assertEqual(len(other_ids), 1)
+        _wait_server_annotation(page, work_id, other_ids[0])
         _wait_pdf_annotation_ops_drained(page, work_id)
-        self.assertIsNotNone(_server_annotation(page, work_id, other_ids[0]))
         wait_for_async(
             page,
             """() => {

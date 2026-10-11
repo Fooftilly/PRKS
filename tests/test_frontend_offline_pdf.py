@@ -258,7 +258,8 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         self.assertIn("intent.desired && !(intent.observed && intent.observed.present)", src)
         self.assertIn("!hasEffectiveAnnotationRow(intent.id)", src)
         # A newer queued write is not overwritten by this write's projection.
-        self.assertIn("if (durableWritesQueued <= 1) {\n                        await restoreEffectiveViewerAnnotations();", src)
+        self.assertIn("if (!newerEditPending()) {\n                        await restoreEffectiveViewerAnnotations();", src)
+        self.assertIn("return durableWritesQueued > 1 || uncommittedEdits.size > 0;", src)
         # A failure whose popup already closed has no draft to wait on.
         note = src[src.index("function noteLocalSaveFailure("):src.index("function noteLocalSaveAttempt(")]
         self.assertIn("if (id !== '*' && !created && !annotationPopupOpenFor(id)) id = '*';", note)

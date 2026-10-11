@@ -3009,6 +3009,15 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
      */
     // Durable writes enqueued and not yet finished, the running one included.
     let durableWritesQueued = 0;
+    // Comment edits the viewer took whose committed event (which enqueues
+    // their durable write) has not arrived yet: id -> comment.
+    const uncommittedEdits = new Map();
+
+    // A newer edit will record what the viewer holds now: projecting stored
+    // state over the viewer before it does would lose that edit (#401).
+    function newerEditPending() {
+        return durableWritesQueued > 1 || uncommittedEdits.size > 0;
+    }
 
     function enqueueDurableAnnotationWrite(writeFn) {
         const prior = runtime._annotationDurableWriteChain || Promise.resolve();
@@ -3194,15 +3203,17 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
 
     async function rollbackFailedDurableAnnotation(annId, expectedComment, created) {
         if (!stillLive()) return;
-        // A later write is queued (e.g. a second Save while this one was
-        // writing). It reads the live viewer when it runs, so rolling the
-        // viewer back now would make it record the stored value and lose the
-        // newer edit. That write settles this failure when it records the
-        // viewer's comment, and the last queued write restores (#401).
-        const newerQueued = durableWritesQueued > 1;
+        // A later edit is queued or not yet committed (e.g. a second Save
+        // while this one was writing). Its write reads the live viewer when
+        // it runs, so rolling the viewer back now would make it record the
+        // stored value and lose the newer edit. That write settles this
+        // failure when it records the newer comment, and restores (#401).
+        const newerQueued = newerEditPending();
         if (newerQueued && !created) {
+            const id = String(annId || '');
             const live = prksFindViewerAnnotation(liveAnnotationViewer(), annId);
-            if (live) expectedComment = prksAnnotationCommentText(live);
+            if (uncommittedEdits.has(id)) expectedComment = uncommittedEdits.get(id);
+            else if (live) expectedComment = prksAnnotationCommentText(live);
         }
         noteLocalSaveFailure(annId, expectedComment, created);
         renderSyncIndicator();
@@ -3218,6 +3229,9 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
     function onAnnotationEvent(evt) {
         if (worker && worker.destroyed) return;
         if (!stillLive()) return;
+        if (evt && evt.committed === true && evt.annotationId != null) {
+            uncommittedEdits.delete(String(evt.annotationId));
+        }
         const eventViewer = liveAnnotationViewer();
         // Reconcile create/update/delete must not look like user mutations.
         if (typeof window.prksViewerIsReconcilingAnnotations === 'function' &&
@@ -3247,11 +3261,12 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                     );
                     if (!stillLive()) return;
                     adoptDurableAnnotationCache(intent.ackList);
-                    // A later write is queued (e.g. a second Save while this
-                    // one was writing): projecting stored state now would put
-                    // this older value over the newer viewer edit before that
-                    // write reads it. The last queued write restores (#401).
-                    if (durableWritesQueued <= 1) {
+                    // A later edit is queued or not yet committed (e.g. a
+                    // second Save while this one was writing): projecting
+                    // stored state now would put this older value over the
+                    // newer viewer edit before its write reads it. The last
+                    // write restores (#401).
+                    if (!newerEditPending()) {
                         await restoreEffectiveViewerAnnotations();
                     }
                     syncState.localMutationSeen = true;
@@ -3391,6 +3406,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             };
             runtime._annotationEventHandler = onAnnotationEvent;
             runtime.reportAnnotationEditNotSaved = function (annId, comment) {
+                uncommittedEdits.delete(String(annId || ''));
                 if (runtime.annotationMutationDurable) {
                     // Same outcome as a failed durable write: error status and
                     // the viewer back on acknowledged + pending state.
@@ -3403,6 +3419,11 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             };
             runtime.noteAnnotationEditAttempt = function (annId, comment) {
                 noteLocalSaveAttempt(annId, comment);
+                // An update to the comment it already has commits nothing.
+                const live = prksFindViewerAnnotation(liveAnnotationViewer(), annId);
+                if (annId && (!live || prksAnnotationCommentText(live) !== comment)) {
+                    uncommittedEdits.set(String(annId), comment);
+                }
             };
             runtime._onAnnotationPopupClosed = function (annId) {
                 if (!stillLive()) return;

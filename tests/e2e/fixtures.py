@@ -175,8 +175,8 @@ def seed_imported_highlight_library(storage_root: str) -> dict:
     """The default library, but Work B's PDF carries a highlight made elsewhere.
 
     The highlight lives only in the PDF bytes, the way a file annotated in
-    another reader arrives. PRKS has no canonical row for it until the user
-    edits it (#385 adoption is separate work).
+    another reader arrives. Tests that need it to have no canonical row
+    until the user edits it stop the open-time adoption from finding it.
     """
     import pymupdf
 
