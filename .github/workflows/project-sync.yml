@@ -34,9 +34,10 @@ jobs:
     # A relayed review counts only from a successful signal run for a PR in
     # this repository. Fork PRs carry no PR number here and are not relayed.
     # The token lives in the project-automation environment, which only
-    # master may use. A pull_request_target run's ref is the PR's base branch,
-    # so a PR into any other branch is skipped here instead of being refused
-    # by the environment (project-3.md section 11).
+    # master may use. pull_request_target and workflow_run both run as the
+    # default branch, so the ref check below always holds today; it skips the
+    # job instead of failing it if the default branch ever changes
+    # (project-3.md section 11).
     if: >-
       github.repository == 'Fooftilly/PRKS' &&
       github.ref == 'refs/heads/master' &&

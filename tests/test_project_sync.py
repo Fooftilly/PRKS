@@ -1440,8 +1440,9 @@ class WorkflowShapeTests(unittest.TestCase):
         job = self.text.split("\n  sync:\n", 1)[1].split("\n    steps:", 1)[0]
         self.assertEqual(re.findall(r"(?m)^    environment: (.+)$", job), ["project-automation"])
         self.assertEqual(self.text.count("environment:"), 1)
-        # The environment admits only master, so the job skips every other
-        # ref (a pull_request_target run's ref is the PR's base branch).
+        # The environment admits only master. pull_request_target and
+        # workflow_run run as the default branch, so this guard only matters
+        # if the default branch changes; it then skips instead of failing.
         self.assertIn("      github.repository == 'Fooftilly/PRKS' &&\n      github.ref == 'refs/heads/master' &&\n", self.text)
 
 
