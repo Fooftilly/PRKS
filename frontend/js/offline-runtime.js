@@ -1905,16 +1905,18 @@
             if (!root.prksIsSupportedConceptField ||
                 !root.prksIsSupportedConceptField(field)) return false;
             const value = String((op && op.payload && op.payload.value) || '');
-            await patchEntity('concept-state', id, function (state) {
-                if (typeof root.prksIsConceptStateShape === 'function' &&
-                    !root.prksIsConceptStateShape(state, id)) return null;
-                const entry = state.fields[field];
-                if (!entry || entry.revision > result.server_revision) return null;
-                const next = Object.assign({}, state,
-                    { fields: Object.assign({}, state.fields) });
-                next.fields[field] = { revision: result.server_revision };
-                return next;
-            });
+            /* The text lands BEFORE its revision (#568). The base an editor
+             * reads is this revision plus the cached text, from two entries;
+             * read between the writes, the new revision must never come with
+             * the old text, or a draft of that old text would be measured
+             * against the revision that replaced it. The other order (new text,
+             * old revision) only makes a save conflict. A cache that already
+             * holds a later revision holds later text too, and keeps both. */
+            const held = await store.getEntity('concept-state', id).catch(() => null);
+            const heldEntry = held && held.value && held.value.fields &&
+                held.value.fields[field];
+            if (heldEntry && Number.isSafeInteger(heldEntry.revision) &&
+                heldEntry.revision > result.server_revision) return true;
             const rows = await cachedConceptRows();
             if (rows && rows.some(row => row && row.id === id)) {
                 const patched = rows.map(function (row) {
@@ -1929,6 +1931,16 @@
                 if (!concept || concept.id !== id) return null;
                 const next = Object.assign({}, concept);
                 next[field] = value;
+                return next;
+            });
+            await patchEntity('concept-state', id, function (state) {
+                if (typeof root.prksIsConceptStateShape === 'function' &&
+                    !root.prksIsConceptStateShape(state, id)) return null;
+                const entry = state.fields[field];
+                if (!entry || entry.revision > result.server_revision) return null;
+                const next = Object.assign({}, state,
+                    { fields: Object.assign({}, state.fields) });
+                next.fields[field] = { revision: result.server_revision };
                 return next;
             });
             /* A definition is not a Graph label and not a note reference, so no

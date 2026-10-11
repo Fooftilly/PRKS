@@ -29,6 +29,31 @@ class ConceptSyncFrontendTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn('checks passed', proc.stdout)
 
+    def test_an_acknowledged_definition_lands_before_its_revision(self):
+        """#568: an editor's base is the cached revision plus the cached text.
+
+        Read between the two writes, the new revision must never come with the
+        old text: a draft of that old text would then be measured against the
+        revision that replaced it.
+        """
+        runtime = (FRONTEND / 'offline-runtime.js').read_text()
+        at = runtime.index('async function reconcileConceptField(')
+        body = runtime[at: runtime.index('async function reconcileConceptIdentity(', at)]
+        text = body.index("patchEntity('concept', id")
+        rows = body.index('writeConceptRows(')
+        revision = body.index("patchEntity('concept-state', id")
+        self.assertLess(text, revision)
+        self.assertLess(rows, revision)
+
+    def test_the_definition_editor_saves_against_its_opening_base(self):
+        """#568: the Vue Definition editor reads its base when it opens."""
+        intents = (ROOT / 'frontend-app' / 'src' / 'features' / 'concepts'
+                   / 'intents.ts').read_text()
+        at = intents.index('async editDefinition(')
+        body = intents[at: intents.index('async editAliases(', at)]
+        self.assertLess(body.index('prksBeginConceptDefinitionEdit'), body.index('promptText('))
+        self.assertIn('definitionEdit: session', body)
+
     def test_the_two_sides_synchronize_the_same_fields(self):
         client = js_string_list(self.store, 'const CONCEPT_FIELDS =')
         self.assertEqual(sorted(client), sorted(concept_sync.FIELDS))

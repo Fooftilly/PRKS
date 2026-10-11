@@ -1151,20 +1151,38 @@ async function createConcept(payload) {
  * belong to two different families: the definition is a scalar FIELD, and the
  * name is half of the identity aggregate, because renaming keeps the old name
  * reachable as an alias.
+ *
+ * `options.definitionEdit` is the session `prksBeginConceptDefinitionEdit`
+ * returned when the Definition editor opened. The definition is then measured
+ * against the base that text was typed on, not one read now: another tab's
+ * newer save comes back as `changed_elsewhere` instead of being replaced.
  */
-async function updateConcept(id, payload) {
+async function updateConcept(id, payload, options) {
     const src = payload && typeof payload === 'object' ? payload : {};
+    const session = options && options.definitionEdit;
     const ops = typeof prksDurableOperationsOrNone === 'function'
         ? await prksDurableOperationsOrNone() : [];
     if (Object.prototype.hasOwnProperty.call(src, 'description')) {
-        const base = await prksAcknowledgedConceptFields(id, ops);
-        if (!base) throw prksConceptBaseUnavailable();
-        const draft = { description: src.description == null ? '' : String(src.description) };
-        const changes = prksDirtyConceptFields(id, draft, base, ops);
+        const desired = src.description == null ? '' : String(src.description);
+        let base;
+        let changes;
+        if (session) {
+            base = await prksConceptDefinitionSaveBase(id, session, ops);
+            if (!base) throw prksConceptBaseUnavailable();
+            changes = desired === session.value ? {} : { description: desired };
+        } else {
+            base = await prksAcknowledgedConceptFields(id, ops);
+            if (!base) throw prksConceptBaseUnavailable();
+            changes = prksDirtyConceptFields(id, { description: desired }, base, ops);
+        }
         if (Object.keys(changes).length) {
             try {
-                await prksSaveConceptFieldsDurably(id, changes, base);
+                await prksSaveConceptFieldsDurably(id, changes, base,
+                    session ? session.expected : undefined);
             } catch (error) {
+                /* Another tab's unsettled row holds the definition: replacing
+                 * it would drop text this editor never showed. */
+                if (session && error && error.prksBusyForeign) throw prksConceptChangedElsewhere();
                 throw new Error(prksConceptSaveMessage(error, 'save this concept'));
             }
         }

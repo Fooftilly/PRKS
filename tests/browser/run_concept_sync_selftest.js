@@ -231,6 +231,163 @@ async function theDefinitionCancelGoesThroughApiWrapper() {
         "production updateConcept A→B→A cancel leaves no intent");
 }
 
+/* ---- #568: the Definition editor's base is the one it opened on ---- */
+
+/** A Concept whose acknowledged definition another tab can move. */
+function installMovableConcept(id, description, revision) {
+    const acknowledged = { description: description, revision: revision };
+    globalThis.prksOfflineReadEntity = async (kind, entityId) => {
+        if (entityId !== id) return { value: null, source: "unavailable" };
+        if (kind === "concept-state") {
+            return { value: {
+                concept_id: id,
+                fields: { description: { revision: acknowledged.revision } },
+                identity: { name: "Systems", aliases: [] }, identity_revision: 0,
+                parent_ids: [], parents_revision: 0,
+            }, source: "server" };
+        }
+        if (kind === "concept") {
+            return { value: { id: id, name: "Systems", description: acknowledged.description },
+                source: "server" };
+        }
+        return { value: null, source: "unavailable" };
+    };
+    globalThis.prksOfflineInvalidateEntity = async () => true;
+    return acknowledged;
+}
+
+const changedElsewhere = error => error && error.code === "changed_elsewhere";
+
+async function anOlderDraftDoesNotReplaceAnotherTabsSave() {
+    const store = newStore();
+    globalThis.prksSync = { store: store };
+    const id = "C-" + "5".repeat(32);
+    const server = installMovableConcept(id, "Original", 2);
+
+    /* Both tabs open the editor on revision 2. */
+    const tabA = await globalThis.prksBeginConceptDefinitionEdit(id);
+    const tabB = await globalThis.prksBeginConceptDefinitionEdit(id);
+    assert.equal(tabB.value, "Original");
+    assert.deepEqual(tabB.base, fieldBase(2, "Original"));
+    assert.deepEqual(tabB.expected, { description: null });
+
+    await globalThis.updateConcept(id, { description: "Def A" }, { definitionEdit: tabA });
+    const sentA = await rowsFor(store, "SET_CONCEPT_FIELD");
+    assert.equal(sentA[0].base_revision, 2);
+    /* A is acknowledged: its row leaves the queue both tabs share, and the
+     * acknowledged definition moves, text and revision together. */
+    const shared = newStore();
+    globalThis.prksSync = { store: shared };
+    server.description = "Def A";
+    server.revision = 3;
+
+    await assert.rejects(
+        () => globalThis.updateConcept(id, { description: "Def B" }, { definitionEdit: tabB }),
+        changedElsewhere,
+        "B's draft was typed on revision 2; measuring it against 3 would replace A's text");
+    assert.equal((await rowsFor(shared, "SET_CONCEPT_FIELD")).length, 0,
+        "nothing is queued: A's save stands");
+
+    /* Recovery: a new session opens on what PRKS has now, and saving the kept
+     * draft from it is a decision made with A's text in view. */
+    const reopened = await globalThis.prksBeginConceptDefinitionEdit(id);
+    assert.equal(reopened.value, "Def A");
+    assert.deepEqual(reopened.base, fieldBase(3, "Def A"));
+    await globalThis.updateConcept(id, { description: "Def B" }, { definitionEdit: reopened });
+    const rows = await rowsFor(shared, "SET_CONCEPT_FIELD");
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].base_revision, 3, "the deliberate save is measured against A's revision");
+    assert.equal(rows[0].payload.value, "Def B");
+}
+
+async function aSaveTheServerAlreadyMatchesKeepsGoing() {
+    const store = newStore();
+    globalThis.prksSync = { store: store };
+    const id = "C-" + "6".repeat(32);
+    const server = installMovableConcept(id, "Shown", 4);
+    const session = await globalThis.prksBeginConceptDefinitionEdit(id);
+    /* The revision moved but the text is exactly what the editor showed:
+     * nothing this user did not see would be replaced. */
+    server.revision = 5;
+    await globalThis.updateConcept(id, { description: "Edited" }, { definitionEdit: session });
+    const rows = await rowsFor(store, "SET_CONCEPT_FIELD");
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].base_revision, 5);
+
+    /* Unchanged text from the session is not an edit. */
+    const store2 = newStore();
+    globalThis.prksSync = { store: store2 };
+    const again = await globalThis.prksBeginConceptDefinitionEdit(id);
+    await globalThis.updateConcept(id, { description: "Shown" }, { definitionEdit: again });
+    assert.equal((await rowsFor(store2, "SET_CONCEPT_FIELD")).length, 0);
+}
+
+async function anotherTabsQueuedRowIsNeverCoalescedOver() {
+    const store = newStore();
+    globalThis.prksSync = { store: store };
+    const id = "C-" + "7".repeat(32);
+    installMovableConcept(id, "Original", 1);
+    const tabB = await globalThis.prksBeginConceptDefinitionEdit(id);
+
+    /* Tab A saves while offline: its row waits in the queue both tabs share. */
+    const tabA = await globalThis.prksBeginConceptDefinitionEdit(id);
+    await globalThis.updateConcept(id, { description: "Def A" }, { definitionEdit: tabA });
+    const queued = await rowsFor(store, "SET_CONCEPT_FIELD");
+    assert.equal(queued.length, 1);
+
+    await assert.rejects(
+        () => globalThis.updateConcept(id, { description: "Def B" }, { definitionEdit: tabB }),
+        changedElsewhere,
+        "B never showed A's queued text, so it may not replace it");
+    const after = await rowsFor(store, "SET_CONCEPT_FIELD");
+    assert.equal(after.length, 1);
+    assert.equal(after[0].op_id, queued[0].op_id);
+    assert.equal(after[0].payload.value, "Def A", "A's queued save is untouched");
+
+    /* An editor that opened on A's queued text owns that row and coalesces. */
+    const onA = await globalThis.prksBeginConceptDefinitionEdit(id);
+    assert.equal(onA.value, "Def A");
+    assert.deepEqual(onA.expected, { description: queued[0].op_id });
+    assert.equal(onA.base.description.revision, 1, "the row keeps the revision it was typed on");
+    await globalThis.updateConcept(id, { description: "Def A2" }, { definitionEdit: onA });
+    const coalesced = await rowsFor(store, "SET_CONCEPT_FIELD");
+    assert.equal(coalesced.length, 1);
+    assert.equal(coalesced[0].payload.value, "Def A2");
+    assert.equal(coalesced[0].base_revision, 1);
+}
+
+async function theStoreRefusesAForeignRow() {
+    const store = newStore();
+    const id = "C-" + "8".repeat(32);
+    const mine = await store.saveConceptFields(id, { description: "Mine" }, fieldBase(1, "Old"),
+        { description: null });
+    await assert.rejects(
+        () => store.saveConceptFields(id, { description: "Other" }, fieldBase(1, "Old"),
+            { description: null }),
+        error => error.prksLocalStoreCode === "scope_busy" && error.prksBusyForeign === true &&
+            error.prksBusyOpId === mine[0].op_id,
+        "a row the caller did not name is someone else's");
+    await store.saveConceptFields(id, { description: "Mine again" }, fieldBase(1, "Old"),
+        { description: mine[0].op_id });
+    assert.equal((await rowsFor(store, "SET_CONCEPT_FIELD"))[0].payload.value, "Mine again");
+    /* Callers that name nothing keep the old coalescing. */
+    await store.saveConceptFields(id, { description: "Anyone" }, fieldBase(1, "Old"));
+    assert.equal((await rowsFor(store, "SET_CONCEPT_FIELD"))[0].payload.value, "Anyone");
+    await assert.rejects(
+        () => store.saveConceptFields(id, { description: "x" }, fieldBase(1, "Old"), { description: 7 }),
+        error => error.prksLocalStoreCode === "invalid_envelope");
+}
+
+async function anEditorWithNoKnownBaseDoesNotOpen() {
+    globalThis.prksSync = { store: newStore() };
+    globalThis.prksOfflineReadEntity = async () => ({ value: null, source: "unavailable" });
+    assert.equal(await globalThis.prksBeginConceptDefinitionEdit("C-" + "9".repeat(32)), null);
+    globalThis.prksSync = { store: { listOperations: async () => { throw new Error("blocked"); } } };
+    installMovableConcept("C-" + "9".repeat(32), "Known", 1);
+    assert.equal(await globalThis.prksBeginConceptDefinitionEdit("C-" + "9".repeat(32)), null,
+        "an unreadable queue is not an empty one");
+}
+
 async function theDefinitionIsNotTheIdentity() {
     const store = newStore();
     const id = "C-" + "B".repeat(32);
@@ -531,6 +688,11 @@ async function main() {
     await aConceptNeedsAName();
     await theDefinitionCoalescesAndCancels();
     await theDefinitionCancelGoesThroughApiWrapper();
+    await anOlderDraftDoesNotReplaceAnotherTabsSave();
+    await aSaveTheServerAlreadyMatchesKeepsGoing();
+    await anotherTabsQueuedRowIsNeverCoalescedOver();
+    await theStoreRefusesAForeignRow();
+    await anEditorWithNoKnownBaseDoesNotOpen();
     await theDefinitionIsNotTheIdentity();
     await theIdentityIsOneDecision();
     await aPendingRenameReachesEverySurfaceThatNamesIt();

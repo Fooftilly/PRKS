@@ -438,7 +438,14 @@ interface Window {
     onPick: (id: string, pickType?: string) => void
   }) => void
   createPosition?: (body: { name: string; description?: string }) => Promise<{ id?: string } | null>
-  updateConcept?: (id: string, body: { name?: string; description?: string }) => Promise<unknown>
+  updateConcept?: (
+    id: string,
+    body: { name?: string; description?: string },
+    options?: { definitionEdit?: import('./src/features/concepts/types').ConceptDefinitionEdit },
+  ) => Promise<unknown>
+  prksBeginConceptDefinitionEdit?: (
+    conceptId: string,
+  ) => Promise<import('./src/features/concepts/types').ConceptDefinitionEdit | null>
   deleteConcept?: (id: string) => Promise<unknown>
   putConceptAliases?: (id: string, aliases: string[]) => Promise<unknown>
   putConceptParents?: (id: string, parentIds: string[]) => Promise<unknown>
