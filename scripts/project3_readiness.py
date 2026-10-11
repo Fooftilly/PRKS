@@ -48,7 +48,9 @@ import sys
 import tempfile
 import urllib.error
 import urllib.request
+import zipfile
 from collections import Counter
+from io import BytesIO
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
@@ -492,6 +494,33 @@ def check_snapshot(snapshot: Any, *, now: datetime, max_age_hours: float = MAX_A
     return generated
 
 
+ARTIFACT_FILE = "project3-readiness.json"
+MAX_SNAPSHOT_BYTES = 16 * 1024 * 1024
+
+
+def decode_download(raw: bytes) -> Any:
+    """Decode a downloaded artifact by its content, not its name: the raw
+    JSON file (``archive: false``) or a ZIP holding exactly that one file.
+    Anything else is refused."""
+    if raw.startswith(b"PK\x03\x04"):
+        try:
+            with zipfile.ZipFile(BytesIO(raw)) as archive:
+                members = archive.infolist()
+                if [m.filename for m in members] != [ARTIFACT_FILE]:
+                    raise Malformed(f"artifact ZIP must hold only {ARTIFACT_FILE}")
+                if members[0].file_size > MAX_SNAPSHOT_BYTES:
+                    raise Malformed("artifact file is too large")
+                raw = archive.read(members[0])
+        except zipfile.BadZipFile:
+            raise Malformed("artifact is a damaged ZIP") from None
+    if len(raw) > MAX_SNAPSHOT_BYTES:
+        raise Malformed("artifact file is too large")
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise Malformed("artifact is neither the snapshot JSON nor a ZIP holding it") from None
+
+
 _ROW_KEYS = frozenset({"number", "state", "in_project", "project_item_id", "archived", "assignees", *FIELDS})
 
 
@@ -603,8 +632,8 @@ def main(argv: Optional[Sequence[str]] = None, env: Optional[Mapping[str, str]] 
     args = parser.parse_args(argv)
     try:
         if args.command == "check":
-            snapshot_path = _confined(args.snapshot, "--snapshot", ".json")
-            data = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            snapshot_path = _confined(args.snapshot, "--snapshot")
+            data = decode_download(snapshot_path.read_bytes())
             generated = check_snapshot(data, now=clock(), max_age_hours=args.max_age_hours)
             print(f"ok: snapshot generated {_iso(generated)} is complete and fresh")
             return 0

@@ -388,13 +388,14 @@ A triage that reads GitHub only through REST (such as the ChatGPT PRKS Daily Tri
 - `archived: true`: the item is archived on Project #3.
 - `assignees`: the issue's assignee logins, sorted.
 
-**Retrieving it (REST, authenticated).**
+**Retrieving it (ChatGPT GitHub connector).** Use the connector's dedicated artifact actions, not its general UTF-8 `fetch` against the download URL, which answers with a `302` redirect to blob storage.
 
-1. Latest successful run: `GET /repos/Fooftilly/PRKS/actions/workflows/project3-readiness.yml/runs?status=success&branch=master&per_page=1`. Take `workflow_runs[0].id`. No run means no snapshot.
-2. Its artifact: `GET /repos/Fooftilly/PRKS/actions/runs/{run_id}/artifacts`. Take the artifact named `project3-readiness.json` with `expired: false`.
-3. Download: `GET /repos/Fooftilly/PRKS/actions/artifacts/{artifact_id}/zip`. Despite the `zip` in the path, an artifact uploaded with `archive: false` is expected to download as the JSON file itself; this is **not yet verified** and is checked on the first live run (record the result here). GitHub answers with a `302` redirect to a short-lived blob-storage URL, so the client must follow the redirect (without forwarding its GitHub token, which the URL does not need).
+1. Latest successful run: list runs of `project3-readiness.yml` on `master` with status `success` (REST: `GET /repos/Fooftilly/PRKS/actions/workflows/project3-readiness.yml/runs?status=success&branch=master&per_page=1`). No run means no snapshot.
+2. Its artifact: `fetch_workflow_run_artifacts` for that run (REST: `GET /repos/Fooftilly/PRKS/actions/runs/{run_id}/artifacts`). Take the artifact named `project3-readiness.json` with `expired: false`.
+3. Download: `download_workflow_artifact` with that artifact ID. It follows the redirect and returns a file reference.
+4. Decode by **content**, not by name or stated type: bytes starting with `PK` are a ZIP that must hold exactly `project3-readiness.json`; anything else must be that JSON file itself (`archive: false`). `python scripts/project3_readiness.py check --snapshot <downloaded file>` does this decoding and every check below.
 
-A connector that offers a dedicated artifact download (such as a `download_workflow_artifact` action that follows the redirect and returns a file reference) can use that in place of step 3, provided the triage can then read the file's text as JSON. Neither route has been tested end to end with the ChatGPT GitHub connector yet; this is checked on the first live run after merge and recorded here. Until then, the triage treats readiness as unknown.
+Evidence so far (2026-10-11, maintainer): with the connected ChatGPT GitHub integration, `fetch_workflow_run_artifacts` listed an existing ordinary (zipped) PRKS artifact, `download_workflow_artifact` followed the redirect and returned a file, and the JSON inside the ZIP was read in the triage's working container. That proves the route for zipped artifacts. The `archive: false` file from this workflow is **not yet verified**; the first successful run after merge is the acceptance test, and its result is recorded here. Until then, and whenever any step fails, the triage treats readiness as unknown.
 
 **Freshness and use (consumer rules).**
 

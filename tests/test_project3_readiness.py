@@ -14,6 +14,7 @@ import sys
 import tempfile
 import unittest
 import urllib.error
+import zipfile
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -439,6 +440,23 @@ class FreshnessTests(unittest.TestCase):
         with self.assertRaisesRegex(pr.Malformed, "fields"):
             pr.check_snapshot(snap, now=NOW)
 
+
+    def test_download_is_decoded_by_content(self) -> None:
+        snap = self.snap()
+        text = json.dumps(snap).encode()
+        self.assertEqual(pr.decode_download(text), snap)
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("project3-readiness.json", text)
+        self.assertEqual(pr.decode_download(buffer.getvalue()), snap)
+        other = io.BytesIO()
+        with zipfile.ZipFile(other, "w") as archive:
+            archive.writestr("project3-readiness.json", text)
+            archive.writestr("extra.json", b"{}")
+        for label, raw in (("two members", other.getvalue()), ("damaged zip", b"PK\x03\x04broken"),
+                           ("binary", b"\xff\xfe"), ("html", b"<html>redirect</html>")):
+            with self.subTest(label), self.assertRaises(pr.Malformed):
+                pr.decode_download(raw)
 
 class MainTests(unittest.TestCase):
     def run_main(self, argv: list[str], env: dict, fake: Optional[FakeGitHub] = None) -> tuple[int, str, str]:
