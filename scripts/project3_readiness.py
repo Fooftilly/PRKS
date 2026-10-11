@@ -487,12 +487,23 @@ def _write_atomic(path: Path, text: str) -> None:
         raise
 
 
-def _out_path(value: str) -> Path:
+def _allowed_roots() -> tuple[Path, ...]:
+    return tuple({Path(tempfile.gettempdir()).resolve(), Path.home().resolve()})
+
+
+def _confined(value: str, what: str, suffix: Optional[str] = None) -> Path:
+    """Keep every file this tool reads or writes in the home or temp
+    directory (the runner's temp and step-summary files are under its home)
+    and out of this repository, so an argument cannot point it at an
+    arbitrary file and a snapshot is never written into the checkout."""
     path = Path(value).expanduser().resolve()
     if path == _REPO_ROOT or path.is_relative_to(_REPO_ROOT):
-        raise ReadinessError("--out must be outside the repository (snapshots are never committed)")
-    if path.suffix != ".json":
-        raise ReadinessError("--out must be a .json file")
+        raise ReadinessError(f"{what} must be outside the repository (snapshots are never committed)")
+    roots = _allowed_roots()
+    if not any(path == root or path.is_relative_to(root) for root in roots):
+        raise ReadinessError(f"{what} must be under {' or '.join(str(r) for r in roots)}")
+    if suffix and path.suffix != suffix:
+        raise ReadinessError(f"{what} must be a {suffix} file")
     return path
 
 
@@ -540,18 +551,20 @@ def main(argv: Optional[Sequence[str]] = None, env: Optional[Mapping[str, str]] 
     args = parser.parse_args(argv)
     try:
         if args.command == "check":
-            data = json.loads(Path(args.snapshot).read_text(encoding="utf-8"))
+            snapshot_path = _confined(args.snapshot, "--snapshot", ".json")
+            data = json.loads(snapshot_path.read_text(encoding="utf-8"))
             generated = check_snapshot(data, now=clock(), max_age_hours=args.max_age_hours)
             print(f"ok: snapshot generated {_iso(generated)} is complete and fresh")
             return 0
-        out = _out_path(args.out)
+        out = _confined(args.out, "--out", ".json")
+        summary = _confined(args.summary, "--summary") if args.summary else None
         token = env.get("PROJECT3_READINESS_TOKEN", "")
         if not token:
             raise NotConfigured("PROJECT3_READINESS_TOKEN is not set; nothing was read or written")
         snapshot = build_snapshot(transport_factory(token), generated_at=clock(), source=_source(env))
         _write_atomic(out, json.dumps(snapshot, indent=2, sort_keys=True) + "\n")
-        if args.summary:
-            with open(args.summary, "a", encoding="utf-8") as handle:
+        if summary:
+            with open(summary, "a", encoding="utf-8") as handle:
                 handle.write(summary_markdown(snapshot))
         print(f"ok: wrote {snapshot['counts']['issues']} issues to {out}")
         return 0

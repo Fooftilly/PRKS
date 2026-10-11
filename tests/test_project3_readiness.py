@@ -441,6 +441,16 @@ class MainTests(unittest.TestCase):
         self.assertFalse((_ROOT / "snapshot.json").exists())
 
 
+    def test_paths_outside_home_and_temp_are_refused(self) -> None:
+        for argv in (["snapshot", "--out", "/etc/prks-snapshot.json"],
+                     ["snapshot", "--out", str(Path(tempfile.gettempdir()) / "s.json"), "--summary", "/etc/summary.md"],
+                     ["check", "--snapshot", "/etc/passwd.json"]):
+            with self.subTest(argv):
+                code, _, err = self.run_main(argv, {"PROJECT3_READINESS_TOKEN": "t"})
+                self.assertEqual(code, 1)
+                self.assertIn("must be under", err)
+
+
 class WorkflowTests(unittest.TestCase):
     text = _WORKFLOW.read_text(encoding="utf-8")
 

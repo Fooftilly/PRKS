@@ -357,7 +357,7 @@ A triage that reads GitHub only through REST (such as the ChatGPT PRKS Daily Tri
 
 **Fail closed.** The run fails, and publishes nothing, when any page is missing (`hasNextPage` without an `endCursor`, a repeated cursor, fewer nodes than `totalCount`), when `totalCount` changes between pages (rerun), when the project's id, number or owner differ from `PVT_kwHOAsc2_s4BkAo3`, 3, `Fooftilly`, when Status, Execution or Agent is missing or not single select, when one issue has two items or one item appears twice, when an issue has more than 20 assignees, or when any node has an unexpected shape. The file is written atomically, and only after every read succeeded.
 
-**Output.** One artifact per successful run, named `project3-readiness.json`, uploaded unzipped (`archive: false`) and kept for 2 days. It is never committed; the script refuses an output path inside the repository. The job summary repeats the counts for people, and is not the output.
+**Output.** One artifact per successful run, named `project3-readiness.json`, uploaded unzipped (`archive: false`) and kept for 2 days. It is never committed: the script reads and writes files only under the home or temp directory (the runner's temp and step-summary files are under its home) and refuses any path inside the repository. The job summary repeats the counts for people, and is not the output.
 
 ```json
 {
