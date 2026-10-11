@@ -3510,6 +3510,65 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
         self.assertEqual(_server_annotation(page, work_id, ann_id)["contents"], "saved comment")
         self.assertEqual(_popup_comment(page, ann_id), "saved comment")
 
+    def test_a_failure_after_its_popup_closed_does_not_wait_on_that_annotation(self):
+        server, page, _collector = self._start_app()
+        work_id = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        _commit_pdf_highlight(page)
+        ann_id = _only_viewer_annotation_id(page)
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+        self._edit_comment_repeatedly(page, server, work_id, ann_id, ["saved comment"])
+
+        # The local write is still running when the user closes the popup,
+        # and only then fails.
+        page.evaluate(
+            """() => {
+                const store = window.prksSync.store;
+                const real = store.savePdfAnnotation;
+                store.savePdfAnnotation = function () {
+                    store.savePdfAnnotation = real;
+                    return new Promise((_resolve, reject) => {
+                        window.__prksFailHeldSave = () => reject(
+                            Object.assign(new Error('disk full'), { code: 'write_failed' })
+                        );
+                    });
+                };
+            }"""
+        )
+        _wait_pdf_annotation_durable(page)
+        popup = _open_annotation_popup(page, ann_id)
+        popup.locator('[data-prks-role="pdf-annotation-popup-text"]').fill("late failure")
+        popup.get_by_role("button", name="Save comment").click()
+        page.wait_for_function("() => typeof window.__prksFailHeldSave === 'function'", timeout=15000)
+        _close_annotation_popup(page)
+        page.evaluate("() => window.__prksFailHeldSave()")
+        page.wait_for_function(
+            """() => {
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const el = ctx && ctx.root && ctx.root.querySelector('[data-prks-role="annotation-sync-status"]');
+                return !!(el && el.classList.contains('work-annotation-sync-status--error'));
+            }""",
+            timeout=15000,
+        )
+        self.assertEqual(_server_annotation(page, work_id, ann_id)["contents"], "saved comment")
+
+        # No draft is left for that annotation, so the next recorded write
+        # (here another highlight) settles it.
+        _wait_pdf_annotation_durable(page)
+        _commit_pdf_highlight(page, _pdf_text_band_fractions(3, 6))
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf._annotationDurableWriteChain).then(() => !pdf.hasPendingSync());
+            }""",
+        )
+        _wait_local_save_warning_cleared(page)
+
     def test_a_failed_highlight_is_settled_by_saving_it_again(self):
         server, page, _collector = self._start_app()
         work_id = server.ids["work_a"]

@@ -3055,7 +3055,8 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
 
     // Annotations whose edit failed to save locally: the comment the user
     // tried to save (null when the failure was not a comment edit), and
-    // whether the annotation itself was never saved (a failed create).
+    // whether the annotation itself was never saved (a failed create). A
+    // failure with no open popup draft is kept under '*'.
     // 'local_save_failed' (and the hasPendingSync() leave guard) clears only
     // once each of them has a recorded durable write carrying that comment:
     // another annotation's save, or a rollback's echo of the stored comment,
@@ -3063,8 +3064,18 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
     // by any recorded write.
     const localSaveFailures = new Map();
 
+    function annotationPopupOpenFor(id) {
+        const popup = runtime.annotationPopup;
+        return !!(popup && popup.open && String(popup.annId) === id);
+    }
+
     function noteLocalSaveFailure(annId, expectedComment, created) {
-        const id = annId ? String(annId) : '*';
+        let id = annId ? String(annId) : '*';
+        // The popup closed before the write failed (or a delete closed it):
+        // no draft is left for this id to wait on, and the rollback restored
+        // the viewer. Still say the edit was not saved, until the next
+        // recorded write, as for an unknown id.
+        if (id !== '*' && !created && !annotationPopupOpenFor(id)) id = '*';
         const prior = localSaveFailures.get(id);
         localSaveFailures.set(id, {
             comment: typeof expectedComment === 'string' ? expectedComment : null,

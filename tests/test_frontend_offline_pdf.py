@@ -244,6 +244,9 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         # save; one whose annotation is gone from the viewer is dropped.
         self.assertIn("await rollbackFailedDurableAnnotation(\n                        intent.id,", src)
         self.assertIn("settleLocalSaveFailure(intent.id, durableIntentComment(intent));", src)
+        # A failure whose popup already closed has no draft to wait on.
+        note = src[src.index("function noteLocalSaveFailure("):src.index("function noteLocalSaveAttempt(")]
+        self.assertIn("if (id !== '*' && !created && !annotationPopupOpenFor(id)) id = '*';", note)
         rollback = src[src.index("async function rollbackFailedDurableAnnotation"):src.index("function onAnnotationEvent(evt)")]
         self.assertIn("pruneLocalSaveFailuresGoneFromViewer();", rollback)
         durable = src[src.index("const recorded = await window.prksSavePdfAnnotationDurably("):]
