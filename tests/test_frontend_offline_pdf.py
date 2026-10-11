@@ -258,8 +258,19 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         self.assertIn("intent.desired && !(intent.observed && intent.observed.present)", src)
         self.assertIn("!hasEffectiveAnnotationRow(intent.id)", src)
         # A newer queued write is not overwritten by this write's projection.
-        self.assertIn("if (!newerEditPending()) {\n                        await restoreEffectiveViewerAnnotations();", src)
-        self.assertIn("return durableWritesQueued > 1 || uncommittedEdits.size > 0;", src)
+        self.assertIn("await restoreEffectiveViewerAnnotations({\n                        holdIds: newerEditIds(intent.id),", src)
+        rollback_src = src[src.index("async function rollbackFailedDurableAnnotation"):src.index("function onAnnotationEvent(evt)")]
+        self.assertIn("await restoreEffectiveViewerAnnotations({ holdIds: holdIds });", rollback_src)
+        # Only annotations with a newer edit are held, not the whole Work.
+        newer = src[src.index("function newerEditIds(runningId)"):src.index("function enqueueDurableAnnotationWrite(")]
+        self.assertIn("new Set(uncommittedEdits.keys())", newer)
+        self.assertIn("if (n > (id === runningId ? 1 : 0)) ids.add(id);", newer)
+        # Held rows reach the viewer only; the list sets the acknowledged
+        # cache and stays on stored state.
+        restore = src[src.index("async function restoreEffectiveViewerAnnotations("):src.index("const PDF_PASS_NOT_WRITTEN")]
+        self.assertIn("const holdIds = (opts && opts.holdIds) || newerEditIds();", restore)
+        self.assertIn("window.prksReconcileViewerAnnotations(activeViewer, projected, {", restore)
+        self.assertIn("renderAnnotationFallbackList(\n            effective,", restore)
         # An edit whose commit never comes (a failed engine write) is
         # reported after a bound, not left pending for the session.
         note = src[src.index("function noteUncommittedEdit("):src.index("function forgetUncommittedEdit(")]
@@ -271,11 +282,6 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         self.assertIn("if (id !== '*' && !created && !annotationPopupOpenFor(id)) id = '*';", note)
         rollback = src[src.index("async function rollbackFailedDurableAnnotation"):src.index("function onAnnotationEvent(evt)")]
         self.assertIn("pruneLocalSaveFailuresGoneFromViewer();", rollback)
-        # A failed write with a newer one queued leaves the viewer for it.
-        self.assertLess(
-            rollback.index("if (newerQueued) return;"),
-            rollback.index("await restoreEffectiveViewerAnnotations();"),
-        )
         durable = src[src.index("const recorded = await window.prksSavePdfAnnotationDurably("):]
         self.assertLess(
             durable.index("pruneLocalSaveFailuresGoneFromViewer();"),

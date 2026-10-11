@@ -2404,8 +2404,26 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             typeof window.prksEffectiveWorkAnnotations === 'function'
                 ? window.prksEffectiveWorkAnnotations(ackOnly, String(workId))
                 : ackOnly;
+        // Annotations with a newer edit still to be recorded keep what the
+        // viewer shows: that write reads the viewer when it runs (#401).
+        // Only the viewer projection holds them; the list (which also sets
+        // the acknowledged cache) stays on stored state.
+        let projected = effective;
+        const holdIds = (opts && opts.holdIds) || newerEditIds();
+        if (holdIds.size > 0) {
+            projected = effective.filter(function (row) {
+                const id = typeof window.prksPdfAnnotationCanonicalId === 'function'
+                    ? window.prksPdfAnnotationCanonicalId(row)
+                    : row && row.id;
+                return !(id != null && holdIds.has(String(id)));
+            });
+            holdIds.forEach(function (id) {
+                const live = prksFindViewerAnnotation(activeViewer, id);
+                if (live) projected.push(live);
+            });
+        }
         if (typeof window.prksReconcileViewerAnnotations === 'function') {
-            await window.prksReconcileViewerAnnotations(activeViewer, effective, {
+            await window.prksReconcileViewerAnnotations(activeViewer, projected, {
                 isManaged: prksIsUserMarkupAnnotation,
                 knownAbsent: prksKnownAbsentAnnotationSeed(runtime),
             });
@@ -2434,6 +2452,12 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
     const PDF_PASS_NOT_WRITTEN = 'not-written';
     // Local-save failures by annotation id (see noteLocalSaveFailure).
     const localSaveFailures = new Map();
+    // Durable writes enqueued and not yet finished, the running one
+    // included: annotation id -> count.
+    const queuedWriteIds = new Map();
+    // Comment edits the viewer took whose committed event (which enqueues
+    // their durable write) has not arrived yet: id -> { comment, timer }.
+    const uncommittedEdits = new Map();
     // A claim kept back while the viewer holds an annotation that failed to
     // save: exporting would write it into the PDF with no canonical row.
     let materializationHeldForUnsaved = false;
@@ -3003,15 +3027,6 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         }, delay);
     }
 
-    /**
-     * Real execution serializer: enqueue the write function; do not start it
-     * before the prior chain link settles.
-     */
-    // Durable writes enqueued and not yet finished, the running one included.
-    let durableWritesQueued = 0;
-    // Comment edits the viewer took whose committed event (which enqueues
-    // their durable write) has not arrived yet: id -> { comment, timer }.
-    const uncommittedEdits = new Map();
     // A commit follows within milliseconds. The viewer emits none when its
     // engine write fails, so an edit still uncommitted after this long is
     // reported as not saved instead of holding projection for the session.
@@ -3036,19 +3051,36 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         uncommittedEdits.delete(id);
     }
 
-    // A newer edit will record what the viewer holds now: projecting stored
-    // state over the viewer before it does would lose that edit (#401).
-    function newerEditPending() {
-        return durableWritesQueued > 1 || uncommittedEdits.size > 0;
+    function countQueuedWrite(id, delta) {
+        const n = (queuedWriteIds.get(id) || 0) + delta;
+        if (n > 0) queuedWriteIds.set(id, n);
+        else queuedWriteIds.delete(id);
     }
 
-    function enqueueDurableAnnotationWrite(writeFn) {
+    // Annotations with an edit still to be recorded after the write for
+    // `runningId` (if any): queued writes and edits the viewer has not
+    // committed yet. That write records what the viewer holds when it runs,
+    // so projecting stored state over these would lose the edit (#401).
+    function newerEditIds(runningId) {
+        const ids = new Set(uncommittedEdits.keys());
+        queuedWriteIds.forEach(function (n, id) {
+            if (n > (id === runningId ? 1 : 0)) ids.add(id);
+        });
+        return ids;
+    }
+
+    /**
+     * Real execution serializer: enqueue the write function; do not start it
+     * before the prior chain link settles.
+     */
+    function enqueueDurableAnnotationWrite(writeFn, annId) {
         const prior = runtime._annotationDurableWriteChain || Promise.resolve();
-        durableWritesQueued += 1;
+        const id = String(annId || '');
+        countQueuedWrite(id, 1);
         function run() {
             return Promise.resolve()
                 .then(writeFn)
-                .finally(function () { durableWritesQueued -= 1; });
+                .finally(function () { countQueuedWrite(id, -1); });
         }
         const ran = prior.then(run, run);
         // Keep the chain pointer settled so a rejected write does not kill
@@ -3224,25 +3256,23 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         return ann ? prksAnnotationCommentText(ann) : null;
     }
 
-    async function rollbackFailedDurableAnnotation(annId, expectedComment, created) {
+    async function rollbackFailedDurableAnnotation(annId, expectedComment, created, runningId) {
         if (!stillLive()) return;
-        // A later edit is queued or not yet committed (e.g. a second Save
-        // while this one was writing). Its write reads the live viewer when
-        // it runs, so rolling the viewer back now would make it record the
-        // stored value and lose the newer edit. That write settles this
-        // failure when it records the newer comment, and restores (#401).
-        const newerQueued = newerEditPending();
-        if (newerQueued && !created) {
-            const id = String(annId || '');
+        // A later edit of this annotation is queued or not yet committed
+        // (e.g. a second Save while this one was writing). The rollback
+        // leaves it in the viewer: its write records it, which settles this
+        // failure (#401). Other annotations roll back as usual.
+        const id = String(annId || '');
+        const holdIds = newerEditIds(runningId);
+        if (holdIds.has(id) && !created) {
             const live = prksFindViewerAnnotation(liveAnnotationViewer(), annId);
             if (uncommittedEdits.has(id)) expectedComment = uncommittedEdits.get(id).comment;
             else if (live) expectedComment = prksAnnotationCommentText(live);
         }
         noteLocalSaveFailure(annId, expectedComment, created);
         renderSyncIndicator();
-        if (newerQueued) return;
         try {
-            await restoreEffectiveViewerAnnotations();
+            await restoreEffectiveViewerAnnotations({ holdIds: holdIds });
         } catch (_e2) {}
         if (!stillLive()) return;
         pruneLocalSaveFailuresGoneFromViewer();
@@ -3284,14 +3314,12 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                     );
                     if (!stillLive()) return;
                     adoptDurableAnnotationCache(intent.ackList);
-                    // A later edit is queued or not yet committed (e.g. a
-                    // second Save while this one was writing): projecting
-                    // stored state now would put this older value over the
-                    // newer viewer edit before its write reads it. The last
-                    // write restores (#401).
-                    if (!newerEditPending()) {
-                        await restoreEffectiveViewerAnnotations();
-                    }
+                    // Annotations with a later edit still to be recorded (e.g.
+                    // a second Save while this one was writing) keep the
+                    // viewer's newer value for that write to read (#401).
+                    await restoreEffectiveViewerAnnotations({
+                        holdIds: newerEditIds(intent.id),
+                    });
                     syncState.localMutationSeen = true;
                     // A write that recorded nothing only shows the viewer
                     // already matches stored state — e.g. the commit echo of a
@@ -3320,10 +3348,13 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                     await rollbackFailedDurableAnnotation(
                         intent.id,
                         created ? null : durableIntentComment(intent),
-                        created
+                        created,
+                        intent.id
                     );
                 }
-            });
+            }, evt.annotationId || (evt.annotation && (
+                evt.annotation.id || evt.annotation.uuid || evt.annotation.annotationId
+            )));
             return;
         }
 
