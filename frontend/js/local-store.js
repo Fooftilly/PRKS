@@ -2635,11 +2635,29 @@
                 });
         }
 
-        /** The definition, and only the definition. */
-        function saveConceptFields(conceptId, changes, base) {
+        /**
+         * The definition, and only the definition.
+         *
+         * `expected`, when given, names per field the unsettled row the caller's
+         * text came from (null: none). Any other unsettled row on that field was
+         * queued by someone else -- another tab sharing this queue -- and is
+         * never coalesced over (#568).
+         */
+        function saveConceptFields(conceptId, changes, base, expected) {
             if (!isNonBlankString(conceptId) || !isPlainObject(changes) || !isPlainObject(base)) {
                 return Promise.reject(localStoreError('invalid_envelope',
                     'Invalid concept save.'));
+            }
+            if (expected !== undefined && !isPlainObject(expected)) {
+                return Promise.reject(localStoreError('invalid_envelope',
+                    'Invalid concept save.'));
+            }
+            const owns = expected || {};
+            for (const field of Object.keys(owns)) {
+                if (owns[field] !== null && !isNonBlankString(owns[field])) {
+                    return Promise.reject(localStoreError('invalid_envelope',
+                        'Invalid concept save.'));
+                }
             }
             for (const field of Object.keys(changes)) {
                 const observed = base[field];
@@ -2668,9 +2686,16 @@
                             r.entity_type === 'concept' && r.entity_id === conceptId &&
                             r.payload.field === field && r.status !== STATUS_ACKNOWLEDGED);
                         if (existing) {
-                            if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
-                                throw localStoreError('scope_busy',
-                                    'This field is syncing or needs resolution.');
+                            const foreign = Object.prototype.hasOwnProperty.call(owns, field) &&
+                                owns[field] !== existing.op_id;
+                            if (foreign || existing.status !== STATUS_PENDING ||
+                                existing.attempt_count > 0) {
+                                throw Object.assign(localStoreError('scope_busy',
+                                    'This field is syncing or needs resolution.'), {
+                                    prksBusyOpId: existing.op_id,
+                                    prksBusyStatus: existing.status,
+                                    prksBusyForeign: foreign,
+                                });
                             }
                             if (existing.payload.value === desired) {
                                 written.push(existing);

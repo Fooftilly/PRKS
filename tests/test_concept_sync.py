@@ -540,7 +540,9 @@ class ConceptSyncTests(unittest.TestCase):
         self.parents(child, [parent], 0)
         self.field(child, "Changed.", 0)
         state = self.db.get_concept_sync_state(child)
-        self.assertEqual(state["fields"]["description"]["revision"], 1)
+        self.assertEqual(state["fields"]["description"],
+                         {"value": "Changed.", "revision": 1},
+                         "the text and its revision come from one read (#568)")
         self.assertEqual(state["identity"],
                          {"name": "Emergence", "aliases": ["Self-organization"]})
         self.assertEqual(state["identity_revision"], 1)

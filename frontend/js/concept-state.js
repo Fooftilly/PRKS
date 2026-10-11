@@ -304,6 +304,7 @@
             const entry = fields[FIELDS[i]];
             if (!entry || typeof entry !== 'object') return false;
             if (!Number.isSafeInteger(entry.revision) || entry.revision < 0) return false;
+            if (entry.value !== undefined && typeof entry.value !== 'string') return false;
         }
         return true;
     }
@@ -323,7 +324,10 @@
     /** The state a Concept created here has, before any server has seen it. */
     function newConceptState(conceptId, row) {
         const fields = {};
-        FIELDS.forEach(function (name) { fields[name] = { revision: 0 }; });
+        FIELDS.forEach(function (name) {
+            const raw = row && row[name];
+            fields[name] = { value: raw == null ? '' : String(raw), revision: 0 };
+        });
         return {
             concept_id: conceptId,
             fields: fields,
@@ -354,42 +358,33 @@
         } catch (_e) { return null; }
     }
 
-    /** `{value, revision}` for the definition, or null when unknowable. */
+    /** `{value, revision}` for a field, or null when unknowable. */
     function observedConceptField(state, field) {
         if (!state || !state.fields) return null;
         const entry = state.fields[field];
-        if (!entry) return null;
-        return { value: '', revision: entry.revision };
+        if (!entry || typeof entry.value !== 'string') return null;
+        return { value: entry.value, revision: entry.revision };
     }
 
     /**
-     * The field base, with its VALUE read from the cached Concept.
+     * The field base: each value with the revision it was read with.
      *
-     * The sync-state carries revisions for the definition but not its text --
-     * the Concept detail already holds that, and a second copy would be a
-     * second thing to keep true.
+     * Both come from the one sync-state entry, never the text from the
+     * Concept detail and the revision from the state: those are two reads,
+     * and either can be live while the other falls back to the cache. Older
+     * text paired with a newer revision is a base that silently overwrites
+     * the edit that revision stands for (#568). A state cached before it
+     * carried the text has no knowable base.
      */
     async function acknowledgedConceptFields(conceptId, operations) {
         const state = await acknowledgedConceptBase(conceptId, operations);
         if (!state) return null;
-        const creating = pendingCreates(operations).find(op => op.entity_id === conceptId);
-        let concept = creating ? catalogRowFromOp(creating) : null;
-        if (!concept) {
-            try {
-                const cached = await root.prksOfflineReadEntity('concept', conceptId,
-                    '/api/concepts/' + encodeURIComponent(conceptId), {});
-                concept = cached && cached.value;
-            } catch (_e) { concept = null; }
-        }
-        if (!concept) return null;
         const base = {};
         FIELDS.forEach(function (field) {
             const observed = observedConceptField(state, field);
-            if (!observed) return;
-            const raw = concept[field];
-            base[field] = { value: raw == null ? '' : String(raw), revision: observed.revision };
+            if (observed) base[field] = observed;
         });
-        return base;
+        return Object.keys(base).length ? base : null;
     }
 
     /** `{name, aliases, revision}` the identity edit is measured against. */
@@ -426,6 +421,91 @@
         return changes;
     }
 
+    /* ---- the definition editor's base (#568) ---- */
+
+    /**
+     * What a Definition editor opens on, and the base its text is typed on.
+     *
+     * Read when the editor OPENS, never when it saves: a base read at Save
+     * time is whatever another tab or device stored meanwhile, and measuring
+     * an older draft against it is exactly how that newer text gets silently
+     * overwritten. `value` is the text the editor shows (the pending overlay
+     * over the acknowledged value). `expected` names the unsettled row that
+     * text came from, so a save replaces only that row and never a row another
+     * tab queued meanwhile. A pending row keeps the revision it was queued on:
+     * its text was typed on that revision, not on whatever has been
+     * acknowledged since. Null when the base is not knowable.
+     */
+    async function beginConceptDefinitionEdit(conceptId, operations) {
+        let ops = operations;
+        if (!Array.isArray(ops)) {
+            /* An unreadable queue is not an empty one: the editor would open
+             * on the wrong text and claim no row as its own. */
+            try {
+                ops = await sync().store.listOperations();
+            } catch (_e) { return null; }
+        }
+        const fields = await acknowledgedConceptFields(conceptId, ops);
+        const observed = fields && fields.description;
+        if (!observed) return null;
+        const row = unsettled(ops, 'SET_CONCEPT_FIELD', conceptId)
+            .filter(op => op.payload && op.payload.field === 'description')
+            .sort((a, b) => (b.sequence || 0) - (a.sequence || 0))[0] || null;
+        const revision = row && Number.isSafeInteger(row.base_revision) &&
+            row.base_revision >= 0 ? row.base_revision : observed.revision;
+        return {
+            concept_id: conceptId,
+            value: row ? String((row.payload && row.payload.value) || '') : observed.value,
+            base: { description: { value: observed.value, revision: revision } },
+            expected: { description: row ? row.op_id : null },
+        };
+    }
+
+    /**
+     * The base a Definition editor's Save is measured against, or a
+     * `changed_elsewhere` error when what it opened on is no longer current.
+     *
+     * When the acknowledged revision has moved past the one the editor opened
+     * on, the save keeps going only if PRKS now holds exactly the text the
+     * editor showed: then nobody's change is hidden from this user, and the
+     * edit is measured against the new revision. Anything else changed
+     * elsewhere, and saving would replace text this user never saw, unless
+     * the editor's text is its own unsettled row (see below). A base
+     * that cannot be read now keeps the one the editor opened on, and the
+     * server's revision check decides.
+     */
+    async function conceptDefinitionSaveBase(conceptId, session, operations) {
+        const pinned = session && session.base && session.base.description;
+        if (!pinned) return null;
+        let current = null;
+        try {
+            const fields = await acknowledgedConceptFields(conceptId, operations);
+            current = fields && fields.description;
+        } catch (_e) { current = null; }
+        /* One revision, two texts: the editor opened on a base that never
+         * existed on the server, so it cannot say what this save replaces. */
+        if (current && current.revision === pinned.revision &&
+            current.value !== pinned.value) throw changedElsewhere();
+        if (!current || current.revision <= pinned.revision) return session.base;
+        if (current.value === session.value) return { description: current };
+        /* The editor's text is its own still-unsettled row: a newer
+         * acknowledgement under it is that row's conflict, not a change made
+         * elsewhere. The store refuses a row that needs a decision, and the
+         * server's revision check catches one still pending. */
+        const own = session.expected && session.expected.description;
+        if (own && unsettled(operations, 'SET_CONCEPT_FIELD', conceptId)
+            .some(op => op.op_id === own)) return session.base;
+        throw changedElsewhere();
+    }
+
+    /** Carries `code: 'changed_elsewhere'`; the caller keeps the user's text. */
+    function changedElsewhere() {
+        const err = new Error('The definition changed in another tab or on another '
+            + 'device after you started editing.');
+        err.code = 'changed_elsewhere';
+        return err;
+    }
+
     /* ---- durable writers ---- */
 
     function sync() {
@@ -442,9 +522,9 @@
         return op;
     }
 
-    async function saveConceptFieldsDurably(conceptId, changes, base) {
+    async function saveConceptFieldsDurably(conceptId, changes, base, expected) {
         const runtime = sync();
-        const written = await runtime.store.saveConceptFields(conceptId, changes, base);
+        const written = await runtime.store.saveConceptFields(conceptId, changes, base, expected);
         if (typeof runtime.changed === 'function') runtime.changed();
         return written;
     }
@@ -616,6 +696,9 @@
         prksAcknowledgedConceptIdentity: acknowledgedConceptIdentity,
         prksAcknowledgedConceptParents: acknowledgedConceptParents,
         prksDirtyConceptFields: dirtyConceptFields,
+        prksBeginConceptDefinitionEdit: beginConceptDefinitionEdit,
+        prksConceptDefinitionSaveBase: conceptDefinitionSaveBase,
+        prksConceptChangedElsewhere: changedElsewhere,
         prksCreateConceptDurably: createConceptDurably,
         prksSaveConceptFieldsDurably: saveConceptFieldsDurably,
         prksSetConceptIdentityDurably: setConceptIdentityDurably,

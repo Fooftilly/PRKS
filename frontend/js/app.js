@@ -122,6 +122,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initPrksSettingsCategoryNav();
     initPrksPdfRememberPageSetting();
     initPrksPdfLastPageVisibilityFlush();
+    initPrksConceptDetailReturnRefresh();
     initPrksHintsSetting();
     initForceMobileSetting();
     initMobileWorkNotesRightSetting();
@@ -389,6 +390,102 @@ function initPrksPdfLastPageVisibilityFlush() {
         flush();
     });
     window.addEventListener('pagehide', flush);
+}
+
+/**
+ * A Concept detail catches up when this browser tab is returned to (#568).
+ *
+ * Another tab or device may have changed the Definition meanwhile, and nothing
+ * else repaints a route on a change it did not make. The focused pane is
+ * repainted in place under its CURRENT generation, so an editor that is
+ * opening or open on it keeps owning it and keeps the user's text.
+ */
+function initPrksConceptDetailReturnRefresh() {
+    if (window.__prksConceptReturnRefreshBound) return;
+    window.__prksConceptReturnRefreshBound = true;
+    let scheduled = false;
+    const refresh = () => {
+        scheduled = false;
+        if (document.visibilityState === 'hidden') return;
+        const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+        if (ctx) void prksReloadConceptDetail(ctx);
+    };
+    /* `focus` and `visibilitychange` usually arrive together: one refresh. */
+    const schedule = () => {
+        if (scheduled) return;
+        scheduled = true;
+        setTimeout(refresh, 0);
+    };
+    document.addEventListener('visibilitychange', schedule);
+    window.addEventListener('focus', schedule);
+}
+
+/**
+ * A Concept detail with every pending intent applied, or null once `stale()`
+ * says its reader no longer owns the route. Backlink rows name a
+ * Work's Title, so a pending rename has to reach them. The overlay is applied
+ * here, so the Vue surface stays ignorant of durable operations and the cached
+ * Concept is never rewritten. The Concept's own pending intent too -- its
+ * definition, its name and aliases, and both ends of its hierarchy. The
+ * vocabulary supplies the NAME of a parent or child created on this device,
+ * which no cache holds.
+ */
+async function prksEffectiveConceptDetailView(item, conceptOps, stale) {
+    await prksHydratePendingWorkMetadata();
+    if (stale()) return null;
+    const conceptCatalogue = typeof prksEffectiveConceptCatalogue === 'function'
+        ? await prksEffectiveConceptCatalogue(conceptOps) : [];
+    if (stale()) return null;
+    const overlaid = typeof prksEffectiveConceptDetail === 'function'
+        ? prksEffectiveConceptDetail(item, conceptOps, conceptCatalogue) : item;
+    return typeof prksEffectiveWorkReferences === 'function'
+        ? prksEffectiveWorkReferences('concept', overlaid) : overlaid;
+}
+
+/**
+ * Re-read this owner's Concept and repaint it in place, keeping the route
+ * generation. Only a Concept the server has, read successfully; anything else
+ * leaves the page as it is for the next navigation to settle.
+ */
+async function prksReloadConceptDetail(ctx) {
+    if (!ctx || typeof ctx.isCurrent !== 'function') return false;
+    const generation = ctx.generation;
+    const route = ctx.lastResolvedRoute || ctx.route;
+    if (!route || route.name !== 'concept-detail' || !ctx.root || !ctx.root.isConnected) return false;
+    const conceptId = route.params && route.params.conceptId;
+    if (!conceptId) return false;
+    const conceptOps = await prksDurableOperationsOrNone();
+    if (typeof prksPendingConceptDeletions === 'function' &&
+        prksPendingConceptDeletions(conceptOps).has(conceptId)) return false;
+    if (typeof prksPendingConceptCreates === 'function' &&
+        prksPendingConceptCreates(conceptOps).some(op => op.entity_id === conceptId)) return false;
+    let read;
+    try {
+        read = await prksOfflineDetailFetch('concept', conceptId,
+            '/api/concepts/' + encodeURIComponent(conceptId), null, {
+                domain: PRKS_CONCEPTS_DOMAIN,
+                validate: value => prksIsConceptShape(value, conceptId),
+            });
+    } catch (_e) { return false; }
+    const owns = () => {
+        const live = ctx.lastResolvedRoute || ctx.route;
+        return ctx.isCurrent(generation) && !!live && live.name === 'concept-detail' &&
+            live.params && live.params.conceptId === conceptId && !!ctx.root && ctx.root.isConnected;
+    };
+    if (!owns()) return false;
+    const resolved = prksResolveOfflineConcept(read, conceptId);
+    if (resolved.unavailable || !resolved.concept) return false;
+    const effective = await prksEffectiveConceptDetailView(resolved.concept, conceptOps,
+        () => !owns());
+    if (!effective || !owns()) return false;
+    ctx.setEntity('concept', effective);
+    prksPresentVueRoute(ctx, ctx.root, 'concept-detail', {
+        availability: 'ready',
+        concept: effective,
+        conceptId: conceptId,
+        generation: generation,
+    });
+    return true;
 }
 
 function initPrksHintsSetting() {
@@ -4812,23 +4909,8 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                         skipPageEnter: sameConceptsWorkspace,
                     };
                 } else {
-                    /* Backlink rows name a Work's Title, so a pending rename
-                     * has to reach them. The overlay is applied here, so the
-                     * Vue surface stays ignorant of durable operations and the
-                     * cached Concept is never rewritten. */
-                    await prksHydratePendingWorkMetadata();
-                    if (stale()) return;
-                    /* The Concept's own pending intent too -- its definition,
-                     * its name and aliases, and both ends of its hierarchy. The
-                     * vocabulary supplies the NAME of a parent or child created
-                     * on this device, which no cache holds. */
-                    const conceptCatalogue = typeof prksEffectiveConceptCatalogue === 'function'
-                        ? await prksEffectiveConceptCatalogue(conceptOps) : [];
-                    if (stale()) return;
-                    const overlaid = typeof prksEffectiveConceptDetail === 'function'
-                        ? prksEffectiveConceptDetail(item, conceptOps, conceptCatalogue) : item;
-                    const effective = typeof prksEffectiveWorkReferences === 'function'
-                        ? prksEffectiveWorkReferences('concept', overlaid) : overlaid;
+                    const effective = await prksEffectiveConceptDetailView(item, conceptOps, stale);
+                    if (!effective || stale()) return;
                     ctx.setEntity('concept', effective);
                     prksPresentVueRoute(ctx, contentDiv, 'concept-detail', {
                         availability: 'ready',

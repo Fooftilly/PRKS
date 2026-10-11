@@ -1,5 +1,5 @@
 import type { InjectionKey } from 'vue'
-import type { ConceptDetail } from './types'
+import type { ConceptDefinitionEdit, ConceptDetail } from './types'
 
 /** Owning TabContext fields Concept intents need. Not a second route model. */
 export interface ConceptIntentOwner {
@@ -70,6 +70,29 @@ function refreshDetail(owner: ConceptIntentOwner | null | undefined, generation:
     replace: true,
     tabId: owner?.tabId,
   })
+}
+
+const BASE_UNAVAILABLE =
+  'This concept cannot be edited offline yet. Open it once while connected to PRKS so its synchronization state is prepared.'
+
+const NOTICE_PREVIEW_CHARS = 280
+
+function errorCode(err: unknown): string {
+  return err && typeof err === 'object' && 'code' in err
+    ? String((err as { code?: unknown }).code || '')
+    : ''
+}
+
+/** The hint a reopened Definition editor shows after a stale Save. */
+export function changedElsewhereNotice(current: string): string {
+  const text = current.trim()
+  const preview =
+    text.length > NOTICE_PREVIEW_CHARS ? `${text.slice(0, NOTICE_PREVIEW_CHARS)}…` : text
+  return (
+    'Not saved: this definition changed in another tab or on another device after you ' +
+    `started editing. It now reads: ${preview ? `“${preview}”` : '(empty)'}. ` +
+    'Your text is below. Save replaces the current definition with it; Cancel keeps the current definition.'
+  )
 }
 
 /** Fail closed when a required durable Concept API is not on window. */
@@ -170,21 +193,77 @@ export function browserConceptIntents(
     },
 
     async editDefinition(concept) {
-      const next = await promptText({
-        title: 'Definition',
-        message: 'Markdown',
-        defaultValue: concept.description || '',
-        multiline: true,
-        okLabel: 'Save',
-      })
-      if (next == null) return
-      if (!ownsDetail(owner, generation, concept.id)) return
+      /* The base is read when the editor opens, with the text it shows, so a
+       * Save measures this draft against what it was typed on rather than
+       * against whatever another tab stored meanwhile (#568). */
+      let session: ConceptDefinitionEdit | null
       try {
-        const update = requireDurableApi(window.updateConcept, 'updateConcept')
-        await update(concept.id, { description: next })
+        const begin = requireDurableApi(
+          window.prksBeginConceptDefinitionEdit,
+          'prksBeginConceptDefinitionEdit',
+        )
+        session = await begin(concept.id)
       } catch (err) {
-        await reportFailure(owner, generation, concept.id, err, 'Could not save the definition')
+        await reportFailure(owner, generation, concept.id, err, 'Could not edit the definition')
         return
+      }
+      if (!session) {
+        await reportFailure(
+          owner,
+          generation,
+          concept.id,
+          new Error(BASE_UNAVAILABLE),
+          'Could not edit the definition',
+        )
+        return
+      }
+      if (!ownsDetail(owner, generation, concept.id)) return
+      let draft = session.value
+      let notice = ''
+      for (;;) {
+        const next = await promptText({
+          title: 'Definition',
+          message: notice || 'Markdown',
+          defaultValue: draft,
+          multiline: true,
+          okLabel: 'Save',
+        })
+        if (!ownsDetail(owner, generation, concept.id)) return
+        if (next == null) {
+          // The page may still show text from before the editor opened.
+          if (notice || session.value !== (concept.description || '')) {
+            refreshDetail(owner, generation, concept.id)
+          }
+          return
+        }
+        try {
+          const update = requireDurableApi(window.updateConcept, 'updateConcept')
+          await update(concept.id, { description: next }, { definitionEdit: session })
+          break
+        } catch (err) {
+          if (errorCode(err) !== 'changed_elsewhere') {
+            await reportFailure(owner, generation, concept.id, err, 'Could not save the definition')
+            return
+          }
+        }
+        /* Changed in another tab or device since this editor opened. Keep the
+         * draft, show what PRKS has now, and let the user decide: Save again
+         * replaces that text deliberately, Cancel keeps it. */
+        const fresh = await window.prksBeginConceptDefinitionEdit?.(concept.id)
+        if (!ownsDetail(owner, generation, concept.id)) return
+        if (!fresh) {
+          await reportFailure(
+            owner,
+            generation,
+            concept.id,
+            new Error(BASE_UNAVAILABLE),
+            'Could not save the definition',
+          )
+          return
+        }
+        session = fresh
+        draft = next
+        notice = changedElsewhereNotice(fresh.value)
       }
       refreshDetail(owner, generation, concept.id)
     },

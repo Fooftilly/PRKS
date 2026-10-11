@@ -29,6 +29,36 @@ class ConceptSyncFrontendTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn('checks passed', proc.stdout)
 
+    def test_an_acknowledged_definition_lands_before_its_revision(self):
+        """#568: the shown text moves first, then the editor's base, whose text
+        and revision are written together in the one state entry."""
+        runtime = (FRONTEND / 'offline-runtime.js').read_text()
+        at = runtime.index('async function reconcileConceptField(')
+        body = runtime[at: runtime.index('async function reconcileConceptIdentity(', at)]
+        text = body.index("patchEntity('concept', id")
+        rows = body.index('writeConceptRows(')
+        revision = body.index("patchEntity('concept-state', id")
+        self.assertLess(text, revision)
+        self.assertLess(rows, revision)
+        self.assertIn('next.fields[field] = { value: value, revision: result.server_revision }',
+                      body[revision:])
+
+    def test_the_definition_base_is_read_from_one_entry(self):
+        """#568: text from the Concept detail and a revision from the state are
+        two reads, one of which can fall back to an older cache."""
+        at = self.state.index('async function acknowledgedConceptFields(')
+        body = self.state[at: self.state.index('\n    }\n', at)]
+        self.assertNotIn("prksOfflineReadEntity('concept'", body)
+
+    def test_the_definition_editor_saves_against_its_opening_base(self):
+        """#568: the Vue Definition editor reads its base when it opens."""
+        intents = (ROOT / 'frontend-app' / 'src' / 'features' / 'concepts'
+                   / 'intents.ts').read_text()
+        at = intents.index('async editDefinition(')
+        body = intents[at: intents.index('async editAliases(', at)]
+        self.assertLess(body.index('prksBeginConceptDefinitionEdit'), body.index('promptText('))
+        self.assertIn('definitionEdit: session', body)
+
     def test_the_two_sides_synchronize_the_same_fields(self):
         client = js_string_list(self.store, 'const CONCEPT_FIELDS =')
         self.assertEqual(sorted(client), sorted(concept_sync.FIELDS))
