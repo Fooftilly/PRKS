@@ -122,13 +122,23 @@ class ReadOnlyGraphQL:
         return data
 
 
-def http_transport(token: str, url: str = GRAPHQL_URL) -> Transport:
-    if not url.startswith("https://"):
-        raise ReadinessError("the GraphQL URL must use https")
+def _https_only_opener() -> urllib.request.OpenerDirector:
+    """An opener that can speak only HTTPS (through the environment's proxy,
+    if any): unlike urlopen, it has no file:// or ftp:// handler."""
+    opener = urllib.request.OpenerDirector()
+    for handler in (urllib.request.ProxyHandler(), urllib.request.HTTPSHandler(),
+                    urllib.request.HTTPDefaultErrorHandler(), urllib.request.HTTPErrorProcessor(),
+                    urllib.request.UnknownHandler()):
+        opener.add_handler(handler)
+    return opener
+
+
+def http_transport(token: str) -> Transport:
+    opener = _https_only_opener()
 
     def send(document: str, variables: dict[str, Any]) -> dict[str, Any]:
         request = urllib.request.Request(
-            url,
+            GRAPHQL_URL,
             data=json.dumps({"query": document, "variables": variables}).encode("utf-8"),
             method="POST",
             headers={
@@ -138,7 +148,7 @@ def http_transport(token: str, url: str = GRAPHQL_URL) -> Transport:
             },
         )
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:  # nosec B310 - https only
+            with opener.open(request, timeout=30) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as error:
             if error.code in (401, 403):
@@ -356,8 +366,7 @@ def read_items(gql: ReadOnlyGraphQL) -> tuple[dict[int, dict[str, Any]], Counter
             # null content: deleted, or from a repository the token cannot see.
             skipped["redacted_or_unknown"] += 1
             continue
-        assert isinstance(content, dict)
-        repo = _obj(content.get("repository"), "issue repository")
+        repo = _obj(_obj(content, "issue content").get("repository"), "issue repository")
         if repo.get("nameWithOwner") != REPOSITORY:
             skipped["other_repositories"] += 1
             continue

@@ -288,11 +288,21 @@ class FakeResponse(io.BytesIO):
         self.close()
 
 
+def opener(result: object) -> mock.Mock:
+    """A stand-in opener whose open() returns or raises ``result``."""
+    fake = mock.Mock()
+    if isinstance(result, BaseException):
+        fake.open.side_effect = result
+    else:
+        fake.open.return_value = result
+    return fake
+
+
 class TransportTests(unittest.TestCase):
     def test_rejected_token_is_not_configured_and_not_printed(self) -> None:
         for code in (401, 403):
             error = urllib.error.HTTPError(pr.GRAPHQL_URL, code, "nope", {}, None)  # type: ignore[arg-type]
-            with self.subTest(code), mock.patch.object(pr.urllib.request, "urlopen", side_effect=error):
+            with self.subTest(code), mock.patch.object(pr, "_https_only_opener", return_value=opener(error)):
                 with self.assertRaises(pr.NotConfigured) as caught:
                     pr.http_transport("ghp_secret")("query { viewer { login } }", {})
                 self.assertNotIn("ghp_secret", str(caught.exception))
@@ -301,14 +311,17 @@ class TransportTests(unittest.TestCase):
         bodies = {b'{"errors":[{"message":"rate limited"}]}': "rate limited",
                   b"not json": "request failed", b"[1]": "not an object", b'{"data":null}': "no data"}
         for body, message in bodies.items():
-            with self.subTest(body), mock.patch.object(pr.urllib.request, "urlopen",
-                                                       return_value=FakeResponse(body)):
+            with self.subTest(body), mock.patch.object(pr, "_https_only_opener",
+                                                       return_value=opener(FakeResponse(body))):
                 with self.assertRaisesRegex(pr.ReadinessError, message):
                     pr.http_transport("t")("query { viewer { login } }", {})
 
-    def test_https_only(self) -> None:
-        with self.assertRaises(pr.ReadinessError):
-            pr.http_transport("t", "http://api.github.com/graphql")
+    def test_opener_has_no_file_or_ftp_handler(self) -> None:
+        handlers = {type(h) for h in pr._https_only_opener().handlers}
+        self.assertNotIn(urllib.request.FileHandler, handlers)
+        self.assertNotIn(urllib.request.FTPHandler, handlers)
+        self.assertNotIn(urllib.request.HTTPHandler, handlers)
+        self.assertTrue(pr.GRAPHQL_URL.startswith("https://"))
 
 
 class ReadOnlyTests(unittest.TestCase):
