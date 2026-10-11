@@ -1905,13 +1905,11 @@
             if (!root.prksIsSupportedConceptField ||
                 !root.prksIsSupportedConceptField(field)) return false;
             const value = String((op && op.payload && op.payload.value) || '');
-            /* The text lands BEFORE its revision (#568). The base an editor
-             * reads is this revision plus the cached text, from two entries;
-             * read between the writes, the new revision must never come with
-             * the old text, or a draft of that old text would be measured
-             * against the revision that replaced it. The other order (new text,
-             * old revision) only makes a save conflict. A cache that already
-             * holds a later revision holds later text too, and keeps both. */
+            /* The base an editor reads is the state entry's text and revision,
+             * written together below (#568). The Concept detail's text lands
+             * first, so a page showing the definition never lags the base it
+             * would be edited from. A cache that already holds a later
+             * revision holds later text too, and keeps both. */
             const held = await store.getEntity('concept-state', id).catch(() => null);
             const heldEntry = held && held.value && held.value.fields &&
                 held.value.fields[field];
@@ -1927,7 +1925,7 @@
                 });
                 if (!await writeConceptRows(patched)) return false;
             }
-            /* The revision is published only once the text is: a failed text
+            /* The base moves only once the shown text has: a failed text
              * write leaves the acknowledgement unreconciled, to be retried. */
             const textCached = await patchEntity('concept', id, function (concept) {
                 if (!concept || concept.id !== id) return null;
@@ -1943,7 +1941,7 @@
                 if (!entry || entry.revision > result.server_revision) return null;
                 const next = Object.assign({}, state,
                     { fields: Object.assign({}, state.fields) });
-                next.fields[field] = { revision: result.server_revision };
+                next.fields[field] = { value: value, revision: result.server_revision };
                 return next;
             });
             /* A definition is not a Graph label and not a note reference, so no

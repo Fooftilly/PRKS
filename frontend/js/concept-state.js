@@ -304,6 +304,7 @@
             const entry = fields[FIELDS[i]];
             if (!entry || typeof entry !== 'object') return false;
             if (!Number.isSafeInteger(entry.revision) || entry.revision < 0) return false;
+            if (entry.value !== undefined && typeof entry.value !== 'string') return false;
         }
         return true;
     }
@@ -323,7 +324,10 @@
     /** The state a Concept created here has, before any server has seen it. */
     function newConceptState(conceptId, row) {
         const fields = {};
-        FIELDS.forEach(function (name) { fields[name] = { revision: 0 }; });
+        FIELDS.forEach(function (name) {
+            const raw = row && row[name];
+            fields[name] = { value: raw == null ? '' : String(raw), revision: 0 };
+        });
         return {
             concept_id: conceptId,
             fields: fields,
@@ -354,42 +358,33 @@
         } catch (_e) { return null; }
     }
 
-    /** `{value, revision}` for the definition, or null when unknowable. */
+    /** `{value, revision}` for a field, or null when unknowable. */
     function observedConceptField(state, field) {
         if (!state || !state.fields) return null;
         const entry = state.fields[field];
-        if (!entry) return null;
-        return { value: '', revision: entry.revision };
+        if (!entry || typeof entry.value !== 'string') return null;
+        return { value: entry.value, revision: entry.revision };
     }
 
     /**
-     * The field base, with its VALUE read from the cached Concept.
+     * The field base: each value with the revision it was read with.
      *
-     * The sync-state carries revisions for the definition but not its text --
-     * the Concept detail already holds that, and a second copy would be a
-     * second thing to keep true.
+     * Both come from the one sync-state entry, never the text from the
+     * Concept detail and the revision from the state: those are two reads,
+     * and either can be live while the other falls back to the cache. Older
+     * text paired with a newer revision is a base that silently overwrites
+     * the edit that revision stands for (#568). A state cached before it
+     * carried the text has no knowable base.
      */
     async function acknowledgedConceptFields(conceptId, operations) {
         const state = await acknowledgedConceptBase(conceptId, operations);
         if (!state) return null;
-        const creating = pendingCreates(operations).find(op => op.entity_id === conceptId);
-        let concept = creating ? catalogRowFromOp(creating) : null;
-        if (!concept) {
-            try {
-                const cached = await root.prksOfflineReadEntity('concept', conceptId,
-                    '/api/concepts/' + encodeURIComponent(conceptId), {});
-                concept = cached && cached.value;
-            } catch (_e) { concept = null; }
-        }
-        if (!concept) return null;
         const base = {};
         FIELDS.forEach(function (field) {
             const observed = observedConceptField(state, field);
-            if (!observed) return;
-            const raw = concept[field];
-            base[field] = { value: raw == null ? '' : String(raw), revision: observed.revision };
+            if (observed) base[field] = observed;
         });
-        return base;
+        return Object.keys(base).length ? base : null;
     }
 
     /** `{name, aliases, revision}` the identity edit is measured against. */
@@ -487,6 +482,10 @@
             const fields = await acknowledgedConceptFields(conceptId, operations);
             current = fields && fields.description;
         } catch (_e) { current = null; }
+        /* One revision, two texts: the editor opened on a base that never
+         * existed on the server, so it cannot say what this save replaces. */
+        if (current && current.revision === pinned.revision &&
+            current.value !== pinned.value) throw changedElsewhere();
         if (!current || current.revision <= pinned.revision) return session.base;
         if (current.value === session.value) return { description: current };
         /* The editor's text is its own still-unsettled row: a newer

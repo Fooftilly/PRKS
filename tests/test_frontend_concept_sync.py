@@ -30,12 +30,8 @@ class ConceptSyncFrontendTests(unittest.TestCase):
         self.assertIn('checks passed', proc.stdout)
 
     def test_an_acknowledged_definition_lands_before_its_revision(self):
-        """#568: an editor's base is the cached revision plus the cached text.
-
-        Read between the two writes, the new revision must never come with the
-        old text: a draft of that old text would then be measured against the
-        revision that replaced it.
-        """
+        """#568: the shown text moves first, then the editor's base, whose text
+        and revision are written together in the one state entry."""
         runtime = (FRONTEND / 'offline-runtime.js').read_text()
         at = runtime.index('async function reconcileConceptField(')
         body = runtime[at: runtime.index('async function reconcileConceptIdentity(', at)]
@@ -44,6 +40,15 @@ class ConceptSyncFrontendTests(unittest.TestCase):
         revision = body.index("patchEntity('concept-state', id")
         self.assertLess(text, revision)
         self.assertLess(rows, revision)
+        self.assertIn('next.fields[field] = { value: value, revision: result.server_revision }',
+                      body[revision:])
+
+    def test_the_definition_base_is_read_from_one_entry(self):
+        """#568: text from the Concept detail and a revision from the state are
+        two reads, one of which can fall back to an older cache."""
+        at = self.state.index('async function acknowledgedConceptFields(')
+        body = self.state[at: self.state.index('\n    }\n', at)]
+        self.assertNotIn("prksOfflineReadEntity('concept'", body)
 
     def test_the_definition_editor_saves_against_its_opening_base(self):
         """#568: the Vue Definition editor reads its base when it opens."""

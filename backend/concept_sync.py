@@ -271,19 +271,26 @@ def delete_concept_on_conn(conn, concept_id):
 
 
 def get_concept_state_on_conn(conn, concept_id):
-    """Revisions only, plus the two aggregate VALUES.
+    """Each field's value and revision, plus the two aggregates and theirs.
 
-    The field revision is a number; the identity and the hierarchy are sets, and
-    a client measuring an edit against them needs what it last acknowledged --
-    the Concept detail carries `parents` as objects and would have to be
-    reshaped, so the ids are stated here instead.
+    A client measures an edit against what it last acknowledged, so every
+    value here is read in the same transaction as its revision. The field
+    text is stated here even though the Concept detail carries it too: two
+    reads can land on different revisions (one live, one from a cache), and
+    a draft of older text paired with a newer revision would overwrite the
+    edit that revision stands for (#568). The identity and the hierarchy are
+    sets -- the Concept detail carries `parents` as objects and would have to
+    be reshaped, so the ids are stated here instead.
     """
     identity = current_identity(conn, concept_id)
     if identity is None:
         return None
     fields = {}
     for name in FIELDS:
-        fields[name] = {"revision": get_revision(conn, concept_id, name)}
+        fields[name] = {
+            "value": current_field(conn, concept_id, name),
+            "revision": get_revision(conn, concept_id, name),
+        }
     return {
         "concept_id": concept_id,
         "fields": fields,
