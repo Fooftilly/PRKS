@@ -537,6 +537,17 @@ class MainTests(unittest.TestCase):
             self.assertIn("different file", err)
             self.assertFalse(Path(target).exists())
 
+    def test_check_reads_standard_input(self) -> None:
+        fake = FakeGitHub(items=[[issue_item("I1", 1)]], issues=[[open_issue(1)]])
+        raw = json.dumps(pr.build_snapshot(fake, generated_at=NOW)).encode()
+        with mock.patch.object(pr.sys, "stdin", mock.Mock(buffer=io.BytesIO(raw))):
+            code, out, err = self.run_main(["check", "--snapshot", "-"], {})
+        self.assertEqual(code, 0, err)
+        self.assertIn("complete and fresh", out)
+        with mock.patch.object(pr.sys, "stdin", mock.Mock(buffer=io.BytesIO(b"not json"))):
+            code, _, err = self.run_main(["check", "--snapshot", "-"], {})
+        self.assertEqual(code, 1)
+
     def test_output_inside_repository_is_refused(self) -> None:
         code, _, err = self.run_main(["snapshot", "--out", str(_ROOT / "snapshot.json")],
                                      {"PROJECT3_READINESS_TOKEN": "t"})

@@ -631,13 +631,18 @@ def main(argv: Optional[Sequence[str]] = None, env: Optional[Mapping[str, str]] 
     snap.add_argument("--out", required=True, help="output .json path, outside the repository")
     snap.add_argument("--summary", help="append a Markdown summary to this file (job summary)")
     chk = sub.add_parser("check", help="validate a snapshot and its freshness")
-    chk.add_argument("--snapshot", required=True)
+    chk.add_argument("--snapshot", required=True, help="file under home or temp, or - for standard input")
     chk.add_argument("--max-age-hours", type=float, default=MAX_AGE_HOURS)
     args = parser.parse_args(argv)
     try:
         if args.command == "check":
-            snapshot_path = _confined(args.snapshot, "--snapshot")
-            data = decode_download(snapshot_path.read_bytes())
+            if args.snapshot == "-":
+                # Standard input reads a downloaded file from anywhere (for
+                # example /mnt/data) without widening the path confinement.
+                raw = sys.stdin.buffer.read(MAX_SNAPSHOT_BYTES + 1)
+            else:
+                raw = _confined(args.snapshot, "--snapshot").read_bytes()
+            data = decode_download(raw)
             generated = check_snapshot(data, now=clock(), max_age_hours=args.max_age_hours)
             print(f"ok: snapshot generated {_iso(generated)} is complete and fresh")
             return 0
