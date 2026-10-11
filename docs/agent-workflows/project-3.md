@@ -396,7 +396,7 @@ A triage that reads GitHub only through REST (such as the ChatGPT PRKS Daily Tri
 
 **Freshness and use (consumer rules).**
 
-- Reject the snapshot unless `schema` is `prks-project3-readiness/v1`, `complete` is `true`, and `project.id`, `project.number`, `project.owner` and `repository` match the values above.
+- Reject the snapshot unless `schema` is `prks-project3-readiness/v1`, `complete` is `true`, and `project.id`, `project.number`, `project.owner` and `repository` match the values above, and unless every row has exactly the keys shown with valid types (`project_item_id` and `archived` set when `in_project` is true; every Project value `null` and `state` `OPEN` when it is false), rows are sorted by number without duplicates, and `counts` agree with the rows. One invalid row rejects the whole snapshot.
 - Reject it when it is older than 30 hours by the consumer's own clock (`now - generated_at > 30 h`) or dated more than 5 minutes in the future. Do not rely on the run's date or on the artifact still existing. `python scripts/project3_readiness.py check --snapshot <file>` applies the same rules.
 - Without a usable snapshot, report every issue's readiness as **unknown**. Never fall back to an older snapshot or infer readiness from labels.
 - An issue is a readiness candidate only when its `status` is `Ready` (or `In Progress` for "already started"), and it has no open native blocker. Blockers come from the live REST dependency read (`GET /repos/Fooftilly/PRKS/issues/{n}/dependencies/blocked_by`), done at triage time, not from the snapshot. Execution and Agent say who would do it; they never make an issue ready. Inbox and Backlog are not ready.

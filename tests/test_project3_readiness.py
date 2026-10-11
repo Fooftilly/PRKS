@@ -378,6 +378,55 @@ class FreshnessTests(unittest.TestCase):
             pr.check_snapshot(dup, now=NOW)
 
 
+    def test_structurally_invalid_rows_and_counts_fail(self) -> None:
+        def with_row(change: dict, index: int = 0) -> dict:
+            snap = snapshot(FakeGitHub(items=[[issue_item("I1", 1, status="Ready")]],
+                                       issues=[[open_issue(1), open_issue(2)]]))
+            row = snap["issues"][index]
+            for key, value in change.items():
+                if value is KeyError:
+                    del row[key]
+                else:
+                    row[key] = value
+            return snap
+
+        cases = [
+            ("bare row", {k: KeyError for k in ("state", "in_project", "project_item_id", "archived",
+                                                 "status", "execution", "agent", "assignees")}),
+            ("missing status", {"status": KeyError}),
+            ("extra key", {"ready": True}),
+            ("bad state", {"state": "MERGED"}),
+            ("in_project not bool", {"in_project": "true"}),
+            ("present without item id", {"project_item_id": None}),
+            ("present without archived", {"archived": None}),
+            ("empty status", {"status": ""}),
+            ("numeric agent", {"agent": 3}),
+            ("assignees not list", {"assignees": "amy"}),
+            ("assignees unsorted", {"assignees": ["zed", "amy"]}),
+        ]
+        for label, change in cases:
+            with self.subTest(label), self.assertRaises(pr.Malformed):
+                pr.check_snapshot(with_row(change), now=NOW)
+        for label, change in (("absent with status", {"status": "Ready"}),
+                              ("absent with item id", {"project_item_id": "I9"}),
+                              ("absent and closed", {"state": "CLOSED"})):
+            with self.subTest(label), self.assertRaises(pr.Malformed):
+                pr.check_snapshot(with_row(change, index=1), now=NOW)
+
+        snap = with_row({})
+        snap["counts"]["in_project"] = 2
+        with self.assertRaisesRegex(pr.Malformed, "counts"):
+            pr.check_snapshot(snap, now=NOW)
+        snap = with_row({})
+        snap["issues"].reverse()
+        with self.assertRaisesRegex(pr.Malformed, "sorted"):
+            pr.check_snapshot(snap, now=NOW)
+        snap = with_row({})
+        snap["fields"] = {"status": "Status"}
+        with self.assertRaisesRegex(pr.Malformed, "fields"):
+            pr.check_snapshot(snap, now=NOW)
+
+
 class MainTests(unittest.TestCase):
     def run_main(self, argv: list[str], env: dict, fake: Optional[FakeGitHub] = None) -> tuple[int, str, str]:
         out, err = io.StringIO(), io.StringIO()

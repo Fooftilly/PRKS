@@ -467,11 +467,54 @@ def check_snapshot(snapshot: Any, *, now: datetime, max_age_hours: float = MAX_A
     age = now - generated
     if age > timedelta(hours=max_age_hours):
         raise ReadinessError(f"snapshot is stale: {age.total_seconds() / 3600:.1f} h old, limit {max_age_hours:g} h")
-    rows = _list(data.get("issues"), "snapshot issues")
-    numbers = [_int(_obj(r, "snapshot issue").get("number"), "snapshot issue number") for r in rows]
+    if data.get("fields") != FIELDS:
+        raise Malformed("snapshot fields do not match Status / Execution / Agent")
+    rows = [_check_row(r) for r in _list(data.get("issues"), "snapshot issues")]
+    numbers = [r["number"] for r in rows]
     if len(set(numbers)) != len(numbers):
         raise Malformed("snapshot lists an issue twice")
+    if numbers != sorted(numbers):
+        raise Malformed("snapshot issues are not sorted by number")
+    counts = _obj(data.get("counts"), "snapshot counts")
+    in_project = sum(1 for r in rows if r["in_project"])
+    expected = {"issues": len(rows), "in_project": in_project, "open_not_in_project": len(rows) - in_project}
+    if any(counts.get(key) != value for key, value in expected.items()):
+        raise Malformed("snapshot counts do not match its issues")
     return generated
+
+
+_ROW_KEYS = frozenset({"number", "state", "in_project", "project_item_id", "archived", "assignees", *FIELDS})
+
+
+def _check_row(raw: Any) -> dict[str, Any]:
+    """One issue row must be exactly as ``build_snapshot`` writes it, so a
+    truncated or hand-edited row is never read as authoritative."""
+    row = _obj(raw, "snapshot issue")
+    if set(row) != _ROW_KEYS:
+        raise Malformed(f"snapshot issue has keys {sorted(row)}, expected {sorted(_ROW_KEYS)}")
+    number = _int(row["number"], "snapshot issue number")
+    what = f"snapshot issue #{number}"
+    if number < 1:
+        raise Malformed(f"{what} has an invalid number")
+    if row["state"] not in ("OPEN", "CLOSED"):
+        raise Malformed(f"{what} has an invalid state")
+    for key in FIELDS:
+        if row[key] is not None:
+            _str(row[key], f"{what} {key}")
+    assignees = _list(row["assignees"], f"{what} assignees")
+    for login in assignees:
+        _str(login, f"{what} assignee")
+    if assignees != sorted(set(assignees)):
+        raise Malformed(f"{what} assignees are not sorted and unique")
+    if _bool(row["in_project"], f"{what} in_project"):
+        _str(row["project_item_id"], f"{what} project_item_id")
+        _bool(row["archived"], f"{what} archived")
+    else:
+        if row["state"] != "OPEN":
+            raise Malformed(f"{what} is closed and not on Project #3, so it cannot be listed")
+        if any(row[key] is not None for key in ("project_item_id", "archived", *FIELDS)):
+            raise Malformed(f"{what} is not on Project #3 but has Project values")
+    return row
 
 
 # --- output -------------------------------------------------------------------
