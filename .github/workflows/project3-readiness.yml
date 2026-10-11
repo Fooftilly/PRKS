@@ -1,0 +1,56 @@
+name: Project 3 readiness
+
+# Read-only snapshot of each PRKS issue's Project #3 Status, Execution and
+# Agent, published as a short-lived JSON artifact for triage (#441). See
+# docs/agent-workflows/project-3.md section 14. It never writes to Project #3,
+# issues or dependencies: scripts/project3_readiness.py sends GraphQL queries
+# only. It refuses to publish anything unless Project #3 is public, because
+# this repository's artifacts and logs are public.
+on:
+  workflow_dispatch:
+  schedule:
+    # 02:23 UTC daily, off the hour to avoid the busiest scheduling slots.
+    # GitHub may delay or drop scheduled runs; consumers enforce the
+    # snapshot's freshness limit instead of trusting the schedule.
+    - cron: "23 2 * * *"
+
+permissions: {}
+
+concurrency:
+  group: project3-readiness
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    name: Project #3 readiness snapshot
+    # Skips dispatches of this file from other branches. Not a security
+    # boundary: a branch can edit this line. See project-3.md section 14.
+    if: github.repository == 'Fooftilly/PRKS' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read Project #3 (queries only)
+        env:
+          PROJECT3_READINESS_TOKEN: ${{ secrets.PROJECT_SYNC_TOKEN }}
+        run: >-
+          python3 scripts/project3_readiness.py snapshot
+          --out "$RUNNER_TEMP/project3-readiness.json"
+          --summary "$GITHUB_STEP_SUMMARY"
+
+      # Uploaded unzipped (archive: false), so the REST download returns the
+      # JSON file itself. Runs only when the snapshot step succeeded, so a
+      # failed or refused run never has an artifact.
+      - name: Upload snapshot
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: ${{ runner.temp }}/project3-readiness.json
+          archive: false
+          retention-days: 2
+          if-no-files-found: error

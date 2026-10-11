@@ -68,7 +68,7 @@ Legacy planning options (Idea, Research / Design, Ready for Agent, Ready to Merg
 
 `project-sync` treats any Status it has no key for, Backlog and the legacy options included, as `unknown:<name>`. Such a value matches no "allowed from" list, so a PR in Backlog is never moved by `project-sync` (covered by `tests/test_project3_migrate.py`). No change to `project-sync` was needed.
 
-## 3. Roadmap Stage and Execution fields (approved; not created yet)
+## 3. Roadmap Stage and Execution fields (approved; created by the maintainer 2026-10-11)
 
 **Roadmap Stage**, single select {Idea, Research / Design, Planned, Parked}: the planning stage of roadmap items, previously carried by Status. It is separate from Commitment (how firmly PRKS commits: Committed, Research-first, Exploratory) and Horizon (when). These are three different questions. Today Stage and Commitment mostly line up (#472 is Idea + Research-first), but they evolve independently, and Parked has no other home.
 
@@ -247,6 +247,7 @@ Implementation: `scripts/project_sync.py`, `.github/workflows/project-sync.yml`,
 |---|---|---|
 | Issue dependency writer | `GITHUB_TOKEN` | `issues: read` (plan job), `issues: write` (apply job only) |
 | `project-sync` review relay (`project-sync-review.yml`) | none | `permissions: {}`; no secrets, no checkout, no writes |
+| Readiness snapshot (`project3-readiness.yml`, §14) | `PROJECT_SYNC_TOKEN`, passed to the one step that reads | Queries only; the job has `contents: read` and nothing else. |
 | `project-sync` | `PROJECT_SYNC_TOKEN` repository Actions secret: a classic personal access token with only the `project` scope (`GITHUB_TOKEN` cannot reach Projects) | Project read/write. Repository data it reads is public. |
 
 - The token has an expiration date. To rotate it, create a new token with the same single scope, replace the secret, then revoke the old token.
@@ -341,3 +342,67 @@ Order:
 4. Generate the backfill plan, review it, then dry-run and apply it.
 5. Change the views (§7).
 6. Retire legacy options only after a separate approval.
+
+## 14. Readiness snapshot for triage (read-only)
+
+A triage that reads GitHub only through REST (such as the ChatGPT PRKS Daily Triage) cannot query Project V2 custom fields. `.github/workflows/project3-readiness.yml` publishes them as one JSON file it can download.
+
+**What it does.** `scripts/project3_readiness.py snapshot` sends three GraphQL queries and nothing else: Project #3 itself, every page of its items, and every page of the repository's open issues. It cannot write. Every document passes a guard that refuses anything but a query, the file defines no mutation, and it imports neither `project_sync` nor `project3_migrate`. It never touches Status, Execution, Agent, dependencies, issues or PRs.
+
+**Triggers.** `workflow_dispatch`, and a daily schedule at 02:23 UTC. The job's `if` skips a manual dispatch of an unmodified workflow from any branch other than `master`. It is not a security boundary: a dispatch runs the workflow file at the selected ref, and `PROJECT_SYNC_TOKEN` is a repository secret, so a branch that edits this file (or adds its own workflow) can still read the token. Only a GitHub Environment limited to `master` that holds the secret would close that; it is not set up yet. GitHub can delay scheduled runs, sometimes by hours, or drop them, so the freshness limit below decides whether a snapshot can be used, never the schedule. A `workflow_dispatch` run needs the workflow file on the default branch.
+
+**Credentials.** The existing `PROJECT_SYNC_TOKEN` (classic, `project` scope only), passed as `PROJECT3_READINESS_TOKEN` to the one step that reads. No new secret. It is never printed. Without it, or when GitHub rejects it (HTTP 401 or 403: expired, revoked or lacking a scope; a 403 can also be a rate limit), the run fails as `not-configured` and publishes nothing. The job has `contents: read` and no other permission.
+
+**Confidentiality.** This repository is public, so its Actions logs, job summaries and artifacts are readable by anyone (artifacts by any signed-in GitHub user). Project #3 field values are public data only when the project is public. The run therefore reads the project's `public` flag first and **refuses (exit 3) when Project #3 is private**, before it reads any item, and again after the last read, and publishes nothing: no artifact, no summary, no field values in the log. There is no override. The maintainer confirmed on 2026-10-11 that Project #3 is public (`gh project view 3 --owner Fooftilly` returned `public: true`, `closed: false`); the guard stays for future changes. Items from other repositories, PRs, draft issues and items the token cannot see are skipped and only counted. If Project #3 is private, the options are: make Project #3 public (every field on it becomes world-readable; the maintainer decides), or run the same script somewhere private, such as a private repository's workflow with its own copy of the token or the maintainer's machine, and give the triage access only there.
+
+**Fail closed.** The run fails, and publishes nothing, when any page is missing (`hasNextPage` without an `endCursor`, a repeated cursor, fewer nodes than `totalCount`), when `totalCount` changes between pages (rerun), when the project's id, number or owner differ from `PVT_kwHOAsc2_s4BkAo3`, 3, `Fooftilly`, when Status, Execution or Agent is missing or not single select, when one issue has two items or one item appears twice, when an issue has more than 20 assignees, or when any node has an unexpected shape. The file is written atomically, and only after every read succeeded.
+
+**Output.** One artifact per successful run, named `project3-readiness.json`, uploaded unzipped (`archive: false`) and kept for 2 days. It is never committed: the script reads and writes files only under the home or temp directory (the runner's temp and step-summary files are under its home) and refuses any path inside the repository. The job summary repeats the counts for people, and is not the output.
+
+```json
+{
+  "schema": "prks-project3-readiness/v1",
+  "complete": true,
+  "generated_at": "2026-10-12T02:24:10Z",
+  "stale_after": "2026-10-13T08:24:10Z",
+  "max_age_hours": 30,
+  "project": {"owner": "Fooftilly", "number": 3, "id": "PVT_kwHOAsc2_s4BkAo3", "public": true, "closed": false},
+  "repository": "Fooftilly/PRKS",
+  "coverage": "every open issue of the repository, plus every closed issue that has a Project #3 item",
+  "fields": {"status": "Status", "execution": "Execution", "agent": "Agent"},
+  "source": {"workflow_run_id": 123, "run_attempt": "1", "sha": "…", "event": "schedule"},
+  "counts": {"issues": 2, "in_project": 1, "open_not_in_project": 1, "skipped_items": {"pull_requests": 4}},
+  "issues": [
+    {"number": 402, "state": "OPEN", "in_project": true, "project_item_id": "PVTI_…", "archived": false,
+     "status": "Inbox", "execution": null, "agent": null, "assignees": []},
+    {"number": 600, "state": "OPEN", "in_project": false, "project_item_id": null, "archived": null,
+     "status": null, "execution": null, "agent": null, "assignees": []}
+  ]
+}
+```
+
+(Values above are illustrative.) Issues are sorted by number and keys are sorted, so two runs over the same data produce the same file apart from `generated_at`, `stale_after` and `source`.
+
+- `in_project: false`: an open issue with no Project #3 item. `in_project: true` with `null` fields: on the board, field not set. `null` always means unset, never "not ready" or "ready".
+- An issue that is **not listed** is closed and not on Project #3, or was created after `generated_at`. Treat it as unknown.
+- `archived: true`: the item is archived on Project #3.
+- `assignees`: the issue's assignee logins, sorted.
+
+**Retrieving it (ChatGPT GitHub connector).** Use the connector's dedicated artifact actions, not its general UTF-8 `fetch` against the download URL, which answers with a `302` redirect to blob storage.
+
+1. Latest successful run. The connector's general `fetch` refuses the per-workflow endpoint (`/actions/workflows/project3-readiness.yml/runs`; verified by the maintainer 2026-10-11), so read the repository-wide collection, which it does allow: `GET /repos/Fooftilly/PRKS/actions/runs?per_page=100&page=N`, starting at page 1. Runs come newest first. Keep a run only when `path` is `.github/workflows/project3-readiness.yml`, `head_branch` is `master`, `event` is `schedule` or `workflow_dispatch`, `status` is `completed` and `conclusion` is `success`. Take the first such run. Read further pages until one is found or a page's oldest run was created more than 31 hours ago (the 30-hour limit plus queueing margin; the snapshot's own `generated_at` is still checked below). If a page fails, is cut short, or no matching run is found, readiness is unknown.
+2. Its artifact: the dedicated `fetch_workflow_run_artifacts` action for that run ID (REST: `GET /repos/Fooftilly/PRKS/actions/runs/{run_id}/artifacts`). Take the artifact named `project3-readiness.json` with `expired: false`.
+3. Download: `download_workflow_artifact` with that artifact ID. It follows the redirect and returns a file reference.
+4. Decode by **content**, not by name or stated type: bytes starting with `PK` are a ZIP that must hold exactly `project3-readiness.json`; anything else must be that JSON file itself (`archive: false`). `python scripts/project3_readiness.py check --snapshot - < <downloaded file>` does this decoding and every check below. Standard input works wherever the file is (for example under `/mnt/data`); a path given directly must be under the home or temp directory.
+
+Evidence so far (2026-10-11, maintainer): with the connected ChatGPT GitHub integration, `fetch_workflow_run_artifacts` listed an existing ordinary (zipped) PRKS artifact, `download_workflow_artifact` followed the redirect and returned a file, and the JSON inside the ZIP was read in the triage's working container. That proves the route for zipped artifacts. The `archive: false` file from this workflow is **not yet verified**; the first successful run after merge is the acceptance test, and its result is recorded here. Until then, and whenever any step fails, the triage treats readiness as unknown.
+
+**Freshness and use (consumer rules).**
+
+- Reject the snapshot unless `schema` is `prks-project3-readiness/v1`, `complete` is `true`, and `project.id`, `project.number`, `project.owner` and `repository` match the values above, and unless every row has exactly the keys shown with valid types (`project_item_id` and `archived` set when `in_project` is true; every Project value `null` and `state` `OPEN` when it is false), rows are sorted by number without duplicates, and `counts` agree with the rows. One invalid row rejects the whole snapshot.
+- Reject it when it is older than 30 hours by the consumer's own clock (`now - generated_at > 30 h`) or dated more than 5 minutes in the future. Do not rely on the run's date or on the artifact still existing. `check` applies the same rules.
+- Without a usable snapshot, report every issue's readiness as **unknown**. Never fall back to an older snapshot or infer readiness from labels.
+- **New agent-ready work** (the Agent Queue rule, §7): recommend an issue only when all of these hold. In the snapshot: `in_project` is `true`, `archived` is `false`, `state` is `OPEN`, `status` is `Ready`, and `execution` is `Agent` or `Mixed`. Live at triage time: the issue is still open, and it has no open native blocker (`GET /repos/Fooftilly/PRKS/issues/{n}/dependencies/blocked_by`; blockers never come from the snapshot). And the work is accepted and cleared for an agent to take: nobody else owns it, and nothing in the issue says to wait.
+- `In Progress` means the work is already owned. Report it for coordination, never as new work to assign. `execution: Human` never enters the agent queue. `Agent` names a specific executor; it never makes an issue ready by itself.
+- Inbox, Backlog and every other Status are not ready. An issue with `in_project: false` is not on Project #3 and is not ready. A `null` field and an issue not listed are **unknown**; neither is ever promoted to ready.
+- Re-read an issue's live state before acting: the snapshot can be up to 30 hours old.
