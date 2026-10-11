@@ -3403,9 +3403,111 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
         self.assertTrue(_pdf_has_pending_sync(page))
         self.assertEqual(_sync_status_label(page), "Could not save locally")
 
+        # Another highlight is saved and acknowledged. Its materialization
+        # must not write the unsaved comment into the PDF bytes.
+        _wait_pdf_annotation_durable(page)
+        _commit_pdf_highlight(page, _pdf_text_band_fractions(3, 6))
+        other_ids = [i for i in _viewer_annotation_ids(page) if i != ann_id]
+        self.assertEqual(len(other_ids), 1)
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        self.assertIsNotNone(_server_annotation(page, work_id, other_ids[0]))
+        # Wait for its acknowledged generation to be claimed for (or already
+        # written to) the PDF, then run a materialization pass.
+        wait_for_async(
+            page,
+            """(workId) => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                if (Number.isSafeInteger(pdf.pendingMaterializationRevision)) return true;
+                return fetch('/api/works/' + workId + '/pdf-materialization', { cache: 'no-store' })
+                    .then(r => r.json()).then(m => !!m && m.stale === false);
+            }""",
+            arg=work_id,
+        )
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf.flushAnnotations()).then(() => true);
+            }""",
+        )
+        self.assertNotIn("imported draft", _managed_pdf_annotation_contents(page, server, work_id))
+        self.assertTrue(_pdf_has_pending_sync(page))
+
+        _close_annotation_popup(page)
         _wait_pdf_annotation_durable(page)
         _save_annotation_comment(page, ann_id, "imported retry")
         _wait_server_comment(page, work_id, ann_id, "imported retry")
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf._annotationDurableWriteChain).then(() => !pdf.hasPendingSync());
+            }""",
+        )
+        _wait_local_save_warning_cleared(page)
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf.flushAnnotations()).then(
+                    () => !Number.isSafeInteger(pdf.pendingMaterializationRevision)
+                );
+            }""",
+        )
+        contents = _managed_pdf_annotation_contents(page, server, work_id)
+        self.assertIn("imported retry", contents)
+        self.assertNotIn("imported draft", contents)
+
+    def test_a_delete_that_fails_after_its_popup_closed_does_not_wait_on_it(self):
+        server, page, _collector = self._start_app()
+        work_id = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        _commit_pdf_highlight(page)
+        ann_id = _only_viewer_annotation_id(page)
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+        self._edit_comment_repeatedly(page, server, work_id, ann_id, ["kept comment"])
+
+        # Delete from the popup: the editor closes right after the viewer
+        # mutation, before the local write runs, and that write fails.
+        page.evaluate(
+            """() => {
+                const store = window.prksSync.store;
+                const real = store.savePdfAnnotation;
+                store.savePdfAnnotation = function () {
+                    store.savePdfAnnotation = real;
+                    return Promise.reject(Object.assign(new Error('disk full'), { code: 'write_failed' }));
+                };
+            }"""
+        )
+        _wait_pdf_annotation_durable(page)
+        popup = _open_annotation_popup(page, ann_id)
+        popup.get_by_role("button", name="Delete annotation").click()
+        page.locator("#prks-modal-confirm-ok").click()
+        page.wait_for_function(
+            """() => {
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const el = ctx && ctx.root && ctx.root.querySelector('[data-prks-role="annotation-sync-status"]');
+                return !!(el && el.classList.contains('work-annotation-sync-status--error'));
+            }""",
+            timeout=15000,
+        )
+        # The rollback puts the stored highlight back.
+        page.wait_for_function(
+            "(id) => (%s.getAnnotations() || []).some(a => String(a.id) === id)" % _FOCUSED_VIEWER,
+            arg=ann_id,
+            timeout=15000,
+        )
+        self.assertEqual(_server_annotation(page, work_id, ann_id)["contents"], "kept comment")
+
+        # Nothing is left unsaved for it, so the next recorded write settles it.
+        _wait_pdf_annotation_durable(page)
+        _commit_pdf_highlight(page, _pdf_text_band_fractions(3, 6))
+        _wait_pdf_annotation_ops_drained(page, work_id)
         wait_for_async(
             page,
             """() => {

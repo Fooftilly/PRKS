@@ -221,6 +221,16 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         self.assertIn("if (forgetLocalSaveFailure(annId)) renderSyncIndicator();", src)
         legacy = src[src.index("// Legacy: the viewer took this edit"):src.index("void requestFlush('annotation-event');")]
         self.assertIn("settleLocalSaveFailure(", legacy)
+        # The event may carry only the id: read the comment from the viewer.
+        self.assertIn("prksFindViewerAnnotation(liveAnnotationViewer(), legacyAnnId)", legacy)
+        # Materialization never exports an annotation that failed to save;
+        # it keeps the claim inside the locked section until that settles.
+        pass_src = src[src.index("async function runWorkAnnotationAndPdfPersistencePass"):src.index("async function drainFlushQueue")]
+        gate = pass_src.index("prksBeginAnnotationMaterializationGate(runtime)")
+        held = pass_src.index("if (viewerHoldsUnsavedAnnotation()) {")
+        self.assertLess(gate, held)
+        self.assertLess(held, pass_src.index("const persisted = await exportAndPersistPdfCopy(saveToken, claimed);"))
+        self.assertIn("releaseHeldMaterialization();", src[src.index("function forgetLocalSaveFailureId("):src.index("function forgetLocalSaveFailure(annId)")])
         runtime_src = _read(os.path.join(_FRONTEND, "js", "pdf-work-runtime.js"))
         close = runtime_src[runtime_src.index("runtime.closeAnnotationPopup = function"):runtime_src.index("runtime.captureAnnotationPopupTicket")]
         self.assertIn("runtime._onAnnotationPopupClosed(closedAnnId);", close)

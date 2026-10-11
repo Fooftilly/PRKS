@@ -2432,6 +2432,26 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
 
     // A durable pass that kept its claim because no PDF bytes were written.
     const PDF_PASS_NOT_WRITTEN = 'not-written';
+    // Local-save failures by annotation id (see noteLocalSaveFailure).
+    const localSaveFailures = new Map();
+    // A claim kept back while the viewer holds an annotation that failed to
+    // save: exporting would write it into the PDF with no canonical row.
+    let materializationHeldForUnsaved = false;
+
+    function viewerHoldsUnsavedAnnotation() {
+        for (const failure of localSaveFailures.values()) {
+            if (failure.created) return true;
+        }
+        return false;
+    }
+
+    function releaseHeldMaterialization() {
+        if (!materializationHeldForUnsaved || viewerHoldsUnsavedAnnotation()) return;
+        materializationHeldForUnsaved = false;
+        if (Number.isSafeInteger(runtime.pendingMaterializationRevision)) {
+            void requestFlush('materialize');
+        }
+    }
 
     async function runWorkAnnotationAndPdfPersistencePass(saveToken) {
         if (!stillLive()) return;
@@ -2499,6 +2519,11 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                         // Keep the claim; a later ACK / startup catch-up retries.
                         return;
                     }
+                }
+                if (viewerHoldsUnsavedAnnotation()) {
+                    // Keep the claim; settling that failure releases it.
+                    materializationHeldForUnsaved = true;
+                    return;
                 }
                 // Project ACKNOWLEDGED-only state — require success (fail closed).
                 const ackOnly = Array.isArray(runtime.annotationCache && runtime.annotationCache.items)
@@ -3061,8 +3086,8 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
     // once each of them has a recorded durable write carrying that comment:
     // another annotation's save, or a rollback's echo of the stored comment,
     // does not save this one's popup draft (#401). An unknown id is settled
-    // by any recorded write.
-    const localSaveFailures = new Map();
+    // by any recorded write. The map itself is declared with the
+    // materialization pass, which reads it.
 
     function annotationPopupOpenFor(id) {
         const popup = runtime.annotationPopup;
@@ -3096,6 +3121,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         if (localSaveFailures.size === 0 && syncState.lastError === 'local_save_failed') {
             syncState.lastError = '';
         }
+        releaseHeldMaterialization();
         return true;
     }
 
@@ -3127,6 +3153,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         if (syncState.lastError !== 'local_save_failed') {
             localSaveFailures.clear();
             syncState.lastError = '';
+            releaseHeldMaterialization();
             return;
         }
         const id = String(annId || '');
@@ -3136,6 +3163,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         }
         localSaveFailures.delete('*');
         if (localSaveFailures.size === 0) syncState.lastError = '';
+        releaseHeldMaterialization();
     }
 
     // Comment text a durable write carries, or null for a delete.
@@ -3226,7 +3254,13 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             const legacyAnnId = evt.annotationId || (evt.annotation && (
                 evt.annotation.id || evt.annotation.uuid || evt.annotation.annotationId
             ));
-            settleLocalSaveFailure(legacyAnnId, evt.annotation ? prksAnnotationCommentText(evt.annotation) : null);
+            // The committed viewer row carries the saved comment; the event
+            // may carry only the id.
+            const legacyAnn = legacyAnnId
+                ? prksFindViewerAnnotation(liveAnnotationViewer(), legacyAnnId) ||
+                  rawViewerAnnotation(evt, String(legacyAnnId))
+                : null;
+            settleLocalSaveFailure(legacyAnnId, legacyAnn ? prksAnnotationCommentText(legacyAnn) : null);
         }
         syncState.localMutationSeen = true;
         void requestFlush('annotation-event');

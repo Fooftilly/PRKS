@@ -318,10 +318,16 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertNotIn("requestFlush('materialize')", save_tail)
         self.assertNotIn("pendingMaterializationRevision =", save_tail)
         # Materialization flush from catch-up after gate release (plus optional
-        # handoff-retry flush if gate acquire fails — same string).
+        # handoff-retry flush if gate acquire fails — same string), and the
+        # release of a claim held while an unsaved annotation was on the page
+        # (#401), which only re-runs an already-claimed generation.
         only_flush = works_pdf.count("void requestFlush('materialize')")
         self.assertGreaterEqual(only_flush, 1)
-        self.assertLessEqual(only_flush, 2)
+        self.assertLessEqual(only_flush, 3)
+        release = works_pdf[works_pdf.index("function releaseHeldMaterialization()"):]
+        release = release[:release.index("\n    }\n")]
+        self.assertIn("Number.isSafeInteger(runtime.pendingMaterializationRevision)", release)
+        self.assertIn("void requestFlush('materialize');", release)
         self.assertIn("void requestFlush('materialize');", catch_up_body)
         # 6. SENT successor rebased against actual ACK server_revision
         self.assertIn("rebasePdfAnnotationDependents", store)
