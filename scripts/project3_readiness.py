@@ -430,6 +430,10 @@ def build_snapshot(transport: Transport, *, generated_at: datetime,
                 "project_item_id": None, "archived": None,
                 **{key: None for key in FIELDS}, "assignees": issue["assignees"],
             }
+    # Re-check identity and visibility after every read: a project made
+    # private while the items were being read must not be published.
+    if check_project(gql.query(PROJECT_QUERY, {"owner": OWNER, "number": PROJECT_NUMBER})) != project:
+        raise ReadinessError("Project #3 changed while it was read; rerun")
     rows = [issues[n] for n in sorted(issues)]
     return {
         "schema": SCHEMA,
@@ -639,6 +643,8 @@ def main(argv: Optional[Sequence[str]] = None, env: Optional[Mapping[str, str]] 
             return 0
         out = _confined(args.out, "--out", ".json")
         summary = _confined(args.summary, "--summary") if args.summary else None
+        if summary == out:
+            raise ReadinessError("--summary must be a different file from --out")
         token = env.get("PROJECT3_READINESS_TOKEN", "")
         if not token:
             raise NotConfigured("PROJECT3_READINESS_TOKEN is not set; nothing was read or written")

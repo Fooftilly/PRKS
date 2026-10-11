@@ -202,6 +202,21 @@ class FailClosedTests(unittest.TestCase):
         # Nothing past the project check was read.
         self.assertEqual([q for q, _ in fake.calls], [pr.PROJECT_QUERY])
 
+    def test_project_made_private_during_the_read_is_refused(self) -> None:
+        fake = FakeGitHub(items=[[issue_item("I1", 1, status="Ready")]], issues=[[open_issue(1)]])
+        original = fake.__call__
+        reads = []
+
+        def flipping(query: str, variables: dict) -> dict:
+            if query is pr.PROJECT_QUERY:
+                reads.append(1)
+                fake.public = len(reads) == 1
+            return original(query, variables)
+
+        with self.assertRaises(pr.Confidential):
+            pr.build_snapshot(flipping, generated_at=NOW)
+        self.assertEqual(len(reads), 2)
+
     def test_wrong_project_identity_is_refused(self) -> None:
         fake = self.fake()
         bad = fake.project()
@@ -512,6 +527,15 @@ class MainTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertIn("totalCount", err)
             self.assertEqual(list(Path(tmp).iterdir()), [])
+
+    def test_summary_same_as_out_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = str(Path(tmp) / "s.json")
+            code, _, err = self.run_main(["snapshot", "--out", target, "--summary", target],
+                                         {"PROJECT3_READINESS_TOKEN": "t"})
+            self.assertEqual(code, 1)
+            self.assertIn("different file", err)
+            self.assertFalse(Path(target).exists())
 
     def test_output_inside_repository_is_refused(self) -> None:
         code, _, err = self.run_main(["snapshot", "--out", str(_ROOT / "snapshot.json")],
