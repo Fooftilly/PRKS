@@ -23,8 +23,8 @@ concurrency:
 jobs:
   snapshot:
     name: Project #3 readiness snapshot
-    # Only the default branch's reviewed code receives the token: a manual
-    # dispatch from any other branch is skipped.
+    # Skips dispatches of this file from other branches. Not a security
+    # boundary: a branch can edit this line. See project-3.md section 14.
     if: github.repository == 'Fooftilly/PRKS' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
