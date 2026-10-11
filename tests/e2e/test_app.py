@@ -3400,6 +3400,63 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
         self.assertEqual(_server_annotation(page, work_id, ann_id)["contents"], "second of two")
         self.assertEqual(_popup_comment(page, ann_id), "second of two")
 
+    def test_second_save_survives_the_first_save_failing(self):
+        server, page, _collector = self._start_app()
+        work_id = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        _commit_pdf_highlight(page)
+        ann_id = _only_viewer_annotation_id(page)
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+
+        # The first local write is slow and then fails; the user saves again
+        # while it is still writing.
+        page.evaluate(
+            """() => {
+                const store = window.prksSync.store;
+                const real = store.savePdfAnnotation;
+                store.savePdfAnnotation = function () {
+                    store.savePdfAnnotation = real;
+                    return new Promise((resolve) => {
+                        window.__prksReleaseHeldSave = resolve;
+                    }).then(() => Promise.reject(
+                        Object.assign(new Error('disk full'), { code: 'write_failed' })
+                    ));
+                };
+            }"""
+        )
+        _wait_pdf_annotation_durable(page)
+        popup = _open_annotation_popup(page, ann_id)
+        text = popup.locator('[data-prks-role="pdf-annotation-popup-text"]')
+        text.fill("first that fails")
+        popup.get_by_role("button", name="Save comment").click()
+        page.wait_for_function("() => typeof window.__prksReleaseHeldSave === 'function'", timeout=15000)
+        text.fill("second that saves")
+        popup.get_by_role("button", name="Save comment").click()
+        page.wait_for_function(
+            """(id) => {
+                const v = %s;
+                const a = (v.getAnnotations() || []).find(row => String(row.id) === id);
+                const obj = a && a.raw ? a.raw : a;
+                return !!obj && obj.contents === 'second that saves';
+            }"""
+            % _FOCUSED_VIEWER,
+            arg=ann_id,
+            timeout=15000,
+        )
+        page.evaluate("() => window.__prksReleaseHeldSave()")
+
+        _wait_server_comment(page, work_id, ann_id, "second that saves")
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+        _wait_local_save_warning_cleared(page)
+        self.assertEqual(_server_annotation(page, work_id, ann_id)["contents"], "second that saves")
+        self.assertEqual(_popup_comment(page, ann_id), "second that saves")
+        self.assertIn("second that saves", _managed_pdf_annotation_contents(page, server, work_id))
+        self.assertFalse(_pdf_has_pending_sync(page))
+
     def test_repeated_comment_edits_on_imported_highlight_persist(self):
         server, page, _collector = self._start_app(seed_fn=seed_imported_highlight_library)
         work_id = server.ids["work_b"]

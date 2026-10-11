@@ -3194,8 +3194,19 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
 
     async function rollbackFailedDurableAnnotation(annId, expectedComment, created) {
         if (!stillLive()) return;
+        // A later write is queued (e.g. a second Save while this one was
+        // writing). It reads the live viewer when it runs, so rolling the
+        // viewer back now would make it record the stored value and lose the
+        // newer edit. That write settles this failure when it records the
+        // viewer's comment, and the last queued write restores (#401).
+        const newerQueued = durableWritesQueued > 1;
+        if (newerQueued && !created) {
+            const live = prksFindViewerAnnotation(liveAnnotationViewer(), annId);
+            if (live) expectedComment = prksAnnotationCommentText(live);
+        }
         noteLocalSaveFailure(annId, expectedComment, created);
         renderSyncIndicator();
+        if (newerQueued) return;
         try {
             await restoreEffectiveViewerAnnotations();
         } catch (_e2) {}
