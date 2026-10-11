@@ -161,12 +161,49 @@ async function knownAbsentRemovesStaleDeletedMarkup() {
     assert.deepEqual(ids, ['legacy-byte', 'link-1']);
 }
 
+async function acknowledgedDatesReachTheViewerAsDates() {
+    // #401: acknowledged rows come through JSON, so EmbedPDF's `created` /
+    // `modified` are ISO strings. A string makes the viewer's engine write
+    // hang and wedges every later commit in the document.
+    const seen = [];
+    const viewer = fakeViewer([highlight('a', 'Live edit')]);
+    const update = viewer.updateAnnotation;
+    const create = viewer.createAnnotation;
+    viewer.updateAnnotation = function (id, patch) {
+        seen.push(['update', patch]);
+        return update.call(this, id, patch);
+    };
+    viewer.createAnnotation = function (page, ann) {
+        seen.push(['create', ann]);
+        return create.call(this, page, ann);
+    };
+    const ackA = Object.assign(highlight('a', 'Stored'), {
+        created: '2026-10-11T11:47:47.247Z',
+        modified: 'not a date',
+        updated_at: '2026-10-11 11:47:47',
+    });
+    const ackB = Object.assign(highlight('b', 'Other device'), { created: 1791719267247 });
+    const frozen = JSON.stringify([ackA, ackB]);
+    await globalThis.prksReconcileViewerAnnotations(viewer, [ackA, ackB], {});
+    assert.equal(JSON.stringify([ackA, ackB]), frozen, 'effective rows are not mutated');
+    const patch = seen.find((row) => row[0] === 'update')[1];
+    assert.ok(patch.created instanceof Date);
+    assert.equal(patch.created.toISOString(), '2026-10-11T11:47:47.247Z');
+    assert.equal(Object.prototype.hasOwnProperty.call(patch, 'modified'), false, 'unparseable date dropped');
+    assert.equal(patch.contents, 'Stored');
+    assert.equal(Object.prototype.hasOwnProperty.call(patch, 'id'), false);
+    const created = seen.find((row) => row[0] === 'create')[1];
+    assert.ok(created.created instanceof Date);
+    assert.equal(created.created.getTime(), 1791719267247);
+}
+
 (async () => {
     await createUpdateIdempotent();
     await updateAndManagedDelete();
     await suppressDepth();
     await neverTouchLink();
     await knownAbsentRemovesStaleDeletedMarkup();
+    await acknowledgedDatesReachTheViewerAsDates();
     console.log(checks + ' checks passed');
 })().catch((err) => {
     console.error(err);

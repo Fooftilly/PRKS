@@ -429,24 +429,6 @@ function prksAnnotationCommentText(annObj) {
     return '';
 }
 
-function prksPatchAnnotationListCacheAfterCommentSave(ctx, annId, commentVal) {
-    const pdf = prksPdfRuntime(ctx);
-    const c = pdf && pdf.annotationCache;
-    if (!c || annId == null || annId === '') return;
-    const sid = String(annId);
-    const pools = [c.allItems, c.rawItems, c.items].filter(Array.isArray);
-    for (const pool of pools) {
-        for (const it of pool) {
-            if (!it || typeof it !== 'object') continue;
-            const id = it.id || it.uuid || it.annotationId || it._id;
-            if (id == null || String(id) !== sid) continue;
-            if (!it.custom || typeof it.custom !== 'object') it.custom = {};
-            it.custom.prksComment = commentVal;
-            it.contents = commentVal;
-        }
-    }
-}
-
 function prksSyncAnnotationPopup(ctx) {
     if (typeof window.prksVueSyncWorkPdfAnnotationPopup === 'function') {
         window.prksVueSyncWorkPdfAnnotationPopup(ctx);
@@ -1119,7 +1101,10 @@ window.savePdfAnnotationComment = async function (ctx, text, captured) {
             return;
         }
         const viewer = ticket.viewer;
-        if (!viewer || pdf.viewer !== viewer || typeof viewer.updateAnnotation !== 'function') return;
+        if (!viewer || pdf.viewer !== viewer || typeof viewer.updateAnnotation !== 'function') {
+            prksReportPdfAnnotationEditNotSaved(pdf);
+            return;
+        }
         const liveAnn = prksFindViewerAnnotation(viewer, ticket.annId);
         let pageIdx = ticket.pageIndex;
         if (!Number.isFinite(Number(pageIdx)) || Number(pageIdx) < 0) {
@@ -1129,6 +1114,7 @@ window.savePdfAnnotationComment = async function (ctx, text, captured) {
             }
         }
         if (!Number.isFinite(Number(pageIdx)) || Number(pageIdx) < 0) {
+            prksReportPdfAnnotationEditNotSaved(pdf);
             return;
         }
         const baseCustom =
@@ -1142,21 +1128,43 @@ window.savePdfAnnotationComment = async function (ctx, text, captured) {
             contents: val,
         };
         // User path: plain update after lock — never beginProgrammatic.
+        // The viewer's committed update event is what records the durable
+        // SET intent (or, legacy, the full-set POST); this function never
+        // writes the acknowledged annotation cache — that cache is the
+        // `observed` base the intent is measured against (#401).
         viewer.updateAnnotation(ticket.annId, patch);
-        prksPatchAnnotationListCacheAfterCommentSave(owner, ticket.annId, val);
+        // The viewer gate can refuse the update without throwing. Keep the
+        // popup draft and say so rather than showing the text as saved.
+        const applied = prksFindViewerAnnotation(viewer, ticket.annId);
+        if (!applied || prksAnnotationCommentText(applied) !== val) {
+            prksReportPdfAnnotationEditNotSaved(pdf);
+            return;
+        }
         if (typeof pdf.annotationPopupStill === 'function' && pdf.annotationPopupStill(ticket)) {
             if (typeof pdf.noteAnnotationPopupComment === 'function') {
                 pdf.noteAnnotationPopupComment(ticket, val);
             }
         }
-        if (typeof window.applyCachedAnnotationListToPanel === 'function') {
-            window.applyCachedAnnotationListToPanel(owner);
-        }
-        if (pdf && typeof pdf.flushAnnotations === 'function') {
+        // Durable: PDF bytes materialize only after the intent's ACK, so a
+        // flush here has nothing to export. Legacy still posts the full set.
+        if (pdf.annotationMutationDurable !== true && typeof pdf.flushAnnotations === 'function') {
             void pdf.flushAnnotations();
         }
-    } catch (_e) {}
+    } catch (_e) {
+        prksReportPdfAnnotationEditNotSaved(pdf);
+    }
 };
+
+/**
+ * A comment edit that did not reach the viewer must not leave the status on
+ * "Saved". The persistence worker owns the indicator; without one there is
+ * nothing to report into.
+ */
+function prksReportPdfAnnotationEditNotSaved(pdf) {
+    if (pdf && typeof pdf.reportAnnotationEditNotSaved === 'function') {
+        try { pdf.reportAnnotationEditNotSaved(); } catch (_e) { /* indicator is best-effort */ }
+    }
+}
 
 function prksPageIndexFromAnnotationObject(obj) {
     if (!obj || typeof obj !== 'object') return NaN;
@@ -2514,7 +2522,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 runtime.materializedPdfAnnotationRevision = claimed;
                 // Do not paint ACK-only items into the sidebar here — finally
                 // restores effective ack+pending (and skips identical DOM).
-                return;
+                return true;
             } finally {
                 // ACK-only reconcile may have removed pending local intent from
                 // the live viewer — restore effective ack+pending before unlock.
@@ -2626,6 +2634,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         }
         if (!stillLive()) return;
         await exportAndPersistPdfCopy(saveToken, replaceGen);
+        return true;
     }
 
     // PRKS may go offline mid-confirmation-loop (the persistence worker
@@ -2692,7 +2701,10 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             const saveToken = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
             syncState.activeToken = saveToken;
             try {
-                await runWorkAnnotationAndPdfPersistencePass(saveToken);
+                // `true` only when PDF bytes were persisted. A durable pass with
+                // no claimed generation exports nothing and must not refresh
+                // the "Saved · PDF updated <time>" stamp (#401).
+                const persisted = await runWorkAnnotationAndPdfPersistencePass(saveToken);
                 if (!stillLive()) break;
                 // Durable path: PDF POST alone materializes; metadata already
                 // lives in the sync family. save-confirm still requires both
@@ -2702,8 +2714,10 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                     if (!stillLive()) break;
                     if (!confirmed) throw new Error('Server confirmation timeout');
                 }
-                syncState.lastConfirmedToken = saveToken;
-                syncState.lastSuccessAt = Date.now();
+                if (persisted === true) {
+                    syncState.lastConfirmedToken = saveToken;
+                    syncState.lastSuccessAt = Date.now();
+                }
                 syncState.pendingChanges = queueRequested;
                 syncState.lastError = '';
             } catch (err) {
@@ -3144,6 +3158,17 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 } catch (_e) {}
             };
             runtime._annotationEventHandler = onAnnotationEvent;
+            runtime.reportAnnotationEditNotSaved = function () {
+                if (runtime.annotationMutationDurable) {
+                    // Same outcome as a failed durable write: error status and
+                    // the viewer back on acknowledged + pending state.
+                    void rollbackFailedDurableAnnotation();
+                    return;
+                }
+                if (!stillLive()) return;
+                syncState.lastError = 'local_save_failed';
+                renderSyncIndicator();
+            };
             const bridgeViewer = liveAnnotationViewer();
             if (bridgeViewer && typeof bridgeViewer.onAnnotationEvent === 'function') {
                 bridgeViewer.onAnnotationEvent(onAnnotationEvent);

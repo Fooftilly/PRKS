@@ -184,6 +184,24 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         drain_body = src[drain_start:drain_end]
         self.assertIn("worker && worker.paused", drain_body)
 
+    def test_empty_durable_pass_does_not_claim_pdf_updated(self):
+        """#401: "Saved · PDF updated <time>" only after bytes were persisted."""
+        src = _read(_WORKS_PDF)
+        drain = src[src.index("async function drainFlushQueue"):src.index("function requestFlush(")]
+        self.assertIn("const persisted = await runWorkAnnotationAndPdfPersistencePass(saveToken);", drain)
+        guard = drain.index("if (persisted === true) {")
+        self.assertLess(guard, drain.index("syncState.lastSuccessAt = Date.now();"))
+
+    def test_comment_save_never_rewrites_the_acknowledged_cache(self):
+        """#401: the acknowledged cache is the base a SET intent is measured against."""
+        src = _read(_WORKS_PDF)
+        self.assertNotIn("prksPatchAnnotationListCacheAfterCommentSave", src)
+        at = src.index("window.savePdfAnnotationComment = async function")
+        body = src[at:src.index("function prksReportPdfAnnotationEditNotSaved", at)]
+        self.assertNotIn("annotationCache", body)
+        self.assertNotIn("catch (_e) {}", body)
+        self.assertIn("prksReportPdfAnnotationEditNotSaved(pdf)", body)
+
     def test_annotation_mutation_entry_points_are_guarded(self):
         src = _read(_WORKS_PDF)
         self.assertIn("function prksPdfUserMutationStillAllowed(pdf)", src)

@@ -14,6 +14,7 @@ from tests.e2e.fixtures import (
     WORK_A_TITLE,
     WORK_B_TITLE,
     seed_graph_context_library,
+    seed_imported_highlight_library,
     seed_library,
     seed_person_profile_draft_library,
 )
@@ -3135,6 +3136,282 @@ def _warm_person_group_sync_state(page, group_id):
             }""",
             arg=group_id,
         )
+
+
+_WAIT_PDF_DURABLE_JS = """() => {
+    const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+    const pdf = ctx && ctx.getResource ? ctx.getResource('pdf') : null;
+    return !!(pdf && pdf.mode === 'work' && pdf.annotationBaseReady &&
+        pdf.annotationMutationDurable && pdf.annotationMutationAllowed === true &&
+        !pdf._annotationMaterializing && !pdf._annotationMaterializationHandoff);
+}"""
+
+
+def _wait_pdf_annotation_durable(page):
+    page.wait_for_function(_WAIT_PDF_DURABLE_JS, timeout=30000)
+
+
+def _wait_pdf_annotation_ops_drained(page, work_id):
+    wait_for_async(
+        page,
+        """(workId) => prksSync.store.listOperations().then(rows => !rows.some(
+            r => r && r.entity_id === workId && /_PDF_ANNOTATION$/.test(r.operation || '')))""",
+        arg=work_id,
+        timeout=30000,
+    )
+
+
+_SERVER_ANNOTATION_JS = """async ([workId, annId]) => {
+    const res = await fetch('/api/works/' + workId + '/annotations-snapshot', { cache: 'no-store' });
+    const body = await res.json();
+    const row = ((body && body.items) || []).find(it => it && String(it.id) === annId) || null;
+    if (!row) return null;
+    const custom = row.custom && typeof row.custom === 'object' ? row.custom : {};
+    return {
+        contents: row.contents == null ? null : String(row.contents),
+        prksComment: custom.prksComment == null ? null : String(custom.prksComment),
+    };
+}"""
+
+
+def _server_annotation(page, work_id, ann_id):
+    """The canonical row for one annotation, read straight from the server."""
+    return page.evaluate(_SERVER_ANNOTATION_JS, [work_id, ann_id])
+
+
+def _wait_server_comment(page, work_id, ann_id, text, timeout=30000):
+    wait_for_async(
+        page,
+        """([workId, annId, text]) => (%s)([workId, annId]).then(row =>
+            !!row && row.contents === text && row.prksComment === text)"""
+        % _SERVER_ANNOTATION_JS,
+        arg=[work_id, ann_id, text],
+        timeout=timeout,
+        message="server never stored comment %r for %s" % (text, ann_id),
+    )
+
+
+def _wait_pdf_materialized(page, work_id, timeout=30000):
+    wait_for_async(
+        page,
+        """(workId) => fetch('/api/works/' + workId + '/pdf-materialization', { cache: 'no-store' })
+            .then(r => r.json()).then(m => !!m && m.stale === false
+                && m.canonical_annotation_set_revision > 0)""",
+        arg=work_id,
+        timeout=timeout,
+    )
+
+
+def _managed_pdf_annotation_contents(page, server, work_id):
+    """Every annotation /Contents in the managed PDF bytes the server holds."""
+    import pymupdf
+
+    file_path = page.evaluate(
+        """(workId) => fetch('/api/works/' + workId, { cache: 'no-store' })
+            .then(r => r.json()).then(w => w && w.file_path)""",
+        arg=work_id,
+    )
+    name = unquote(urlparse(file_path).path.rsplit("/", 1)[-1])
+    path = os.path.join(server.storage_root, "pdfs", name)
+    doc = pymupdf.open(path)
+    try:
+        return [a.info.get("content", "") for a in doc[0].annots()]
+    finally:
+        doc.close()
+
+
+def _only_viewer_annotation_id(page):
+    ids = page.evaluate(
+        """() => {
+            const v = %s;
+            return v ? (v.getAnnotations() || []).map(a => String(a.id)) : [];
+        }"""
+        % _FOCUSED_VIEWER
+    )
+    if len(ids) != 1:
+        raise AssertionError("expected exactly one viewer annotation, got %r" % (ids,))
+    return ids[0]
+
+
+def _close_annotation_popup(page):
+    popup = page.locator('[data-prks-role="pdf-annotation-popup"]')
+    if popup.count() and popup.first.is_visible():
+        popup.first.get_by_role("button", name="Cancel").click()
+        popup.first.wait_for(state="hidden", timeout=15000)
+    # Selecting the annotation that is still selected does not reopen it.
+    page.evaluate(
+        """() => {
+            const v = %s;
+            if (v && typeof v.deselectAnnotation === 'function') v.deselectAnnotation();
+        }"""
+        % _FOCUSED_VIEWER
+    )
+
+
+def _open_annotation_popup(page, ann_id):
+    _close_annotation_popup(page)
+    page.evaluate(
+        "(annId) => %s.selectAnnotation(annId)" % _FOCUSED_VIEWER,
+        arg=ann_id,
+    )
+    popup = page.locator(
+        '[data-prks-role="pdf-annotation-popup"][data-prks-annotation-id="%s"]' % ann_id
+    )
+    popup.wait_for(state="visible", timeout=15000)
+    return popup
+
+
+def _save_annotation_comment(page, ann_id, text):
+    popup = _open_annotation_popup(page, ann_id)
+    popup.locator('[data-prks-role="pdf-annotation-popup-text"]').fill(text)
+    popup.get_by_role("button", name="Save comment").click()
+
+
+def _popup_comment(page, ann_id):
+    popup = _open_annotation_popup(page, ann_id)
+    return popup.locator('[data-prks-role="pdf-annotation-popup-text"]').input_value()
+
+
+def _sync_status_label(page):
+    return page.evaluate(
+        """() => {
+            const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+            const root = ctx && ctx.root;
+            const el = root && root.querySelector('.work-annotation-sync-status__label');
+            return el ? el.textContent : '';
+        }"""
+    )
+
+
+class PdfAnnotationCommentEditTests(_BrowserE2E):
+    """#401: every comment edit reaches the server, the PDF and a reload."""
+
+    def _edit_comment_repeatedly(self, page, server, work_id, ann_id, texts):
+        for text in texts:
+            _wait_pdf_annotation_durable(page)
+            _save_annotation_comment(page, ann_id, text)
+            _wait_server_comment(page, work_id, ann_id, text)
+            _wait_pdf_annotation_ops_drained(page, work_id)
+            _wait_pdf_materialized(page, work_id)
+            self.assertEqual(_popup_comment(page, ann_id), text)
+        self.assertIn(texts[-1], _managed_pdf_annotation_contents(page, server, work_id))
+
+    def test_repeated_comment_edits_on_prks_highlight_persist(self):
+        server, page, _collector = self._start_app()
+        work_id = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        _commit_pdf_highlight(page)
+        ann_id = _only_viewer_annotation_id(page)
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+
+        self._edit_comment_repeatedly(
+            page, server, work_id, ann_id,
+            ["first comment", "second comment", "third comment"],
+        )
+
+        page.reload(wait_until="domcontentloaded")
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        self.assertEqual(_popup_comment(page, ann_id), "third comment")
+        # A later session edits the same annotation again.
+        self._edit_comment_repeatedly(page, server, work_id, ann_id, ["fourth comment"])
+        self.assertEqual(_server_annotation(page, work_id, ann_id)["contents"], "fourth comment")
+
+    def test_repeated_comment_edits_on_imported_highlight_persist(self):
+        server, page, _collector = self._start_app(seed_fn=seed_imported_highlight_library)
+        work_id = server.ids["work_b"]
+        _open_work_from_home(page, WORK_B_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        ann_id = _only_viewer_annotation_id(page)
+        self.assertEqual(
+            _popup_comment(page, ann_id), server.ids["imported_highlight_comment"]
+        )
+
+        self._edit_comment_repeatedly(
+            page, server, work_id, ann_id, ["imported first edit", "imported second edit"],
+        )
+
+        page.reload(wait_until="domcontentloaded")
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        self.assertEqual(_popup_comment(page, ann_id), "imported second edit")
+        self._edit_comment_repeatedly(page, server, work_id, ann_id, ["imported third edit"])
+
+    def test_comment_edit_that_cannot_be_saved_is_not_reported_saved(self):
+        server, page, _collector = self._start_app()
+        work_id = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        _commit_pdf_highlight(page)
+        ann_id = _only_viewer_annotation_id(page)
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+        self._edit_comment_repeatedly(page, server, work_id, ann_id, ["saved comment"])
+
+        # The local durable write fails once (quota, blocked IndexedDB, ...).
+        page.evaluate(
+            """() => {
+                const store = window.prksSync.store;
+                const real = store.savePdfAnnotation;
+                store.savePdfAnnotation = function () {
+                    store.savePdfAnnotation = real;
+                    return Promise.reject(Object.assign(new Error('disk full'), { code: 'write_failed' }));
+                };
+            }"""
+        )
+        _wait_pdf_annotation_durable(page)
+        popup = _open_annotation_popup(page, ann_id)
+        text = popup.locator('[data-prks-role="pdf-annotation-popup-text"]')
+        text.fill("comment that failed")
+        popup.get_by_role("button", name="Save comment").click()
+        page.wait_for_function(
+            """() => {
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const el = ctx && ctx.root && ctx.root.querySelector('[data-prks-role="annotation-sync-status"]');
+                return !!(el && el.classList.contains('work-annotation-sync-status--error'));
+            }""",
+            timeout=15000,
+        )
+        self.assertEqual(_sync_status_label(page), "Could not save locally")
+        self.assertNotIn("Saved", _sync_status_label(page))
+        # The user's text stays in the open popup so it can be saved again.
+        self.assertEqual(text.input_value(), "comment that failed")
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        self.assertEqual(_server_annotation(page, work_id, ann_id)["contents"], "saved comment")
+        # The viewer is back on the stored comment, not the unsaved one.
+        self.assertEqual(
+            page.evaluate(
+                """(id) => {
+                    const a = (%s.getAnnotations() || []).find(row => String(row.id) === id);
+                    const obj = a && a.raw ? a.raw : a;
+                    return obj ? obj.contents : null;
+                }"""
+                % _FOCUSED_VIEWER,
+                arg=ann_id,
+            ),
+            "saved comment",
+        )
+
+        # Saving again from the same popup succeeds and clears the error.
+        _wait_pdf_annotation_durable(page)
+        popup.get_by_role("button", name="Save comment").click()
+        _wait_server_comment(page, work_id, ann_id, "comment that failed")
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+        page.wait_for_function(
+            """() => {
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const el = ctx && ctx.root && ctx.root.querySelector('.work-annotation-sync-status__label');
+                return !!(el && el.textContent.indexOf('Saved') === 0);
+            }""",
+            timeout=15000,
+        )
+        self.assertIn("comment that failed", _managed_pdf_annotation_contents(page, server, work_id))
 
 
 class RequestCoordinatorTests(_BrowserE2E):

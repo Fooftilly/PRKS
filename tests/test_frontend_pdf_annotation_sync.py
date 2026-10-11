@@ -43,6 +43,18 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("checks passed", proc.stdout)
 
+    def test_comment_save_selftests(self):
+        """#401: every comment edit records an intent; failures are reported."""
+        proc = subprocess.run(
+            ["node", str(ROOT / "tests" / "browser" / "run_pdf_annotation_comment_save_selftest.js")],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("checks passed", proc.stdout)
+
     def test_cow_remount_retry_selftests(self):
         """Behavioral: failed staged remount retries despite live shared viewer."""
         proc = subprocess.run(
