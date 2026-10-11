@@ -206,6 +206,22 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         self.assertIn("worker.scheduleRetry();", pass_src[no_bytes:pass_src.index("return;", no_bytes)])
         self.assertIn("const persisted = await exportAndPersistPdfCopy(saveToken, replaceGen);\n        return persisted === true;", pass_src)
 
+    def test_a_failed_local_edit_is_kept_until_saved_or_abandoned(self):
+        """#401: no flush (durable or legacy) clears 'local_save_failed'; the
+        failed annotation's own recorded write or closing its popup does."""
+        src = _read(_WORKS_PDF)
+        keeps = src[src.index("function keepsLocalSaveFailure()"):src.index("function clearFlushError()")]
+        self.assertIn("return syncState.lastError === 'local_save_failed';", keeps)
+        self.assertIn("runtime._onAnnotationPopupClosed = function (annId)", src)
+        self.assertIn("if (forgetLocalSaveFailure(annId)) renderSyncIndicator();", src)
+        legacy = src[src.index("// Legacy: the viewer took this edit"):src.index("void requestFlush('annotation-event');")]
+        self.assertIn("settleLocalSaveFailure(", legacy)
+        runtime_src = _read(os.path.join(_FRONTEND, "js", "pdf-work-runtime.js"))
+        close = runtime_src[runtime_src.index("runtime.closeAnnotationPopup = function"):runtime_src.index("runtime.captureAnnotationPopupTicket")]
+        self.assertIn("runtime._onAnnotationPopupClosed(closedAnnId);", close)
+        guard = runtime_src[runtime_src.index("runtime.hasPendingSync = function"):runtime_src.index("runtime.flushAnnotations = async function")]
+        self.assertIn("st.pendingChanges || st.inFlight || st.lastError === 'local_save_failed'", guard)
+
     def test_comment_save_never_rewrites_the_acknowledged_cache(self):
         """#401: the acknowledged cache is the base a SET intent is measured against."""
         src = _read(_WORKS_PDF)

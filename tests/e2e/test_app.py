@@ -3466,6 +3466,36 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
         self.assertIn("comment that failed", _managed_pdf_annotation_contents(page, server, work_id))
         self.assertFalse(_pdf_has_pending_sync(page))
 
+    def test_closing_the_popup_of_a_failed_edit_clears_the_warning(self):
+        server, page, _collector = self._start_app()
+        work_id = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        _commit_pdf_highlight(page)
+        ann_id = _only_viewer_annotation_id(page)
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+        self._edit_comment_repeatedly(page, server, work_id, ann_id, ["saved comment"])
+
+        self._fail_comment_save(page, work_id, ann_id, "abandoned draft")
+        self.assertEqual(_sync_status_label(page), "Could not save locally")
+        self.assertTrue(_pdf_has_pending_sync(page))
+
+        # Closing the popup discards the draft: nothing is left to protect.
+        _close_annotation_popup(page)
+        self.assertFalse(_pdf_has_pending_sync(page))
+        page.wait_for_function(
+            """() => {
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const el = ctx && ctx.root && ctx.root.querySelector('.work-annotation-sync-status__label');
+                return !!(el && el.textContent.indexOf('Saved') === 0);
+            }""",
+            timeout=15000,
+        )
+        self.assertEqual(_server_annotation(page, work_id, ann_id)["contents"], "saved comment")
+        self.assertEqual(_popup_comment(page, ann_id), "saved comment")
+
     def test_a_failed_highlight_is_settled_by_saving_it_again(self):
         server, page, _collector = self._start_app()
         work_id = server.ids["work_a"]

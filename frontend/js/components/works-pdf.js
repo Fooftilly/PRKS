@@ -2687,14 +2687,14 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
     let queueDrainPromise = Promise.resolve();
     let worker = null;
 
-    // Durable: a flush only materializes PDF bytes; it never settles a failed
-    // local annotation write. That edit stays unsaved in the popup until a
-    // later durable write records it (onAnnotationEvent), so keep
-    // 'local_save_failed', and with it the hasPendingSync() leave guard,
-    // across flush passes (#401). Legacy flushes POST the viewer state and
-    // own the error as before.
+    // A flush never settles a failed local annotation edit: durable flushes
+    // only materialize PDF bytes, and a legacy full-set POST carries the
+    // viewer state, which never took the refused edit. The edit stays unsaved
+    // in the popup until its own write is recorded (onAnnotationEvent) or the
+    // popup is closed, so keep 'local_save_failed', and with it the
+    // hasPendingSync() leave guard, across flush passes (#401).
     function keepsLocalSaveFailure() {
-        return !!runtime.annotationMutationDurable && syncState.lastError === 'local_save_failed';
+        return syncState.lastError === 'local_save_failed';
     }
 
     function clearFlushError() {
@@ -3056,6 +3056,16 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         syncState.lastError = 'local_save_failed';
     }
 
+    // The failed annotation's popup closed: its unsaved draft is gone, so
+    // there is nothing left to protect for it.
+    function forgetLocalSaveFailure(annId) {
+        if (!annId || !localSaveFailedIds.delete(String(annId))) return false;
+        if (localSaveFailedIds.size === 0 && syncState.lastError === 'local_save_failed') {
+            syncState.lastError = '';
+        }
+        return true;
+    }
+
     function settleLocalSaveFailure(annId) {
         if (syncState.lastError !== 'local_save_failed') {
             localSaveFailedIds.clear();
@@ -3132,6 +3142,13 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             return;
         }
 
+        // Legacy: the viewer took this edit and the flush below posts it.
+        if (evt.kind !== 'create' && syncState.lastError === 'local_save_failed') {
+            const legacyAnnId = evt.annotationId || (evt.annotation && (
+                evt.annotation.id || evt.annotation.uuid || evt.annotation.annotationId
+            ));
+            settleLocalSaveFailure(legacyAnnId);
+        }
         syncState.localMutationSeen = true;
         void requestFlush('annotation-event');
     }
@@ -3228,8 +3245,12 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                     return;
                 }
                 if (!stillLive()) return;
-                syncState.lastError = 'local_save_failed';
+                noteLocalSaveFailure(annId);
                 renderSyncIndicator();
+            };
+            runtime._onAnnotationPopupClosed = function (annId) {
+                if (!stillLive()) return;
+                if (forgetLocalSaveFailure(annId)) renderSyncIndicator();
             };
             const bridgeViewer = liveAnnotationViewer();
             if (bridgeViewer && typeof bridgeViewer.onAnnotationEvent === 'function') {
