@@ -3570,6 +3570,20 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
             for route in held:
                 route.continue_()
         _wait_server_comment(page, work_id, ann_id, "unacknowledged first", timeout=60000)
+        # No unsaved annotation is held on the page, so the acknowledged
+        # generation still reaches the managed PDF.
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf.flushAnnotations()).then(
+                    () => !Number.isSafeInteger(pdf.pendingMaterializationRevision)
+                );
+            }""",
+        )
+        self.assertIn("unacknowledged first", _managed_pdf_annotation_contents(page, server, work_id))
 
     def test_a_delete_that_fails_after_its_popup_closed_does_not_wait_on_it(self):
         server, page, _collector = self._start_app()
