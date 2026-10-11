@@ -3356,6 +3356,13 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
         # The local durable write fails once (quota, blocked IndexedDB, ...).
         page.evaluate(
             """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                window.__prksCommittedUpdates = 0;
+                pdf.viewer.onAnnotationEvent((evt) => {
+                    if (evt && evt.kind === 'update' && evt.committed === true) {
+                        window.__prksCommittedUpdates += 1;
+                    }
+                });
                 const store = window.prksSync.store;
                 const real = store.savePdfAnnotation;
                 store.savePdfAnnotation = function () {
@@ -3377,11 +3384,21 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
             }""",
             timeout=15000,
         )
+        # Let the rollback finish: the user's committed update, then the
+        # viewer's commit echo of putting the stored comment back, and the
+        # durable write that echo starts. None of it may clear the error.
+        page.wait_for_function("() => window.__prksCommittedUpdates >= 2", timeout=15000)
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf._annotationDurableWriteChain).then(() => true);
+            }""",
+        )
+        _wait_pdf_annotation_ops_drained(page, work_id)
         self.assertEqual(_sync_status_label(page), "Could not save locally")
-        self.assertNotIn("Saved", _sync_status_label(page))
         # The user's text stays in the open popup so it can be saved again.
         self.assertEqual(text.input_value(), "comment that failed")
-        _wait_pdf_annotation_ops_drained(page, work_id)
         self.assertEqual(_server_annotation(page, work_id, ann_id)["contents"], "saved comment")
         # The viewer is back on the stored comment, not the unsaved one.
         self.assertEqual(

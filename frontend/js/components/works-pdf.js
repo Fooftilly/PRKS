@@ -3050,7 +3050,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 const intent = durableAnnotationWriteIntent(evt);
                 if (!intent) return;
                 try {
-                    await window.prksSavePdfAnnotationDurably(
+                    const recorded = await window.prksSavePdfAnnotationDurably(
                         String(workId),
                         intent.desired,
                         intent.observed
@@ -3059,7 +3059,13 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                     adoptDurableAnnotationCache(intent.ackList);
                     await restoreEffectiveViewerAnnotations();
                     syncState.localMutationSeen = true;
-                    syncState.lastError = '';
+                    // A write that recorded nothing only shows the viewer
+                    // already matches stored state — e.g. the commit echo of a
+                    // rollback, which EmbedPDF emits after reconcile ended. It
+                    // is not proof that the failed edit was saved (#401).
+                    if (recorded || syncState.lastError !== 'local_save_failed') {
+                        syncState.lastError = '';
+                    }
                     renderSyncIndicator();
                     // Do NOT materialize PDF bytes here. Materialization runs
                     // only after semantic ACK of an acknowledged generation.
