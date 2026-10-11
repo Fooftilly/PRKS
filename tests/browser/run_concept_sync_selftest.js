@@ -358,6 +358,49 @@ async function anotherTabsQueuedRowIsNeverCoalescedOver() {
     assert.equal(coalesced[0].base_revision, 1);
 }
 
+/* An editor showing its own unsettled row is not told that row is a change
+ * made elsewhere: a newer acknowledgement under it is the row's own conflict. */
+async function anEditorOnItsOwnRowIsNotChangedElsewhere() {
+    const store = newStore();
+    globalThis.prksSync = { store: store };
+    const id = "C-" + "4".repeat(32);
+    const server = installMovableConcept(id, "Original", 1);
+    const first = await globalThis.prksBeginConceptDefinitionEdit(id);
+    await globalThis.updateConcept(id, { description: "Mine" }, { definitionEdit: first });
+    const [row] = await rowsFor(store, "SET_CONCEPT_FIELD");
+    server.description = "Theirs";
+    server.revision = 2;
+
+    /* Still pending: the edit stays in its row, measured against the revision
+     * it was typed on, so the server's revision check refuses it loudly. */
+    const pending = await globalThis.prksBeginConceptDefinitionEdit(id);
+    assert.equal(pending.value, "Mine");
+    assert.deepEqual(pending.expected, { description: row.op_id });
+    await globalThis.updateConcept(id, { description: "Mine 2" }, { definitionEdit: pending });
+    const coalesced = await rowsFor(store, "SET_CONCEPT_FIELD");
+    assert.equal(coalesced.length, 1);
+    assert.equal(coalesced[0].payload.value, "Mine 2");
+    assert.equal(coalesced[0].base_revision, 1, "never rebased onto text it did not see");
+
+    /* Refused by the server: the row needs a decision, and saying it changed
+     * in another tab would loop the editor on its own text. */
+    await store.updateOperationSyncState(coalesced[0].op_id,
+        { status: "conflict", server_result: { code: "REVISION_CONFLICT" } });
+    const conflicted = await globalThis.prksBeginConceptDefinitionEdit(id);
+    assert.deepEqual(conflicted.expected, { description: coalesced[0].op_id });
+    await assert.rejects(
+        () => globalThis.updateConcept(id, { description: "Mine 3" }, { definitionEdit: conflicted }),
+        error => !changedElsewhere(error) && /needs a decision/.test(error.message),
+        "the editor's own refused row is a decision, not another tab's change");
+
+    /* Once that row has left the queue, the session's claim on it is gone and
+     * the newer text is someone else's again. */
+    globalThis.prksSync = { store: newStore() };
+    await assert.rejects(
+        () => globalThis.updateConcept(id, { description: "Mine 3" }, { definitionEdit: conflicted }),
+        changedElsewhere);
+}
+
 async function theStoreRefusesAForeignRow() {
     const store = newStore();
     const id = "C-" + "8".repeat(32);
@@ -727,6 +770,7 @@ async function main() {
     await anOlderDraftDoesNotReplaceAnotherTabsSave();
     await aSaveTheServerAlreadyMatchesKeepsGoing();
     await anotherTabsQueuedRowIsNeverCoalescedOver();
+    await anEditorOnItsOwnRowIsNotChangedElsewhere();
     await theStoreRefusesAForeignRow();
     await anEditorWithNoKnownBaseDoesNotOpen();
     await aFailedTextWriteDoesNotPublishTheRevision();

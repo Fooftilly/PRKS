@@ -23,7 +23,13 @@ from tests.e2e.fixtures import (
     CONCEPT_PARENT_NAME,
     seed_concepts_library,
 )
-from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
+from tests.e2e.harness import (
+    AppServer,
+    PageCollector,
+    open_app_page,
+    require_chromium,
+    wait_for_async,
+)
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -413,10 +419,6 @@ class DurableConceptTests(unittest.TestCase):
         self.assertNotIn('Offline Mistake', self.concepts_in_db(server))
 
 
-if __name__ == '__main__':
-    unittest.main()
-
-
 class ConceptDefinitionTwoTabTests(unittest.TestCase):
     """#568: two tabs of one browser editing one Concept's Definition.
 
@@ -426,13 +428,16 @@ class ConceptDefinitionTwoTabTests(unittest.TestCase):
 
     def start(self):
         server = AppServer(seed_fn=seed_concepts_library)
-        self.addCleanup(server.stop); server.start()
+        self.addCleanup(server.stop)
+        server.start()
         page_a, context, collector = open_app_page(_BROWSER, server.origin,
                                                    service_workers='allow')
         self.addCleanup(context.close)
         self.addCleanup(lambda: self.assertEqual(collector.pageerrors, []))
         o._wait_sw_active(page_a)
         page_b = context.new_page()
+        collector_b = PageCollector(page_b, server.origin)
+        self.addCleanup(lambda: self.assertEqual(collector_b.pageerrors, []))
         page_b.goto(server.origin + '/#/folders', wait_until='domcontentloaded')
         page_b.wait_for_selector('#sidebar')
         self._pages = [page_a, page_b]
@@ -629,3 +634,7 @@ class ConceptDefinitionTwoTabTests(unittest.TestCase):
         page_a.evaluate("() => window.dispatchEvent(new Event('online'))")
         page_a.wait_for_function("() => prksOfflineRuntimeState() === 'online'")
         self.wait_for_definition(server, concept_id, 'Edited offline twice.')
+
+
+if __name__ == '__main__':
+    unittest.main()

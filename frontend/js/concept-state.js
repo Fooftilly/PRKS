@@ -474,7 +474,8 @@
      * on, the save keeps going only if PRKS now holds exactly the text the
      * editor showed: then nobody's change is hidden from this user, and the
      * edit is measured against the new revision. Anything else changed
-     * elsewhere, and saving would replace text this user never saw. A base
+     * elsewhere, and saving would replace text this user never saw, unless
+     * the editor's text is its own unsettled row (see below). A base
      * that cannot be read now keeps the one the editor opened on, and the
      * server's revision check decides.
      */
@@ -488,6 +489,13 @@
         } catch (_e) { current = null; }
         if (!current || current.revision <= pinned.revision) return session.base;
         if (current.value === session.value) return { description: current };
+        /* The editor's text is its own still-unsettled row: a newer
+         * acknowledgement under it is that row's conflict, not a change made
+         * elsewhere. The store refuses a row that needs a decision, and the
+         * server's revision check catches one still pending. */
+        const own = session.expected && session.expected.description;
+        if (own && unsettled(operations, 'SET_CONCEPT_FIELD', conceptId)
+            .some(op => op.op_id === own)) return session.base;
         throw changedElsewhere();
     }
 
