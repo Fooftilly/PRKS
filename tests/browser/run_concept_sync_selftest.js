@@ -17,6 +17,8 @@ const assert = new Proxy(function (...args) { checks += 1; return strict(...args
     { get: (_t, k) => (...args) => { checks += 1; return strict[k](...args); } });
 const { createFakeIndexedDBFactory } = require("./lib/fake_indexeddb.js");
 const { createPrksLocalStore } = require("../../frontend/js/local-store.js");
+const { createPrksOfflineStore } = require("../../frontend/js/offline-store.js");
+const { createPrksOfflineRuntime } = require("../../frontend/js/offline-runtime.js");
 require("../../frontend/js/sync-runtime.js");
 require("../../frontend/js/concept-state.js");
 
@@ -388,6 +390,40 @@ async function anEditorWithNoKnownBaseDoesNotOpen() {
         "an unreadable queue is not an empty one");
 }
 
+/** An acknowledgement whose text write fails must not publish its revision:
+ * the cached base would pair the new revision with the old text (#568). */
+async function aFailedTextWriteDoesNotPublishTheRevision() {
+    const id = "C-" + "4".repeat(32);
+    const cache = createPrksOfflineStore({ indexedDB: createFakeIndexedDBFactory() });
+    const state = globalThis.prksNewConceptState(id, { name: "Systems" });
+    state.fields.description = { revision: 2 };
+    await cache.putEntity("concept", id, { id: id, name: "Systems", description: "Old" });
+    await cache.putEntity("concept-state", id, state);
+    let failText = true;
+    const flaky = Object.assign(Object.create(cache), {
+        putEntity: (kind, entityId, value, token) => (kind === "concept" && failText
+            ? Promise.reject(new Error("quota"))
+            : cache.putEntity(kind, entityId, value, token)),
+    });
+    const offline = createPrksOfflineRuntime({ store: flaky, window: null,
+        prksRequest: async () => { throw new Error("no reads in this scenario"); } });
+    const ack = { code: "ACKNOWLEDGED", concept_id: id, field: "description",
+        changed: true, server_revision: 3, value_omitted: true };
+    const op = { entity_id: id, payload: { field: "description", value: "New" } };
+
+    assert.equal(await offline.reconcileConceptField(ack, op), false,
+        "the acknowledgement stays unreconciled, so it is retried");
+    assert.equal((await cache.getEntity("concept-state", id)).value.fields.description.revision, 2,
+        "the revision did not move past the text it describes");
+    assert.equal((await cache.getEntity("concept", id)).value.description, "Old");
+
+    failText = false;
+    assert.equal(await offline.reconcileConceptField(ack, op), true);
+    assert.equal((await cache.getEntity("concept", id)).value.description, "New");
+    assert.equal((await cache.getEntity("concept-state", id)).value.fields.description.revision, 3,
+        "the retry publishes text, then revision");
+}
+
 async function theDefinitionIsNotTheIdentity() {
     const store = newStore();
     const id = "C-" + "B".repeat(32);
@@ -693,6 +729,7 @@ async function main() {
     await anotherTabsQueuedRowIsNeverCoalescedOver();
     await theStoreRefusesAForeignRow();
     await anEditorWithNoKnownBaseDoesNotOpen();
+    await aFailedTextWriteDoesNotPublishTheRevision();
     await theDefinitionIsNotTheIdentity();
     await theIdentityIsOneDecision();
     await aPendingRenameReachesEverySurfaceThatNamesIt();

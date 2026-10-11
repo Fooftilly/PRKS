@@ -1927,12 +1927,15 @@
                 });
                 if (!await writeConceptRows(patched)) return false;
             }
-            await patchEntity('concept', id, function (concept) {
+            /* The revision is published only once the text is: a failed text
+             * write leaves the acknowledgement unreconciled, to be retried. */
+            const textCached = await patchEntity('concept', id, function (concept) {
                 if (!concept || concept.id !== id) return null;
                 const next = Object.assign({}, concept);
                 next[field] = value;
                 return next;
             });
+            if (!textCached) return false;
             await patchEntity('concept-state', id, function (state) {
                 if (typeof root.prksIsConceptStateShape === 'function' &&
                     !root.prksIsConceptStateShape(state, id)) return null;
