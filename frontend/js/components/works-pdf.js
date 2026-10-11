@@ -2430,6 +2430,9 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         return true;
     }
 
+    // A durable pass that kept its claim because no PDF bytes were written.
+    const PDF_PASS_NOT_WRITTEN = 'not-written';
+
     async function runWorkAnnotationAndPdfPersistencePass(saveToken) {
         if (!stillLive()) return;
         // Slice F: PDF bytes are a materialized artifact of an *acknowledged*
@@ -2523,11 +2526,13 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 if (persisted !== true) {
                     // No bytes were written (viewer detached / empty copy):
                     // keep the claim and retry it; nothing else may come
-                    // along to (no later ACK, reconnect or reload).
+                    // along to (no later ACK, reconnect or reload). The flush
+                    // stays pending, so a resume after going offline (which
+                    // cancels the retry timer) requests it again.
                     if (worker && typeof worker.scheduleRetry === 'function') {
                         worker.scheduleRetry();
                     }
-                    return;
+                    return PDF_PASS_NOT_WRITTEN;
                 }
                 if (runtime.pendingMaterializationRevision === claimed) {
                     runtime.pendingMaterializationRevision = null;
@@ -2749,7 +2754,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                     syncState.lastConfirmedToken = saveToken;
                     syncState.lastSuccessAt = Date.now();
                 }
-                syncState.pendingChanges = queueRequested;
+                syncState.pendingChanges = queueRequested || persisted === PDF_PASS_NOT_WRITTEN;
                 clearFlushError();
             } catch (err) {
                 if (stillLive() && !(worker && worker.destroyed)) {

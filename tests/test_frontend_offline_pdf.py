@@ -203,7 +203,12 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         no_bytes = pass_src.index("if (persisted !== true) {", durable)
         self.assertLess(no_bytes, pass_src.index("runtime.materializedPdfAnnotationRevision = claimed;"))
         # Nothing else is guaranteed to come back for a retained claim.
-        self.assertIn("worker.scheduleRetry();", pass_src[no_bytes:pass_src.index("return;", no_bytes)])
+        no_bytes_branch = pass_src[no_bytes:pass_src.index("return PDF_PASS_NOT_WRITTEN;", no_bytes)]
+        self.assertIn("worker.scheduleRetry();", no_bytes_branch)
+        # The flush stays pending, so a resume after an offline pause (which
+        # cancels the retry timer) asks for it again.
+        drain = src[src.index("async function drainFlushQueue"):]
+        self.assertIn("syncState.pendingChanges = queueRequested || persisted === PDF_PASS_NOT_WRITTEN;", drain)
         self.assertIn("const persisted = await exportAndPersistPdfCopy(saveToken, replaceGen);\n        return persisted === true;", pass_src)
 
     def test_a_failed_local_edit_is_kept_until_saved_or_abandoned(self):
