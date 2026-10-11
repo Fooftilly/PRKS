@@ -579,6 +579,9 @@ class WorkflowTests(unittest.TestCase):
         triggers = re.findall(r"^  ([a-z_]+):", on_block, re.MULTILINE)
         self.assertEqual(triggers, ["workflow_dispatch", "schedule"])
 
+    def test_only_the_default_branch_runs(self) -> None:
+        self.assertIn("if: github.repository == 'Fooftilly/PRKS' && github.ref == 'refs/heads/master'", self.text)
+
     def test_token_only_in_snapshot_step_and_actions_pinned(self) -> None:
         self.assertEqual(self.text.count("secrets."), 1)
         self.assertIn("PROJECT3_READINESS_TOKEN: ${{ secrets.PROJECT_SYNC_TOKEN }}", self.text)

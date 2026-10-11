@@ -23,7 +23,9 @@ concurrency:
 jobs:
   snapshot:
     name: Project #3 readiness snapshot
-    if: github.repository == 'Fooftilly/PRKS'
+    # Only the default branch's reviewed code receives the token: a manual
+    # dispatch from any other branch is skipped.
+    if: github.repository == 'Fooftilly/PRKS' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
