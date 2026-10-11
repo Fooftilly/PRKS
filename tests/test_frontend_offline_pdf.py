@@ -260,6 +260,12 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         # A newer queued write is not overwritten by this write's projection.
         self.assertIn("if (!newerEditPending()) {\n                        await restoreEffectiveViewerAnnotations();", src)
         self.assertIn("return durableWritesQueued > 1 || uncommittedEdits.size > 0;", src)
+        # An edit whose commit never comes (a failed engine write) is
+        # reported after a bound, not left pending for the session.
+        note = src[src.index("function noteUncommittedEdit("):src.index("function forgetUncommittedEdit(")]
+        self.assertIn("setTimeout(", note)
+        self.assertIn("runtime.reportAnnotationEditNotSaved(id, comment);", note)
+        self.assertIn("forgetUncommittedEdit(String(evt.annotationId));", src)
         # A failure whose popup already closed has no draft to wait on.
         note = src[src.index("function noteLocalSaveFailure("):src.index("function noteLocalSaveAttempt(")]
         self.assertIn("if (id !== '*' && !created && !annotationPopupOpenFor(id)) id = '*';", note)

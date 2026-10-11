@@ -3481,6 +3481,60 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
         self.assertIn("second that saves", _managed_pdf_annotation_contents(page, server, work_id))
         self.assertFalse(_pdf_has_pending_sync(page))
 
+    def test_an_edit_the_viewer_never_commits_is_reported_and_does_not_stick(self):
+        server, page, _collector = self._start_app()
+        work_id = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        _commit_pdf_highlight(page)
+        ann_id = _only_viewer_annotation_id(page)
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+        self._edit_comment_repeatedly(page, server, work_id, ann_id, ["committed comment"])
+
+        # The viewer's engine write fails: it emits no committed event for
+        # the next update. Drop that one event on its way to PRKS.
+        page.evaluate(
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                const handler = pdf._annotationEventHandler;
+                const removeBridge = pdf.viewer.onAnnotationEvent(handler);
+                removeBridge();
+                let dropped = false;
+                pdf.viewer.onAnnotationEvent((evt) => {
+                    if (!dropped && evt && evt.kind === 'update' && evt.committed === true) {
+                        dropped = true;
+                        return;
+                    }
+                    handler(evt);
+                });
+            }"""
+        )
+        _wait_pdf_annotation_durable(page)
+        _save_annotation_comment(page, ann_id, "never committed")
+        page.wait_for_function(
+            """() => {
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const el = ctx && ctx.root && ctx.root.querySelector('.work-annotation-sync-status__label');
+                return !!el && el.textContent === 'Could not save locally';
+            }""",
+            timeout=20000,
+        )
+        self.assertTrue(_pdf_has_pending_sync(page))
+        self.assertEqual(_server_annotation(page, work_id, ann_id)["contents"], "committed comment")
+
+        # Projection is not held for the rest of the session: the next save
+        # is recorded, synced and materialized, and the warning clears.
+        _wait_pdf_annotation_durable(page)
+        _save_annotation_comment(page, ann_id, "committed again")
+        _wait_server_comment(page, work_id, ann_id, "committed again")
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+        _wait_local_save_warning_cleared(page)
+        self.assertFalse(_pdf_has_pending_sync(page))
+        self.assertIn("committed again", _managed_pdf_annotation_contents(page, server, work_id))
+
     def test_repeated_comment_edits_on_imported_highlight_persist(self):
         server, page, _collector = self._start_app(seed_fn=seed_imported_highlight_library)
         work_id = server.ids["work_b"]
