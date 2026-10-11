@@ -3007,12 +3007,18 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
      * Real execution serializer: enqueue the write function; do not start it
      * before the prior chain link settles.
      */
+    // Durable writes enqueued and not yet finished, the running one included.
+    let durableWritesQueued = 0;
+
     function enqueueDurableAnnotationWrite(writeFn) {
         const prior = runtime._annotationDurableWriteChain || Promise.resolve();
-        const ran = prior.then(
-            function () { return writeFn(); },
-            function () { return writeFn(); }
-        );
+        durableWritesQueued += 1;
+        function run() {
+            return Promise.resolve()
+                .then(writeFn)
+                .finally(function () { durableWritesQueued -= 1; });
+        }
+        const ran = prior.then(run, run);
         // Keep the chain pointer settled so a rejected write does not kill
         // later enqueues, while callers can still await `ran` for this write.
         runtime._annotationDurableWriteChain = ran.then(
@@ -3166,6 +3172,20 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         releaseHeldMaterialization();
     }
 
+    // Whether acknowledged + pending state holds a row for this annotation.
+    function hasEffectiveAnnotationRow(id) {
+        const ackOnly = Array.isArray(runtime.annotationCache && runtime.annotationCache.items)
+            ? runtime.annotationCache.items
+            : [];
+        const effective = typeof window.prksEffectiveWorkAnnotations === 'function'
+            ? window.prksEffectiveWorkAnnotations(ackOnly, String(workId))
+            : ackOnly;
+        return (effective || []).some(function (row) {
+            const rowId = row && (row.id || row.uuid || row.annotationId);
+            return rowId != null && String(rowId) === String(id);
+        });
+    }
+
     // Comment text a durable write carries, or null for a delete.
     function durableIntentComment(intent) {
         const ann = intent && intent.desired && intent.desired.annotation;
@@ -3216,7 +3236,13 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                     );
                     if (!stillLive()) return;
                     adoptDurableAnnotationCache(intent.ackList);
-                    await restoreEffectiveViewerAnnotations();
+                    // A later write is queued (e.g. a second Save while this
+                    // one was writing): projecting stored state now would put
+                    // this older value over the newer viewer edit before that
+                    // write reads it. The last queued write restores (#401).
+                    if (durableWritesQueued <= 1) {
+                        await restoreEffectiveViewerAnnotations();
+                    }
                     syncState.localMutationSeen = true;
                     // A write that recorded nothing only shows the viewer
                     // already matches stored state — e.g. the commit echo of a
@@ -3236,8 +3262,11 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                     // for it saves the highlight, whatever its comment. An
                     // edit of an annotation only the imported PDF holds is a
                     // create too, and no rollback can take it off the page.
+                    // One with a pending (unacknowledged) row is an edit: the
+                    // rollback restores that row.
                     const created = evt.kind === 'create' || !!(
-                        intent.desired && !(intent.observed && intent.observed.present)
+                        intent.desired && !(intent.observed && intent.observed.present) &&
+                        !hasEffectiveAnnotationRow(intent.id)
                     );
                     await rollbackFailedDurableAnnotation(
                         intent.id,

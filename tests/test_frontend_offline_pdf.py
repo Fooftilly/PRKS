@@ -256,6 +256,9 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         self.assertIn("settleLocalSaveFailure(intent.id, durableIntentComment(intent));", src)
         # An imported annotation's first save is a create, whatever the event.
         self.assertIn("intent.desired && !(intent.observed && intent.observed.present)", src)
+        self.assertIn("!hasEffectiveAnnotationRow(intent.id)", src)
+        # A newer queued write is not overwritten by this write's projection.
+        self.assertIn("if (durableWritesQueued <= 1) {\n                        await restoreEffectiveViewerAnnotations();", src)
         # A failure whose popup already closed has no draft to wait on.
         note = src[src.index("function noteLocalSaveFailure("):src.index("function noteLocalSaveAttempt(")]
         self.assertIn("if (id !== '*' && !created && !annotationPopupOpenFor(id)) id = '*';", note)
