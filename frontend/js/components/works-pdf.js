@@ -1102,7 +1102,7 @@ window.savePdfAnnotationComment = async function (ctx, text, captured) {
         }
         const viewer = ticket.viewer;
         if (!viewer || pdf.viewer !== viewer || typeof viewer.updateAnnotation !== 'function') {
-            prksReportPdfAnnotationEditNotSaved(pdf, ticket.annId);
+            prksReportPdfAnnotationEditNotSaved(pdf, ticket.annId, val);
             return;
         }
         const liveAnn = prksFindViewerAnnotation(viewer, ticket.annId);
@@ -1114,7 +1114,7 @@ window.savePdfAnnotationComment = async function (ctx, text, captured) {
             }
         }
         if (!Number.isFinite(Number(pageIdx)) || Number(pageIdx) < 0) {
-            prksReportPdfAnnotationEditNotSaved(pdf, ticket.annId);
+            prksReportPdfAnnotationEditNotSaved(pdf, ticket.annId, val);
             return;
         }
         const baseCustom =
@@ -1132,12 +1132,15 @@ window.savePdfAnnotationComment = async function (ctx, text, captured) {
         // SET intent (or, legacy, the full-set POST); this function never
         // writes the acknowledged annotation cache — that cache is the
         // `observed` base the intent is measured against (#401).
+        if (typeof pdf.noteAnnotationEditAttempt === 'function') {
+            pdf.noteAnnotationEditAttempt(ticket.annId, val);
+        }
         viewer.updateAnnotation(ticket.annId, patch);
         // The viewer gate can refuse the update without throwing. Keep the
         // popup draft and say so rather than showing the text as saved.
         const applied = prksFindViewerAnnotation(viewer, ticket.annId);
         if (!applied || prksAnnotationCommentText(applied) !== val) {
-            prksReportPdfAnnotationEditNotSaved(pdf, ticket.annId);
+            prksReportPdfAnnotationEditNotSaved(pdf, ticket.annId, val);
             return;
         }
         if (typeof pdf.annotationPopupStill === 'function' && pdf.annotationPopupStill(ticket)) {
@@ -1151,7 +1154,7 @@ window.savePdfAnnotationComment = async function (ctx, text, captured) {
             void pdf.flushAnnotations();
         }
     } catch (_e) {
-        prksReportPdfAnnotationEditNotSaved(pdf, ticket.annId);
+        prksReportPdfAnnotationEditNotSaved(pdf, ticket.annId, val);
     }
 };
 
@@ -1160,9 +1163,9 @@ window.savePdfAnnotationComment = async function (ctx, text, captured) {
  * "Saved". The persistence worker owns the indicator; without one there is
  * nothing to report into.
  */
-function prksReportPdfAnnotationEditNotSaved(pdf, annId) {
+function prksReportPdfAnnotationEditNotSaved(pdf, annId, comment) {
     if (pdf && typeof pdf.reportAnnotationEditNotSaved === 'function') {
-        try { pdf.reportAnnotationEditNotSaved(annId); } catch (_e) { /* indicator is best-effort */ }
+        try { pdf.reportAnnotationEditNotSaved(annId, comment); } catch (_e) { /* indicator is best-effort */ }
     }
 }
 
@@ -3045,45 +3048,96 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         };
     }
 
-    // Annotations whose edit failed to save locally. 'local_save_failed' (and
-    // the hasPendingSync() leave guard) clears only once each of them has a
-    // recorded durable write: another annotation's save does not save this
-    // one's popup draft (#401). An unknown id is settled by any recorded write.
-    const localSaveFailedIds = new Set();
+    // Annotations whose edit failed to save locally: the comment the user
+    // tried to save (null when the failure was not a comment edit), and
+    // whether the annotation itself was never saved (a failed create).
+    // 'local_save_failed' (and the hasPendingSync() leave guard) clears only
+    // once each of them has a recorded durable write carrying that comment:
+    // another annotation's save, or a rollback's echo of the stored comment,
+    // does not save this one's popup draft (#401). An unknown id is settled
+    // by any recorded write.
+    const localSaveFailures = new Map();
 
-    function noteLocalSaveFailure(annId) {
-        localSaveFailedIds.add(annId ? String(annId) : '*');
+    function noteLocalSaveFailure(annId, expectedComment, created) {
+        const id = annId ? String(annId) : '*';
+        const prior = localSaveFailures.get(id);
+        localSaveFailures.set(id, {
+            comment: typeof expectedComment === 'string' ? expectedComment : null,
+            created: !!(created || (prior && prior.created)),
+        });
         syncState.lastError = 'local_save_failed';
     }
 
-    // The failed annotation's popup closed: its unsaved draft is gone, so
-    // there is nothing left to protect for it.
-    function forgetLocalSaveFailure(annId) {
-        if (!annId || !localSaveFailedIds.delete(String(annId))) return false;
-        if (localSaveFailedIds.size === 0 && syncState.lastError === 'local_save_failed') {
+    // The user saves this annotation's comment again: that text is now the
+    // draft a recorded write has to carry.
+    function noteLocalSaveAttempt(annId, comment) {
+        const failure = localSaveFailures.get(String(annId || ''));
+        if (failure && typeof comment === 'string') failure.comment = comment;
+    }
+
+    function forgetLocalSaveFailureId(id) {
+        if (!localSaveFailures.delete(id)) return false;
+        if (localSaveFailures.size === 0 && syncState.lastError === 'local_save_failed') {
             syncState.lastError = '';
         }
         return true;
     }
 
-    function settleLocalSaveFailure(annId) {
+    // The failed annotation's popup closed: its unsaved draft is gone. A
+    // failed create is still unsaved on the page, so it stays.
+    function forgetLocalSaveFailure(annId) {
+        if (!annId) return false;
+        const failure = localSaveFailures.get(String(annId));
+        if (!failure || failure.created) return false;
+        return forgetLocalSaveFailureId(String(annId));
+    }
+
+    // A failed annotation no longer in the viewer (a removed unsaved
+    // highlight, a delete) has nothing left to protect (#401).
+    function pruneLocalSaveFailuresGoneFromViewer() {
+        const viewer = liveAnnotationViewer();
+        if (!viewer || !localSaveFailures.size) return;
+        const present = new Set();
+        prksViewerAnnotationObjects(viewer).forEach(function (a) {
+            const id = a && (a.id || a.uuid || a.annotationId || a._id);
+            if (id != null) present.add(String(id));
+        });
+        Array.from(localSaveFailures.keys()).forEach(function (id) {
+            if (id !== '*' && !present.has(id)) forgetLocalSaveFailureId(id);
+        });
+    }
+
+    function settleLocalSaveFailure(annId, savedComment) {
         if (syncState.lastError !== 'local_save_failed') {
-            localSaveFailedIds.clear();
+            localSaveFailures.clear();
             syncState.lastError = '';
             return;
         }
-        localSaveFailedIds.delete(String(annId || ''));
-        localSaveFailedIds.delete('*');
-        if (localSaveFailedIds.size === 0) syncState.lastError = '';
+        const id = String(annId || '');
+        const failure = localSaveFailures.get(id);
+        if (failure && (failure.comment === null || failure.comment === savedComment)) {
+            localSaveFailures.delete(id);
+        }
+        localSaveFailures.delete('*');
+        if (localSaveFailures.size === 0) syncState.lastError = '';
     }
 
-    async function rollbackFailedDurableAnnotation(annId) {
+    // Comment text a durable write carries, or null for a delete.
+    function durableIntentComment(intent) {
+        const ann = intent && intent.desired && intent.desired.annotation;
+        return ann ? prksAnnotationCommentText(ann) : null;
+    }
+
+    async function rollbackFailedDurableAnnotation(annId, expectedComment, created) {
         if (!stillLive()) return;
-        noteLocalSaveFailure(annId);
+        noteLocalSaveFailure(annId, expectedComment, created);
         renderSyncIndicator();
         try {
             await restoreEffectiveViewerAnnotations();
         } catch (_e2) {}
+        if (!stillLive()) return;
+        pruneLocalSaveFailuresGoneFromViewer();
+        renderSyncIndicator();
     }
 
     function onAnnotationEvent(evt) {
@@ -3124,8 +3178,9 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                     // already matches stored state — e.g. the commit echo of a
                     // rollback, which EmbedPDF emits after reconcile ended. It
                     // is not proof that the failed edit was saved (#401).
+                    pruneLocalSaveFailuresGoneFromViewer();
                     if (recorded) {
-                        settleLocalSaveFailure(intent.id);
+                        settleLocalSaveFailure(intent.id, durableIntentComment(intent));
                     } else if (syncState.lastError !== 'local_save_failed') {
                         syncState.lastError = '';
                     }
@@ -3133,10 +3188,14 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                     // Do NOT materialize PDF bytes here. Materialization runs
                     // only after semantic ACK of an acknowledged generation.
                 } catch (_err) {
-                    // Rollback removes a failed create from the viewer and a
-                    // redraw gets a new id, so nothing could settle its id:
-                    // any recorded write settles it instead.
-                    await rollbackFailedDurableAnnotation(evt.kind === 'create' ? null : intent.id);
+                    // A failed create has no stored row: any recorded write
+                    // for it saves the highlight, whatever its comment.
+                    const created = evt.kind === 'create';
+                    await rollbackFailedDurableAnnotation(
+                        intent.id,
+                        created ? null : durableIntentComment(intent),
+                        created
+                    );
                 }
             });
             return;
@@ -3147,7 +3206,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             const legacyAnnId = evt.annotationId || (evt.annotation && (
                 evt.annotation.id || evt.annotation.uuid || evt.annotation.annotationId
             ));
-            settleLocalSaveFailure(legacyAnnId);
+            settleLocalSaveFailure(legacyAnnId, evt.annotation ? prksAnnotationCommentText(evt.annotation) : null);
         }
         syncState.localMutationSeen = true;
         void requestFlush('annotation-event');
@@ -3237,16 +3296,19 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 } catch (_e) {}
             };
             runtime._annotationEventHandler = onAnnotationEvent;
-            runtime.reportAnnotationEditNotSaved = function (annId) {
+            runtime.reportAnnotationEditNotSaved = function (annId, comment) {
                 if (runtime.annotationMutationDurable) {
                     // Same outcome as a failed durable write: error status and
                     // the viewer back on acknowledged + pending state.
-                    void rollbackFailedDurableAnnotation(annId);
+                    void rollbackFailedDurableAnnotation(annId, comment);
                     return;
                 }
                 if (!stillLive()) return;
-                noteLocalSaveFailure(annId);
+                noteLocalSaveFailure(annId, comment);
                 renderSyncIndicator();
+            };
+            runtime.noteAnnotationEditAttempt = function (annId, comment) {
+                noteLocalSaveAttempt(annId, comment);
             };
             runtime._onAnnotationPopupClosed = function (annId) {
                 if (!stillLive()) return;

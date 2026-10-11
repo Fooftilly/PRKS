@@ -230,11 +230,21 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         body = src[at:src.index("function prksReportPdfAnnotationEditNotSaved", at)]
         self.assertNotIn("annotationCache", body)
         self.assertNotIn("catch (_e) {}", body)
-        self.assertIn("prksReportPdfAnnotationEditNotSaved(pdf, ticket.annId)", body)
-        # A failed create may leave nothing with its id to save again, so any
-        # recorded write settles it; edits and deletes settle by their own id.
-        self.assertIn(
-            "await rollbackFailedDurableAnnotation(evt.kind === 'create' ? null : intent.id);", src
+        self.assertIn("prksReportPdfAnnotationEditNotSaved(pdf, ticket.annId, val)", body)
+        self.assertLess(
+            body.index("pdf.noteAnnotationEditAttempt(ticket.annId, val)"),
+            body.index("viewer.updateAnnotation(ticket.annId, patch)"),
+        )
+        # Every failure is tracked by its own id with the comment it has to
+        # save; one whose annotation is gone from the viewer is dropped.
+        self.assertIn("await rollbackFailedDurableAnnotation(\n                        intent.id,", src)
+        self.assertIn("settleLocalSaveFailure(intent.id, durableIntentComment(intent));", src)
+        rollback = src[src.index("async function rollbackFailedDurableAnnotation"):src.index("function onAnnotationEvent(evt)")]
+        self.assertIn("pruneLocalSaveFailuresGoneFromViewer();", rollback)
+        durable = src[src.index("const recorded = await window.prksSavePdfAnnotationDurably("):]
+        self.assertLess(
+            durable.index("pruneLocalSaveFailuresGoneFromViewer();"),
+            durable.index("settleLocalSaveFailure(intent.id, durableIntentComment(intent));"),
         )
 
     def test_annotation_mutation_entry_points_are_guarded(self):

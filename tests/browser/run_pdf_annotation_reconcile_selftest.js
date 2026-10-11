@@ -197,6 +197,24 @@ async function acknowledgedDatesReachTheViewerAsDates() {
     assert.equal(created.created.getTime(), 1791719267247);
 }
 
+async function rollbackClearsACommentTheStoredRowNeverHad() {
+    // #401: a highlight saved without a comment has no `contents`/`custom`.
+    // Rolling back a failed popup save must clear the draft from the viewer,
+    // or its next commit records the draft that failed to save.
+    const stored = highlight('a', '');
+    delete stored.contents;
+    delete stored.custom;
+    const viewer = fakeViewer([highlight('a', 'Unsaved draft')]);
+    const stats = await globalThis.prksReconcileViewerAnnotations(viewer, [stored], {});
+    assert.equal(stats.updated, 1);
+    const live = viewer.getAnnotations()[0].raw;
+    assert.equal(live.contents, '');
+    assert.equal(live.custom, undefined);
+    assert.equal(globalThis.prksPdfAnnotationsSemanticallyEqual(live, stored), true);
+    const again = await globalThis.prksReconcileViewerAnnotations(viewer, [stored], {});
+    assert.equal(again.updated, 0, 'cleared viewer row matches the stored row');
+}
+
 (async () => {
     await createUpdateIdempotent();
     await updateAndManagedDelete();
@@ -204,6 +222,7 @@ async function acknowledgedDatesReachTheViewerAsDates() {
     await neverTouchLink();
     await knownAbsentRemovesStaleDeletedMarkup();
     await acknowledgedDatesReachTheViewerAsDates();
+    await rollbackClearsACommentTheStoredRowNeverHad();
     console.log(checks + ' checks passed');
 })().catch((err) => {
     console.error(err);

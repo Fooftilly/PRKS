@@ -130,6 +130,27 @@
         return out;
     }
 
+    // Fields a user edit can add that the viewer keeps unless a patch names
+    // them, with the value that clears each one.
+    const CLEARABLE_KEYS = { contents: '', custom: undefined };
+
+    /**
+     * The update that puts `live` back on `desired`. An update only merges, so
+     * a comment the acknowledged row never had (an unsaved popup draft on a
+     * highlight with no comment yet) is cleared explicitly; otherwise it
+     * stays in the viewer and its next commit records the draft (#401).
+     */
+    function viewerUpdatePatch(live, desired) {
+        const patch = viewerAnnotationObject(desired);
+        delete patch.id;
+        Object.keys(CLEARABLE_KEYS).forEach(function (key) {
+            if (Object.prototype.hasOwnProperty.call(patch, key)) return;
+            if (!live || live[key] === undefined) return;
+            patch[key] = CLEARABLE_KEYS[key];
+        });
+        return patch;
+    }
+
     function semanticallyEqual(left, right) {
         if (typeof root.prksPdfAnnotationsSemanticallyEqual === 'function') {
             return root.prksPdfAnnotationsSemanticallyEqual(left, right);
@@ -233,8 +254,7 @@
                 }
                 // Prefer update; fall back to delete+create when update is absent.
                 if (typeof viewer.updateAnnotation === 'function') {
-                    const patch = viewerAnnotationObject(desired);
-                    delete patch.id;
+                    const patch = viewerUpdatePatch(live, desired);
                     viewer.updateAnnotation(id, patch);
                     stats.updated += 1;
                 } else if (typeof viewer.deleteAnnotation === 'function' &&
