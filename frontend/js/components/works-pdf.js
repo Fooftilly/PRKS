@@ -2383,6 +2383,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             // deliberately stays out of it.
             prksMarkFoldersDomainChanged();
         }
+        return true;
     }
 
     async function restoreEffectiveViewerAnnotations(opts) {
@@ -2514,8 +2515,13 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                         return;
                     }
                 }
-                await exportAndPersistPdfCopy(saveToken, claimed);
+                const persisted = await exportAndPersistPdfCopy(saveToken, claimed);
                 if (!stillLive()) return;
+                if (persisted !== true) {
+                    // No bytes were written (viewer detached / empty copy):
+                    // keep the claim so a later ACK / catch-up retries.
+                    return;
+                }
                 if (runtime.pendingMaterializationRevision === claimed) {
                     runtime.pendingMaterializationRevision = null;
                 }
@@ -2633,8 +2639,8 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             prksOfflineMarkEntityChanged('work', workId);
         }
         if (!stillLive()) return;
-        await exportAndPersistPdfCopy(saveToken, replaceGen);
-        return true;
+        const persisted = await exportAndPersistPdfCopy(saveToken, replaceGen);
+        return persisted === true;
     }
 
     // PRKS may go offline mid-confirmation-loop (the persistence worker

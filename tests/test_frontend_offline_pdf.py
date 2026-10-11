@@ -192,6 +192,17 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         guard = drain.index("if (persisted === true) {")
         self.assertLess(guard, drain.index("syncState.lastSuccessAt = Date.now();"))
 
+    def test_pdf_export_that_writes_nothing_is_not_reported_persisted(self):
+        """#401: a detached viewer / empty copy keeps the claim and is not success."""
+        src = _read(_WORKS_PDF)
+        export = src[src.index("async function exportAndPersistPdfCopy"):src.index("async function restoreEffectiveViewerAnnotations")]
+        self.assertTrue(export.rstrip().endswith("return true;\n    }"))
+        self.assertEqual(export.count("return true;"), 1)
+        pass_src = src[src.index("async function runWorkAnnotationAndPdfPersistencePass"):src.index("async function drainFlushQueue")]
+        durable = pass_src.index("const persisted = await exportAndPersistPdfCopy(saveToken, claimed);")
+        self.assertLess(pass_src.index("if (persisted !== true) {", durable), pass_src.index("runtime.materializedPdfAnnotationRevision = claimed;"))
+        self.assertIn("const persisted = await exportAndPersistPdfCopy(saveToken, replaceGen);\n        return persisted === true;", pass_src)
+
     def test_comment_save_never_rewrites_the_acknowledged_cache(self):
         """#401: the acknowledged cache is the base a SET intent is measured against."""
         src = _read(_WORKS_PDF)
