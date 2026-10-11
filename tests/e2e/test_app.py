@@ -3220,14 +3220,18 @@ def _managed_pdf_annotation_contents(page, server, work_id):
         doc.close()
 
 
-def _only_viewer_annotation_id(page):
-    ids = page.evaluate(
+def _viewer_annotation_ids(page):
+    return page.evaluate(
         """() => {
             const v = %s;
             return v ? (v.getAnnotations() || []).map(a => String(a.id)) : [];
         }"""
         % _FOCUSED_VIEWER
     )
+
+
+def _only_viewer_annotation_id(page):
+    ids = _viewer_annotation_ids(page)
     if len(ids) != 1:
         raise AssertionError("expected exactly one viewer annotation, got %r" % (ids,))
     return ids[0]
@@ -3351,18 +3355,10 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
         self.assertEqual(_popup_comment(page, ann_id), "imported second edit")
         self._edit_comment_repeatedly(page, server, work_id, ann_id, ["imported third edit"])
 
-    def test_comment_edit_that_cannot_be_saved_is_not_reported_saved(self):
-        server, page, _collector = self._start_app()
-        work_id = server.ids["work_a"]
-        _open_work_from_home(page, WORK_A_TITLE)
-        _wait_pdf_viewer(page)
-        _wait_pdf_annotation_durable(page)
-        _commit_pdf_highlight(page)
-        ann_id = _only_viewer_annotation_id(page)
-        _wait_pdf_annotation_ops_drained(page, work_id)
-        _wait_pdf_materialized(page, work_id)
-        self._edit_comment_repeatedly(page, server, work_id, ann_id, ["saved comment"])
-
+    def _fail_comment_save(self, page, work_id, ann_id, text_value):
+        """Save ``text_value`` from the popup while the local durable write
+        fails once; return the still-open popup and its text field once the
+        rollback has settled."""
         # The local durable write fails once (quota, blocked IndexedDB, ...).
         page.evaluate(
             """() => {
@@ -3384,7 +3380,7 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
         _wait_pdf_annotation_durable(page)
         popup = _open_annotation_popup(page, ann_id)
         text = popup.locator('[data-prks-role="pdf-annotation-popup-text"]')
-        text.fill("comment that failed")
+        text.fill(text_value)
         popup.get_by_role("button", name="Save comment").click()
         page.wait_for_function(
             """() => {
@@ -3406,6 +3402,21 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
             }""",
         )
         _wait_pdf_annotation_ops_drained(page, work_id)
+        return popup, text
+
+    def test_comment_edit_that_cannot_be_saved_is_not_reported_saved(self):
+        server, page, _collector = self._start_app()
+        work_id = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        _commit_pdf_highlight(page)
+        ann_id = _only_viewer_annotation_id(page)
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+        self._edit_comment_repeatedly(page, server, work_id, ann_id, ["saved comment"])
+
+        popup, text = self._fail_comment_save(page, work_id, ann_id, "comment that failed")
         self.assertEqual(_sync_status_label(page), "Could not save locally")
         # The user's text stays in the open popup so it can be saved again.
         self.assertEqual(text.input_value(), "comment that failed")
@@ -3455,6 +3466,68 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
         self.assertIn("comment that failed", _managed_pdf_annotation_contents(page, server, work_id))
         self.assertFalse(_pdf_has_pending_sync(page))
 
+    def test_another_annotations_save_does_not_settle_a_failed_edit(self):
+        server, page, _collector = self._start_app()
+        work_id = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        _commit_pdf_highlight(page)
+        ann_id = _only_viewer_annotation_id(page)
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+
+        # An edit to some other annotation could not be saved (its popup still
+        # holds the draft): the same report savePdfAnnotationComment makes.
+        page.evaluate(
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                pdf.reportAnnotationEditNotSaved('other-annotation');
+            }"""
+        )
+        page.wait_for_function(
+            """() => {
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const el = ctx && ctx.root && ctx.root.querySelector('[data-prks-role="annotation-sync-status"]');
+                return !!(el && el.classList.contains('work-annotation-sync-status--error'));
+            }""",
+            timeout=15000,
+        )
+        self.assertTrue(_pdf_has_pending_sync(page))
+
+        # This highlight's comment is recorded, synced and materialized; that
+        # does not save the other annotation's draft.
+        _wait_pdf_annotation_durable(page)
+        _save_annotation_comment(page, ann_id, "unrelated comment")
+        _wait_server_comment(page, work_id, ann_id, "unrelated comment")
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf._annotationDurableWriteChain).then(() => true);
+            }""",
+        )
+        self.assertEqual(_sync_status_label(page), "Could not save locally")
+        self.assertTrue(_pdf_has_pending_sync(page))
+
+        # A failure on this highlight, then its own successful save, leaves
+        # the other annotation's failure in place too.
+        popup, _text = self._fail_comment_save(page, work_id, ann_id, "own retry")
+        _wait_pdf_annotation_durable(page)
+        popup.get_by_role("button", name="Save comment").click()
+        _wait_server_comment(page, work_id, ann_id, "own retry")
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf._annotationDurableWriteChain).then(() => true);
+            }""",
+        )
+        self.assertEqual(_sync_status_label(page), "Could not save locally")
+        self.assertTrue(_pdf_has_pending_sync(page))
 
 class RequestCoordinatorTests(_BrowserE2E):
     def test_identical_work_detail_gets_dedupe_to_one_network_request(self):

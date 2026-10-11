@@ -200,7 +200,10 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         self.assertEqual(export.count("return true;"), 1)
         pass_src = src[src.index("async function runWorkAnnotationAndPdfPersistencePass"):src.index("async function drainFlushQueue")]
         durable = pass_src.index("const persisted = await exportAndPersistPdfCopy(saveToken, claimed);")
-        self.assertLess(pass_src.index("if (persisted !== true) {", durable), pass_src.index("runtime.materializedPdfAnnotationRevision = claimed;"))
+        no_bytes = pass_src.index("if (persisted !== true) {", durable)
+        self.assertLess(no_bytes, pass_src.index("runtime.materializedPdfAnnotationRevision = claimed;"))
+        # Nothing else is guaranteed to come back for a retained claim.
+        self.assertIn("worker.scheduleRetry();", pass_src[no_bytes:pass_src.index("return;", no_bytes)])
         self.assertIn("const persisted = await exportAndPersistPdfCopy(saveToken, replaceGen);\n        return persisted === true;", pass_src)
 
     def test_comment_save_never_rewrites_the_acknowledged_cache(self):
@@ -211,7 +214,7 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         body = src[at:src.index("function prksReportPdfAnnotationEditNotSaved", at)]
         self.assertNotIn("annotationCache", body)
         self.assertNotIn("catch (_e) {}", body)
-        self.assertIn("prksReportPdfAnnotationEditNotSaved(pdf)", body)
+        self.assertIn("prksReportPdfAnnotationEditNotSaved(pdf, ticket.annId)", body)
 
     def test_annotation_mutation_entry_points_are_guarded(self):
         src = _read(_WORKS_PDF)
