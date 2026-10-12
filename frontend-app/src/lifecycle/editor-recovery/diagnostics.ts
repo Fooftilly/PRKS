@@ -188,8 +188,7 @@ function unreadableReason(stored: StoredEmergency): DiagnosticsUnreadableEmergen
 function enumerable(storage: EmergencyStorage | null): boolean {
   if (!storage) return false
   try {
-    void storage.length
-    return true
+    return typeof storage.length === 'number'
   } catch {
     return false
   }

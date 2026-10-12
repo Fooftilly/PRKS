@@ -1035,8 +1035,7 @@ var prksEditorRecovery = (function(exports) {
 	function enumerable(storage) {
 		if (!storage) return false;
 		try {
-			storage.length;
-			return true;
+			return typeof storage.length === "number";
 		} catch {
 			return false;
 		}
