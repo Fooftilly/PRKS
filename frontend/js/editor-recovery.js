@@ -1180,7 +1180,7 @@ var prksEditorRecovery = (function(exports) {
 			const { emergency, unreadableEmergency } = await listEmergency(rows);
 			const sizes = [
 				...drafts.map((d) => Number.isFinite(d.bodyLength) ? d.bodyLength : null),
-				...emergency.filter((e) => e.bodyLength !== null).map((e) => e.bodyLength),
+				...emergency.map((e) => e.bodyLength),
 				...unreadable.map((u) => u.bodyLength),
 				...unreadableEmergency.map((u) => u.rawLength)
 			];

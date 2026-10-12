@@ -343,7 +343,7 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
     // Everything kept counts, readable or not: an unreadable copy takes storage too.
     const sizes = [
       ...drafts.map((d) => (Number.isFinite(d.bodyLength) ? d.bodyLength : null)),
-      ...emergency.filter((e) => e.bodyLength !== null).map((e) => e.bodyLength),
+      ...emergency.map((e) => e.bodyLength),
       ...unreadable.map((u) => u.bodyLength),
       ...unreadableEmergency.map((u) => u.rawLength),
     ]

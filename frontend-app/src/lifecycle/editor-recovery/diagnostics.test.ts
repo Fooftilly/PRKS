@@ -211,6 +211,8 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     // Its editor is open: the text is read there, not from the key.
     expect(await diag.readText({ source: 'emergency', key: held.key, draftId: held.draftId, generation: held.generation })).toEqual({ ok: false, code: 'live' })
     expect(inv.emergency.find((e) => e.draftId === 'd-tail')).toMatchObject({ bodyLength: null, entityId: 'w2' })
+    // A kept copy that states no size leaves the total a lower bound.
+    expect(inv.sizeIncomplete).toBe(true)
     expect(inv.unreadableEmergency.map((u) => [u.pageInstanceId, u.reason]).sort()).toEqual([['p-broken', 'malformed'], ['p-newer', 'newer-version']])
     expect(await diag.readText({ source: 'unreadable-emergency', key: EMERGENCY_KEY_PREFIX + 'p-broken' })).toEqual({ ok: true, text: '{"v": 1, "entr' })
     // Nothing was merged or removed: the live page still owns its key.
