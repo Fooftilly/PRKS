@@ -425,10 +425,17 @@ restore and `rebuild-derived` run on their own dedicated connection**, not a
 pooled one, with `idle_in_transaction_session_timeout = 0` (a backup holds
 its exported snapshot and the shared objects lock while it copies files
 without issuing queries) and no inherited `statement_timeout`. Every lock
-wait in those protocols sets its own bounded `lock_timeout` with `SET LOCAL`
-just before it: the R3 drain of in-flight commands and the wait for a
-running backup copy (§11.4) use a configurable drain timeout (default
-5 min) whose expiry aborts the restore cleanly, never the 5 s default.
+wait in those protocols runs inside an explicit short transaction that sets
+its own bounded `lock_timeout` with `SET LOCAL` and commits as soon as the
+lock is held. `SET LOCAL` is never issued in autocommit mode, where
+PostgreSQL ignores it with a warning. The setting reverts at commit, and the
+session-level advisory locks taken inside stay held. The R3 drain of
+in-flight commands and the wait for a running backup copy (§11.4) use a
+configurable drain timeout (default 5 min) whose expiry aborts the restore
+cleanly, never the 5 s default. A rollback does not release session-level
+advisory locks already taken in that transaction, so every abort path calls
+`pg_advisory_unlock_all()` (or closes the dedicated connection) before it
+finishes.
 
 The thread-per-connection server can open more request threads than the pool
 has connections. Pool exhaustion is a 503 with `Retry-After`, never a hang,
@@ -1518,7 +1525,7 @@ Restore runs these phases, recorded in a `restore_runs` row with a lease
 | R0 Validate | Hashes, manifest, schema and format version (newer refused; after 1.0 older accepted) | Nothing |
 | R1 Stage | Build `restore_<id>` with the migration runner at the archive's schema version, `COPY … FROM` with interchange casts, run forward migrations on it (post-1.0), map identities, check constraints; for each archive object, under the per-object lock `pg_advisory_xact_lock(hashtextextended('obj:'||key, 0))` that cleanup's settle also takes (§7.4), insert `restore_run_objects(run, key)` and commit; only then look at the file: missing → write it from the archive with exclusive create; present with the archive's hash → reuse; present with another hash → abort (a live object is never overwritten) | Nothing; reads and writes continue normally |
 | R2 Enter | One committed transaction: `UPDATE libraries SET maintenance = 'restore', maintenance_run = <run> WHERE id = L AND maintenance IS NULL` (refused if another maintenance is active, or if a backup run is active) | From here every new command refuses with `MAINTENANCE` |
-| R3 Drain | On the restore connection, take `pg_advisory_lock(lib_key(L))` **exclusive** (waits for every in-flight command, which holds the shared lock, to commit or roll back) and `pg_advisory_lock((L,'objects'))` exclusive (waits for a running backup copy, bounded by a timeout that aborts the restore). Then re-check ownership: `libraries.maintenance_run` must still be this run; otherwise the run lost its lease, so release and abort. With cleanup now excluded by the objects lock, re-verify that every key in `restore_run_objects` exists with the archive's size; rewrite a missing one from the archive, abort on a mismatch | Commands that slipped in before R2 finish first |
+| R3 Drain | On the restore connection, in one explicit short transaction (`BEGIN; SET LOCAL lock_timeout = <drain timeout>`, then both locks, then `COMMIT` before R4's SERIALIZABLE transaction begins; §4.3), take `pg_advisory_lock(lib_key(L))` **exclusive** (waits for every in-flight command, which holds the shared lock, to commit or roll back) and `pg_advisory_lock((L,'objects'))` exclusive (waits for a running backup copy, bounded by a timeout that aborts the restore). Then re-check ownership: `libraries.maintenance_run` must still be this run; otherwise the run lost its lease, so release and abort. With cleanup now excluded by the objects lock, re-verify that every key in `restore_run_objects` exists with the archive's size; rewrite a missing one from the archive, abort on a mismatch | Commands that slipped in before R2 finish first |
 | R4 Commit | One SERIALIZABLE transaction that first locks the `libraries` row `FOR UPDATE` and aborts unless `maintenance = 'restore' AND maintenance_run = <run>` and the `restore_runs` row is still this run's live lease; then: delete the Library's rows of the content tables (the allowlist, never memberships, sessions or operational rows) and its `derived` rows; insert the devices the identity mapping marked as new, then the staged, mapped rows; record a `hold` cleanup claim for every object the old catalogue referenced and the new one does not; cancel the Library's queued and running jobs (`state = 'cancelled'`, `lease_id = NULL`, `last_error = 'restore_superseded'`); set `epoch = epoch + 1` and `maintenance = NULL`; **enqueue** `derived.rebuild`, a cleanup retry and the orphan sweep at the new epoch; mark the run committed | Atomically: the old Library before COMMIT, the restored one (with its follow-up jobs already queued) after |
 | R5 Release | Release both locks and drop the staging schema; nothing in R5 is needed for correctness | Normal operation |
 
@@ -1922,7 +1929,12 @@ the lane that ports the relevant module.
 - Long maintenance sessions: a backup whose object copy outlasts the
   request-session idle timeout completes with its snapshot and objects lock
   intact; the R3 drain waits past 5 s for a slow in-flight command and aborts
-  cleanly only at its own drain timeout.
+  cleanly only at its own drain timeout. With a short drain timeout and a
+  command that never finishes, the drain fails with `lock_not_available`
+  at that timeout (so the test fails if `SET LOCAL` ran outside a
+  transaction and had no effect), the connection's `lock_timeout` is back to
+  its session value afterwards, and the restore connection holds no advisory lock
+  once the abort finishes.
 - Restore lease fencing: stall a restore between R2 and R3 past its lease,
   let recovery clear the flag and admit writes, then resume it: it aborts in
   R3 and the admitted writes survive; recovery cannot clear the flag of a
