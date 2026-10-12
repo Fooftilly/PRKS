@@ -271,7 +271,7 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
   })
 
   it('refuses an emergency copy\'s text once its page answers for it again', async () => {
-    const { page, local } = setup()
+    const { page, idb, local } = setup()
     const frozen = { now: true }
     const tab = page('frozen', frozen)
     await tab.rt.start()
@@ -285,6 +285,11 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     expect(held!.lineage).toBe('unknown')
     const target = { source: 'emergency' as const, key: held!.key, draftId: held!.draftId, generation: held!.generation }
     expect(await diag.readText(target)).toEqual({ ok: true, text: 'typed while frozen' })
+    // A damaged row for the same lineage, without its text, never hides the key's copy.
+    await putRows(idb, DRAFTS_STORE, [{ v: 1, draftId: held!.draftId, kind: 'work-research-note', generation: held!.generation, owner: { pageInstanceId: 'p-x' } }])
+    const again = await diag.inventory()
+    expect(again.emergency.map((e) => e.draftId)).toEqual([held!.draftId])
+    expect(again.unreadable.map((u) => u.draftId)).toEqual([held!.draftId])
     // The page rewrites its key while it is asked about: the text read before is stale.
     const rewritten = local.getItem(held!.key)!.replace('typed while frozen', 'typed as it hid')
     const probing = createRecoveryDiagnostics(

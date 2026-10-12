@@ -233,7 +233,7 @@ function isIntactPipeline(pipeline: unknown): boolean {
 }
 
 /** A supported record that is a `discarded` tombstone: no draft, nothing to list. */
-function isTombstone(row: unknown): boolean {
+function isTombstone(row: unknown): row is DraftRecord {
   return isSupportedRecord(row) && row.status === 'discarded'
 }
 
@@ -377,7 +377,8 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
   async function listEmergency(rows: unknown[]): Promise<{ emergency: DiagnosticsEmergency[]; unreadableEmergency: DiagnosticsUnreadableEmergency[] }> {
     const known = new Map<string, number>()
     for (const row of rows) {
-      if (isSupportedRecord(row)) known.set(row.draftId, Math.max(row.generation, known.get(row.draftId) || 0))
+      // Only a usable record or a tombstone stands for an entry: a damaged row may have lost its text.
+      if (isIntactRecord(row) || isTombstone(row)) known.set(row.draftId, Math.max(row.generation, known.get(row.draftId) || 0))
     }
     const unreadableEmergency: DiagnosticsUnreadableEmergency[] = []
     const pending: Array<Promise<DiagnosticsEmergency>> = []

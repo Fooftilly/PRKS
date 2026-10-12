@@ -1187,7 +1187,7 @@ var prksEditorRecovery = (function(exports) {
 		/** Emergency entries of other pages that no record holds yet, and keys this build cannot parse. */
 		async function listEmergency(rows) {
 			const known = /* @__PURE__ */ new Map();
-			for (const row of rows) if (isSupportedRecord(row)) known.set(row.draftId, Math.max(row.generation, known.get(row.draftId) || 0));
+			for (const row of rows) if (isIntactRecord(row) || isTombstone(row)) known.set(row.draftId, Math.max(row.generation, known.get(row.draftId) || 0));
 			const unreadableEmergency = [];
 			const pending = [];
 			for (const stored of storage ? readEmergencyKeys(storage) : []) {
