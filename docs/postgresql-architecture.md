@@ -796,7 +796,7 @@ in the UI, merges) stay gated; the schema only stops being the obstacle.
 
 | Family | Tables | Changes from today |
 | --- | --- | --- |
-| Instance and identity | `instance`, `users`, `libraries`, `library_memberships`, `devices`, `sessions`, `bootstrap_tokens` | New |
+| Instance and identity | `instance`, `users`, `libraries`, `library_memberships`, `devices`, `sessions`, `bootstrap_tokens`, `login_attempts` | New |
 | Works | `works` L, `manifestations` L, `assets` L, `manifestation_relations` L, `manifestation_identifiers` L, `work_notes` L, `sync_work_lifecycle` L, `duplicate_decisions` L | §6.4 |
 | Annotations | `annotations` L | `geometry jsonb`; primary key `(asset_id, id)` because the viewer mints the ID (global uniqueness of a client-minted viewer ID is not something PRKS controls) |
 | People | `persons` L, `person_aliases` L, `roles` L, `person_groups` L, `person_group_members` L, `publishers` L, `publisher_aliases` L | Aliases become rows with keys; `roles` drops the `rowid` tiebreak in favor of `order_index`; publisher and group names unique by identity key |
@@ -1152,7 +1152,15 @@ authenticated owner of a `ready` instance (§11.4).
 
 - Password login with **Argon2id** (`argon2-cffi`, library defaults, tuned
   once on the target hardware and recorded in docs), constant-time failure
-  paths, and a per-account and per-IP attempt limiter stored in PostgreSQL.
+  paths, and a per-account and per-IP attempt limiter stored in PostgreSQL:
+  `login_attempts(key text PRIMARY KEY, failures int, window_start
+  timestamptz)`, where `key` is `acct:<login_key>` or `ip:<address>` (the
+  peer address, or the forwarded one only from `PRKS_TRUSTED_PROXIES`). The
+  login command updates both rows in its own transaction. After 5 failures
+  for an account or 20 for an address within 15 minutes (configurable),
+  login answers 429 with `Retry-After` until the window ends, without
+  checking the password; a successful login resets the account row. The
+  `sessions.prune` job deletes expired windows.
 - Sessions: 256-bit random token in an `HttpOnly`, `SameSite=Strict`,
   `Path=/` cookie; `Secure` whenever the public origin is HTTPS. The database
   stores only the SHA-256 of the token. Sliding expiry (default 30 days idle,
@@ -2069,7 +2077,7 @@ merged; several run at the same time).
 
 | Slice | Depends on | Content | Acceptance criteria |
 | --- | --- | --- | --- |
-| **L-ID-1** Identity, bootstrap and sessions | PG-2 | Users, Libraries (with `epoch`), memberships, bootstrap tokens and command, Argon2id login, sessions, `GET /api/session` (returns the epoch), `RequestContext` carrying the acted-on epoch and the command-helper epoch check, `authorize()`, loopback-owner mode for `--testing`; CSRF hardening | §13.3 bootstrap and session tests; a command with a stale or missing epoch is refused before writing; takeover after `ready` refused; secrets never in responses or logs (log-privacy test); `--testing` E2E unaffected |
+| **L-ID-1** Identity, bootstrap and sessions | PG-2 | Users, Libraries (with `epoch`), memberships, bootstrap tokens and command, Argon2id login, sessions, `GET /api/session` (returns the epoch), `RequestContext` carrying the acted-on epoch and the command-helper epoch check, `authorize()`, loopback-owner mode for `--testing`; CSRF hardening | §13.3 bootstrap and session tests; a command with a stale or missing epoch is refused before writing; login throttling: the sixth failed attempt for an account and the 21st for an address within the window get 429 with `Retry-After` without a password check, the window expiry or a successful login resets it, and a spoofed `X-Forwarded-For` from an untrusted peer does not change the address key; takeover after `ready` refused; secrets never in responses or logs (log-privacy test); `--testing` E2E unaffected |
 | **L-J-1** Jobs runtime | PG-2 | `jobs` claim/run/retry/lease, NOTIFY wakeup, embedded worker thread, `prks worker`, prune job, diagnostics counters | Kill-after-claim → lease expiry → exactly one reclaim → idempotent completion; stale-worker completion and heartbeat update nothing; repeated-crash job ends `failed` and frees its singleton key; dedupe tests, including a handled failure while a queued twin exists (A cancelled, B runs once); two concurrent workers with several queued jobs of one singleton key never run two and never surface `23505`; jobs of a Library in maintenance or of an older epoch are not claimed; worker graceful stop |
 | **L-W-1** Works core | PG-3, L-ID-1 | `works`, `manifestations`, `assets` (catalogue only), `work_notes`, projection module producing today's JSON; create/get/browse/recent/open/metadata/source/delete commands; facade methods; `CREATE_WORK`, `DELETE_WORK`, `MARK_WORK_OPENED`, `SET_WORK_METADATA_FIELD`, `SET_WORK_SOURCE`, note handlers | Parametrized Work and sync-family tests pass on PostgreSQL; JSON parity tests against SQLite fixtures; the #60 §4.1 negative tests as schema tests; deferred pointer FKs proven |
 | **L-W-2** Bulk, BibTeX, wiki links, Work merge scaffolding | L-W-1 | Bulk actions (SERIALIZABLE), BibTeX via citation record, wiki-link resolution | Byte-identical BibTeX tests; bulk atomicity tests |
