@@ -697,6 +697,9 @@ class ResearchNotesTabCloseAndReviewTests(_RecoveryPage, unittest.TestCase):
         self.assertEqual(self.note_rows(tab), [])
         self.assertEqual(self.server_text(server, work), 'Another device wrote this.')
         self.assertEqual(len(self.records(tab, work)), 1)
+        # An empty body (a note cleared before the tab closed) is copied, not skipped.
+        tab.evaluate("() => window.prksCopyTextToClipboard('')")
+        self.wait_clipboard(tab, '')
 
     def test_review_copy_falls_back_when_the_clipboard_api_refuses(self):
         """The textarea fallback still copies when writeText is refused (#532)."""

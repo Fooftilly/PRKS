@@ -466,8 +466,8 @@ function prksSetButtonBusy(button, busy, options = {}) {
  * @returns {Promise<void>}
  */
 async function prksCopyTextToClipboard(text) {
+    // An empty draft body is real text too: it replaces the clipboard, never a silent no-op.
     const s = text == null ? '' : String(text);
-    if (!s) return;
     let clipboardErr = null;
     if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
         try {
