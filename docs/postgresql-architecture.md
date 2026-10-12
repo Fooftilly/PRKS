@@ -625,7 +625,9 @@ nothing.
   data; `derived` holds rebuildable projections (search documents, extracted
   PDF text, research mentions). Extensions `pg_trgm` and `unaccent` live in
   their own `ext` schema. `search_path` is set per connection
-  (`prks, ext`), and migrations always schema-qualify.
+  (`prks, ext`), and migrations always schema-qualify. The migration runner
+  therefore only ever targets the live schemas; restore staging builds its
+  own schema without it (§11.4).
 - **Types.** `text` for identifiers and free text (with `CHECK` limits where
   the API already enforces them), `bigint` for revisions and generations,
   `boolean` for flags, `timestamptz` for every instant (UTC on the wire),
@@ -1366,9 +1368,14 @@ part of the Assets lane, against the new schema, not against SQLite.
 - **Ingest**: stream to a freshly minted key with exclusive create, hash while
   writing (`ingest_sha256` of the raw stream), fsync per `fs_durability`, then
   (for PDFs) linearize into a **second** new key whose hash becomes
-  `content_sha256`. Then one transaction inserts the Asset pointing at the
-  working key (and optionally the source key). A crash before COMMIT leaves an
-  unreferenced object, collected by the orphan sweep.
+  `content_sha256`. Then one transaction takes the per-object lock that
+  settle takes (§7.4) for each key it will reference, confirms each file
+  still exists with the size it wrote, and only then inserts the Asset
+  pointing at the working key (and optionally the source key). A sweep claim
+  settled before that lock therefore fails the ingest cleanly (the client
+  retries) instead of committing a locator to an unlinked file, and a claim
+  settled after it sees the Asset and keeps the object. A crash before COMMIT
+  leaves an unreferenced object, collected by the orphan sweep.
 - **Rewrite** (annotation materialization, re-linearization, replace): write
   the new bytes to a new key, then one transaction locks the Asset row,
   checks the revision it materialized, switches `storage_locator` and
@@ -1393,7 +1400,9 @@ part of the Assets lane, against the new schema, not against SQLite.
   them and the rows are deleted.
 - **Orphan sweep** (`objects.sweep`, maintenance job): lists the namespace and
   claims objects that no catalogue row references and that are older than a
-  grace period (24 h default), so an ingest in progress is never claimed. It
+  grace period (24 h default), so an ordinary ingest is not claimed; an
+  ingest that stalls past the grace period is caught by its own lock-coupled
+  existence check above rather than by age. It
   runs on demand and weekly; it never deletes directly, it only records
   claims, and claims are settled by the usual three-valued check.
 - **Why immutable**: backup can copy exactly the bytes a snapshot references
@@ -1486,6 +1495,25 @@ the older version.
   including identity mapping and constraint checks. Only a verified archive
   is offered for download.
 
+#### Staging schema
+
+The migration files schema-qualify every object as `prks` or `derived`
+(§6.1), so running them cannot build a separate staging schema; they would
+target the live one. Restore and backup verification therefore build
+`restore_<id>` from the live tables' own definitions with `CREATE TABLE …
+(LIKE prks.<t> …)`, which carries columns, defaults, `CHECK` and `NOT NULL`
+constraints, primary keys and unique indexes. `LIKE` does not copy foreign
+keys, so R1 checks them with generated anti-join queries, and R4's inserts
+into the live tables enforce them again. Before 1.0 the baseline files are
+edited in place and there is no forward path from an older schema, so an
+archive must carry the instance's schema version exactly; a mismatch is
+refused with a message naming both versions. After 1.0, an archive from an
+older schema version is first loaded into a scratch database that the runner
+builds at that version and migrates forward, then copied into the staging
+schema. How that scratch database is provisioned (it needs `CREATEDB` or an
+operator-supplied URL) is decided with the 1.0 compatibility work, which the
+golden-archive CI (below) tests.
+
 #### Identity mapping on restore
 
 The staged rows refer to the archive's Library, users and devices; the
@@ -1546,7 +1574,7 @@ Restore runs these phases, recorded in a `restore_runs` row with a lease
 | Phase | What happens | Visible to others |
 | --- | --- | --- |
 | R0 Validate | Hashes, manifest, schema and format version (newer refused; after 1.0 older accepted) | Nothing |
-| R1 Stage | Build `restore_<id>` with the migration runner at the archive's schema version, `COPY … FROM` with interchange casts, run forward migrations on it (post-1.0), map identities, check constraints; for each archive object, under the per-object lock `pg_advisory_xact_lock(hashtextextended('obj:'||key, 0))` that cleanup's settle also takes (§7.4), insert `restore_run_objects(run, key)` and commit; only then look at the file: missing → write it from the archive with exclusive create; present with the archive's hash → reuse; present with another hash → abort (a live object is never overwritten) | Nothing; reads and writes continue normally |
+| R1 Stage | Refuse an archive whose schema version differs from the instance's (see "Staging schema" below). Create `restore_<id>` without the migration runner: for each table in `BACKUP_CONTENT_TABLES`, `CREATE TABLE restore_<id>.<t> (LIKE prks.<t> INCLUDING DEFAULTS INCLUDING CONSTRAINTS INCLUDING INDEXES INCLUDING GENERATED)`, plus the mapping tables; `COPY … FROM` with interchange casts, map identities, then check every foreign key of the live tables against the staged rows with anti-join queries generated from `pg_constraint`; for each archive object, under the per-object lock `pg_advisory_xact_lock(hashtextextended('obj:'||key, 0))` that cleanup's settle also takes (§7.4), insert `restore_run_objects(run, key)` and commit; only then look at the file: missing → write it from the archive with exclusive create; present with the archive's hash → reuse; present with another hash → abort (a live object is never overwritten) | Nothing; reads and writes continue normally |
 | R2 Enter | One committed transaction: `UPDATE libraries SET maintenance = 'restore', maintenance_run = <run> WHERE id = L AND maintenance IS NULL` (refused if another maintenance is active, or if a backup run is active) | From here every new command refuses with `MAINTENANCE` |
 | R3 Drain | On the restore connection, in one explicit short transaction (`BEGIN; SET LOCAL lock_timeout = <drain timeout>`, then both locks, then `COMMIT` before R4's SERIALIZABLE transaction begins; §4.3), take `pg_advisory_lock(lib_key(L))` **exclusive** (waits for every in-flight command, which holds the shared lock, to commit or roll back) and `pg_advisory_lock((L,'objects'))` exclusive (waits for a running backup copy, bounded by a timeout that aborts the restore). Then re-check ownership: `libraries.maintenance_run` must still be this run; otherwise the run lost its lease, so release and abort. With cleanup now excluded by the objects lock, re-verify that every key in `restore_run_objects` exists with the archive's size; rewrite a missing one from the archive, abort on a mismatch | Commands that slipped in before R2 finish first |
 | R4 Commit | One SERIALIZABLE transaction that first locks the `libraries` row `FOR UPDATE` and aborts unless `maintenance = 'restore' AND maintenance_run = <run>` and the `restore_runs` row is still this run's live lease; then: delete the Library's rows of the content tables (the allowlist, never memberships, sessions or operational rows) and its `derived` rows; insert the devices the identity mapping marked as new, then the staged, mapped rows; record a `hold` cleanup claim for every object the old catalogue referenced and the new one does not; cancel the Library's queued and running jobs (`state = 'cancelled'`, `lease_id = NULL`, `last_error = 'restore_superseded'`); set `epoch = epoch + 1` and `maintenance = NULL`; **enqueue** `derived.rebuild`, a cleanup retry and the orphan sweep at the new epoch; mark the run committed | Atomically: the old Library before COMMIT, the restored one (with its follow-up jobs already queued) after |
@@ -1834,6 +1862,7 @@ services:
     environment: *prks_env
     ports: ["${PRKS_PUBLISH_HOST:-127.0.0.1}:8080:8080"]
     volumes: [./data:/data]
+    secrets: [prks_database_url]
     depends_on: {migrate: {condition: service_completed_successfully}}
     healthcheck: {test: ["CMD", "python", "-c", "…GET /readyz…"]}
   worker:
@@ -1841,6 +1870,7 @@ services:
     command: ["python", "/app/prks_app.py", "worker"]
     environment: *prks_env
     volumes: [./data:/data]
+    secrets: [prks_database_url]   # Compose grants a secret only to services that list it
     depends_on: {migrate: {condition: service_completed_successfully}}
 volumes: {pgdata: {}}
 secrets:
@@ -1946,6 +1976,14 @@ the lane that ports the relevant module.
 - Restore staging vs sweep: an orphan sweep run during a stalled R1 older
   than the grace period records no claim for staged keys; after the run
   fails they become orphans; after it commits they are referenced.
+- Stalled ingest vs sweep: an ingest paused after writing its key, past the
+  grace period, while a sweep claims and settles that key, fails cleanly at
+  its existence check and commits no Asset; a claim settled after the
+  ingest's commit keeps the object.
+- Restore staging isolation: building and loading `restore_<id>` leaves the
+  live schemas' catalog snapshot unchanged; a staged row that breaks a live
+  foreign key is refused in R1; an archive with a different schema version
+  is refused before staging.
 - Backup table classification: every library-scoped table is on exactly one
   of the content and excluded lists; a restore leaves memberships and
   sessions untouched.
@@ -2119,12 +2157,12 @@ merged; several run at the same time).
 | **L-P-1** People | L-W-1 | Persons, aliases as rows, roles (no `rowid`), person groups, publishers; their sync families | Parametrized tests; Greek/Cyrillic identity for publishers and groups; role order stable without `rowid` |
 | **L-O-1** Organization | L-W-1 | Tags (aliases, merge), folders, folder tags, playlists, Saved Views, settings split; their sync families | Parametrized tests; tag merge concurrency test; per-parent folder identity; one-playlist-per-Work |
 | **L-R-1** Research | L-W-1 | Concepts with `concept_keys`, Positions, Arguments, sources/targets, notes integration, derived mentions via `research.reindex_work`, graph projection | Parametrized tests; Research-ACK fence still observed by E2E; no Python full scan for concept resolution |
-| **L-A-1** Objects and annotations | L-W-1, L-J-1 | #311 Phase B on PostgreSQL: all managed-file paths through `StorageBackend`; immutable objects; cleanup claims, orphan sweep, and the `restore_run_objects` table counted by the reference check (§11.2); annotations, materialization, PDF replace, save-confirm from durable state; person portraits | Object lifecycle tests (§13.3); write-amplification measurement recorded in the PR; no `os.remove` outside the storage backend; parametrized annotation and sync tests pass |
+| **L-A-1** Objects and annotations | L-W-1, L-J-1 | #311 Phase B on PostgreSQL: all managed-file paths through `StorageBackend`; immutable objects; cleanup claims, orphan sweep, and the `restore_run_objects` table counted by the reference check (§11.2); annotations, materialization, PDF replace, save-confirm from durable state; person portraits | Object lifecycle tests (§13.3), including a stalled ingest whose key the sweep settles failing cleanly at its lock-coupled existence check; write-amplification measurement recorded in the PR; no `os.remove` outside the storage backend; parametrized annotation and sync tests pass |
 | **L-PR-1** Processing | L-A-1 | Inbox scan as a job, import through the objects lane | Parametrized processing tests; no absolute path stored |
 | **L-S-1** Search | L-W-1, L-J-1 | `derived.work_search` maintained by commands, `asset_text` via `text.extract`, trigram filters, parity ordering, Saved View execution, `rebuild-derived`; `backend/AGENTS.md` extracted-text rule amended for the `derived` schema (§16, decision 5) | §8.7 parity tests; search parametrized tests pass with the documented Unicode improvements replacing ASCII pins |
 | **L-S-2** Ranking | L-S-1 | Single weighted score | Before/after results on a synthetic multilingual corpus approved in review |
-| **L-B-1** Backup and restore format 2 | L-W-1, L-P-1, L-O-1, L-R-1, L-A-1 | §11.4 | Round-trip test over a fixture covering every canonical table and object kind; text `COPY` with the interchange contract (no binary `COPY`); restore into the same and into a new instance with real sync operations, the archive Library mapped to the target Library and all library/user/device references resolving; a restore over a different Library whose IDs still exist is refused; R1 reuse of an existing object is lock-coupled to cleanup settle and re-verified in R3, so R4 never commits a locator to a missing object; new devices are inserted only by R4; a restore that outlives its lease aborts and never replaces writes accepted after recovery; export, staging and the R4 delete/insert use only the content-table allowlist, and a schema test classifies every library-scoped table; staged objects of a live run survive an orphan sweep (L-B-1 only writes `restore_run_objects` rows; the table and its term in the reference check belong to L-A-1); verification refuses tampered archives; fault injection at R0–R5, including a kill immediately after the R4 commit that still rebuilds search after restart; the exclusion interleavings of §13.3; restoring an older snapshot while a long job runs and a pending edit exists never applies either to the replacement state; backup concurrent with writes and cleanup; format 1 refused with a clear message |
-| **L-D-1** Compose and health | PG-1, L-ID-1, L-J-1 | Dockerfile with psycopg, Compose of §12.3, `/healthz`, `/readyz`, graceful stop, `.env.example`, README deployment section, #612 configuration entries | Clean `docker compose up` smoke test in CI reaches `/readyz` and bootstrap; the database volume is mounted at `/var/lib/postgresql`; data survives `down`/`up` and container recreation with the volume kept; wrong root/database pairing refused at start |
+| **L-B-1** Backup and restore format 2 | L-W-1, L-P-1, L-O-1, L-R-1, L-A-1 | §11.4 | Round-trip test over a fixture covering every canonical table and object kind; text `COPY` with the interchange contract (no binary `COPY`); restore into the same and into a new instance with real sync operations, the archive Library mapped to the target Library and all library/user/device references resolving; a restore over a different Library whose IDs still exist is refused; R1 reuse of an existing object is lock-coupled to cleanup settle and re-verified in R3, so R4 never commits a locator to a missing object; new devices are inserted only by R4; a restore that outlives its lease aborts and never replaces writes accepted after recovery; export, staging and the R4 delete/insert use only the content-table allowlist, and a schema test classifies every library-scoped table; staging builds `restore_<id>` with `LIKE` from the live tables, never with the migration runner, checks foreign keys with generated anti-joins, and refuses an archive of another schema version (§13.3 staging isolation); staged objects of a live run survive an orphan sweep (L-B-1 only writes `restore_run_objects` rows; the table and its term in the reference check belong to L-A-1); verification refuses tampered archives; fault injection at R0–R5, including a kill immediately after the R4 commit that still rebuilds search after restart; the exclusion interleavings of §13.3; restoring an older snapshot while a long job runs and a pending edit exists never applies either to the replacement state; backup concurrent with writes and cleanup; format 1 refused with a clear message |
+| **L-D-1** Compose and health | PG-1, L-ID-1, L-J-1 | Dockerfile with psycopg, Compose of §12.3, `/healthz`, `/readyz`, graceful stop, `.env.example`, README deployment section, #612 configuration entries | Clean `docker compose up` smoke test in CI reaches `/readyz` and bootstrap; the database volume is mounted at `/var/lib/postgresql`; `web` and `worker` each list the `prks_database_url` secret and read it at start; data survives `down`/`up` and container recreation with the volume kept; wrong root/database pairing refused at start |
 | **L-F-1** Browser store scoping, auth hold and restore epoch | L-ID-1 | §10.3–10.4 on the client | E2E: two accounts in one browser never see each other's drafts or queue; session expiry mid-queue holds and later delivers; pre-0.8 queue offered review-only, never auto-deleted; after a restore to an older snapshot a pending edit is not applied, its text is offered in review-only recovery, and older-epoch drafts are never auto-restored; every mutation carries `PRKS-Library-Epoch`; #465/#466 suites green |
 
 **Stage 3. Cutover (sequential).**
