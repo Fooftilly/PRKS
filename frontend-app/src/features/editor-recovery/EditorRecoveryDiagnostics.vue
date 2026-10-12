@@ -154,6 +154,12 @@ async function readText(row: Row): Promise<string | null> {
   if (!diagnostics || !target) return null
   const result = await diagnostics.readText(target)
   if (result.ok) return result.text
+  if (result.code === 'changed' || result.code === 'live') {
+    // What the list showed no longer holds: read it again, and say why at the top.
+    await load()
+    listMessage.value = textFailureText(result.code)
+    return null
+  }
   setMessage(row, textFailureText(result.code))
   return null
 }

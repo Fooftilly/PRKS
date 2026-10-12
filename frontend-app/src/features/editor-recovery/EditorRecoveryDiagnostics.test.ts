@@ -41,6 +41,7 @@ function inventory(over: Partial<RecoveryInventory> = {}): RecoveryInventory {
     unreadableEmergency: [],
     totalChars: 0,
     approxBytes: 0,
+    sizeIncomplete: false,
     overBudget: false,
     ...over,
   }
@@ -87,11 +88,12 @@ describe('EditorRecoveryDiagnostics', () => {
     const api = install([
       inventory({
         drafts: [draft(), draft({ draftId: 'd-2', kind: 'folder-private-note', entityType: 'folder', entityId: 'f1', lineage: 'unknown', old: true, deletedHere: false })],
-        unreadable: [{ source: 'unreadable-record', draftId: 'd-new', reason: 'newer-version', kind: 'work-private-note', entityType: 'work', entityId: 'w9', updatedAt: 1 }],
+        unreadable: [{ source: 'unreadable-record', draftId: 'd-new', reason: 'newer-version', kind: 'work-private-note', entityType: 'work', entityId: 'w9', updatedAt: 1, bodyLength: null }],
         emergency: [{ source: 'emergency', key: 'k1', pageInstanceId: 'p-1', draftId: 'd-e', kind: 'work-private-note', entityType: 'work', entityId: 'w2', generation: 2, bodyLength: 5, at: 1, lineage: 'unknown' }],
         unreadableEmergency: [{ source: 'unreadable-emergency', key: 'k2', pageInstanceId: 'p-2', reason: 'malformed', rawLength: 9 }],
         totalChars: 29,
         approxBytes: 58,
+        sizeIncomplete: true,
       }),
     ])
     const wrapper = mount(EditorRecoveryDiagnostics, { attachTo: document.body })
@@ -113,7 +115,7 @@ describe('EditorRecoveryDiagnostics', () => {
     expect(rows[2]!.find('[data-prks-role="editor-recovery-diag-discard"]').exists()).toBe(false)
     expect(rows[3]!.find('[data-prks-role="editor-recovery-diag-discard"]').exists()).toBe(false)
     expect(rows[4]!.find('[data-prks-role="editor-recovery-diag-copy"]').text()).toBe('Copy raw data')
-    expect(wrapper.find('[data-prks-role="editor-recovery-diag-summary"]').text()).toContain('5 editor drafts kept in this browser')
+    expect(wrapper.find('[data-prks-role="editor-recovery-diag-summary"]').text()).toContain('5 editor drafts kept in this browser, at least about 58 B')
   })
 
   it('shows, copies and downloads the whole text on request', async () => {
@@ -178,6 +180,18 @@ describe('EditorRecoveryDiagnostics', () => {
     await wrapper.find('[data-prks-role="editor-recovery-diag-discard"]').trigger('click')
     await flushPromises()
     expect(wrapper.find('[data-prks-role="editor-recovery-diag-message"]').text()).toContain('was not discarded')
+  })
+
+  it('reads the list again when a draft changed or opened in an editor since it was listed', async () => {
+    const api = install([inventory({ drafts: [draft()] }), inventory()], {
+      readText: vi.fn(async () => ({ ok: false as const, code: 'changed' as const })),
+    })
+    const wrapper = await open()
+    await wrapper.find('[data-prks-role="editor-recovery-diag-view"]').trigger('click')
+    await flushPromises()
+    expect(api.inventory).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('[data-prks-role="editor-recovery-diag-message"]').text()).toContain('The list was refreshed.')
+    expect(wrapper.findAll('[data-prks-role="editor-recovery-diag-row"]')).toHaveLength(0)
   })
 
   it('says when storage is unavailable, local storage is refused, or the budget is exceeded', async () => {

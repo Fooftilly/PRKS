@@ -74,6 +74,8 @@ export interface DiagnosticsUnreadableRecord {
   entityType: string | null
   entityId: string | null
   updatedAt: number | null
+  /** As the record states it; null when it does not. */
+  bodyLength: number | null
 }
 
 /** Text only an emergency key holds: its page is still open, or not proven gone. */
@@ -113,6 +115,8 @@ export interface RecoveryInventory {
   totalChars: number
   /** Approximate storage those characters take (UTF-16). */
   approxBytes: number
+  /** Some kept copy states no size (an unreadable record or key): the totals are a lower bound. */
+  sizeIncomplete: boolean
   overBudget: boolean
 }
 
@@ -242,6 +246,7 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
       entityType: stringOrNull(r.entityType),
       entityId: stringOrNull(r.entityId),
       updatedAt: typeof r.updatedAt === 'number' ? r.updatedAt : null,
+      bodyLength: typeof r.bodyLength === 'number' && Number.isFinite(r.bodyLength) && r.bodyLength >= 0 ? r.bodyLength : null,
     }
   }
 
@@ -335,9 +340,14 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
     }
     const { state, rows, drafts, unreadable } = await listRecords(at)
     const { emergency, unreadableEmergency } = await listEmergency(rows)
-    const totalChars =
-      drafts.reduce((sum, d) => sum + (Number.isFinite(d.bodyLength) ? d.bodyLength : 0), 0) +
-      emergency.reduce((sum, e) => sum + (e.bodyLength || 0), 0)
+    // Everything kept counts, readable or not: an unreadable copy takes storage too.
+    const sizes = [
+      ...drafts.map((d) => (Number.isFinite(d.bodyLength) ? d.bodyLength : null)),
+      ...emergency.filter((e) => e.bodyLength !== null).map((e) => e.bodyLength),
+      ...unreadable.map((u) => u.bodyLength),
+      ...unreadableEmergency.map((u) => u.rawLength),
+    ]
+    const totalChars = sizes.reduce<number>((sum, n) => sum + (n ?? 0), 0)
     const approxBytes = totalChars * 2
     return {
       storage: state,
@@ -348,6 +358,7 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
       unreadableEmergency,
       totalChars,
       approxBytes,
+      sizeIncomplete: sizes.some((n) => n === null),
       overBudget: approxBytes > RECOVERY_WARN_BYTES,
     }
   }
@@ -380,12 +391,17 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
     return row && typeof row.body === 'string' ? { ok: true, text: row.body } : { ok: false, code: 'missing' }
   }
 
-  function readEmergencyText(key: string, draftId: string, generation: number): TextResult {
+  async function readEmergencyText(key: string, draftId: string, generation: number): Promise<TextResult> {
     const stored = storage ? readEmergencyKeys(storage).find((s) => s.key === key) : undefined
-    if (!stored || !stored.payload) return { ok: false, code: 'changed' }
-    const entry = stored.payload.entries.find((e) => e.draftId === draftId && e.generation === generation)
+    const payload = stored ? stored.payload : null
+    if (!stored || !payload) return { ok: false, code: 'changed' }
+    const entry = payload.entries.find((e) => e.draftId === draftId && e.generation === generation)
     if (!entry) return { ok: false, code: 'changed' }
-    return entry.body === null ? { ok: false, code: 'missing' } : { ok: true, text: entry.body }
+    if (entry.body === null) return { ok: false, code: 'missing' }
+    // Its page may have resumed since the list was read: an open editor is the authority on its text.
+    const owner = { runtimeId: payload.runtimeId, pageInstanceId: stored.pageInstanceId, paneId: '', claimedAt: payload.at }
+    if (isLive(await classifySafely({ draftId, owner }))) return { ok: false, code: 'live' }
+    return { ok: true, text: entry.body }
   }
 
   function readRawEmergency(key: string): TextResult {
@@ -406,7 +422,7 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
         case 'unreadable-record':
           return await readUnreadableText(target.draftId)
         case 'emergency':
-          return readEmergencyText(target.key, target.draftId, target.generation)
+          return await readEmergencyText(target.key, target.draftId, target.generation)
         case 'unreadable-emergency':
           return readRawEmergency(target.key)
       }

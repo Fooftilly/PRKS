@@ -168,6 +168,9 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     const diag = createRecoveryDiagnostics(viewer, { storage: local })
     const inv = await diag.inventory()
     expect(inv.drafts).toEqual([])
+    // Unreadable copies count towards the size; one that states none makes the total a lower bound.
+    expect(inv.totalChars).toBe('newer schema text'.length)
+    expect(inv.sizeIncomplete).toBe(true)
     expect(inv.unreadable).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ draftId, reason: 'newer-version', kind: 'work-research-note', entityId: 'w1' }),
@@ -205,7 +208,8 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     const inv = await diag.inventory()
     const held = inv.emergency.find((e) => e.draftId === w.draftId())!
     expect(held).toMatchObject({ lineage: 'other-live', bodyLength: 'hidden tab text'.length, kind: 'work-research-note', entityId: 'w1' })
-    expect(await diag.readText({ source: 'emergency', key: held.key, draftId: held.draftId, generation: held.generation })).toEqual({ ok: true, text: 'hidden tab text' })
+    // Its editor is open: the text is read there, not from the key.
+    expect(await diag.readText({ source: 'emergency', key: held.key, draftId: held.draftId, generation: held.generation })).toEqual({ ok: false, code: 'live' })
     expect(inv.emergency.find((e) => e.draftId === 'd-tail')).toMatchObject({ bodyLength: null, entityId: 'w2' })
     expect(inv.unreadableEmergency.map((u) => [u.pageInstanceId, u.reason]).sort()).toEqual([['p-broken', 'malformed'], ['p-newer', 'newer-version']])
     expect(await diag.readText({ source: 'unreadable-emergency', key: EMERGENCY_KEY_PREFIX + 'p-broken' })).toEqual({ ok: true, text: '{"v": 1, "entr' })
@@ -215,6 +219,26 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     // The page itself skips its own key: its editors are open here.
     const own = await createRecoveryDiagnostics(live, { storage: local }).inventory()
     expect(own.emergency.find((e) => e.draftId === w.draftId())).toBeUndefined()
+  })
+
+  it('refuses an emergency copy\'s text once its page answers for it again', async () => {
+    const { page, local } = setup()
+    const frozen = { now: true }
+    const tab = page('frozen', frozen)
+    await tab.rt.start()
+    const w = tab.rt.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE })
+    w.edit(1, 'typed while frozen')
+    expect(tab.rt.writers.writeEmergencyNow()).toBe('written')
+    const viewer = page('viewer').rt
+    await viewer.start()
+    const diag = createRecoveryDiagnostics(viewer, { storage: local })
+    const [held] = (await diag.inventory()).emergency
+    expect(held!.lineage).toBe('unknown')
+    const target = { source: 'emergency' as const, key: held!.key, draftId: held!.draftId, generation: held!.generation }
+    expect(await diag.readText(target)).toEqual({ ok: true, text: 'typed while frozen' })
+    // The tab resumes: its editor holds newer text than the key.
+    frozen.now = false
+    expect(await diag.readText(target)).toEqual({ ok: false, code: 'live' })
   })
 
   it('merges a closed page\'s emergency text into a record before listing it', async () => {

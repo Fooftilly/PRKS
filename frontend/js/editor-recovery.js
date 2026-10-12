@@ -1089,7 +1089,8 @@ var prksEditorRecovery = (function(exports) {
 				kind: stringOrNull(r.kind),
 				entityType: stringOrNull(r.entityType),
 				entityId: stringOrNull(r.entityId),
-				updatedAt: typeof r.updatedAt === "number" ? r.updatedAt : null
+				updatedAt: typeof r.updatedAt === "number" ? r.updatedAt : null,
+				bodyLength: typeof r.bodyLength === "number" && Number.isFinite(r.bodyLength) && r.bodyLength >= 0 ? r.bodyLength : null
 			};
 		}
 		/** Stored records: readable ones classified, unreadable ones listed as they are. */
@@ -1177,7 +1178,13 @@ var prksEditorRecovery = (function(exports) {
 			} catch {}
 			const { state, rows, drafts, unreadable } = await listRecords(at);
 			const { emergency, unreadableEmergency } = await listEmergency(rows);
-			const totalChars = drafts.reduce((sum, d) => sum + (Number.isFinite(d.bodyLength) ? d.bodyLength : 0), 0) + emergency.reduce((sum, e) => sum + (e.bodyLength || 0), 0);
+			const sizes = [
+				...drafts.map((d) => Number.isFinite(d.bodyLength) ? d.bodyLength : null),
+				...emergency.filter((e) => e.bodyLength !== null).map((e) => e.bodyLength),
+				...unreadable.map((u) => u.bodyLength),
+				...unreadableEmergency.map((u) => u.rawLength)
+			];
+			const totalChars = sizes.reduce((sum, n) => sum + (n ?? 0), 0);
 			const approxBytes = totalChars * 2;
 			return {
 				storage: state,
@@ -1188,6 +1195,7 @@ var prksEditorRecovery = (function(exports) {
 				unreadableEmergency,
 				totalChars,
 				approxBytes,
+				sizeIncomplete: sizes.some((n) => n === null),
 				overBudget: approxBytes > RECOVERY_WARN_BYTES
 			};
 		}
@@ -1228,21 +1236,35 @@ var prksEditorRecovery = (function(exports) {
 				code: "missing"
 			};
 		}
-		function readEmergencyText(key, draftId, generation) {
+		async function readEmergencyText(key, draftId, generation) {
 			const stored = storage ? readEmergencyKeys(storage).find((s) => s.key === key) : void 0;
-			if (!stored || !stored.payload) return {
+			const payload = stored ? stored.payload : null;
+			if (!stored || !payload) return {
 				ok: false,
 				code: "changed"
 			};
-			const entry = stored.payload.entries.find((e) => e.draftId === draftId && e.generation === generation);
+			const entry = payload.entries.find((e) => e.draftId === draftId && e.generation === generation);
 			if (!entry) return {
 				ok: false,
 				code: "changed"
 			};
-			return entry.body === null ? {
+			if (entry.body === null) return {
 				ok: false,
 				code: "missing"
-			} : {
+			};
+			if (isLive(await classifySafely({
+				draftId,
+				owner: {
+					runtimeId: payload.runtimeId,
+					pageInstanceId: stored.pageInstanceId,
+					paneId: "",
+					claimedAt: payload.at
+				}
+			}))) return {
+				ok: false,
+				code: "live"
+			};
+			return {
 				ok: true,
 				text: entry.body
 			};
@@ -1273,7 +1295,7 @@ var prksEditorRecovery = (function(exports) {
 				switch (target.source) {
 					case "record": return await readRecordText(target.expect);
 					case "unreadable-record": return await readUnreadableText(target.draftId);
-					case "emergency": return readEmergencyText(target.key, target.draftId, target.generation);
+					case "emergency": return await readEmergencyText(target.key, target.draftId, target.generation);
 					case "unreadable-emergency": return readRawEmergency(target.key);
 				}
 			} catch {

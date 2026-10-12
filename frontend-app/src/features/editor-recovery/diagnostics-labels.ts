@@ -110,7 +110,8 @@ export function summaryText(inv: RecoveryInventory): string {
   const count = inv.drafts.length + inv.emergency.length + inv.unreadable.length + inv.unreadableEmergency.length
   if (!count) return 'No editor drafts are kept in this browser.'
   const head = `${count} editor draft${count === 1 ? '' : 's'} kept in this browser`
-  return `${head}, about ${approxSize(inv.approxBytes)} (${lengthText(inv.totalChars)}).`
+  const about = inv.sizeIncomplete ? 'at least about' : 'about'
+  return `${head}, ${about} ${approxSize(inv.approxBytes)} (${lengthText(inv.totalChars)}).`
 }
 
 export function budgetText(inv: Pick<RecoveryInventory, 'overBudget'>): string | null {
