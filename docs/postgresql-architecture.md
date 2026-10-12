@@ -94,7 +94,7 @@ explicit answer.
 | PG16 | Authentication | One owner account per instance in 0.8, Argon2id password hashes (`argon2-cffi`), opaque server-side sessions in PostgreSQL, HttpOnly SameSite cookies, and the existing Origin checks hardened for HTTPS and proxies (§9). Row-level security is not used in 0.8. |
 | PG17 | Library selection | A request's Library comes from the authenticated session in 0.8 (one Library). It travels in an explicit request context, so a later path- or header-based selector is a routing change, not a domain change (§9.4). |
 | PG18 | Sync protocol | The durable-operation protocol, its conflict units, revisions, ACK shapes and the browser stores keep their semantics. Only the server mechanics move to PostgreSQL. Browser databases become scoped to instance, Library and user (§10). |
-| PG19 | Backup | A PRKS-owned logical archive (format 2): a consistent snapshot of the Library's canonical rows in text `COPY` with a typed interchange contract, credential-free attribution identities, and every object the rows reference, verified before publishing. Restore drains writers behind a committed maintenance flag and commits in **one PostgreSQL transaction** (§11.4). `pg_dump` stays an operator tool for whole-cluster disaster recovery, not the library backup. |
+| PG19 | Backup | A PRKS-owned logical archive (format 2): a consistent snapshot of the Library's canonical rows in text `COPY` with a typed interchange contract, credential-free attribution identities, and every object the rows reference, verified before publishing. Restore drains writers behind a committed maintenance flag, commits in **one PostgreSQL transaction** that also enqueues its follow-up jobs, and advances a per-Library **epoch** that fences pre-restore jobs, requests and browser outboxes (§11.4). `pg_dump` stays an operator tool for whole-cluster disaster recovery, not the library backup. |
 | PG20 | HTTP server | 0.8 keeps the stdlib HTTP adapter and connects it to a connection pool. Replacing it with a production WSGI/ASGI server is a separate research item that must finish before 1.0 (§4.5). |
 | PG21 | Deployment | Compose runs `postgres:18`, a one-shot `migrate` service, `web` and `worker`. Database data lives in its own named volume, never inside the PRKS data root (§12.3). |
 | PG22 | Transition | Build the PostgreSQL implementation beside the SQLite runtime, family by family, behind the same facade and the same parametrized tests. Switch once, then delete SQLite in the same release (§15). |
@@ -536,7 +536,8 @@ def add_work_tag(ctx: RequestContext, work_id: str, tag_id: str,
 ```
 
 - **A command is one transaction.** It takes the Library maintenance lock in
-  shared mode (§11.4), authorizes the actor for the Library,
+  shared mode, checks that the Library's `epoch` equals the epoch the caller
+  acted on (§11.4), authorizes the actor for the Library,
   validates, decides against the current revision, writes, advances the
   revisions it touched, enqueues jobs and returns a result. The REST endpoint
   and the durable-operation handler for the same action call **the same
@@ -644,6 +645,7 @@ CREATE TABLE prks.libraries (
   name        text NOT NULL,
   maintenance text CHECK (maintenance IN ('restore','rebuild')),
   maintenance_run uuid,                -- the restore/rebuild run that set it (§11.4)
+  epoch       bigint NOT NULL DEFAULT 1 CHECK (epoch >= 1),  -- restore generation; +1 on every restore (§11.4)
   created_at  timestamptz NOT NULL DEFAULT now()
 );
 
@@ -883,6 +885,11 @@ RETURNING op_id;
   replay the stored status and body; different hash → 409 `OP_ID_REUSE`.
 - Dependencies (`depends_on`) are checked inside the same transaction, as
   today.
+- **Ledger before epoch.** An `op_id` already in the ledger replays its stored
+  result whatever epoch it carries, because the restored state already
+  contains its effect. Only an operation that would be *applied* now is
+  compared with the Library's current epoch, and a mismatch is refused with
+  409 `LIBRARY_EPOCH_CHANGED` without being ledgered (§11.4).
 - The ledger row records `user_id` and `library_id`, and the device must
   belong to the authenticated user, so a replayed `op_id` from another account
   is `OP_ID_REUSE`, never a disclosure of another user's result.
@@ -893,7 +900,7 @@ RETURNING op_id;
 | --- | --- | --- |
 | Serialize all mutations | `LibraryAccessGate` | Not needed. Row locks and constraints serialize what conflicts. |
 | Backup must not interleave with deletions of objects it is copying | gate "backup" mode | Shared advisory lock `(library, 'objects')` held by backup; object cleanup takes it exclusively per batch (§11.3). DB consistency comes from the snapshot. |
-| Restore exclusive | gate "restore" mode | Committed `libraries.maintenance = 'restore'` plus the Library maintenance lock: every command takes it shared (try-lock) and re-reads the flag; restore takes it exclusive to drain in-flight writers before its one-transaction commit (§11.4) |
+| Restore exclusive | gate "restore" mode | Committed `libraries.maintenance = 'restore'` plus the Library maintenance lock: every command takes it shared (try-lock) and re-reads the flag; restore takes it exclusive to drain in-flight writers before its one-transaction commit, which advances `libraries.epoch` to fence everything that started earlier (§11.4) |
 | Reference check + delete of an object | `_PDF_PATH_LOCKS` + one transaction | `pg_advisory_xact_lock(hashtextextended('obj:'||name, 0))` + the same single transaction (`settle_claim_if_referenced`) |
 | Materialization validate → replace → mark | per-Work `threading.Lock` | `SELECT … FROM assets WHERE id = … FOR UPDATE` |
 | Cleanup retry single runner | implicit (one process) | It is a job; one claimed job per Library at a time via a unique `singleton_key` |
@@ -1236,6 +1243,21 @@ account's queued intents or recovered drafts to another. Recommendation:
 - **Library mismatch** (an operation whose ledger Library differs from the
   session's) is answered `409 LIBRARY_MISMATCH` and held, never applied to the
   session's Library.
+- **Library epoch.** `GET /api/session`, every state endpoint and every
+  ETag carry the Library's `epoch` (§11.4). Each queued intent records the
+  epoch it was created under, and each recovery draft records the epoch of
+  the base it proved. When the client sees a newer epoch (on startup, on
+  resume, in a response header, or from a 409 `LIBRARY_EPOCH_CHANGED`), the
+  sync runtime stops delivering older-epoch rows and moves them, with their
+  text, to the review-only "unsent changes from before this library was
+  restored" list, the same mechanism as the pre-0.8 list in §10.3: copy-out
+  and explicit discard, never automatic deletion or re-submission. Drafts
+  whose base belongs to an older epoch become unproven-base drafts: shown for
+  review, never auto-restored or auto-adopted, exactly as #489 treats unknown
+  owners. Cached bodies of an older epoch are invalidated, since an ETag of
+  the old epoch never validates against the new one. A revision number alone
+  is never taken as proof of a base across epochs, because a restored older
+  snapshot can reach the same number again with different content.
 - The service worker never caches authenticated API responses beyond what it
   caches today, and the scoped PDF cache is cleared from the scope's
   perspective on sign-out only if the user asks (sign-out on a shared device
@@ -1435,8 +1457,8 @@ Restore runs these phases, recorded in a `restore_runs` row with a lease
 | R1 Stage | Build `restore_<id>` with the migration runner at the archive's schema version, `COPY … FROM` with interchange casts, run forward migrations on it (post-1.0), map identities, check constraints; write every object under its key (immutable, random keys: never overwrites a live object; an identical key with an identical hash is reused) | Nothing; reads and writes continue normally |
 | R2 Enter | One committed transaction: `UPDATE libraries SET maintenance = 'restore', maintenance_run = <run> WHERE id = L AND maintenance IS NULL` (refused if another maintenance is active, or if a backup run is active) | From here every new command refuses with `MAINTENANCE` |
 | R3 Drain | On the restore connection, take `pg_advisory_lock(lib_key(L))` **exclusive** (waits for every in-flight command, which holds the shared lock, to commit or roll back) and `pg_advisory_lock((L,'objects'))` exclusive (waits for a running backup copy, bounded by a timeout that aborts the restore) | Commands that slipped in before R2 finish first |
-| R4 Commit | One SERIALIZABLE transaction: delete the Library's canonical rows; insert the staged, mapped rows; record a `hold` cleanup claim for every object the old catalogue referenced and the new one does not; set `maintenance = NULL`; mark the run committed | Atomically: the old Library before COMMIT, the restored one after |
-| R5 Release | Release both locks, drop the staging schema, enqueue `derived.rebuild`, cleanup retries and the orphan sweep | Normal operation |
+| R4 Commit | One SERIALIZABLE transaction: delete the Library's canonical rows and its `derived` rows; insert the staged, mapped rows; record a `hold` cleanup claim for every object the old catalogue referenced and the new one does not; cancel the Library's queued and running jobs (`state = 'cancelled'`, `lease_id = NULL`, `last_error = 'restore_superseded'`); set `epoch = epoch + 1` and `maintenance = NULL`; **enqueue** `derived.rebuild`, a cleanup retry and the orphan sweep at the new epoch; mark the run committed | Atomically: the old Library before COMMIT, the restored one (with its follow-up jobs already queued) after |
+| R5 Release | Release both locks and drop the staging schema; nothing in R5 is needed for correctness | Normal operation |
 
 **Crash recovery.** PostgreSQL releases advisory locks when the restore
 connection dies. A crash before R2 leaves nothing to undo except the staging
@@ -1444,8 +1466,55 @@ schema and staged objects (dropped, and swept as orphans). A crash between R2
 and R4 leaves the flag set with the live data untouched: when the run's lease
 expires, startup or the maintenance reaper clears `maintenance` for that
 `maintenance_run` and marks the run failed. A crash after R4 leaves the
-restored Library with its holds recorded. No file-rename journal is needed for
-the database half.
+restored Library with its holds recorded and its rebuild, cleanup retry and
+orphan sweep already queued, because they were enqueued in the R4
+transaction (the same transactional-outbox rule as §5.2). The only R5 work a
+crash can skip is dropping the staging schema; startup drops any
+`restore_<id>` schema whose run is committed or failed. No file-rename
+journal is needed for the database half.
+
+**Search while rebuilding.** R4 deletes the Library's `derived` rows rather
+than leaving stale ones, so search can never return rows of the replaced
+Library. Until the `derived.rebuild` job for the Library succeeds, search
+responses carry `index_state: "rebuilding"` and the UI says results are
+incomplete.
+
+#### Restore epoch: fencing work that started before the restore
+
+R2 and R3 stop new commands and drain in-flight command transactions, but
+work can *outlive* a transaction: a job handler computing between two
+transactions, a job queued before the restore, a browser tab that loaded the
+old Library, and a browser outbox with pending intents. Matching revision
+numbers cannot tell these apart from current work, because restoring an older
+snapshot lowers revisions that later edits raise to the same numbers again.
+So every Library has a monotonic `epoch` (§6.2), and R4 advances it.
+
+- **Commands.** Every command states the epoch it acts on, and after taking
+  the maintenance lock shared it compares that with `libraries.epoch`. A
+  mismatch refuses with 409 `LIBRARY_EPOCH_CHANGED` before any write.
+- **API requests.** The browser sends the epoch it loaded in a
+  `PRKS-Library-Epoch` header on every mutation and in every durable
+  operation envelope. A mutation without it is refused with 400, so no
+  client can bypass the fence (enforced from the cutover, once L-F-1 sends
+  it). Responses carry the current
+  epoch.
+- **Jobs.** A job records `library_epoch` when it is enqueued. R4 cancels
+  every queued and running job of the Library and clears its `lease_id`, and
+  the claim statement only selects jobs whose `library_epoch` equals the
+  Library's current epoch (§12.1). A handler that is still running after R4
+  is fenced twice: its commands carry the job's epoch and are refused, and its
+  heartbeat and completion match on `lease_id` and update nothing. Derived
+  writes from a handler run in the same kind of fenced transaction.
+- **Browser outboxes.** Older-epoch intents and drafts go to review-only
+  recovery, as §10.4 describes, so unsent text is kept and never silently
+  applied to the replacement state.
+- **Replay.** An `op_id` already in the restored ledger still replays its
+  stored result (§7.3), because the restored state contains its effect.
+
+`epoch` is per Library and never decreases, including across restores of
+older archives, so it also distinguishes two restores of the same archive.
+A restore into a new instance needs no special case: the instance ID already
+differs, so browsers never send those queues (§10.6).
 
 **Old objects** stay under `hold` claims, never deleted automatically, until
 the user confirms "discard the replaced library's files" or a documented
@@ -1495,6 +1564,7 @@ personal files" rule applied to the clean start.
 CREATE TABLE prks.jobs (
   id            uuid PRIMARY KEY DEFAULT uuidv7(),
   library_id    text REFERENCES prks.libraries ON DELETE CASCADE,
+  library_epoch bigint,               -- libraries.epoch at enqueue; NULL iff library_id IS NULL
   kind          text NOT NULL,
   payload       jsonb NOT NULL DEFAULT '{}',
   dedupe_key    text,                 -- coalesces repeated enqueues of the same work
@@ -1521,7 +1591,8 @@ CREATE INDEX jobs_expired ON prks.jobs (locked_until) WHERE state = 'running';
 ```
 
 - **Enqueue** inside the command transaction (`INSERT … ON CONFLICT DO
-  NOTHING` on the dedupe index) and `NOTIFY prks_jobs` at COMMIT. The job
+  NOTHING` on the dedupe index, with `library_epoch` set to the epoch the
+  command checked) and `NOTIFY prks_jobs` at COMMIT. The job
   exists if and only if the mutation committed: this is the transactional
   outbox.
 - **Claim and reclaim** are one statement, so a job whose worker died is
@@ -1531,21 +1602,39 @@ CREATE INDEX jobs_expired ON prks.jobs (locked_until) WHERE state = 'running';
   UPDATE prks.jobs
      SET state = 'running', lease_id = gen_random_uuid(), locked_by = %(worker)s,
          locked_until = now() + %(lease)s, attempts = attempts + 1
-   WHERE id = (SELECT id FROM prks.jobs
-                WHERE ((state = 'queued'  AND run_after <= now())
-                    OR (state = 'running' AND locked_until < now()))
-                  AND attempts < max_attempts
-                  AND (library_id IS NULL OR library_id NOT IN
-                       (SELECT id FROM prks.libraries WHERE maintenance IS NOT NULL))
-                ORDER BY priority DESC, run_after
+   WHERE id = (SELECT j.id FROM prks.jobs j
+                WHERE ((j.state = 'queued'  AND j.run_after <= now())
+                    OR (j.state = 'running' AND j.locked_until < now()))
+                  AND j.attempts < j.max_attempts
+                  AND (j.library_id IS NULL OR EXISTS
+                       (SELECT 1 FROM prks.libraries l
+                         WHERE l.id = j.library_id AND l.maintenance IS NULL
+                           AND l.epoch = j.library_epoch))
+                  AND (j.singleton_key IS NULL OR j.state = 'running' OR NOT EXISTS
+                       (SELECT 1 FROM prks.jobs r
+                         WHERE r.singleton_key = j.singleton_key AND r.state = 'running'))
+                ORDER BY j.priority DESC, j.run_after
                 FOR UPDATE SKIP LOCKED
                 LIMIT 1)
-  RETURNING id, kind, payload, lease_id, attempts;
+  RETURNING id, kind, payload, library_id, library_epoch, lease_id, attempts;
   ```
 
   `attempts` counts **claims**, so a job that crashes its worker every time
   still runs out of attempts. A reclaimed job keeps `state = 'running'`, so
   the singleton index is never violated by a reclaim; only the lease changes.
+- **Singleton arbitration.** A queued job whose `singleton_key` already has a
+  `running` row (live or expired) is skipped, so it waits for that run to
+  finish, be reclaimed or be reaped. Two workers can still race: each sees no
+  running row in its snapshot and claims a *different* queued row with the
+  same key, and the second `UPDATE` then fails on `jobs_singleton` with
+  `23505` once the first commits. The claim runs as its own single-statement
+  transaction, so the worker treats `23505` on `jobs_singleton` as "lost the
+  race": nothing changed, the losing row is still `queued`, and the worker
+  immediately claims again, when the `NOT EXISTS` now sees the committed
+  running row and skips that key. Any other error stays an error.
+- **Epoch.** Only jobs of the Library's current epoch are claimable, and every
+  transaction a handler opens (commands, derived writes, completion) checks
+  the job's epoch and `lease_id` (§11.4).
 - **Lease token.** Every claim mints a new `lease_id`. Heartbeats
   (`UPDATE … SET locked_until = now() + lease WHERE id = %s AND lease_id = %s`),
   completion and failure all match on `id` **and** `lease_id`. A stale worker
@@ -1737,6 +1826,19 @@ the lane that ports the relevant module.
 - Jobs: kill a worker after claim → lease expiry → exactly one reclaim →
   idempotent completion; the stale worker's completion updates nothing; a job
   exhausted by repeated crashes ends `failed` and frees its singleton key.
+- Singleton jobs: two concurrent workers and several queued jobs with one
+  `singleton_key` → never two running, the race loser retries without error
+  and claims another key or nothing, a job queued during a running singleton
+  waits and then runs.
+- Restore fencing: restore an older snapshot while a long heartbeating job
+  and a pending browser edit exist → the job's later commands and completion
+  are refused, the browser edit gets `LIBRARY_EPOCH_CHANGED` and its text
+  appears in review-only recovery, an already-ledgered `op_id` still replays,
+  and no row of the replacement state changes.
+- Restore crash after commit: kill the process immediately after R4 COMMIT →
+  after restart the rebuild job is queued and runs, search reports
+  `rebuilding` until it finishes and then passes the parity checks, and no
+  stale `derived` row of the replaced Library is ever returned.
 - Object lifecycle: rewrite produces a new key; claims for old keys; backup
   during cleanup; orphan sweep grace period.
 - Search parity (§8.7) and identity vectors (§8.1).
@@ -1790,6 +1892,7 @@ checkpointing, rowid preservation) are listed as retired with the reason.
 | R15 | #60 Version/merge features designed against the old mirror model | Low | Medium | §6.4 states the mechanics change; #60 slices G–L consume the new schema |
 | R16 | An archive becomes unreadable after a PostgreSQL major or column-type change | Medium | Critical after 1.0 | Text `COPY` with interchange types (§11.4); golden archives restored in CI on every supported major |
 | R17 | A restore races ordinary writers, jobs or cleanup | Medium | High | Committed maintenance flag, maintenance lock drain, objects lock (§11.4); interleaving tests (§13.3) |
+| R18 | Work begun before a restore (a running job, an open tab, a browser outbox) is applied to the restored Library | Medium | High | Library `epoch` checked by every command, job claim and job transaction; older-epoch browser rows go to review-only recovery (§10.4, §11.4); restore-fencing tests (§13.3) |
 
 Dependencies: #60 (model, unchanged in meaning), #311 (Phase B is absorbed
 into the Assets lane; D–E later), #612 (bootstrap and configuration
@@ -1854,8 +1957,8 @@ merged; several run at the same time).
 
 | Slice | Depends on | Content | Acceptance criteria |
 | --- | --- | --- | --- |
-| **L-ID-1** Identity, bootstrap and sessions | PG-2 | Users, Libraries, memberships, bootstrap tokens and command, Argon2id login, sessions, `GET /api/session`, `RequestContext`, `authorize()`, loopback-owner mode for `--testing`; CSRF hardening | §13.3 bootstrap and session tests; takeover after `ready` refused; secrets never in responses or logs (log-privacy test); `--testing` E2E unaffected |
-| **L-J-1** Jobs runtime | PG-2 | `jobs` claim/run/retry/lease, NOTIFY wakeup, embedded worker thread, `prks worker`, prune job, diagnostics counters | Kill-after-claim → lease expiry → exactly one reclaim → idempotent completion; stale-worker completion and heartbeat update nothing; repeated-crash job ends `failed` and frees its singleton key; dedupe and singleton tests; jobs of a Library in maintenance are not claimed; worker graceful stop |
+| **L-ID-1** Identity, bootstrap and sessions | PG-2 | Users, Libraries (with `epoch`), memberships, bootstrap tokens and command, Argon2id login, sessions, `GET /api/session` (returns the epoch), `RequestContext` carrying the acted-on epoch and the command-helper epoch check, `authorize()`, loopback-owner mode for `--testing`; CSRF hardening | §13.3 bootstrap and session tests; a command with a stale or missing epoch is refused before writing; takeover after `ready` refused; secrets never in responses or logs (log-privacy test); `--testing` E2E unaffected |
+| **L-J-1** Jobs runtime | PG-2 | `jobs` claim/run/retry/lease, NOTIFY wakeup, embedded worker thread, `prks worker`, prune job, diagnostics counters | Kill-after-claim → lease expiry → exactly one reclaim → idempotent completion; stale-worker completion and heartbeat update nothing; repeated-crash job ends `failed` and frees its singleton key; dedupe tests; two concurrent workers with several queued jobs of one singleton key never run two and never surface `23505`; jobs of a Library in maintenance or of an older epoch are not claimed; worker graceful stop |
 | **L-W-1** Works core | PG-3, L-ID-1 | `works`, `manifestations`, `assets` (catalogue only), `work_notes`, projection module producing today's JSON; create/get/browse/recent/open/metadata/source/delete commands; facade methods; `CREATE_WORK`, `DELETE_WORK`, `MARK_WORK_OPENED`, `SET_WORK_METADATA_FIELD`, `SET_WORK_SOURCE`, note handlers | Parametrized Work and sync-family tests pass on PostgreSQL; JSON parity tests against SQLite fixtures; the #60 §4.1 negative tests as schema tests; deferred pointer FKs proven |
 | **L-W-2** Bulk, BibTeX, wiki links, Work merge scaffolding | L-W-1 | Bulk actions (SERIALIZABLE), BibTeX via citation record, wiki-link resolution | Byte-identical BibTeX tests; bulk atomicity tests |
 | **L-P-1** People | L-W-1 | Persons, aliases as rows, roles (no `rowid`), person groups, publishers; their sync families | Parametrized tests; Greek/Cyrillic identity for publishers and groups; role order stable without `rowid` |
@@ -1865,9 +1968,9 @@ merged; several run at the same time).
 | **L-PR-1** Processing | L-A-1 | Inbox scan as a job, import through the objects lane | Parametrized processing tests; no absolute path stored |
 | **L-S-1** Search | L-W-1, L-J-1 | `derived.work_search` maintained by commands, `asset_text` via `text.extract`, trigram filters, parity ordering, Saved View execution, `rebuild-derived` | §8.7 parity tests; search parametrized tests pass with the documented Unicode improvements replacing ASCII pins |
 | **L-S-2** Ranking | L-S-1 | Single weighted score | Before/after results on a synthetic multilingual corpus approved in review |
-| **L-B-1** Backup and restore format 2 | L-W-1, L-P-1, L-O-1, L-R-1, L-A-1 | §11.4 | Round-trip test over a fixture covering every canonical table and object kind; text `COPY` with the interchange contract (no binary `COPY`); restore into the same and into a new instance with real sync operations, all user/device references resolving; verification refuses tampered archives; fault injection at R0–R5; the exclusion interleavings of §13.3; backup concurrent with writes and cleanup; format 1 refused with a clear message |
+| **L-B-1** Backup and restore format 2 | L-W-1, L-P-1, L-O-1, L-R-1, L-A-1 | §11.4 | Round-trip test over a fixture covering every canonical table and object kind; text `COPY` with the interchange contract (no binary `COPY`); restore into the same and into a new instance with real sync operations, all user/device references resolving; verification refuses tampered archives; fault injection at R0–R5, including a kill immediately after the R4 commit that still rebuilds search after restart; the exclusion interleavings of §13.3; restoring an older snapshot while a long job runs and a pending edit exists never applies either to the replacement state; backup concurrent with writes and cleanup; format 1 refused with a clear message |
 | **L-D-1** Compose and health | PG-1, L-ID-1, L-J-1 | Dockerfile with psycopg, Compose of §12.3, `/healthz`, `/readyz`, graceful stop, `.env.example`, README deployment section, #612 configuration entries | Clean `docker compose up` smoke test in CI reaches `/readyz` and bootstrap; the database volume is mounted at `/var/lib/postgresql`; data survives `down`/`up` and container recreation with the volume kept; wrong root/database pairing refused at start |
-| **L-F-1** Browser store scoping and auth hold | L-ID-1 | §10.3–10.4 on the client | E2E: two accounts in one browser never see each other's drafts or queue; session expiry mid-queue holds and later delivers; pre-0.8 queue offered review-only, never auto-deleted; #465/#466 suites green |
+| **L-F-1** Browser store scoping, auth hold and restore epoch | L-ID-1 | §10.3–10.4 on the client | E2E: two accounts in one browser never see each other's drafts or queue; session expiry mid-queue holds and later delivers; pre-0.8 queue offered review-only, never auto-deleted; after a restore to an older snapshot a pending edit is not applied, its text is offered in review-only recovery, and older-epoch drafts are never auto-restored; every mutation carries `PRKS-Library-Epoch`; #465/#466 suites green |
 
 **Stage 3. Cutover (sequential).**
 
