@@ -420,6 +420,16 @@ on borrow. Every pooled connection sets `application_name`
 named maintenance commands), `idle_in_transaction_session_timeout` (60 s) and
 `lock_timeout` (5 s).
 
+These defaults are for request and ordinary worker sessions. **Backup,
+restore and `rebuild-derived` run on their own dedicated connection**, not a
+pooled one, with `idle_in_transaction_session_timeout = 0` (a backup holds
+its exported snapshot and the shared objects lock while it copies files
+without issuing queries) and no inherited `statement_timeout`. Every lock
+wait in those protocols sets its own bounded `lock_timeout` with `SET LOCAL`
+just before it: the R3 drain of in-flight commands and the wait for a
+running backup copy (§11.4) use a configurable drain timeout (default
+5 min) whose expiry aborts the restore cleanly, never the 5 s default.
+
 The thread-per-connection server can open more request threads than the pool
 has connections. Pool exhaustion is a 503 with `Retry-After`, never a hang,
 and a test pins that behavior.
@@ -1866,6 +1876,10 @@ the lane that ports the relevant module.
 - Restore fault injection at each phase R0–R5 of §11.4, including a crash
   during object staging, between R2 and R4 (flag cleared by recovery, data
   untouched) and immediately after COMMIT.
+- Long maintenance sessions: a backup whose object copy outlasts the
+  request-session idle timeout completes with its snapshot and objects lock
+  intact; the R3 drain waits past 5 s for a slow in-flight command and aborts
+  cleanly only at its own drain timeout.
 - Restore lease fencing: stall a restore between R2 and R3 past its lease,
   let recovery clear the flag and admit writes, then resume it: it aborts in
   R3 and the admitted writes survive; recovery cannot clear the flag of a
