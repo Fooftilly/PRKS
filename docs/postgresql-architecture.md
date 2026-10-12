@@ -1660,7 +1660,21 @@ CREATE INDEX jobs_expired ON prks.jobs (locked_until) WHERE state = 'running';
 - **Run** outside the claim transaction; long jobs heartbeat. On success the
   job is marked `succeeded`; on a handled failure it returns to `queued` with
   exponential backoff in `run_after`, or becomes `failed` once `attempts` has
-  reached `max_attempts`, so no job is left queued but unclaimable. A **reaper** transaction (run by every
+  reached `max_attempts`, so no job is left queued but unclaimable.
+- **Retry versus a queued duplicate.** `jobs_dedupe` covers only `queued`
+  rows, deliberately: an enqueue while the same work is running must still
+  queue a fresh run, because the running one may have read state that changed
+  since. So a failed job cannot always return to `queued`: a twin with the
+  same `(kind, dedupe_key)` may already be queued. The failure update
+  therefore cancels instead of requeueing when a twin exists, in the same
+  statement that checks the lease
+  (`SET state = CASE WHEN EXISTS (queued twin) THEN 'cancelled' ELSE 'queued'
+  END, last_error = …`); the queued twin does the same work. If a twin
+  commits between that check and the update, the update fails with `23505` on
+  `jobs_dedupe` and changes nothing, and the worker repeats it, now seeing the
+  twin and cancelling. Reclaim never hits this, because a reclaimed job stays
+  `running`.
+- A **reaper** transaction (run by every
   worker on its idle tick) marks `failed` any job that is `running` with an
   expired lease and `attempts >= max_attempts`, with `last_error =
   'lease_expired'`, so an exhausted job never stays `running` forever and its
@@ -1837,6 +1851,9 @@ the lane that ports the relevant module.
 - Jobs: kill a worker after claim → lease expiry → exactly one reclaim →
   idempotent completion; the stale worker's completion updates nothing; a job
   exhausted by repeated crashes ends `failed` and frees its singleton key.
+- Retry versus duplicate: while job A runs, enqueue a twin B with the same
+  `dedupe_key`; A's handled failure cancels A (no `23505` reaches the caller),
+  B runs once; without a twin, A returns to `queued` with backoff.
 - Singleton jobs: two concurrent workers and several queued jobs with one
   `singleton_key` → never two running, the race loser retries without error
   and claims another key or nothing, a job queued during a running singleton
@@ -1971,7 +1988,7 @@ merged; several run at the same time).
 | Slice | Depends on | Content | Acceptance criteria |
 | --- | --- | --- | --- |
 | **L-ID-1** Identity, bootstrap and sessions | PG-2 | Users, Libraries (with `epoch`), memberships, bootstrap tokens and command, Argon2id login, sessions, `GET /api/session` (returns the epoch), `RequestContext` carrying the acted-on epoch and the command-helper epoch check, `authorize()`, loopback-owner mode for `--testing`; CSRF hardening | §13.3 bootstrap and session tests; a command with a stale or missing epoch is refused before writing; takeover after `ready` refused; secrets never in responses or logs (log-privacy test); `--testing` E2E unaffected |
-| **L-J-1** Jobs runtime | PG-2 | `jobs` claim/run/retry/lease, NOTIFY wakeup, embedded worker thread, `prks worker`, prune job, diagnostics counters | Kill-after-claim → lease expiry → exactly one reclaim → idempotent completion; stale-worker completion and heartbeat update nothing; repeated-crash job ends `failed` and frees its singleton key; dedupe tests; two concurrent workers with several queued jobs of one singleton key never run two and never surface `23505`; jobs of a Library in maintenance or of an older epoch are not claimed; worker graceful stop |
+| **L-J-1** Jobs runtime | PG-2 | `jobs` claim/run/retry/lease, NOTIFY wakeup, embedded worker thread, `prks worker`, prune job, diagnostics counters | Kill-after-claim → lease expiry → exactly one reclaim → idempotent completion; stale-worker completion and heartbeat update nothing; repeated-crash job ends `failed` and frees its singleton key; dedupe tests, including a handled failure while a queued twin exists (A cancelled, B runs once); two concurrent workers with several queued jobs of one singleton key never run two and never surface `23505`; jobs of a Library in maintenance or of an older epoch are not claimed; worker graceful stop |
 | **L-W-1** Works core | PG-3, L-ID-1 | `works`, `manifestations`, `assets` (catalogue only), `work_notes`, projection module producing today's JSON; create/get/browse/recent/open/metadata/source/delete commands; facade methods; `CREATE_WORK`, `DELETE_WORK`, `MARK_WORK_OPENED`, `SET_WORK_METADATA_FIELD`, `SET_WORK_SOURCE`, note handlers | Parametrized Work and sync-family tests pass on PostgreSQL; JSON parity tests against SQLite fixtures; the #60 §4.1 negative tests as schema tests; deferred pointer FKs proven |
 | **L-W-2** Bulk, BibTeX, wiki links, Work merge scaffolding | L-W-1 | Bulk actions (SERIALIZABLE), BibTeX via citation record, wiki-link resolution | Byte-identical BibTeX tests; bulk atomicity tests |
 | **L-P-1** People | L-W-1 | Persons, aliases as rows, roles (no `rowid`), person groups, publishers; their sync families | Parametrized tests; Greek/Cyrillic identity for publishers and groups; role order stable without `rowid` |
