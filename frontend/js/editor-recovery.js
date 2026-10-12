@@ -1203,18 +1203,27 @@ var prksEditorRecovery = (function(exports) {
 			const tombstones = [];
 			const unreadable = [];
 			for (const row of rows) if (isTombstoneShape(row) && !await bodyStored(row.draftId)) tombstones.push(row);
-			else if (isIntactRecord(row)) records.push(row);
+			else if (isIntactRecord(row) && await bodyMatches(row)) records.push(row);
 			else unreadable.push(unreadableOf(row));
 			const lineages = await Promise.all(records.map((record) => classifySafely(record)));
 			const drafts = records.map((record, i) => draftOf(record, lineages[i], at));
 			drafts.sort((a, b) => b.updatedAt - a.updatedAt || a.draftId.localeCompare(b.draftId));
 			return {
 				state,
-				rows,
+				records,
 				tombstones,
 				drafts,
 				unreadable
 			};
+		}
+		/** Whether the stored body is text of the record's own generation; when that cannot be told, it is not. */
+		async function bodyMatches(record) {
+			try {
+				const body = await rt.store.getBody(record.draftId);
+				return !!body && body.generation === record.generation && typeof body.body === "string";
+			} catch {
+				return false;
+			}
 		}
 		/** Whether a body row exists; when that cannot be told, assume it does (list, never hide). */
 		async function bodyStored(draftId) {
@@ -1235,9 +1244,9 @@ var prksEditorRecovery = (function(exports) {
 			};
 		}
 		/** Emergency entries of other pages that no record holds yet, and keys this build cannot parse. */
-		async function listEmergency(rows, tombstones) {
+		async function listEmergency(records, tombstones) {
 			const known = /* @__PURE__ */ new Map();
-			for (const row of [...rows.filter(isIntactRecord), ...tombstones]) known.set(row.draftId, Math.max(row.generation, known.get(row.draftId) || 0));
+			for (const row of [...records, ...tombstones]) known.set(row.draftId, Math.max(row.generation, known.get(row.draftId) || 0));
 			const unreadableEmergency = [];
 			const pending = [];
 			for (const stored of storage ? readEmergencyKeys(storage) : []) {
@@ -1284,8 +1293,8 @@ var prksEditorRecovery = (function(exports) {
 			try {
 				await rt.scanEmergency();
 			} catch {}
-			const { state, rows, tombstones, drafts, unreadable } = await listRecords(at);
-			const { emergency, unreadableEmergency } = await listEmergency(rows, tombstones);
+			const { state, records, tombstones, drafts, unreadable } = await listRecords(at);
+			const { emergency, unreadableEmergency } = await listEmergency(records, tombstones);
 			const sizes = [
 				...drafts.map((d) => Number.isFinite(d.bodyLength) ? d.bodyLength : null),
 				...emergency.map((e) => e.bodyLength),
@@ -1324,6 +1333,10 @@ var prksEditorRecovery = (function(exports) {
 			if (!row || typeof row.body !== "string") return {
 				ok: false,
 				code: "missing"
+			};
+			if (row.generation !== expect.generation) return {
+				ok: false,
+				code: "changed"
 			};
 			if (!sameReviewed(await rt.store.get(expect.draftId), expect)) return {
 				ok: false,

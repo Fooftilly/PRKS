@@ -394,7 +394,7 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
   /** Stored records: readable ones classified, unreadable ones listed as they are. */
   async function listRecords(at: number): Promise<{
     state: StorageState
-    rows: unknown[]
+    records: DraftRecord[]
     tombstones: DraftRecord[]
     drafts: DiagnosticsDraft[]
     unreadable: DiagnosticsUnreadableRecord[]
@@ -412,14 +412,25 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
     for (const row of rows) {
       // A tombstone hides nothing while a body is still stored under it: then it is a damaged row.
       if (isTombstoneShape(row) && !(await bodyStored(row.draftId))) tombstones.push(row)
-      else if (isIntactRecord(row)) records.push(row)
+      // A draft is its record and that generation's body together: anything less is copy-only.
+      else if (isIntactRecord(row) && (await bodyMatches(row))) records.push(row)
       else unreadable.push(unreadableOf(row))
     }
     // The pings wait on silence, so every record is classified together.
     const lineages = await Promise.all(records.map((record) => classifySafely(record)))
     const drafts = records.map((record, i) => draftOf(record, lineages[i]!, at))
     drafts.sort((a, b) => b.updatedAt - a.updatedAt || a.draftId.localeCompare(b.draftId))
-    return { state, rows, tombstones, drafts, unreadable }
+    return { state, records, tombstones, drafts, unreadable }
+  }
+
+  /** Whether the stored body is text of the record's own generation; when that cannot be told, it is not. */
+  async function bodyMatches(record: DraftRecord): Promise<boolean> {
+    try {
+      const body = (await rt.store.getBody(record.draftId)) as { generation?: unknown; body?: unknown } | null
+      return !!body && body.generation === record.generation && typeof body.body === 'string'
+    } catch {
+      return false
+    }
   }
 
   /** Whether a body row exists; when that cannot be told, assume it does (list, never hide). */
@@ -444,12 +455,12 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
 
   /** Emergency entries of other pages that no record holds yet, and keys this build cannot parse. */
   async function listEmergency(
-    rows: unknown[],
+    records: DraftRecord[],
     tombstones: DraftRecord[],
   ): Promise<{ emergency: DiagnosticsEmergency[]; unreadableEmergency: DiagnosticsUnreadableEmergency[] }> {
     const known = new Map<string, number>()
-    // Only a usable record or a verified tombstone stands for an entry: a damaged row may have lost its text.
-    for (const row of [...rows.filter(isIntactRecord), ...tombstones]) {
+    // Only a draft with its body, or a verified tombstone, stands for an entry: a damaged row may have lost its text.
+    for (const row of [...records, ...tombstones]) {
       known.set(row.draftId, Math.max(row.generation, known.get(row.draftId) || 0))
     }
     const unreadableEmergency: DiagnosticsUnreadableEmergency[] = []
@@ -495,8 +506,8 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
     } catch {
       /* storage refused; whatever the keys hold is listed below */
     }
-    const { state, rows, tombstones, drafts, unreadable } = await listRecords(at)
-    const { emergency, unreadableEmergency } = await listEmergency(rows, tombstones)
+    const { state, records, tombstones, drafts, unreadable } = await listRecords(at)
+    const { emergency, unreadableEmergency } = await listEmergency(records, tombstones)
     // Everything kept counts, readable or not: an unreadable copy takes storage too.
     const sizes = [
       ...drafts.map((d) => (Number.isFinite(d.bodyLength) ? d.bodyLength : null)),
@@ -536,6 +547,8 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
     if (isLive(await classifySafely(record))) return { ok: false, code: 'live' }
     const row = await rt.store.getBody(expect.draftId)
     if (!row || typeof row.body !== 'string') return { ok: false, code: 'missing' }
+    // Listed with this generation's body: any other body means it changed since.
+    if (row.generation !== expect.generation) return { ok: false, code: 'changed' }
     // Read twice around the body, so a record adopted or rewritten meanwhile never shows stale text.
     if (!sameReviewed(await rt.store.get(expect.draftId), expect)) return { ok: false, code: 'changed' }
     return { ok: true, text: row.body }

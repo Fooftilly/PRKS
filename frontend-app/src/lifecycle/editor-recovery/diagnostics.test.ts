@@ -340,6 +340,24 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     const falseStone = await diag.inventory()
     expect(falseStone.emergency.map((e) => e.draftId)).toEqual([held!.draftId])
     expect(falseStone.unreadable.map((u) => u.draftId)).toEqual([held!.draftId])
+    // Nor does a well-formed record whose body is gone or of another generation: it is copy-only.
+    await deleteRows(idb, BODIES_STORE, [held!.draftId])
+    const wellFormed = {
+      v: 1, draftId: held!.draftId, kind: 'work-research-note', entityType: 'work', entityId: 'w1', entityKey: 'work-research-note:w1',
+      owner: { runtimeId: null, pageInstanceId: 'p-x', paneId: '', claimedAt: 1 }, generation: held!.generation, bodyLength: 5,
+      base: UNKNOWN_BASE, pipeline: null, status: 'active', createdAt: 1, updatedAt: 1,
+    }
+    await putRows(idb, DRAFTS_STORE, [wellFormed])
+    await putRows(idb, BODIES_STORE, [{ draftId: held!.draftId, generation: held!.generation - 1, body: 'older' }])
+    const bodiless = await diag.inventory()
+    expect(bodiless.drafts).toEqual([])
+    expect(bodiless.emergency.map((e) => e.draftId)).toEqual([held!.draftId])
+    expect(bodiless.unreadable.map((u) => u.draftId)).toEqual([held!.draftId])
+    // With its own generation's body it is an ordinary draft, and the key's copy is already in it.
+    await putRows(idb, BODIES_STORE, [{ draftId: held!.draftId, generation: held!.generation, body: 'typed while frozen' }])
+    const whole = await diag.inventory()
+    expect(whole.drafts.map((d) => d.draftId)).toEqual([held!.draftId])
+    expect(whole.emergency).toEqual([])
     // A real tombstone (the store's shape, no body) still answers for the key, as the runtime's merge does.
     await deleteRows(idb, BODIES_STORE, [held!.draftId])
     await putRows(idb, DRAFTS_STORE, [{
