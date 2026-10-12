@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createRecoveryDiagnostics, DELETED_WORK_MARK_PREFIX, OLD_DRAFT_MS, RECOVERY_WARN_BYTES, type DiagnosticsDraft } from './diagnostics'
+import { createRecoveryDiagnostics, DELETED_WORK_MARK_PREFIX, OLD_DRAFT_MS, RECOVERY_WARN_BYTES, type DiagnosticsDraft, type DiscardTarget } from './diagnostics'
 import { createEditorRecoveryRuntime, type EditorRecoveryRuntime } from './runtime'
 import { BODIES_STORE, DRAFTS_STORE, EMERGENCY_KEY_PREFIX, RECOVERY_DB_NAME, SUPERSEDED_KEY_PREFIX, UNKNOWN_BASE, type DraftEntityType, type DraftKind } from './schema'
 import { createFakeBrowser, memoryStorage } from './test-support/fake-env'
@@ -163,7 +163,9 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     const draftId = await crashedDraft(page('gone'), 'newer schema text')
     const viewer = page('viewer').rt
     const [record] = await viewer.store.listAll()
-    await putRows(idb, DRAFTS_STORE, [{ ...record!, v: 99 }, { draftId: 'd-garbled', kind: 7 }])
+    // A v1 row that lost its status, entity and timestamps is damaged too, never a discardable draft.
+    const partial = { v: 1, draftId: 'd-partial', kind: 'work-private-note', generation: 2, owner: { pageInstanceId: 'p-x' } }
+    await putRows(idb, DRAFTS_STORE, [{ ...record!, v: 99 }, { draftId: 'd-garbled', kind: 7 }, partial])
     await putRows(idb, BODIES_STORE, [{ draftId: 'd-garbled', generation: 1, body: 'damaged but readable' }])
     const diag = createRecoveryDiagnostics(viewer, { storage: local })
     const inv = await diag.inventory()
@@ -175,13 +177,16 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
       expect.arrayContaining([
         expect.objectContaining({ draftId, reason: 'newer-version', kind: 'work-research-note', entityId: 'w1' }),
         expect.objectContaining({ draftId: 'd-garbled', reason: 'malformed', kind: null }),
+        expect.objectContaining({ draftId: 'd-partial', reason: 'malformed', kind: 'work-private-note', entityId: null }),
       ]),
     )
+    const sameUndefined = { draftId: 'd-partial', pageInstanceId: 'p-x', generation: 2, status: undefined, kind: 'work-private-note', entityType: undefined, entityId: undefined }
+    expect(await diag.discard(sameUndefined as unknown as DiscardTarget)).toBe('changed')
     expect(await diag.readText({ source: 'unreadable-record', draftId })).toEqual({ ok: true, text: 'newer schema text' })
     expect(await diag.readText({ source: 'unreadable-record', draftId: 'd-garbled' })).toEqual({ ok: true, text: 'damaged but readable' })
     expect(await diag.readText({ source: 'unreadable-record', draftId: 'd-missing' })).toEqual({ ok: false, code: 'missing' })
     expect((await viewer.store.get(draftId))?.v).toBe(99)
-    expect(idb.rows(RECOVERY_DB_NAME, DRAFTS_STORE)).toHaveLength(2)
+    expect(idb.rows(RECOVERY_DB_NAME, DRAFTS_STORE)).toHaveLength(3)
   })
 
   it('lists text only an emergency key holds, without merging a live page and without listing its own page', async () => {
@@ -238,6 +243,20 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     expect(held!.lineage).toBe('unknown')
     const target = { source: 'emergency' as const, key: held!.key, draftId: held!.draftId, generation: held!.generation }
     expect(await diag.readText(target)).toEqual({ ok: true, text: 'typed while frozen' })
+    // The page rewrites its key while it is asked about: the text read before is stale.
+    const rewritten = local.getItem(held!.key)!.replace('typed while frozen', 'typed as it hid')
+    const probing = createRecoveryDiagnostics(
+      {
+        ...viewer,
+        classify: async (record) => {
+          local.setItem(held!.key, rewritten)
+          return viewer.classify(record)
+        },
+      },
+      { storage: local },
+    )
+    expect(await probing.readText(target)).toEqual({ ok: false, code: 'changed' })
+    expect(await diag.readText(target)).toEqual({ ok: true, text: 'typed as it hid' })
     // The tab resumes: its editor holds newer text than the key.
     frozen.now = false
     expect(await diag.readText(target)).toEqual({ ok: false, code: 'live' })

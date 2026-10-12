@@ -189,6 +189,27 @@ function unreadableReason(stored: StoredEmergency): DiagnosticsUnreadableEmergen
   return mayHoldUnreadable(stored) ? 'newer-version' : 'malformed'
 }
 
+function finiteAtLeastZero(value: unknown): boolean {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
+/**
+ * A supported record whose every field Diagnostics shows or compares is intact.
+ * A partly damaged row stays copy-only: it is never offered for Discard.
+ */
+function isListableRecord(row: unknown): row is DraftRecord {
+  if (!isSupportedRecord(row)) return false
+  return (
+    (row.status === 'active' || row.status === 'tail-missing' || row.status === 'discarded') &&
+    (row.entityType === 'work' || row.entityType === 'folder') &&
+    typeof row.entityId === 'string' &&
+    Number.isInteger(row.generation) &&
+    finiteAtLeastZero(row.bodyLength) &&
+    finiteAtLeastZero(row.createdAt) &&
+    finiteAtLeastZero(row.updatedAt)
+  )
+}
+
 function enumerable(storage: EmergencyStorage | null): boolean {
   if (!storage) return false
   try {
@@ -267,7 +288,7 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
     const records: DraftRecord[] = []
     const unreadable: DiagnosticsUnreadableRecord[] = []
     for (const row of rows) {
-      if (!isSupportedRecord(row)) unreadable.push(unreadableOf(row))
+      if (!isListableRecord(row)) unreadable.push(unreadableOf(row))
       else if (row.status !== 'discarded') records.push(row)
     }
     // The pings wait on silence, so every record is classified together.
@@ -365,8 +386,7 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
 
   function sameReviewed(record: DraftRecord | null, expect: ReviewedRecord): record is DraftRecord {
     return (
-      !!record &&
-      isSupportedRecord(record) &&
+      isListableRecord(record) &&
       record.status !== 'discarded' &&
       record.owner.pageInstanceId === expect.pageInstanceId &&
       record.generation === expect.generation &&
@@ -401,6 +421,8 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
     // Its page may have resumed since the list was read: an open editor is the authority on its text.
     const owner = { runtimeId: payload.runtimeId, pageInstanceId: stored.pageInstanceId, paneId: '', claimedAt: payload.at }
     if (isLive(await classifySafely({ draftId, owner }))) return { ok: false, code: 'live' }
+    // The page may also have rewritten its key while it was asked: then this text is stale.
+    if (readKey(storage, key) !== stored.raw) return { ok: false, code: 'changed' }
     return { ok: true, text: entry.body }
   }
 

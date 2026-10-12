@@ -1032,6 +1032,17 @@ var prksEditorRecovery = (function(exports) {
 		if (stored.readFailed) return "read-failed";
 		return mayHoldUnreadable(stored) ? "newer-version" : "malformed";
 	}
+	function finiteAtLeastZero(value) {
+		return typeof value === "number" && Number.isFinite(value) && value >= 0;
+	}
+	/**
+	* A supported record whose every field Diagnostics shows or compares is intact.
+	* A partly damaged row stays copy-only: it is never offered for Discard.
+	*/
+	function isListableRecord(row) {
+		if (!isSupportedRecord(row)) return false;
+		return (row.status === "active" || row.status === "tail-missing" || row.status === "discarded") && (row.entityType === "work" || row.entityType === "folder") && typeof row.entityId === "string" && Number.isInteger(row.generation) && finiteAtLeastZero(row.bodyLength) && finiteAtLeastZero(row.createdAt) && finiteAtLeastZero(row.updatedAt);
+	}
 	function enumerable(storage) {
 		if (!storage) return false;
 		try {
@@ -1104,7 +1115,7 @@ var prksEditorRecovery = (function(exports) {
 			}
 			const records = [];
 			const unreadable = [];
-			for (const row of rows) if (!isSupportedRecord(row)) unreadable.push(unreadableOf(row));
+			for (const row of rows) if (!isListableRecord(row)) unreadable.push(unreadableOf(row));
 			else if (row.status !== "discarded") records.push(row);
 			const lineages = await Promise.all(records.map((record) => classifySafely(record)));
 			const drafts = records.map((record, i) => draftOf(record, lineages[i], at));
@@ -1200,7 +1211,7 @@ var prksEditorRecovery = (function(exports) {
 			};
 		}
 		function sameReviewed(record, expect) {
-			return !!record && isSupportedRecord(record) && record.status !== "discarded" && record.owner.pageInstanceId === expect.pageInstanceId && record.generation === expect.generation && record.status === expect.status;
+			return isListableRecord(record) && record.status !== "discarded" && record.owner.pageInstanceId === expect.pageInstanceId && record.generation === expect.generation && record.status === expect.status;
 		}
 		async function readRecordText(expect) {
 			const record = await rt.store.get(expect.draftId);
@@ -1263,6 +1274,10 @@ var prksEditorRecovery = (function(exports) {
 			}))) return {
 				ok: false,
 				code: "live"
+			};
+			if (readKey(storage, key) !== stored.raw) return {
+				ok: false,
+				code: "changed"
 			};
 			return {
 				ok: true,
