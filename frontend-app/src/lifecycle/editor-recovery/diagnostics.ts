@@ -274,15 +274,9 @@ function hasIntactShape(row: unknown): row is DraftRecord {
   )
 }
 
-function hexOf(bytes: Uint8Array): string {
-  let hex = ''
-  for (const byte of bytes) hex += byte.toString(16).padStart(2, '0')
-  return hex
-}
-
 /**
  * An exact, tagged serialization of a structured-clone value: primitives
- * (BigInt included), arrays, plain objects, Dates, Maps, Sets and ArrayBuffers,
+ * (BigInt included), arrays, plain objects, Dates, Maps and Sets,
  * with shared and cyclic references by position. Null for anything it cannot
  * represent exactly, so two different rows never share a snapshot.
  */
@@ -316,9 +310,9 @@ function serialized(value: unknown, seen: Map<object, number>): string | null {
   if (value instanceof Date) return 'd:' + value.getTime()
   if (value instanceof Map) return wrap('m{', all([...value].map(([k, v]) => wrap('', all([serialized(k, seen), serialized(v, seen)]), ''))), '}')
   if (value instanceof Set) return wrap('S{', all([...value].map((item) => serialized(item, seen))), '}')
-  if (value instanceof ArrayBuffer) return 'a:' + hexOf(new Uint8Array(value))
-  // A view's identity includes its buffer, offset and aliasing: not represented, so such a row offers no text.
-  if (ArrayBuffer.isView(value)) return null
+  // Binary data carries identity beyond its bytes (resizability, views, aliasing): not represented,
+  // so such a row offers no text. No v1 record holds any.
+  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return null
   const proto = Object.getPrototypeOf(value)
   if (proto !== Object.prototype && proto !== null) return null
   return wrap('{', ownKeys(value as Record<string, unknown>), '}')
@@ -414,7 +408,7 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
       if (isTombstoneShape(row) && !(await bodyStored(row.draftId))) tombstones.push(row)
       // A draft is its record and that generation's body together: anything less is copy-only.
       else if (isIntactRecord(row) && (await bodyMatches(row))) records.push(row)
-      else unreadable.push(unreadableOf(row))
+      else unreadable.push(await measured(unreadableOf(row)))
     }
     // The pings wait on silence, so every record is classified together.
     const lineages = await Promise.all(records.map((record) => classifySafely(record)))
@@ -423,13 +417,24 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
     return { state, records, tombstones, drafts, unreadable }
   }
 
-  /** Whether the stored body is text of the record's own generation; when that cannot be told, it is not. */
+  /** Whether the stored body is text of the record's own generation and stated length; when that cannot be told, it is not. */
   async function bodyMatches(record: DraftRecord): Promise<boolean> {
     try {
       const body = (await rt.store.getBody(record.draftId)) as { generation?: unknown; body?: unknown } | null
-      return !!body && body.generation === record.generation && typeof body.body === 'string'
+      return !!body && body.generation === record.generation && typeof body.body === 'string' && body.body.length === record.bodyLength
     } catch {
       return false
+    }
+  }
+
+  /** A copy-only row's size is its stored text's, when there is any: its stated length may be wrong. */
+  async function measured(row: DiagnosticsUnreadableRecord): Promise<DiagnosticsUnreadableRecord> {
+    if (row.draftId === null) return row
+    try {
+      const body = (await rt.store.getBody(row.draftId)) as { body?: unknown } | null
+      return body && typeof body.body === 'string' ? { ...row, bodyLength: body.body.length } : row
+    } catch {
+      return row
     }
   }
 

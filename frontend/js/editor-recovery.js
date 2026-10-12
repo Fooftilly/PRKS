@@ -1086,14 +1086,9 @@ var prksEditorRecovery = (function(exports) {
 		const entityType = row.kind === "folder-private-note" ? "folder" : "work";
 		return (r.status === "active" || r.status === "tail-missing" || r.status === "discarded") && r.entityType === entityType && typeof r.entityId === "string" && r.entityId !== "" && r.entityKey === entityKeyOf(row.kind, r.entityId) && Number.isInteger(r.generation) && finiteAtLeastZero(r.generation) && isIntactOwner(r.owner) && isIntactBase(r.base) && isIntactPipeline(r.pipeline) && finiteAtLeastZero(r.bodyLength) && finiteAtLeastZero(r.createdAt) && finiteAtLeastZero(r.updatedAt) && (r.emergencySource === void 0 || typeof r.emergencySource === "string");
 	}
-	function hexOf(bytes) {
-		let hex = "";
-		for (const byte of bytes) hex += byte.toString(16).padStart(2, "0");
-		return hex;
-	}
 	/**
 	* An exact, tagged serialization of a structured-clone value: primitives
-	* (BigInt included), arrays, plain objects, Dates, Maps, Sets and ArrayBuffers,
+	* (BigInt included), arrays, plain objects, Dates, Maps and Sets,
 	* with shared and cyclic references by position. Null for anything it cannot
 	* represent exactly, so two different rows never share a snapshot.
 	*/
@@ -1118,8 +1113,7 @@ var prksEditorRecovery = (function(exports) {
 		if (value instanceof Date) return "d:" + value.getTime();
 		if (value instanceof Map) return wrap("m{", all([...value].map(([k, v]) => wrap("", all([serialized(k, seen), serialized(v, seen)]), ""))), "}");
 		if (value instanceof Set) return wrap("S{", all([...value].map((item) => serialized(item, seen))), "}");
-		if (value instanceof ArrayBuffer) return "a:" + hexOf(new Uint8Array(value));
-		if (ArrayBuffer.isView(value)) return null;
+		if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return null;
 		const proto = Object.getPrototypeOf(value);
 		if (proto !== Object.prototype && proto !== null) return null;
 		return wrap("{", ownKeys(value), "}");
@@ -1204,7 +1198,7 @@ var prksEditorRecovery = (function(exports) {
 			const unreadable = [];
 			for (const row of rows) if (isTombstoneShape(row) && !await bodyStored(row.draftId)) tombstones.push(row);
 			else if (isIntactRecord(row) && await bodyMatches(row)) records.push(row);
-			else unreadable.push(unreadableOf(row));
+			else unreadable.push(await measured(unreadableOf(row)));
 			const lineages = await Promise.all(records.map((record) => classifySafely(record)));
 			const drafts = records.map((record, i) => draftOf(record, lineages[i], at));
 			drafts.sort((a, b) => b.updatedAt - a.updatedAt || a.draftId.localeCompare(b.draftId));
@@ -1216,13 +1210,26 @@ var prksEditorRecovery = (function(exports) {
 				unreadable
 			};
 		}
-		/** Whether the stored body is text of the record's own generation; when that cannot be told, it is not. */
+		/** Whether the stored body is text of the record's own generation and stated length; when that cannot be told, it is not. */
 		async function bodyMatches(record) {
 			try {
 				const body = await rt.store.getBody(record.draftId);
-				return !!body && body.generation === record.generation && typeof body.body === "string";
+				return !!body && body.generation === record.generation && typeof body.body === "string" && body.body.length === record.bodyLength;
 			} catch {
 				return false;
+			}
+		}
+		/** A copy-only row's size is its stored text's, when there is any: its stated length may be wrong. */
+		async function measured(row) {
+			if (row.draftId === null) return row;
+			try {
+				const body = await rt.store.getBody(row.draftId);
+				return body && typeof body.body === "string" ? {
+					...row,
+					bodyLength: body.body.length
+				} : row;
+			} catch {
+				return row;
 			}
 		}
 		/** Whether a body row exists; when that cannot be told, assume it does (list, never hide). */

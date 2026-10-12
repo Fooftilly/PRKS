@@ -183,7 +183,8 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     const inv = await diag.inventory()
     expect(inv.drafts).toEqual([])
     // Unreadable copies count towards the size; one that states none makes the total a lower bound.
-    expect(inv.totalChars).toBe('newer schema text'.length)
+    // Copy-only rows are sized by the text actually stored when there is some.
+    expect(inv.totalChars).toBe('newer schema text'.length + 'damaged but readable'.length)
     expect(inv.sizeIncomplete).toBe(true)
     expect(inv.unreadable).toEqual(
       expect.arrayContaining([
@@ -219,8 +220,10 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     const plain = (await diag.inventory()).unreadable.find((u) => u.draftId === 'd-arr')!.snapshot
     await putRows(idb, DRAFTS_STORE, [{ v: 99, draftId: 'd-arr', a: tagged }])
     expect((await diag.inventory()).unreadable.find((u) => u.draftId === 'd-arr')!.snapshot).not.toBe(plain)
-    // A typed-array view's buffer identity is not represented: no snapshot, so no text from it.
+    // Binary data's identity is not represented: no snapshot, so no text from it.
     await putRows(idb, DRAFTS_STORE, [{ v: 99, draftId: 'd-arr', a: new Uint8Array(new ArrayBuffer(2), 1, 1) }])
+    expect((await diag.inventory()).unreadable.find((u) => u.draftId === 'd-arr')!.snapshot).toBeNull()
+    await putRows(idb, DRAFTS_STORE, [{ v: 99, draftId: 'd-arr', a: new ArrayBuffer(2) }])
     expect((await diag.inventory()).unreadable.find((u) => u.draftId === 'd-arr')!.snapshot).toBeNull()
     // A newer-version editor rewrote the row since it was listed: its text is not shown from the old listing.
     await putRows(idb, DRAFTS_STORE, [{ ...record!, v: 99, generation: record!.generation + 1 }])
@@ -344,7 +347,7 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     await deleteRows(idb, BODIES_STORE, [held!.draftId])
     const wellFormed = {
       v: 1, draftId: held!.draftId, kind: 'work-research-note', entityType: 'work', entityId: 'w1', entityKey: 'work-research-note:w1',
-      owner: { runtimeId: null, pageInstanceId: 'p-x', paneId: '', claimedAt: 1 }, generation: held!.generation, bodyLength: 5,
+      owner: { runtimeId: null, pageInstanceId: 'p-x', paneId: '', claimedAt: 1 }, generation: held!.generation, bodyLength: 'typed while frozen'.length,
       base: UNKNOWN_BASE, pipeline: null, status: 'active', createdAt: 1, updatedAt: 1,
     }
     await putRows(idb, DRAFTS_STORE, [wellFormed])
@@ -353,6 +356,11 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     expect(bodiless.drafts).toEqual([])
     expect(bodiless.emergency.map((e) => e.draftId)).toEqual([held!.draftId])
     expect(bodiless.unreadable.map((u) => u.draftId)).toEqual([held!.draftId])
+    // A body of its generation but not its stated length is copy-only too, sized by the text actually stored.
+    await putRows(idb, BODIES_STORE, [{ draftId: held!.draftId, generation: held!.generation, body: 'longer than stated, much' }])
+    const misstated = await diag.inventory()
+    expect(misstated.drafts).toEqual([])
+    expect(misstated.unreadable).toEqual([expect.objectContaining({ draftId: held!.draftId, bodyLength: 'longer than stated, much'.length })])
     // With its own generation's body it is an ordinary draft, and the key's copy is already in it.
     await putRows(idb, BODIES_STORE, [{ draftId: held!.draftId, generation: held!.generation, body: 'typed while frozen' }])
     const whole = await diag.inventory()
@@ -410,7 +418,8 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     const draftId = await crashedDraft(page('gone'), 'ancient')
     const viewer = page('viewer').rt
     const [record] = await viewer.store.listAll()
-    await putRows(idb, DRAFTS_STORE, [{ ...record!, updatedAt: 1, bodyLength: RECOVERY_WARN_BYTES }])
+    // A copy that states a size and has no text to measure counts by what it states.
+    await putRows(idb, DRAFTS_STORE, [{ ...record!, updatedAt: 1 }, { v: 99, draftId: 'd-huge', bodyLength: RECOVERY_WARN_BYTES }])
     local.setItem(SUPERSEDED_KEY_PREFIX + draftId, JSON.stringify({ pageInstanceId: record!.owner.pageInstanceId, generation: record!.generation }))
     local.setItem(DELETED_WORK_MARK_PREFIX + 'w1', JSON.stringify({ marked: 1, tried: 0 }))
     const diag = createRecoveryDiagnostics(viewer, { storage: local, now: () => 1 + OLD_DRAFT_MS + 1 })
@@ -418,7 +427,7 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     expect(inv.drafts[0]).toMatchObject<Partial<DiagnosticsDraft>>({ old: true, superseded: true, deletedHere: true })
     expect(inv.overBudget).toBe(true)
     await diag.inventory()
-    expect(await bodies(viewer)).toEqual(['ancient'])
+    expect(await bodies(viewer)).toEqual(expect.arrayContaining(['ancient']))
   })
 
   it('still lists emergency copies when recovery storage cannot be opened', async () => {
