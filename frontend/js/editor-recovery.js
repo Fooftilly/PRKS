@@ -1035,13 +1035,49 @@ var prksEditorRecovery = (function(exports) {
 	function finiteAtLeastZero(value) {
 		return typeof value === "number" && Number.isFinite(value) && value >= 0;
 	}
+	function numberOrNull(value) {
+		return value === null || typeof value === "number" && Number.isFinite(value);
+	}
+	function isObject(value) {
+		return !!value && typeof value === "object";
+	}
+	var BASE_SOURCES = [
+		"server",
+		"cache",
+		"pending-create",
+		"unknown"
+	];
+	var PIPELINE_STATES = [
+		"drafting",
+		"saving",
+		"queued",
+		"blocked",
+		"error",
+		"conflict"
+	];
+	function isIntactOwner(owner) {
+		return isObject(owner) && (owner.runtimeId === null || typeof owner.runtimeId === "string") && typeof owner.pageInstanceId === "string" && typeof owner.paneId === "string" && finiteAtLeastZero(owner.claimedAt);
+	}
+	function isIntactBase(base) {
+		return isObject(base) && typeof base.source === "string" && BASE_SOURCES.includes(base.source) && numberOrNull(base.revision) && numberOrNull(base.length) && (base.fingerprint === null || typeof base.fingerprint === "string");
+	}
+	function isIntactPipeline(pipeline) {
+		return pipeline === null || isObject(pipeline) && typeof pipeline.state === "string" && PIPELINE_STATES.includes(pipeline.state);
+	}
+	/** A supported record that is a `discarded` tombstone: no draft, nothing to list. */
+	function isTombstone(row) {
+		return isSupportedRecord(row) && row.status === "discarded";
+	}
 	/**
-	* A supported record whose every field Diagnostics shows or compares is intact.
-	* A partly damaged row stays copy-only: it is never offered for Discard.
+	* A supported draft record with the whole v1 shape intact: identity, entity,
+	* owner, base, pipeline, sizes and times. Anything less is listed copy-only
+	* as damaged and is never offered for Discard.
 	*/
-	function isListableRecord(row) {
+	function isIntactRecord(row) {
 		if (!isSupportedRecord(row)) return false;
-		return (row.status === "active" || row.status === "tail-missing" || row.status === "discarded") && (row.entityType === "work" || row.entityType === "folder") && typeof row.entityId === "string" && Number.isInteger(row.generation) && finiteAtLeastZero(row.bodyLength) && finiteAtLeastZero(row.createdAt) && finiteAtLeastZero(row.updatedAt);
+		const r = row;
+		const entityType = row.kind === "folder-private-note" ? "folder" : "work";
+		return (r.status === "active" || r.status === "tail-missing") && r.entityType === entityType && typeof r.entityId === "string" && r.entityId !== "" && r.entityKey === entityKeyOf(row.kind, r.entityId) && Number.isInteger(r.generation) && finiteAtLeastZero(r.generation) && isIntactOwner(r.owner) && isIntactBase(r.base) && isIntactPipeline(r.pipeline) && finiteAtLeastZero(r.bodyLength) && finiteAtLeastZero(r.createdAt) && finiteAtLeastZero(r.updatedAt) && (r.emergencySource === void 0 || typeof r.emergencySource === "string");
 	}
 	function enumerable(storage) {
 		if (!storage) return false;
@@ -1115,8 +1151,11 @@ var prksEditorRecovery = (function(exports) {
 			}
 			const records = [];
 			const unreadable = [];
-			for (const row of rows) if (!isListableRecord(row)) unreadable.push(unreadableOf(row));
-			else if (row.status !== "discarded") records.push(row);
+			for (const row of rows) {
+				if (isTombstone(row)) continue;
+				if (isIntactRecord(row)) records.push(row);
+				else unreadable.push(unreadableOf(row));
+			}
 			const lineages = await Promise.all(records.map((record) => classifySafely(record)));
 			const drafts = records.map((record, i) => draftOf(record, lineages[i], at));
 			drafts.sort((a, b) => b.updatedAt - a.updatedAt || a.draftId.localeCompare(b.draftId));
@@ -1211,7 +1250,7 @@ var prksEditorRecovery = (function(exports) {
 			};
 		}
 		function sameReviewed(record, expect) {
-			return isListableRecord(record) && record.status !== "discarded" && record.owner.pageInstanceId === expect.pageInstanceId && record.generation === expect.generation && record.status === expect.status;
+			return isIntactRecord(record) && record.owner.pageInstanceId === expect.pageInstanceId && record.generation === expect.generation && record.status === expect.status;
 		}
 		async function readRecordText(expect) {
 			const record = await rt.store.get(expect.draftId);

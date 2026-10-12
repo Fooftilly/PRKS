@@ -189,6 +189,40 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     expect(idb.rows(RECOVERY_DB_NAME, DRAFTS_STORE)).toHaveLength(3)
   })
 
+  it('keeps a record missing only its base or entity key copy-only, never discardable', async () => {
+    const { page, idb, local } = setup()
+    const first = await crashedDraft(page('gone-1'), 'lost its base')
+    const second = await crashedDraft(page('gone-2'), 'lost its entity key', 'work-private-note', 'w2')
+    const viewer = page('viewer').rt
+    const rows = await viewer.store.listAll()
+    const noBase: Record<string, unknown> = { ...rows.find((r) => r.draftId === first)! }
+    delete noBase.base
+    const noKey: Record<string, unknown> = { ...rows.find((r) => r.draftId === second)! }
+    delete noKey.entityKey
+    await putRows(idb, DRAFTS_STORE, [noBase, noKey])
+    const diag = createRecoveryDiagnostics(viewer, { storage: local })
+    const inv = await diag.inventory()
+    expect(inv.drafts).toEqual([])
+    expect(inv.unreadable.map((u) => [u.draftId, u.reason]).sort()).toEqual([[first, 'malformed'], [second, 'malformed']].sort())
+    for (const [row, text] of [[noBase, 'lost its base'], [noKey, 'lost its entity key']] as const) {
+      const target = {
+        draftId: row.draftId,
+        pageInstanceId: (row.owner as { pageInstanceId: string }).pageInstanceId,
+        generation: row.generation,
+        status: row.status,
+        kind: row.kind,
+        entityType: row.entityType,
+        entityId: row.entityId,
+        allowUnknownOwner: true,
+      } as DiscardTarget
+      expect(await diag.discard(target)).toBe('changed')
+      expect(await diag.readText({ source: 'record', expect: target })).toEqual({ ok: false, code: 'changed' })
+      expect(await diag.readText({ source: 'unreadable-record', draftId: target.draftId })).toEqual({ ok: true, text })
+    }
+    expect(await bodies(viewer)).toEqual(expect.arrayContaining(['lost its base', 'lost its entity key']))
+    expect(idb.rows(RECOVERY_DB_NAME, DRAFTS_STORE)).toHaveLength(2)
+  })
+
   it('lists text only an emergency key holds, without merging a live page and without listing its own page', async () => {
     const { page, local } = setup()
     const live = page('live').rt

@@ -20,6 +20,7 @@ import type { LineageClass } from './lineage'
 import type { EditorRecoveryRuntime, ReviewedRecord } from './runtime'
 import {
   SUPERSEDED_KEY_PREFIX,
+  entityKeyOf,
   isDraftKind,
   isSupportedRecord,
   type BaseSource,
@@ -193,20 +194,71 @@ function finiteAtLeastZero(value: unknown): boolean {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
 }
 
-/**
- * A supported record whose every field Diagnostics shows or compares is intact.
- * A partly damaged row stays copy-only: it is never offered for Discard.
- */
-function isListableRecord(row: unknown): row is DraftRecord {
-  if (!isSupportedRecord(row)) return false
+function numberOrNull(value: unknown): boolean {
+  return value === null || (typeof value === 'number' && Number.isFinite(value))
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object'
+}
+
+const BASE_SOURCES: readonly string[] = ['server', 'cache', 'pending-create', 'unknown']
+const PIPELINE_STATES: readonly string[] = ['drafting', 'saving', 'queued', 'blocked', 'error', 'conflict']
+
+function isIntactOwner(owner: unknown): boolean {
   return (
-    (row.status === 'active' || row.status === 'tail-missing' || row.status === 'discarded') &&
-    (row.entityType === 'work' || row.entityType === 'folder') &&
-    typeof row.entityId === 'string' &&
-    Number.isInteger(row.generation) &&
-    finiteAtLeastZero(row.bodyLength) &&
-    finiteAtLeastZero(row.createdAt) &&
-    finiteAtLeastZero(row.updatedAt)
+    isObject(owner) &&
+    (owner.runtimeId === null || typeof owner.runtimeId === 'string') &&
+    typeof owner.pageInstanceId === 'string' &&
+    typeof owner.paneId === 'string' &&
+    finiteAtLeastZero(owner.claimedAt)
+  )
+}
+
+function isIntactBase(base: unknown): boolean {
+  return (
+    isObject(base) &&
+    typeof base.source === 'string' &&
+    BASE_SOURCES.includes(base.source) &&
+    numberOrNull(base.revision) &&
+    numberOrNull(base.length) &&
+    (base.fingerprint === null || typeof base.fingerprint === 'string')
+  )
+}
+
+function isIntactPipeline(pipeline: unknown): boolean {
+  return pipeline === null || (isObject(pipeline) && typeof pipeline.state === 'string' && PIPELINE_STATES.includes(pipeline.state))
+}
+
+/** A supported record that is a `discarded` tombstone: no draft, nothing to list. */
+function isTombstone(row: unknown): boolean {
+  return isSupportedRecord(row) && row.status === 'discarded'
+}
+
+/**
+ * A supported draft record with the whole v1 shape intact: identity, entity,
+ * owner, base, pipeline, sizes and times. Anything less is listed copy-only
+ * as damaged and is never offered for Discard.
+ */
+function isIntactRecord(row: unknown): row is DraftRecord {
+  if (!isSupportedRecord(row)) return false
+  const r = row as unknown as Record<string, unknown>
+  const entityType = row.kind === 'folder-private-note' ? 'folder' : 'work'
+  return (
+    (r.status === 'active' || r.status === 'tail-missing') &&
+    r.entityType === entityType &&
+    typeof r.entityId === 'string' &&
+    r.entityId !== '' &&
+    r.entityKey === entityKeyOf(row.kind, r.entityId) &&
+    Number.isInteger(r.generation) &&
+    finiteAtLeastZero(r.generation) &&
+    isIntactOwner(r.owner) &&
+    isIntactBase(r.base) &&
+    isIntactPipeline(r.pipeline) &&
+    finiteAtLeastZero(r.bodyLength) &&
+    finiteAtLeastZero(r.createdAt) &&
+    finiteAtLeastZero(r.updatedAt) &&
+    (r.emergencySource === undefined || typeof r.emergencySource === 'string')
   )
 }
 
@@ -288,8 +340,9 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
     const records: DraftRecord[] = []
     const unreadable: DiagnosticsUnreadableRecord[] = []
     for (const row of rows) {
-      if (!isListableRecord(row)) unreadable.push(unreadableOf(row))
-      else if (row.status !== 'discarded') records.push(row)
+      if (isTombstone(row)) continue
+      if (isIntactRecord(row)) records.push(row)
+      else unreadable.push(unreadableOf(row))
     }
     // The pings wait on silence, so every record is classified together.
     const lineages = await Promise.all(records.map((record) => classifySafely(record)))
@@ -386,8 +439,7 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
 
   function sameReviewed(record: DraftRecord | null, expect: ReviewedRecord): record is DraftRecord {
     return (
-      isListableRecord(record) &&
-      record.status !== 'discarded' &&
+      isIntactRecord(record) &&
       record.owner.pageInstanceId === expect.pageInstanceId &&
       record.generation === expect.generation &&
       record.status === expect.status
