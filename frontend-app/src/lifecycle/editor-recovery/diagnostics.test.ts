@@ -68,6 +68,18 @@ async function putRows(idb: FakeIdbControls, store: string, rows: Array<Record<s
   })
 }
 
+async function deleteRows(idb: FakeIdbControls, store: string, keys: string[]): Promise<void> {
+  const db = await new Promise<IDBDatabase>((resolve) => {
+    const req = idb.factory.open(RECOVERY_DB_NAME, 1)
+    req.onsuccess = () => resolve(req.result)
+  })
+  await new Promise<void>((resolve) => {
+    const tx = db.transaction([store], 'readwrite')
+    for (const key of keys) tx.objectStore(store).delete(key)
+    tx.oncomplete = () => resolve()
+  })
+}
+
 async function bodies(rt: EditorRecoveryRuntime): Promise<string[]> {
   const rows = (await rt.store.listAll()).filter((r) => r.status !== 'discarded')
   return Promise.all(rows.map(async (r) => (await rt.store.getBody(r.draftId))?.body ?? '<none>'))
@@ -322,6 +334,23 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     const again = await diag.inventory()
     expect(again.emergency.map((e) => e.draftId)).toEqual([held!.draftId])
     expect(again.unreadable.map((u) => u.draftId)).toEqual([held!.draftId])
+    // Nor does a damaged row that claims to be discarded while its body is still stored.
+    await putRows(idb, DRAFTS_STORE, [{ v: 1, draftId: held!.draftId, kind: 'work-research-note', generation: held!.generation, owner: { pageInstanceId: 'p-x' }, status: 'discarded' }])
+    await putRows(idb, BODIES_STORE, [{ draftId: held!.draftId, generation: held!.generation, body: 'kept under a false tombstone' }])
+    const falseStone = await diag.inventory()
+    expect(falseStone.emergency.map((e) => e.draftId)).toEqual([held!.draftId])
+    expect(falseStone.unreadable.map((u) => u.draftId)).toEqual([held!.draftId])
+    // A real tombstone (the store's shape, no body) still answers for the key, as the runtime's merge does.
+    await deleteRows(idb, BODIES_STORE, [held!.draftId])
+    await putRows(idb, DRAFTS_STORE, [{
+      v: 1, draftId: held!.draftId, kind: 'work-research-note', entityType: 'work', entityId: 'w1', entityKey: 'work-research-note:w1',
+      owner: { runtimeId: null, pageInstanceId: 'p-x', paneId: '', claimedAt: 1 }, generation: held!.generation, bodyLength: 0,
+      base: UNKNOWN_BASE, pipeline: null, status: 'discarded', createdAt: 1, updatedAt: 1,
+    }])
+    const stone = await diag.inventory()
+    expect(stone.emergency).toEqual([])
+    expect(stone.unreadable).toEqual([])
+    await deleteRows(idb, DRAFTS_STORE, [held!.draftId])
     // The page rewrites its key while it is asked about: the text read before is stale.
     const rewritten = local.getItem(held!.key)!.replace('typed while frozen', 'typed as it hid')
     const probing = createRecoveryDiagnostics(

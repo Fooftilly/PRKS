@@ -234,9 +234,12 @@ function isIntactPipeline(pipeline: unknown): boolean {
   return pipeline === null || (isObject(pipeline) && typeof pipeline.state === 'string' && PIPELINE_STATES.includes(pipeline.state))
 }
 
-/** A supported record that is a `discarded` tombstone: no draft, nothing to list. */
-function isTombstone(row: unknown): row is DraftRecord {
-  return isSupportedRecord(row) && row.status === 'discarded'
+/**
+ * A row with the store's tombstone shape: the whole v1 shape, `discarded`, no
+ * body length. Whether its body is really gone is checked when it is listed.
+ */
+function isTombstoneShape(row: unknown): row is DraftRecord {
+  return hasIntactShape(row) && row.status === 'discarded' && row.bodyLength === 0
 }
 
 /**
@@ -245,11 +248,16 @@ function isTombstone(row: unknown): row is DraftRecord {
  * as damaged and is never offered for Discard.
  */
 function isIntactRecord(row: unknown): row is DraftRecord {
+  return hasIntactShape(row) && (row.status === 'active' || row.status === 'tail-missing')
+}
+
+/** Every v1 field present and well formed, whatever the status. */
+function hasIntactShape(row: unknown): row is DraftRecord {
   if (!isSupportedRecord(row)) return false
   const r = row as unknown as Record<string, unknown>
   const entityType = row.kind === 'folder-private-note' ? 'folder' : 'work'
   return (
-    (r.status === 'active' || r.status === 'tail-missing') &&
+    (r.status === 'active' || r.status === 'tail-missing' || r.status === 'discarded') &&
     r.entityType === entityType &&
     typeof r.entityId === 'string' &&
     r.entityId !== '' &&
@@ -387,6 +395,7 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
   async function listRecords(at: number): Promise<{
     state: StorageState
     rows: unknown[]
+    tombstones: DraftRecord[]
     drafts: DiagnosticsDraft[]
     unreadable: DiagnosticsUnreadableRecord[]
   }> {
@@ -398,17 +407,28 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
       state = storageState(error)
     }
     const records: DraftRecord[] = []
+    const tombstones: DraftRecord[] = []
     const unreadable: DiagnosticsUnreadableRecord[] = []
     for (const row of rows) {
-      if (isTombstone(row)) continue
-      if (isIntactRecord(row)) records.push(row)
+      // A tombstone hides nothing while a body is still stored under it: then it is a damaged row.
+      if (isTombstoneShape(row) && !(await bodyStored(row.draftId))) tombstones.push(row)
+      else if (isIntactRecord(row)) records.push(row)
       else unreadable.push(unreadableOf(row))
     }
     // The pings wait on silence, so every record is classified together.
     const lineages = await Promise.all(records.map((record) => classifySafely(record)))
     const drafts = records.map((record, i) => draftOf(record, lineages[i]!, at))
     drafts.sort((a, b) => b.updatedAt - a.updatedAt || a.draftId.localeCompare(b.draftId))
-    return { state, rows, drafts, unreadable }
+    return { state, rows, tombstones, drafts, unreadable }
+  }
+
+  /** Whether a body row exists; when that cannot be told, assume it does (list, never hide). */
+  async function bodyStored(draftId: string): Promise<boolean> {
+    try {
+      return (await rt.store.getBody(draftId)) !== null
+    } catch {
+      return true
+    }
   }
 
   function unreadableKeyOf(stored: StoredEmergency): DiagnosticsUnreadableEmergency {
@@ -423,11 +443,14 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
   }
 
   /** Emergency entries of other pages that no record holds yet, and keys this build cannot parse. */
-  async function listEmergency(rows: unknown[]): Promise<{ emergency: DiagnosticsEmergency[]; unreadableEmergency: DiagnosticsUnreadableEmergency[] }> {
+  async function listEmergency(
+    rows: unknown[],
+    tombstones: DraftRecord[],
+  ): Promise<{ emergency: DiagnosticsEmergency[]; unreadableEmergency: DiagnosticsUnreadableEmergency[] }> {
     const known = new Map<string, number>()
-    for (const row of rows) {
-      // Only a usable record or a tombstone stands for an entry: a damaged row may have lost its text.
-      if (isIntactRecord(row) || isTombstone(row)) known.set(row.draftId, Math.max(row.generation, known.get(row.draftId) || 0))
+    // Only a usable record or a verified tombstone stands for an entry: a damaged row may have lost its text.
+    for (const row of [...rows.filter(isIntactRecord), ...tombstones]) {
+      known.set(row.draftId, Math.max(row.generation, known.get(row.draftId) || 0))
     }
     const unreadableEmergency: DiagnosticsUnreadableEmergency[] = []
     const pending: Array<Promise<DiagnosticsEmergency>> = []
@@ -472,8 +495,8 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
     } catch {
       /* storage refused; whatever the keys hold is listed below */
     }
-    const { state, rows, drafts, unreadable } = await listRecords(at)
-    const { emergency, unreadableEmergency } = await listEmergency(rows)
+    const { state, rows, tombstones, drafts, unreadable } = await listRecords(at)
+    const { emergency, unreadableEmergency } = await listEmergency(rows, tombstones)
     // Everything kept counts, readable or not: an unreadable copy takes storage too.
     const sizes = [
       ...drafts.map((d) => (Number.isFinite(d.bodyLength) ? d.bodyLength : null)),

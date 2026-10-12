@@ -1064,9 +1064,12 @@ var prksEditorRecovery = (function(exports) {
 	function isIntactPipeline(pipeline) {
 		return pipeline === null || isObject(pipeline) && typeof pipeline.state === "string" && PIPELINE_STATES.includes(pipeline.state);
 	}
-	/** A supported record that is a `discarded` tombstone: no draft, nothing to list. */
-	function isTombstone(row) {
-		return isSupportedRecord(row) && row.status === "discarded";
+	/**
+	* A row with the store's tombstone shape: the whole v1 shape, `discarded`, no
+	* body length. Whether its body is really gone is checked when it is listed.
+	*/
+	function isTombstoneShape(row) {
+		return hasIntactShape(row) && row.status === "discarded" && row.bodyLength === 0;
 	}
 	/**
 	* A supported draft record with the whole v1 shape intact: identity, entity,
@@ -1074,10 +1077,14 @@ var prksEditorRecovery = (function(exports) {
 	* as damaged and is never offered for Discard.
 	*/
 	function isIntactRecord(row) {
+		return hasIntactShape(row) && (row.status === "active" || row.status === "tail-missing");
+	}
+	/** Every v1 field present and well formed, whatever the status. */
+	function hasIntactShape(row) {
 		if (!isSupportedRecord(row)) return false;
 		const r = row;
 		const entityType = row.kind === "folder-private-note" ? "folder" : "work";
-		return (r.status === "active" || r.status === "tail-missing") && r.entityType === entityType && typeof r.entityId === "string" && r.entityId !== "" && r.entityKey === entityKeyOf(row.kind, r.entityId) && Number.isInteger(r.generation) && finiteAtLeastZero(r.generation) && isIntactOwner(r.owner) && isIntactBase(r.base) && isIntactPipeline(r.pipeline) && finiteAtLeastZero(r.bodyLength) && finiteAtLeastZero(r.createdAt) && finiteAtLeastZero(r.updatedAt) && (r.emergencySource === void 0 || typeof r.emergencySource === "string");
+		return (r.status === "active" || r.status === "tail-missing" || r.status === "discarded") && r.entityType === entityType && typeof r.entityId === "string" && r.entityId !== "" && r.entityKey === entityKeyOf(row.kind, r.entityId) && Number.isInteger(r.generation) && finiteAtLeastZero(r.generation) && isIntactOwner(r.owner) && isIntactBase(r.base) && isIntactPipeline(r.pipeline) && finiteAtLeastZero(r.bodyLength) && finiteAtLeastZero(r.createdAt) && finiteAtLeastZero(r.updatedAt) && (r.emergencySource === void 0 || typeof r.emergencySource === "string");
 	}
 	function hexOf(bytes) {
 		let hex = "";
@@ -1193,21 +1200,29 @@ var prksEditorRecovery = (function(exports) {
 				state = storageState(error);
 			}
 			const records = [];
+			const tombstones = [];
 			const unreadable = [];
-			for (const row of rows) {
-				if (isTombstone(row)) continue;
-				if (isIntactRecord(row)) records.push(row);
-				else unreadable.push(unreadableOf(row));
-			}
+			for (const row of rows) if (isTombstoneShape(row) && !await bodyStored(row.draftId)) tombstones.push(row);
+			else if (isIntactRecord(row)) records.push(row);
+			else unreadable.push(unreadableOf(row));
 			const lineages = await Promise.all(records.map((record) => classifySafely(record)));
 			const drafts = records.map((record, i) => draftOf(record, lineages[i], at));
 			drafts.sort((a, b) => b.updatedAt - a.updatedAt || a.draftId.localeCompare(b.draftId));
 			return {
 				state,
 				rows,
+				tombstones,
 				drafts,
 				unreadable
 			};
+		}
+		/** Whether a body row exists; when that cannot be told, assume it does (list, never hide). */
+		async function bodyStored(draftId) {
+			try {
+				return await rt.store.getBody(draftId) !== null;
+			} catch {
+				return true;
+			}
 		}
 		function unreadableKeyOf(stored) {
 			return {
@@ -1220,9 +1235,9 @@ var prksEditorRecovery = (function(exports) {
 			};
 		}
 		/** Emergency entries of other pages that no record holds yet, and keys this build cannot parse. */
-		async function listEmergency(rows) {
+		async function listEmergency(rows, tombstones) {
 			const known = /* @__PURE__ */ new Map();
-			for (const row of rows) if (isIntactRecord(row) || isTombstone(row)) known.set(row.draftId, Math.max(row.generation, known.get(row.draftId) || 0));
+			for (const row of [...rows.filter(isIntactRecord), ...tombstones]) known.set(row.draftId, Math.max(row.generation, known.get(row.draftId) || 0));
 			const unreadableEmergency = [];
 			const pending = [];
 			for (const stored of storage ? readEmergencyKeys(storage) : []) {
@@ -1269,8 +1284,8 @@ var prksEditorRecovery = (function(exports) {
 			try {
 				await rt.scanEmergency();
 			} catch {}
-			const { state, rows, drafts, unreadable } = await listRecords(at);
-			const { emergency, unreadableEmergency } = await listEmergency(rows);
+			const { state, rows, tombstones, drafts, unreadable } = await listRecords(at);
+			const { emergency, unreadableEmergency } = await listEmergency(rows, tombstones);
 			const sizes = [
 				...drafts.map((d) => Number.isFinite(d.bodyLength) ? d.bodyLength : null),
 				...emergency.map((e) => e.bodyLength),
