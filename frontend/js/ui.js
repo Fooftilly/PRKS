@@ -456,6 +456,52 @@ function prksSetButtonBusy(button, busy, options = {}) {
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(button);
 }
 
+/**
+ * Copies text to the clipboard: the Clipboard API first, then a hidden
+ * textarea and `execCommand('copy')` where the API is missing or refused
+ * (for example LAN/HTTP pages, which are not a secure context). Rejects when
+ * neither copies. One helper for classic callers (PDF annotation links) and
+ * Vue (recovery Review and Settings → Diagnostics).
+ * @param {string} text
+ * @returns {Promise<void>}
+ */
+async function prksCopyTextToClipboard(text) {
+    const s = text == null ? '' : String(text);
+    if (!s) return;
+    let clipboardErr = null;
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        try {
+            await navigator.clipboard.writeText(s);
+            return;
+        } catch (e) {
+            clipboardErr = e;
+        }
+    }
+
+    // Fallback for older browsers / blocked clipboard access.
+    const restore = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const ta = document.createElement('textarea');
+    ta.value = s;
+    ta.setAttribute('readonly', 'readonly');
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    ta.style.top = '-9999px';
+    document.body.appendChild(ta);
+    try {
+        ta.select();
+        const ok = document.execCommand('copy');
+        if (!ok) throw clipboardErr || new Error('Copy failed');
+    } finally {
+        document.body.removeChild(ta);
+        // The copy button keeps focus (dialogs keep their keyboard position).
+        if (restore && restore.isConnected) {
+            try {
+                restore.focus({ preventScroll: true });
+            } catch (_e) {}
+        }
+    }
+}
+
 const PRKS_BUTTON_LABEL_FLASH_MS = 1500;
 const _prksButtonLabelFlashTimers = new WeakMap();
 
@@ -1305,6 +1351,7 @@ window.prksConfirmUnsavedRouteLeave = prksConfirmUnsavedRouteLeave;
 window.prksPromptTextDialog = prksPromptTextDialog;
 window.prksSetButtonBusy = prksSetButtonBusy;
 window.prksFlashButtonLabel = prksFlashButtonLabel;
+window.prksCopyTextToClipboard = prksCopyTextToClipboard;
 window.prksConfirmDeletePdfAnnotation = prksConfirmDeletePdfAnnotation;
 
 function personDisplayName(p) {
