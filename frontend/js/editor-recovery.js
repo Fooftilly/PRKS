@@ -1106,7 +1106,8 @@ var prksEditorRecovery = (function(exports) {
 		seen.set(value, seen.size);
 		const all = (parts) => parts.every((part) => part !== null) ? parts.join(",") : null;
 		const wrap = (open, inner, close) => inner === null ? null : open + inner + close;
-		if (Array.isArray(value)) return wrap("[", all(Array.from(value, (item) => serialized(item, seen))), "]");
+		const ownKeys = (record) => all(Object.keys(record).map((k) => wrap(JSON.stringify(k) + ":", serialized(record[k], seen), "")));
+		if (Array.isArray(value)) return wrap("[" + value.length + ":", ownKeys(value), "]");
 		if (value instanceof Date) return "d:" + value.getTime();
 		if (value instanceof Map) return wrap("m{", all([...value].map(([k, v]) => wrap("", all([serialized(k, seen), serialized(v, seen)]), ""))), "}");
 		if (value instanceof Set) return wrap("S{", all([...value].map((item) => serialized(item, seen))), "}");
@@ -1114,8 +1115,7 @@ var prksEditorRecovery = (function(exports) {
 		if (ArrayBuffer.isView(value)) return "v:" + value.constructor.name + ":" + hexOf(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
 		const proto = Object.getPrototypeOf(value);
 		if (proto !== Object.prototype && proto !== null) return null;
-		const record = value;
-		return wrap("{", all(Object.keys(record).map((k) => wrap(JSON.stringify(k) + ":", serialized(record[k], seen), ""))), "}");
+		return wrap("{", ownKeys(value), "}");
 	}
 	/** Identity of a stored row as listed; null when it cannot be told apart exactly from a rewrite. */
 	function snapshotOf(row) {

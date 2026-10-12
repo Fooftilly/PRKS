@@ -194,11 +194,24 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     expect(await diag.readText({ source: 'unreadable-record', draftId: 'd-big', snapshot: big.snapshot! })).toEqual({ ok: true, text: 'big text' })
     await putRows(idb, DRAFTS_STORE, [{ v: 99, draftId: 'd-big', n: 2n }])
     expect(await diag.readText({ source: 'unreadable-record', draftId: 'd-big', snapshot: big.snapshot! })).toEqual({ ok: false, code: 'changed' })
+    // Array holes and extra properties count too.
+    const sparse: unknown[] = [1]
+    sparse[2] = 3
+    const filled: unknown[] = [1, undefined, 3]
+    const tagged: unknown[] = Object.assign([1, 2], { note: 'x' })
+    await putRows(idb, DRAFTS_STORE, [{ v: 99, draftId: 'd-arr', a: sparse }])
+    const arr = (await diag.inventory()).unreadable.find((u) => u.draftId === 'd-arr')!.snapshot
+    await putRows(idb, DRAFTS_STORE, [{ v: 99, draftId: 'd-arr', a: filled }])
+    expect((await diag.inventory()).unreadable.find((u) => u.draftId === 'd-arr')!.snapshot).not.toBe(arr)
+    await putRows(idb, DRAFTS_STORE, [{ v: 99, draftId: 'd-arr', a: [1, 2] }])
+    const plain = (await diag.inventory()).unreadable.find((u) => u.draftId === 'd-arr')!.snapshot
+    await putRows(idb, DRAFTS_STORE, [{ v: 99, draftId: 'd-arr', a: tagged }])
+    expect((await diag.inventory()).unreadable.find((u) => u.draftId === 'd-arr')!.snapshot).not.toBe(plain)
     // A newer-version editor rewrote the row since it was listed: its text is not shown from the old listing.
     await putRows(idb, DRAFTS_STORE, [{ ...record!, v: 99, generation: record!.generation + 1 }])
     expect(await diag.readText({ source: 'unreadable-record', draftId, snapshot: snapshot(draftId) })).toEqual({ ok: false, code: 'changed' })
     expect((await viewer.store.get(draftId))?.v).toBe(99)
-    expect(idb.rows(RECOVERY_DB_NAME, DRAFTS_STORE)).toHaveLength(4)
+    expect(idb.rows(RECOVERY_DB_NAME, DRAFTS_STORE)).toHaveLength(5)
   })
 
   it('keeps a record missing only its base or entity key copy-only, never discardable', async () => {
