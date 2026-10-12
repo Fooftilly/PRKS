@@ -463,9 +463,14 @@ are specific:
 - **Runner.** `prks migrate` (and `web` startup when `PRKS_MIGRATE_ON_START=1`,
   the default for personal installs) takes `pg_advisory_lock` on a fixed key,
   creates `prks.schema_migrations(version, name, sha256, applied_at)`, refuses
-  to run if an applied file's checksum changed (after 1.0) or if the database
-  is newer than the code, and applies each pending file in its own
-  transaction. DDL failures abort and are never swallowed.
+  to run if an applied file's checksum changed or if the database is newer
+  than the code, and applies each pending file in its own transaction. DDL
+  failures abort and are never swallowed. Before 1.0 a changed checksum means
+  a baseline file was edited in place after this database applied it; the
+  database is not upgraded in place, so `migrate` and startup stop with a
+  message naming the file and saying the instance must be recreated (PG2,
+  clean start). Test and development databases are rebuilt from the files and
+  never hit this.
 - **Schema check.** A test builds a database from the files and compares its
   catalog (tables, columns, types, constraints, indexes, functions, extensions)
   against a checked-in normalized snapshot `backend/db/schema/snapshot.json`.
@@ -1619,8 +1624,11 @@ clears the flag from under a live restore, and a stale restore can never
 commit:
 
 - Recovery clears the flag only while holding
-  `pg_try_advisory_lock(lib_key(L))` exclusive, in one transaction that
-  checks `maintenance_run = <run>` and the expired lease. A restore that has
+  `pg_try_advisory_xact_lock(lib_key(L))` exclusive, in one transaction that
+  checks `maintenance_run = <run>` and the expired lease. The transaction-level
+  lock is released by that transaction's commit or rollback, so a pooled or
+  long-lived worker connection never keeps the Library's exclusive lock after
+  recovery. A restore that has
   reached R3 holds that lock, so recovery cannot get it and leaves the run
   alone until the restore connection ends; a hung restore therefore keeps
   the Library in maintenance (safe) rather than losing writes.
@@ -2033,7 +2041,9 @@ the lane that ports the relevant module.
 - Restore lease fencing: stall a restore between R2 and R3 past its lease,
   let recovery clear the flag and admit writes, then resume it: it aborts in
   R3 and the admitted writes survive; recovery cannot clear the flag of a
-  restore that holds the R3 lock.
+  restore that holds the R3 lock; recovery run on a pooled worker connection
+  holds no advisory lock after its transaction ends, and the next command on
+  that Library takes its shared lock at once.
 - Restore exclusion interleavings: a write in flight at R2 finishes before
   R4; a write after R2 gets `MAINTENANCE` and the browser holds it; a cleanup
   batch and an orphan sweep during restore are skipped; a running backup
@@ -2176,7 +2186,7 @@ explicit go, and PG-1 comes first.
 | Slice | Content | Acceptance criteria |
 | --- | --- | --- |
 | **PG-1** Database plumbing and test harness | psycopg + psycopg_pool pins; `backend/db/` config (`PRKS_DATABASE_URL`, `*_FILE`), pool, `command()`/`query()` helpers with isolation, error mapping table; harness-created test databases with template cloning and refusal of foreign databases (ownership marked with a `COMMENT ON DATABASE` until PG-2 adds `instance.testing`); `scripts/test-postgres`; CI service container in `test-gate.yml`. No domain tables. | Unit tests for helpers (commit, rollback on exception, SERIALIZABLE retry on injected `40001`, READ ONLY query refuses writes); error-mapping tests per SQLSTATE; pool exhaustion → typed error; harness refuses a pre-existing database; CI green with the service; existing SQLite suites untouched and green. |
-| **PG-2** Migration runner, schema layout and core tables | Runner with advisory lock and checksums; `000_extensions.sql`, `010_instance.sql`, `020_identity.sql`, `030_jobs.sql`, `040_sync.sql` (`entity_revisions`, `sync_operations`, `devices`); `prks.identity_key` with the immutability proof (§8.1); text identity vectors and Python implementation; schema snapshot test and `check_pg_schema.py`. | Fresh database matches the snapshot; concurrent `migrate` runs apply once; a newer-schema database is refused; identity vectors pass in SQL and Python; `IMMUTABLE` generated column works under the builtin locale (or the fallback is chosen and documented). |
+| **PG-2** Migration runner, schema layout and core tables | Runner with advisory lock and checksums; `000_extensions.sql`, `010_instance.sql`, `020_identity.sql`, `030_jobs.sql`, `040_sync.sql` (`entity_revisions`, `sync_operations`, `devices`); `prks.identity_key` with the immutability proof (§8.1); text identity vectors and Python implementation; schema snapshot test and `check_pg_schema.py`. | Fresh database matches the snapshot; concurrent `migrate` runs apply once; a newer-schema database is refused; a database whose applied baseline file has since changed is refused with the recreate message; identity vectors pass in SQL and Python; `IMMUTABLE` generated column works under the builtin locale (or the fallback is chosen and documented). |
 | **PG-3** Parity harness and facade skeleton | `PostgresLibrary` facade composed of empty mixins; a test fixture parametrizing selected modules over `sqlite` and `postgres`, with a registry marking which methods are ported (unported ones skip on `postgres`, not fail); a dual-run CI job. | Running `python run_tests.py` unchanged still runs SQLite only; the `postgres` leg runs and reports ported/unported counts; no lane needs to edit the fixture to register its family (one line in its mixin). |
 
 **Stage 2. Parallel lanes** (each may start once its dependencies are
@@ -2190,12 +2200,12 @@ merged; several run at the same time).
 | **L-W-2** Bulk, BibTeX, wiki links, Work merge scaffolding | L-W-1 | Bulk actions (SERIALIZABLE), BibTeX via citation record, wiki-link resolution | Byte-identical BibTeX tests; bulk atomicity tests |
 | **L-P-1** People | L-W-1 | Persons, aliases as rows, roles (no `rowid`), person groups, publishers; their sync families | Parametrized tests; Greek/Cyrillic identity for publishers and groups; role order stable without `rowid` |
 | **L-O-1** Organization | L-W-1 | Tags (aliases, merge), folders, folder tags, playlists, Saved Views, settings split; their sync families | Parametrized tests; tag merge concurrency test; per-parent folder identity; one-playlist-per-Work |
-| **L-R-1** Research | L-W-1 | Concepts with `concept_keys`, Positions, Arguments, sources/targets, notes integration, derived mentions via `research.reindex_work`, graph projection | Parametrized tests; Research-ACK fence still observed by E2E; no Python full scan for concept resolution |
+| **L-R-1** Research | L-W-1, L-J-1 | Concepts with `concept_keys`, Positions, Arguments, sources/targets, notes integration, derived mentions via `research.reindex_work`, graph projection | Parametrized tests; Research-ACK fence still observed by E2E; no Python full scan for concept resolution |
 | **L-A-1** Objects and annotations | L-W-1, L-J-1 | #311 Phase B on PostgreSQL: all managed-file paths through `StorageBackend`; immutable objects; cleanup claims, orphan sweep, and the `restore_run_objects` table counted by the reference check (§11.2); annotations, materialization, PDF replace, save-confirm from durable state; person portraits | Object lifecycle tests (§13.3), including a stalled ingest and a stalled rewrite whose new key the sweep settles failing cleanly at the adoption check; write-amplification measurement recorded in the PR; no `os.remove` outside the storage backend; parametrized annotation and sync tests pass |
 | **L-PR-1** Processing | L-A-1 | Inbox scan as a job, import through the objects lane | Parametrized processing tests; no absolute path stored |
 | **L-S-1** Search | L-W-1, L-J-1, L-P-1, L-O-1, L-A-1 | `derived.work_search` maintained by commands, `asset_text` via `text.extract`, trigram filters, parity ordering, Saved View execution, `rebuild-derived`; `backend/AGENTS.md` extracted-text rule amended for the `derived` schema (§16, decision 5) | §8.7 parity tests; search parametrized tests pass with the documented Unicode improvements replacing ASCII pins |
 | **L-S-2** Ranking | L-S-1 | Single weighted score | Before/after results on a synthetic multilingual corpus approved in review |
-| **L-B-1** Backup and restore format 2 | L-W-1, L-P-1, L-O-1, L-R-1, L-A-1 | §11.4 | Round-trip test over a fixture covering every canonical table and object kind; text `COPY` with the interchange contract (no binary `COPY`); restore into the same and into a new instance with real sync operations, the archive Library mapped to the target Library and all library/user/device references resolving; a restore over a different Library whose IDs still exist is refused; R1 reuse of an existing object is lock-coupled to cleanup settle and re-verified in R3, so R4 never commits a locator to a missing object; new devices are inserted only by R4; a restore that outlives its lease aborts and never replaces writes accepted after recovery; export, staging and the R4 delete/insert use only the content-table allowlist, and a schema test classifies every library-scoped table; staging builds `restore_<id>` with `LIKE` from the live tables, never with the migration runner, checks foreign keys with redirected generated anti-joins, and refuses an archive of another schema fingerprint (§13.3 staging isolation); the round trip covers a table with a generated `*_key` column, which is not exported and is recomputed on restore; staged objects of a live run survive an orphan sweep (L-B-1 only writes `restore_run_objects` rows; the table and its term in the reference check belong to L-A-1); verification refuses tampered archives; fault injection at R0–R5, including a kill immediately after the R4 commit that still rebuilds search after restart; the exclusion interleavings of §13.3; restoring an older snapshot while a long job runs and a pending edit exists never applies either to the replacement state; backup concurrent with writes and cleanup; format 1 refused with a clear message |
+| **L-B-1** Backup and restore format 2 | L-W-1, L-P-1, L-O-1, L-R-1, L-A-1, L-PR-1, L-S-1 | §11.4 | Round-trip test over a fixture covering every canonical table and object kind; text `COPY` with the interchange contract (no binary `COPY`); restore into the same and into a new instance with real sync operations, the archive Library mapped to the target Library and all library/user/device references resolving; a restore over a different Library whose IDs still exist is refused; R1 reuse of an existing object is lock-coupled to cleanup settle and re-verified in R3, so R4 never commits a locator to a missing object; new devices are inserted only by R4; a restore that outlives its lease aborts and never replaces writes accepted after recovery; export, staging and the R4 delete/insert use only the content-table allowlist, and a schema test classifies every library-scoped table; staging builds `restore_<id>` with `LIKE` from the live tables, never with the migration runner, checks foreign keys with redirected generated anti-joins, and refuses an archive of another schema fingerprint (§13.3 staging isolation); the round trip covers a table with a generated `*_key` column, which is not exported and is recomputed on restore; staged objects of a live run survive an orphan sweep (L-B-1 only writes `restore_run_objects` rows; the table and its term in the reference check belong to L-A-1); verification refuses tampered archives; fault injection at R0–R5, including a kill immediately after the R4 commit that still rebuilds search after restart; the exclusion interleavings of §13.3; restoring an older snapshot while a long job runs and a pending edit exists never applies either to the replacement state; backup concurrent with writes and cleanup; format 1 refused with a clear message |
 | **L-D-1** Compose and health | PG-1, L-ID-1, L-J-1 | Dockerfile with psycopg, Compose of §12.3, `/healthz`, `/readyz`, graceful stop, `.env.example`, README deployment section, #612 configuration entries | Clean `docker compose up` smoke test in CI reaches `/readyz` and bootstrap; the database volume is mounted at `/var/lib/postgresql`; `web` and `worker` each list the `prks_database_url` secret and read it at start; data survives `down`/`up` and container recreation with the volume kept; wrong root/database pairing refused at start |
 | **L-F-1** Browser store scoping, auth hold and restore epoch | L-ID-1 | §10.3–10.4 on the client | E2E: two accounts in one browser never see each other's drafts or queue; session expiry mid-queue holds and later delivers; pre-0.8 queue offered review-only, never auto-deleted; after a restore to an older snapshot a pending edit is not applied, its text is offered in review-only recovery, and older-epoch drafts are never auto-restored; every mutation carries `PRKS-Library-Epoch`; #465/#466 suites green |
 
@@ -2215,20 +2225,27 @@ reassessment (§10.5).
 ### 15.4 Parallelism at a glance
 
 ```text
-PG-1 → PG-2 → PG-3 ─┬─ L-W-1 ─┬─ L-W-2
-        │           │         ├─ L-P-1 ─────────┐
-        ├─ L-ID-1 ──┤         ├─ L-O-1 ─────────┤
-        │     └─ L-F-1        ├─ L-R-1 ─────────┼─ L-B-1 ─┐
-        └─ L-J-1 ───┴─────────┴─ L-A-1 ─ L-PR-1 ┘         ├─ PG-C1 → PG-C2 → PG-C3
-              L-S-1 (after L-P-1, L-O-1, L-A-1) ─ L-S-2   │
-              L-D-1 (after PG-1, L-ID-1, L-J-1) ──────────┘
+Stage 1  PG-1 → PG-2 → PG-3
+Stage 2  after PG-2 ............................... L-ID-1, L-J-1
+         after PG-3 + L-ID-1 ...................... L-W-1
+         after L-ID-1 ............................. L-F-1
+         after PG-1 + L-ID-1 + L-J-1 .............. L-D-1
+         after L-W-1 .............................. L-W-2, L-P-1, L-O-1
+         after L-W-1 + L-J-1 ...................... L-R-1, L-A-1
+         after L-A-1 .............................. L-PR-1
+         after L-P-1 + L-O-1 + L-A-1 .............. L-S-1
+         after L-S-1 .............................. L-S-2
+         after L-P-1, L-O-1, L-R-1, L-PR-1, L-S-1 . L-B-1
+Stage 3  PG-C1 (after every Stage 2 lane except L-S-2) → PG-C2 → PG-C3
 ```
 
 Up to six lanes can run at once after L-W-1 (Works bulk and links, People,
 Organization, Research, Objects, Browser scoping), each in its own files.
 Search starts once People, Organization and Objects have merged, because
 its search documents, Saved View execution and `text.extract` read their
-tables and the storage backend.
+tables and the storage backend. Backup comes last among the domain lanes,
+because its round trip covers every canonical table (Processing included)
+and its post-restore rebuild runs the Search lane's `derived.rebuild`.
 
 ---
 
