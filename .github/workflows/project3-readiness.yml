@@ -57,3 +57,20 @@ jobs:
           archive: false
           retention-days: 2
           if-no-files-found: error
+
+  # TEMPORARY NEGATIVE TEST ONLY; do not merge this test job into master.
+  # Dispatch this workflow from test/environment-guard-597. The snapshot job
+  # above must skip, and GitHub must reject this job BEFORE starting its steps
+  # because project-automation only admits refs/heads/master.
+  environment-guard-negative-test:
+    name: TEST ONLY - refuse non-master environment deployment
+    if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    permissions: {}
+    environment: project-automation
+    steps:
+      - name: Unexpected - environment restriction did not block this branch
+        run: |
+          echo "::error::Non-master branch was allowed to use project-automation; fix Environment branch rules."
+          exit 1
