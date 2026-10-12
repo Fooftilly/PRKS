@@ -998,6 +998,538 @@ var prksEditorRecovery = (function(exports) {
 			return false;
 		}
 	}
+	/** Diagnostics warns when recovery copies together exceed this (design §9). */
+	var RECOVERY_WARN_BYTES = 268435456;
+	function isLive(lineage) {
+		return lineage === "self-live" || lineage === "other-live";
+	}
+	function storageState(error) {
+		const code = error && typeof error === "object" ? error.code : void 0;
+		if (code === "unavailable" || code === "blocked") return code;
+		return "failed";
+	}
+	function stringOrNull(value) {
+		return typeof value === "string" ? value : null;
+	}
+	function readKey(storage, key) {
+		try {
+			return storage ? storage.getItem(key) : null;
+		} catch {
+			return null;
+		}
+	}
+	function supersededGeneration(storage, draftId) {
+		const raw = readKey(storage, SUPERSEDED_KEY_PREFIX + draftId);
+		if (!raw) return 0;
+		try {
+			const value = JSON.parse(raw);
+			return value && typeof value.generation === "number" ? value.generation : 0;
+		} catch {
+			return 0;
+		}
+	}
+	function unreadableReason(stored) {
+		if (stored.readFailed) return "read-failed";
+		return mayHoldUnreadable(stored) ? "newer-version" : "malformed";
+	}
+	function finiteAtLeastZero(value) {
+		return typeof value === "number" && Number.isFinite(value) && value >= 0;
+	}
+	function numberOrNull(value) {
+		return value === null || typeof value === "number" && Number.isFinite(value);
+	}
+	function isObject(value) {
+		return !!value && typeof value === "object";
+	}
+	var BASE_SOURCES = [
+		"server",
+		"cache",
+		"pending-create",
+		"unknown"
+	];
+	var PIPELINE_STATES = [
+		"drafting",
+		"saving",
+		"queued",
+		"blocked",
+		"error",
+		"conflict"
+	];
+	function isIntactOwner(owner) {
+		return isObject(owner) && (owner.runtimeId === null || typeof owner.runtimeId === "string") && typeof owner.pageInstanceId === "string" && typeof owner.paneId === "string" && finiteAtLeastZero(owner.claimedAt);
+	}
+	function isIntactBase(base) {
+		return isObject(base) && typeof base.source === "string" && BASE_SOURCES.includes(base.source) && numberOrNull(base.revision) && numberOrNull(base.length) && (base.fingerprint === null || typeof base.fingerprint === "string");
+	}
+	function isIntactPipeline(pipeline) {
+		return pipeline === null || isObject(pipeline) && typeof pipeline.state === "string" && PIPELINE_STATES.includes(pipeline.state);
+	}
+	/**
+	* A row with the store's tombstone shape: the whole v1 shape, `discarded`, no
+	* body length. Whether its body is really gone is checked when it is listed.
+	*/
+	function isTombstoneShape(row) {
+		return hasIntactShape(row) && row.status === "discarded" && row.bodyLength === 0;
+	}
+	/**
+	* A supported draft record with the whole v1 shape intact: identity, entity,
+	* owner, base, pipeline, sizes and times. Anything less is listed copy-only
+	* as damaged and is never offered for Discard.
+	*/
+	function isIntactRecord(row) {
+		return hasIntactShape(row) && (row.status === "active" || row.status === "tail-missing");
+	}
+	/** Every v1 field present and well formed, whatever the status. */
+	function hasIntactShape(row) {
+		if (!isSupportedRecord(row)) return false;
+		const r = row;
+		const entityType = row.kind === "folder-private-note" ? "folder" : "work";
+		return (r.status === "active" || r.status === "tail-missing" || r.status === "discarded") && r.entityType === entityType && typeof r.entityId === "string" && r.entityId !== "" && r.entityKey === entityKeyOf(row.kind, r.entityId) && Number.isInteger(r.generation) && finiteAtLeastZero(r.generation) && isIntactOwner(r.owner) && isIntactBase(r.base) && isIntactPipeline(r.pipeline) && finiteAtLeastZero(r.bodyLength) && finiteAtLeastZero(r.createdAt) && finiteAtLeastZero(r.updatedAt) && (r.emergencySource === void 0 || typeof r.emergencySource === "string");
+	}
+	/**
+	* An exact, tagged serialization of a structured-clone value: primitives
+	* (BigInt included), arrays, plain objects, Dates, Maps and Sets,
+	* with shared and cyclic references by position. Null for anything it cannot
+	* represent exactly, so two different rows never share a snapshot.
+	*/
+	function serialized(value, seen) {
+		switch (typeof value) {
+			case "undefined": return "u";
+			case "boolean": return "b:" + String(value);
+			case "number": return "n:" + (Object.is(value, -0) ? "-0" : String(value));
+			case "bigint": return "i:" + value.toString();
+			case "string": return "s:" + JSON.stringify(value);
+			case "object": break;
+			default: return null;
+		}
+		if (value === null) return "null";
+		const ref = seen.get(value);
+		if (ref !== void 0) return "r:" + ref;
+		seen.set(value, seen.size);
+		const all = (parts) => parts.every((part) => part !== null) ? parts.join(",") : null;
+		const wrap = (open, inner, close) => inner === null ? null : open + inner + close;
+		const ownKeys = (record) => all(Object.keys(record).map((k) => wrap(JSON.stringify(k) + ":", serialized(record[k], seen), "")));
+		if (Array.isArray(value)) return wrap("[" + value.length + ":", ownKeys(value), "]");
+		if (value instanceof Date) return "d:" + value.getTime();
+		if (value instanceof Map) return wrap("m{", all([...value].map(([k, v]) => wrap("", all([serialized(k, seen), serialized(v, seen)]), ""))), "}");
+		if (value instanceof Set) return wrap("S{", all([...value].map((item) => serialized(item, seen))), "}");
+		if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return null;
+		const proto = Object.getPrototypeOf(value);
+		if (proto !== Object.prototype && proto !== null) return null;
+		return wrap("{", ownKeys(value), "}");
+	}
+	/** Two independent 32-bit FNV-1a lanes over the UTF-16 code units: a compact fingerprint of a body's text. */
+	function digestOf(text) {
+		let a = 2166136261;
+		let b = 16777619 ^ text.length;
+		for (let i = 0; i < text.length; i++) {
+			const c = text.charCodeAt(i);
+			a = Math.imul(a ^ c, 16777619);
+			b = Math.imul(b ^ c, 1540483477) ^ b >>> 13;
+		}
+		return (a >>> 0).toString(16).padStart(8, "0") + (b >>> 0).toString(16).padStart(8, "0");
+	}
+	/**
+	* Identity of a copy-only row and its stored body together, as listed: the row
+	* exactly, the body by everything but its text plus the text's length and
+	* fingerprint. Null when either cannot be represented exactly.
+	*/
+	function copySnapshotOf(row, body) {
+		const rowPart = snapshotOf(row);
+		if (rowPart === null) return null;
+		if (body === null || body === void 0) return rowPart + "|none";
+		if (typeof body !== "object") return null;
+		const { body: text, ...rest } = body;
+		const restPart = snapshotOf(rest);
+		const textPart = typeof text === "string" ? "t:" + text.length + ":" + digestOf(text) : snapshotOf(text);
+		return restPart === null || textPart === null ? null : rowPart + "|" + restPart + "|" + textPart;
+	}
+	/** Identity of a stored row as listed; null when it cannot be told apart exactly from a rewrite. */
+	function snapshotOf(row) {
+		return serialized(row, /* @__PURE__ */ new Map());
+	}
+	function enumerable(storage) {
+		if (!storage) return false;
+		try {
+			return typeof storage.length === "number";
+		} catch {
+			return false;
+		}
+	}
+	function createRecoveryDiagnostics(rt, options = {}) {
+		const storage = options.storage === void 0 ? defaultLocalStorage$2() : options.storage;
+		const now = options.now || Date.now;
+		async function classifySafely(record) {
+			try {
+				return await rt.classify(record);
+			} catch {
+				return "unknown";
+			}
+		}
+		function draftOf(record, lineage, at) {
+			const status = record.status === "tail-missing" ? "tail-missing" : "active";
+			return {
+				source: "record",
+				draftId: record.draftId,
+				kind: record.kind,
+				entityType: record.entityType,
+				entityId: record.entityId,
+				status,
+				lineage,
+				generation: record.generation,
+				bodyLength: record.bodyLength,
+				createdAt: record.createdAt,
+				updatedAt: record.updatedAt,
+				baseRevision: record.base ? record.base.revision : null,
+				baseSource: record.base ? record.base.source : "unknown",
+				pipelineState: record.pipeline ? record.pipeline.state : null,
+				old: !isLive(lineage) && at - record.updatedAt > 2592e6,
+				superseded: supersededGeneration(storage, record.draftId) >= record.generation,
+				deletedHere: record.entityType === "work" && readKey(storage, "prks.workRecoveryCleanup.v1." + record.entityId) !== null,
+				fromEmergency: typeof record.emergencySource === "string",
+				expect: {
+					draftId: record.draftId,
+					pageInstanceId: record.owner.pageInstanceId,
+					generation: record.generation,
+					status: record.status
+				}
+			};
+		}
+		function unreadableOf(row) {
+			const r = row && typeof row === "object" ? row : {};
+			const newer = typeof r.v === "number" && r.v > 1;
+			return {
+				source: "unreadable-record",
+				draftId: stringOrNull(r.draftId),
+				reason: newer ? "newer-version" : "malformed",
+				kind: stringOrNull(r.kind),
+				entityType: stringOrNull(r.entityType),
+				entityId: stringOrNull(r.entityId),
+				updatedAt: typeof r.updatedAt === "number" ? r.updatedAt : null,
+				bodyLength: typeof r.bodyLength === "number" && Number.isFinite(r.bodyLength) && r.bodyLength >= 0 ? r.bodyLength : null,
+				snapshot: snapshotOf(row)
+			};
+		}
+		/** Stored records: readable ones classified, unreadable ones listed as they are. */
+		async function listRecords(at) {
+			let state = "ok";
+			let rows = [];
+			try {
+				rows = await rt.store.listAll();
+			} catch (error) {
+				state = storageState(error);
+			}
+			const records = [];
+			const tombstones = [];
+			const unreadable = [];
+			for (const row of rows) if (isTombstoneShape(row) && !await bodyStored(row.draftId)) tombstones.push(row);
+			else if (isIntactRecord(row) && await bodyMatches(row)) records.push(row);
+			else unreadable.push(await measured(row));
+			const lineages = await Promise.all(records.map((record) => classifySafely(record)));
+			const drafts = records.map((record, i) => draftOf(record, lineages[i], at));
+			drafts.sort((a, b) => b.updatedAt - a.updatedAt || a.draftId.localeCompare(b.draftId));
+			return {
+				state,
+				records,
+				tombstones,
+				drafts,
+				unreadable
+			};
+		}
+		/** Whether the stored body is text of the record's own generation and stated length; when that cannot be told, it is not. */
+		async function bodyMatches(record) {
+			try {
+				const body = await rt.store.getBody(record.draftId);
+				return !!body && body.generation === record.generation && typeof body.body === "string" && body.body.length === record.bodyLength;
+			} catch {
+				return false;
+			}
+		}
+		/**
+		* A copy-only row as listed: sized by its stored text when there is any (its
+		* stated length may be wrong), and identified by its row and body together.
+		*/
+		async function measured(raw) {
+			const row = unreadableOf(raw);
+			if (row.draftId === null) return row;
+			try {
+				const body = await rt.store.getBody(row.draftId);
+				const snapshot = copySnapshotOf(raw, body);
+				return body && typeof body.body === "string" ? {
+					...row,
+					bodyLength: body.body.length,
+					snapshot
+				} : {
+					...row,
+					snapshot
+				};
+			} catch {
+				return {
+					...row,
+					snapshot: null
+				};
+			}
+		}
+		/** Whether a body row exists; when that cannot be told, assume it does (list, never hide). */
+		async function bodyStored(draftId) {
+			try {
+				return await rt.store.getBody(draftId) !== null;
+			} catch {
+				return true;
+			}
+		}
+		function unreadableKeyOf(stored) {
+			return {
+				source: "unreadable-emergency",
+				key: stored.key,
+				pageInstanceId: stored.pageInstanceId,
+				reason: unreadableReason(stored),
+				rawLength: stored.raw === null ? null : stored.raw.length,
+				raw: stored.raw
+			};
+		}
+		/** Emergency entries of other pages that no record holds yet, and keys this build cannot parse. */
+		async function listEmergency(records, tombstones) {
+			const known = /* @__PURE__ */ new Map();
+			for (const row of [...records, ...tombstones]) known.set(row.draftId, Math.max(row.generation, known.get(row.draftId) || 0));
+			const unreadableEmergency = [];
+			const pending = [];
+			for (const stored of storage ? readEmergencyKeys(storage) : []) {
+				const payload = stored.payload;
+				if (!payload) {
+					if (stored.raw !== null || stored.readFailed) unreadableEmergency.push(unreadableKeyOf(stored));
+					continue;
+				}
+				const owner = {
+					runtimeId: payload.runtimeId,
+					pageInstanceId: stored.pageInstanceId,
+					paneId: "",
+					claimedAt: payload.at
+				};
+				for (const entry of payload.entries) {
+					if (Math.max(known.get(entry.draftId) || 0, known.get(forkedDraftId(entry.draftId, entry.generation)) || 0) >= entry.generation) continue;
+					pending.push(classifySafely({
+						draftId: entry.draftId,
+						owner
+					}).then((lineage) => ({
+						source: "emergency",
+						key: stored.key,
+						pageInstanceId: stored.pageInstanceId,
+						draftId: entry.draftId,
+						kind: entry.kind,
+						entityType: entry.entityType,
+						entityId: entry.entityId,
+						generation: entry.generation,
+						bodyLength: entry.body === null ? null : entry.body.length,
+						at: payload.at,
+						lineage
+					})));
+				}
+			}
+			const emergency = await Promise.all(pending);
+			emergency.sort((a, b) => b.at - a.at || a.draftId.localeCompare(b.draftId));
+			return {
+				emergency,
+				unreadableEmergency
+			};
+		}
+		async function inventory() {
+			const at = now();
+			try {
+				await rt.scanEmergency();
+			} catch {}
+			const { state, records, tombstones, drafts, unreadable } = await listRecords(at);
+			const { emergency, unreadableEmergency } = await listEmergency(records, tombstones);
+			const sizes = [
+				...drafts.map((d) => Number.isFinite(d.bodyLength) ? d.bodyLength : null),
+				...emergency.map((e) => e.bodyLength),
+				...unreadable.map((u) => u.bodyLength),
+				...unreadableEmergency.map((u) => u.rawLength)
+			];
+			const totalChars = sizes.reduce((sum, n) => sum + (n ?? 0), 0);
+			const approxBytes = totalChars * 2;
+			return {
+				storage: state,
+				emergencyStorage: enumerable(storage) ? "ok" : "unavailable",
+				drafts,
+				unreadable,
+				emergency,
+				unreadableEmergency,
+				totalChars,
+				approxBytes,
+				sizeIncomplete: sizes.some((n) => n === null),
+				overBudget: approxBytes > RECOVERY_WARN_BYTES
+			};
+		}
+		function sameReviewed(record, expect) {
+			return isIntactRecord(record) && record.owner.pageInstanceId === expect.pageInstanceId && record.generation === expect.generation && record.status === expect.status;
+		}
+		async function readRecordText(expect) {
+			const record = await rt.store.get(expect.draftId);
+			if (!sameReviewed(record, expect)) return {
+				ok: false,
+				code: "changed"
+			};
+			if (isLive(await classifySafely(record))) return {
+				ok: false,
+				code: "live"
+			};
+			const row = await rt.store.getBody(expect.draftId);
+			if (!row || typeof row.body !== "string") return {
+				ok: false,
+				code: "missing"
+			};
+			if (row.generation !== expect.generation) return {
+				ok: false,
+				code: "changed"
+			};
+			if (!sameReviewed(await rt.store.get(expect.draftId), expect)) return {
+				ok: false,
+				code: "changed"
+			};
+			return {
+				ok: true,
+				text: row.body
+			};
+		}
+		async function readUnreadableText(draftId, snapshot) {
+			if (snapshot === null) return {
+				ok: false,
+				code: "failed"
+			};
+			const take = async () => {
+				const row = await rt.store.get(draftId);
+				const body = await rt.store.getBody(draftId);
+				return {
+					same: copySnapshotOf(row, body) === snapshot,
+					body
+				};
+			};
+			const first = await take();
+			if (!first.same) return {
+				ok: false,
+				code: "changed"
+			};
+			if (!first.body || typeof first.body.body !== "string") return {
+				ok: false,
+				code: "missing"
+			};
+			if (!(await take()).same) return {
+				ok: false,
+				code: "changed"
+			};
+			return {
+				ok: true,
+				text: first.body.body
+			};
+		}
+		async function readEmergencyText(key, draftId, generation) {
+			const stored = storage ? readEmergencyKeys(storage).find((s) => s.key === key) : void 0;
+			const payload = stored ? stored.payload : null;
+			if (!stored || !payload) return {
+				ok: false,
+				code: "changed"
+			};
+			const entry = payload.entries.find((e) => e.draftId === draftId && e.generation === generation);
+			if (!entry) return {
+				ok: false,
+				code: "changed"
+			};
+			if (entry.body === null) return {
+				ok: false,
+				code: "missing"
+			};
+			if (isLive(await classifySafely({
+				draftId,
+				owner: {
+					runtimeId: payload.runtimeId,
+					pageInstanceId: stored.pageInstanceId,
+					paneId: "",
+					claimedAt: payload.at
+				}
+			}))) return {
+				ok: false,
+				code: "live"
+			};
+			if (readKey(storage, key) !== stored.raw) return {
+				ok: false,
+				code: "changed"
+			};
+			return {
+				ok: true,
+				text: entry.body
+			};
+		}
+		function readRawEmergency(key, listed) {
+			if (!storage || listed === null) return {
+				ok: false,
+				code: "failed"
+			};
+			try {
+				const raw = storage.getItem(key);
+				return raw === null || raw !== listed ? {
+					ok: false,
+					code: "changed"
+				} : {
+					ok: true,
+					text: raw
+				};
+			} catch {
+				return {
+					ok: false,
+					code: "failed"
+				};
+			}
+		}
+		async function readText(target) {
+			try {
+				switch (target.source) {
+					case "record": return await readRecordText(target.expect);
+					case "unreadable-record": return await readUnreadableText(target.draftId, target.snapshot);
+					case "emergency": return await readEmergencyText(target.key, target.draftId, target.generation);
+					case "unreadable-emergency": return readRawEmergency(target.key, target.raw);
+				}
+			} catch {
+				return {
+					ok: false,
+					code: "failed"
+				};
+			}
+		}
+		async function discard(target) {
+			if (!isDraftKind(target.kind)) return "changed";
+			try {
+				const record = await rt.store.get(target.draftId);
+				if (!sameReviewed(record, target) || record.kind !== target.kind || record.entityId !== target.entityId) return "changed";
+				const lineage = await classifySafely(record);
+				if (isLive(lineage)) return "live";
+				if (lineage === "unknown" && !target.allowUnknownOwner) return "unknown-owner";
+				return await rt.discardReviewed({
+					draftId: target.draftId,
+					pageInstanceId: target.pageInstanceId,
+					generation: target.generation,
+					status: target.status,
+					kind: record.kind,
+					entityType: record.entityType,
+					entityId: record.entityId
+				}) === "deleted" ? "deleted" : "changed";
+			} catch {
+				return "failed";
+			}
+		}
+		return {
+			inventory,
+			readText,
+			discard
+		};
+	}
+	function defaultLocalStorage$2() {
+		try {
+			return typeof localStorage !== "undefined" ? localStorage : null;
+		} catch {
+			return null;
+		}
+	}
 	//#endregion
 	//#region src/lifecycle/editor-recovery/identity.ts
 	/**
@@ -2722,12 +3254,19 @@ var prksEditorRecovery = (function(exports) {
 	* Classic-script entry. The maintainer build emits `frontend/js/editor-recovery.js`
 	* as the global `prksEditorRecovery`. Loading the script starts nothing;
 	* `runtime()` creates the page's single runtime on first use. Research Notes
-	* (`works.js`) is the consumer since #466 slice 2.
+	* (`works.js`) is the consumer since #466 slice 2; Settings → Diagnostics
+	* reads every kind through `diagnostics()` (slice 5).
 	*/
 	var pageRuntime = null;
+	var pageDiagnostics = null;
 	function runtime() {
 		if (!pageRuntime) pageRuntime = createEditorRecoveryRuntime();
 		return pageRuntime;
+	}
+	/** Settings → Diagnostics (#466 slice 5) over this page's runtime. Starts nothing until it is asked to read. */
+	function diagnostics() {
+		if (!pageDiagnostics) pageDiagnostics = createRecoveryDiagnostics(runtime());
+		return pageDiagnostics;
 	}
 	//#endregion
 	exports.BODIES_STORE = BODIES_STORE;
@@ -2763,6 +3302,7 @@ var prksEditorRecovery = (function(exports) {
 	exports.createPageIdentity = createPageIdentity;
 	exports.createRecoveryStore = createRecoveryStore;
 	exports.createWriterRegistry = createWriterRegistry;
+	exports.diagnostics = diagnostics;
 	exports.emergencyKeyOf = emergencyKeyOf;
 	exports.entityKeyOf = entityKeyOf;
 	exports.fingerprintText = fingerprintText;

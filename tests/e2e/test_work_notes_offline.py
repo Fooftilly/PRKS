@@ -1243,3 +1243,237 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
         tab.wait_for_function("() => window.prksOfflineRuntimeState && window.prksOfflineRuntimeState() === 'online'", timeout=20000)
         self.assertEqual(tab.evaluate(_WORK_RECOVERY_RECORDS, work), ['work-private-note:active'])
         self.assertEqual(probes, [])
+
+
+_DIAG_SEED_UNREADABLE = """
+    async () => {
+        // A record a newer PRKS wrote (kept for that version) and two emergency
+        // keys this build cannot parse: one of a newer schema, one damaged.
+        const db = await new Promise((resolve, reject) => {
+            const req = indexedDB.open('prks-editor-recovery-v1', 1);
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        });
+        await new Promise((resolve, reject) => {
+            const tx = db.transaction(['drafts', 'bodies'], 'readwrite');
+            tx.objectStore('drafts').put({ v: 99, draftId: 'd-from-newer-prks', kind: 'work-research-note',
+                entityType: 'work', entityId: 'w-newer', updatedAt: 1 });
+            tx.objectStore('bodies').put({ draftId: 'd-from-newer-prks', generation: 1, body: 'Text a newer PRKS kept' });
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+        });
+        db.close();
+        localStorage.setItem('prks.editorRecovery.emergency.v1.p-newer',
+            JSON.stringify({ v: 99, pageInstanceId: 'p-newer', entries: [] }));
+        localStorage.setItem('prks.editorRecovery.emergency.v1.p-broken', '{"v": 1, "entr');
+    }
+"""
+
+
+class EditorRecoveryDiagnosticsTests(_RecoveryPage, unittest.TestCase):
+    """#466 slice 5: Settings → Diagnostics lists every browser-local editor
+    draft apart from the sync queue, reachable without its Work, with view,
+    copy and download, and a confirmed compare-and-set discard. It never
+    restores, enqueues or saves, and never removes a draft on its own."""
+
+    hold_saves = ResearchNotesTabCloseAndReviewTests.hold_saves
+    close_tab = ResearchNotesTabCloseAndReviewTests.close_tab
+    type_reminder = WorkRemindersRecoveryTests.type_reminder
+    hold_reminder_saves = WorkRemindersRecoveryTests.hold_reminder_saves
+    wait_reminder_recorded = WorkRemindersRecoveryTests.wait_reminder_recorded
+    field = WorkRemindersRecoveryTests.field
+    status = WorkRemindersRecoveryTests.status
+
+    def folders_tab(self, context, server, init_script=None):
+        tab = context.new_page()
+        tab.on('dialog', lambda d: (self.dialogs.append(d.type), d.accept()))
+        if init_script:
+            tab.add_init_script(init_script)
+        tab.goto(server.origin + '/#/folders', wait_until='domcontentloaded')
+        tab.wait_for_selector('#sidebar')
+        return tab
+
+    def open_diagnostics(self, page):
+        page.locator('button.settings-btn').click()
+        page.locator('#prks-settings-tab-diagnostics').click()
+        section = page.locator('[data-prks-role="editor-recovery-diagnostics"]')
+        section.wait_for()
+        page.wait_for_function("""() => {
+            const el = document.querySelector('[data-prks-role="editor-recovery-diag-summary"]');
+            return !!el && !/Loading|listed when/.test(el.textContent);
+        }""", timeout=20000)
+        return section
+
+    def refresh_diagnostics(self, page, section):
+        section.locator('[data-prks-role="editor-recovery-diag-refresh"]').click()
+        page.wait_for_function("""() => {
+            const b = document.querySelector('[data-prks-role="editor-recovery-diag-refresh"]');
+            return !!b && !b.disabled && b.getAttribute('aria-busy') !== 'true';
+        }""")
+
+    def rows(self, section, source=None):
+        selector = '[data-prks-role="editor-recovery-diag-row"]'
+        if source:
+            selector += '[data-source="%s"]' % source
+        return section.locator(selector)
+
+    def all_records(self, page):
+        return page.evaluate("""() => window.prksEditorRecovery.runtime().store.listAll()
+            .then(rows => rows.filter(r => r.status !== 'discarded').map(r => r.kind + ':' + r.entityId))""")
+
+    def crash(self, page):
+        from playwright.sync_api import Error as PlaywrightError
+        with page.expect_event('crash', timeout=15000):
+            try:
+                page.goto('chrome://crash', timeout=5000)
+            except PlaywrightError:
+                pass
+
+    def test_a_closed_tab_draft_of_a_work_deleted_elsewhere_is_viewed_copied_downloaded_then_discarded(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.hold_saves(page)
+        self.type_marker(page, ' Only copy left')
+        self.wait_recorded(page, work, ' Only copy left')
+        text = self.records(page, work)[0]['body']
+        self.hold_reminder_saves(page)
+        self.type_reminder(page, server, ' Reminder too')
+        self.wait_reminder_recorded(page, work, ' Reminder too')
+        # The Work is deleted elsewhere: its page can no longer be opened.
+        with self.db_for(server).connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            work_lifecycle_sync.delete_work_record_on_conn(conn, work)
+        self.close_tab(page)
+        tab = self.folders_tab(context, server)
+        probes = []
+        tab.on('request', lambda r: probes.append(r.url) if '/api/works/' in r.url else None)
+        tab.evaluate('() => { window.__copied = null; window.prksCopyTextToClipboard = async (t) => { window.__copied = t; }; }')
+        section = self.open_diagnostics(tab)
+        # Separate from the durable sync queue, which holds nothing here.
+        tab.locator('[data-sync-diagnostics]').wait_for(state='attached')
+        self.assertEqual(tab.locator('[data-sync-diagnostics] p').count(), 0)
+        self.assertEqual(tab.locator('[data-sync-diagnostics] [data-prks-role="editor-recovery-diagnostics"]').count(), 0)
+        rows = self.rows(section, 'record')
+        self.assertEqual(rows.count(), 2)
+        notes = rows.filter(has_text='Research Notes')
+        self.assertEqual(notes.get_attribute('data-entity-id'), work)
+        meta = notes.locator('[data-prks-role="editor-recovery-diag-meta"]').inner_text()
+        self.assertIn('A browser tab that was closed', meta)
+        self.assertIn('Complete', meta)
+        self.assertEqual(notes.locator('a').get_attribute('href'), '#/works/' + work)
+        self.assertIn('Work Reminders', rows.nth(0).inner_text() + rows.nth(1).inner_text())
+        notes.locator('[data-prks-role="editor-recovery-diag-view"]').click()
+        self.assertEqual(notes.locator('[data-prks-role="editor-recovery-diag-text"]').input_value(), text)
+        notes.locator('[data-prks-role="editor-recovery-diag-copy"]').click()
+        tab.wait_for_function('t => window.__copied === t', arg=text)
+        with tab.expect_download() as download:
+            notes.locator('[data-prks-role="editor-recovery-diag-download"]').click()
+        with open(download.value.path(), encoding='utf-8') as fh:
+            self.assertEqual(fh.read(), text)
+        self.assertTrue(download.value.suggested_filename.startswith('prks-recovered-research-notes-'))
+        # Reading changed nothing, and the server was never asked about the Work.
+        self.assertEqual(sorted(self.all_records(tab)), ['work-private-note:' + work, 'work-research-note:' + work])
+        self.assertEqual(probes, [])
+        # Cancel keeps it; a confirmed discard removes only that draft.
+        notes.locator('[data-prks-role="editor-recovery-diag-discard"]').click()
+        tab.locator('#prks-modal-confirm-title', has_text='Discard this draft?').wait_for()
+        self.assertIn('does not change anything on the server', tab.locator('#prks-modal-confirm-desc').inner_text())
+        tab.locator('#prks-modal-confirm-cancel').click()
+        tab.locator('#prks-modal-confirm').wait_for(state='hidden')
+        self.assertEqual(len(self.all_records(tab)), 2)
+        notes.locator('[data-prks-role="editor-recovery-diag-discard"]').click()
+        tab.locator('#prks-modal-confirm-ok').click()
+        section.locator('[data-prks-role="editor-recovery-diag-message"]', has_text='Draft discarded.').wait_for()
+        self.assertEqual(self.all_records(tab), ['work-private-note:' + work])
+        self.assertEqual(self.rows(section, 'record').count(), 1)
+        self.assertEqual(tab.evaluate('() => prksSync.store.listOperations().then(r => r.length)'), 0)
+
+    def test_a_crashed_lan_tab_draft_has_an_unknown_owner_and_discard_names_that_risk(self):
+        server, page, context = self.start(without_locks=True)
+        work = server.ids['work_a']
+        self.hold_saves(page)
+        self.type_marker(page, ' Before the crash')
+        self.wait_recorded(page, work, ' Before the crash')
+        self.crash(page)
+        tab = self.folders_tab(context, server, init_script=_WITHOUT_WEB_LOCKS)
+        section = self.open_diagnostics(tab)
+        row = self.rows(section, 'record')
+        self.assertEqual(row.count(), 1)
+        self.assertIn('Another tab that may still be open', row.inner_text())
+        row.locator('[data-prks-role="editor-recovery-diag-view"]').click()
+        self.assertTrue(row.locator('[data-prks-role="editor-recovery-diag-text"]').input_value().endswith(' Before the crash'))
+        row.locator('[data-prks-role="editor-recovery-diag-discard"]').click()
+        tab.locator('#prks-modal-confirm-title', has_text='Discard this draft?').wait_for()
+        self.assertIn('may belong to another browser tab that is still open', tab.locator('#prks-modal-confirm-desc').inner_text())
+        tab.locator('#prks-modal-confirm-ok').click()
+        section.locator('[data-prks-role="editor-recovery-diag-message"]', has_text='Draft discarded.').wait_for()
+        self.assertEqual(self.all_records(tab), [])
+
+    def test_a_draft_open_in_another_tab_is_listed_without_its_text_or_a_discard(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.hold_saves(page)
+        self.type_marker(page, ' Still typing')
+        self.wait_recorded(page, work, ' Still typing')
+        tab = self.folders_tab(context, server)
+        section = self.open_diagnostics(tab)
+        row = self.rows(section, 'record')
+        self.assertEqual(row.count(), 1)
+        row.locator('[data-prks-role="editor-recovery-diag-live"]').wait_for()
+        self.assertIn('Open in an editor now', row.inner_text())
+        self.assertEqual(row.locator('[data-prks-role="editor-recovery-diag-view"]').count(), 0)
+        self.assertEqual(row.locator('[data-prks-role="editor-recovery-diag-discard"]').count(), 0)
+        self.assertTrue(self.editor_text(page).endswith(' Still typing'))
+        self.assertEqual(len(self.records(page, work)), 1)
+
+    def test_unreadable_records_and_emergency_copies_stay_listed_copyable_and_untouched(self):
+        server, page, context = self.start()
+        page.evaluate(_DIAG_SEED_UNREADABLE)
+        tab = self.folders_tab(context, server)
+        tab.evaluate('() => { window.__copied = null; window.prksCopyTextToClipboard = async (t) => { window.__copied = t; }; }')
+        section = self.open_diagnostics(tab)
+        unreadable = self.rows(section, 'unreadable-record')
+        self.assertEqual(unreadable.count(), 1)
+        self.assertIn('newer version of PRKS', unreadable.inner_text())
+        self.assertEqual(unreadable.locator('[data-prks-role="editor-recovery-diag-discard"]').count(), 0)
+        unreadable.locator('[data-prks-role="editor-recovery-diag-copy"]').click()
+        tab.wait_for_function("() => window.__copied === 'Text a newer PRKS kept'")
+        keys = self.rows(section, 'unreadable-emergency')
+        self.assertEqual(keys.count(), 2)
+        broken = keys.filter(has_text='damaged')
+        broken.locator('[data-prks-role="editor-recovery-diag-copy"]').click()
+        tab.wait_for_function("""() => window.__copied === '{"v": 1, "entr'""")
+        # Refreshing lists them again: nothing was removed or rewritten.
+        self.refresh_diagnostics(tab, section)
+        self.assertEqual(self.rows(section, 'unreadable-record').count(), 1)
+        self.assertEqual(self.rows(section, 'unreadable-emergency').count(), 2)
+        self.assertEqual(tab.evaluate("""() => [
+            localStorage.getItem('prks.editorRecovery.emergency.v1.p-broken'),
+            !!localStorage.getItem('prks.editorRecovery.emergency.v1.p-newer'),
+        ]"""), ['{"v": 1, "entr', True])
+        self.assertEqual(tab.evaluate("""() => window.prksEditorRecovery.runtime().store.get('d-from-newer-prks')
+            .then(r => r && r.v)"""), 99)
+
+    def test_with_recovery_storage_refused_a_live_tabs_emergency_copy_is_still_listed(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        # This tab cannot reach recovery storage, so its text is only in its
+        # editor and, once hidden, in its emergency key.
+        page.add_init_script(_WITHOUT_RECOVERY_STORAGE)
+        page.reload(wait_until='domcontentloaded')
+        page.wait_for_selector('.CodeMirror')
+        page.wait_for_function(
+            "() => !!prksGetFocusedTabContext().getResource('workNotesObserved')")
+        self.hold_saves(page)
+        self.type_marker(page, ' Unprotected')
+        page.locator('[data-prks-role="editor-recovery-unprotected"]').wait_for()
+        self.assertEqual(page.evaluate('() => window.prksEditorRecovery.runtime().writers.writeEmergencyNow()'), 'written')
+        tab = self.folders_tab(context, server, init_script=_WITHOUT_RECOVERY_STORAGE)
+        section = self.open_diagnostics(tab)
+        section.locator('[data-prks-role="editor-recovery-diag-storage"]', has_text='Recovery storage is unavailable').wait_for()
+        held = self.rows(section, 'emergency')
+        self.assertEqual(held.count(), 1)
+        self.assertEqual(held.get_attribute('data-entity-id'), work)
+        self.assertIn('Held for a tab that is still open', held.inner_text())
+        self.assertEqual(held.locator('[data-prks-role="editor-recovery-diag-discard"]').count(), 0)
+        self.assertTrue(self.editor_text(page).endswith(' Unprotected'))
