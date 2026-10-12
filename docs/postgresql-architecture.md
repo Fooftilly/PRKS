@@ -1,10 +1,14 @@
 # PostgreSQL canonical backend for PRKS 1.0: design (#613)
 
-**Status: proposed design, awaiting maintainer review.** This is the design
-gate that #613 requires before any PostgreSQL implementation starts. It adds no
-code, schema, migration, dependency or workflow. Once it is approved, the
-slices in [§15](#15-implementation-sequence) become focused implementation
-issues and PRs, in the order and with the ownership boundaries given there.
+**Status: approved design (maintainer review of #619 at `7bb9545`,
+2026-10-12).** This is the design gate that #613 requires before any
+PostgreSQL implementation starts. It adds no code, schema, migration,
+dependency or workflow. The decisions in [§0](#0-decisions) and the answers
+in [§16](#16-maintainer-decisions) are approved. The slices in
+[§15](#15-implementation-sequence) become focused implementation issues once
+this document is merged, in the order and with the ownership boundaries given
+there. Each implementation PR still needs the maintainer's explicit go before
+it starts and before it merges.
 
 It follows the shape of [work-identity-model.md](work-identity-model.md) and
 [storage-architecture.md](storage-architecture.md): audit the code first, then
@@ -65,16 +69,16 @@ Contents:
 13. [Tests, gates and what is retired](#13-tests-gates-and-what-is-retired)
 14. [Risk register](#14-risk-register)
 15. [Implementation sequence](#15-implementation-sequence)
-16. [Open questions for the maintainer](#16-open-questions-for-the-maintainer)
+16. [Maintainer decisions](#16-maintainer-decisions)
 
 ---
 
 ## 0. Decisions
 
-Each row is a recommendation for review. §16 lists the ones that most need an
-explicit answer.
+Each row is an approved decision (2026-10-12). §16 records the maintainer's
+answers to the questions that needed an explicit choice.
 
-| # | Topic | Recommendation |
+| # | Topic | Decision |
 | --- | --- | --- |
 | PG1 | Engine and version | PostgreSQL **18** is the baseline and the only supported engine from 0.8. CI also runs against 19 once it is released (19 is at Beta 4 on 2026-10-12). Nothing relies on a feature newer than 18. |
 | PG2 | Clean start | One fresh 0.8 schema. No SQLite → PostgreSQL data migration, no import of pre-0.8 archives, and no dual canonical database at runtime. A root that still holds `prks_data.db` is refused, never modified or deleted (§11.6). |
@@ -915,7 +919,7 @@ RETURNING op_id;
 | `_PDF_MATERIALIZATION_LOCKS`, `_PDF_PATH_LOCKS` | Row lock and advisory lock (§7.4) |
 | `_ready_backups` tokens | `backup_runs` rows with an opaque download token hash and expiry |
 | Bound root, index singletons | Bound once per process at startup; the database pairing record decides validity (§11.1); no hot rebind across processes (#311 §12) |
-| `root.lock` lease | Kept, but its meaning changes from "one process per root" to "one instance per root". Every process of the paired instance (`web`, `worker`, admin commands) takes the OS lock **shared**; relocation, restore of the file half and the offline storage tools take it **exclusive**. A process whose database names a different `storage_root_id` is refused before it touches the lock (§11.1). This is the PostgreSQL-era fencing that #311 §12 anticipates. Hot rebind stays a single-process capability and is unavailable while another process holds the shared lock. |
+| `root.lock` lease | Kept, but its meaning changes from "one process per root" to "one instance per root". Every process of the paired instance (`web`, `worker`, admin commands) takes the OS lock **shared**; relocation and the offline storage tools take it **exclusive**. Format-2 restore does not: it writes new immutable keys into the live root while the application runs (§11.4). A process whose database names a different `storage_root_id` is refused before it touches the lock (§11.1). This is the PostgreSQL-era fencing that #311 §12 anticipates. Hot rebind stays a single-process capability and is unavailable while another process holds the shared lock. |
 | Performance registry | Stays per process by design, labelled with process role (§12.4) |
 
 ### 7.6 Concurrency tests
@@ -954,8 +958,8 @@ identity_key(s) = casefold( collapse_whitespace( trim( NFC(s) ) ) )
 - It does **not** strip diacritics: "Résumé" and "Resume", or Serbian "ћ" and
   "ч", are different names. Diacritic-insensitivity belongs to search (§8.3).
 - It does **not** apply NFKC: compatibility folding (ligatures, full-width
-  forms, superscripts) is lossy and was never PRKS behavior. §16 asks whether
-  identity should be stricter.
+  forms, superscripts) is lossy and was never PRKS behavior. The maintainer
+  confirmed this rule (§16, decision 3).
 - **Where it runs.** In PostgreSQL as an `IMMUTABLE` SQL function
   `prks.identity_key(text)` built from `normalize(…, NFC)`, `regexp_replace`
   and `casefold(… COLLATE pg_unicode_fast)`, used in `GENERATED ALWAYS AS
@@ -1009,8 +1013,8 @@ ALTER TEXT SEARCH CONFIGURATION prks.prks_search
   rules must be checked against the parity vectors for Greek tonos and
   dialytika, and for Cyrillic letters whose diacritic is part of the letter
   (й, ё, ћ, ђ). Where the default rules are wrong for PRKS (for example
-  folding й to и), PRKS ships its own `prks_unaccent.rules` file. That is a
-  §16 question because the image must carry the file.
+  folding й to и), PRKS ships its own `prks_unaccent.rules` file, carried by
+  the image (§16, decision 4).
 - Query parsing stays in Python: `_prks_search_tokens` semantics (split on
   `-`/`_`, drop non-word characters) are kept, then the tokens are passed
   through `to_tsquery('prks.prks_search', …)` with `:*` and `&`, using bound
@@ -1298,6 +1302,13 @@ lets the schema drop `origin_work_id` and legacy operation mappings (§6.4).
   process and vice versa, mirroring today's storage testing containment.
 - PostgreSQL's data directory is **never** inside the PRKS data root
   (#311 §9.1). Compose uses a separate named volume.
+- **Restore keeps the pairing.** A format-2 restore replaces one Library's
+  rows and writes its objects into the instance's current root, so
+  `instance.storage_root_id` never changes. The #311 §7.1 sentence that
+  restore "rewrites the database's expected `storage_root_id`" describes a
+  restore that replaces both halves at once; in PRKS that is only the
+  operator's whole-instance disaster recovery (§11.4), which restores a
+  database and its root together and so restores a matching pair.
 
 ### 11.2 Object lifecycle (PG14)
 
@@ -1877,7 +1888,7 @@ checkpointing, rowid preservation) are listed as retired with the reason.
 | --- | --- | --- | --- | --- |
 | R1 | Behavior drift while porting ~50 sync families and ~130 routes | High | High | Backend-parametrized tests per family (§13.1); full E2E on the PostgreSQL leg before cutover; one family per PR |
 | R2 | Acknowledged-save or recovery guarantee broken by the auth/session change (an expired session drops queued intents) | Medium | Critical | §10.4 rule, E2E for session expiry mid-queue, #465/#466 suites unchanged and required |
-| R3 | Unicode identity changes merge names users consider different (or vice versa) | Medium | Medium | Shared vectors reviewed by the maintainer (§16 Q3), no diacritic folding in identity, NAME_TAKEN instead of silent merge |
+| R3 | Unicode identity changes merge names users consider different (or vice versa) | Medium | Medium | Shared vectors reviewed by the maintainer (§16, decision 3), no diacritic folding in identity, NAME_TAKEN instead of silent merge |
 | R4 | `casefold` cannot be used in an IMMUTABLE generated column | Low | Low | Fallback in §8.1 |
 | R5 | Write amplification from immutable objects on frequent annotation saves | Medium | Medium | Measure in the Assets lane; debounce materialization per Asset |
 | R6 | Restore of a large Library holds a long SERIALIZABLE transaction | Medium | Low | Restore already runs in maintenance mode; staging happens before the transaction; measure on a synthetic large Library |
@@ -1886,7 +1897,7 @@ checkpointing, rowid preservation) are listed as retired with the reason.
 | R9 | stdlib HTTP server unsuitable for an exposed 1.0 deployment | Medium | High | Pre-1.0 research issue (§4.5); reverse-proxy-only exposure documented meanwhile |
 | R10 | Tests become slow or flaky with a database service | Medium | Medium | Template databases, per-class databases, no shared mutable fixtures; measure in PG-1 |
 | R11 | Agents run tests against a real database | Low | Critical | Harness-created databases only, `instance.testing` flag, refusal on mismatch (§13.1) |
-| R12 | `unaccent` rules wrong for Greek/Serbian | Medium | Low | Parity vectors; optional PRKS rules file (§16 Q4) |
+| R12 | `unaccent` rules wrong for Greek/Serbian | Medium | Low | Parity vectors; optional PRKS rules file (§16, decision 4) |
 | R13 | Dual-run period lingers and SQLite stays half-alive | Medium | High | Cutover and deletion in the same release (PG22), tracked as a release gate in #614 |
 | R14 | Browser data from pre-0.8 lost at cutover | Low | High | §10.3 review-only legacy queue and drafts, never auto-deleted |
 | R15 | #60 Version/merge features designed against the old mirror model | Low | Medium | §6.4 states the mechanics change; #60 slices G–L consume the new schema |
@@ -1940,9 +1951,11 @@ touch `server.py` at all.
 
 ### 15.3 Slices, dependencies and acceptance criteria
 
-**Stage 0. Design (this PR).** Accepted when the maintainer approves the
-decisions in §0 and answers §16. Then each slice below becomes an
-engineering-task issue under the v0.8.0 milestone.
+**Stage 0. Design (this PR).** Approved 2026-10-12 (§16). After this
+document is merged, each slice below becomes one engineering-task issue under
+the v0.8.0 milestone, linked from #614, with native issue dependencies
+matching the "Depends on" column. No slice starts without the maintainer's
+explicit go, and PG-1 comes first.
 
 **Stage 1. Foundation (sequential).**
 
@@ -1966,7 +1979,7 @@ merged; several run at the same time).
 | **L-R-1** Research | L-W-1 | Concepts with `concept_keys`, Positions, Arguments, sources/targets, notes integration, derived mentions via `research.reindex_work`, graph projection | Parametrized tests; Research-ACK fence still observed by E2E; no Python full scan for concept resolution |
 | **L-A-1** Objects and annotations | L-W-1, L-J-1 | #311 Phase B on PostgreSQL: all managed-file paths through `StorageBackend`; immutable objects; cleanup claims, orphan sweep; annotations, materialization, PDF replace, save-confirm from durable state; person portraits | Object lifecycle tests (§13.3); write-amplification measurement recorded in the PR; no `os.remove` outside the storage backend; parametrized annotation and sync tests pass |
 | **L-PR-1** Processing | L-A-1 | Inbox scan as a job, import through the objects lane | Parametrized processing tests; no absolute path stored |
-| **L-S-1** Search | L-W-1, L-J-1 | `derived.work_search` maintained by commands, `asset_text` via `text.extract`, trigram filters, parity ordering, Saved View execution, `rebuild-derived` | §8.7 parity tests; search parametrized tests pass with the documented Unicode improvements replacing ASCII pins |
+| **L-S-1** Search | L-W-1, L-J-1 | `derived.work_search` maintained by commands, `asset_text` via `text.extract`, trigram filters, parity ordering, Saved View execution, `rebuild-derived`; `backend/AGENTS.md` extracted-text rule amended for the `derived` schema (§16, decision 5) | §8.7 parity tests; search parametrized tests pass with the documented Unicode improvements replacing ASCII pins |
 | **L-S-2** Ranking | L-S-1 | Single weighted score | Before/after results on a synthetic multilingual corpus approved in review |
 | **L-B-1** Backup and restore format 2 | L-W-1, L-P-1, L-O-1, L-R-1, L-A-1 | §11.4 | Round-trip test over a fixture covering every canonical table and object kind; text `COPY` with the interchange contract (no binary `COPY`); restore into the same and into a new instance with real sync operations, all user/device references resolving; verification refuses tampered archives; fault injection at R0–R5, including a kill immediately after the R4 commit that still rebuilds search after restart; the exclusion interleavings of §13.3; restoring an older snapshot while a long job runs and a pending edit exists never applies either to the replacement state; backup concurrent with writes and cleanup; format 1 refused with a clear message |
 | **L-D-1** Compose and health | PG-1, L-ID-1, L-J-1 | Dockerfile with psycopg, Compose of §12.3, `/healthz`, `/readyz`, graceful stop, `.env.example`, README deployment section, #612 configuration entries | Clean `docker compose up` smoke test in CI reaches `/readyz` and bootstrap; the database volume is mounted at `/var/lib/postgresql`; data survives `down`/`up` and container recreation with the volume kept; wrong root/database pairing refused at start |
@@ -2002,37 +2015,41 @@ Objects, Search, Browser scoping), each in its own files.
 
 ---
 
-## 16. Open questions for the maintainer
+## 16. Maintainer decisions
 
-None blocks approving the overall direction; each has a recommended answer.
+Recorded from the maintainer's approval of #619 at `7bb9545` on 2026-10-12.
+Each decision is the recommendation this section proposed; none was changed.
 
-1. **Clean start (PG2).** Confirm no importer for pre-0.8 SQLite libraries or
-   format 1 archives. *Recommended: confirm.*
-2. **Immutable objects (PG14).** Accept the extra writes per annotation save in
-   exchange for removing in-place rewrite protocols? *Recommended: accept,
-   with the measurement gate in L-A-1.*
-3. **Identity rule (PG9).** NFC + whitespace collapse + full case folding, no
-   diacritic folding, no NFKC. Stricter (NFKC) or looser (diacritic-
-   insensitive) identity? *Recommended: as proposed.*
-4. **Search folding.** Fold diacritics in search with `unaccent`, including
-   Greek tonos; ship a PRKS rules file if defaults mishandle Cyrillic letters
-   like й/ћ? Transliteration between Serbian Cyrillic and Latin in search is
-   *not* proposed for 0.8. *Recommended: unaccent yes, transliteration later.*
-5. **Derived data in the same database (PG11).** This changes the rule in
-   `backend/AGENTS.md` ("do not write extracted PDF text into the canonical
-   main DB") to "into the `derived` schema only, never backed up, always
-   rebuildable". *Recommended: accept.*
-6. **Authentication in 0.8.** Password + session for the owner, with a
-   loopback-owner mode only for `--testing`. Should a personal Compose
-   install also allow a loopback-only no-password mode? *Recommended: no;
-   one password is the safe default once the port can be published.*
-7. **Library in the session vs in the path (PG17).** *Recommended: session for
-   0.8; #45 decides the versioned path shape.*
-8. **IDs as text (PG7).** *Recommended: keep text; revisit only with
-   measurements after 1.0.*
-9. **HTTP server (PG20).** Confirm that replacing the stdlib server is a
-   pre-1.0 research item rather than part of 0.8. *Recommended: confirm.*
-10. **Planning issues.** After approval, create one engineering-task issue per
-    slice in §15.3 under the v0.8.0 milestone, linked from #614.
-    *Recommended: yes; none are created before approval to avoid duplicates if
-    the design changes.*
+1. **Clean start (PG2).** No importer for pre-0.8 SQLite libraries and no
+   format 1 archive import before 1.0.
+2. **Immutable objects (PG14).** Approved. L-A-1 measures write amplification
+   (large PDFs, repeated annotation saves) and records it in its PR; a
+   debounced per-Asset materialization job is the fallback if it is too high.
+3. **Text identity (PG9).** NFC, whitespace collapse and full case folding.
+   No NFKC and no diacritic folding for identity.
+4. **Search folding.** `unaccent` for search, verified against the Greek and
+   Cyrillic parity vectors (§8.7), with a PRKS rules file only if the
+   defaults are wrong. Serbian Cyrillic↔Latin transliteration is deferred
+   beyond 0.8.
+5. **Derived data (PG11).** Rebuildable indexes and extracted text live in the
+   separate `derived` schema of the same database, never backed up and always
+   rebuildable. The `backend/AGENTS.md` rule "do not write extracted PDF text
+   into the canonical main DB" becomes "only into the `derived` schema"; L-S-1
+   amends it.
+6. **Authentication.** Password-based owner authentication with server-side
+   sessions. No passwordless mode for normal deployments; the loopback-owner
+   mode exists only for `--testing`.
+7. **Library selection (PG17).** From the session in 0.8, carried in an
+   explicit request context; #45 decides any versioned path shape.
+8. **Entity IDs (PG7).** Prefixed text IDs are kept.
+9. **HTTP server (PG20).** A production server is evaluated before 1.0 as a
+   separate item, not part of the initial PostgreSQL migration.
+10. **Implementation planning.** Approved. After this document is merged,
+    the slices of §15.3 become focused implementation issues under v0.8.0,
+    linked from #614 and the relevant roadmap issues, with native
+    dependencies. PG-1 is the first coding task, and each slice starts only
+    on the maintainer's explicit authorization.
+
+The compatibility boundary stays **v1.0.0**: before it, backend APIs,
+schemas and implementations may be replaced without prerelease
+compatibility; from it, supported upgrades preserve released user data.
