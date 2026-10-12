@@ -9760,6 +9760,70 @@ textarea[data-prks-autosize="1"] {
     }
 }
 
+/* Settings → Diagnostics editor recovery drafts (#466 slice 5): dense flat
+ * rows, one per draft, separated by rules like the sync rows above them. */
+.editor-recovery-diag__list {
+    display: flex;
+    flex-direction: column;
+    margin: 0 0 var(--space-sm);
+    padding: 0;
+    list-style: none;
+}
+
+.editor-recovery-diag__row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+    padding: var(--space-sm) 0;
+    border-top: 1px solid var(--border);
+    min-width: 0;
+}
+
+.editor-recovery-diag__title,
+.editor-recovery-diag__meta {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+.editor-recovery-diag__title {
+    font-size: var(--text-sm);
+    color: var(--text-primary);
+}
+
+.editor-recovery-diag__title a {
+    color: var(--accent);
+}
+
+.editor-recovery-diag__title a:hover {
+    color: var(--accent-hover);
+}
+
+.editor-recovery-diag__meta {
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+}
+
+.editor-recovery-diag__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-xs);
+}
+
+.editor-recovery-diag__text-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+}
+
+.editor-recovery-diag__text.prks-input {
+    width: 100%;
+    min-height: 8rem;
+    max-height: 40vh;
+    resize: vertical;
+    font-size: var(--text-sm);
+    line-height: var(--line-normal);
+}
+
 .document-view--work .work-notes-pane-header-actions {
     display: flex;
     align-items: center;

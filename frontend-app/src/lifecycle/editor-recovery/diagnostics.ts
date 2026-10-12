@@ -1,0 +1,438 @@
+/**
+ * Settings → Diagnostics view of browser-local editor recovery (#466 slice 5).
+ *
+ * Lists every draft recovery storage holds, for every kind, without opening
+ * its Work or Folder: the records in `prks-editor-recovery-v1`, records this
+ * build cannot read, and emergency entries still outside IndexedDB (a live or
+ * unproven page's localStorage key). It reads; it never restores, enqueues or
+ * applies anything, and never asks the server whether an entity exists (a
+ * 404 from the library this origin serves now proves nothing, #550).
+ *
+ * The only write is an explicit discard of one reviewed record, through the
+ * runtime's compare-and-set `discardReviewed` after the record and its owner
+ * class are read again. Nothing here deletes by age, orphan state or
+ * readability: unreadable records and emergency keys are listed, never
+ * removed, so a newer bundle or a later read can still recover them.
+ */
+
+import { mayHoldUnreadable, readEmergencyKeys, type EmergencyStorage, type StoredEmergency } from './emergency'
+import type { LineageClass } from './lineage'
+import type { EditorRecoveryRuntime, ReviewedRecord } from './runtime'
+import {
+  SUPERSEDED_KEY_PREFIX,
+  isDraftKind,
+  isSupportedRecord,
+  type BaseSource,
+  type DraftEntityType,
+  type DraftKind,
+  type DraftRecord,
+} from './schema'
+import { forkedDraftId } from './store'
+
+/** Per-Work cleanup marks of `work-lifecycle-state.js` (#533): this device confirmed that Work deleted. */
+export const DELETED_WORK_MARK_PREFIX = 'prks.workRecoveryCleanup.v1.'
+/** A draft not touched for this long is flagged as old. Flagged only: nothing is removed for its age. */
+export const OLD_DRAFT_MS = 30 * 24 * 60 * 60 * 1000
+/** Diagnostics warns when recovery copies together exceed this (design §9). */
+export const RECOVERY_WARN_BYTES = 256 * 1024 * 1024
+
+export type StorageState = 'ok' | 'unavailable' | 'blocked' | 'failed'
+
+/** One readable record. `expect` is what an action on it must still find. */
+export interface DiagnosticsDraft {
+  source: 'record'
+  draftId: string
+  kind: DraftKind
+  entityType: DraftEntityType
+  entityId: string
+  status: 'active' | 'tail-missing'
+  lineage: LineageClass
+  generation: number
+  bodyLength: number
+  createdAt: number
+  updatedAt: number
+  baseRevision: number | null
+  baseSource: BaseSource
+  pipelineState: string | null
+  /** Not touched for `OLD_DRAFT_MS` and no editor holds it. */
+  old: boolean
+  /** The server already holds newer text; this copy waits for its removal. */
+  superseded: boolean
+  /** This device confirmed its Work deleted; the draft stays until its tab is proven closed. */
+  deletedHere: boolean
+  /** Created from an emergency entry of a page that did not finish writing it. */
+  fromEmergency: boolean
+  expect: ReviewedRecord
+}
+
+/** A record this build cannot read: a newer schema or a malformed row. Listed, never changed. */
+export interface DiagnosticsUnreadableRecord {
+  source: 'unreadable-record'
+  draftId: string | null
+  reason: 'newer-version' | 'malformed'
+  kind: string | null
+  entityType: string | null
+  entityId: string | null
+  updatedAt: number | null
+}
+
+/** Text only an emergency key holds: its page is still open, or not proven gone. */
+export interface DiagnosticsEmergency {
+  source: 'emergency'
+  key: string
+  pageInstanceId: string
+  draftId: string
+  kind: DraftKind
+  entityType: DraftEntityType
+  entityId: string
+  generation: number
+  /** Null when the newest text could not be captured. */
+  bodyLength: number | null
+  at: number
+  lineage: LineageClass
+}
+
+/** An emergency key this build cannot parse. Its raw value stays copyable. */
+export interface DiagnosticsUnreadableEmergency {
+  source: 'unreadable-emergency'
+  key: string
+  pageInstanceId: string
+  reason: 'read-failed' | 'newer-version' | 'malformed'
+  rawLength: number | null
+}
+
+export interface RecoveryInventory {
+  storage: StorageState
+  /** localStorage could not be enumerated: emergency copies, if any, are unknown. */
+  emergencyStorage: 'ok' | 'unavailable'
+  drafts: DiagnosticsDraft[]
+  unreadable: DiagnosticsUnreadableRecord[]
+  emergency: DiagnosticsEmergency[]
+  unreadableEmergency: DiagnosticsUnreadableEmergency[]
+  /** Characters of every listed recovery copy. */
+  totalChars: number
+  /** Approximate storage those characters take (UTF-16). */
+  approxBytes: number
+  overBudget: boolean
+}
+
+export type TextTarget =
+  | { source: 'record'; expect: ReviewedRecord }
+  | { source: 'unreadable-record'; draftId: string }
+  | { source: 'emergency'; key: string; draftId: string; generation: number }
+  | { source: 'unreadable-emergency'; key: string }
+
+export type TextResult =
+  | { ok: true; text: string }
+  | { ok: false; code: 'changed' | 'live' | 'missing' | 'failed' }
+
+export interface DiscardTarget extends ReviewedRecord {
+  kind: DraftKind
+  entityType: DraftEntityType
+  entityId: string
+  /** The user confirmed that a tab which may still be open could lose this text. */
+  allowUnknownOwner: boolean
+}
+
+export type DiscardResult = 'deleted' | 'changed' | 'live' | 'unknown-owner' | 'failed'
+
+export interface RecoveryDiagnostics {
+  inventory(): Promise<RecoveryInventory>
+  readText(target: TextTarget): Promise<TextResult>
+  discard(target: DiscardTarget): Promise<DiscardResult>
+}
+
+export interface RecoveryDiagnosticsOptions {
+  storage?: EmergencyStorage | null
+  now?: () => number
+}
+
+function isLive(lineage: LineageClass): boolean {
+  return lineage === 'self-live' || lineage === 'other-live'
+}
+
+function storageState(error: unknown): StorageState {
+  const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined
+  if (code === 'unavailable' || code === 'blocked') return code
+  return 'failed'
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === 'string' ? value : null
+}
+
+function readKey(storage: EmergencyStorage | null, key: string): string | null {
+  try {
+    return storage ? storage.getItem(key) : null
+  } catch {
+    return null
+  }
+}
+
+function supersededGeneration(storage: EmergencyStorage | null, draftId: string): number {
+  const raw = readKey(storage, SUPERSEDED_KEY_PREFIX + draftId)
+  if (!raw) return 0
+  try {
+    const value = JSON.parse(raw) as { generation?: unknown } | null
+    return value && typeof value.generation === 'number' ? value.generation : 0
+  } catch {
+    return 0
+  }
+}
+
+function unreadableReason(stored: StoredEmergency): DiagnosticsUnreadableEmergency['reason'] {
+  if (stored.readFailed) return 'read-failed'
+  return mayHoldUnreadable(stored) ? 'newer-version' : 'malformed'
+}
+
+function enumerable(storage: EmergencyStorage | null): boolean {
+  if (!storage) return false
+  try {
+    void storage.length
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: RecoveryDiagnosticsOptions = {}): RecoveryDiagnostics {
+  const storage = options.storage === undefined ? defaultLocalStorage() : options.storage
+  const now = options.now || Date.now
+
+  async function classifySafely(record: Pick<DraftRecord, 'draftId' | 'owner'>): Promise<LineageClass> {
+    try {
+      return await rt.classify(record)
+    } catch {
+      return 'unknown'
+    }
+  }
+
+  function draftOf(record: DraftRecord, lineage: LineageClass, at: number): DiagnosticsDraft {
+    const status = record.status === 'tail-missing' ? 'tail-missing' : 'active'
+    return {
+      source: 'record',
+      draftId: record.draftId,
+      kind: record.kind,
+      entityType: record.entityType,
+      entityId: record.entityId,
+      status,
+      lineage,
+      generation: record.generation,
+      bodyLength: record.bodyLength,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+      baseRevision: record.base ? record.base.revision : null,
+      baseSource: record.base ? record.base.source : 'unknown',
+      pipelineState: record.pipeline ? record.pipeline.state : null,
+      old: !isLive(lineage) && at - record.updatedAt > OLD_DRAFT_MS,
+      superseded: supersededGeneration(storage, record.draftId) >= record.generation,
+      deletedHere: record.entityType === 'work' && readKey(storage, DELETED_WORK_MARK_PREFIX + record.entityId) !== null,
+      fromEmergency: typeof record.emergencySource === 'string',
+      expect: { draftId: record.draftId, pageInstanceId: record.owner.pageInstanceId, generation: record.generation, status: record.status },
+    }
+  }
+
+  function unreadableOf(row: unknown): DiagnosticsUnreadableRecord {
+    const r = (row && typeof row === 'object' ? row : {}) as Record<string, unknown>
+    const newer = typeof r.v === 'number' && r.v > 1
+    return {
+      source: 'unreadable-record',
+      draftId: stringOrNull(r.draftId),
+      reason: newer ? 'newer-version' : 'malformed',
+      kind: stringOrNull(r.kind),
+      entityType: stringOrNull(r.entityType),
+      entityId: stringOrNull(r.entityId),
+      updatedAt: typeof r.updatedAt === 'number' ? r.updatedAt : null,
+    }
+  }
+
+  async function inventory(): Promise<RecoveryInventory> {
+    const at = now()
+    // Dead pages' emergency entries become records first, by the runtime's own merge rules.
+    try {
+      await rt.scanEmergency()
+    } catch {
+      /* storage refused; whatever the keys hold is listed below */
+    }
+    let state: StorageState = 'ok'
+    let rows: unknown[] = []
+    try {
+      rows = await rt.store.listAll()
+    } catch (error) {
+      state = storageState(error)
+    }
+    const records: DraftRecord[] = []
+    const unreadable: DiagnosticsUnreadableRecord[] = []
+    for (const row of rows) {
+      if (!isSupportedRecord(row)) unreadable.push(unreadableOf(row))
+      else if (row.status !== 'discarded') records.push(row)
+    }
+    // The pings wait on silence, so every record is classified together.
+    const lineages = await Promise.all(records.map((record) => classifySafely(record)))
+    const drafts = records.map((record, i) => draftOf(record, lineages[i]!, at))
+
+    const known = new Map<string, number>()
+    for (const row of rows) {
+      if (isSupportedRecord(row)) known.set(row.draftId, Math.max(row.generation, known.get(row.draftId) || 0))
+    }
+    const emergency: DiagnosticsEmergency[] = []
+    const unreadableEmergency: DiagnosticsUnreadableEmergency[] = []
+    const ownPage = rt.identity.pageInstanceId
+    const pending: Array<Promise<void>> = []
+    for (const stored of storage ? readEmergencyKeys(storage) : []) {
+      // This page's own key mirrors editors that are open here.
+      if (stored.pageInstanceId === ownPage) continue
+      if (!stored.payload) {
+        if (stored.raw === null && !stored.readFailed) continue
+        unreadableEmergency.push({
+          source: 'unreadable-emergency',
+          key: stored.key,
+          pageInstanceId: stored.pageInstanceId,
+          reason: unreadableReason(stored),
+          rawLength: stored.raw === null ? null : stored.raw.length,
+        })
+        continue
+      }
+      const payload = stored.payload
+      for (const entry of payload.entries) {
+        // Already in a record at this generation or later (merged, or written by its editor).
+        const inRecord = Math.max(known.get(entry.draftId) || 0, known.get(forkedDraftId(entry.draftId, entry.generation)) || 0)
+        if (inRecord >= entry.generation) continue
+        const owner = { runtimeId: payload.runtimeId, pageInstanceId: stored.pageInstanceId, paneId: '', claimedAt: payload.at }
+        pending.push(
+          classifySafely({ draftId: entry.draftId, owner }).then((lineage) => {
+            emergency.push({
+              source: 'emergency',
+              key: stored.key,
+              pageInstanceId: stored.pageInstanceId,
+              draftId: entry.draftId,
+              kind: entry.kind,
+              entityType: entry.entityType,
+              entityId: entry.entityId,
+              generation: entry.generation,
+              bodyLength: entry.body === null ? null : entry.body.length,
+              at: payload.at,
+              lineage,
+            })
+          }),
+        )
+      }
+    }
+    await Promise.all(pending)
+    emergency.sort((a, b) => b.at - a.at || a.draftId.localeCompare(b.draftId))
+    drafts.sort((a, b) => b.updatedAt - a.updatedAt || a.draftId.localeCompare(b.draftId))
+
+    const totalChars =
+      drafts.reduce((sum, d) => sum + (Number.isFinite(d.bodyLength) ? d.bodyLength : 0), 0) +
+      emergency.reduce((sum, e) => sum + (e.bodyLength || 0), 0)
+    const approxBytes = totalChars * 2
+    return {
+      storage: state,
+      emergencyStorage: enumerable(storage) ? 'ok' : 'unavailable',
+      drafts,
+      unreadable,
+      emergency,
+      unreadableEmergency,
+      totalChars,
+      approxBytes,
+      overBudget: approxBytes > RECOVERY_WARN_BYTES,
+    }
+  }
+
+  function sameReviewed(record: DraftRecord | null, expect: ReviewedRecord): record is DraftRecord {
+    return (
+      !!record &&
+      isSupportedRecord(record) &&
+      record.status !== 'discarded' &&
+      record.owner.pageInstanceId === expect.pageInstanceId &&
+      record.generation === expect.generation &&
+      record.status === expect.status
+    )
+  }
+
+  async function readRecordText(expect: ReviewedRecord): Promise<TextResult> {
+    const record = await rt.store.get(expect.draftId)
+    if (!sameReviewed(record, expect)) return { ok: false, code: 'changed' }
+    // An editor holding it is the authority on its text: continue there.
+    if (isLive(await classifySafely(record))) return { ok: false, code: 'live' }
+    const row = await rt.store.getBody(expect.draftId)
+    if (!row || typeof row.body !== 'string') return { ok: false, code: 'missing' }
+    // Read twice around the body, so a record adopted or rewritten meanwhile never shows stale text.
+    if (!sameReviewed(await rt.store.get(expect.draftId), expect)) return { ok: false, code: 'changed' }
+    return { ok: true, text: row.body }
+  }
+
+  async function readUnreadableText(draftId: string): Promise<TextResult> {
+    const row = (await rt.store.getBody(draftId)) as { body?: unknown } | null
+    return row && typeof row.body === 'string' ? { ok: true, text: row.body } : { ok: false, code: 'missing' }
+  }
+
+  function readEmergencyText(key: string, draftId: string, generation: number): TextResult {
+    const stored = storage ? readEmergencyKeys(storage).find((s) => s.key === key) : undefined
+    if (!stored || !stored.payload) return { ok: false, code: 'changed' }
+    const entry = stored.payload.entries.find((e) => e.draftId === draftId && e.generation === generation)
+    if (!entry) return { ok: false, code: 'changed' }
+    return entry.body === null ? { ok: false, code: 'missing' } : { ok: true, text: entry.body }
+  }
+
+  function readRawEmergency(key: string): TextResult {
+    if (!storage) return { ok: false, code: 'failed' }
+    try {
+      const raw = storage.getItem(key)
+      return raw === null ? { ok: false, code: 'changed' } : { ok: true, text: raw }
+    } catch {
+      return { ok: false, code: 'failed' }
+    }
+  }
+
+  async function readText(target: TextTarget): Promise<TextResult> {
+    try {
+      switch (target.source) {
+        case 'record':
+          return await readRecordText(target.expect)
+        case 'unreadable-record':
+          return await readUnreadableText(target.draftId)
+        case 'emergency':
+          return readEmergencyText(target.key, target.draftId, target.generation)
+        case 'unreadable-emergency':
+          return readRawEmergency(target.key)
+      }
+    } catch {
+      return { ok: false, code: 'failed' }
+    }
+  }
+
+  async function discard(target: DiscardTarget): Promise<DiscardResult> {
+    if (!isDraftKind(target.kind)) return 'changed'
+    try {
+      const record = await rt.store.get(target.draftId)
+      if (!sameReviewed(record, target) || record.kind !== target.kind || record.entityId !== target.entityId) return 'changed'
+      // Ownership is checked again: what the list showed may have changed since.
+      const lineage = await classifySafely(record)
+      if (isLive(lineage)) return 'live'
+      if (lineage === 'unknown' && !target.allowUnknownOwner) return 'unknown-owner'
+      const outcome = await rt.discardReviewed({
+        draftId: target.draftId,
+        pageInstanceId: target.pageInstanceId,
+        generation: target.generation,
+        status: target.status,
+        kind: record.kind,
+        entityType: record.entityType,
+        entityId: record.entityId,
+      })
+      return outcome === 'deleted' ? 'deleted' : 'changed'
+    } catch {
+      return 'failed'
+    }
+  }
+
+  return { inventory, readText, discard }
+}
+
+function defaultLocalStorage(): EmergencyStorage | null {
+  try {
+    return typeof localStorage !== 'undefined' ? localStorage : null
+  } catch {
+    return null
+  }
+}

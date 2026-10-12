@@ -124,13 +124,33 @@ coordinator names no family: adding one is a registration.
   keeps its lineage, because a frozen tab still holding the text looks the
   same: a later retry removes it once that page is proven gone. Without Web
   Locks (LAN) a crashed tab is never proven gone, so its draft and its
-  Work's mark stay, costing one probe on the loads that reach it. Review
-  and Discard are reached only from that Work's own editor, so nothing in the UI reaches such a
-  draft until drafts can be reviewed apart from their Work (#466 Slice 5
-  Diagnostics). A discard whose emergency key could not be cleared leaves a bodyless
+  Work's mark stay, costing one probe on the loads that reach it. Such a
+  draft is reached in Settings → Diagnostics (#466 slice 5), apart from its
+  Work. A discard whose emergency key could not be cleared leaves a bodyless
   tombstone until that key is gone, so the key cannot recreate the draft.
   A draft a merge created from another page's key carries that page's id
   until the key is removed; deleting it meanwhile leaves the same tombstone.
+  Settings → Diagnostics (#466 slice 5,
+  `lifecycle/editor-recovery/diagnostics.ts`, reached through
+  `prksEditorRecovery.diagnostics()`) lists every kind's drafts apart from
+  the durable queue and without opening their Work or Folder: stored
+  records with entity, kind, time, owner class, completeness, size and
+  flags (old, superseded, deleted on this device), records this build
+  cannot read (a newer schema or a damaged row), and emergency entries still
+  outside IndexedDB (a live or unproven page's key, and keys it cannot
+  parse). Listing first runs the ordinary emergency scan, which merges only
+  pages proven gone. It never asks the server whether an entity exists
+  (#550), and it never restores, enqueues or applies text. View, Copy and
+  Download read the text again at that moment and refuse a record whose
+  owner page, generation or status changed or that an open editor holds.
+  The only write is Discard of a stored record, after a destructive
+  confirmation: the record and its owner class are read again, a live owner
+  refuses, an unknown owner needs the confirmation that names that risk,
+  and the runtime's compare-and-set `discardReviewed` removes it (leaving a
+  tombstone when an emergency key still lists it). Unreadable records and
+  emergency entries are copy-only and never removed there; nothing is
+  removed for its age, size or orphan state. Total size is shown and a
+  warning appears above 256 MB.
   Clear offline cache does not touch it. Research Notes is its consumer
   (slice 2): a reload restores the same pane's own draft automatically only
   when the server's acknowledged note is the one it was typed on (or this

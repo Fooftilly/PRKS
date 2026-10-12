@@ -998,6 +998,310 @@ var prksEditorRecovery = (function(exports) {
 			return false;
 		}
 	}
+	/** Diagnostics warns when recovery copies together exceed this (design §9). */
+	var RECOVERY_WARN_BYTES = 268435456;
+	function isLive(lineage) {
+		return lineage === "self-live" || lineage === "other-live";
+	}
+	function storageState(error) {
+		const code = error && typeof error === "object" ? error.code : void 0;
+		if (code === "unavailable" || code === "blocked") return code;
+		return "failed";
+	}
+	function stringOrNull(value) {
+		return typeof value === "string" ? value : null;
+	}
+	function readKey(storage, key) {
+		try {
+			return storage ? storage.getItem(key) : null;
+		} catch {
+			return null;
+		}
+	}
+	function supersededGeneration(storage, draftId) {
+		const raw = readKey(storage, SUPERSEDED_KEY_PREFIX + draftId);
+		if (!raw) return 0;
+		try {
+			const value = JSON.parse(raw);
+			return value && typeof value.generation === "number" ? value.generation : 0;
+		} catch {
+			return 0;
+		}
+	}
+	function unreadableReason(stored) {
+		if (stored.readFailed) return "read-failed";
+		return mayHoldUnreadable(stored) ? "newer-version" : "malformed";
+	}
+	function enumerable(storage) {
+		if (!storage) return false;
+		try {
+			storage.length;
+			return true;
+		} catch {
+			return false;
+		}
+	}
+	function createRecoveryDiagnostics(rt, options = {}) {
+		const storage = options.storage === void 0 ? defaultLocalStorage$2() : options.storage;
+		const now = options.now || Date.now;
+		async function classifySafely(record) {
+			try {
+				return await rt.classify(record);
+			} catch {
+				return "unknown";
+			}
+		}
+		function draftOf(record, lineage, at) {
+			const status = record.status === "tail-missing" ? "tail-missing" : "active";
+			return {
+				source: "record",
+				draftId: record.draftId,
+				kind: record.kind,
+				entityType: record.entityType,
+				entityId: record.entityId,
+				status,
+				lineage,
+				generation: record.generation,
+				bodyLength: record.bodyLength,
+				createdAt: record.createdAt,
+				updatedAt: record.updatedAt,
+				baseRevision: record.base ? record.base.revision : null,
+				baseSource: record.base ? record.base.source : "unknown",
+				pipelineState: record.pipeline ? record.pipeline.state : null,
+				old: !isLive(lineage) && at - record.updatedAt > 2592e6,
+				superseded: supersededGeneration(storage, record.draftId) >= record.generation,
+				deletedHere: record.entityType === "work" && readKey(storage, "prks.workRecoveryCleanup.v1." + record.entityId) !== null,
+				fromEmergency: typeof record.emergencySource === "string",
+				expect: {
+					draftId: record.draftId,
+					pageInstanceId: record.owner.pageInstanceId,
+					generation: record.generation,
+					status: record.status
+				}
+			};
+		}
+		function unreadableOf(row) {
+			const r = row && typeof row === "object" ? row : {};
+			const newer = typeof r.v === "number" && r.v > 1;
+			return {
+				source: "unreadable-record",
+				draftId: stringOrNull(r.draftId),
+				reason: newer ? "newer-version" : "malformed",
+				kind: stringOrNull(r.kind),
+				entityType: stringOrNull(r.entityType),
+				entityId: stringOrNull(r.entityId),
+				updatedAt: typeof r.updatedAt === "number" ? r.updatedAt : null
+			};
+		}
+		async function inventory() {
+			const at = now();
+			try {
+				await rt.scanEmergency();
+			} catch {}
+			let state = "ok";
+			let rows = [];
+			try {
+				rows = await rt.store.listAll();
+			} catch (error) {
+				state = storageState(error);
+			}
+			const records = [];
+			const unreadable = [];
+			for (const row of rows) if (!isSupportedRecord(row)) unreadable.push(unreadableOf(row));
+			else if (row.status !== "discarded") records.push(row);
+			const lineages = await Promise.all(records.map((record) => classifySafely(record)));
+			const drafts = records.map((record, i) => draftOf(record, lineages[i], at));
+			const known = /* @__PURE__ */ new Map();
+			for (const row of rows) if (isSupportedRecord(row)) known.set(row.draftId, Math.max(row.generation, known.get(row.draftId) || 0));
+			const emergency = [];
+			const unreadableEmergency = [];
+			const ownPage = rt.identity.pageInstanceId;
+			const pending = [];
+			for (const stored of storage ? readEmergencyKeys(storage) : []) {
+				if (stored.pageInstanceId === ownPage) continue;
+				if (!stored.payload) {
+					if (stored.raw === null && !stored.readFailed) continue;
+					unreadableEmergency.push({
+						source: "unreadable-emergency",
+						key: stored.key,
+						pageInstanceId: stored.pageInstanceId,
+						reason: unreadableReason(stored),
+						rawLength: stored.raw === null ? null : stored.raw.length
+					});
+					continue;
+				}
+				const payload = stored.payload;
+				for (const entry of payload.entries) {
+					if (Math.max(known.get(entry.draftId) || 0, known.get(forkedDraftId(entry.draftId, entry.generation)) || 0) >= entry.generation) continue;
+					const owner = {
+						runtimeId: payload.runtimeId,
+						pageInstanceId: stored.pageInstanceId,
+						paneId: "",
+						claimedAt: payload.at
+					};
+					pending.push(classifySafely({
+						draftId: entry.draftId,
+						owner
+					}).then((lineage) => {
+						emergency.push({
+							source: "emergency",
+							key: stored.key,
+							pageInstanceId: stored.pageInstanceId,
+							draftId: entry.draftId,
+							kind: entry.kind,
+							entityType: entry.entityType,
+							entityId: entry.entityId,
+							generation: entry.generation,
+							bodyLength: entry.body === null ? null : entry.body.length,
+							at: payload.at,
+							lineage
+						});
+					}));
+				}
+			}
+			await Promise.all(pending);
+			emergency.sort((a, b) => b.at - a.at || a.draftId.localeCompare(b.draftId));
+			drafts.sort((a, b) => b.updatedAt - a.updatedAt || a.draftId.localeCompare(b.draftId));
+			const totalChars = drafts.reduce((sum, d) => sum + (Number.isFinite(d.bodyLength) ? d.bodyLength : 0), 0) + emergency.reduce((sum, e) => sum + (e.bodyLength || 0), 0);
+			const approxBytes = totalChars * 2;
+			return {
+				storage: state,
+				emergencyStorage: enumerable(storage) ? "ok" : "unavailable",
+				drafts,
+				unreadable,
+				emergency,
+				unreadableEmergency,
+				totalChars,
+				approxBytes,
+				overBudget: approxBytes > RECOVERY_WARN_BYTES
+			};
+		}
+		function sameReviewed(record, expect) {
+			return !!record && isSupportedRecord(record) && record.status !== "discarded" && record.owner.pageInstanceId === expect.pageInstanceId && record.generation === expect.generation && record.status === expect.status;
+		}
+		async function readRecordText(expect) {
+			const record = await rt.store.get(expect.draftId);
+			if (!sameReviewed(record, expect)) return {
+				ok: false,
+				code: "changed"
+			};
+			if (isLive(await classifySafely(record))) return {
+				ok: false,
+				code: "live"
+			};
+			const row = await rt.store.getBody(expect.draftId);
+			if (!row || typeof row.body !== "string") return {
+				ok: false,
+				code: "missing"
+			};
+			if (!sameReviewed(await rt.store.get(expect.draftId), expect)) return {
+				ok: false,
+				code: "changed"
+			};
+			return {
+				ok: true,
+				text: row.body
+			};
+		}
+		async function readUnreadableText(draftId) {
+			const row = await rt.store.getBody(draftId);
+			return row && typeof row.body === "string" ? {
+				ok: true,
+				text: row.body
+			} : {
+				ok: false,
+				code: "missing"
+			};
+		}
+		function readEmergencyText(key, draftId, generation) {
+			const stored = storage ? readEmergencyKeys(storage).find((s) => s.key === key) : void 0;
+			if (!stored || !stored.payload) return {
+				ok: false,
+				code: "changed"
+			};
+			const entry = stored.payload.entries.find((e) => e.draftId === draftId && e.generation === generation);
+			if (!entry) return {
+				ok: false,
+				code: "changed"
+			};
+			return entry.body === null ? {
+				ok: false,
+				code: "missing"
+			} : {
+				ok: true,
+				text: entry.body
+			};
+		}
+		function readRawEmergency(key) {
+			if (!storage) return {
+				ok: false,
+				code: "failed"
+			};
+			try {
+				const raw = storage.getItem(key);
+				return raw === null ? {
+					ok: false,
+					code: "changed"
+				} : {
+					ok: true,
+					text: raw
+				};
+			} catch {
+				return {
+					ok: false,
+					code: "failed"
+				};
+			}
+		}
+		async function readText(target) {
+			try {
+				switch (target.source) {
+					case "record": return await readRecordText(target.expect);
+					case "unreadable-record": return await readUnreadableText(target.draftId);
+					case "emergency": return readEmergencyText(target.key, target.draftId, target.generation);
+					case "unreadable-emergency": return readRawEmergency(target.key);
+				}
+			} catch {
+				return {
+					ok: false,
+					code: "failed"
+				};
+			}
+		}
+		async function discard(target) {
+			if (!isDraftKind(target.kind)) return "changed";
+			try {
+				const record = await rt.store.get(target.draftId);
+				if (!sameReviewed(record, target) || record.kind !== target.kind || record.entityId !== target.entityId) return "changed";
+				const lineage = await classifySafely(record);
+				if (isLive(lineage)) return "live";
+				if (lineage === "unknown" && !target.allowUnknownOwner) return "unknown-owner";
+				return await rt.discardReviewed({
+					draftId: target.draftId,
+					pageInstanceId: target.pageInstanceId,
+					generation: target.generation,
+					status: target.status,
+					kind: record.kind,
+					entityType: record.entityType,
+					entityId: record.entityId
+				}) === "deleted" ? "deleted" : "changed";
+			} catch {
+				return "failed";
+			}
+		}
+		return {
+			inventory,
+			readText,
+			discard
+		};
+	}
+	function defaultLocalStorage$2() {
+		try {
+			return typeof localStorage !== "undefined" ? localStorage : null;
+		} catch {
+			return null;
+		}
+	}
 	//#endregion
 	//#region src/lifecycle/editor-recovery/identity.ts
 	/**
@@ -2722,12 +3026,19 @@ var prksEditorRecovery = (function(exports) {
 	* Classic-script entry. The maintainer build emits `frontend/js/editor-recovery.js`
 	* as the global `prksEditorRecovery`. Loading the script starts nothing;
 	* `runtime()` creates the page's single runtime on first use. Research Notes
-	* (`works.js`) is the consumer since #466 slice 2.
+	* (`works.js`) is the consumer since #466 slice 2; Settings → Diagnostics
+	* reads every kind through `diagnostics()` (slice 5).
 	*/
 	var pageRuntime = null;
+	var pageDiagnostics = null;
 	function runtime() {
 		if (!pageRuntime) pageRuntime = createEditorRecoveryRuntime();
 		return pageRuntime;
+	}
+	/** Settings → Diagnostics (#466 slice 5) over this page's runtime. Starts nothing until it is asked to read. */
+	function diagnostics() {
+		if (!pageDiagnostics) pageDiagnostics = createRecoveryDiagnostics(runtime());
+		return pageDiagnostics;
 	}
 	//#endregion
 	exports.BODIES_STORE = BODIES_STORE;
@@ -2763,6 +3074,7 @@ var prksEditorRecovery = (function(exports) {
 	exports.createPageIdentity = createPageIdentity;
 	exports.createRecoveryStore = createRecoveryStore;
 	exports.createWriterRegistry = createWriterRegistry;
+	exports.diagnostics = diagnostics;
 	exports.emergencyKeyOf = emergencyKeyOf;
 	exports.entityKeyOf = entityKeyOf;
 	exports.fingerprintText = fingerprintText;
