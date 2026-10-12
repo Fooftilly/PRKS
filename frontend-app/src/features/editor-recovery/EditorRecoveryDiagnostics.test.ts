@@ -88,7 +88,7 @@ describe('EditorRecoveryDiagnostics', () => {
     const api = install([
       inventory({
         drafts: [draft(), draft({ draftId: 'd-2', kind: 'folder-private-note', entityType: 'folder', entityId: 'f1', lineage: 'unknown', old: true, deletedHere: false })],
-        unreadable: [{ source: 'unreadable-record', draftId: 'd-new', reason: 'newer-version', kind: 'work-private-note', entityType: 'work', entityId: 'w9', updatedAt: 1, bodyLength: null }],
+        unreadable: [{ source: 'unreadable-record', draftId: 'd-new', reason: 'newer-version', kind: 'work-private-note', entityType: 'work', entityId: 'w9', updatedAt: 1, bodyLength: null, snapshot: '{}' }],
         emergency: [{ source: 'emergency', key: 'k1', pageInstanceId: 'p-1', draftId: 'd-e', kind: 'work-private-note', entityType: 'work', entityId: 'w2', generation: 2, bodyLength: 5, at: 1, lineage: 'unknown' }],
         unreadableEmergency: [{ source: 'unreadable-emergency', key: 'k2', pageInstanceId: 'p-2', reason: 'malformed', rawLength: 9 }],
         totalChars: 29,

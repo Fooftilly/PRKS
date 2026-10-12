@@ -125,7 +125,7 @@ function textTarget(row: Row): TextTarget | null {
     case 'record':
       return { source: 'record', expect: item.expect }
     case 'unreadable-record':
-      return item.draftId === null ? null : { source: 'unreadable-record', draftId: item.draftId }
+      return item.draftId === null ? null : { source: 'unreadable-record', draftId: item.draftId, snapshot: item.snapshot }
     case 'emergency':
       return { source: 'emergency', key: item.key, draftId: item.draftId, generation: item.generation }
     case 'unreadable-emergency':

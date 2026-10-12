@@ -77,6 +77,8 @@ export interface DiagnosticsUnreadableRecord {
   updatedAt: number | null
   /** As the record states it; null when it does not. */
   bodyLength: number | null
+  /** Opaque identity of the row as listed: its text is read only while the row still matches. */
+  snapshot: string
 }
 
 /** Text only an emergency key holds: its page is still open, or not proven gone. */
@@ -123,7 +125,7 @@ export interface RecoveryInventory {
 
 export type TextTarget =
   | { source: 'record'; expect: ReviewedRecord }
-  | { source: 'unreadable-record'; draftId: string }
+  | { source: 'unreadable-record'; draftId: string; snapshot: string }
   | { source: 'emergency'; key: string; draftId: string; generation: number }
   | { source: 'unreadable-emergency'; key: string }
 
@@ -262,6 +264,15 @@ function isIntactRecord(row: unknown): row is DraftRecord {
   )
 }
 
+/** A stable serialization of a stored row; a row that cannot be serialized compares by its draft id alone. */
+function snapshotOf(row: unknown): string {
+  try {
+    return JSON.stringify(row) ?? 'null'
+  } catch {
+    return 'unserializable'
+  }
+}
+
 function enumerable(storage: EmergencyStorage | null): boolean {
   if (!storage) return false
   try {
@@ -320,6 +331,7 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
       entityId: stringOrNull(r.entityId),
       updatedAt: typeof r.updatedAt === 'number' ? r.updatedAt : null,
       bodyLength: typeof r.bodyLength === 'number' && Number.isFinite(r.bodyLength) && r.bodyLength >= 0 ? r.bodyLength : null,
+      snapshot: snapshotOf(row),
     }
   }
 
@@ -370,8 +382,6 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
     const unreadableEmergency: DiagnosticsUnreadableEmergency[] = []
     const pending: Array<Promise<DiagnosticsEmergency>> = []
     for (const stored of storage ? readEmergencyKeys(storage) : []) {
-      // This page's own key mirrors editors that are open here.
-      if (stored.pageInstanceId === rt.identity.pageInstanceId) continue
       const payload = stored.payload
       if (!payload) {
         if (stored.raw !== null || stored.readFailed) unreadableEmergency.push(unreadableKeyOf(stored))
@@ -458,9 +468,13 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
     return { ok: true, text: row.body }
   }
 
-  async function readUnreadableText(draftId: string): Promise<TextResult> {
+  async function readUnreadableText(draftId: string, snapshot: string): Promise<TextResult> {
+    // Its row cannot be classified, so it is read only while it is exactly the row that was listed.
+    if (snapshotOf(await rt.store.get(draftId)) !== snapshot) return { ok: false, code: 'changed' }
     const row = (await rt.store.getBody(draftId)) as { body?: unknown } | null
-    return row && typeof row.body === 'string' ? { ok: true, text: row.body } : { ok: false, code: 'missing' }
+    if (!row || typeof row.body !== 'string') return { ok: false, code: 'missing' }
+    if (snapshotOf(await rt.store.get(draftId)) !== snapshot) return { ok: false, code: 'changed' }
+    return { ok: true, text: row.body }
   }
 
   async function readEmergencyText(key: string, draftId: string, generation: number): Promise<TextResult> {
@@ -494,7 +508,7 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
         case 'record':
           return await readRecordText(target.expect)
         case 'unreadable-record':
-          return await readUnreadableText(target.draftId)
+          return await readUnreadableText(target.draftId, target.snapshot)
         case 'emergency':
           return await readEmergencyText(target.key, target.draftId, target.generation)
         case 'unreadable-emergency':

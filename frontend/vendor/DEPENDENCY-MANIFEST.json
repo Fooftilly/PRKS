@@ -98,7 +98,7 @@
       "runtime_files": [
         {
           "path": "/js/editor-recovery.js",
-          "sha256": "0d6245dac998a2e45436587ef134dad02e39a8cf083c97babe04a7bca2916488"
+          "sha256": "0c304c17e315a462b677b72fd5e4921a80b7f55e9bc75cdcdb4db096c111d6a5"
         }
       ],
       "source_category": "frontend-app:editor-recovery",
@@ -172,7 +172,7 @@
       "runtime_files": [
         {
           "path": "/vue/prks-vue.js",
-          "sha256": "304b1e84e1073f741553530f6facb68adbff8220b5509bab652782b59cee600c"
+          "sha256": "24264b14b7f5f678c6686e4b8b635b3cd9df40f2e1c08c3921436104d7febfd3"
         }
       ],
       "source_category": "npm:frontend-app",

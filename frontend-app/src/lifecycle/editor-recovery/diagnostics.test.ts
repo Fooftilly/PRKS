@@ -182,9 +182,13 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     )
     const sameUndefined = { draftId: 'd-partial', pageInstanceId: 'p-x', generation: 2, status: undefined, kind: 'work-private-note', entityType: undefined, entityId: undefined }
     expect(await diag.discard(sameUndefined as unknown as DiscardTarget)).toBe('changed')
-    expect(await diag.readText({ source: 'unreadable-record', draftId })).toEqual({ ok: true, text: 'newer schema text' })
-    expect(await diag.readText({ source: 'unreadable-record', draftId: 'd-garbled' })).toEqual({ ok: true, text: 'damaged but readable' })
-    expect(await diag.readText({ source: 'unreadable-record', draftId: 'd-missing' })).toEqual({ ok: false, code: 'missing' })
+    const snapshot = (id: string) => inv.unreadable.find((u) => u.draftId === id)!.snapshot
+    expect(await diag.readText({ source: 'unreadable-record', draftId, snapshot: snapshot(draftId) })).toEqual({ ok: true, text: 'newer schema text' })
+    expect(await diag.readText({ source: 'unreadable-record', draftId: 'd-garbled', snapshot: snapshot('d-garbled') })).toEqual({ ok: true, text: 'damaged but readable' })
+    expect(await diag.readText({ source: 'unreadable-record', draftId: 'd-missing', snapshot: 'null' })).toEqual({ ok: false, code: 'missing' })
+    // A newer-version editor rewrote the row since it was listed: its text is not shown from the old listing.
+    await putRows(idb, DRAFTS_STORE, [{ ...record!, v: 99, generation: record!.generation + 1 }])
+    expect(await diag.readText({ source: 'unreadable-record', draftId, snapshot: snapshot(draftId) })).toEqual({ ok: false, code: 'changed' })
     expect((await viewer.store.get(draftId))?.v).toBe(99)
     expect(idb.rows(RECOVERY_DB_NAME, DRAFTS_STORE)).toHaveLength(3)
   })
@@ -217,13 +221,14 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
       } as DiscardTarget
       expect(await diag.discard(target)).toBe('changed')
       expect(await diag.readText({ source: 'record', expect: target })).toEqual({ ok: false, code: 'changed' })
-      expect(await diag.readText({ source: 'unreadable-record', draftId: target.draftId })).toEqual({ ok: true, text })
+      const listed = inv.unreadable.find((u) => u.draftId === target.draftId)!
+      expect(await diag.readText({ source: 'unreadable-record', draftId: target.draftId, snapshot: listed.snapshot })).toEqual({ ok: true, text })
     }
     expect(await bodies(viewer)).toEqual(expect.arrayContaining(['lost its base', 'lost its entity key']))
     expect(idb.rows(RECOVERY_DB_NAME, DRAFTS_STORE)).toHaveLength(2)
   })
 
-  it('lists text only an emergency key holds, without merging a live page and without listing its own page', async () => {
+  it('lists text only an emergency key holds, without merging a live page, and lists the page\'s own key as open', async () => {
     const { page, local } = setup()
     const live = page('live').rt
     await live.start()
@@ -257,9 +262,12 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     // Nothing was merged or removed: the live page still owns its key.
     expect(await viewer.store.get(w.draftId()!)).toBeNull()
     expect(local.getItem(EMERGENCY_KEY_PREFIX + 'p-broken')).toBe('{"v": 1, "entr')
-    // The page itself skips its own key: its editors are open here.
-    const own = await createRecoveryDiagnostics(live, { storage: local }).inventory()
-    expect(own.emergency.find((e) => e.draftId === w.draftId())).toBeUndefined()
+    // The page lists its own key too while no record holds the text yet (recovery storage refused or behind),
+    // as open here: the text is read in its editor.
+    const ownDiag = createRecoveryDiagnostics(live, { storage: local })
+    const own = (await ownDiag.inventory()).emergency.find((e) => e.draftId === w.draftId())!
+    expect(['self-live', 'other-live']).toContain(own.lineage)
+    expect(await ownDiag.readText({ source: 'emergency', key: own.key, draftId: own.draftId, generation: own.generation })).toEqual({ ok: false, code: 'live' })
   })
 
   it('refuses an emergency copy\'s text once its page answers for it again', async () => {

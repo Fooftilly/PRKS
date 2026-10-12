@@ -1079,6 +1079,14 @@ var prksEditorRecovery = (function(exports) {
 		const entityType = row.kind === "folder-private-note" ? "folder" : "work";
 		return (r.status === "active" || r.status === "tail-missing") && r.entityType === entityType && typeof r.entityId === "string" && r.entityId !== "" && r.entityKey === entityKeyOf(row.kind, r.entityId) && Number.isInteger(r.generation) && finiteAtLeastZero(r.generation) && isIntactOwner(r.owner) && isIntactBase(r.base) && isIntactPipeline(r.pipeline) && finiteAtLeastZero(r.bodyLength) && finiteAtLeastZero(r.createdAt) && finiteAtLeastZero(r.updatedAt) && (r.emergencySource === void 0 || typeof r.emergencySource === "string");
 	}
+	/** A stable serialization of a stored row; a row that cannot be serialized compares by its draft id alone. */
+	function snapshotOf(row) {
+		try {
+			return JSON.stringify(row) ?? "null";
+		} catch {
+			return "unserializable";
+		}
+	}
 	function enumerable(storage) {
 		if (!storage) return false;
 		try {
@@ -1137,7 +1145,8 @@ var prksEditorRecovery = (function(exports) {
 				entityType: stringOrNull(r.entityType),
 				entityId: stringOrNull(r.entityId),
 				updatedAt: typeof r.updatedAt === "number" ? r.updatedAt : null,
-				bodyLength: typeof r.bodyLength === "number" && Number.isFinite(r.bodyLength) && r.bodyLength >= 0 ? r.bodyLength : null
+				bodyLength: typeof r.bodyLength === "number" && Number.isFinite(r.bodyLength) && r.bodyLength >= 0 ? r.bodyLength : null,
+				snapshot: snapshotOf(row)
 			};
 		}
 		/** Stored records: readable ones classified, unreadable ones listed as they are. */
@@ -1182,7 +1191,6 @@ var prksEditorRecovery = (function(exports) {
 			const unreadableEmergency = [];
 			const pending = [];
 			for (const stored of storage ? readEmergencyKeys(storage) : []) {
-				if (stored.pageInstanceId === rt.identity.pageInstanceId) continue;
 				const payload = stored.payload;
 				if (!payload) {
 					if (stored.raw !== null || stored.readFailed) unreadableEmergency.push(unreadableKeyOf(stored));
@@ -1276,14 +1284,23 @@ var prksEditorRecovery = (function(exports) {
 				text: row.body
 			};
 		}
-		async function readUnreadableText(draftId) {
+		async function readUnreadableText(draftId, snapshot) {
+			if (snapshotOf(await rt.store.get(draftId)) !== snapshot) return {
+				ok: false,
+				code: "changed"
+			};
 			const row = await rt.store.getBody(draftId);
-			return row && typeof row.body === "string" ? {
-				ok: true,
-				text: row.body
-			} : {
+			if (!row || typeof row.body !== "string") return {
 				ok: false,
 				code: "missing"
+			};
+			if (snapshotOf(await rt.store.get(draftId)) !== snapshot) return {
+				ok: false,
+				code: "changed"
+			};
+			return {
+				ok: true,
+				text: row.body
 			};
 		}
 		async function readEmergencyText(key, draftId, generation) {
@@ -1348,7 +1365,7 @@ var prksEditorRecovery = (function(exports) {
 			try {
 				switch (target.source) {
 					case "record": return await readRecordText(target.expect);
-					case "unreadable-record": return await readUnreadableText(target.draftId);
+					case "unreadable-record": return await readUnreadableText(target.draftId, target.snapshot);
 					case "emergency": return await readEmergencyText(target.key, target.draftId, target.generation);
 					case "unreadable-emergency": return readRawEmergency(target.key);
 				}
