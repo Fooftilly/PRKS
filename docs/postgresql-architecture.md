@@ -1030,6 +1030,14 @@ ALTER TEXT SEARCH CONFIGURATION prks.prks_search
   ALTER MAPPING FOR hword, hword_part, word WITH ext.unaccent, simple;
 ```
 
+- **Case folding before the configuration.** The `simple` dictionary only
+  lowercases, which keeps Greek final `ς` and medial `σ` (and similar pairs)
+  apart. Every text indexed with this configuration, in `derived.work_search`
+  and `derived.asset_text` alike, is passed as `to_tsvector('prks.prks_search',
+  casefold(normalize(t, NFC) COLLATE pg_unicode_fast))`, and query tokens are
+  case-folded the same way in Python (`str.casefold` after NFC) before
+  `to_tsquery`. Indexed and queried lexemes therefore use the same full case
+  folding as `search_norm` and `identity_key`.
 - **No stemming.** The library is multilingual (English, Greek, Serbian
   Cyrillic and Latin, German, French, …), Works rarely declare a language,
   and today's FTS5 does not stem. Prefix matching (`'term':*`) reproduces
@@ -1124,6 +1132,7 @@ consistency count (`works` without `work_search` rows) schedules a repair job.
 | German "Straße" vs "STRASSE" | equal identity key (full case folding) |
 | Turkish "İ" | documented behavior, pinned by vectors |
 | PDF text in Greek | found by unaccented, lower-case prefix query |
+| PDF text "Σωκράτης", query "ΣΩΚΡΑΤΗΣ" / "σωκρατησ" | found through `asset_text` FTS alone (no trigram fallback) |
 | Publisher filter "lumière" on "Éditions Lumière" | found (replaces the ASCII-only pin in `test_publisher_catalog_queries.py`) |
 
 ---
@@ -1530,7 +1539,12 @@ parent will be after R4:
   (R4 replaces the live rows, so a live parent proves nothing);
 - `devices` → `prks.devices` plus the staged new-device mapping (new devices
   exist only in staging until R4);
-- `libraries` and `users` → the live tables, after identity mapping.
+- `libraries` and `users` → the live tables, after identity mapping;
+- global seed and reference tables that no backup carries (such as
+  `argument_verdicts`) → their live tables.
+
+A schema test fails if a foreign key of a content table points at a parent
+that none of these rules routes.
 
 R4's inserts into the live tables enforce the same keys again.
 
