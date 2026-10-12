@@ -131,7 +131,8 @@ function textTarget(row: Row): TextTarget | null {
     case 'emergency':
       return { source: 'emergency', key: item.key, draftId: item.draftId, generation: item.generation }
     case 'unreadable-emergency':
-      return { source: 'unreadable-emergency', key: item.key, raw: item.raw }
+      // Never read when listed: there is nothing it can be checked against, so Refresh tries again.
+      return item.raw === null ? null : { source: 'unreadable-emergency', key: item.key, raw: item.raw }
   }
 }
 

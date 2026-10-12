@@ -543,7 +543,7 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
   }
 
   function readRawEmergency(key: string, listed: string | null): TextResult {
-    if (!storage) return { ok: false, code: 'failed' }
+    if (!storage || listed === null) return { ok: false, code: 'failed' }
     try {
       const raw = storage.getItem(key)
       // Rewritten since it was listed (it may now be a live page's payload): list it again first.

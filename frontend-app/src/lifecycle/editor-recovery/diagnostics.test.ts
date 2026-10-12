@@ -286,6 +286,8 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     local.setItem(broken.key, '{"v": 1, "entries": []')
     expect(await diag.readText(broken)).toEqual({ ok: false, code: 'changed' })
     local.setItem(broken.key, broken.raw)
+    // Nothing was listed for a key that could not be read: there is nothing to check its value against.
+    expect(await diag.readText({ ...broken, raw: null })).toEqual({ ok: false, code: 'failed' })
     // Nothing was merged or removed: the live page still owns its key.
     expect(await viewer.store.get(w.draftId()!)).toBeNull()
     expect(local.getItem(EMERGENCY_KEY_PREFIX + 'p-broken')).toBe('{"v": 1, "entr')

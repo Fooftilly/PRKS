@@ -90,7 +90,10 @@ describe('EditorRecoveryDiagnostics', () => {
         drafts: [draft(), draft({ draftId: 'd-2', kind: 'folder-private-note', entityType: 'folder', entityId: 'f1', lineage: 'unknown', old: true, deletedHere: false })],
         unreadable: [{ source: 'unreadable-record', draftId: 'd-new', reason: 'newer-version', kind: 'work-private-note', entityType: 'work', entityId: 'w9', updatedAt: 1, bodyLength: null, snapshot: '{}' }],
         emergency: [{ source: 'emergency', key: 'k1', pageInstanceId: 'p-1', draftId: 'd-e', kind: 'work-private-note', entityType: 'work', entityId: 'w2', generation: 2, bodyLength: 5, at: 1, lineage: 'unknown' }],
-        unreadableEmergency: [{ source: 'unreadable-emergency', key: 'k2', pageInstanceId: 'p-2', reason: 'malformed', rawLength: 9, raw: '{"broken"' }],
+        unreadableEmergency: [
+          { source: 'unreadable-emergency', key: 'k2', pageInstanceId: 'p-2', reason: 'malformed', rawLength: 9, raw: '{"broken"' },
+          { source: 'unreadable-emergency', key: 'k3', pageInstanceId: 'p-3', reason: 'read-failed', rawLength: null, raw: null },
+        ],
         totalChars: 29,
         approxBytes: 58,
         sizeIncomplete: true,
@@ -103,7 +106,7 @@ describe('EditorRecoveryDiagnostics', () => {
     await flushPromises()
     expect(api.inventory).toHaveBeenCalledTimes(1)
     const rows = wrapper.findAll('[data-prks-role="editor-recovery-diag-row"]')
-    expect(rows.map((r) => r.attributes('data-source'))).toEqual(['record', 'record', 'emergency', 'unreadable-record', 'unreadable-emergency'])
+    expect(rows.map((r) => r.attributes('data-source'))).toEqual(['record', 'record', 'emergency', 'unreadable-record', 'unreadable-emergency', 'unreadable-emergency'])
     expect(rows[0]!.text()).toContain('Research Notes')
     expect(rows[0]!.find('a').attributes('href')).toBe('#/works/w1')
     expect(rows[0]!.text()).toContain('A browser tab that was closed')
@@ -115,7 +118,10 @@ describe('EditorRecoveryDiagnostics', () => {
     expect(rows[2]!.find('[data-prks-role="editor-recovery-diag-discard"]').exists()).toBe(false)
     expect(rows[3]!.find('[data-prks-role="editor-recovery-diag-discard"]').exists()).toBe(false)
     expect(rows[4]!.find('[data-prks-role="editor-recovery-diag-copy"]').text()).toBe('Copy raw data')
-    expect(wrapper.find('[data-prks-role="editor-recovery-diag-summary"]').text()).toContain('5 editor drafts kept in this browser, at least about 58 B')
+    // A key this browser could not read offers no text to read: Refresh tries again.
+    expect(rows[5]!.find('[data-prks-role="editor-recovery-diag-view"]').exists()).toBe(false)
+    expect(rows[5]!.find('[data-prks-role="editor-recovery-diag-copy"]').exists()).toBe(false)
+    expect(wrapper.find('[data-prks-role="editor-recovery-diag-summary"]').text()).toContain('6 editor drafts kept in this browser, at least about 58 B')
   })
 
   it('shows, copies and downloads the whole text on request', async () => {

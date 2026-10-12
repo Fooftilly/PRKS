@@ -1380,7 +1380,7 @@ var prksEditorRecovery = (function(exports) {
 			};
 		}
 		function readRawEmergency(key, listed) {
-			if (!storage) return {
+			if (!storage || listed === null) return {
 				ok: false,
 				code: "failed"
 			};
