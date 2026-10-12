@@ -461,7 +461,10 @@ are specific:
   only new numbered forward migrations are added. A migration file is never
   edited after release.
 - **Runner.** `prks migrate` (and `web` startup when `PRKS_MIGRATE_ON_START=1`,
-  the default for personal installs) takes `pg_advisory_lock` on a fixed key,
+  the default for personal installs) opens its own dedicated connection,
+  never a pooled one, takes `pg_advisory_lock` on a fixed key, and closes
+  that connection on every success and failure path, which releases the
+  lock (session-level advisory locks outlive the per-file commits). It
   creates `prks.schema_migrations(version, name, sha256, applied_at)`, refuses
   to run if an applied file's checksum changed or if the database is newer
   than the code, and applies each pending file in its own transaction. DDL
@@ -1665,10 +1668,12 @@ So every Library has a monotonic `epoch` (§6.2), and R4 advances it.
   the maintenance lock shared it compares that with `libraries.epoch`. A
   mismatch refuses with 409 `LIBRARY_EPOCH_CHANGED` before any write.
 - **API requests.** The browser sends the epoch it loaded in a
-  `PRKS-Library-Epoch` header on every mutation and in every durable
-  operation envelope. A mutation without it is refused with 400, so no
-  client can bypass the fence (enforced from the cutover, once L-F-1 sends
-  it). Responses carry the current
+  `PRKS-Library-Epoch` header on every authenticated, Library-scoped
+  mutation and in every durable operation envelope. Such a mutation without
+  it is refused with 400, so no client can bypass the fence (enforced from
+  the cutover, once L-F-1 sends it). Identity and instance routes act on no
+  Library and are exempt: bootstrap, login, sign-out and session renewal,
+  which a browser must be able to call before it has loaded an epoch. Responses carry the current
   epoch.
 - **Jobs.** A job records `library_epoch` when it is enqueued. R4 cancels
   every queued and running job of the Library and clears its `lease_id`, and
@@ -2045,7 +2050,7 @@ the lane that ports the relevant module.
   holds no advisory lock after its transaction ends, and the next command on
   that Library takes its shared lock at once.
 - Restore exclusion interleavings: a write in flight at R2 finishes before
-  R4; a write after R2 gets `MAINTENANCE` and the browser holds it; a cleanup
+  R4; a write after R2 gets `MAINTENANCE` (that the browser holds it is part of PG-C1's restore scenario); a cleanup
   batch and an orphan sweep during restore are skipped; a running backup
   makes restore wait or abort cleanly; a backup during maintenance is refused.
 - Restore into a **new instance** with real acknowledged, replayed and
@@ -2205,15 +2210,15 @@ merged; several run at the same time).
 | **L-PR-1** Processing | L-A-1 | Inbox scan as a job, import through the objects lane | Parametrized processing tests; no absolute path stored |
 | **L-S-1** Search | L-W-1, L-J-1, L-P-1, L-O-1, L-A-1 | `derived.work_search` maintained by commands, `asset_text` via `text.extract`, trigram filters, parity ordering, Saved View execution, `rebuild-derived`; `backend/AGENTS.md` extracted-text rule amended for the `derived` schema (§16, decision 5) | §8.7 parity tests; search parametrized tests pass with the documented Unicode improvements replacing ASCII pins |
 | **L-S-2** Ranking | L-S-1 | Single weighted score | Before/after results on a synthetic multilingual corpus approved in review |
-| **L-B-1** Backup and restore format 2 | L-W-1, L-P-1, L-O-1, L-R-1, L-A-1, L-PR-1, L-S-1 | §11.4 | Round-trip test over a fixture covering every canonical table and object kind; text `COPY` with the interchange contract (no binary `COPY`); restore into the same and into a new instance with real sync operations, the archive Library mapped to the target Library and all library/user/device references resolving; a restore over a different Library whose IDs still exist is refused; R1 reuse of an existing object is lock-coupled to cleanup settle and re-verified in R3, so R4 never commits a locator to a missing object; new devices are inserted only by R4; a restore that outlives its lease aborts and never replaces writes accepted after recovery; export, staging and the R4 delete/insert use only the content-table allowlist, and a schema test classifies every library-scoped table; staging builds `restore_<id>` with `LIKE` from the live tables, never with the migration runner, checks foreign keys with redirected generated anti-joins, and refuses an archive of another schema fingerprint (§13.3 staging isolation); the round trip covers a table with a generated `*_key` column, which is not exported and is recomputed on restore; staged objects of a live run survive an orphan sweep (L-B-1 only writes `restore_run_objects` rows; the table and its term in the reference check belong to L-A-1); verification refuses tampered archives; fault injection at R0–R5, including a kill immediately after the R4 commit that still rebuilds search after restart; the exclusion interleavings of §13.3; restoring an older snapshot while a long job runs and a pending edit exists never applies either to the replacement state; backup concurrent with writes and cleanup; format 1 refused with a clear message |
+| **L-B-1** Backup and restore format 2 | L-W-1, L-P-1, L-O-1, L-R-1, L-A-1, L-PR-1, L-S-1 | §11.4 | Round-trip test over a fixture covering every canonical table and object kind; text `COPY` with the interchange contract (no binary `COPY`); restore into the same and into a new instance with real sync operations, the archive Library mapped to the target Library and all library/user/device references resolving; a restore over a different Library whose IDs still exist is refused; R1 reuse of an existing object is lock-coupled to cleanup settle and re-verified in R3, so R4 never commits a locator to a missing object; new devices are inserted only by R4; a restore that outlives its lease aborts and never replaces writes accepted after recovery; export, staging and the R4 delete/insert use only the content-table allowlist, and a schema test classifies every library-scoped table; staging builds `restore_<id>` with `LIKE` from the live tables, never with the migration runner, checks foreign keys with redirected generated anti-joins, and refuses an archive of another schema fingerprint (§13.3 staging isolation); the round trip covers a table with a generated `*_key` column, which is not exported and is recomputed on restore; staged objects of a live run survive an orphan sweep (L-B-1 only writes `restore_run_objects` rows; the table and its term in the reference check belong to L-A-1); verification refuses tampered archives; fault injection at R0–R5, including a kill immediately after the R4 commit that still rebuilds search after restart; the exclusion interleavings of §13.3; restoring an older snapshot while a long job runs never lets the job write to the replacement state, and an API mutation or operation envelope carrying the pre-restore epoch is refused with 409 `LIBRARY_EPOCH_CHANGED`; backup concurrent with writes and cleanup; format 1 refused with a clear message |
 | **L-D-1** Compose and health | PG-1, L-ID-1, L-J-1 | Dockerfile with psycopg, Compose of §12.3, `/healthz`, `/readyz`, graceful stop, `.env.example`, README deployment section, #612 configuration entries | Clean `docker compose up` smoke test in CI reaches `/readyz` and bootstrap; the database volume is mounted at `/var/lib/postgresql`; `web` and `worker` each list the `prks_database_url` secret and read it at start; data survives `down`/`up` and container recreation with the volume kept; wrong root/database pairing refused at start |
-| **L-F-1** Browser store scoping, auth hold and restore epoch | L-ID-1 | §10.3–10.4 on the client | E2E: two accounts in one browser never see each other's drafts or queue; session expiry mid-queue holds and later delivers; pre-0.8 queue offered review-only, never auto-deleted; after a restore to an older snapshot a pending edit is not applied, its text is offered in review-only recovery, and older-epoch drafts are never auto-restored; every mutation carries `PRKS-Library-Epoch`; #465/#466 suites green |
+| **L-F-1** Browser store scoping, auth hold and restore epoch | L-ID-1 | §10.3–10.4 on the client | E2E: two accounts in one browser never see each other's drafts or queue; session expiry mid-queue holds and later delivers; pre-0.8 queue offered review-only, never auto-deleted; after the Library epoch changes, a pending edit is not applied, its text is offered in review-only recovery, and older-epoch drafts are never auto-restored; every Library-scoped mutation carries `PRKS-Library-Epoch` and login and bootstrap work without it; the client's epoch handling is proven against a 409 `LIBRARY_EPOCH_CHANGED` and a changed epoch from `/api/session` without a real restore (a real restore belongs to L-B-1, and the combined scenario to PG-C1); #465/#466 suites green |
 
 **Stage 3. Cutover (sequential).**
 
 | Slice | Depends on | Content | Acceptance criteria |
 | --- | --- | --- | --- |
-| **PG-C1** Full PostgreSQL E2E leg | all Stage 2 lanes except L-S-2 | Run the full E2E gate with the facade as the backend in CI (not yet default) | Full E2E Gate green on PostgreSQL; facade method registry reports 100 % ported |
+| **PG-C1** Full PostgreSQL E2E leg | all Stage 2 lanes except L-S-2 | Run the full E2E gate with the facade as the backend in CI (not yet default); the combined restore and browser scenario | Full E2E Gate green on PostgreSQL; facade method registry reports 100 % ported; E2E: a real restore to an older snapshot while the browser holds a pending edit, the edit is not applied and its text is offered in review-only recovery |
 | **PG-C2** Switch and delete | PG-C1 | PostgreSQL becomes the only backend; §13.4 retirement in one PR (or a short stack); docs and `AGENTS.md` updated; `--testing` uses the harness database | No `import sqlite3` anywhere in `backend/`; full E2E, Test Gate and static analysis green; README quick start works from a clean machine; #614 release gates checked by the maintainer |
 | **PG-C3** Route extraction follow-up | PG-C2 | Move route families from facade to direct domain calls under #67, one family per PR | Facade shrinks; no behavior change |
 
