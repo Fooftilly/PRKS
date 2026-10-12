@@ -727,6 +727,10 @@ class ResearchNotesTabCloseAndReviewTests(_RecoveryPage, unittest.TestCase):
         dialog.locator('[data-prks-role="editor-recovery-copy"]', has_text='Copied').wait_for()
         self.wait_clipboard(tab, mine)
         self.assertEqual(tab.evaluate('() => window.__refusedWrites'), 1)
+        # An empty body through the fallback replaces the clipboard too.
+        tab.evaluate("() => window.prksCopyTextToClipboard('')")
+        self.wait_clipboard(tab, '')
+        self.assertEqual(tab.evaluate('() => window.__refusedWrites'), 2)
         # The fallback's hidden textarea is gone and focus stays on the button.
         self.assertEqual(tab.evaluate('() => document.querySelectorAll("body > textarea").length'), 0)
         self.assertEqual(tab.evaluate('() => document.activeElement && document.activeElement.dataset.prksRole'), 'editor-recovery-copy')

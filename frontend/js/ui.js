@@ -487,11 +487,20 @@ async function prksCopyTextToClipboard(text) {
     ta.style.left = '-9999px';
     ta.style.top = '-9999px';
     document.body.appendChild(ta);
+    // The copy event carries the text itself: an empty selection (an empty
+    // draft body) would otherwise copy nothing and still report success.
+    const onCopy = (e) => {
+        if (!e.clipboardData) return;
+        e.clipboardData.setData('text/plain', s);
+        e.preventDefault();
+    };
+    document.addEventListener('copy', onCopy);
     try {
         ta.select();
         const ok = document.execCommand('copy');
         if (!ok) throw clipboardErr || new Error('Copy failed');
     } finally {
+        document.removeEventListener('copy', onCopy);
         document.body.removeChild(ta);
         // The copy button keeps focus (dialogs keep their keyboard position).
         if (restore && restore.isConnected) {
