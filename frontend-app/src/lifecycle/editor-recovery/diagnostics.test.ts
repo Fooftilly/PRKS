@@ -198,7 +198,11 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     const snapshot = (id: string) => inv.unreadable.find((u) => u.draftId === id)!.snapshot!
     expect(await diag.readText({ source: 'unreadable-record', draftId, snapshot: snapshot(draftId) })).toEqual({ ok: true, text: 'newer schema text' })
     expect(await diag.readText({ source: 'unreadable-record', draftId: 'd-garbled', snapshot: snapshot('d-garbled') })).toEqual({ ok: true, text: 'damaged but readable' })
-    expect(await diag.readText({ source: 'unreadable-record', draftId: 'd-missing', snapshot: 'null' })).toEqual({ ok: false, code: 'missing' })
+    expect(await diag.readText({ source: 'unreadable-record', draftId: 'd-missing', snapshot: 'null' })).toEqual({ ok: false, code: 'changed' })
+    // A body rewritten under an unchanged row is not the listed copy either.
+    await putRows(idb, BODIES_STORE, [{ draftId: 'd-garbled', generation: 1, body: 'rewritten by a newer editor' }])
+    expect(await diag.readText({ source: 'unreadable-record', draftId: 'd-garbled', snapshot: snapshot('d-garbled') })).toEqual({ ok: false, code: 'changed' })
+    await putRows(idb, BODIES_STORE, [{ draftId: 'd-garbled', generation: 1, body: 'damaged but readable' }])
     // A row JSON cannot represent still gets an exact identity.
     await putRows(idb, DRAFTS_STORE, [{ v: 99, draftId: 'd-big', n: 1n }])
     await putRows(idb, BODIES_STORE, [{ draftId: 'd-big', generation: 1, body: 'big text' }])

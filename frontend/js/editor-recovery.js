@@ -1118,6 +1118,32 @@ var prksEditorRecovery = (function(exports) {
 		if (proto !== Object.prototype && proto !== null) return null;
 		return wrap("{", ownKeys(value), "}");
 	}
+	/** Two independent 32-bit FNV-1a lanes over the UTF-16 code units: a compact fingerprint of a body's text. */
+	function digestOf(text) {
+		let a = 2166136261;
+		let b = 16777619 ^ text.length;
+		for (let i = 0; i < text.length; i++) {
+			const c = text.charCodeAt(i);
+			a = Math.imul(a ^ c, 16777619);
+			b = Math.imul(b ^ c, 1540483477) ^ b >>> 13;
+		}
+		return (a >>> 0).toString(16).padStart(8, "0") + (b >>> 0).toString(16).padStart(8, "0");
+	}
+	/**
+	* Identity of a copy-only row and its stored body together, as listed: the row
+	* exactly, the body by everything but its text plus the text's length and
+	* fingerprint. Null when either cannot be represented exactly.
+	*/
+	function copySnapshotOf(row, body) {
+		const rowPart = snapshotOf(row);
+		if (rowPart === null) return null;
+		if (body === null || body === void 0) return rowPart + "|none";
+		if (typeof body !== "object") return null;
+		const { body: text, ...rest } = body;
+		const restPart = snapshotOf(rest);
+		const textPart = typeof text === "string" ? "t:" + text.length + ":" + digestOf(text) : snapshotOf(text);
+		return restPart === null || textPart === null ? null : rowPart + "|" + restPart + "|" + textPart;
+	}
 	/** Identity of a stored row as listed; null when it cannot be told apart exactly from a rewrite. */
 	function snapshotOf(row) {
 		return serialized(row, /* @__PURE__ */ new Map());
@@ -1198,7 +1224,7 @@ var prksEditorRecovery = (function(exports) {
 			const unreadable = [];
 			for (const row of rows) if (isTombstoneShape(row) && !await bodyStored(row.draftId)) tombstones.push(row);
 			else if (isIntactRecord(row) && await bodyMatches(row)) records.push(row);
-			else unreadable.push(await measured(unreadableOf(row)));
+			else unreadable.push(await measured(row));
 			const lineages = await Promise.all(records.map((record) => classifySafely(record)));
 			const drafts = records.map((record, i) => draftOf(record, lineages[i], at));
 			drafts.sort((a, b) => b.updatedAt - a.updatedAt || a.draftId.localeCompare(b.draftId));
@@ -1219,17 +1245,29 @@ var prksEditorRecovery = (function(exports) {
 				return false;
 			}
 		}
-		/** A copy-only row's size is its stored text's, when there is any: its stated length may be wrong. */
-		async function measured(row) {
+		/**
+		* A copy-only row as listed: sized by its stored text when there is any (its
+		* stated length may be wrong), and identified by its row and body together.
+		*/
+		async function measured(raw) {
+			const row = unreadableOf(raw);
 			if (row.draftId === null) return row;
 			try {
 				const body = await rt.store.getBody(row.draftId);
+				const snapshot = copySnapshotOf(raw, body);
 				return body && typeof body.body === "string" ? {
 					...row,
-					bodyLength: body.body.length
-				} : row;
+					bodyLength: body.body.length,
+					snapshot
+				} : {
+					...row,
+					snapshot
+				};
 			} catch {
-				return row;
+				return {
+					...row,
+					snapshot: null
+				};
 			}
 		}
 		/** Whether a body row exists; when that cannot be told, assume it does (list, never hide). */
@@ -1359,22 +1397,30 @@ var prksEditorRecovery = (function(exports) {
 				ok: false,
 				code: "failed"
 			};
-			if (snapshotOf(await rt.store.get(draftId)) !== snapshot) return {
+			const take = async () => {
+				const row = await rt.store.get(draftId);
+				const body = await rt.store.getBody(draftId);
+				return {
+					same: copySnapshotOf(row, body) === snapshot,
+					body
+				};
+			};
+			const first = await take();
+			if (!first.same) return {
 				ok: false,
 				code: "changed"
 			};
-			const row = await rt.store.getBody(draftId);
-			if (!row || typeof row.body !== "string") return {
+			if (!first.body || typeof first.body.body !== "string") return {
 				ok: false,
 				code: "missing"
 			};
-			if (snapshotOf(await rt.store.get(draftId)) !== snapshot) return {
+			if (!(await take()).same) return {
 				ok: false,
 				code: "changed"
 			};
 			return {
 				ok: true,
-				text: row.body
+				text: first.body.body
 			};
 		}
 		async function readEmergencyText(key, draftId, generation) {

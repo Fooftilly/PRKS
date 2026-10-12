@@ -77,7 +77,7 @@ export interface DiagnosticsUnreadableRecord {
   updatedAt: number | null
   /** As the record states it; null when it does not. */
   bodyLength: number | null
-  /** Opaque identity of the row as listed: its text is read only while the row still matches. Null: not readable safely. */
+  /** Opaque identity of the row and its body as listed: its text is read only while both still match. Null: not readable safely. */
   snapshot: string | null
 }
 
@@ -318,6 +318,34 @@ function serialized(value: unknown, seen: Map<object, number>): string | null {
   return wrap('{', ownKeys(value as Record<string, unknown>), '}')
 }
 
+/** Two independent 32-bit FNV-1a lanes over the UTF-16 code units: a compact fingerprint of a body's text. */
+function digestOf(text: string): string {
+  let a = 0x811c9dc5
+  let b = 0x01000193 ^ text.length
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i)
+    a = Math.imul(a ^ c, 0x01000193)
+    b = Math.imul(b ^ c, 0x5bd1e995) ^ (b >>> 13)
+  }
+  return (a >>> 0).toString(16).padStart(8, '0') + (b >>> 0).toString(16).padStart(8, '0')
+}
+
+/**
+ * Identity of a copy-only row and its stored body together, as listed: the row
+ * exactly, the body by everything but its text plus the text's length and
+ * fingerprint. Null when either cannot be represented exactly.
+ */
+function copySnapshotOf(row: unknown, body: unknown): string | null {
+  const rowPart = snapshotOf(row)
+  if (rowPart === null) return null
+  if (body === null || body === undefined) return rowPart + '|none'
+  if (typeof body !== 'object') return null
+  const { body: text, ...rest } = body as Record<string, unknown>
+  const restPart = snapshotOf(rest)
+  const textPart = typeof text === 'string' ? 't:' + text.length + ':' + digestOf(text) : snapshotOf(text)
+  return restPart === null || textPart === null ? null : rowPart + '|' + restPart + '|' + textPart
+}
+
 /** Identity of a stored row as listed; null when it cannot be told apart exactly from a rewrite. */
 function snapshotOf(row: unknown): string | null {
   return serialized(row, new Map())
@@ -408,7 +436,7 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
       if (isTombstoneShape(row) && !(await bodyStored(row.draftId))) tombstones.push(row)
       // A draft is its record and that generation's body together: anything less is copy-only.
       else if (isIntactRecord(row) && (await bodyMatches(row))) records.push(row)
-      else unreadable.push(await measured(unreadableOf(row)))
+      else unreadable.push(await measured(row))
     }
     // The pings wait on silence, so every record is classified together.
     const lineages = await Promise.all(records.map((record) => classifySafely(record)))
@@ -427,14 +455,19 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
     }
   }
 
-  /** A copy-only row's size is its stored text's, when there is any: its stated length may be wrong. */
-  async function measured(row: DiagnosticsUnreadableRecord): Promise<DiagnosticsUnreadableRecord> {
+  /**
+   * A copy-only row as listed: sized by its stored text when there is any (its
+   * stated length may be wrong), and identified by its row and body together.
+   */
+  async function measured(raw: unknown): Promise<DiagnosticsUnreadableRecord> {
+    const row = unreadableOf(raw)
     if (row.draftId === null) return row
     try {
       const body = (await rt.store.getBody(row.draftId)) as { body?: unknown } | null
-      return body && typeof body.body === 'string' ? { ...row, bodyLength: body.body.length } : row
+      const snapshot = copySnapshotOf(raw, body)
+      return body && typeof body.body === 'string' ? { ...row, bodyLength: body.body.length, snapshot } : { ...row, snapshot }
     } catch {
-      return row
+      return { ...row, snapshot: null }
     }
   }
 
@@ -561,12 +594,18 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
 
   async function readUnreadableText(draftId: string, snapshot: string | null): Promise<TextResult> {
     if (snapshot === null) return { ok: false, code: 'failed' }
-    // Its row cannot be classified, so it is read only while it is exactly the row that was listed.
-    if (snapshotOf(await rt.store.get(draftId)) !== snapshot) return { ok: false, code: 'changed' }
-    const row = (await rt.store.getBody(draftId)) as { body?: unknown } | null
-    if (!row || typeof row.body !== 'string') return { ok: false, code: 'missing' }
-    if (snapshotOf(await rt.store.get(draftId)) !== snapshot) return { ok: false, code: 'changed' }
-    return { ok: true, text: row.body }
+    // Its row cannot be classified, so its text is read only while row and body are exactly as listed,
+    // checked on both sides of the read.
+    const take = async () => {
+      const row = await rt.store.get(draftId)
+      const body = (await rt.store.getBody(draftId)) as { body?: unknown } | null
+      return { same: copySnapshotOf(row, body) === snapshot, body }
+    }
+    const first = await take()
+    if (!first.same) return { ok: false, code: 'changed' }
+    if (!first.body || typeof first.body.body !== 'string') return { ok: false, code: 'missing' }
+    if (!(await take()).same) return { ok: false, code: 'changed' }
+    return { ok: true, text: first.body.body }
   }
 
   async function readEmergencyText(key: string, draftId: string, generation: number): Promise<TextResult> {

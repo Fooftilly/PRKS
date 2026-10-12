@@ -124,6 +124,27 @@ describe('EditorRecoveryDiagnostics', () => {
     expect(wrapper.find('[data-prks-role="editor-recovery-diag-summary"]').text()).toContain('6 editor drafts kept in this browser, at least about 58 B')
   })
 
+  it('closes Settings when a draft\'s Work or Folder link is followed, unless Settings keeps itself open', async () => {
+    install([inventory({ drafts: [draft()] })])
+    const wrapper = await open()
+    const close = vi.fn(() => true)
+    Object.assign(win, { requestModalClose: close })
+    const link = wrapper.find('[data-prks-role="editor-recovery-diag-row"] a')
+    const followed = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 })
+    link.element.dispatchEvent(followed)
+    expect(close).toHaveBeenCalledWith('navigate')
+    expect(followed.defaultPrevented).toBe(false)
+    close.mockReturnValue(false)
+    const held = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 })
+    link.element.dispatchEvent(held)
+    expect(held.defaultPrevented).toBe(true)
+    // A new-tab click leaves Settings as it is.
+    close.mockClear()
+    link.element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0, ctrlKey: true }))
+    expect(close).not.toHaveBeenCalled()
+    Reflect.deleteProperty(win, 'requestModalClose')
+  })
+
   it('shows, copies and downloads the whole text on request', async () => {
     const api = install([inventory({ drafts: [draft()] })])
     const wrapper = await open()

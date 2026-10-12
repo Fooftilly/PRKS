@@ -55,10 +55,19 @@ interface PageHelpers {
   prksEditorRecovery?: { diagnostics?: () => RecoveryDiagnostics }
   prksCopyTextToClipboard?: (text: string) => Promise<void>
   prksConfirmDialog?: (options: { title: string; message: string; confirmLabel: string; cancelLabel?: string; danger: boolean }) => Promise<boolean>
+  requestModalClose?: (reason: string) => boolean
 }
 
 function page(): PageHelpers {
   return window as unknown as PageHelpers
+}
+
+/** Settings is a modal over the workspace: close it so the Work or Folder opens in view. */
+function followEntity(event: MouseEvent): void {
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+  const close = page().requestModalClose
+  // Settings has unsaved changes: its own confirmation decides; stay until then.
+  if (typeof close === 'function' && close('navigate') === false) event.preventDefault()
 }
 
 function api(): RecoveryDiagnostics | null {
@@ -311,7 +320,7 @@ async function discard(row: Row): Promise<void> {
           <span>{{ kindText(rowKind(row), rowEntityType(row)) }}</span>
           <template v-if="row.item.source !== 'unreadable-emergency'">
             ·
-            <a v-if="entityHref(rowEntityType(row), rowEntityId(row))" :href="entityHref(rowEntityType(row), rowEntityId(row))!">{{ entityText(rowEntityType(row), rowEntityId(row)) }}</a>
+            <a v-if="entityHref(rowEntityType(row), rowEntityId(row))" :href="entityHref(rowEntityType(row), rowEntityId(row))!" @click="followEntity">{{ entityText(rowEntityType(row), rowEntityId(row)) }}</a>
             <span v-else>{{ entityText(rowEntityType(row), rowEntityId(row)) }}</span>
           </template>
         </p>
