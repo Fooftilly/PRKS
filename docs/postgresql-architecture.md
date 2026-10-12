@@ -1420,10 +1420,20 @@ the older version.
 
 #### Identity mapping on restore
 
-The staged rows refer to archive users and devices; the target instance has
-its own. Before anything is committed, restore builds two mapping tables in
-the staging schema and rewrites every user and device reference through them:
+The staged rows refer to the archive's Library, users and devices; the
+target instance has its own. Before anything is committed, restore builds
+three mapping tables in the staging schema and rewrites every reference
+through them:
 
+- **Library.** The archive's `library_id` maps to the target Library `L`
+  that the restore replaces: itself when restoring in place, the
+  instance's own Library (minted at bootstrap) when restoring into a new
+  instance. Every `library_id` column of every staged table, ledger and
+  revisions included, is rewritten to `L`. Entity IDs keep their values, so
+  restoring one Library's archive over a *different* Library of the same
+  instance, while the original still holds those IDs, is refused before
+  commit (the global primary keys would collide); that case is "restore as a
+  new Library", which is left to after 1.0 (below).
 - **Users.** An `archive_user_id` that exists in the target instance (restore
   into the same instance) maps to itself. Any other maps to the restoring
   owner (in 0.8 there is exactly one user). A later multi-user restore UI may
@@ -1438,8 +1448,9 @@ the staging schema and rewrites every user and device reference through them:
   (same `op_id` and hash) instead of re-applying. In a *different* instance,
   browsers do not send queued operations at all, because their stores are
   scoped by instance (§10.3, §10.6); the ledger then only preserves history.
-- After mapping, every foreign key into `users` and `devices` must resolve;
-  the staging check runs the same constraint set as the live schema.
+- After mapping, every foreign key into `libraries`, `users` and `devices`
+  must resolve; the staging check runs the same constraint set as the live
+  schema.
 
 #### Restore exclusion protocol
 
@@ -1467,8 +1478,8 @@ Restore runs these phases, recorded in a `restore_runs` row with a lease
 | R0 Validate | Hashes, manifest, schema and format version (newer refused; after 1.0 older accepted) | Nothing |
 | R1 Stage | Build `restore_<id>` with the migration runner at the archive's schema version, `COPY … FROM` with interchange casts, run forward migrations on it (post-1.0), map identities, check constraints; write every object under its key (immutable, random keys: never overwrites a live object; an identical key with an identical hash is reused) | Nothing; reads and writes continue normally |
 | R2 Enter | One committed transaction: `UPDATE libraries SET maintenance = 'restore', maintenance_run = <run> WHERE id = L AND maintenance IS NULL` (refused if another maintenance is active, or if a backup run is active) | From here every new command refuses with `MAINTENANCE` |
-| R3 Drain | On the restore connection, take `pg_advisory_lock(lib_key(L))` **exclusive** (waits for every in-flight command, which holds the shared lock, to commit or roll back) and `pg_advisory_lock((L,'objects'))` exclusive (waits for a running backup copy, bounded by a timeout that aborts the restore) | Commands that slipped in before R2 finish first |
-| R4 Commit | One SERIALIZABLE transaction: delete the Library's canonical rows and its `derived` rows; insert the staged, mapped rows; record a `hold` cleanup claim for every object the old catalogue referenced and the new one does not; cancel the Library's queued and running jobs (`state = 'cancelled'`, `lease_id = NULL`, `last_error = 'restore_superseded'`); set `epoch = epoch + 1` and `maintenance = NULL`; **enqueue** `derived.rebuild`, a cleanup retry and the orphan sweep at the new epoch; mark the run committed | Atomically: the old Library before COMMIT, the restored one (with its follow-up jobs already queued) after |
+| R3 Drain | On the restore connection, take `pg_advisory_lock(lib_key(L))` **exclusive** (waits for every in-flight command, which holds the shared lock, to commit or roll back) and `pg_advisory_lock((L,'objects'))` exclusive (waits for a running backup copy, bounded by a timeout that aborts the restore). Then re-check ownership: `libraries.maintenance_run` must still be this run; otherwise the run lost its lease, so release and abort | Commands that slipped in before R2 finish first |
+| R4 Commit | One SERIALIZABLE transaction that first locks the `libraries` row `FOR UPDATE` and aborts unless `maintenance = 'restore' AND maintenance_run = <run>` and the `restore_runs` row is still this run's live lease; then: delete the Library's canonical rows and its `derived` rows; insert the staged, mapped rows; record a `hold` cleanup claim for every object the old catalogue referenced and the new one does not; cancel the Library's queued and running jobs (`state = 'cancelled'`, `lease_id = NULL`, `last_error = 'restore_superseded'`); set `epoch = epoch + 1` and `maintenance = NULL`; **enqueue** `derived.rebuild`, a cleanup retry and the orphan sweep at the new epoch; mark the run committed | Atomically: the old Library before COMMIT, the restored one (with its follow-up jobs already queued) after |
 | R5 Release | Release both locks and drop the staging schema; nothing in R5 is needed for correctness | Normal operation |
 
 **Crash recovery.** PostgreSQL releases advisory locks when the restore
@@ -1476,7 +1487,25 @@ connection dies. A crash before R2 leaves nothing to undo except the staging
 schema and staged objects (dropped, and swept as orphans). A crash between R2
 and R4 leaves the flag set with the live data untouched: when the run's lease
 expires, startup or the maintenance reaper clears `maintenance` for that
-`maintenance_run` and marks the run failed. A crash after R4 leaves the
+`maintenance_run` and marks the run failed.
+
+**Fencing a restore that lost its lease.** A restore process can stall
+rather than die, outlive its lease and then resume. Recovery therefore never
+clears the flag from under a live restore, and a stale restore can never
+commit:
+
+- Recovery clears the flag only while holding
+  `pg_try_advisory_lock(lib_key(L))` exclusive, in one transaction that
+  checks `maintenance_run = <run>` and the expired lease. A restore that has
+  reached R3 holds that lock, so recovery cannot get it and leaves the run
+  alone until the restore connection ends; a hung restore therefore keeps
+  the Library in maintenance (safe) rather than losing writes.
+- A restore that stalled between R2 and R3 and was recovered finds, after
+  taking the lock in R3, that `maintenance_run` is no longer its run, and
+  aborts.
+- R4 re-checks the same ownership inside its own transaction, under a row
+  lock on `libraries`, so even a stall between R3 and R4 cannot commit a
+  replacement over writes accepted after recovery. A crash after R4 leaves the
 restored Library with its holds recorded and its rebuild, cleanup retry and
 orphan sweep already queued, because they were enqueued in the R4
 transaction (the same transactional-outbox rule as §5.2). The only R5 work a
@@ -1837,6 +1866,10 @@ the lane that ports the relevant module.
 - Restore fault injection at each phase R0–R5 of §11.4, including a crash
   during object staging, between R2 and R4 (flag cleared by recovery, data
   untouched) and immediately after COMMIT.
+- Restore lease fencing: stall a restore between R2 and R3 past its lease,
+  let recovery clear the flag and admit writes, then resume it: it aborts in
+  R3 and the admitted writes survive; recovery cannot clear the flag of a
+  restore that holds the R3 lock.
 - Restore exclusion interleavings: a write in flight at R2 finishes before
   R4; a write after R2 gets `MAINTENANCE` and the browser holds it; a cleanup
   batch and an orphan sweep during restore are skipped; a running backup
@@ -1998,7 +2031,7 @@ merged; several run at the same time).
 | **L-PR-1** Processing | L-A-1 | Inbox scan as a job, import through the objects lane | Parametrized processing tests; no absolute path stored |
 | **L-S-1** Search | L-W-1, L-J-1 | `derived.work_search` maintained by commands, `asset_text` via `text.extract`, trigram filters, parity ordering, Saved View execution, `rebuild-derived`; `backend/AGENTS.md` extracted-text rule amended for the `derived` schema (§16, decision 5) | §8.7 parity tests; search parametrized tests pass with the documented Unicode improvements replacing ASCII pins |
 | **L-S-2** Ranking | L-S-1 | Single weighted score | Before/after results on a synthetic multilingual corpus approved in review |
-| **L-B-1** Backup and restore format 2 | L-W-1, L-P-1, L-O-1, L-R-1, L-A-1 | §11.4 | Round-trip test over a fixture covering every canonical table and object kind; text `COPY` with the interchange contract (no binary `COPY`); restore into the same and into a new instance with real sync operations, all user/device references resolving; verification refuses tampered archives; fault injection at R0–R5, including a kill immediately after the R4 commit that still rebuilds search after restart; the exclusion interleavings of §13.3; restoring an older snapshot while a long job runs and a pending edit exists never applies either to the replacement state; backup concurrent with writes and cleanup; format 1 refused with a clear message |
+| **L-B-1** Backup and restore format 2 | L-W-1, L-P-1, L-O-1, L-R-1, L-A-1 | §11.4 | Round-trip test over a fixture covering every canonical table and object kind; text `COPY` with the interchange contract (no binary `COPY`); restore into the same and into a new instance with real sync operations, the archive Library mapped to the target Library and all library/user/device references resolving; a restore over a different Library whose IDs still exist is refused; a restore that outlives its lease aborts and never replaces writes accepted after recovery; verification refuses tampered archives; fault injection at R0–R5, including a kill immediately after the R4 commit that still rebuilds search after restart; the exclusion interleavings of §13.3; restoring an older snapshot while a long job runs and a pending edit exists never applies either to the replacement state; backup concurrent with writes and cleanup; format 1 refused with a clear message |
 | **L-D-1** Compose and health | PG-1, L-ID-1, L-J-1 | Dockerfile with psycopg, Compose of §12.3, `/healthz`, `/readyz`, graceful stop, `.env.example`, README deployment section, #612 configuration entries | Clean `docker compose up` smoke test in CI reaches `/readyz` and bootstrap; the database volume is mounted at `/var/lib/postgresql`; data survives `down`/`up` and container recreation with the volume kept; wrong root/database pairing refused at start |
 | **L-F-1** Browser store scoping, auth hold and restore epoch | L-ID-1 | §10.3–10.4 on the client | E2E: two accounts in one browser never see each other's drafts or queue; session expiry mid-queue holds and later delivers; pre-0.8 queue offered review-only, never auto-deleted; after a restore to an older snapshot a pending edit is not applied, its text is offered in review-only recovery, and older-epoch drafts are never auto-restored; every mutation carries `PRKS-Library-Epoch`; #465/#466 suites green |
 
