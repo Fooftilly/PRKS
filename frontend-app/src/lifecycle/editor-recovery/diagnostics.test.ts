@@ -182,15 +182,23 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     )
     const sameUndefined = { draftId: 'd-partial', pageInstanceId: 'p-x', generation: 2, status: undefined, kind: 'work-private-note', entityType: undefined, entityId: undefined }
     expect(await diag.discard(sameUndefined as unknown as DiscardTarget)).toBe('changed')
-    const snapshot = (id: string) => inv.unreadable.find((u) => u.draftId === id)!.snapshot
+    const snapshot = (id: string) => inv.unreadable.find((u) => u.draftId === id)!.snapshot!
     expect(await diag.readText({ source: 'unreadable-record', draftId, snapshot: snapshot(draftId) })).toEqual({ ok: true, text: 'newer schema text' })
     expect(await diag.readText({ source: 'unreadable-record', draftId: 'd-garbled', snapshot: snapshot('d-garbled') })).toEqual({ ok: true, text: 'damaged but readable' })
     expect(await diag.readText({ source: 'unreadable-record', draftId: 'd-missing', snapshot: 'null' })).toEqual({ ok: false, code: 'missing' })
+    // A row JSON cannot represent still gets an exact identity.
+    await putRows(idb, DRAFTS_STORE, [{ v: 99, draftId: 'd-big', n: 1n }])
+    await putRows(idb, BODIES_STORE, [{ draftId: 'd-big', generation: 1, body: 'big text' }])
+    const odd = await diag.inventory()
+    const big = odd.unreadable.find((u) => u.draftId === 'd-big')!
+    expect(await diag.readText({ source: 'unreadable-record', draftId: 'd-big', snapshot: big.snapshot! })).toEqual({ ok: true, text: 'big text' })
+    await putRows(idb, DRAFTS_STORE, [{ v: 99, draftId: 'd-big', n: 2n }])
+    expect(await diag.readText({ source: 'unreadable-record', draftId: 'd-big', snapshot: big.snapshot! })).toEqual({ ok: false, code: 'changed' })
     // A newer-version editor rewrote the row since it was listed: its text is not shown from the old listing.
     await putRows(idb, DRAFTS_STORE, [{ ...record!, v: 99, generation: record!.generation + 1 }])
     expect(await diag.readText({ source: 'unreadable-record', draftId, snapshot: snapshot(draftId) })).toEqual({ ok: false, code: 'changed' })
     expect((await viewer.store.get(draftId))?.v).toBe(99)
-    expect(idb.rows(RECOVERY_DB_NAME, DRAFTS_STORE)).toHaveLength(3)
+    expect(idb.rows(RECOVERY_DB_NAME, DRAFTS_STORE)).toHaveLength(4)
   })
 
   it('keeps a record missing only its base or entity key copy-only, never discardable', async () => {
@@ -222,7 +230,7 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
       expect(await diag.discard(target)).toBe('changed')
       expect(await diag.readText({ source: 'record', expect: target })).toEqual({ ok: false, code: 'changed' })
       const listed = inv.unreadable.find((u) => u.draftId === target.draftId)!
-      expect(await diag.readText({ source: 'unreadable-record', draftId: target.draftId, snapshot: listed.snapshot })).toEqual({ ok: true, text })
+      expect(await diag.readText({ source: 'unreadable-record', draftId: target.draftId, snapshot: listed.snapshot! })).toEqual({ ok: true, text })
     }
     expect(await bodies(viewer)).toEqual(expect.arrayContaining(['lost its base', 'lost its entity key']))
     expect(idb.rows(RECOVERY_DB_NAME, DRAFTS_STORE)).toHaveLength(2)
@@ -258,7 +266,13 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     // A kept copy that states no size leaves the total a lower bound.
     expect(inv.sizeIncomplete).toBe(true)
     expect(inv.unreadableEmergency.map((u) => [u.pageInstanceId, u.reason]).sort()).toEqual([['p-broken', 'malformed'], ['p-newer', 'newer-version']])
-    expect(await diag.readText({ source: 'unreadable-emergency', key: EMERGENCY_KEY_PREFIX + 'p-broken' })).toEqual({ ok: true, text: '{"v": 1, "entr' })
+    const broken = { source: 'unreadable-emergency' as const, key: EMERGENCY_KEY_PREFIX + 'p-broken', raw: '{"v": 1, "entr' }
+    expect(inv.unreadableEmergency.find((u) => u.pageInstanceId === 'p-broken')!.raw).toBe(broken.raw)
+    expect(await diag.readText(broken)).toEqual({ ok: true, text: '{"v": 1, "entr' })
+    // Rewritten since it was listed: it is listed again before anything is shown.
+    local.setItem(broken.key, '{"v": 1, "entries": []')
+    expect(await diag.readText(broken)).toEqual({ ok: false, code: 'changed' })
+    local.setItem(broken.key, broken.raw)
     // Nothing was merged or removed: the live page still owns its key.
     expect(await viewer.store.get(w.draftId()!)).toBeNull()
     expect(local.getItem(EMERGENCY_KEY_PREFIX + 'p-broken')).toBe('{"v": 1, "entr')

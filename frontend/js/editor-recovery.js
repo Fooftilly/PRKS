@@ -1079,13 +1079,47 @@ var prksEditorRecovery = (function(exports) {
 		const entityType = row.kind === "folder-private-note" ? "folder" : "work";
 		return (r.status === "active" || r.status === "tail-missing") && r.entityType === entityType && typeof r.entityId === "string" && r.entityId !== "" && r.entityKey === entityKeyOf(row.kind, r.entityId) && Number.isInteger(r.generation) && finiteAtLeastZero(r.generation) && isIntactOwner(r.owner) && isIntactBase(r.base) && isIntactPipeline(r.pipeline) && finiteAtLeastZero(r.bodyLength) && finiteAtLeastZero(r.createdAt) && finiteAtLeastZero(r.updatedAt) && (r.emergencySource === void 0 || typeof r.emergencySource === "string");
 	}
-	/** A stable serialization of a stored row; a row that cannot be serialized compares by its draft id alone. */
-	function snapshotOf(row) {
-		try {
-			return JSON.stringify(row) ?? "null";
-		} catch {
-			return "unserializable";
+	function hexOf(bytes) {
+		let hex = "";
+		for (const byte of bytes) hex += byte.toString(16).padStart(2, "0");
+		return hex;
+	}
+	/**
+	* An exact, tagged serialization of a structured-clone value: primitives
+	* (BigInt included), arrays, plain objects, Dates, Maps, Sets and binary data,
+	* with shared and cyclic references by position. Null for anything it cannot
+	* represent exactly, so two different rows never share a snapshot.
+	*/
+	function serialized(value, seen) {
+		switch (typeof value) {
+			case "undefined": return "u";
+			case "boolean": return "b:" + String(value);
+			case "number": return "n:" + (Object.is(value, -0) ? "-0" : String(value));
+			case "bigint": return "i:" + value.toString();
+			case "string": return "s:" + JSON.stringify(value);
+			case "object": break;
+			default: return null;
 		}
+		if (value === null) return "null";
+		const ref = seen.get(value);
+		if (ref !== void 0) return "r:" + ref;
+		seen.set(value, seen.size);
+		const all = (parts) => parts.every((part) => part !== null) ? parts.join(",") : null;
+		const wrap = (open, inner, close) => inner === null ? null : open + inner + close;
+		if (Array.isArray(value)) return wrap("[", all(Array.from(value, (item) => serialized(item, seen))), "]");
+		if (value instanceof Date) return "d:" + value.getTime();
+		if (value instanceof Map) return wrap("m{", all([...value].map(([k, v]) => wrap("", all([serialized(k, seen), serialized(v, seen)]), ""))), "}");
+		if (value instanceof Set) return wrap("S{", all([...value].map((item) => serialized(item, seen))), "}");
+		if (value instanceof ArrayBuffer) return "a:" + hexOf(new Uint8Array(value));
+		if (ArrayBuffer.isView(value)) return "v:" + value.constructor.name + ":" + hexOf(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+		const proto = Object.getPrototypeOf(value);
+		if (proto !== Object.prototype && proto !== null) return null;
+		const record = value;
+		return wrap("{", all(Object.keys(record).map((k) => wrap(JSON.stringify(k) + ":", serialized(record[k], seen), ""))), "}");
+	}
+	/** Identity of a stored row as listed; null when it cannot be told apart exactly from a rewrite. */
+	function snapshotOf(row) {
+		return serialized(row, /* @__PURE__ */ new Map());
 	}
 	function enumerable(storage) {
 		if (!storage) return false;
@@ -1181,7 +1215,8 @@ var prksEditorRecovery = (function(exports) {
 				key: stored.key,
 				pageInstanceId: stored.pageInstanceId,
 				reason: unreadableReason(stored),
-				rawLength: stored.raw === null ? null : stored.raw.length
+				rawLength: stored.raw === null ? null : stored.raw.length,
+				raw: stored.raw
 			};
 		}
 		/** Emergency entries of other pages that no record holds yet, and keys this build cannot parse. */
@@ -1285,6 +1320,10 @@ var prksEditorRecovery = (function(exports) {
 			};
 		}
 		async function readUnreadableText(draftId, snapshot) {
+			if (snapshot === null) return {
+				ok: false,
+				code: "failed"
+			};
 			if (snapshotOf(await rt.store.get(draftId)) !== snapshot) return {
 				ok: false,
 				code: "changed"
@@ -1340,14 +1379,14 @@ var prksEditorRecovery = (function(exports) {
 				text: entry.body
 			};
 		}
-		function readRawEmergency(key) {
+		function readRawEmergency(key, listed) {
 			if (!storage) return {
 				ok: false,
 				code: "failed"
 			};
 			try {
 				const raw = storage.getItem(key);
-				return raw === null ? {
+				return raw === null || raw !== listed ? {
 					ok: false,
 					code: "changed"
 				} : {
@@ -1367,7 +1406,7 @@ var prksEditorRecovery = (function(exports) {
 					case "record": return await readRecordText(target.expect);
 					case "unreadable-record": return await readUnreadableText(target.draftId, target.snapshot);
 					case "emergency": return await readEmergencyText(target.key, target.draftId, target.generation);
-					case "unreadable-emergency": return readRawEmergency(target.key);
+					case "unreadable-emergency": return readRawEmergency(target.key, target.raw);
 				}
 			} catch {
 				return {

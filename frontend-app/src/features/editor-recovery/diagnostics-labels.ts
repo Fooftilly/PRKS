@@ -120,12 +120,12 @@ export function budgetText(inv: Pick<RecoveryInventory, 'overBudget'>): string |
     : null
 }
 
-export function textFailureText(code: Extract<TextResult, { ok: false }>['code']): string {
+export function textFailureText(code: Extract<TextResult, { ok: false }>['code'], refreshed = true): string {
   switch (code) {
     case 'live':
       return 'It is open in an editor now. Continue there.'
     case 'changed':
-      return 'This draft changed since the list was read. The list was refreshed.'
+      return 'This draft changed since the list was read.' + (refreshed ? ' The list was refreshed.' : '')
     case 'missing':
       return 'Its text could not be read.'
     default:
@@ -133,14 +133,14 @@ export function textFailureText(code: Extract<TextResult, { ok: false }>['code']
   }
 }
 
-export function discardFailureText(result: Exclude<DiscardResult, 'deleted'>): string {
+export function discardFailureText(result: Exclude<DiscardResult, 'deleted'>, refreshed = true): string {
   switch (result) {
     case 'live':
       return 'It is open in an editor now, so it was not discarded.'
     case 'unknown-owner':
       return 'Another tab may still be editing it now. Review it again before discarding.'
     case 'changed':
-      return 'This draft changed since the list was read, so it was not discarded. The list was refreshed.'
+      return 'This draft changed since the list was read, so it was not discarded.' + (refreshed ? ' The list was refreshed.' : '')
     default:
       return 'Discarding failed. Nothing was changed.'
   }

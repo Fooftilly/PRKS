@@ -90,7 +90,7 @@ describe('EditorRecoveryDiagnostics', () => {
         drafts: [draft(), draft({ draftId: 'd-2', kind: 'folder-private-note', entityType: 'folder', entityId: 'f1', lineage: 'unknown', old: true, deletedHere: false })],
         unreadable: [{ source: 'unreadable-record', draftId: 'd-new', reason: 'newer-version', kind: 'work-private-note', entityType: 'work', entityId: 'w9', updatedAt: 1, bodyLength: null, snapshot: '{}' }],
         emergency: [{ source: 'emergency', key: 'k1', pageInstanceId: 'p-1', draftId: 'd-e', kind: 'work-private-note', entityType: 'work', entityId: 'w2', generation: 2, bodyLength: 5, at: 1, lineage: 'unknown' }],
-        unreadableEmergency: [{ source: 'unreadable-emergency', key: 'k2', pageInstanceId: 'p-2', reason: 'malformed', rawLength: 9 }],
+        unreadableEmergency: [{ source: 'unreadable-emergency', key: 'k2', pageInstanceId: 'p-2', reason: 'malformed', rawLength: 9, raw: '{"broken"' }],
         totalChars: 29,
         approxBytes: 58,
         sizeIncomplete: true,
@@ -200,6 +200,20 @@ describe('EditorRecoveryDiagnostics', () => {
     expect(wrapper.find('[data-prks-role="editor-recovery-diag-storage"]').text()).toContain('Recovery storage is unavailable')
     expect(wrapper.find('[data-prks-role="editor-recovery-diag-emergency-storage"]').exists()).toBe(true)
     expect(wrapper.find('[data-prks-role="editor-recovery-diag-budget"]').text()).toContain('256 MB')
+  })
+
+  it('drops the old rows when reading the list again fails', async () => {
+    const api = install([inventory({ drafts: [draft()] })], {
+      readText: vi.fn(async () => ({ ok: false as const, code: 'changed' as const })),
+    })
+    const wrapper = await open()
+    expect(wrapper.findAll('[data-prks-role="editor-recovery-diag-row"]')).toHaveLength(1)
+    api.inventory = vi.fn(async () => Promise.reject(new Error('boom')))
+    await wrapper.find('[data-prks-role="editor-recovery-diag-view"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('[data-prks-role="editor-recovery-diag-row"]')).toHaveLength(0)
+    expect(wrapper.find('[data-prks-role="editor-recovery-diag-summary"]').text()).toBe('Editor drafts could not be listed in this browser.')
+    expect(wrapper.find('[data-prks-role="editor-recovery-diag-message"]').text()).toBe('This draft changed since the list was read.')
   })
 
   it('says it could not list drafts when recovery is not loaded or the read throws', async () => {

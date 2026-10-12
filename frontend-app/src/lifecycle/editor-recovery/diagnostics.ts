@@ -77,8 +77,8 @@ export interface DiagnosticsUnreadableRecord {
   updatedAt: number | null
   /** As the record states it; null when it does not. */
   bodyLength: number | null
-  /** Opaque identity of the row as listed: its text is read only while the row still matches. */
-  snapshot: string
+  /** Opaque identity of the row as listed: its text is read only while the row still matches. Null: not readable safely. */
+  snapshot: string | null
 }
 
 /** Text only an emergency key holds: its page is still open, or not proven gone. */
@@ -104,6 +104,8 @@ export interface DiagnosticsUnreadableEmergency {
   pageInstanceId: string
   reason: 'read-failed' | 'newer-version' | 'malformed'
   rawLength: number | null
+  /** The key's value as listed: its raw data is copied only while the key still holds exactly this. */
+  raw: string | null
 }
 
 export interface RecoveryInventory {
@@ -127,7 +129,7 @@ export type TextTarget =
   | { source: 'record'; expect: ReviewedRecord }
   | { source: 'unreadable-record'; draftId: string; snapshot: string }
   | { source: 'emergency'; key: string; draftId: string; generation: number }
-  | { source: 'unreadable-emergency'; key: string }
+  | { source: 'unreadable-emergency'; key: string; raw: string | null }
 
 export type TextResult =
   | { ok: true; text: string }
@@ -264,13 +266,56 @@ function isIntactRecord(row: unknown): row is DraftRecord {
   )
 }
 
-/** A stable serialization of a stored row; a row that cannot be serialized compares by its draft id alone. */
-function snapshotOf(row: unknown): string {
-  try {
-    return JSON.stringify(row) ?? 'null'
-  } catch {
-    return 'unserializable'
+function hexOf(bytes: Uint8Array): string {
+  let hex = ''
+  for (const byte of bytes) hex += byte.toString(16).padStart(2, '0')
+  return hex
+}
+
+/**
+ * An exact, tagged serialization of a structured-clone value: primitives
+ * (BigInt included), arrays, plain objects, Dates, Maps, Sets and binary data,
+ * with shared and cyclic references by position. Null for anything it cannot
+ * represent exactly, so two different rows never share a snapshot.
+ */
+function serialized(value: unknown, seen: Map<object, number>): string | null {
+  switch (typeof value) {
+    case 'undefined':
+      return 'u'
+    case 'boolean':
+      return 'b:' + String(value)
+    case 'number':
+      return 'n:' + (Object.is(value, -0) ? '-0' : String(value))
+    case 'bigint':
+      return 'i:' + value.toString()
+    case 'string':
+      return 's:' + JSON.stringify(value)
+    case 'object':
+      break
+    default:
+      return null
   }
+  if (value === null) return 'null'
+  const ref = seen.get(value)
+  if (ref !== undefined) return 'r:' + ref
+  seen.set(value, seen.size)
+  const all = (parts: Array<string | null>): string | null => (parts.every((part) => part !== null) ? parts.join(',') : null)
+  const wrap = (open: string, inner: string | null, close: string): string | null => (inner === null ? null : open + inner + close)
+  if (Array.isArray(value)) return wrap('[', all(Array.from(value, (item) => serialized(item, seen))), ']')
+  if (value instanceof Date) return 'd:' + value.getTime()
+  if (value instanceof Map) return wrap('m{', all([...value].map(([k, v]) => wrap('', all([serialized(k, seen), serialized(v, seen)]), ''))), '}')
+  if (value instanceof Set) return wrap('S{', all([...value].map((item) => serialized(item, seen))), '}')
+  if (value instanceof ArrayBuffer) return 'a:' + hexOf(new Uint8Array(value))
+  if (ArrayBuffer.isView(value)) return 'v:' + value.constructor.name + ':' + hexOf(new Uint8Array(value.buffer, value.byteOffset, value.byteLength))
+  const proto = Object.getPrototypeOf(value)
+  if (proto !== Object.prototype && proto !== null) return null
+  const record = value as Record<string, unknown>
+  return wrap('{', all(Object.keys(record).map((k) => wrap(JSON.stringify(k) + ':', serialized(record[k], seen), ''))), '}')
+}
+
+/** Identity of a stored row as listed; null when it cannot be told apart exactly from a rewrite. */
+function snapshotOf(row: unknown): string | null {
+  return serialized(row, new Map())
 }
 
 function enumerable(storage: EmergencyStorage | null): boolean {
@@ -370,6 +415,7 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
       pageInstanceId: stored.pageInstanceId,
       reason: unreadableReason(stored),
       rawLength: stored.raw === null ? null : stored.raw.length,
+      raw: stored.raw,
     }
   }
 
@@ -469,7 +515,8 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
     return { ok: true, text: row.body }
   }
 
-  async function readUnreadableText(draftId: string, snapshot: string): Promise<TextResult> {
+  async function readUnreadableText(draftId: string, snapshot: string | null): Promise<TextResult> {
+    if (snapshot === null) return { ok: false, code: 'failed' }
     // Its row cannot be classified, so it is read only while it is exactly the row that was listed.
     if (snapshotOf(await rt.store.get(draftId)) !== snapshot) return { ok: false, code: 'changed' }
     const row = (await rt.store.getBody(draftId)) as { body?: unknown } | null
@@ -493,11 +540,12 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
     return { ok: true, text: entry.body }
   }
 
-  function readRawEmergency(key: string): TextResult {
+  function readRawEmergency(key: string, listed: string | null): TextResult {
     if (!storage) return { ok: false, code: 'failed' }
     try {
       const raw = storage.getItem(key)
-      return raw === null ? { ok: false, code: 'changed' } : { ok: true, text: raw }
+      // Rewritten since it was listed (it may now be a live page's payload): list it again first.
+      return raw === null || raw !== listed ? { ok: false, code: 'changed' } : { ok: true, text: raw }
     } catch {
       return { ok: false, code: 'failed' }
     }
@@ -513,7 +561,7 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
         case 'emergency':
           return await readEmergencyText(target.key, target.draftId, target.generation)
         case 'unreadable-emergency':
-          return readRawEmergency(target.key)
+          return readRawEmergency(target.key, target.raw)
       }
     } catch {
       return { ok: false, code: 'failed' }

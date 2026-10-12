@@ -97,6 +97,8 @@ async function load(): Promise<void> {
     inventory.value = await diagnostics.inventory()
     loadFailed.value = false
   } catch {
+    // Never keep acting on an old listing: its rows may no longer be true.
+    inventory.value = null
     loadFailed.value = true
   } finally {
     loading.value = false
@@ -125,11 +127,11 @@ function textTarget(row: Row): TextTarget | null {
     case 'record':
       return { source: 'record', expect: item.expect }
     case 'unreadable-record':
-      return item.draftId === null ? null : { source: 'unreadable-record', draftId: item.draftId, snapshot: item.snapshot }
+      return item.draftId === null || item.snapshot === null ? null : { source: 'unreadable-record', draftId: item.draftId, snapshot: item.snapshot }
     case 'emergency':
       return { source: 'emergency', key: item.key, draftId: item.draftId, generation: item.generation }
     case 'unreadable-emergency':
-      return { source: 'unreadable-emergency', key: item.key }
+      return { source: 'unreadable-emergency', key: item.key, raw: item.raw }
   }
 }
 
@@ -157,7 +159,7 @@ async function readText(row: Row): Promise<string | null> {
   if (result.code === 'changed' || result.code === 'live') {
     // What the list showed no longer holds: read it again, and say why at the top.
     await load()
-    listMessage.value = textFailureText(result.code)
+    listMessage.value = textFailureText(result.code, !loadFailed.value)
     return null
   }
   setMessage(row, textFailureText(result.code))
@@ -274,7 +276,7 @@ async function discard(row: Row): Promise<void> {
       return
     }
     await load()
-    listMessage.value = discardFailureText(result)
+    listMessage.value = discardFailureText(result, !loadFailed.value)
   } finally {
     busyKey.value = null
   }
