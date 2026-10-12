@@ -809,7 +809,7 @@ in the UI, merges) stay gated; the schema only stops being the obstacle.
 | Works | `works` L, `manifestations` L, `assets` L, `manifestation_relations` L, `manifestation_identifiers` L, `work_notes` L, `sync_work_lifecycle` L, `duplicate_decisions` L | §6.4 |
 | Annotations | `annotations` L | `geometry jsonb`; primary key `(asset_id, id)` because the viewer mints the ID (global uniqueness of a client-minted viewer ID is not something PRKS controls) |
 | People | `persons` L, `person_aliases` L, `roles` L, `person_groups` L, `person_group_members` L, `publishers` L, `publisher_aliases` L | Aliases become rows with keys; `roles` drops the `rowid` tiebreak in favor of `order_index`; publisher and group names unique by identity key |
-| Organization | `tags` L, `tag_aliases` L, `work_tags` L, `folders` L, `folder_tags` L, `playlists` L, `playlist_items` L, `saved_views` L, `sync_tag_lifecycle` L | `folders.parent_id` + identity key unique per parent; `work.folder` stays a scalar membership table as today (one folder per Work); `playlist_items` keeps one playlist per Work |
+| Organization | `tags` L, `tag_aliases` L, `work_tags` L, `folders` L, `folder_files` L, `folder_tags` L, `playlists` L, `playlist_items` L, `saved_views` L, `sync_tag_lifecycle` L | `folders.parent_id` + identity key unique per parent; `folder_files` stays the scalar Work-to-folder membership table (`work-folder` in `docs/work-identity-model.md`), now with `UNIQUE (library_id, work_id)` so the one-folder-per-Work rule (I8) that only code enforces today is a constraint; `playlist_items` keeps one playlist per Work |
 | Research | `concepts` L, `concept_aliases` L, `concept_parents` L, `positions` L, `arguments` L, `argument_verdicts` (global seed), `argument_target_positions` L, `argument_target_arguments` L, `argument_sources` L | Concept name and alias keys share one `UNIQUE (library_id, key)` namespace through a `concept_keys` table, replacing the full Python scan |
 | Processing | `processing_files` L, `processing_file_roles` L, `processing_file_tags` L | `abs_path` removed; `rel_path` relative to the inbox (#311 Phase B intent) |
 | Settings | `library_settings` L, `instance_settings` | Split by scope (#612): which keys are Library-, instance- or account-scoped is decided with #612's configuration inventory |
@@ -1802,7 +1802,8 @@ CREATE INDEX jobs_expired ON prks.jobs (locked_until) WHERE state = 'running';
   the job's epoch and `lease_id` (§11.4).
 - **Lease token.** Every claim mints a new `lease_id`. Heartbeats
   (`UPDATE … SET locked_until = now() + lease WHERE id = %s AND lease_id = %s`),
-  completion and failure all match on `id` **and** `lease_id`. A stale worker
+  completion and failure all match on `id`, `lease_id` **and** `state =
+  'running'`. A stale worker
   that resumes after its job was reclaimed updates zero rows; it learns that it
   lost the lease and discards its result. Its side effects, if any were
   already made, are covered by the next rule.
@@ -1831,8 +1832,11 @@ CREATE INDEX jobs_expired ON prks.jobs (locked_until) WHERE state = 'running';
 - A **reaper** transaction (run by every
   worker on its idle tick) marks `failed` any job that is `running` with an
   expired lease and `attempts >= max_attempts`, with `last_error =
-  'lease_expired'`, so an exhausted job never stays `running` forever and its
-  singleton key is released. Failed jobs are visible in diagnostics.
+  'lease_expired'` and `lease_id = NULL` in the same update. An exhausted
+  job never stays `running` forever, its singleton key is released, and a
+  worker that resumes after the reap matches no row, so it can neither commit
+  handler work nor overwrite the failure. Failed jobs are visible in
+  diagnostics.
 - **Retention**: succeeded rows older than 7 days are deleted by a
   maintenance job; failed rows are kept until dismissed.
 - **0.8 job kinds** (only workloads that exist today): `text.extract`,
@@ -2189,7 +2193,7 @@ merged; several run at the same time).
 | **L-R-1** Research | L-W-1 | Concepts with `concept_keys`, Positions, Arguments, sources/targets, notes integration, derived mentions via `research.reindex_work`, graph projection | Parametrized tests; Research-ACK fence still observed by E2E; no Python full scan for concept resolution |
 | **L-A-1** Objects and annotations | L-W-1, L-J-1 | #311 Phase B on PostgreSQL: all managed-file paths through `StorageBackend`; immutable objects; cleanup claims, orphan sweep, and the `restore_run_objects` table counted by the reference check (§11.2); annotations, materialization, PDF replace, save-confirm from durable state; person portraits | Object lifecycle tests (§13.3), including a stalled ingest and a stalled rewrite whose new key the sweep settles failing cleanly at the adoption check; write-amplification measurement recorded in the PR; no `os.remove` outside the storage backend; parametrized annotation and sync tests pass |
 | **L-PR-1** Processing | L-A-1 | Inbox scan as a job, import through the objects lane | Parametrized processing tests; no absolute path stored |
-| **L-S-1** Search | L-W-1, L-J-1 | `derived.work_search` maintained by commands, `asset_text` via `text.extract`, trigram filters, parity ordering, Saved View execution, `rebuild-derived`; `backend/AGENTS.md` extracted-text rule amended for the `derived` schema (§16, decision 5) | §8.7 parity tests; search parametrized tests pass with the documented Unicode improvements replacing ASCII pins |
+| **L-S-1** Search | L-W-1, L-J-1, L-P-1, L-O-1, L-A-1 | `derived.work_search` maintained by commands, `asset_text` via `text.extract`, trigram filters, parity ordering, Saved View execution, `rebuild-derived`; `backend/AGENTS.md` extracted-text rule amended for the `derived` schema (§16, decision 5) | §8.7 parity tests; search parametrized tests pass with the documented Unicode improvements replacing ASCII pins |
 | **L-S-2** Ranking | L-S-1 | Single weighted score | Before/after results on a synthetic multilingual corpus approved in review |
 | **L-B-1** Backup and restore format 2 | L-W-1, L-P-1, L-O-1, L-R-1, L-A-1 | §11.4 | Round-trip test over a fixture covering every canonical table and object kind; text `COPY` with the interchange contract (no binary `COPY`); restore into the same and into a new instance with real sync operations, the archive Library mapped to the target Library and all library/user/device references resolving; a restore over a different Library whose IDs still exist is refused; R1 reuse of an existing object is lock-coupled to cleanup settle and re-verified in R3, so R4 never commits a locator to a missing object; new devices are inserted only by R4; a restore that outlives its lease aborts and never replaces writes accepted after recovery; export, staging and the R4 delete/insert use only the content-table allowlist, and a schema test classifies every library-scoped table; staging builds `restore_<id>` with `LIKE` from the live tables, never with the migration runner, checks foreign keys with redirected generated anti-joins, and refuses an archive of another schema fingerprint (§13.3 staging isolation); the round trip covers a table with a generated `*_key` column, which is not exported and is recomputed on restore; staged objects of a live run survive an orphan sweep (L-B-1 only writes `restore_run_objects` rows; the table and its term in the reference check belong to L-A-1); verification refuses tampered archives; fault injection at R0–R5, including a kill immediately after the R4 commit that still rebuilds search after restart; the exclusion interleavings of §13.3; restoring an older snapshot while a long job runs and a pending edit exists never applies either to the replacement state; backup concurrent with writes and cleanup; format 1 refused with a clear message |
 | **L-D-1** Compose and health | PG-1, L-ID-1, L-J-1 | Dockerfile with psycopg, Compose of §12.3, `/healthz`, `/readyz`, graceful stop, `.env.example`, README deployment section, #612 configuration entries | Clean `docker compose up` smoke test in CI reaches `/readyz` and bootstrap; the database volume is mounted at `/var/lib/postgresql`; `web` and `worker` each list the `prks_database_url` secret and read it at start; data survives `down`/`up` and container recreation with the volume kept; wrong root/database pairing refused at start |
@@ -2215,13 +2219,16 @@ PG-1 → PG-2 → PG-3 ─┬─ L-W-1 ─┬─ L-W-2
         │           │         ├─ L-P-1 ─────────┐
         ├─ L-ID-1 ──┤         ├─ L-O-1 ─────────┤
         │     └─ L-F-1        ├─ L-R-1 ─────────┼─ L-B-1 ─┐
-        └─ L-J-1 ───┴─────────┼─ L-A-1 ─ L-PR-1 ┘         ├─ PG-C1 → PG-C2 → PG-C3
-                              └─ L-S-1 ─ L-S-2            │
+        └─ L-J-1 ───┴─────────┴─ L-A-1 ─ L-PR-1 ┘         ├─ PG-C1 → PG-C2 → PG-C3
+              L-S-1 (after L-P-1, L-O-1, L-A-1) ─ L-S-2   │
               L-D-1 (after PG-1, L-ID-1, L-J-1) ──────────┘
 ```
 
-Up to six lanes can run at once after L-W-1 (People, Organization, Research,
-Objects, Search, Browser scoping), each in its own files.
+Up to six lanes can run at once after L-W-1 (Works bulk and links, People,
+Organization, Research, Objects, Browser scoping), each in its own files.
+Search starts once People, Organization and Objects have merged, because
+its search documents, Saved View execution and `text.extract` read their
+tables and the storage backend.
 
 ---
 
