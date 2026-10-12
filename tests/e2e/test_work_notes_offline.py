@@ -354,6 +354,18 @@ class _RecoveryPage(_WorkNotesPage):
         return page.evaluate("""() => prksSync.store.listOperations().then(rows => rows
             .filter(r => r.operation === 'SET_WORK_RESEARCH_NOTE').map(r => r.payload.text))""")
 
+    def grant_clipboard(self, context, server):
+        # A real clipboard: the copy actions are checked by reading it back.
+        context.grant_permissions(['clipboard-read', 'clipboard-write'], origin=server.origin)
+
+    def wait_clipboard(self, page, text):
+        wait_for_async(
+            page,
+            'text => navigator.clipboard.readText().then(t => t === text)',
+            arg=text,
+            timeout=5000,
+            message='the clipboard never held the copied text')
+
     def recovery_notice(self, page):
         return page.evaluate("() => prksGetFocusedTabContext().ui.researchNotesRecovery || null")
 
@@ -648,6 +660,80 @@ class ResearchNotesTabCloseAndReviewTests(_RecoveryPage, unittest.TestCase):
         self.wait_server_text(tab, work, chosen)
         self.wait_no_records(tab, work)
         self.assertEqual(self.notice(tab).count(), 0)
+
+    def test_review_copy_actions_put_their_text_on_the_real_clipboard(self):
+        """#532: Copy text, Copy current note and Copy edited text reach the
+        clipboard through the page's own helper, with no stub."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.grant_clipboard(context, server)
+        self.hold_saves(page)
+        self.type_marker(page, ' Copy me')
+        self.wait_recorded(page, work, ' Copy me')
+        mine = self.records(page, work)[0]['body']
+        self.close_tab(page)
+        work_note_sync.set_research_note(self.db_for(server), work, 'Another device wrote this.')
+        tab = self.new_tab(context, server)
+        self.notice(tab).wait_for()
+        dialog = self.open_review(tab)
+        dialog.locator('[data-prks-role="editor-recovery-copy"]').click()
+        dialog.locator('[data-prks-role="editor-recovery-copy"]', has_text='Copied').wait_for()
+        self.wait_clipboard(tab, mine)
+        dialog.locator('[data-prks-role="editor-recovery-compare-btn"]').click()
+        dialog.locator('[data-prks-role="editor-recovery-copy-current"]').click()
+        dialog.locator('[data-prks-role="editor-recovery-copy-current"]', has_text='Copied').wait_for()
+        self.wait_clipboard(tab, 'Another device wrote this.')
+        chosen = 'Kept by hand. ' + mine
+        dialog.locator('[data-prks-role="editor-recovery-chosen-text"]').fill(chosen)
+        # The editor goes away: the edited text stays in Review, only to copy.
+        tab.evaluate("() => { location.hash = '#/folders'; }")
+        leftover = dialog.locator('[data-prks-role="editor-recovery-leftover"]')
+        leftover.wait_for()
+        self.assertIn('not saved anywhere', leftover.inner_text())
+        leftover.locator('[data-prks-role="editor-recovery-copy-leftover"]').click()
+        leftover.locator('[data-prks-role="editor-recovery-copy-leftover"]', has_text='Copied').wait_for()
+        self.wait_clipboard(tab, chosen)
+        # Copying wrote nothing and kept the draft for review.
+        self.assertEqual(self.note_rows(tab), [])
+        self.assertEqual(self.server_text(server, work), 'Another device wrote this.')
+        self.assertEqual(len(self.records(tab, work)), 1)
+        # An empty body (a note cleared before the tab closed) is copied, not skipped.
+        tab.evaluate("() => window.prksCopyTextToClipboard('')")
+        self.wait_clipboard(tab, '')
+
+    def test_review_copy_falls_back_when_the_clipboard_api_refuses(self):
+        """The textarea fallback still copies when writeText is refused (#532)."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.grant_clipboard(context, server)
+        self.hold_saves(page)
+        self.type_marker(page, ' Fallback copy')
+        self.wait_recorded(page, work, ' Fallback copy')
+        mine = self.records(page, work)[0]['body']
+        self.close_tab(page)
+        work_note_sync.set_research_note(self.db_for(server), work, 'Another device wrote this.')
+        tab = self.new_tab(context, server)
+        self.notice(tab).wait_for()
+        dialog = self.open_review(tab)
+        tab.evaluate("""() => {
+            window.__refusedWrites = 0;
+            navigator.clipboard.writeText = () => {
+                window.__refusedWrites += 1;
+                return Promise.reject(new DOMException('Write permission denied.', 'NotAllowedError'));
+            };
+        }""")
+        copy = dialog.locator('[data-prks-role="editor-recovery-copy"]')
+        copy.click()
+        dialog.locator('[data-prks-role="editor-recovery-copy"]', has_text='Copied').wait_for()
+        self.wait_clipboard(tab, mine)
+        self.assertEqual(tab.evaluate('() => window.__refusedWrites'), 1)
+        # An empty body through the fallback replaces the clipboard too.
+        tab.evaluate("() => window.prksCopyTextToClipboard('')")
+        self.wait_clipboard(tab, '')
+        self.assertEqual(tab.evaluate('() => window.__refusedWrites'), 2)
+        # The fallback's hidden textarea is gone and focus stays on the button.
+        self.assertEqual(tab.evaluate('() => document.querySelectorAll("body > textarea").length'), 0)
+        self.assertEqual(tab.evaluate('() => document.activeElement && document.activeElement.dataset.prksRole'), 'editor-recovery-copy')
 
     def test_two_closed_tabs_show_both_drafts_and_apply_neither(self):
         server, page, context = self.start()
@@ -1347,7 +1433,7 @@ class EditorRecoveryDiagnosticsTests(_RecoveryPage, unittest.TestCase):
         tab = self.folders_tab(context, server)
         probes = []
         tab.on('request', lambda r: probes.append(r.url) if '/api/works/' in r.url else None)
-        tab.evaluate('() => { window.__copied = null; window.prksCopyTextToClipboard = async (t) => { window.__copied = t; }; }')
+        self.grant_clipboard(context, server)
         section = self.open_diagnostics(tab)
         # Separate from the durable sync queue, which holds nothing here.
         tab.locator('[data-sync-diagnostics]').wait_for(state='attached')
@@ -1365,7 +1451,8 @@ class EditorRecoveryDiagnosticsTests(_RecoveryPage, unittest.TestCase):
         notes.locator('[data-prks-role="editor-recovery-diag-view"]').click()
         self.assertEqual(notes.locator('[data-prks-role="editor-recovery-diag-text"]').input_value(), text)
         notes.locator('[data-prks-role="editor-recovery-diag-copy"]').click()
-        tab.wait_for_function('t => window.__copied === t', arg=text)
+        self.wait_clipboard(tab, text)
+        notes.locator('[data-prks-role="editor-recovery-diag-row-message"]', has_text='Copied.').wait_for()
         with tab.expect_download() as download:
             notes.locator('[data-prks-role="editor-recovery-diag-download"]').click()
         with open(download.value.path(), encoding='utf-8') as fh:
@@ -1430,19 +1517,21 @@ class EditorRecoveryDiagnosticsTests(_RecoveryPage, unittest.TestCase):
         server, page, context = self.start()
         page.evaluate(_DIAG_SEED_UNREADABLE)
         tab = self.folders_tab(context, server)
-        tab.evaluate('() => { window.__copied = null; window.prksCopyTextToClipboard = async (t) => { window.__copied = t; }; }')
+        self.grant_clipboard(context, server)
         section = self.open_diagnostics(tab)
         unreadable = self.rows(section, 'unreadable-record')
         self.assertEqual(unreadable.count(), 1)
         self.assertIn('newer version of PRKS', unreadable.inner_text())
         self.assertEqual(unreadable.locator('[data-prks-role="editor-recovery-diag-discard"]').count(), 0)
         unreadable.locator('[data-prks-role="editor-recovery-diag-copy"]').click()
-        tab.wait_for_function("() => window.__copied === 'Text a newer PRKS kept'")
+        self.wait_clipboard(tab, 'Text a newer PRKS kept')
         keys = self.rows(section, 'unreadable-emergency')
         self.assertEqual(keys.count(), 2)
         broken = keys.filter(has_text='damaged')
-        broken.locator('[data-prks-role="editor-recovery-diag-copy"]').click()
-        tab.wait_for_function("""() => window.__copied === '{"v": 1, "entr'""")
+        copy_raw = broken.locator('[data-prks-role="editor-recovery-diag-copy"]')
+        self.assertEqual(copy_raw.inner_text(), 'Copy raw data')
+        copy_raw.click()
+        self.wait_clipboard(tab, '{"v": 1, "entr')
         # Refreshing lists them again: nothing was removed or rewritten.
         self.refresh_diagnostics(tab, section)
         self.assertEqual(self.rows(section, 'unreadable-record').count(), 1)

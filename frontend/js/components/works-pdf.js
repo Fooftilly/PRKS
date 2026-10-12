@@ -379,36 +379,6 @@ function prksBuildPdfAnnWikiLink(annId, label) {
     return lab ? `[[pdf:${id}|${lab}]]` : `[[pdf:${id}]]`;
 }
 
-async function prksCopyTextToClipboard(text) {
-    const s = text == null ? '' : String(text);
-    if (!s) return;
-    let clipboardErr = null;
-    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-        try {
-            await navigator.clipboard.writeText(s);
-            return;
-        } catch (e) {
-            clipboardErr = e;
-        }
-    }
-
-    // Fallback for older browsers / blocked clipboard access.
-    const ta = document.createElement('textarea');
-    ta.value = s;
-    ta.setAttribute('readonly', 'readonly');
-    ta.style.position = 'fixed';
-    ta.style.left = '-9999px';
-    ta.style.top = '-9999px';
-    document.body.appendChild(ta);
-    try {
-        ta.select();
-        const ok = document.execCommand('copy');
-        if (!ok) throw clipboardErr || new Error('Copy failed');
-    } finally {
-        document.body.removeChild(ta);
-    }
-}
-
 function escapeHtml(s) {
     if (typeof window.prksEscapeHtml === 'function') return window.prksEscapeHtml(s);
     if (s == null) return '';
@@ -704,7 +674,7 @@ window.copyPdfAnnotationWikiLink = async function (ctx, annId) {
     const wikiLink = projected && projected.wikiLink;
     if (!wikiLink) return false;
     try {
-        await prksCopyTextToClipboard(wikiLink);
+        await window.prksCopyTextToClipboard(wikiLink);
         return true;
     } catch (_e) {
         return false;

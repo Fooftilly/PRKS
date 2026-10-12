@@ -182,6 +182,17 @@ class AnnotationConfirmStructureTests(unittest.TestCase):
         self.assertIn("window.prksFlashButtonLabel = prksFlashButtonLabel;", ui)
         self.assertIn("window.prksConfirmDeletePdfAnnotation = prksConfirmDeletePdfAnnotation;", ui)
 
+    def test_clipboard_helper_is_published_once_from_ui_js(self):
+        # works-pdf.js is an ES module: a top-level function there is not a
+        # window property, so Vue recovery Copy could never reach it (#532).
+        ui = _read(_UI)
+        self.assertIn("async function prksCopyTextToClipboard(", ui)
+        self.assertIn("window.prksCopyTextToClipboard = prksCopyTextToClipboard;", ui)
+        self.assertIn("document.execCommand('copy')", ui)
+        pdf = _read(_PDF)
+        self.assertNotIn("function prksCopyTextToClipboard", pdf)
+        self.assertIn("await window.prksCopyTextToClipboard(wikiLink)", pdf)
+
     def test_annotation_delete_entry_points_use_shared_confirm_not_native(self):
         # Both entry points must call the shared prksConfirmDeletePdfAnnotation
         # as their primary path. A native window.confirm may still appear as a
