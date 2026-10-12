@@ -274,7 +274,7 @@ function hexOf(bytes: Uint8Array): string {
 
 /**
  * An exact, tagged serialization of a structured-clone value: primitives
- * (BigInt included), arrays, plain objects, Dates, Maps, Sets and binary data,
+ * (BigInt included), arrays, plain objects, Dates, Maps, Sets and ArrayBuffers,
  * with shared and cyclic references by position. Null for anything it cannot
  * represent exactly, so two different rows never share a snapshot.
  */
@@ -309,7 +309,8 @@ function serialized(value: unknown, seen: Map<object, number>): string | null {
   if (value instanceof Map) return wrap('m{', all([...value].map(([k, v]) => wrap('', all([serialized(k, seen), serialized(v, seen)]), ''))), '}')
   if (value instanceof Set) return wrap('S{', all([...value].map((item) => serialized(item, seen))), '}')
   if (value instanceof ArrayBuffer) return 'a:' + hexOf(new Uint8Array(value))
-  if (ArrayBuffer.isView(value)) return 'v:' + value.constructor.name + ':' + hexOf(new Uint8Array(value.buffer, value.byteOffset, value.byteLength))
+  // A view's identity includes its buffer, offset and aliasing: not represented, so such a row offers no text.
+  if (ArrayBuffer.isView(value)) return null
   const proto = Object.getPrototypeOf(value)
   if (proto !== Object.prototype && proto !== null) return null
   return wrap('{', ownKeys(value as Record<string, unknown>), '}')

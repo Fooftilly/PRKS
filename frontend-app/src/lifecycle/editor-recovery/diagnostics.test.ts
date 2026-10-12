@@ -207,6 +207,9 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     const plain = (await diag.inventory()).unreadable.find((u) => u.draftId === 'd-arr')!.snapshot
     await putRows(idb, DRAFTS_STORE, [{ v: 99, draftId: 'd-arr', a: tagged }])
     expect((await diag.inventory()).unreadable.find((u) => u.draftId === 'd-arr')!.snapshot).not.toBe(plain)
+    // A typed-array view's buffer identity is not represented: no snapshot, so no text from it.
+    await putRows(idb, DRAFTS_STORE, [{ v: 99, draftId: 'd-arr', a: new Uint8Array(new ArrayBuffer(2), 1, 1) }])
+    expect((await diag.inventory()).unreadable.find((u) => u.draftId === 'd-arr')!.snapshot).toBeNull()
     // A newer-version editor rewrote the row since it was listed: its text is not shown from the old listing.
     await putRows(idb, DRAFTS_STORE, [{ ...record!, v: 99, generation: record!.generation + 1 }])
     expect(await diag.readText({ source: 'unreadable-record', draftId, snapshot: snapshot(draftId) })).toEqual({ ok: false, code: 'changed' })
