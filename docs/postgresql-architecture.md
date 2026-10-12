@@ -1347,7 +1347,9 @@ part of the Assets lane, against the new schema, not against SQLite.
   reference check and the orphan sweep treat a key listed in
   `restore_run_objects` for a run that is neither committed nor failed as
   referenced, however old the object is, so a slow or stalled restore cannot
-  lose objects that R4 will point at. When the run fails (or recovery marks
+  lose objects that R4 will point at. R1 inserts each row under the same per-object
+  lock that settle takes and only then inspects the file, so a settle either
+  sees the row or has already finished before R1 decides to reuse (§11.4). When the run fails (or recovery marks
   it failed), its rows stop protecting anything and unreferenced staged
   objects become ordinary orphans; once it commits, the catalogue references
   them and the rows are deleted.
