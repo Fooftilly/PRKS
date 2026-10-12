@@ -1093,11 +1093,8 @@ var prksEditorRecovery = (function(exports) {
 				updatedAt: typeof r.updatedAt === "number" ? r.updatedAt : null
 			};
 		}
-		async function inventory() {
-			const at = now();
-			try {
-				await rt.scanEmergency();
-			} catch {}
+		/** Stored records: readable ones classified, unreadable ones listed as they are. */
+		async function listRecords(at) {
 			let state = "ok";
 			let rows = [];
 			try {
@@ -1111,57 +1108,76 @@ var prksEditorRecovery = (function(exports) {
 			else if (row.status !== "discarded") records.push(row);
 			const lineages = await Promise.all(records.map((record) => classifySafely(record)));
 			const drafts = records.map((record, i) => draftOf(record, lineages[i], at));
+			drafts.sort((a, b) => b.updatedAt - a.updatedAt || a.draftId.localeCompare(b.draftId));
+			return {
+				state,
+				rows,
+				drafts,
+				unreadable
+			};
+		}
+		function unreadableKeyOf(stored) {
+			return {
+				source: "unreadable-emergency",
+				key: stored.key,
+				pageInstanceId: stored.pageInstanceId,
+				reason: unreadableReason(stored),
+				rawLength: stored.raw === null ? null : stored.raw.length
+			};
+		}
+		/** Emergency entries of other pages that no record holds yet, and keys this build cannot parse. */
+		async function listEmergency(rows) {
 			const known = /* @__PURE__ */ new Map();
 			for (const row of rows) if (isSupportedRecord(row)) known.set(row.draftId, Math.max(row.generation, known.get(row.draftId) || 0));
-			const emergency = [];
 			const unreadableEmergency = [];
-			const ownPage = rt.identity.pageInstanceId;
 			const pending = [];
 			for (const stored of storage ? readEmergencyKeys(storage) : []) {
-				if (stored.pageInstanceId === ownPage) continue;
-				if (!stored.payload) {
-					if (stored.raw === null && !stored.readFailed) continue;
-					unreadableEmergency.push({
-						source: "unreadable-emergency",
-						key: stored.key,
-						pageInstanceId: stored.pageInstanceId,
-						reason: unreadableReason(stored),
-						rawLength: stored.raw === null ? null : stored.raw.length
-					});
+				if (stored.pageInstanceId === rt.identity.pageInstanceId) continue;
+				const payload = stored.payload;
+				if (!payload) {
+					if (stored.raw !== null || stored.readFailed) unreadableEmergency.push(unreadableKeyOf(stored));
 					continue;
 				}
-				const payload = stored.payload;
+				const owner = {
+					runtimeId: payload.runtimeId,
+					pageInstanceId: stored.pageInstanceId,
+					paneId: "",
+					claimedAt: payload.at
+				};
 				for (const entry of payload.entries) {
 					if (Math.max(known.get(entry.draftId) || 0, known.get(forkedDraftId(entry.draftId, entry.generation)) || 0) >= entry.generation) continue;
-					const owner = {
-						runtimeId: payload.runtimeId,
-						pageInstanceId: stored.pageInstanceId,
-						paneId: "",
-						claimedAt: payload.at
-					};
 					pending.push(classifySafely({
 						draftId: entry.draftId,
 						owner
-					}).then((lineage) => {
-						emergency.push({
-							source: "emergency",
-							key: stored.key,
-							pageInstanceId: stored.pageInstanceId,
-							draftId: entry.draftId,
-							kind: entry.kind,
-							entityType: entry.entityType,
-							entityId: entry.entityId,
-							generation: entry.generation,
-							bodyLength: entry.body === null ? null : entry.body.length,
-							at: payload.at,
-							lineage
-						});
-					}));
+					}).then((lineage) => ({
+						source: "emergency",
+						key: stored.key,
+						pageInstanceId: stored.pageInstanceId,
+						draftId: entry.draftId,
+						kind: entry.kind,
+						entityType: entry.entityType,
+						entityId: entry.entityId,
+						generation: entry.generation,
+						bodyLength: entry.body === null ? null : entry.body.length,
+						at: payload.at,
+						lineage
+					})));
 				}
 			}
-			await Promise.all(pending);
+			const emergency = await Promise.all(pending);
 			emergency.sort((a, b) => b.at - a.at || a.draftId.localeCompare(b.draftId));
-			drafts.sort((a, b) => b.updatedAt - a.updatedAt || a.draftId.localeCompare(b.draftId));
+			return {
+				emergency,
+				unreadableEmergency
+			};
+		}
+		async function inventory() {
+			const at = now();
+			try {
+				await rt.scanEmergency();
+			} catch {}
+			const { state, rows, drafts, unreadable } = await listRecords(at);
+			const { emergency, unreadableEmergency } = await listEmergency(rows);
 			const totalChars = drafts.reduce((sum, d) => sum + (Number.isFinite(d.bodyLength) ? d.bodyLength : 0), 0) + emergency.reduce((sum, e) => sum + (e.bodyLength || 0), 0);
 			const approxBytes = totalChars * 2;
 			return {

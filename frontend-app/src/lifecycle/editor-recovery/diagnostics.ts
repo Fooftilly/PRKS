@@ -246,14 +246,13 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
     }
   }
 
-  async function inventory(): Promise<RecoveryInventory> {
-    const at = now()
-    // Dead pages' emergency entries become records first, by the runtime's own merge rules.
-    try {
-      await rt.scanEmergency()
-    } catch {
-      /* storage refused; whatever the keys hold is listed below */
-    }
+  /** Stored records: readable ones classified, unreadable ones listed as they are. */
+  async function listRecords(at: number): Promise<{
+    state: StorageState
+    rows: unknown[]
+    drafts: DiagnosticsDraft[]
+    unreadable: DiagnosticsUnreadableRecord[]
+  }> {
     let state: StorageState = 'ok'
     let rows: unknown[] = []
     try {
@@ -270,58 +269,73 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
     // The pings wait on silence, so every record is classified together.
     const lineages = await Promise.all(records.map((record) => classifySafely(record)))
     const drafts = records.map((record, i) => draftOf(record, lineages[i]!, at))
+    drafts.sort((a, b) => b.updatedAt - a.updatedAt || a.draftId.localeCompare(b.draftId))
+    return { state, rows, drafts, unreadable }
+  }
 
+  function unreadableKeyOf(stored: StoredEmergency): DiagnosticsUnreadableEmergency {
+    return {
+      source: 'unreadable-emergency',
+      key: stored.key,
+      pageInstanceId: stored.pageInstanceId,
+      reason: unreadableReason(stored),
+      rawLength: stored.raw === null ? null : stored.raw.length,
+    }
+  }
+
+  /** Emergency entries of other pages that no record holds yet, and keys this build cannot parse. */
+  async function listEmergency(rows: unknown[]): Promise<{ emergency: DiagnosticsEmergency[]; unreadableEmergency: DiagnosticsUnreadableEmergency[] }> {
     const known = new Map<string, number>()
     for (const row of rows) {
       if (isSupportedRecord(row)) known.set(row.draftId, Math.max(row.generation, known.get(row.draftId) || 0))
     }
-    const emergency: DiagnosticsEmergency[] = []
     const unreadableEmergency: DiagnosticsUnreadableEmergency[] = []
-    const ownPage = rt.identity.pageInstanceId
-    const pending: Array<Promise<void>> = []
+    const pending: Array<Promise<DiagnosticsEmergency>> = []
     for (const stored of storage ? readEmergencyKeys(storage) : []) {
       // This page's own key mirrors editors that are open here.
-      if (stored.pageInstanceId === ownPage) continue
-      if (!stored.payload) {
-        if (stored.raw === null && !stored.readFailed) continue
-        unreadableEmergency.push({
-          source: 'unreadable-emergency',
-          key: stored.key,
-          pageInstanceId: stored.pageInstanceId,
-          reason: unreadableReason(stored),
-          rawLength: stored.raw === null ? null : stored.raw.length,
-        })
+      if (stored.pageInstanceId === rt.identity.pageInstanceId) continue
+      const payload = stored.payload
+      if (!payload) {
+        if (stored.raw !== null || stored.readFailed) unreadableEmergency.push(unreadableKeyOf(stored))
         continue
       }
-      const payload = stored.payload
+      const owner = { runtimeId: payload.runtimeId, pageInstanceId: stored.pageInstanceId, paneId: '', claimedAt: payload.at }
       for (const entry of payload.entries) {
         // Already in a record at this generation or later (merged, or written by its editor).
         const inRecord = Math.max(known.get(entry.draftId) || 0, known.get(forkedDraftId(entry.draftId, entry.generation)) || 0)
         if (inRecord >= entry.generation) continue
-        const owner = { runtimeId: payload.runtimeId, pageInstanceId: stored.pageInstanceId, paneId: '', claimedAt: payload.at }
         pending.push(
-          classifySafely({ draftId: entry.draftId, owner }).then((lineage) => {
-            emergency.push({
-              source: 'emergency',
-              key: stored.key,
-              pageInstanceId: stored.pageInstanceId,
-              draftId: entry.draftId,
-              kind: entry.kind,
-              entityType: entry.entityType,
-              entityId: entry.entityId,
-              generation: entry.generation,
-              bodyLength: entry.body === null ? null : entry.body.length,
-              at: payload.at,
-              lineage,
-            })
-          }),
+          classifySafely({ draftId: entry.draftId, owner }).then((lineage) => ({
+            source: 'emergency' as const,
+            key: stored.key,
+            pageInstanceId: stored.pageInstanceId,
+            draftId: entry.draftId,
+            kind: entry.kind,
+            entityType: entry.entityType,
+            entityId: entry.entityId,
+            generation: entry.generation,
+            bodyLength: entry.body === null ? null : entry.body.length,
+            at: payload.at,
+            lineage,
+          })),
         )
       }
     }
-    await Promise.all(pending)
+    const emergency = await Promise.all(pending)
     emergency.sort((a, b) => b.at - a.at || a.draftId.localeCompare(b.draftId))
-    drafts.sort((a, b) => b.updatedAt - a.updatedAt || a.draftId.localeCompare(b.draftId))
+    return { emergency, unreadableEmergency }
+  }
 
+  async function inventory(): Promise<RecoveryInventory> {
+    const at = now()
+    // Dead pages' emergency entries become records first, by the runtime's own merge rules.
+    try {
+      await rt.scanEmergency()
+    } catch {
+      /* storage refused; whatever the keys hold is listed below */
+    }
+    const { state, rows, drafts, unreadable } = await listRecords(at)
+    const { emergency, unreadableEmergency } = await listEmergency(rows)
     const totalChars =
       drafts.reduce((sum, d) => sum + (Number.isFinite(d.bodyLength) ? d.bodyLength : 0), 0) +
       emergency.reduce((sum, e) => sum + (e.bodyLength || 0), 0)
