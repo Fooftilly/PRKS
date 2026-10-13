@@ -1792,6 +1792,16 @@ lets the schema drop `origin_work_id` and legacy operation mappings (§6.4).
 
   So an old cluster started again after its copy has run (a reverted image
   tag, a reattached volume) is refused before it touches the root.
+  The generation counts **starts**, not writes: it refuses a copy taken
+  before the last start whose marker write completed, never one taken
+  after it. A database that keeps serving after that point (no process
+  restarted, or a manual `prks migrate` whose marker write failed while
+  the running `web` and `worker` carried on) moves past every copy taken
+  in between without the marker recording it, and such a copy started
+  later passes. That is the accepted copy limitation (risk R20), not a
+  gap in the reconcile: the next start of the real database reconciles
+  or bumps the marker, and PRKS adds no running-process recheck or
+  heartbeat to close it.
 - PostgreSQL's data directory is **never** inside the PRKS data root
   (#311 §9.1). Compose uses a separate named volume.
 - **Restore keeps the pairing.** A format-2 restore replaces one Library's
@@ -2875,7 +2885,7 @@ checkpointing, rowid preservation) are listed as retired with the reason.
 | R17 | A restore races ordinary writers, jobs or cleanup | Medium | High | Committed maintenance flag, maintenance lock drain, objects lock (§11.4); interleaving tests (§13.3) |
 | R18 | Work begun before a restore (a running job, an open tab, a browser outbox) is applied to the restored Library | Medium | High | Library `epoch` checked by every command, job claim and job transaction; older-epoch browser rows go to review-only recovery (§10.4, §11.4); restore-fencing tests (§13.3) |
 | R19 | The PostgreSQL volume fills during restore staging | Low | Medium | Accepted by the maintainer (2026-10-13): no disk-space probe or headroom setting in 0.8; R1/R4 roll back, the failure is reported, cleanup is idempotent, and deployment docs cover monitoring and headroom (§11.4, §12.3) |
-| R20 | Two databases run against one data root, at once (a copy started alongside the original) or one after the other (the old cluster restarted after an upgrade or volume move), and one finds objects the other's orphan sweep deleted | Low | Critical | Accepted by the maintainer (2026-10-13) as a documented deployment limitation of 0.8: one canonical database per root, concurrent copies unsupported and not technically prevented, no heartbeat or cross-database fencing. The pairing check refuses any database paired with another root, the root claim, serialized by the claim lock, refuses an independently bootstrapped database (the marker names another `instance_id`), and the start generation and token refuse a database started after a newer copy has run against the root, including one whose generation another database reached separately (§11.1); copies running at the same time are not detected; the deployment docs say at most one database ever runs against a root, the old cluster's data directory is moved out or deleted once a copy has started, reverting the image tag is not a rollback, and rollback uses a root copy taken with the old data directory or a format-2 backup restored into a fresh instance (§12.3); the shared `root.lock` fences only exclusive tools (§7.5) |
+| R20 | Two databases run against one data root, at once (a copy started alongside the original) or one after the other (the old cluster restarted after an upgrade or volume move), and one finds objects the other's orphan sweep deleted | Low | Critical | Accepted by the maintainer (2026-10-13) as a documented deployment limitation of 0.8: one canonical database per root, concurrent copies unsupported and not technically prevented, no heartbeat or cross-database fencing. The pairing check refuses any database paired with another root, the root claim, serialized by the claim lock, refuses an independently bootstrapped database (the marker names another `instance_id`), and the start generation and token refuse a database started after a newer copy has run against the root, including one whose generation another database reached separately (§11.1); copies running at the same time are not detected, and neither is a copy taken after the last start whose marker write completed (the generation counts starts, not writes, §11.1); the deployment docs say at most one database ever runs against a root, the old cluster's data directory is moved out or deleted once a copy has started, reverting the image tag is not a rollback, and rollback uses a root copy taken with the old data directory or a format-2 backup restored into a fresh instance (§12.3); the shared `root.lock` fences only exclusive tools (§7.5) |
 
 Dependencies: #60 (model, unchanged in meaning), #311 (Phase B is absorbed
 into the Assets lane; D–E later), #612 (bootstrap and configuration
