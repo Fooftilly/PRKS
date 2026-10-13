@@ -1703,8 +1703,10 @@ lets the schema drop `origin_work_id` and legacy operation mappings (§6.4).
     until it sees setup become `ready` (a `worker` checks on its idle
     poll, and claims no job before then), and then runs the start check
     and bump exactly as at a start before its first job or non-setup
-    request. Only the `web` process whose bootstrap request made the
-    claim counts the claim as its bump.
+    request. The one process that performed the claim (the first-run
+    `web` that served the bootstrap request, or `prks admin bootstrap`)
+    counts the claim as its bump and does not bump again when it marks
+    setup `ready`.
   - **Root claim (first boot).** Before bootstrap there is no `instance`
     row (§9.2), so the runner applies the schema and neither compares nor
     bumps, and every other process skips the check, while setup is
@@ -3065,7 +3067,7 @@ Decision 11 and the last two sentences of decision 10 were added on
     (2026-10-13): L-S-2 (ranking) and PG-C3 (route extraction, given that
     PG-C2 leaves a working, maintainable facade). PG-C2 is the last
     mandatory cutover slice of 0.8.
-11. **Concurrent database copies (R20).** Accepted as a documented
+11. **Concurrent or sequential stale database copies (R20).** Accepted as a documented
     deployment limitation for 0.8 (2026-10-13). A data root is supported by
     one canonical PostgreSQL database at a time; independent copies running
     against one root at once are unsupported and are not technically
