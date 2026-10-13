@@ -2615,10 +2615,15 @@ secrets:
 - **At most one database ever runs against a root.** Every copy of the
   database (an upgraded cluster, a reloaded dump, a moved volume) keeps the
   original's `storage_root_id`, so the pairing check cannot tell them apart
-  (§7.5, risk R20); the start generation and token (§11.1) refuse only an older
-  database started after a newer one, or a database whose generation was
-  reached separately by another. The deployment documentation
-  therefore says: once a
+  (§7.5, risk R20). The start generation and token (§11.1) count
+  starts, not writes: they refuse a database copied before the last start
+  whose marker write completed, or one whose generation another database
+  reached separately, but not a copy taken while PRKS kept serving after
+  that start (a volume snapshot or `pg_dump` taken with the stack up).
+  The deployment documentation therefore says: a database copy taken
+  while PRKS is serving is not fenced, so it may only ever be started
+  together with a root copy taken at the same moment, both offline (the
+  same pairing the rollback below requires); and once a
   copy has started against a root, the database it came from is retired,
   because the copy's orphan sweep may already have deleted objects that
   only the old database still references. Retiring is an action, not a
