@@ -64,6 +64,12 @@ class TextIdentityVectorTests(unittest.TestCase):
         else:
             self.assertEqual(identity_key(chr(0xA7CB)), chr(0x0264))
 
+    def test_text_postgresql_cannot_store_is_refused(self) -> None:
+        for value in ("a\x00b", "a" + chr(0xD800), chr(0xDFFF)):
+            with self.subTest(codepoints=[hex(ord(c)) for c in value]):
+                with self.assertRaises(UnsupportedTextError):
+                    identity_key(value)
+
 
 if __name__ == "__main__":
     unittest.main()

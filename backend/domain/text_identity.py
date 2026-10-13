@@ -45,20 +45,26 @@ _WHITESPACE_RUN = re.compile("[" + re.escape(WHITESPACE) + "]+")
 
 
 class UnsupportedTextError(ValueError):
-    """The text holds a code point this Python's Unicode data does not know."""
+    """The text holds a code point this Python's Unicode data does not know,
+    or one PostgreSQL text cannot store (NUL, a lone surrogate)."""
 
 
 def identity_key(value: str) -> str:
     """The identity key of ``value``; equal keys mean the same name.
 
     Raises :class:`UnsupportedTextError` for a code point unassigned in
-    ``unicodedata.unidata_version`` (see the module docstring).
+    ``unicodedata.unidata_version`` (see the module docstring), for NUL and
+    for a lone surrogate, none of which ``prks.identity_key`` can receive.
     """
     for char in value:
-        if unicodedata.category(char) == "Cn":
+        category = unicodedata.category(char)
+        if category == "Cn":
             raise UnsupportedTextError(
                 f"U+{ord(char):04X} is not assigned in Unicode {unicodedata.unidata_version}"
             )
+        if char == "\x00" or category == "Cs":
+            # PostgreSQL text cannot hold NUL, and a lone surrogate is not UTF-8.
+            raise UnsupportedTextError(f"U+{ord(char):04X} cannot be stored as PostgreSQL text")
     text = unicodedata.normalize("NFC", value)
     text = _WHITESPACE_RUN.sub(" ", text).strip(" ")
     return text.casefold()
