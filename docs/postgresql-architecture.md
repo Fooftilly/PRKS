@@ -1082,10 +1082,12 @@ CREATE TABLE derived.work_search (
   doc        tsvector NOT NULL,      -- title A, people/author text B, abstract C, notes D
   title_norm text NOT NULL,          -- search_norm(title) for trigram matching
   people_norm text NOT NULL,
+  text_norm  text NOT NULL,          -- search_norm(title, author text, abstract, notes): today's LIKE blob
   updated_at timestamptz NOT NULL
 );
 CREATE INDEX work_search_doc  ON derived.work_search USING gin (doc);
 CREATE INDEX work_search_trgm ON derived.work_search USING gin (title_norm ext.gin_trgm_ops, people_norm ext.gin_trgm_ops);
+CREATE INDEX work_search_text_trgm ON derived.work_search USING gin (text_norm ext.gin_trgm_ops);
 ```
 
 - Metadata and note commands refresh the row **in the same transaction** (one
@@ -1106,6 +1108,14 @@ CREATE INDEX work_search_trgm ON derived.work_search USING gin (title_norm ext.g
 - **Substring and fuzzy** (`pg_trgm`) replace every `LOWER(…) LIKE` path,
   including author and publisher filters, with Unicode-correct folding via
   `search_norm(s) = unaccent(casefold(NFC(s)))`.
+- **Infix fallback kept.** `doc` matches prefixes only, so it cannot find
+  "state" inside "understatement". Today's per-token fallback
+  (`_search_works_like_tokens`, `backend/db_manager.py:2521`) matches any
+  infix across the displayed title, author text, abstract (the primary
+  Manifestation's when present) and notes. `text_norm` is `search_norm` of
+  that same text, and the fallback becomes `text_norm LIKE '%' || tok ||
+  '%'` per token (the token escaped as today) on the trigram index, so abstracts and notes keep infix
+  matching.
 
 ### 8.4 Research index and graph
 
@@ -1551,7 +1561,11 @@ archive. Inbox files are not
   staged `processing_files` row is rewritten to that path, keeping its ID
   and so its roles and tags. `restored-<run>/` is created with exclusive
   `mkdir`; if it exists, the restore aborts.
-- **Durability.** R1 fsyncs every staged inbox file. Before R4 begins, R3
+- **Durability.** R1 fsyncs every staged inbox file and every staging
+  directory it created, each with its parent, before R3 publishes
+  anything. The staging tree is the undo record (below), so a machine
+  crash must not keep an inbox link while losing the staging entry that
+  proves R3 created it. Before R4 begins, R3
   fsyncs every inbox directory it added a link to or created, and the
   parent of each directory it created, through `backend/fs_durability.py`
   (directory fsync follows that module's policy, as for objects). So R4
@@ -2469,7 +2483,7 @@ merged; several run at the same time).
 | **L-R-1** Research | L-W-1, L-J-1 | Concepts with `concept_keys`, Positions, Arguments, sources/targets, notes integration, derived mentions via `research.reindex_work`, graph projection | Parametrized tests; Research-ACK fence still observed by E2E; no Python full scan for concept resolution |
 | **L-A-1** Objects and annotations | L-W-1, L-J-1, L-P-1 | #311 Phase B on PostgreSQL: all managed-file paths through `StorageBackend`; immutable objects; cleanup claims, orphan sweep, and the `restore_run_objects` table counted by the reference check (§11.2); annotations, materialization, PDF replace, save-confirm from durable state; person portraits | Object lifecycle tests (§13.3), including a stalled ingest and a stalled rewrite whose new key the sweep settles failing cleanly at the adoption check; write-amplification measurement recorded in the PR; no `os.remove` outside the storage backend; parametrized annotation and sync tests pass |
 | **L-PR-1** Processing | L-A-1, L-P-1, L-O-1 | `processing_files`, `processing_file_roles` (persons) and `processing_file_tags` (tags), whose composite foreign keys need People and Organization; inbox scan as a job that never deletes a row held by restore, import through the objects lane; imports hold the inbox lock (§11.3) across their commit and source-file removal, with the `imported` row state | Parametrized processing tests; no absolute path stored; an import's lock is released on every success and failure path; a crash between an import's commit and its source removal is finished by the next scan and the file is never offered for import again; when the file at that path was replaced before the scan, the scan deletes only the `imported` row and lists the new file as pending |
-| **L-S-1** Search | L-W-1, L-J-1, L-P-1, L-O-1, L-A-1 | `derived.work_search` maintained by commands, `asset_text` via `text.extract`, trigram filters, parity ordering, Saved View execution, `rebuild-derived`; `backend/AGENTS.md` extracted-text rule amended for the `derived` schema (§16, decision 5) | §8.7 parity tests; search parametrized tests pass with the documented Unicode improvements replacing ASCII pins |
+| **L-S-1** Search | L-W-1, L-J-1, L-P-1, L-O-1, L-A-1 | `derived.work_search` maintained by commands, `asset_text` via `text.extract`, trigram filters, parity ordering, Saved View execution, `rebuild-derived`; `backend/AGENTS.md` extracted-text rule amended for the `derived` schema (§16, decision 5) | §8.7 parity tests; search parametrized tests pass with the documented Unicode improvements replacing ASCII pins; an infix token ("state" in "understatement") still finds a Work through its abstract and through its notes |
 | **L-S-2** Ranking | L-S-1 | Single weighted score | Before/after results on a synthetic multilingual corpus approved in review |
 | **L-B-1** Backup and restore format 2 | L-W-1, L-P-1, L-O-1, L-R-1, L-A-1, L-PR-1, L-S-1 | §11.4 | Round-trip test over a fixture covering every canonical table and object kind; text `COPY` with the interchange contract (no binary `COPY`); restore into the same and into a new instance with real sync operations, the archive Library mapped to the target Library and all library/user/device references resolving; a restore over a different Library whose IDs still exist is refused; R1 reuse of an existing object is lock-coupled to cleanup settle and re-verified in R3, so R4 never commits a locator to a missing object; new devices are inserted only by R4; a restore that outlives its lease aborts and never replaces writes accepted after recovery; export, staging and the R4 delete/insert use only the content-table allowlist, and a schema test classifies every library-scoped table; staging builds `restore_<id>` with `LIKE` from the live tables, never with the migration runner, checks foreign keys with redirected generated anti-joins, and refuses an archive of another schema fingerprint (§13.3 staging isolation); the round trip covers a table with a generated `*_key` column, which is not exported and is recomputed on restore; a backup with the inbox under the data root restores its pending files into a fresh instance, a file already at the same inbox path is never overwritten (the archived copy lands in `restored-<run>/` and its restored row, roles and tags follow it), a scan right after R4 deletes no restored pending row (a row whose file the user had deleted before the backup is held), and a restored `imported` row whose path holds a different file in the target's inbox loses only its row, never the file; a backup taken after a collision restore, with its `restored-<run>/` rows still pending, restores cleanly; a held `outside-root` row whose path holds a different file stays held and its roles and tags are not applied, an import that commits during a backup leaves the archive with either the pending row and its file or neither, an import handler paused between its commit and its file removal at R2 finishes before R3 publishes, and with an `outside-root` inbox the restored rows are held: a scan that finds no file keeps them and the Processing view offers to dismiss them, while a scan that finds the file with the recorded hash clears the hold; staged objects of a live run survive an orphan sweep (L-B-1 only writes `restore_run_objects` rows; the table and its term in the reference check belong to L-A-1); verification refuses tampered archives, and archive members and inbox paths stay contained (§13.3 archive containment); a restore that does not commit leaves the inbox's files as they were (§13.3 inbox undo); fault injection at R0–R5, including a kill immediately after the R4 commit that still rebuilds search after restart; the exclusion interleavings of §13.3; restoring an older snapshot while a long job runs never lets the job write to the replacement state, and an API mutation or operation envelope carrying the pre-restore epoch is refused with 409 `LIBRARY_EPOCH_CHANGED`; backup concurrent with writes and cleanup; format 1 refused with a clear message; an R3 lock timeout and an R4 rollback each leave the old data intact, clear the flag through abort finalization, and accept a new ordinary command at once without waiting for lease expiry, while an abort whose inbox undo fails keeps the flag set for recovery; a disk-full error (`53100`) injected in R1 and in R4 leaves the live Library unchanged, reports the restore as failed with that error, and a later cleanup pass drops the staging schema |
 | **L-D-1** Compose and health | PG-1, L-ID-1, L-J-1 | Dockerfile with psycopg, Compose of §12.3, `/healthz`, `/readyz`, graceful stop, `.env.example`, README deployment section (including PostgreSQL-volume capacity monitoring and headroom, §12.3), #612 configuration entries | Clean `docker compose up` smoke test in CI reaches `/readyz` and bootstrap; the database volume is mounted at `/var/lib/postgresql`; `web` and `worker` each list the `prks_database_url` secret and read it at start; data survives `down`/`up` and container recreation with the volume kept; wrong root/database pairing refused at start |
