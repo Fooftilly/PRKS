@@ -1161,8 +1161,8 @@ class RepoGateLiveTests(unittest.TestCase):
         self.assertEqual(install_pins, expected_pins)
         # PostgreSQL helper job (#623): runtime pins plus the psycopg pins.
         pg_steps = unique_test_gate_pg_steps(workflow)
-        self.assertIsNotNone(pg_steps)
-        assert pg_steps is not None
+        if pg_steps is None:
+            self.fail("test-gate.yml must run the PostgreSQL helper tests")
         pg_style, pg_body = pg_steps[0]
         pg_lines = [line.strip() for line in pg_body.splitlines() if line.strip()]
         pg_args = test_gate_install_argv_from_run_body(pg_style or ">", pg_lines)

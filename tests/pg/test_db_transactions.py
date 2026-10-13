@@ -5,13 +5,19 @@ from __future__ import annotations
 import threading
 import time
 import unittest
+from typing import LiteralString
 
-from psycopg import sql
+import psycopg
 
 from backend.db.config import DatabaseConfig
 from backend.db.database import Database, Isolation, Transaction
-from backend.db.errors import PoolExhaustedError, RetryTransactionError, UnmappedDatabaseError
-from tests.pg.harness import PostgresTestCase
+from backend.db.errors import (
+    DatabaseUnavailableError,
+    PoolExhaustedError,
+    RetryTransactionError,
+    UnmappedDatabaseError,
+)
+from tests.pg.harness import INJECT, PostgresTestCase, fetch_one
 
 
 class DomainRefusal(Exception):
@@ -19,15 +25,11 @@ class DomainRefusal(Exception):
 
 
 def count(tx: Transaction) -> int:
-    row = tx.execute("SELECT count(*) AS n FROM items").fetchone()
-    assert row is not None
-    return int(row["n"])
+    return int(fetch_one(tx.execute("SELECT count(*) AS n FROM pg1_test.items"))["n"])
 
 
-def inject(sqlstate: str) -> sql.Composed:
-    return sql.SQL("DO $$ BEGIN RAISE EXCEPTION 'injected' USING ERRCODE = {}; END $$").format(
-        sql.Literal(sqlstate)
-    )
+def inject(sqlstate: str) -> LiteralString:
+    return INJECT[sqlstate]
 
 
 class TransactionHelperTests(PostgresTestCase):
@@ -36,9 +38,13 @@ class TransactionHelperTests(PostgresTestCase):
         super().setUpClass()
         db = Database(DatabaseConfig(conninfo=cls.database_conninfo, role="test"))
         try:
+            # Test-only tables live in an explicit schema: the pool's
+            # search_path is the production one (prks, ext), so nothing here
+            # relies on public.
             db.command(
                 lambda tx: tx.execute(
-                    "CREATE TABLE items (id serial PRIMARY KEY, kind int NOT NULL, label text)"
+                    "CREATE SCHEMA pg1_test; "
+                    "CREATE TABLE pg1_test.items (id serial PRIMARY KEY, kind int NOT NULL, label text)"
                 )
             )
         finally:
@@ -51,10 +57,10 @@ class TransactionHelperTests(PostgresTestCase):
             sleep=self.sleeps.append,
         )
         self.addCleanup(self.db.close)
-        self.db.command(lambda tx: tx.execute("TRUNCATE items"))
+        self.db.command(lambda tx: tx.execute("TRUNCATE pg1_test.items"))
 
     def add(self, tx: Transaction, kind: int = 1, label: str | None = None) -> None:
-        tx.execute("INSERT INTO items (kind, label) VALUES (%s, %s)", (kind, label))
+        tx.execute("INSERT INTO pg1_test.items (kind, label) VALUES (%s, %s)", (kind, label))
 
     # -- commit and rollback --------------------------------------------------
 
@@ -99,11 +105,10 @@ class TransactionHelperTests(PostgresTestCase):
     # -- isolation -----------------------------------------------------------
 
     def settings(self, tx: Transaction) -> tuple[str, str]:
-        row = tx.execute(
+        row = fetch_one(tx.execute(
             "SELECT current_setting('transaction_isolation') AS iso, "
             "current_setting('transaction_read_only') AS ro"
-        ).fetchone()
-        assert row is not None
+        ))
         return row["iso"], row["ro"]
 
     def test_command_defaults_to_read_committed_read_write(self) -> None:
@@ -134,7 +139,7 @@ class TransactionHelperTests(PostgresTestCase):
 
         def body(tx: Transaction) -> tuple[int, int]:
             first = count(tx)
-            other.execute("INSERT INTO items (kind) VALUES (1)")
+            other.execute("INSERT INTO pg1_test.items (kind) VALUES (1)")
             return first, count(tx)
 
         self.assertEqual(self.db.query(body), (0, 0))
@@ -142,17 +147,18 @@ class TransactionHelperTests(PostgresTestCase):
 
     def test_pooled_session_settings(self) -> None:
         def read(tx: Transaction) -> dict:
-            row = tx.execute(
+            row = fetch_one(tx.execute(
                 "SELECT current_setting('application_name') AS app, "
+                "current_setting('search_path') AS sp, "
                 "current_setting('statement_timeout') AS st, "
                 "current_setting('lock_timeout') AS lt, "
                 "current_setting('idle_in_transaction_session_timeout') AS it"
-            ).fetchone()
-            assert row is not None
+            ))
             return dict(row)
 
         self.assertEqual(
-            self.db.query(read), {"app": "prks-test", "st": "30s", "lt": "5s", "it": "1min"}
+            self.db.query(read),
+            {"app": "prks-test", "sp": "prks, ext", "st": "30s", "lt": "5s", "it": "1min"},
         )
 
     def test_set_local_does_not_leak_into_next_borrower(self) -> None:
@@ -244,8 +250,7 @@ class TransactionHelperTests(PostgresTestCase):
 
         def make(kind: int, reads: int):
             def body(tx: Transaction) -> tuple[int, int]:
-                row = tx.execute("SELECT count(*) AS n FROM items WHERE kind = %s", (reads,)).fetchone()
-                assert row is not None
+                row = fetch_one(tx.execute("SELECT count(*) AS n FROM pg1_test.items WHERE kind = %s", (reads,)))
                 if tx.attempt == 1:
                     barrier.wait()
                 self.add(tx, kind=kind)
@@ -273,6 +278,63 @@ class TransactionHelperTests(PostgresTestCase):
         retried = next(seen for attempt, seen in results.values() if attempt == 2)
         self.assertEqual(retried, 1)
         self.assertEqual(self.db.query(count), 2)
+
+
+class SearchPathTests(PostgresTestCase):
+    """Unqualified names resolve through prks, then ext, never public (§6.1).
+
+    The class database gets stand-in prks/ext schemas (PG-2 owns the real
+    ones) and a public table that shadows a prks name.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        with psycopg.connect(cls.database_conninfo, autocommit=True) as conn:
+            conn.execute(
+                "CREATE SCHEMA prks; CREATE SCHEMA ext; "
+                "CREATE TABLE public.probe (origin text); INSERT INTO public.probe VALUES ('public'); "
+                "CREATE TABLE prks.probe (origin text); INSERT INTO prks.probe VALUES ('prks'); "
+                "CREATE TABLE public.ext_only (origin text); INSERT INTO public.ext_only VALUES ('public'); "
+                "CREATE TABLE ext.ext_only (origin text); INSERT INTO ext.ext_only VALUES ('ext')"
+            )
+
+    @staticmethod
+    def resolve(tx: Transaction) -> tuple[str, str, int]:
+        probe = fetch_one(tx.execute("SELECT origin FROM probe"))["origin"]
+        ext_only = fetch_one(tx.execute("SELECT origin FROM ext_only"))["origin"]
+        pid = int(fetch_one(tx.execute("SELECT pg_backend_pid() AS pid"))["pid"])
+        return probe, ext_only, pid
+
+    def test_fresh_connection_resolves_prks_then_ext(self) -> None:
+        db = Database(DatabaseConfig(conninfo=self.database_conninfo, role="test", pool_max=1))
+        self.addCleanup(db.close)
+        self.assertEqual(db.query(self.resolve)[:2], ("prks", "ext"))
+        self.assertEqual(db.command(self.resolve)[:2], ("prks", "ext"))
+
+    def test_replacement_connection_gets_the_same_search_path(self) -> None:
+        db = Database(DatabaseConfig(conninfo=self.database_conninfo, role="test", pool_max=1))
+        self.addCleanup(db.close)
+        first_pid = db.query(self.resolve)[2]
+        with self.assertRaises(DatabaseUnavailableError):
+            db.command(lambda tx: tx.execute("SELECT pg_terminate_backend(pg_backend_pid())"))
+        probe, ext_only, pid = db.query(self.resolve)
+        self.assertNotEqual(pid, first_pid)
+        self.assertEqual((probe, ext_only), ("prks", "ext"))
+
+    def test_new_tables_are_never_created_in_public(self) -> None:
+        db = Database(DatabaseConfig(conninfo=self.database_conninfo, role="test", pool_max=1))
+        self.addCleanup(db.close)
+
+        def create(tx: Transaction) -> list[str]:
+            tx.execute("CREATE TABLE unqualified_new (id int)")
+            rows = tx.execute(
+                "SELECT n.nspname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE c.relname = 'unqualified_new'"
+            ).fetchall()
+            return [row["nspname"] for row in rows]
+
+        self.assertEqual(db.command(create), ["prks"])
 
 
 class PoolExhaustionTests(PostgresTestCase):

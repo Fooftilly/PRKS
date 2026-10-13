@@ -17,8 +17,9 @@ from backend.db.config import (
 )
 from backend.db.errors import DatabaseConfigError
 
-SECRET = "s3cret-pw-value"
-URL = f"postgresql://prks:{SECRET}@db.invalid:5432/prks"
+# Stands in for a password; it must never reach repr or an error message.
+SENTINEL = "sentinel-pw-x9q"
+URL = f"postgresql://prks:{SENTINEL}@db.invalid:5432/prks"
 
 
 class DatabaseConfigTests(unittest.TestCase):
@@ -33,7 +34,7 @@ class DatabaseConfigTests(unittest.TestCase):
         with self.assertRaises(DatabaseConfigError) as caught:
             load_database_config(environ, **kwargs)
         self.assertEqual(caught.exception.reason, reason)
-        self.assertNotIn(SECRET, str(caught.exception))
+        self.assertNotIn(SENTINEL, str(caught.exception))
         self.assertEqual(caught.exception.http_status, 500)
         return caught.exception
 
@@ -50,7 +51,7 @@ class DatabaseConfigTests(unittest.TestCase):
         self.assertEqual(config.conninfo, URL)
 
     def test_key_value_conninfo_is_accepted(self) -> None:
-        config = load_database_config({ENV_DATABASE_URL: f"host=db.invalid dbname=prks password={SECRET}"})
+        config = load_database_config({ENV_DATABASE_URL: f"host=db.invalid dbname=prks password={SENTINEL}"})
         self.assertIn("dbname=prks", config.conninfo)
 
     def test_both_sources_refused(self) -> None:
@@ -79,12 +80,12 @@ class DatabaseConfigTests(unittest.TestCase):
         )
 
     def test_unparseable_url_refused_without_echo(self) -> None:
-        self.assert_refused({ENV_DATABASE_URL: f"host=db password={SECRET} =broken"}, "invalid_url")
+        self.assert_refused({ENV_DATABASE_URL: f"host=db password={SENTINEL} =broken"}, "invalid_url")
 
     def test_secret_never_in_repr(self) -> None:
         config = load_database_config({ENV_DATABASE_URL: URL})
-        self.assertNotIn(SECRET, repr(config))
-        self.assertNotIn(SECRET, str(config))
+        self.assertNotIn(SENTINEL, repr(config))
+        self.assertNotIn(SENTINEL, str(config))
 
     def test_pool_max_override_applies_to_web_only(self) -> None:
         self.assertEqual(load_database_config({ENV_DATABASE_URL: URL, ENV_POOL_MAX: "3"}).pool_max, 3)
@@ -104,6 +105,7 @@ class DatabaseConfigTests(unittest.TestCase):
         self.assertEqual(
             config.session_settings(),
             {
+                "search_path": "prks, ext",
                 "statement_timeout": "30000",
                 "lock_timeout": "5000",
                 "idle_in_transaction_session_timeout": "60000",
@@ -118,6 +120,9 @@ class DatabaseConfigTests(unittest.TestCase):
             {"pool_max": 0},
             {"pool_timeout_seconds": 0},
             {"lock_timeout_ms": -1},
+            {"search_path": ()},
+            {"search_path": ("prks", "Ext")},
+            {"search_path": ("prks; DROP SCHEMA prks",)},
         )
         for kwargs in cases:
             with self.subTest(kwargs=kwargs), self.assertRaises(DatabaseConfigError):

@@ -6,7 +6,6 @@ import socket
 import unittest
 
 import psycopg
-from psycopg import sql
 from psycopg_pool import PoolTimeout
 
 from backend.db.config import DatabaseConfig
@@ -24,10 +23,10 @@ from backend.db.errors import (
     check_constraint_field,
     map_database_error,
 )
-from tests.pg.harness import PostgresTestCase
+from tests.pg.harness import INJECT, PostgresTestCase
 
-# Values that must never surface in a mapped error.
-ROW_SECRET = "private-library-title"
+# A row value that must never surface in a mapped error.
+ROW_VALUE = "private-library-title"
 
 
 class ErrorMappingTests(PostgresTestCase):
@@ -38,10 +37,11 @@ class ErrorMappingTests(PostgresTestCase):
             # Test-only tables in the class's own throwaway database.
             conn.execute(
                 """
-                CREATE TABLE parents (id int PRIMARY KEY);
-                CREATE TABLE things (
+                CREATE SCHEMA pg1_test;
+                CREATE TABLE pg1_test.parents (id int PRIMARY KEY);
+                CREATE TABLE pg1_test.things (
                     id int PRIMARY KEY,
-                    parent_id int CONSTRAINT things_parent_id_fkey REFERENCES parents (id),
+                    parent_id int CONSTRAINT things_parent_id_fkey REFERENCES pg1_test.parents (id),
                     name text,
                     other text,
                     amount int,
@@ -50,11 +50,11 @@ class ErrorMappingTests(PostgresTestCase):
                     CONSTRAINT things_amount_check CHECK (amount >= 0),
                     CONSTRAINT oddly_named CHECK (amount <> 13)
                 );
-                CREATE TABLE children (
+                CREATE TABLE pg1_test.children (
                     id int PRIMARY KEY,
-                    thing_id int CONSTRAINT children_thing_id_fkey REFERENCES things (id)
+                    thing_id int CONSTRAINT children_thing_id_fkey REFERENCES pg1_test.things (id)
                 );
-                INSERT INTO parents VALUES (1);
+                INSERT INTO pg1_test.parents VALUES (1);
                 """
             )
 
@@ -68,33 +68,33 @@ class ErrorMappingTests(PostgresTestCase):
             registry=self.registry,
         )
         self.addCleanup(self.db.close)
-        self.db.command(lambda tx: tx.execute("TRUNCATE children, things"))
+        self.db.command(lambda tx: tx.execute("TRUNCATE pg1_test.children, pg1_test.things"))
 
     def raises(self, fn, error_type: type[DatabaseError] = DatabaseError) -> DatabaseError:
         with self.assertRaises(error_type) as caught:
             self.db.command(fn)
         error = caught.exception
-        self.assertNotIn(ROW_SECRET, str(error))
-        self.assertNotIn(ROW_SECRET, error.message)
+        self.assertNotIn(ROW_VALUE, str(error))
+        self.assertNotIn(ROW_VALUE, error.message)
         self.assertIsInstance(error.__cause__, (psycopg.Error, PoolTimeout))
         return error
 
     def insert(self, tx, id_: int, *, name: str | None = None, other: str | None = None,
                amount: int = 0, parent: int | None = None) -> None:
         tx.execute(
-            "INSERT INTO things (id, parent_id, name, other, amount) VALUES (%s, %s, %s, %s, %s)",
+            "INSERT INTO pg1_test.things (id, parent_id, name, other, amount) VALUES (%s, %s, %s, %s, %s)",
             (id_, parent, name, other, amount),
         )
 
     def test_23505_registered_constraint_maps_to_domain_code(self) -> None:
-        self.db.command(lambda tx: self.insert(tx, 1, name=ROW_SECRET))
-        error = self.raises(lambda tx: self.insert(tx, 2, name=ROW_SECRET), ConstraintViolationError)
+        self.db.command(lambda tx: self.insert(tx, 1, name=ROW_VALUE))
+        error = self.raises(lambda tx: self.insert(tx, 2, name=ROW_VALUE), ConstraintViolationError)
         self.assertEqual((error.code, error.http_status), ("NAME_TAKEN", 409))
         self.assertEqual((error.sqlstate, error.constraint), ("23505", "things_name_key"))
 
     def test_23505_unregistered_constraint_is_500(self) -> None:
-        self.db.command(lambda tx: self.insert(tx, 1, other=ROW_SECRET))
-        error = self.raises(lambda tx: self.insert(tx, 2, other=ROW_SECRET), UnmappedDatabaseError)
+        self.db.command(lambda tx: self.insert(tx, 1, other=ROW_VALUE))
+        error = self.raises(lambda tx: self.insert(tx, 2, other=ROW_VALUE), UnmappedDatabaseError)
         self.assertEqual((error.code, error.http_status), ("DATABASE_ERROR", 500))
         self.assertEqual(error.constraint, "things_other_key")
 
@@ -110,10 +110,10 @@ class ErrorMappingTests(PostgresTestCase):
     def test_23503_referenced_row_maps_to_in_use(self) -> None:
         def setup(tx) -> None:
             self.insert(tx, 1)
-            tx.execute("INSERT INTO children VALUES (1, 1)")
+            tx.execute("INSERT INTO pg1_test.children VALUES (1, 1)")
 
         self.db.command(setup)
-        error = self.raises(lambda tx: tx.execute("DELETE FROM things WHERE id = 1"), ConstraintViolationError)
+        error = self.raises(lambda tx: tx.execute("DELETE FROM pg1_test.things WHERE id = 1"), ConstraintViolationError)
         self.assertEqual((error.code, error.http_status), ("IN_USE", 409))
         self.assertEqual(error.constraint, "children_thing_id_fkey")
 
@@ -131,11 +131,7 @@ class ErrorMappingTests(PostgresTestCase):
         for sqlstate in ("40001", "40P01"):
             with self.subTest(sqlstate=sqlstate):
                 error = self.raises(
-                    lambda tx, s=sqlstate: tx.execute(
-                        sql.SQL(
-                            "DO $$ BEGIN RAISE EXCEPTION 'injected' USING ERRCODE = {}; END $$"
-                        ).format(sql.Literal(s))
-                    ),
+                    lambda tx, s=sqlstate: tx.execute(INJECT[s]),
                     RetryTransactionError,
                 )
                 self.assertEqual((error.code, error.http_status, error.retry_after), ("RETRY", 503, 1))
@@ -144,10 +140,10 @@ class ErrorMappingTests(PostgresTestCase):
     def test_55p03_lock_not_available_is_503(self) -> None:
         self.db.command(lambda tx: self.insert(tx, 1))
         holder = self.connect()
-        holder.execute("SELECT * FROM things WHERE id = 1 FOR UPDATE")
+        holder.execute("SELECT * FROM pg1_test.things WHERE id = 1 FOR UPDATE")
         self.addCleanup(holder.rollback)
         error = self.raises(
-            lambda tx: tx.execute("SELECT * FROM things WHERE id = 1 FOR UPDATE NOWAIT"),
+            lambda tx: tx.execute("SELECT * FROM pg1_test.things WHERE id = 1 FOR UPDATE NOWAIT"),
             LockTimeoutError,
         )
         self.assertEqual((error.code, error.http_status, error.sqlstate), ("LOCK_TIMEOUT", 503, "55P03"))
@@ -156,12 +152,12 @@ class ErrorMappingTests(PostgresTestCase):
     def test_55p03_lock_timeout_is_503(self) -> None:
         self.db.command(lambda tx: self.insert(tx, 1))
         holder = self.connect()
-        holder.execute("SELECT * FROM things WHERE id = 1 FOR UPDATE")
+        holder.execute("SELECT * FROM pg1_test.things WHERE id = 1 FOR UPDATE")
         self.addCleanup(holder.rollback)
 
         def wait_for_lock(tx) -> None:
             tx.execute("SET LOCAL lock_timeout = '50ms'")
-            tx.execute("SELECT * FROM things WHERE id = 1 FOR UPDATE")
+            tx.execute("SELECT * FROM pg1_test.things WHERE id = 1 FOR UPDATE")
 
         self.raises(wait_for_lock, LockTimeoutError)
 
@@ -192,16 +188,16 @@ class ConnectionErrorMappingTests(unittest.TestCase):
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
-        secret = "s3cret-pw-value"
+        sentinel = "sentinel-pw-x9q"
         config = DatabaseConfig(
-            conninfo=f"postgresql://prks:{secret}@127.0.0.1:{port}/prks?connect_timeout=1",
+            conninfo=f"postgresql://prks:{sentinel}@127.0.0.1:{port}/prks?connect_timeout=1",
             role="test",
             pool_timeout_seconds=0.5,
         )
         with self.assertRaises(DatabaseUnavailableError) as caught:
             Database(config)
         self.assertEqual(caught.exception.http_status, 503)
-        self.assertNotIn(secret, str(caught.exception))
+        self.assertNotIn(sentinel, str(caught.exception))
 
     def test_operational_error_without_sqlstate_is_unavailable(self) -> None:
         error = map_database_error(psycopg.OperationalError("connection lost"))

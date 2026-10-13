@@ -28,7 +28,7 @@ import re
 import secrets
 import threading
 import unittest
-from typing import Any
+from typing import Any, LiteralString
 
 import psycopg
 from psycopg import sql
@@ -41,6 +41,26 @@ MIN_SERVER_VERSION_NUM = 180000
 DATABASE_PREFIX = "prks_test_"
 
 _NAME_RE = re.compile(r"^prks_test_[0-9a-f]{12}_[a-z0-9_]{1,30}$")
+
+
+# Raise a SQLSTATE on demand (constant statements, one per code the tests inject).
+INJECT: dict[str, LiteralString] = {
+    "40001": "DO $$ BEGIN RAISE EXCEPTION 'injected' USING ERRCODE = '40001'; END $$",
+    "40P01": "DO $$ BEGIN RAISE EXCEPTION 'injected' USING ERRCODE = '40P01'; END $$",
+}
+
+
+def fetch_one(cursor: psycopg.Cursor[Any]) -> Any:
+    """The cursor's next row; a missing row fails the test."""
+    row = cursor.fetchone()
+    if row is None:
+        raise AssertionError("expected a row")
+    return row
+
+
+def compose(*parts: sql.Composable) -> sql.Composed:
+    """One statement from SQL keywords and psycopg-quoted identifiers/literals."""
+    return sql.Composed(list(parts))
 
 
 class HarnessRefusal(RuntimeError):
@@ -121,22 +141,27 @@ class PostgresHarness:
         with self._admin() as conn:
             if conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,)).fetchone():
                 raise HarnessRefusal("refusing to use a pre-existing database")
-            create = sql.SQL("CREATE DATABASE {} TEMPLATE {}").format(
-                sql.Identifier(name), sql.Identifier(template)
+            create = compose(
+                sql.SQL("CREATE DATABASE "), sql.Identifier(name),
+                sql.SQL(" TEMPLATE "), sql.Identifier(template),
             )
             if template == "template0":
-                create = sql.SQL(
-                    "CREATE DATABASE {} TEMPLATE template0 ENCODING 'UTF8' "
-                    "LOCALE_PROVIDER builtin BUILTIN_LOCALE 'C.UTF-8'"
-                ).format(sql.Identifier(name))
+                create = compose(
+                    sql.SQL("CREATE DATABASE "), sql.Identifier(name),
+                    sql.SQL(
+                        " TEMPLATE template0 ENCODING 'UTF8' "
+                        "LOCALE_PROVIDER builtin BUILTIN_LOCALE 'C.UTF-8'"
+                    ),
+                )
             try:
                 conn.execute(create)
             except psycopg.errors.DuplicateDatabase:
                 raise HarnessRefusal("refusing to use a pre-existing database") from None
             self._created.add(name)
             conn.execute(
-                sql.SQL("COMMENT ON DATABASE {} IS {}").format(
-                    sql.Identifier(name), sql.Literal(self.marker)
+                compose(
+                    sql.SQL("COMMENT ON DATABASE "), sql.Identifier(name),
+                    sql.SQL(" IS "), sql.Literal(self.marker),
                 )
             )
 
@@ -170,7 +195,9 @@ class PostgresHarness:
         self.verify_owned(name)
         with self._admin() as conn:
             conn.execute(
-                sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name))
+                compose(
+                    sql.SQL("DROP DATABASE IF EXISTS "), sql.Identifier(name), sql.SQL(" WITH (FORCE)")
+                )
             )
         self._created.discard(name)
         with self._lock:

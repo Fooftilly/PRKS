@@ -15,13 +15,16 @@ from tests.pg.harness import (
     PostgresHarness,
     PostgresTestCase,
     admin_conninfo_from_env,
+    compose,
+    fetch_one,
 )
 
 
 class HarnessTests(PostgresTestCase):
     def setUp(self) -> None:
         admin = admin_conninfo_from_env()
-        assert admin is not None
+        if admin is None:
+            self.fail("PRKS_TEST_DATABASE_URL is not set")
         self.admin_conninfo = admin
         self.foreign: list[str] = []
 
@@ -33,11 +36,14 @@ class HarnessTests(PostgresTestCase):
     def create_foreign(self, name: str, comment: str | None = None) -> None:
         """A database the harness under test did not create (a stand-in for a real library)."""
         conn = self.admin()
-        conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+        conn.execute(compose(sql.SQL("CREATE DATABASE "), sql.Identifier(name)))
         self.addCleanup(self.drop_foreign, name)
         if comment is not None:
             conn.execute(
-                sql.SQL("COMMENT ON DATABASE {} IS {}").format(sql.Identifier(name), sql.Literal(comment))
+                compose(
+                    sql.SQL("COMMENT ON DATABASE "), sql.Identifier(name),
+                    sql.SQL(" IS "), sql.Literal(comment),
+                )
             )
         with psycopg.connect(make_conninfo(self.admin_conninfo, dbname=name), autocommit=True) as db:
             db.execute("CREATE TABLE precious (v text)")
@@ -45,7 +51,7 @@ class HarnessTests(PostgresTestCase):
 
     def drop_foreign(self, name: str) -> None:
         self.admin().execute(
-            sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name))
+            compose(sql.SQL("DROP DATABASE IF EXISTS "), sql.Identifier(name), sql.SQL(" WITH (FORCE)"))
         )
 
     def assert_untouched(self, name: str, comment: str | None) -> None:
@@ -53,8 +59,8 @@ class HarnessTests(PostgresTestCase):
         row = conn.execute(
             "SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = %s", (name,)
         ).fetchone()
-        self.assertIsNotNone(row, "the foreign database must still exist")
-        assert row is not None
+        if row is None:
+            self.fail("the foreign database must still exist")
         self.assertEqual(row[0], comment)
         with psycopg.connect(make_conninfo(self.admin_conninfo, dbname=name)) as db:
             self.assertEqual(db.execute("SELECT v FROM precious").fetchall(), [("keep",)])
@@ -103,7 +109,7 @@ class HarnessTests(PostgresTestCase):
         name = self.harness.create_database("m")
         self.addCleanup(self.cleanup_retagged, name)
         self.admin().execute(
-            sql.SQL("COMMENT ON DATABASE {} IS 'someone else'").format(sql.Identifier(name))
+            compose(sql.SQL("COMMENT ON DATABASE "), sql.Identifier(name), sql.SQL(" IS 'someone else'"))
         )
         with self.assertRaises(HarnessRefusal):
             self.harness.conninfo(name)

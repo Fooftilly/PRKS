@@ -5,7 +5,11 @@ by ``PRKS_DATABASE_URL_FILE`` (a Compose secret, §12.3), never both. It is a
 secret: it is kept out of ``repr``, error messages and logs. Refusals carry a
 stable ``reason`` and name only the environment variable.
 
-Session defaults are the request/worker defaults of §4.3. Backup, restore and
+Session defaults are the request/worker defaults of §4.3, plus the
+``search_path`` of §6.1 (``prks, ext``): unqualified names resolve to the
+canonical schema, then extensions, never to ``public``. The schemas themselves
+come from PG-2's schema files; PostgreSQL skips a ``search_path`` entry that
+does not exist yet. Backup, restore and
 ``rebuild-derived`` use their own dedicated connection with other settings;
 that belongs to the lanes that build them, not to this pool configuration.
 """
@@ -13,6 +17,7 @@ that belongs to the lanes that build them, not to this pool configuration.
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
@@ -28,6 +33,10 @@ DEFAULT_POOL_MAX = {"web": 10, "worker": 4, "test": 4}
 # A secret file holds one connection string; anything larger is a mistake.
 _MAX_URL_FILE_BYTES = 64 * 1024
 
+# §6.1: canonical data in ``prks``, extensions in ``ext``.
+DEFAULT_SEARCH_PATH = ("prks", "ext")
+_SCHEMA_NAME_RE = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
+
 
 @dataclass(frozen=True)
 class DatabaseConfig:
@@ -42,6 +51,7 @@ class DatabaseConfig:
     statement_timeout_ms: int = 30_000
     lock_timeout_ms: int = 5_000
     idle_in_transaction_timeout_ms: int = 60_000
+    search_path: tuple[str, ...] = DEFAULT_SEARCH_PATH
 
     def __post_init__(self) -> None:
         if self.role not in DEFAULT_POOL_MAX:
@@ -52,6 +62,10 @@ class DatabaseConfig:
             raise DatabaseConfigError("invalid_pool_size", "The database pool size is invalid.")
         if self.pool_timeout_seconds <= 0:
             raise DatabaseConfigError("invalid_pool_timeout", "The database pool timeout is invalid.")
+        if not self.search_path or not all(
+            _SCHEMA_NAME_RE.fullmatch(schema) for schema in self.search_path
+        ):
+            raise DatabaseConfigError("invalid_search_path", "The database search_path is invalid.")
         for value in (
             self.statement_timeout_ms,
             self.lock_timeout_ms,
@@ -65,8 +79,9 @@ class DatabaseConfig:
         return f"prks-{self.role}"
 
     def session_settings(self) -> dict[str, str]:
-        """Session GUCs every pooled connection sets once (§4.3)."""
+        """Session GUCs every pooled connection sets once (§4.3, §6.1)."""
         return {
+            "search_path": ", ".join(self.search_path),
             "statement_timeout": str(self.statement_timeout_ms),
             "lock_timeout": str(self.lock_timeout_ms),
             "idle_in_transaction_session_timeout": str(self.idle_in_transaction_timeout_ms),
