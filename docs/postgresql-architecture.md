@@ -993,7 +993,7 @@ RETURNING op_id;
 | `_PDF_MATERIALIZATION_LOCKS`, `_PDF_PATH_LOCKS` | Row lock and advisory lock (§7.4) |
 | `_ready_backups` tokens | `backup_runs` rows with an opaque download token hash and expiry |
 | Bound root, index singletons | Bound once per process at startup; the database pairing record decides validity (§11.1); no hot rebind across processes (#311 §12) |
-| `root.lock` lease | Kept, but its meaning changes from "one process per root" to "one instance per root". Every process of the paired instance (`web`, `worker`, admin commands) takes the OS lock **shared**; relocation and the offline storage tools take it **exclusive**. The one marker write made under the shared lock is the start-generation bump (§11.1). Format-2 restore does not: it writes new immutable keys into the live root while the application runs (§11.4). A process whose database names a different `storage_root_id` is refused before it touches the lock (§11.1). This is the PostgreSQL-era fencing that #311 §12 anticipates. The shared lock cannot tell two databases apart: a copy of the database carries the same `storage_root_id`, so a second instance started from a copy against the same root would pass the pairing check and share the lock. So at most one database ever runs against a root: once a copy (an upgraded cluster, a reloaded dump, a moved volume) has started against it, the database it came from is retired from that root, and the start generation refuses it if it is started there again (§11.1, §12.3, risk R20). Hot rebind stays a single-process capability and is unavailable while another process holds the shared lock. |
+| `root.lock` lease | Kept, but its meaning changes from "one process per root" to "one instance per root". Every process of the paired instance (`migrate`, `web`, `worker`, admin commands) takes the OS lock **shared**; relocation and the offline storage tools take it **exclusive**. The one marker write made under the shared lock is the start-generation bump (§11.1). Format-2 restore does not: it writes new immutable keys into the live root while the application runs (§11.4). A process whose database names a different `storage_root_id` is refused before it touches the lock (§11.1). This is the PostgreSQL-era fencing that #311 §12 anticipates. The shared lock cannot tell two databases apart: a copy of the database carries the same `storage_root_id`, so a second instance started from a copy against the same root would pass the pairing check and share the lock. So at most one database ever runs against a root: once a copy (an upgraded cluster, a reloaded dump, a moved volume) has started against it, the database it came from is retired from that root, and the start generation refuses it if it is started there again (§11.1, §12.3, risk R20). Hot rebind stays a single-process capability and is unavailable while another process holds the shared lock. |
 | Performance registry | Stays per process by design, labelled with process role (§12.4) |
 
 ### 7.6 Concurrency tests
@@ -2342,6 +2342,8 @@ services:
     environment: &prks_env
       PRKS_DATABASE_URL_FILE: /run/secrets/prks_database_url
       PRKS_STORAGE: /data
+      PRKS_MIGRATE_ON_START: "0"   # the migrate service already ran (and bumped the start generation, §11.1)
+    volumes: [./data:/data]        # migrate takes root.lock shared and bumps the root marker
     secrets: [prks_database_url]
     depends_on: {db: {condition: service_healthy}}
   web:
@@ -2390,7 +2392,10 @@ secrets:
   finishes or releases its job lease. Compose `stop_grace_period` covers the
   deadline.
 - **Upgrades**: `migrate` runs before `web`/`worker` start; both refuse to
-  run against a schema newer or older than their code.
+  run against a schema newer or older than their code. Compose sets
+  `PRKS_MIGRATE_ON_START=0` for every service, so the one-shot `migrate`
+  is the only runner and each `up` bumps the start generation once
+  (§11.1).
 - **Database volume capacity.** The deployment documentation tells the
   operator to monitor free space on the PostgreSQL volume, which PRKS
   cannot see (§11.4, "Database capacity"). It recommends keeping free at
