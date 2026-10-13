@@ -252,7 +252,8 @@ def _is_empty(conn: psycopg.Connection[Any]) -> bool:
     A non-superuser database owner cannot read ``pg_user_mapping`` (its
     options can hold passwords), so catalogs the role cannot read are
     skipped and user mappings are checked through the public
-    ``pg_user_mappings`` view instead.
+    ``pg_user_mappings`` view instead. Subscriptions sit in the shared
+    ``pg_subscription`` catalog and are matched by ``subdbid``.
     """
     catalogs = [
         str(name)
@@ -282,6 +283,13 @@ def _is_empty(conn: psycopg.Connection[Any]) -> bool:
     probes.append(
         sql.SQL("EXISTS (SELECT 1 FROM pg_catalog.pg_user_mappings WHERE umid >= {})").format(
             sql.Literal(_FIRST_NORMAL_OBJECT_ID)
+        )
+    )
+    # pg_subscription is a shared catalog, but each row lives in one database.
+    probes.append(
+        sql.SQL(
+            "EXISTS (SELECT 1 FROM pg_catalog.pg_subscription WHERE subdbid = "
+            "(SELECT oid FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database()))"
         )
     )
     row = conn.execute(

@@ -323,6 +323,12 @@ class MigrateTests(EmptyDatabaseTestCase):
             ),
             ("CREATE PUBLICATION everything", "DROP PUBLICATION everything"),
             ("SELECT lo_create(0)", "SELECT lo_unlink(oid) FROM pg_largeobject_metadata"),
+            # pg_subscription is shared; the row carries this database's oid.
+            (
+                "CREATE SUBSCRIPTION foreign_sub CONNECTION 'dbname=none' PUBLICATION p "
+                "WITH (connect = false)",
+                "ALTER SUBSCRIPTION foreign_sub SET (slot_name = NONE); DROP SUBSCRIPTION foreign_sub",
+            ),
         ):
             with self.subTest(setup):
                 self.query(setup)

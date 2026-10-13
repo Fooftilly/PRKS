@@ -85,6 +85,30 @@ class TypeDefinitionsTests(PostgresTestCase):
                     self.conn.execute("ROLLBACK TO SAVEPOINT change")
 
 
+class SequenceDefinitionTests(PostgresTestCase):
+    def test_sequence_options_are_recorded(self) -> None:
+        conn = self.connect()
+        self.addCleanup(conn.rollback)
+        conn.execute("CREATE SEQUENCE prks.probe_s")
+        for change in (
+            "ALTER SEQUENCE prks.probe_s AS integer",
+            "ALTER SEQUENCE prks.probe_s START WITH 5",
+            "ALTER SEQUENCE prks.probe_s INCREMENT BY 2",
+            "ALTER SEQUENCE prks.probe_s MINVALUE 0",
+            "ALTER SEQUENCE prks.probe_s MAXVALUE 1000",
+            "ALTER SEQUENCE prks.probe_s CACHE 10",
+            "ALTER SEQUENCE prks.probe_s CYCLE",
+        ):
+            with self.subTest(change):
+                conn.execute("SAVEPOINT change")
+                try:
+                    before = catalog_snapshot(conn)["tables"]
+                    conn.execute(change)
+                    self.assertNotEqual(catalog_snapshot(conn)["tables"], before)
+                finally:
+                    conn.execute("ROLLBACK TO SAVEPOINT change")
+
+
 class SearchNormGuardTests(PostgresTestCase):
     """The guard reports what would store search_norm output (§8.3)."""
 

@@ -89,7 +89,25 @@ def _relations(conn: psycopg.Connection[Any]) -> tuple[dict[str, Any], dict[str,
             views[qualified] = {"kind": kind, "definition": None if row is None else row[0]}
             continue
         if kind == "S":
-            tables[qualified] = {"kind": "sequence"}
+            type_, start, increment, minimum, maximum, cache, cycle = _rows(
+                conn,
+                """
+                SELECT format_type(seqtypid, NULL), seqstart, seqincrement, seqmin, seqmax,
+                       seqcache, seqcycle
+                  FROM pg_sequence WHERE seqrelid = %s
+                """,
+                (relid,),
+            )[0]
+            tables[qualified] = {
+                "kind": "sequence",
+                "type": type_,
+                "start": start,
+                "increment": increment,
+                "min": minimum,
+                "max": maximum,
+                "cache": cache,
+                "cycle": cycle,
+            }
             continue
         constraints = {
             conname: pg_def
