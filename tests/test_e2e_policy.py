@@ -1,6 +1,7 @@
 """Unit coverage for tests.e2e.policy — no Chromium."""
 from __future__ import annotations
 
+import ast
 import contextlib
 import io
 import json
@@ -800,6 +801,99 @@ class AffectedMappingTests(unittest.TestCase):
         self.assertEqual(plan["mode"], "affected")
         for name in ("folders", "browse", "playlists", "smoke"):
             self.assertIn(name, plan["features"])
+
+    def test_postgres_schema_and_migration_only_diff_skips_browser_ci(self):
+        paths = [
+            "backend/db/__init__.py",
+            "backend/db/migrate.py",
+            "backend/db/schema/000_extensions.sql",
+            "backend/db/schema/010_instance.sql",
+            "backend/db/schema/020_identity.sql",
+            "backend/db/schema/030_jobs.sql",
+            "backend/db/schema/040_sync.sql",
+            "backend/db/schema/snapshot.json",
+            "backend/db/schema_snapshot.py",
+            "backend/domain/__init__.py",
+            "tests/pg/test_migrate.py",
+            "tests/pg/test_schema_snapshot.py",
+            "backend/AGENTS.md",
+        ]
+        for path in paths[:10]:
+            with self.subTest(path=path):
+                classified = policy.classify_affected_path(path)
+                self.assertEqual(classified["rules"], ["postgres-migration-infrastructure"])
+                self.assertTrue(classified["skip"])
+        plan = policy.plan_ci_e2e(paths)
+        self.assertEqual(plan["mode"], "skip")
+        self.assertFalse(plan["run"])
+
+    def test_postgres_text_identity_helper_runs_smoke_not_full(self):
+        path = "backend/domain/text_identity.py"
+        classified = policy.classify_affected_path(path)
+        self.assertEqual(classified["rules"], ["postgres-text-identity"])
+        self.assertFalse(classified["skip"])
+        self.assertFalse(classified["unmapped"])
+        self.assertEqual(classified["features"], ["smoke"])
+        plan = policy.plan_ci_e2e([
+            path, "backend/db/schema/020_identity.sql",
+            "tests/pg/test_text_identity.py", "tests/test_text_identity.py",
+        ])
+        self.assertEqual(plan["mode"], "affected")
+        self.assertTrue(plan["run"])
+        self.assertEqual(plan["features"], ["smoke"])
+        self.assertFalse(plan["pointer_capture"])
+
+    def test_postgres_exemption_does_not_hide_runtime_or_unknown_changes(self):
+        pg_paths = ["backend/db/migrate.py", "backend/db/schema/040_sync.sql"]
+        for runtime in (
+            "prks_app.py", "backend/server.py", "backend/db_manager.py",
+            "backend/db/database.py", "backend/db/new_unknown_module.py",
+            "frontend/js/app.js", "tests/e2e/policy.py",
+        ):
+            with self.subTest(runtime=runtime):
+                self.assertEqual(policy.plan_ci_e2e(pg_paths + [runtime])["mode"], "full")
+        self.assertEqual(
+            policy.plan_ci_e2e(pg_paths + ["frontend/js/components/folders.js"])["mode"],
+            "affected",
+        )
+        self.assertEqual(policy.plan_ci_e2e(pg_paths, force_full=True)["mode"], "full")
+
+    def test_postgres_exemption_requires_no_runtime_imports(self):
+        # Once the running backend imports the PG modules, stop skipping them:
+        # a future PG-3/cutover PR must deliberately reclassify these paths.
+        root = Path(_PROJECT_DIR)
+        sources = [root / "prks_app.py", *(root / "backend").rglob("*.py")]
+        for path in sources:
+            relative = path.relative_to(root).as_posix()
+            if relative.startswith("backend/db/") or relative == "backend/domain/text_identity.py":
+                continue
+            syntax = ast.parse(path.read_text(encoding="utf-8"), filename=relative)
+            for node in ast.walk(syntax):
+                targets = []
+                if isinstance(node, ast.Import):
+                    targets = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom):
+                    if node.level == 0:
+                        targets = [node.module or ""]
+                        if node.module == "backend":
+                            targets.extend(
+                                "backend." + alias.name for alias in node.names
+                            )
+                        if node.module == "backend.domain":
+                            targets.extend(
+                                "backend.domain." + alias.name for alias in node.names
+                            )
+                    elif node.module == "db" and relative.startswith("backend/"):
+                        targets = ["backend.db"]
+                if any(
+                    target == "backend.db" or target.startswith("backend.db.")
+                    or target == "backend.domain.text_identity"
+                    for target in targets
+                ):
+                    self.fail(
+                        f"{relative} imports PostgreSQL infrastructure; "
+                        "revisit the E2E skip rule before integrating it into the runtime"
+                    )
 
     def test_unmapped_e2e_support_module_is_ci_full(self):
         # inventory.py / doctor.py / etc. must not skip the browser gate.
