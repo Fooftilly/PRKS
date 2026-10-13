@@ -701,12 +701,14 @@ CREATE TABLE prks.devices (            -- client/sync identity, never authentica
 CREATE TABLE prks.sessions (
   id           uuid PRIMARY KEY DEFAULT uuidv7(),
   token_sha256 bytea NOT NULL UNIQUE,  -- the cookie holds the token, the database its hash
-  user_id      text NOT NULL REFERENCES prks.users ON DELETE CASCADE,
-  library_id   text NOT NULL REFERENCES prks.libraries ON DELETE CASCADE,
+  user_id      text NOT NULL,
+  library_id   text NOT NULL,
   created_at   timestamptz NOT NULL DEFAULT now(),
   last_used_at timestamptz NOT NULL DEFAULT now(),
   expires_at   timestamptz NOT NULL,
-  revoked_at   timestamptz
+  revoked_at   timestamptz,
+  FOREIGN KEY (library_id, user_id)    -- a session exists only while its membership does
+    REFERENCES prks.library_memberships ON DELETE CASCADE
 );
 ```
 
@@ -1240,6 +1242,13 @@ authenticated owner of a `ready` instance (§11.4).
   Capabilities in 0.8: `READ_LIBRARY`, `EDIT_LIBRARY`, `ADMIN_LIBRARY`
   (backup, restore, settings), `ADMIN_INSTANCE`. Role → capability is a table
   in code.
+- Reads are authorized against the current membership, not the session
+  alone. Session resolution joins the session to its `library_memberships`
+  row on every request and takes the role from that row, so a role change
+  applies to the next request, and every query calls `authorize(tx, ctx,
+  READ_LIBRARY)` like commands do. A session references its membership
+  (§6.2), so removing a membership deletes that user's sessions for the
+  Library.
 - Every query filters by `ctx.library_id`; composite FKs make it impossible
   to reach another Library through a join. A test lane creates two Libraries
   and asserts that no API route returns or mutates the other's data (§13.3).
@@ -1582,6 +1591,13 @@ archive. Inbox files are not
   drive path, no `.` or `..` component, no backslash, NUL or empty
   component.
 - No symlink or special entry, and no duplicate member or manifest entry.
+- Format 1's resource bounds stay: the entry-count cap
+  (`DEFAULT_MAX_ZIP_ENTRIES`), the declared-uncompressed-size cap
+  (`DEFAULT_MAX_UNCOMPRESSED_BYTES`), compression-ratio rejection
+  (`DEFAULT_MAX_COMPRESSION_RATIO`) and the free-space preflight
+  (declared size plus `DISK_MARGIN_BYTES`) on the staging filesystem, all
+  before R1 writes anything. R1 counts the bytes it extracts and stops at
+  each member's declared size.
 - Every member belongs to the archive layout above (`manifest.json`,
   `identities/*.csv`, `db/<table>.csv` for a content table, `objects/<key>`
   with a valid key, `inbox/<rel_path>`), every member is listed in the
@@ -2163,7 +2179,9 @@ the lane that ports the relevant module.
   and keeps K, or R1 finds K gone and rewrites it; R4 never commits a locator
   to a missing object.
 - Restore archive containment: archives with an absolute, drive, `..`,
-  backslash or duplicate member, a symlink entry, a member outside the
+  backslash or duplicate member, a symlink entry, too many entries, a
+  declared size over the cap or the free space, a member whose compression
+  ratio is over the cap or whose stream is longer than declared, a member outside the
   layout or missing from the manifest, or an inbox path that escapes the
   inbox are refused in R0, and nothing is
   written outside the staging directory; an inbox subdirectory replaced by
@@ -2359,7 +2377,7 @@ merged; several run at the same time).
 
 | Slice | Depends on | Content | Acceptance criteria |
 | --- | --- | --- | --- |
-| **L-ID-1** Identity, bootstrap and sessions | PG-2 | Users, Libraries (with `epoch`), memberships, bootstrap tokens and command, Argon2id login with the attempt limiter, login-device tokens and `prks admin unlock-login`, sessions, `GET /api/session` (returns the epoch), `RequestContext` carrying the acted-on epoch and the command-helper epoch check, `authorize()`, loopback-owner mode for `--testing`; CSRF hardening | §13.3 bootstrap and session tests; a command with a stale or missing epoch is refused before writing; login throttling: without a login-device cookie, the sixth attempt for an account and the 21st for an address within the window get 429 with `Retry-After` without a password check, and window expiry or a successful login resets the account row; 20 simultaneous wrong-password requests for one account run at most 5 password checks; with the account limit tripped, the correct password from a browser holding a valid login-device cookie still signs in, and that cookie is limited on its own; `prks admin unlock-login` clears the account limit; two IPv6 addresses in one `/64` share an address key; a spoofed `X-Forwarded-For` from an untrusted peer does not change the address key; takeover after `ready` refused; secrets, the bootstrap token included, never in responses or logs (log-privacy test), and the token file is created `0600` outside the data root; `--testing` E2E unaffected |
+| **L-ID-1** Identity, bootstrap and sessions | PG-2 | Users, Libraries (with `epoch`), memberships, bootstrap tokens and command, Argon2id login with the attempt limiter, login-device tokens and `prks admin unlock-login`, sessions, `GET /api/session` (returns the epoch), `RequestContext` carrying the acted-on epoch and the command-helper epoch check, `authorize()`, loopback-owner mode for `--testing`; CSRF hardening | §13.3 bootstrap and session tests; a command with a stale or missing epoch is refused before writing; login throttling: without a login-device cookie, the sixth attempt for an account and the 21st for an address within the window get 429 with `Retry-After` without a password check, and window expiry or a successful login resets the account row; 20 simultaneous wrong-password requests for one account run at most 5 password checks; with the account limit tripped, the correct password from a browser holding a valid login-device cookie still signs in, and that cookie is limited on its own; `prks admin unlock-login` clears the account limit; two IPv6 addresses in one `/64` share an address key; a spoofed `X-Forwarded-For` from an untrusted peer does not change the address key; takeover after `ready` refused; secrets, the bootstrap token included, never in responses or logs (log-privacy test), and the token file is created `0600` outside the data root; removing a membership refuses the next read and write of that user's existing session for the Library, and demoting an editor to reader refuses the next write; `--testing` E2E unaffected |
 | **L-J-1** Jobs runtime | PG-2 | `jobs` claim/run/retry/lease, NOTIFY wakeup, embedded worker thread, `prks worker`, prune job, diagnostics counters | Kill-after-claim → lease expiry → exactly one reclaim → idempotent completion; stale-worker completion and heartbeat update nothing; repeated-crash job ends `failed` and frees its singleton key; dedupe tests, including a handled failure while a queued twin exists (A cancelled, B runs once); two concurrent workers with several queued jobs of one singleton key never run two and never surface `23505`; jobs of a Library in maintenance or of an older epoch are not claimed; worker graceful stop |
 | **L-W-1** Works core | PG-3, L-ID-1 | `works`, `manifestations`, `assets` (catalogue only), `work_notes`, projection module producing today's JSON; create/get/browse/recent/open/metadata/source/delete commands; facade methods; `CREATE_WORK`, `DELETE_WORK`, `MARK_WORK_OPENED`, `SET_WORK_METADATA_FIELD`, `SET_WORK_SOURCE`, note handlers | Parametrized Work and sync-family tests pass on PostgreSQL; JSON parity tests against SQLite fixtures; the #60 §4.1 negative tests as schema tests; deferred pointer FKs proven |
 | **L-W-2** Bulk, BibTeX, wiki links, Work merge scaffolding | L-W-1 | Bulk actions (SERIALIZABLE), BibTeX via citation record, wiki-link resolution | Byte-identical BibTeX tests; bulk atomicity tests |
