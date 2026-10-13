@@ -100,7 +100,7 @@ answers to the questions that needed an explicit choice.
 | PG18 | Sync protocol | The durable-operation protocol, its conflict units, revisions, ACK shapes and the browser stores keep their semantics. Only the server mechanics move to PostgreSQL. Browser databases become scoped to instance, Library and user (§10). |
 | PG19 | Backup | A PRKS-owned logical archive (format 2): a consistent snapshot of the Library's canonical rows in text `COPY` with a typed interchange contract, credential-free attribution identities, and every object the rows reference, verified before publishing. Restore drains writers behind a committed maintenance flag, commits in **one PostgreSQL transaction** that also enqueues its follow-up jobs, and advances a per-Library **epoch** that fences pre-restore jobs, requests and browser outboxes (§11.4). `pg_dump` stays an operator tool for whole-cluster disaster recovery, not the library backup. |
 | PG20 | HTTP server | 0.8 keeps the stdlib HTTP adapter and connects it to a connection pool. Replacing it with a production WSGI/ASGI server is a separate research item that must finish before 1.0 (§4.5). |
-| PG21 | Deployment | Compose runs `postgres:18`, a one-shot `migrate` service, `web` and `worker`. Database data lives in its own named volume, never inside the PRKS data root (§12.3). |
+| PG21 | Deployment | Compose runs `postgres:18` (or PRKS's image built from it, only if a PRKS `unaccent` rules file is needed, §8.3), a one-shot `migrate` service, `web` and `worker`. Database data lives in its own named volume, never inside the PRKS data root (§12.3). |
 | PG22 | Transition | Build the PostgreSQL implementation beside the SQLite runtime, family by family, behind the same facade and the same parametrized tests. Switch once, then delete SQLite in the same release (§15). |
 
 ---
@@ -1043,9 +1043,11 @@ identity_key(s) = casefold( collapse_whitespace( trim( NFC(s) ) ) )
 **Text search configuration.**
 
 ```sql
+CREATE TEXT SEARCH DICTIONARY prks.search_unaccent
+  (TEMPLATE = ext.unaccent, RULES = 'unaccent');   -- or 'prks_unaccent_v<N>', below
 CREATE TEXT SEARCH CONFIGURATION prks.prks_search (COPY = pg_catalog.simple);
 ALTER TEXT SEARCH CONFIGURATION prks.prks_search
-  ALTER MAPPING FOR hword, hword_part, word WITH ext.unaccent, simple;
+  ALTER MAPPING FOR hword, hword_part, word WITH prks.search_unaccent, simple;
 ```
 
 - **Case folding before the configuration.** The `simple` dictionary only
@@ -1065,9 +1067,19 @@ ALTER TEXT SEARCH CONFIGURATION prks.prks_search
   "ćevapi" and "Σωκράτης" is found by "σωκρατης". The default `unaccent`
   rules must be checked against the parity vectors for Greek tonos and
   dialytika, and for Cyrillic letters whose diacritic is part of the letter
-  (й, ё, ћ, ђ). Where the default rules are wrong for PRKS (for example
-  folding й to и), PRKS ships its own `prks_unaccent.rules` file, carried by
-  the image (§16, decision 4).
+  (й, ё, ћ, ђ). Both the configuration and `prks.search_norm` use the one
+  dictionary `prks.search_unaccent`, so the rules are chosen in one place.
+  While the defaults pass, it uses upstream `unaccent` rules and Compose
+  runs stock `postgres:18`. Where the defaults are wrong for PRKS (for
+  example folding й to и), PRKS ships `prks_unaccent_v<N>.rules` (§16,
+  decision 4). PostgreSQL reads rules only from the server's
+  `$SHAREDIR/tsearch_data/`, so the file goes in a PRKS database image
+  built `FROM postgres:18` that copies it there. Compose, the CI service and
+  `scripts/test-postgres` then use that image, and the baseline sets
+  `RULES = 'prks_unaccent_v<N>'`. A rules change ships as a new file name,
+  never an edit in place, so the dictionary's rules name identifies the
+  rules (§8.6). A database image without the named file fails the
+  dictionary's first use loudly instead of folding with other rules.
 - Query parsing stays in Python: `_prks_search_tokens` semantics (split on
   `-`/`_`, drop non-word characters) are kept, then the tokens are passed
   through `to_tsquery('prks.prks_search', …)` with `:*` and `&`, using bound
@@ -1108,10 +1120,10 @@ CREATE INDEX work_search_text_trgm ON derived.work_search USING gin (text_norm e
   results on a synthetic multilingual corpus.
 - **Substring and fuzzy** (`pg_trgm`) replace every `LOWER(…) LIKE` path,
   including author and publisher filters, with Unicode-correct folding via
-  `prks.search_norm(s) = ext.unaccent('ext.unaccent'::regdictionary,
+  `prks.search_norm(s) = ext.unaccent('prks.search_unaccent'::regdictionary,
   casefold(normalize(s, NFC) COLLATE pg_unicode_fast))`, an `IMMUTABLE` SQL
-  function that uses the same `unaccent` rules (PRKS's `prks_unaccent.rules`
-  included) as the text search configuration. Like `identity_key` and the
+  function that uses the same dictionary, `prks.search_unaccent`, as the
+  text search configuration. Like `identity_key` and the
   FTS path, it pins `casefold` to `pg_unicode_fast`, so a bound token and a
   stored column fold identically whatever their collation. Naming the
   dictionary removes the `search_path` lookup, but both forms of `unaccent`
@@ -1177,14 +1189,15 @@ consistency count (`works` without `work_search` rows) schedules a repair job.
 
 **Folding check.** `doc` vectors, `asset_text.doc` and the `*_norm` columns
 all fold through the same `unaccent` rules and the server's Unicode tables,
-and either can change with no DDL at all. PRKS can ship a changed
-`prks_unaccent.rules` (the R12 mitigation), or a new image can bring a
-PostgreSQL release whose upstream `unaccent.rules` or Unicode data differ.
-Stored values would then keep the old folding while new rows and query
+and either can change without touching the stored values. PRKS can point
+`prks.search_unaccent` at a new rules file (the R12 mitigation), or a new
+database image can bring a PostgreSQL release whose upstream
+`unaccent.rules` or Unicode data differ. Stored values would then keep the
+old folding while new rows and query
 tokens use the new one, and searches would silently miss existing Works.
 
-- The current folding is PRKS's rules version (a constant PRKS bumps with
-  any change to its rules file) plus `server_version_num`. Both are
+- The current folding is the rules name of `prks.search_unaccent`
+  (`pg_ts_dict.dictinitoption`) plus `server_version_num`. Both are
   readable without privileges, so there is no probe of the server's files.
 - `libraries.search_folding` records the folding of the Library's last
   **completed** search and text rebuild, not a requested one. The folding
@@ -1207,6 +1220,11 @@ tokens use the new one, and searches would silently miss existing Works.
   older folding, does not suppress it. So a rebuild that failed, or was
   cancelled before it finished, is enqueued again on the next start, and
   two processes starting together enqueue it once.
+- The database can be upgraded or restarted under running processes,
+  whose pools simply reconnect. So the check also runs on every worker's
+  idle tick (the embedded one included), at most once a minute: one catalog
+  query reads the current folding, and the check above runs when it
+  differs from the folding that worker last checked.
 - `derived.rebuild` jobs use `dedupe_key = <library_id>:<scope>`, with
   the scope set sorted (`research,search,text` for a full rebuild), and
   `singleton_key = derived:<library_id>`. So a queued search-only rebuild
@@ -2559,7 +2577,7 @@ merged; several run at the same time).
 | **L-R-1** Research | L-W-1, L-J-1 | Concepts with `concept_keys`, Positions, Arguments, sources/targets, notes integration, derived mentions via `research.reindex_work`, graph projection | Parametrized tests; Research-ACK fence still observed by E2E; no Python full scan for concept resolution |
 | **L-A-1** Objects and annotations | L-W-1, L-J-1, L-P-1 | #311 Phase B on PostgreSQL: all managed-file paths through `StorageBackend`; immutable objects; cleanup claims, orphan sweep, and the `restore_run_objects` table counted by the reference check (§11.2); annotations, materialization, PDF replace, save-confirm from durable state; person portraits | Object lifecycle tests (§13.3), including a stalled ingest and a stalled rewrite whose new key the sweep settles failing cleanly at the adoption check; write-amplification measurement recorded in the PR; no `os.remove` outside the storage backend; parametrized annotation and sync tests pass |
 | **L-PR-1** Processing | L-A-1, L-P-1, L-O-1 | `processing_files`, `processing_file_roles` (persons) and `processing_file_tags` (tags), whose composite foreign keys need People and Organization; inbox scan as a job that never deletes a row held by restore, import through the objects lane; imports hold the inbox lock (§11.3) across their commit and source-file removal, with the `imported` row state | Parametrized processing tests; no absolute path stored; an import's lock is released on every success and failure path; a crash between an import's commit and its source removal is finished by the next scan and the file is never offered for import again; when the file at that path was replaced before the scan, the scan deletes only the `imported` row and lists the new file as pending |
-| **L-S-1** Search | L-W-1, L-J-1, L-P-1, L-O-1, L-A-1 | `derived.work_search` maintained by commands, `asset_text` via `text.extract`, trigram filters, parity ordering, Saved View execution, `rebuild-derived`, the folding check (§8.6); `backend/AGENTS.md` extracted-text rule amended for the `derived` schema (§16, decision 5) | §8.7 parity tests; search parametrized tests pass with the documented Unicode improvements replacing ASCII pins; an infix token ("state" in "understatement") still finds a Work through its abstract and through its notes, and a diacritic infix ("šnja" in notes containing "Trešnja") finds it too, the §8.7 substring vectors; a changed folding enqueues the folding rebuild once even when two processes start together, and still enqueues it (a new job row, not a dedupe no-op) when only a search-only rebuild is queued, a failed or cancelled folding rebuild leaves `libraries.search_folding` unchanged and is enqueued again on the next start, and `--only text` recomputes `doc` without extracting again |
+| **L-S-1** Search | L-W-1, L-J-1, L-P-1, L-O-1, L-A-1 | `derived.work_search` maintained by commands, `asset_text` via `text.extract`, trigram filters, parity ordering, Saved View execution, `rebuild-derived`, the folding check (§8.6); `backend/AGENTS.md` extracted-text rule amended for the `derived` schema (§16, decision 5) | §8.7 parity tests; search parametrized tests pass with the documented Unicode improvements replacing ASCII pins; an infix token ("state" in "understatement") still finds a Work through its abstract and through its notes, and a diacritic infix ("šnja" in notes containing "Trešnja") finds it too, the §8.7 substring vectors; a changed folding, at start or seen on a worker's idle tick after the database restarts on a new release, enqueues the folding rebuild once even when two processes start together, and still enqueues it (a new job row, not a dedupe no-op) when only a search-only rebuild is queued, a failed or cancelled folding rebuild leaves `libraries.search_folding` unchanged and is enqueued again on the next start, and `--only text` recomputes `doc` without extracting again |
 | **L-S-2** Ranking | L-S-1 | Single weighted score | Before/after results on a synthetic multilingual corpus approved in review |
 | **L-B-1** Backup and restore format 2 | L-W-1, L-P-1, L-O-1, L-R-1, L-A-1, L-PR-1, L-S-1 | §11.4 | Round-trip test over a fixture covering every canonical table and object kind; text `COPY` with the interchange contract (no binary `COPY`); restore into the same and into a new instance with real sync operations, the archive Library mapped to the target Library and all library/user/device references resolving; a restore over a different Library whose IDs still exist is refused; R1 reuse of an existing object is lock-coupled to cleanup settle and re-verified in R3, so R4 never commits a locator to a missing object; new devices are inserted only by R4; a restore that outlives its lease aborts and never replaces writes accepted after recovery; export, staging and the R4 delete/insert use only the content-table allowlist, and a schema test classifies every library-scoped table; staging builds `restore_<id>` with `LIKE` from the live tables, never with the migration runner, checks foreign keys with redirected generated anti-joins, and refuses an archive of another schema fingerprint (§13.3 staging isolation); the round trip covers a table with a generated `*_key` column, which is not exported and is recomputed on restore; a backup with the inbox under the data root restores its pending files into a fresh instance, a file already at the same inbox path is never overwritten (the archived copy lands in `restored-<run>/` and its restored row, roles and tags follow it), a scan right after R4 deletes no restored pending row (a row whose file the user had deleted before the backup is held), and a restored `imported` row whose path holds a different file in the target's inbox loses only its row, never the file; a backup taken after a collision restore, with its `restored-<run>/` rows still pending, restores cleanly; a held `outside-root` row whose path holds a different file stays held and its roles and tags are not applied, an import that commits during a backup leaves the archive with either the pending row and its file or neither, an import handler paused between its commit and its file removal at R2 finishes before R3 publishes, and with an `outside-root` inbox the restored rows are held: a scan that finds no file keeps them and the Processing view offers to dismiss them, while a scan that finds the file with the recorded hash clears the hold; staged objects of a live run survive an orphan sweep (L-B-1 only writes `restore_run_objects` rows; the table and its term in the reference check belong to L-A-1); verification refuses tampered archives, and archive members and inbox paths stay contained (§13.3 archive containment); a restore that does not commit leaves the inbox's files as they were (§13.3 inbox undo); fault injection at R0–R5, including a kill immediately after the R4 commit that still rebuilds search after restart; the exclusion interleavings of §13.3; restoring an older snapshot while a long job runs never lets the job write to the replacement state, and an API mutation or operation envelope carrying the pre-restore epoch is refused with 409 `LIBRARY_EPOCH_CHANGED`; backup concurrent with writes and cleanup; format 1 refused with a clear message; an R3 lock timeout and an R4 rollback each leave the old data intact, clear the flag through abort finalization, and accept a new ordinary command at once without waiting for lease expiry, while an abort whose inbox undo fails keeps the flag set for recovery; a disk-full error (`53100`) injected in R1 and in R4 leaves the live Library unchanged, reports the restore as failed with that error, and a later cleanup pass drops the staging schema |
 | **L-D-1** Compose and health | PG-1, L-ID-1, L-J-1 | Dockerfile with psycopg, Compose of §12.3, `/healthz`, `/readyz`, graceful stop, `.env.example`, README deployment section (including PostgreSQL-volume capacity monitoring and headroom, §12.3), #612 configuration entries | Clean `docker compose up` smoke test in CI reaches `/readyz` and bootstrap; the database volume is mounted at `/var/lib/postgresql`; `web` and `worker` each list the `prks_database_url` secret and read it at start; data survives `down`/`up` and container recreation with the volume kept; wrong root/database pairing refused at start |
