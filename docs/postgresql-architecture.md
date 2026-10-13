@@ -1612,8 +1612,12 @@ archive. Inbox files are not
   each member's declared size.
 - Every member belongs to the archive layout above (`manifest.json`,
   `identities/*.csv`, `db/<table>.csv` for a content table, `objects/<key>`
-  with a valid key, `inbox/<rel_path>`), every member is listed in the
-  manifest, and every manifest entry is present.
+  with a valid key, `inbox/<rel_path>`), and every member is listed in the
+  manifest. Every `tables` and `objects` entry has its member. `inbox`
+  entries have members only when `inbox_bytes` is `"included"`, and then
+  all of them must be present. With `"outside-root"` the `inbox` entries
+  are metadata only (their path and hash are still checked), and an
+  `inbox/` member is refused.
 - Every `inbox` key and every archived `processing_files.rel_path` passes
   the same path check. A path under an earlier run's `restored-<run>/` is
   an ordinary path: `<run>` is minted when the restore starts, so no
@@ -2257,8 +2261,11 @@ the lane that ports the relevant module.
   backslash or duplicate member, a symlink entry, too many entries, a
   declared size over the cap or the free space, a member whose compression
   ratio is over the cap or whose stream is longer than declared, a member outside the
-  layout or missing from the manifest, or an inbox path that escapes the
-  inbox are refused in R0, and nothing is
+  layout or missing from the manifest, an `inbox/` member in an
+  `outside-root` archive or a missing one in an `included` archive, or an
+  inbox path that escapes the inbox are refused in R0, an `outside-root`
+  archive with metadata-only `inbox` entries passes R0 and backup
+  self-verification, and nothing is
   written outside the staging directory; an inbox subdirectory replaced by
   a symlink is treated as a collision in R3.
 - Restore inbox undo: an R4 failure and a kill between R3 and R4 each leave
