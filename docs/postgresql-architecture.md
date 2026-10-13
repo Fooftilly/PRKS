@@ -1000,7 +1000,7 @@ RETURNING op_id;
 | `_PDF_MATERIALIZATION_LOCKS`, `_PDF_PATH_LOCKS` | Row lock and advisory lock (§7.4) |
 | `_ready_backups` tokens | `backup_runs` rows with an opaque download token hash and expiry |
 | Bound root, index singletons | Bound once per process at startup; the database pairing record decides validity (§11.1); no hot rebind across processes (#311 §12) |
-| `root.lock` lease | Kept, but its meaning changes from "one process per root" to "one instance per root". Every process of the paired instance (`migrate`, `web`, `worker`, admin commands) takes the OS lock **shared**; relocation and the offline storage tools take it **exclusive**. The only marker writes made under the shared lock are bootstrap's one-time root claim and the start-generation bump and reconcile (§11.1). Format-2 restore does not: it writes new immutable keys into the live root while the application runs (§11.4). A process whose database names a different `storage_root_id` is refused before it touches the lock (§11.1). This is the PostgreSQL-era fencing that #311 §12 anticipates. The shared lock cannot tell two databases apart: a copy of the database carries the same `storage_root_id`, so a second instance started from a copy against the same root would pass the pairing check and share the lock. So at most one database ever runs against a root: once a copy (an upgraded cluster, a reloaded dump, a moved volume) has started against it, the database it came from is retired from that root, and the start generation refuses it if it is started there again (§11.1, §12.3, risk R20). Hot rebind stays a single-process capability and is unavailable while another process holds the shared lock. |
+| `root.lock` lease | Kept, but its meaning changes from "one process per root" to "one instance per root". Every process of the paired instance (`migrate`, `web`, `worker`, admin commands) takes the OS lock **shared**; relocation and the offline storage tools take it **exclusive**. The only marker writes made under the shared lock are bootstrap's one-time root claim (serialized by a separate, briefly held exclusive `root.claim` lock) and the start-generation bump and reconcile (§11.1). Format-2 restore does not: it writes new immutable keys into the live root while the application runs (§11.4). A process whose database names a different `storage_root_id` is refused before it touches the lock (§11.1). This is the PostgreSQL-era fencing that #311 §12 anticipates. The shared lock cannot tell two databases apart: a copy of the database carries the same `storage_root_id`, so a second instance started from a copy against the same root would pass the pairing check and share the lock. So at most one database ever runs against a root: once a copy (an upgraded cluster, a reloaded dump, a moved volume) has started against it, the database it came from is retired from that root, and the start generation refuses it if it is started there again (§11.1, §12.3, risk R20). Hot rebind stays a single-process capability and is unavailable while another process holds the shared lock. |
 | Performance registry | Stays per process by design, labelled with process role (§12.4) |
 
 ### 7.6 Concurrency tests
@@ -1668,12 +1668,21 @@ lets the schema drop `origin_work_id` and legacy operation mappings (§6.4).
        `storage_root_id`, `start_generation` 1 and setup `bootstrapping`,
        and commits. If a `bootstrapping` row already exists, its `id` is
        reused.
-    2. `claim_root(root, instance_id, shared_lease)` re-reads the marker
-       and writes `instance_id` and `start_generation` 1 only if the
-       marker is still unclaimed at generation 0 with no stored objects,
-       or already names this `instance_id` (a retry). It replaces the
-       marker atomically and reads it back. Any other marker refuses
-       bootstrap.
+    2. `claim_root(root, instance_id, shared_lease)` takes the root's
+       **claim lock** exclusive (an OS lock on a dedicated `root.claim`
+       file beside `root.lock`, held only for this step), re-reads the
+       marker and accepts exactly two states: unclaimed at generation 0
+       with no stored objects (it then writes `instance_id` and
+       `start_generation` 1), or already naming this `instance_id` at
+       generation 1 with no stored objects (a retry, which writes
+       nothing). It replaces the marker atomically, reads it back and
+       releases the lock. Any other marker refuses bootstrap; in
+       particular a marker naming this `instance_id` above generation 1,
+       or a root holding objects, means the root has moved on without
+       this database (a copy taken while it was still bootstrapping), and
+       the claim never lowers a generation. A copy retried before its
+       original has bumped or stored anything cannot be told from a
+       retry; that is a concurrent copy (risk R20).
     3. The bootstrap transaction (§9.2 step 3) marks setup `ready`.
 
     A crash after step 1 leaves a `bootstrapping` row and an unclaimed
@@ -1685,9 +1694,11 @@ lets the schema drop `origin_work_id` and legacy operation mappings (§6.4).
     volume, a wrong connection string) finds the marker naming another
     instance and is refused, even though no object has been written yet.
     Two empty databases bootstrapping against one root at the same moment
-    both pass step 1. The read-back in step 2 refuses whichever claim was
-    overwritten before it read back, but two writes that interleave
-    exactly can both pass; that simultaneous case stays risk R20.
+    both pass step 1, but the claim lock serializes step 2: the first
+    claim commits to the marker before the second re-reads it, so the
+    second finds another `instance_id` and is refused. The claim lock is
+    held only for that one read-check-write-read, and nothing else takes
+    it.
   - **Lock mode.** The claim, the bump and the reconcile run under the
     **shared** `root.lock`, because Compose runs the new `migrate` while
     the previous `web` and `worker` still hold it shared, and a manual
@@ -1699,7 +1710,8 @@ lets the schema drop `origin_work_id` and legacy operation mappings (§6.4).
     `start_generation`. Both re-read the marker, change nothing else and
     replace it atomically (`replace_file_atomically`); `write_marker`
     keeps requiring the exclusive lease for every other change.
-  - **Serialization.** The runner's `pg_advisory_lock` serializes bumps from
+  - **Serialization.** The claim lock serializes root claims (above). The
+    runner's `pg_advisory_lock` serializes bumps from
     one database. Relocation and the offline storage tools hold the lock
     exclusive, so they never meet a claim or a bump. Two different
     databases writing at once is the concurrent-copy case: the atomic
@@ -2708,6 +2720,14 @@ the lane that ports the relevant module.
   - a second empty database pointed at the root after the claim, with no
     object written yet, is refused by bootstrap and the marker is
     unchanged;
+  - two empty databases claiming one root, with a barrier holding the
+    first claim between its marker re-read and its write: the second
+    claim waits on the claim lock, then is refused, and exactly one
+    database reaches `ready`;
+  - a copy of a database taken while it was `bootstrapping`, retried
+    after the original became `ready` and either bumped the marker or
+    stored an object, is refused, and the marker's generation and
+    objects are unchanged;
   - `migrate` killed after the database bump commits and before the
     marker write: `web` and `worker` started next reconcile the marker
     before `/readyz` reports ready, and a copy of the database taken
@@ -2766,7 +2786,7 @@ checkpointing, rowid preservation) are listed as retired with the reason.
 | R17 | A restore races ordinary writers, jobs or cleanup | Medium | High | Committed maintenance flag, maintenance lock drain, objects lock (§11.4); interleaving tests (§13.3) |
 | R18 | Work begun before a restore (a running job, an open tab, a browser outbox) is applied to the restored Library | Medium | High | Library `epoch` checked by every command, job claim and job transaction; older-epoch browser rows go to review-only recovery (§10.4, §11.4); restore-fencing tests (§13.3) |
 | R19 | The PostgreSQL volume fills during restore staging | Low | Medium | Accepted by the maintainer (2026-10-13): no disk-space probe or headroom setting in 0.8; R1/R4 roll back, the failure is reported, cleanup is idempotent, and deployment docs cover monitoring and headroom (§11.4, §12.3) |
-| R20 | Two databases run against one data root, at once (a copy started alongside the original) or one after the other (the old cluster restarted after an upgrade or volume move), and one finds objects the other's orphan sweep deleted | Low | Critical | Accepted by the maintainer (2026-10-13) as a documented deployment limitation of 0.8: one canonical database per root, concurrent copies unsupported and not technically prevented, no heartbeat or cross-database fencing. The pairing check refuses any database paired with another root, the root claim refuses an independently bootstrapped database (the marker names another `instance_id`), and the start generation refuses a database started after a newer copy has run against the root (§11.1); copies running at the same time are not detected; the deployment docs say at most one database ever runs against a root, the old cluster's data directory is moved out or deleted once a copy has started, reverting the image tag is not a rollback, and rollback uses a root copy taken with the old data directory or a format-2 backup restored into a fresh instance (§12.3); the shared `root.lock` fences only exclusive tools (§7.5) |
+| R20 | Two databases run against one data root, at once (a copy started alongside the original) or one after the other (the old cluster restarted after an upgrade or volume move), and one finds objects the other's orphan sweep deleted | Low | Critical | Accepted by the maintainer (2026-10-13) as a documented deployment limitation of 0.8: one canonical database per root, concurrent copies unsupported and not technically prevented, no heartbeat or cross-database fencing. The pairing check refuses any database paired with another root, the root claim, serialized by the claim lock, refuses an independently bootstrapped database (the marker names another `instance_id`), and the start generation refuses a database started after a newer copy has run against the root (§11.1); copies running at the same time are not detected; the deployment docs say at most one database ever runs against a root, the old cluster's data directory is moved out or deleted once a copy has started, reverting the image tag is not a rollback, and rollback uses a root copy taken with the old data directory or a format-2 backup restored into a fresh instance (§12.3); the shared `root.lock` fences only exclusive tools (§7.5) |
 
 Dependencies: #60 (model, unchanged in meaning), #311 (Phase B is absorbed
 into the Assets lane; D–E later), #612 (bootstrap and configuration
@@ -2834,7 +2854,7 @@ merged; several run at the same time).
 
 | Slice | Depends on | Content | Acceptance criteria |
 | --- | --- | --- | --- |
-| **L-ID-1** Identity, bootstrap and sessions | PG-2 | Users, Libraries (with `epoch`), memberships, bootstrap tokens and command, Argon2id login with the attempt limiter, login-device tokens and `prks admin unlock-login`, sessions, `GET /api/session` (returns the epoch), `RequestContext` carrying the acted-on epoch and the command-helper epoch check, `authorize()`, loopback-owner mode for `--testing`; CSRF hardening | §13.3 bootstrap and session tests; a command with a stale or missing epoch is refused before writing; login throttling: without a login-device cookie, the sixth attempt for an account and the 21st for an address within the window get 429 with `Retry-After` without a password check, and window expiry or a successful login resets the account row; 20 simultaneous wrong-password requests for one account run at most 5 password checks; with the account limit tripped, the correct password from a browser holding a valid login-device cookie still signs in, and that cookie is limited on its own; `prks admin unlock-login` clears the account limit; two IPv6 addresses in one `/64` share an address key; a spoofed `X-Forwarded-For` from an untrusted peer does not change the address key; takeover after `ready` refused; secrets, the bootstrap token included, never in responses or logs (log-privacy test), and the token file is created `0600` outside the data root; removing a membership refuses the next read and write of that user's existing session for the Library, and demoting an editor to reader refuses the next write; `--testing` E2E unaffected; the root claim and start check of §11.1 (`root_pairing.py`, `claim_root`, `bump_start_generation`) with the §13.3 root-claim fault-injection tests: interrupted bootstrap resumes, interrupted bump is reconciled before serving, a second empty database is refused after the claim |
+| **L-ID-1** Identity, bootstrap and sessions | PG-2 | Users, Libraries (with `epoch`), memberships, bootstrap tokens and command, Argon2id login with the attempt limiter, login-device tokens and `prks admin unlock-login`, sessions, `GET /api/session` (returns the epoch), `RequestContext` carrying the acted-on epoch and the command-helper epoch check, `authorize()`, loopback-owner mode for `--testing`; CSRF hardening | §13.3 bootstrap and session tests; a command with a stale or missing epoch is refused before writing; login throttling: without a login-device cookie, the sixth attempt for an account and the 21st for an address within the window get 429 with `Retry-After` without a password check, and window expiry or a successful login resets the account row; 20 simultaneous wrong-password requests for one account run at most 5 password checks; with the account limit tripped, the correct password from a browser holding a valid login-device cookie still signs in, and that cookie is limited on its own; `prks admin unlock-login` clears the account limit; two IPv6 addresses in one `/64` share an address key; a spoofed `X-Forwarded-For` from an untrusted peer does not change the address key; takeover after `ready` refused; secrets, the bootstrap token included, never in responses or logs (log-privacy test), and the token file is created `0600` outside the data root; removing a membership refuses the next read and write of that user's existing session for the Library, and demoting an editor to reader refuses the next write; `--testing` E2E unaffected; the root claim and start check of §11.1 (`root_pairing.py`, `claim_root`, `bump_start_generation`) with the §13.3 root-claim fault-injection tests: interrupted bootstrap resumes, interrupted bump is reconciled before serving, a second empty database is refused after the claim, two simultaneous claims leave exactly one `ready` database, a bootstrapping copy retried after the root moved on is refused |
 | **L-J-1** Jobs runtime | PG-2 | `jobs` claim/run/retry/lease, NOTIFY wakeup, embedded worker thread, `prks worker`, prune job, diagnostics counters | Kill-after-claim → lease expiry → exactly one reclaim → idempotent completion; stale-worker completion and heartbeat update nothing; repeated-crash job ends `failed` and frees its singleton key; dedupe tests, including a handled failure while a queued twin exists (A cancelled, B runs once); a handled failure on the last attempt ends `failed`, never `queued`, and frees its dedupe key; two concurrent workers with several queued jobs of one singleton key never run two and never surface `23505`; jobs of a Library in maintenance or of an older epoch are not claimed; worker graceful stop |
 | **L-W-1** Works core | PG-3, L-ID-1 | Every Works-family table of §6.5 (`works`, `manifestations`, `assets` (catalogue only), `manifestation_relations`, `manifestation_identifiers`, `work_notes`, `sync_work_lifecycle`, `duplicate_decisions`), so later 0.8 Works slices add no canonical table (`manifestation_credit_overrides` comes with #60 Slice K, §6.4); projection module producing today's JSON; create/get/browse/recent/open/metadata/source/delete commands; facade methods; `CREATE_WORK`, `DELETE_WORK`, `MARK_WORK_OPENED`, `SET_WORK_METADATA_FIELD`, `SET_WORK_SOURCE`, note handlers | Parametrized Work and sync-family tests pass on PostgreSQL; JSON parity tests against SQLite fixtures; the #60 §4.1 negative tests as schema tests; deferred pointer FKs proven |
 | **L-W-2** Bulk, BibTeX, wiki links, Work merge scaffolding | L-W-1 | Bulk actions (SERIALIZABLE), BibTeX via citation record, wiki-link resolution, on the tables L-W-1 created (no new canonical table, so L-B-1 does not wait for it) | Byte-identical BibTeX tests; bulk atomicity tests |
