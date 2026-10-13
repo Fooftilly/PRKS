@@ -2795,7 +2795,7 @@ stops for maintainer review. No PR is merged without explicit approval.
 | Lane | Owns (may create and edit) | Must not edit |
 | --- | --- | --- |
 | Foundation (PG-1, PG-2, PG-3) | `backend/db/**`, `backend/db/schema/000_*.sql`–`020_*.sql`, `tests/pg/**` harness, CI workflow DB service, `requirements*.txt`, `dependency-inventory.json`, `backend/pg_facade/__init__.py` | domain packages |
-| Identity (L-ID) | `backend/domain/identity/**`, `020_identity.sql` (after PG-2 hands it over), `backend/api/session.py`, auth admission hook in `server.py` (one function) | other domain packages |
+| Identity (L-ID) | `backend/domain/identity/**` (including `root_pairing.py`, §11.1), `020_identity.sql` (after PG-2 hands it over), `backend/api/session.py`, auth admission hook in `server.py` (one function), `claim_root` and `bump_start_generation` in `backend/storage/root_marker.py` | other domain packages |
 | Works (L-W) | `backend/domain/works/**`, `100_works.sql`, `backend/pg_facade/works.py`, `backend/sync/handlers/work_*.py` | people/organization/research files |
 | People (L-P) | `backend/domain/people/**`, `110_people.sql`, `pg_facade/people.py`, `sync/handlers/person*.py`, `work_role` handler | works schema (references only) |
 | Organization (L-O) | `backend/domain/organization/**`, `120_organization.sql`, `pg_facade/organization.py`, tag/folder/playlist handlers, `domain/saved_views`, `domain/settings` | |
