@@ -554,7 +554,8 @@ cleanup, rebuilds).
 # backend/domain/organization/commands.py (illustrative)
 def add_work_tag(ctx: RequestContext, work_id: str, tag_id: str,
                  base_revision: int | None) -> CommandResult:
-    with ctx.db.command(ctx, isolation="read_committed") as tx:
+    # work_tags is a peer table of tag merge and Work merge (§7.1)
+    with ctx.db.command(ctx, isolation="serializable") as tx:   # retried on 40001
         authorize(tx, ctx, Capability.EDIT_LIBRARY)
         rev = tx.lock_revision("work-tag", [work_id, tag_id])   # SELECT … FOR UPDATE
         ...                                                     # decision table
