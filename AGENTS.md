@@ -124,6 +124,7 @@ When a finding is fixed, obsolete, rejected, superseded, or duplicated, close it
 - `backend/storage/root_binding.py` startup root validation, `prks-root.json` marker (`root_marker.py`) and the single-process `root.lock` lease (`file_lock.py`)
 - `backend/storage/objects.py` `StorageBackend` / `LocalFilesystemStorage` (not yet routed; Phase B). Design: `docs/storage-architecture.md`
 - `backend/db_manager.py` SQLite
+- `backend/db/` PostgreSQL plumbing (#623, PG-1): config, bounded pool, `command()`/`query()` helpers, SQLSTATE error mapping; not used by the running app yet. Its tests live in `tests/pg/` and run only through `scripts/test-postgres` (needs PostgreSQL 18 and the psycopg pins in `requirements-dev.txt`)
 - `backend/pdf_annotations.py` canonical PDF annotation metadata
 - `backend/db_migrations.py` ordered schema migrations
 - `backend/backup_restore.py` verified backup/restore
