@@ -1107,9 +1107,19 @@ CREATE INDEX work_search_text_trgm ON derived.work_search USING gin (text_norm e
   results on a synthetic multilingual corpus.
 - **Substring and fuzzy** (`pg_trgm`) replace every `LOWER(…) LIKE` path,
   including author and publisher filters, with Unicode-correct folding via
-  `prks.search_norm(s) = unaccent(casefold(normalize(s, NFC)))`, an
-  `IMMUTABLE` SQL function that uses the same `unaccent` rules (PRKS's
-  `prks_unaccent.rules` included) as the text search configuration.
+  `prks.search_norm(s) = ext.unaccent('ext.unaccent'::regdictionary,
+  casefold(normalize(s, NFC) COLLATE pg_unicode_fast))`, an `IMMUTABLE` SQL
+  function that uses the same `unaccent` rules (PRKS's `prks_unaccent.rules`
+  included) as the text search configuration. Like `identity_key` and the
+  FTS path, it pins `casefold` to `pg_unicode_fast`, so a bound token and a
+  stored column fold identically whatever their collation, and it names the
+  dictionary explicitly because one-argument `unaccent` is only `STABLE`.
+  The PG-2 immutability proof (§8.1) covers this function too. If it
+  cannot be `IMMUTABLE`, it is declared `STABLE` and nothing else changes:
+  the `*_norm` columns are plain columns that commands and
+  `rebuild-derived` write by calling the same function, not generated
+  columns or expression indexes, so the stored and queried sides still use
+  one definition.
 - **Both sides of a substring match are normalized in SQL.** Python only
   splits the query into tokens. Every substring predicate, on `text_norm`,
   `title_norm`, `people_norm` or an author or publisher filter, is
@@ -2479,7 +2489,7 @@ explicit go, and PG-1 comes first.
 | Slice | Content | Acceptance criteria |
 | --- | --- | --- |
 | **PG-1** Database plumbing and test harness | psycopg + psycopg_pool pins; `backend/db/` config (`PRKS_DATABASE_URL`, `*_FILE`), pool, `command()`/`query()` helpers with isolation, error mapping table; harness-created test databases with template cloning and refusal of foreign databases (ownership marked with a `COMMENT ON DATABASE` until PG-2 adds `instance.testing`); `scripts/test-postgres`; CI service container in `test-gate.yml`. No domain tables. | Unit tests for helpers (commit, rollback on exception, SERIALIZABLE retry on injected `40001`, READ ONLY query refuses writes); error-mapping tests per SQLSTATE; pool exhaustion → typed error; harness refuses a pre-existing database; CI green with the service; existing SQLite suites untouched and green. |
-| **PG-2** Migration runner, schema layout and core tables | Runner with advisory lock and checksums; `000_extensions.sql`, `010_instance.sql`, `020_identity.sql`, `030_jobs.sql`, `040_sync.sql` (`entity_revisions`, `sync_operations`, `devices`); `prks.identity_key` with the immutability proof (§8.1); text identity vectors and Python implementation; schema snapshot test and `check_pg_schema.py`. | Fresh database matches the snapshot; concurrent `migrate` runs apply once; a newer-schema database is refused; a database whose applied baseline file has since changed is refused with the recreate message; identity vectors pass in SQL and Python; `IMMUTABLE` generated column works under the builtin locale (or the fallback is chosen and documented). |
+| **PG-2** Migration runner, schema layout and core tables | Runner with advisory lock and checksums; `000_extensions.sql`, `010_instance.sql`, `020_identity.sql`, `030_jobs.sql`, `040_sync.sql` (`entity_revisions`, `sync_operations`, `devices`); `prks.identity_key` with the immutability proof (§8.1), which also covers `prks.search_norm` (§8.3); text identity vectors and Python implementation; schema snapshot test and `check_pg_schema.py`. | Fresh database matches the snapshot; concurrent `migrate` runs apply once; a newer-schema database is refused; a database whose applied baseline file has since changed is refused with the recreate message; identity vectors pass in SQL and Python; `IMMUTABLE` generated column works under the builtin locale (or the fallback is chosen and documented). |
 | **PG-3** Parity harness and facade skeleton | `PostgresLibrary` facade composed of empty mixins; a test fixture parametrizing selected modules over `sqlite` and `postgres`, with a registry marking which methods are ported (unported ones skip on `postgres`, not fail); a dual-run CI job. | Running `python run_tests.py` unchanged still runs SQLite only; the `postgres` leg runs and reports ported/unported counts; no lane needs to edit the fixture to register its family (one line in its mixin). |
 
 **Stage 2. Parallel lanes** (each may start once its dependencies are
