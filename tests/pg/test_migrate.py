@@ -297,9 +297,26 @@ class MigrateTests(EmptyDatabaseTestCase):
         self.assert_refused("schema_file_failed", migrate, self.conninfo, directory=directory)
         self.assertEqual(self.query("SELECT to_regclass('public.stray') IS NULL"), [(True,)])
 
-    def test_unknown_prks_schema_is_refused(self) -> None:
-        self.query("CREATE SCHEMA prks")
-        self.assert_refused("foreign_schema", migrate, self.conninfo)
+    def test_non_empty_databases_are_refused_untouched(self) -> None:
+        for setup, cleanup in (
+            ("CREATE SCHEMA prks", "DROP SCHEMA prks"),
+            ("CREATE SCHEMA derived", "DROP SCHEMA derived"),
+            ("CREATE SCHEMA library_data", "DROP SCHEMA library_data"),
+            ("CREATE TABLE public.precious (v text)", "DROP TABLE public.precious"),
+            ("CREATE FUNCTION public.f() RETURNS int LANGUAGE sql AS 'SELECT 1'", "DROP FUNCTION public.f()"),
+            ("CREATE TYPE public.mood AS ENUM ('ok')", "DROP TYPE public.mood"),
+            ("CREATE EXTENSION pg_trgm SCHEMA public", "DROP EXTENSION pg_trgm"),
+        ):
+            with self.subTest(setup):
+                self.query(setup)
+                try:
+                    self.assert_refused("foreign_schema", migrate, self.conninfo)
+                    self.assertEqual(
+                        self.query("SELECT to_regclass('prks.schema_migrations') IS NULL"), [(True,)]
+                    )
+                finally:
+                    self.query(cleanup)
+        self.assertEqual(len(migrate(self.conninfo).applied), len(load_schema_files()))
 
     def test_verify_refuses_an_empty_or_partial_database(self) -> None:
         self.assert_refused("not_migrated", verify_schema, self.conninfo)

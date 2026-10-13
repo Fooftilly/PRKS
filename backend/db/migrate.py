@@ -235,15 +235,39 @@ def _lock(conn: psycopg.Connection[Any]) -> None:
         ) from None
 
 
+def _is_empty(conn: psycopg.Connection[Any]) -> bool:
+    """No user schema, no object in ``public`` and no extension but plpgsql."""
+    row = conn.execute(
+        """
+        SELECT NOT EXISTS (
+                 SELECT 1 FROM pg_namespace
+                  WHERE nspname NOT IN ('pg_catalog', 'information_schema', 'public')
+                    AND nspname NOT LIKE 'pg\\_toast%'
+                    AND nspname NOT LIKE 'pg\\_temp\\_%')
+           AND NOT EXISTS (
+                 SELECT 1 FROM pg_class
+                  WHERE relnamespace = 'public'::regnamespace)
+           AND NOT EXISTS (
+                 SELECT 1 FROM pg_proc
+                  WHERE pronamespace = 'public'::regnamespace)
+           AND NOT EXISTS (
+                 SELECT 1 FROM pg_type
+                  WHERE typnamespace = 'public'::regnamespace)
+           AND NOT EXISTS (
+                 SELECT 1 FROM pg_extension WHERE extname <> 'plpgsql')
+        """
+    ).fetchone()
+    return bool(row is not None and row[0])
+
+
 def _ensure_ledger(conn: psycopg.Connection[Any]) -> list[AppliedFile]:
     applied = _applied(conn)
     if applied is not None:
         return applied
-    has_prks = conn.execute("SELECT to_regnamespace('prks') IS NOT NULL").fetchone()
-    if has_prks is not None and has_prks[0]:
+    if not _is_empty(conn):
         raise MigrationError(
             "foreign_schema",
-            "The database has a prks schema without prks.schema_migrations; "
+            "The database already holds objects and has no prks.schema_migrations; "
             "the runner only initializes an empty database.",
         )
     with conn.transaction():
