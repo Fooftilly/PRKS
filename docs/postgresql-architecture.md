@@ -1091,10 +1091,11 @@ ALTER TEXT SEARCH CONFIGURATION prks.prks_search
   lowercases, which keeps Greek final `ς` and medial `σ` (and similar pairs)
   apart. Every text indexed with this configuration, in `derived.work_search`
   and `derived.asset_text` alike, is passed as `to_tsvector('prks.prks_search',
-  casefold(normalize(t, NFC) COLLATE pg_unicode_fast))`, and query tokens are
-  case-folded the same way in Python (`str.casefold` after NFC) before
-  `to_tsquery`. Indexed and queried lexemes therefore use the same full case
-  folding as `search_norm` and `identity_key`.
+  casefold(normalize(t, NFC) COLLATE pg_unicode_fast))`, and query tokens
+  are folded by the same expression in SQL (below), never by Python's
+  `str.casefold`. Indexed and queried lexemes therefore use one Unicode
+  implementation, PostgreSQL's, whatever Python version PRKS runs on, and
+  the folding check (§8.6) covers both sides.
 - **No stemming.** The library is multilingual (English, Greek, Serbian
   Cyrillic and Latin, German, French, …), Works rarely declare a language,
   and today's FTS5 does not stem. Prefix matching (`'term':*`) reproduces
@@ -1117,11 +1118,14 @@ ALTER TEXT SEARCH CONFIGURATION prks.prks_search
   never an edit in place, so the dictionary's rules name identifies the
   rules (§8.6). A database image without the named file fails the
   dictionary's first use loudly instead of folding with other rules.
-- Query parsing stays in Python: `_prks_search_tokens` semantics (split on
-  `-`/`_`, drop non-word characters) are kept, then the tokens are passed
-  through `to_tsquery('prks.prks_search', …)` with `:*` and `&`, using bound
-  parameters and never string interpolation of raw query text into
-  `to_tsquery` syntax.
+- Query splitting stays in Python: `_prks_search_tokens` semantics (split on
+  `-`/`_`, drop non-word characters) are kept, and the tokens are bound as a
+  `text[]` parameter. SQL folds each one and builds the query:
+  `to_tsquery('prks.prks_search', (SELECT string_agg(quote_literal(
+  casefold(normalize(t, NFC) COLLATE pg_unicode_fast)) || ':*', ' & ')
+  FROM unnest($tokens) AS t))`. Raw query text is never interpolated into
+  `to_tsquery` syntax, and the configuration's own parser then reads each
+  folded token, so Python decides only where tokens split.
 
 **Search documents** live in `derived.work_search`:
 
@@ -2611,8 +2615,8 @@ merged; several run at the same time).
 | --- | --- | --- | --- |
 | **L-ID-1** Identity, bootstrap and sessions | PG-2 | Users, Libraries (with `epoch`), memberships, bootstrap tokens and command, Argon2id login with the attempt limiter, login-device tokens and `prks admin unlock-login`, sessions, `GET /api/session` (returns the epoch), `RequestContext` carrying the acted-on epoch and the command-helper epoch check, `authorize()`, loopback-owner mode for `--testing`; CSRF hardening | §13.3 bootstrap and session tests; a command with a stale or missing epoch is refused before writing; login throttling: without a login-device cookie, the sixth attempt for an account and the 21st for an address within the window get 429 with `Retry-After` without a password check, and window expiry or a successful login resets the account row; 20 simultaneous wrong-password requests for one account run at most 5 password checks; with the account limit tripped, the correct password from a browser holding a valid login-device cookie still signs in, and that cookie is limited on its own; `prks admin unlock-login` clears the account limit; two IPv6 addresses in one `/64` share an address key; a spoofed `X-Forwarded-For` from an untrusted peer does not change the address key; takeover after `ready` refused; secrets, the bootstrap token included, never in responses or logs (log-privacy test), and the token file is created `0600` outside the data root; removing a membership refuses the next read and write of that user's existing session for the Library, and demoting an editor to reader refuses the next write; `--testing` E2E unaffected |
 | **L-J-1** Jobs runtime | PG-2 | `jobs` claim/run/retry/lease, NOTIFY wakeup, embedded worker thread, `prks worker`, prune job, diagnostics counters | Kill-after-claim → lease expiry → exactly one reclaim → idempotent completion; stale-worker completion and heartbeat update nothing; repeated-crash job ends `failed` and frees its singleton key; dedupe tests, including a handled failure while a queued twin exists (A cancelled, B runs once); a handled failure on the last attempt ends `failed`, never `queued`, and frees its dedupe key; two concurrent workers with several queued jobs of one singleton key never run two and never surface `23505`; jobs of a Library in maintenance or of an older epoch are not claimed; worker graceful stop |
-| **L-W-1** Works core | PG-3, L-ID-1 | `works`, `manifestations`, `assets` (catalogue only), `work_notes`, projection module producing today's JSON; create/get/browse/recent/open/metadata/source/delete commands; facade methods; `CREATE_WORK`, `DELETE_WORK`, `MARK_WORK_OPENED`, `SET_WORK_METADATA_FIELD`, `SET_WORK_SOURCE`, note handlers | Parametrized Work and sync-family tests pass on PostgreSQL; JSON parity tests against SQLite fixtures; the #60 §4.1 negative tests as schema tests; deferred pointer FKs proven |
-| **L-W-2** Bulk, BibTeX, wiki links, Work merge scaffolding | L-W-1 | Bulk actions (SERIALIZABLE), BibTeX via citation record, wiki-link resolution | Byte-identical BibTeX tests; bulk atomicity tests |
+| **L-W-1** Works core | PG-3, L-ID-1 | Every Works-family table of §6.5 (`works`, `manifestations`, `assets` (catalogue only), `manifestation_relations`, `manifestation_identifiers`, `work_notes`, `sync_work_lifecycle`, `duplicate_decisions`), so later Works slices add no canonical table; projection module producing today's JSON; create/get/browse/recent/open/metadata/source/delete commands; facade methods; `CREATE_WORK`, `DELETE_WORK`, `MARK_WORK_OPENED`, `SET_WORK_METADATA_FIELD`, `SET_WORK_SOURCE`, note handlers | Parametrized Work and sync-family tests pass on PostgreSQL; JSON parity tests against SQLite fixtures; the #60 §4.1 negative tests as schema tests; deferred pointer FKs proven |
+| **L-W-2** Bulk, BibTeX, wiki links, Work merge scaffolding | L-W-1 | Bulk actions (SERIALIZABLE), BibTeX via citation record, wiki-link resolution, on the tables L-W-1 created (no new canonical table, so L-B-1 does not wait for it) | Byte-identical BibTeX tests; bulk atomicity tests |
 | **L-P-1** People | L-W-1 | Persons, aliases as rows, roles (no `rowid`), person groups, publishers; their sync families | Parametrized tests; Greek/Cyrillic identity for publishers and groups; a publisher name and another publisher's alias never share a key under concurrency (`publisher_keys`); role order stable without `rowid` |
 | **L-O-1** Organization | L-W-1 | Tags (aliases, merge), folders, folder tags, playlists, Saved Views, settings split; their sync families | Parametrized tests; tag merge concurrency test; a tag name and another tag's alias never share a key under concurrency (`tag_keys`); per-parent folder identity; one-playlist-per-Work |
 | **L-R-1** Research | L-W-1, L-J-1 | Concepts with `concept_keys`, Positions, Arguments, sources/targets, notes integration, derived mentions via `research.reindex_work`, graph projection | Parametrized tests; Research-ACK fence still observed by E2E; no Python full scan for concept resolution |
