@@ -149,6 +149,28 @@ def _applied(conn: psycopg.Connection[Any]) -> list[AppliedFile] | None:
     return [AppliedFile(int(v), str(n), str(s)) for v, n, s in rows]
 
 
+def _check_applied(row: AppliedFile, current: SchemaFile | None, newest: int) -> None:
+    """Refuse one applied ledger row that the files on disk do not reproduce."""
+    if current is None and row.version > newest:
+        raise MigrationError(
+            "newer_schema",
+            f"The database has schema version {row.version:03d}, newer than this "
+            f"PRKS ({newest:03d}). Run the PRKS release that migrated it.",
+        )
+    if current is None:
+        raise MigrationError(
+            "unknown_schema_file",
+            f"The database applied schema version {row.version:03d}, which this PRKS "
+            f"does not have. {_RECREATE_HINT}",
+        )
+    if current.name != row.name or current.sha256 != row.sha256:
+        raise MigrationError(
+            "schema_file_changed",
+            f"Schema file {current.filename} changed after this database applied it. "
+            f"{_RECREATE_HINT}",
+        )
+
+
 def plan(files: Sequence[SchemaFile], applied: Sequence[AppliedFile]) -> list[SchemaFile]:
     """The files still to apply, after refusing every inconsistent state.
 
@@ -166,25 +188,7 @@ def plan(files: Sequence[SchemaFile], applied: Sequence[AppliedFile]) -> list[Sc
     by_version = {f.version: f for f in files}
     newest = files[-1].version if files else -1
     for row in applied:
-        if row.version not in by_version:
-            if row.version > newest:
-                raise MigrationError(
-                    "newer_schema",
-                    f"The database has schema version {row.version:03d}, newer than this "
-                    f"PRKS ({newest:03d}). Run the PRKS release that migrated it.",
-                )
-            raise MigrationError(
-                "unknown_schema_file",
-                f"The database applied schema version {row.version:03d}, which this PRKS "
-                f"does not have. {_RECREATE_HINT}",
-            )
-        current = by_version[row.version]
-        if current.name != row.name or current.sha256 != row.sha256:
-            raise MigrationError(
-                "schema_file_changed",
-                f"Schema file {current.filename} changed after this database applied it. "
-                f"{_RECREATE_HINT}",
-            )
+        _check_applied(row, by_version.get(row.version), newest)
     applied_versions = {row.version for row in applied}
     pending = [f for f in files if f.version not in applied_versions]
     if pending and applied and pending[0].version < max(applied_versions):
