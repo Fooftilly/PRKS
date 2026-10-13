@@ -54,8 +54,13 @@ start_docker() {
   local i
   for ((i = 0; i < 60; i++)); do
     if docker exec "$name" pg_isready -U postgres -h 127.0.0.1 >/dev/null 2>&1; then
-      local port
-      port="$(docker port "$name" 5432/tcp | head -n1 | sed 's/.*://')"
+      local port=""
+      port="$(docker port "$name" 5432/tcp 2>/dev/null | head -n1 | sed 's/.*://')"
+      if [[ ! "$port" =~ ^[0-9]+$ ]]; then
+        echo "test-postgres: could not read the Docker server's port" >&2
+        docker rm -f "$name" >/dev/null 2>&1 || true
+        return 1
+      fi
       export PRKS_TEST_DATABASE_URL="postgresql://postgres@127.0.0.1:${port}/postgres"
       return 0
     fi
