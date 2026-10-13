@@ -257,7 +257,10 @@ edits only the files it owns (§15.2), schema-qualifies every name (the runner
 applies files with an empty `search_path`), and regenerates
 `backend/db/schema/snapshot.json` with `scripts/check_pg_schema.py --write` in
 the same PR. Never index, default or generate a column from
-`prks.search_norm` (§8.3; the snapshot check fails it). The runner never reads
+`prks.search_norm` (§8.3; the snapshot check fails it), and give any SQL function
+that an index, default or generated column calls a `BEGIN ATOMIC` body: the
+check refuses stored values computed through string-bodied functions, whose
+calls the catalog does not record. The runner never reads
 or writes the data root; the root claim and start generation belong to L-ID-1.
 
 ## Bulk work mutations

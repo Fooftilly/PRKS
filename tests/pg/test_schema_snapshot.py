@@ -85,6 +85,49 @@ class SearchNormGuardTests(PostgresTestCase):
         self.conn.execute("CREATE INDEX w_norm ON guard_probe.w (guard_probe.wrap(v))")
         self.assertTrue(any("w_norm" in d for d in self.dependents()), self.dependents())
 
+    def test_index_through_a_string_bodied_sql_wrapper_is_reported(self) -> None:
+        # PostgreSQL records no dependency for a string body, so the guard
+        # must fail closed on the wrapper itself.
+        self.conn.execute(
+            "CREATE FUNCTION guard_probe.swrap(s text) RETURNS text LANGUAGE sql IMMUTABLE "
+            "AS $$ SELECT prks.search_norm(s) $$"
+        )
+        self.conn.execute("CREATE TABLE guard_probe.s (v text)")
+        self.conn.execute("CREATE INDEX s_norm ON guard_probe.s (guard_probe.swrap(v))")
+        self.assertTrue(any("s_norm" in d for d in self.dependents()), self.dependents())
+
+    def test_index_through_a_plpgsql_wrapper_is_reported(self) -> None:
+        self.conn.execute(
+            "CREATE FUNCTION guard_probe.pwrap(s text) RETURNS text LANGUAGE plpgsql IMMUTABLE "
+            "AS $$ BEGIN RETURN prks.search_norm(s); END $$"
+        )
+        self.conn.execute("CREATE TABLE guard_probe.pl (v text)")
+        self.conn.execute("CREATE INDEX pl_norm ON guard_probe.pl (guard_probe.pwrap(v))")
+        self.assertTrue(any("pl_norm" in d for d in self.dependents()), self.dependents())
+
+    def test_generated_column_through_atomic_then_string_wrappers_is_reported(self) -> None:
+        self.conn.execute(
+            "CREATE FUNCTION guard_probe.inner_s(s text) RETURNS text LANGUAGE sql IMMUTABLE "
+            "AS $$ SELECT prks.search_norm(s) $$"
+        )
+        self.conn.execute(
+            "CREATE FUNCTION guard_probe.outer_a(s text) RETURNS text LANGUAGE sql IMMUTABLE "
+            "BEGIN ATOMIC SELECT guard_probe.inner_s(s); END"
+        )
+        self.conn.execute(
+            "CREATE TABLE guard_probe.chain (v text, n text GENERATED ALWAYS AS (guard_probe.outer_a(v)) STORED)"
+        )
+        self.assertNotEqual(self.dependents(), [])
+
+    def test_unused_string_bodied_function_is_allowed(self) -> None:
+        self.conn.execute(
+            "CREATE FUNCTION guard_probe.helper(s text) RETURNS text LANGUAGE sql IMMUTABLE "
+            "AS $$ SELECT prks.search_norm(s) $$"
+        )
+        self.conn.execute("CREATE TABLE guard_probe.h (v text, n text)")
+        self.conn.execute("INSERT INTO guard_probe.h VALUES ('X', guard_probe.helper('X'))")
+        self.assertEqual(self.dependents(), [])
+
     def test_plain_column_written_by_a_command_is_allowed(self) -> None:
         self.conn.execute("CREATE TABLE guard_probe.p (v text, n text)")
         self.conn.execute("INSERT INTO guard_probe.p VALUES ('X', prks.search_norm('X'))")

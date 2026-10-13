@@ -10,7 +10,9 @@ built from the schema files; ``scripts/check_pg_schema.py`` and
 :func:`search_norm_dependents` is the §8.3 guard: nothing stored may be
 computed from ``prks.search_norm``, whose rules can change with the database
 image, so no index expression, column default or generated column may depend
-on it, directly or through another function.
+on it, directly or through another function. String-bodied functions hide
+their calls from the catalog, so the guard refuses stored values computed
+through them too.
 
 Extension members (``ext``) are not listed one by one: the extension's name
 and schema stand for them, and their versions belong to the server image.
@@ -270,11 +272,17 @@ def catalog_snapshot(conn: psycopg.Connection[Any]) -> dict[str, Any]:
 
 
 def search_norm_dependents(conn: psycopg.Connection[Any]) -> list[str]:
-    """Stored objects computed from ``prks.search_norm``; must be empty (§8.3).
+    """Stored objects that may be computed from ``prks.search_norm``; must be empty (§8.3).
 
-    Follows functions that call it (SQL-standard bodies record their
-    dependencies), then reports every index, column default or generated
-    column, and constraint that depends on any of them.
+    PostgreSQL records what an SQL-standard (``BEGIN ATOMIC``) body calls, but
+    not what a string body (``LANGUAGE sql AS $$…$$``, PL/pgSQL) calls. The
+    guard therefore fails closed: it starts from ``prks.search_norm`` *and*
+    every string-bodied SQL or PL/pgSQL function outside the system schemas and
+    extensions, follows the recorded function-to-function edges, and reports
+    every index, column default or generated column, and constraint that
+    depends on any of them, as ``"<object> -> <function>"``. A stored value
+    computed through a function the check cannot see into is refused like a
+    direct use; such a function must be rewritten with a ``BEGIN ATOMIC`` body.
     """
     rows = _rows(
         conn,
@@ -282,11 +290,23 @@ def search_norm_dependents(conn: psycopg.Connection[Any]) -> list[str]:
         WITH RECURSIVE fns(oid) AS (
           SELECT 'prks.search_norm(text)'::regprocedure::oid
           UNION
+          SELECT p.oid
+            FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            JOIN pg_language l ON l.oid = p.prolang
+           WHERE p.prosqlbody IS NULL
+             AND l.lanname IN ('sql', 'plpgsql')
+             AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+             AND NOT EXISTS (SELECT 1 FROM pg_depend e
+                              WHERE e.classid = 'pg_proc'::regclass AND e.objid = p.oid
+                                AND e.deptype = 'e')
+          UNION
           SELECT d.objid
             FROM pg_depend d JOIN fns ON d.refobjid = fns.oid
            WHERE d.refclassid = 'pg_proc'::regclass AND d.classid = 'pg_proc'::regclass
         )
         SELECT DISTINCT pg_describe_object(d.classid, d.objid, d.objsubid)
+                        || ' -> ' || fns.oid::regprocedure::text
           FROM pg_depend d JOIN fns ON d.refobjid = fns.oid
          WHERE d.refclassid = 'pg_proc'::regclass
            AND d.classid IN ('pg_class'::regclass, 'pg_attrdef'::regclass,

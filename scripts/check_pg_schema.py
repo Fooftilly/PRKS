@@ -12,7 +12,9 @@ Codes:
 - PG-SCHEMA-002: the snapshot's file list differs from the files on disk.
 - PG-SCHEMA-003: the fresh catalog differs from the snapshot.
 - PG-SCHEMA-004: an index, column default, generated column or constraint
-  depends on ``prks.search_norm``.
+  depends on ``prks.search_norm``, directly, through ``BEGIN ATOMIC`` wrappers,
+  or through a string-bodied SQL/PL/pgSQL function whose calls the catalog
+  does not record (refused fail-closed).
 
 The catalog comparison needs a disposable PostgreSQL 18 server: set
 ``PRKS_TEST_DATABASE_URL`` to its ``postgres`` maintenance database
@@ -108,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         snapshot, dependents = build_fresh_snapshot()
         if dependents:
-            _fail("PG-SCHEMA-004", "stored objects depend on prks.search_norm: " + ", ".join(dependents))
+            _fail("PG-SCHEMA-004", "stored objects depend on prks.search_norm or on a string-bodied function: " + ", ".join(dependents))
             return 1
         with open(SNAPSHOT_PATH, "w", encoding="utf-8", newline="\n") as handle:
             handle.write(dumps(snapshot))
@@ -124,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
     snapshot, dependents = build_fresh_snapshot()
     ok = True
     if dependents:
-        _fail("PG-SCHEMA-004", "stored objects depend on prks.search_norm: " + ", ".join(dependents))
+        _fail("PG-SCHEMA-004", "stored objects depend on prks.search_norm or on a string-bodied function: " + ", ".join(dependents))
         ok = False
     with open(SNAPSHOT_PATH, encoding="utf-8") as handle:
         expected_text = handle.read()
