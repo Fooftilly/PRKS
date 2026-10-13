@@ -124,11 +124,19 @@ class TableDefinitionTests(PostgresTestCase):
 
 
 class SequenceDefinitionTests(PostgresTestCase):
+    """Sequence options, persistence and ownership; view options."""
+
     def test_sequence_options_are_recorded(self) -> None:
         conn = self.connect()
         self.addCleanup(conn.rollback)
-        conn.execute("CREATE SEQUENCE prks.probe_s")
+        conn.execute(
+            "CREATE SEQUENCE prks.probe_s; CREATE TABLE prks.probe_owner (a bigint, b bigint);"
+            "CREATE VIEW prks.probe_v AS SELECT 1 AS one"
+        )
         for change in (
+            "ALTER SEQUENCE prks.probe_s SET UNLOGGED",
+            "ALTER SEQUENCE prks.probe_s OWNED BY prks.probe_owner.a",
+            "ALTER VIEW prks.probe_v SET (security_invoker = true)",
             "ALTER SEQUENCE prks.probe_s AS integer",
             "ALTER SEQUENCE prks.probe_s START WITH 5",
             "ALTER SEQUENCE prks.probe_s INCREMENT BY 2",
@@ -140,11 +148,22 @@ class SequenceDefinitionTests(PostgresTestCase):
             with self.subTest(change):
                 conn.execute("SAVEPOINT change")
                 try:
-                    before = catalog_snapshot(conn)["tables"]
+                    before = catalog_snapshot(conn)
                     conn.execute(change)
-                    self.assertNotEqual(catalog_snapshot(conn)["tables"], before)
+                    self.assertNotEqual(catalog_snapshot(conn), before)
                 finally:
                     conn.execute("ROLLBACK TO SAVEPOINT change")
+
+    def test_owner_change_is_recorded(self) -> None:
+        conn = self.connect()
+        self.addCleanup(conn.rollback)
+        conn.execute(
+            "CREATE TABLE prks.probe_owner (a bigint, b bigint);"
+            "CREATE SEQUENCE prks.probe_s OWNED BY prks.probe_owner.a"
+        )
+        before = catalog_snapshot(conn)["tables"]["prks.probe_s"]
+        conn.execute("ALTER SEQUENCE prks.probe_s OWNED BY prks.probe_owner.b")
+        self.assertNotEqual(catalog_snapshot(conn)["tables"]["prks.probe_s"], before)
 
 
 class SearchNormGuardTests(PostgresTestCase):

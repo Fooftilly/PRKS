@@ -163,8 +163,13 @@ def _relations(conn: psycopg.Connection[Any]) -> tuple[dict[str, Any], dict[str,
     ):
         qualified = f"{schema}.{name}"
         if kind in ("v", "m"):
-            row = conn.execute("SELECT pg_get_viewdef(%s::oid, true)", (relid,)).fetchone()
-            views[qualified] = {"kind": kind, "definition": None if row is None else row[0]}
+            definition, options = _rows(
+                conn, "SELECT pg_get_viewdef(oid, true), reloptions FROM pg_class WHERE oid = %s", (relid,)
+            )[0]
+            view: dict[str, Any] = {"kind": kind, "definition": definition}
+            if options:
+                view["options"] = sorted(options)
+            views[qualified] = view
             continue
         if kind == "S":
             type_, start, increment, minimum, maximum, cache, cycle = _rows(
@@ -176,7 +181,7 @@ def _relations(conn: psycopg.Connection[Any]) -> tuple[dict[str, Any], dict[str,
                 """,
                 (relid,),
             )[0]
-            tables[qualified] = {
+            sequence: dict[str, Any] = {
                 "kind": "sequence",
                 "type": type_,
                 "start": start,
@@ -186,6 +191,24 @@ def _relations(conn: psycopg.Connection[Any]) -> tuple[dict[str, Any], dict[str,
                 "cache": cache,
                 "cycle": cycle,
             }
+            persistence, owned_by = _rows(
+                conn,
+                """
+                SELECT c.relpersistence,
+                       (SELECT d.refobjid::regclass::text || '.' || quote_ident(a.attname)
+                          FROM pg_depend d
+                          JOIN pg_attribute a ON a.attrelid = d.refobjid AND a.attnum = d.refobjsubid
+                         WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid
+                           AND d.refclassid = 'pg_class'::regclass AND d.deptype IN ('a', 'i'))
+                  FROM pg_class c WHERE c.oid = %s
+                """,
+                (relid,),
+            )[0]
+            if persistence != "p":
+                sequence["persistence"] = persistence
+            if owned_by is not None:
+                sequence["owned_by"] = owned_by
+            tables[qualified] = sequence
             continue
         constraints = {
             conname: pg_def
