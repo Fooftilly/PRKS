@@ -365,8 +365,8 @@ class RunnerNeverTouchesTheDataRootTests(EmptyDatabaseTestCase):
         marker = os.path.join(root, "prks-root.json")
         with open(marker, "w", encoding="utf-8") as handle:
             handle.write('{"format": 1}\n')
-        os.chmod(root, 0o555)
-        self.addCleanup(os.chmod, root, 0o755)
+        os.chmod(root, 0o500)
+        self.addCleanup(os.chmod, root, 0o700)
         before = (sorted(os.listdir(root)), os.stat(marker).st_mtime_ns)
         done = self.run_migrate(root)
         self.assertEqual(done.returncode, 0, done.stderr)
