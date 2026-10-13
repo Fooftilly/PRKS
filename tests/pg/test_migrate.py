@@ -11,6 +11,7 @@ import os
 import shutil
 import subprocess
 import sys
+import secrets
 import tempfile
 import threading
 import time
@@ -18,6 +19,7 @@ import unittest
 from collections.abc import Callable
 
 import psycopg
+from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
 from backend.db.migrate import (
@@ -344,6 +346,38 @@ class MigrateTests(EmptyDatabaseTestCase):
         )
         self.query("DROP SCHEMA public")
         self.assertEqual(len(migrate(self.conninfo).applied), len(load_schema_files()))
+
+    def test_non_superuser_database_owner_initializes_and_is_refused_like_anyone(self) -> None:
+        # createuser prks; createdb -O prks prks: the owner cannot read
+        # pg_user_mapping, and the baseline's extensions are trusted.
+        role = f"prks_owner_{secrets.token_hex(4)}"
+        password = secrets.token_hex(16)
+        self.query(
+            sql.SQL("CREATE ROLE {} LOGIN NOSUPERUSER PASSWORD {}")
+            .format(sql.Identifier(role), sql.Literal(password))
+            .as_string()
+        )
+
+        def drop_role() -> None:
+            ident = sql.Identifier(role)
+            self.query(sql.SQL("REASSIGN OWNED BY {} TO CURRENT_USER").format(ident).as_string())
+            self.query(sql.SQL("DROP OWNED BY {}").format(ident).as_string())
+            self.query(sql.SQL("DROP ROLE {}").format(ident).as_string())
+
+        self.addCleanup(drop_role)
+        self.query(
+            sql.SQL("ALTER DATABASE {} OWNER TO {}")
+            .format(sql.Identifier(self.name), sql.Identifier(role))
+            .as_string()
+        )
+        owner = make_conninfo(self.conninfo, user=role, password=password)
+
+        self.query("CREATE COLLATION public.foreign (provider = builtin, locale = 'C.UTF-8')")
+        self.assert_refused("foreign_schema", migrate, owner)
+        self.query("DROP COLLATION public.foreign")
+
+        self.assertEqual(len(migrate(owner).applied), len(load_schema_files()))
+        verify_schema(owner)
 
     def test_verify_refuses_an_empty_or_partial_database(self) -> None:
         self.assert_refused("not_migrated", verify_schema, self.conninfo)

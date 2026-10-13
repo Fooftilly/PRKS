@@ -248,6 +248,11 @@ def _is_empty(conn: psycopg.Connection[Any]) -> bool:
     collation, operator, cast, event trigger, publication or large object
     counts as well as tables, functions and types. Leftover temporary
     namespaces and a re-created or dropped ``public`` schema do not.
+
+    A non-superuser database owner cannot read ``pg_user_mapping`` (its
+    options can hold passwords), so catalogs the role cannot read are
+    skipped and user mappings are checked through the public
+    ``pg_user_mappings`` view instead.
     """
     catalogs = [
         str(name)
@@ -259,6 +264,7 @@ def _is_empty(conn: psycopg.Connection[Any]) -> bool:
              WHERE c.relnamespace = 'pg_catalog'::regnamespace
                AND c.relkind = 'r'
                AND NOT c.relisshared
+               AND pg_catalog.has_table_privilege(c.oid, 'SELECT')
              ORDER BY c.relname
             """
         ).fetchall()
@@ -273,6 +279,11 @@ def _is_empty(conn: psycopg.Connection[Any]) -> bool:
                 "{} AND nspname <> 'public' AND nspname !~ '^pg_(toast_)?temp_[0-9]+$'"
             ).format(probe)
         probes.append(sql.SQL("EXISTS ({})").format(probe))
+    probes.append(
+        sql.SQL("EXISTS (SELECT 1 FROM pg_catalog.pg_user_mappings WHERE umid >= {})").format(
+            sql.Literal(_FIRST_NORMAL_OBJECT_ID)
+        )
+    )
     row = conn.execute(
         sql.SQL("SELECT NOT ({})").format(sql.SQL(" OR ").join(probes))
     ).fetchone()
