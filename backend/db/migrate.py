@@ -266,13 +266,13 @@ def _apply(conn: psycopg.Connection[Any], schema_file: SchemaFile) -> None:
             "lock_timeout", f"Schema file {schema_file.filename} timed out waiting for a lock."
         ) from None
     except psycopg.Error as exc:
-        # The primary message names schema objects, never row values (those
-        # are in the detail, which is not used).
+        # SQLSTATE only: the server's message can quote row values (an invalid
+        # cast embeds its input), and a forward migration may touch library
+        # data, so no driver text reaches the error or the log.
         sqlstate = exc.sqlstate or "unknown"
-        primary = exc.diag.message_primary or "error"
         raise MigrationError(
             "schema_file_failed",
-            f"Schema file {schema_file.filename} failed (SQLSTATE {sqlstate}: {primary}); "
+            f"Schema file {schema_file.filename} failed (SQLSTATE {sqlstate}); "
             "nothing from it was applied.",
         ) from None
 

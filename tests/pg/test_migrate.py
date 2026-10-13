@@ -235,6 +235,17 @@ class MigrateTests(EmptyDatabaseTestCase):
             migrate(self.conninfo, directory=directory).applied, ("900_broken.sql", "910_after.sql")
         )
 
+    def test_failure_message_carries_no_server_text(self) -> None:
+        # An invalid cast quotes its input in the server message; library
+        # content must never reach the error (logging privacy).
+        directory = self.schema_copy()
+        self.write(directory, "900_cast.sql", "SELECT 'private-title-text'::integer;\n")
+        error = self.assert_refused("schema_file_failed", migrate, self.conninfo, directory=directory)
+        self.assertNotIn("private-title-text", error.message)
+        self.assertNotIn("private-title-text", str(error))
+        self.assertIsNone(error.__cause__)
+        self.assertIn("22P02", error.message)
+
     def test_unqualified_names_fail_instead_of_landing_in_public(self) -> None:
         directory = self.schema_copy()
         self.write(directory, "900_unqualified.sql", "CREATE TABLE stray (id int);\n")
