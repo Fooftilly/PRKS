@@ -884,6 +884,20 @@ the `applied_at` index makes bounded compaction possible later.
 The isolation is declared by the command, and a test enumerates commands to
 make sure each one declares it.
 
+**Writers of what a SERIALIZABLE command decides on are SERIALIZABLE too.**
+PostgreSQL's serializable guarantee holds only among SERIALIZABLE
+transactions. A READ COMMITTED writer can, for example, add a Work to the
+source tag after a tag merge has read the source's links, and the merge
+would then miss that Work instead of failing with `40001`. So every
+command that writes rows a multi-aggregate command reads to decide also
+runs SERIALIZABLE, with the same retry. For a tag merge that means adding,
+removing or renaming tags on Works and the tags themselves; for a Work
+merge, the Works' child rows; for a protected Person delete, the
+Person's links. Each multi-aggregate command declares the tables it
+decides on, and the isolation test fails if any command that writes one
+of them declares READ COMMITTED. Single-scope commands that touch none of
+those tables keep READ COMMITTED with the revision-row lock.
+
 ### 7.2 Revision protocol on PostgreSQL
 
 ```sql
@@ -1678,7 +1692,11 @@ archive. Inbox files are not
   once empty, the only directory that is unambiguously the restore's. Other
   directories R3 created are left in place, empty: the staging tree cannot
   tell whether one existed before R3, and an empty directory holds no data
-  and is ignored by the scan. It runs under the inbox lock exclusively, while
+  and is ignored by the scan. Before undo reports success it fsyncs every
+  directory it unlinked from and the parent of `restored-<run>/` through
+  `backend/fs_durability.py`. A failed or refused fsync counts as an undo
+  failure, so a machine crash cannot bring back a link whose staging
+  entry is already gone. It runs under the inbox lock exclusively, while
   the Library is still in maintenance (so no import or scan can see the
   links), and before the staging directory is deleted:
   - R5 runs it on an abort after R3 while the restore connection is alive
@@ -2345,7 +2363,7 @@ parameters, search terms or library metadata are recorded, as today.
 | Schema snapshot (`check_pg_schema.py` + test) | `check_schema_change.py` SQLite parts, `validate_current_schema` | fresh schema equals snapshot; after 1.0, migrated equals fresh, migrations append-only and unedited |
 | Persistence boundary | (new) | `psycopg` imported only in `backend/db/` and `backend/domain/`; no SQL strings in `server.py`/`backend/api/`/`backend/sync/` |
 | Revision ownership | discussion #583 option (a) | DML on revisioned tables only in `backend/domain/`; FKs into revision-owning rows are not `ON DELETE CASCADE` unless listed with the command that tombstones them |
-| Isolation declared | (new) | every command declares its isolation level |
+| Isolation declared | (new) | every command declares its isolation level; no command writing a table a SERIALIZABLE command decides on declares READ COMMITTED (§7.1); a tag added to the source during a tag merge either lands on the target or makes the merge retry |
 | Text identity vectors | (new) | Python, SQL and TypeScript agree on every vector |
 | Library isolation | (new) | two-Library API sweep (§13.3) |
 | Correlated catalogue counts | kept, re-justified | PostgreSQL often decorrelates, but not always; keep the ratchet and re-baseline its allowlist with `EXPLAIN` evidence during the family ports |
