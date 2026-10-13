@@ -1313,6 +1313,8 @@ write:
   matches.
 - **research**: enqueues `research.reindex_work` for each Work rather than
   writing mentions itself, so mentions are written only by that job (§8.4).
+  A final transaction deletes `concept_mentions`, `argument_mentions` and
+  `work_note_state` rows whose Work no longer exists, as search does.
 
 Every batch recomputes from the canonical rows current when it runs, so a
 rebuild is idempotent and safe to retry: an interrupted run resumes from
