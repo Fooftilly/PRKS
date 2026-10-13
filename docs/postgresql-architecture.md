@@ -1118,14 +1118,18 @@ ALTER TEXT SEARCH CONFIGURATION prks.prks_search
   never an edit in place, so the dictionary's rules name identifies the
   rules (§8.6). A database image without the named file fails the
   dictionary's first use loudly instead of folding with other rules.
-- Query splitting stays in Python: `_prks_search_tokens` semantics (split on
-  `-`/`_`, drop non-word characters) are kept, and the tokens are bound as a
-  `text[]` parameter. SQL folds each one and builds the query:
+- **Python only splits the query.** It splits on whitespace, `-` and `_`,
+  drops empty pieces, and does nothing else: no `.lower()`, no NFC, no
+  `\w` filter. Today's `_prks_search_tokens` lowercases and strips
+  non-word characters in Python before any NFC, and Python's `\w` does not
+  match combining marks, so a decomposed (NFD) "й" became "и" before SQL
+  could recompose it. The tokens are bound as a `text[]` parameter, and
+  every Unicode step happens in SQL. The FTS query is
   `to_tsquery('prks.prks_search', (SELECT string_agg(quote_literal(
   casefold(normalize(t, NFC) COLLATE pg_unicode_fast)) || ':*', ' & ')
-  FROM unnest($tokens) AS t))`. Raw query text is never interpolated into
-  `to_tsquery` syntax, and the configuration's own parser then reads each
-  folded token, so Python decides only where tokens split.
+  FROM unnest($tokens) AS t))`, and the configuration's parser discards
+  punctuation as it does on the indexed side. Raw query text is never
+  interpolated into `to_tsquery` syntax.
 
 **Search documents** live in `derived.work_search`:
 
@@ -1182,10 +1186,13 @@ CREATE INDEX work_search_text_trgm ON derived.work_search USING gin (text_norm e
 - **Both sides of a substring match are normalized in SQL.** Python only
   splits the query into tokens. Every substring predicate, on `text_norm`,
   `title_norm`, `people_norm` or an author or publisher filter, is
-  `<column> LIKE '%' || prks.like_escape(prks.search_norm($tok)) || '%'
-  ESCAPE '\'`, with the token as a bound parameter. `like_escape` escapes
-  `\`, `%` and `_` *after* normalization, so a character that folds into
-  one of them stays literal. Python never reproduces `unaccent`, so the
+  `<column> LIKE '%' || prks.like_escape(prks.search_token($tok)) || '%'
+  ESCAPE '\'`, with the token as a bound parameter, where
+  `prks.search_token(t) = regexp_replace(prks.search_norm(t),
+  '[[:punct:]]+', '', 'g')` drops punctuation after folding, as today's
+  token cleanup did, and a token left empty is skipped. `like_escape`
+  escapes `\`, `%` and `_` *after* normalization, so a character that
+  folds into one of them stays literal. Python never reproduces `unaccent`, so the
   stored and queried sides cannot drift.
 - **Infix fallback kept.** `doc` matches prefixes only, so it cannot find
   "state" inside "understatement". Today's per-token fallback
@@ -1293,7 +1300,8 @@ tokens use the new one, and searches would silently miss existing Works.
 | Publisher filter "lumière" on "Éditions Lumière" | found (replaces the ASCII-only pin in `test_publisher_catalog_queries.py`) |
 | Abstract "understatement", query "state" | found through the infix fallback (`text_norm`) |
 | Notes "Trešnja", query "šnja" or "snja"; title "Σωκράτης", query "ωκράτ" | found (both sides normalized by `prks.search_norm` in SQL) |
-| Query token containing `%` or `_`, or one that folds into them | matched literally, never as a wildcard |
+| Query token containing `%` or `_`, or one that folds into them | never acts as a wildcard (split or dropped as punctuation; `like_escape` covers anything left) |
+| NFD query "й", "Trešnja" or "İstanbul" | same results as the NFC query, through FTS and through the infix fallback (Python never lowercases or filters characters) |
 
 ---
 
