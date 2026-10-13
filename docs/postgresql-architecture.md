@@ -661,6 +661,7 @@ CREATE TABLE prks.instance (           -- exactly one row
   storage_root_id  text NOT NULL CHECK (storage_root_id ~ '^SR-[0-9a-fA-F]{32}$'),
   setup_state      text NOT NULL CHECK (setup_state IN ('unconfigured','bootstrapping','ready')),
   testing          boolean NOT NULL,    -- a testing database is never served by a non-testing process
+  search_folding   text,                -- rules version and server_version_num the derived search data was folded with (§8.6)
   created_at       timestamptz NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX instance_singleton ON prks.instance ((true));
@@ -1112,14 +1113,19 @@ CREATE INDEX work_search_text_trgm ON derived.work_search USING gin (text_norm e
   function that uses the same `unaccent` rules (PRKS's `prks_unaccent.rules`
   included) as the text search configuration. Like `identity_key` and the
   FTS path, it pins `casefold` to `pg_unicode_fast`, so a bound token and a
-  stored column fold identically whatever their collation, and it names the
-  dictionary explicitly because one-argument `unaccent` is only `STABLE`.
-  The PG-2 immutability proof (§8.1) covers this function too. If it
-  cannot be `IMMUTABLE`, it is declared `STABLE` and nothing else changes:
-  the `*_norm` columns are plain columns that commands and
-  `rebuild-derived` write by calling the same function, not generated
-  columns or expression indexes, so the stored and queried sides still use
-  one definition.
+  stored column fold identically whatever their collation. Naming the
+  dictionary removes the `search_path` lookup, but both forms of `unaccent`
+  are `STABLE`, and the result still depends on the rules files the server
+  reads from disk. So `IMMUTABLE` here is a promise PRKS makes, not
+  something PG-2 can derive from the functions it calls. The promise is
+  safe for two reasons. First, the rules are fixed per image. Second,
+  nothing indexes the function's output: the `*_norm` columns are plain
+  columns that commands and `rebuild-derived` write by calling the same
+  function, never generated columns or expression indexes. PG-2's schema
+  snapshot test asserts the second point through `pg_depend`: no index
+  expression or column default depends on `prks.search_norm`. When the
+  rules do change, the folding check in §8.6 rebuilds everything that was
+  folded with the old ones.
 - **Both sides of a substring match are normalized in SQL.** Python only
   splits the query into tokens. Every substring predicate, on `text_norm`,
   `title_norm`, `people_norm` or an author or publisher filter, is
@@ -1161,10 +1167,35 @@ uniqueness change (identity key per Library).
 ### 8.6 Rebuild and verification
 
 `prks admin rebuild-derived [--library L] [--only search|text|research]`
-truncates and recomputes the `derived` schema, as a job with progress. It runs
+truncates and recomputes the `derived` schema, as a job with progress. The
+`text` scope keeps extracted text: it recomputes `asset_text.doc` from the
+stored `text`, and extracts again only where a row is missing or its
+`content_sha256` or `extractor_version` no longer matches. It runs
 automatically after restore and is the documented step after a PostgreSQL
 major upgrade. Normal startup never runs a full verification; a cheap
 consistency count (`works` without `work_search` rows) schedules a repair job.
+
+**Folding check.** `doc` vectors, `asset_text.doc` and the `*_norm` columns
+all fold through the same `unaccent` rules and the server's Unicode tables,
+and either can change with no DDL at all. PRKS can ship a changed
+`prks_unaccent.rules` (the R12 mitigation), or a new image can bring a
+PostgreSQL release whose upstream `unaccent.rules` or Unicode data differ.
+Stored values would then keep the old folding while new rows and query
+tokens use the new one, and searches would silently miss existing Works.
+
+- `instance.search_folding` records what the derived search data was folded
+  with: PRKS's rules version (a constant PRKS bumps with any change to its
+  rules file) and `server_version_num`. Both are readable without
+  privileges, so there is no probe of the server's files.
+- When `web` or `worker` starts, one transaction locks the instance row
+  `FOR UPDATE` and compares. On a mismatch it enqueues `rebuild-derived
+  --only search` and `--only text` for every Library and stores the new
+  value. The jobs table is the outbox (§12.1), so the stored value never
+  runs ahead of a durable job.
+- Until those jobs finish, existing Works can be missed, and their progress
+  shows like any rebuild. A PostgreSQL major upgrade now triggers the search
+  rebuild by itself; a minor release costs one search rebuild that keeps
+  the extracted text.
 
 ### 8.7 Parity tests
 
@@ -2423,7 +2454,7 @@ checkpointing, rowid preservation) are listed as retired with the reason.
 | R9 | stdlib HTTP server unsuitable for an exposed 1.0 deployment | Medium | High | Pre-1.0 research issue (§4.5); reverse-proxy-only exposure documented meanwhile |
 | R10 | Tests become slow or flaky with a database service | Medium | Medium | Template databases, per-class databases, no shared mutable fixtures; measure in PG-1 |
 | R11 | Agents run tests against a real database | Low | Critical | Harness-created databases only, `instance.testing` flag, refusal on mismatch (§13.1) |
-| R12 | `unaccent` rules wrong for Greek/Serbian | Medium | Low | Parity vectors; optional PRKS rules file (§16, decision 4) |
+| R12 | `unaccent` rules wrong for Greek/Serbian | Medium | Low | Parity vectors; optional PRKS rules file (§16, decision 4); the folding check rebuilds search data when the rules or the server release change (§8.6) |
 | R13 | Dual-run period lingers and SQLite stays half-alive | Medium | High | Cutover and deletion in the same release (PG22), tracked as a release gate in #614 |
 | R14 | Browser data from pre-0.8 lost at cutover | Low | High | §10.3 review-only legacy queue and drafts, never auto-deleted |
 | R15 | #60 Version/merge features designed against the old mirror model | Low | Medium | §6.4 states the mechanics change; #60 slices G–L consume the new schema |
@@ -2489,7 +2520,7 @@ explicit go, and PG-1 comes first.
 | Slice | Content | Acceptance criteria |
 | --- | --- | --- |
 | **PG-1** Database plumbing and test harness | psycopg + psycopg_pool pins; `backend/db/` config (`PRKS_DATABASE_URL`, `*_FILE`), pool, `command()`/`query()` helpers with isolation, error mapping table; harness-created test databases with template cloning and refusal of foreign databases (ownership marked with a `COMMENT ON DATABASE` until PG-2 adds `instance.testing`); `scripts/test-postgres`; CI service container in `test-gate.yml`. No domain tables. | Unit tests for helpers (commit, rollback on exception, SERIALIZABLE retry on injected `40001`, READ ONLY query refuses writes); error-mapping tests per SQLSTATE; pool exhaustion → typed error; harness refuses a pre-existing database; CI green with the service; existing SQLite suites untouched and green. |
-| **PG-2** Migration runner, schema layout and core tables | Runner with advisory lock and checksums; `000_extensions.sql`, `010_instance.sql`, `020_identity.sql`, `030_jobs.sql`, `040_sync.sql` (`entity_revisions`, `sync_operations`, `devices`); `prks.identity_key` with the immutability proof (§8.1), which also covers `prks.search_norm` (§8.3); text identity vectors and Python implementation; schema snapshot test and `check_pg_schema.py`. | Fresh database matches the snapshot; concurrent `migrate` runs apply once; a newer-schema database is refused; a database whose applied baseline file has since changed is refused with the recreate message; identity vectors pass in SQL and Python; `IMMUTABLE` generated column works under the builtin locale (or the fallback is chosen and documented). |
+| **PG-2** Migration runner, schema layout and core tables | Runner with advisory lock and checksums; `000_extensions.sql`, `010_instance.sql`, `020_identity.sql`, `030_jobs.sql`, `040_sync.sql` (`entity_revisions`, `sync_operations`, `devices`); `prks.identity_key` with the immutability proof (§8.1); `prks.search_norm` with the snapshot assertion that no index expression or column default depends on it (§8.3); text identity vectors and Python implementation; schema snapshot test and `check_pg_schema.py`. | Fresh database matches the snapshot; concurrent `migrate` runs apply once; a newer-schema database is refused; a database whose applied baseline file has since changed is refused with the recreate message; identity vectors pass in SQL and Python; `IMMUTABLE` generated column works under the builtin locale (or the fallback is chosen and documented). |
 | **PG-3** Parity harness and facade skeleton | `PostgresLibrary` facade composed of empty mixins; a test fixture parametrizing selected modules over `sqlite` and `postgres`, with a registry marking which methods are ported (unported ones skip on `postgres`, not fail); a dual-run CI job. | Running `python run_tests.py` unchanged still runs SQLite only; the `postgres` leg runs and reports ported/unported counts; no lane needs to edit the fixture to register its family (one line in its mixin). |
 
 **Stage 2. Parallel lanes** (each may start once its dependencies are
@@ -2506,7 +2537,7 @@ merged; several run at the same time).
 | **L-R-1** Research | L-W-1, L-J-1 | Concepts with `concept_keys`, Positions, Arguments, sources/targets, notes integration, derived mentions via `research.reindex_work`, graph projection | Parametrized tests; Research-ACK fence still observed by E2E; no Python full scan for concept resolution |
 | **L-A-1** Objects and annotations | L-W-1, L-J-1, L-P-1 | #311 Phase B on PostgreSQL: all managed-file paths through `StorageBackend`; immutable objects; cleanup claims, orphan sweep, and the `restore_run_objects` table counted by the reference check (§11.2); annotations, materialization, PDF replace, save-confirm from durable state; person portraits | Object lifecycle tests (§13.3), including a stalled ingest and a stalled rewrite whose new key the sweep settles failing cleanly at the adoption check; write-amplification measurement recorded in the PR; no `os.remove` outside the storage backend; parametrized annotation and sync tests pass |
 | **L-PR-1** Processing | L-A-1, L-P-1, L-O-1 | `processing_files`, `processing_file_roles` (persons) and `processing_file_tags` (tags), whose composite foreign keys need People and Organization; inbox scan as a job that never deletes a row held by restore, import through the objects lane; imports hold the inbox lock (§11.3) across their commit and source-file removal, with the `imported` row state | Parametrized processing tests; no absolute path stored; an import's lock is released on every success and failure path; a crash between an import's commit and its source removal is finished by the next scan and the file is never offered for import again; when the file at that path was replaced before the scan, the scan deletes only the `imported` row and lists the new file as pending |
-| **L-S-1** Search | L-W-1, L-J-1, L-P-1, L-O-1, L-A-1 | `derived.work_search` maintained by commands, `asset_text` via `text.extract`, trigram filters, parity ordering, Saved View execution, `rebuild-derived`; `backend/AGENTS.md` extracted-text rule amended for the `derived` schema (§16, decision 5) | §8.7 parity tests; search parametrized tests pass with the documented Unicode improvements replacing ASCII pins; an infix token ("state" in "understatement") still finds a Work through its abstract and through its notes, and a diacritic infix ("šnja" in notes containing "Trešnja") finds it too, the §8.7 substring vectors |
+| **L-S-1** Search | L-W-1, L-J-1, L-P-1, L-O-1, L-A-1 | `derived.work_search` maintained by commands, `asset_text` via `text.extract`, trigram filters, parity ordering, Saved View execution, `rebuild-derived`, the folding check (§8.6); `backend/AGENTS.md` extracted-text rule amended for the `derived` schema (§16, decision 5) | §8.7 parity tests; search parametrized tests pass with the documented Unicode improvements replacing ASCII pins; an infix token ("state" in "understatement") still finds a Work through its abstract and through its notes, and a diacritic infix ("šnja" in notes containing "Trešnja") finds it too, the §8.7 substring vectors; a changed `instance.search_folding` enqueues the search and text rebuilds once, and `--only text` recomputes `doc` without extracting again |
 | **L-S-2** Ranking | L-S-1 | Single weighted score | Before/after results on a synthetic multilingual corpus approved in review |
 | **L-B-1** Backup and restore format 2 | L-W-1, L-P-1, L-O-1, L-R-1, L-A-1, L-PR-1, L-S-1 | §11.4 | Round-trip test over a fixture covering every canonical table and object kind; text `COPY` with the interchange contract (no binary `COPY`); restore into the same and into a new instance with real sync operations, the archive Library mapped to the target Library and all library/user/device references resolving; a restore over a different Library whose IDs still exist is refused; R1 reuse of an existing object is lock-coupled to cleanup settle and re-verified in R3, so R4 never commits a locator to a missing object; new devices are inserted only by R4; a restore that outlives its lease aborts and never replaces writes accepted after recovery; export, staging and the R4 delete/insert use only the content-table allowlist, and a schema test classifies every library-scoped table; staging builds `restore_<id>` with `LIKE` from the live tables, never with the migration runner, checks foreign keys with redirected generated anti-joins, and refuses an archive of another schema fingerprint (§13.3 staging isolation); the round trip covers a table with a generated `*_key` column, which is not exported and is recomputed on restore; a backup with the inbox under the data root restores its pending files into a fresh instance, a file already at the same inbox path is never overwritten (the archived copy lands in `restored-<run>/` and its restored row, roles and tags follow it), a scan right after R4 deletes no restored pending row (a row whose file the user had deleted before the backup is held), and a restored `imported` row whose path holds a different file in the target's inbox loses only its row, never the file; a backup taken after a collision restore, with its `restored-<run>/` rows still pending, restores cleanly; a held `outside-root` row whose path holds a different file stays held and its roles and tags are not applied, an import that commits during a backup leaves the archive with either the pending row and its file or neither, an import handler paused between its commit and its file removal at R2 finishes before R3 publishes, and with an `outside-root` inbox the restored rows are held: a scan that finds no file keeps them and the Processing view offers to dismiss them, while a scan that finds the file with the recorded hash clears the hold; staged objects of a live run survive an orphan sweep (L-B-1 only writes `restore_run_objects` rows; the table and its term in the reference check belong to L-A-1); verification refuses tampered archives, and archive members and inbox paths stay contained (§13.3 archive containment); a restore that does not commit leaves the inbox's files as they were (§13.3 inbox undo); fault injection at R0–R5, including a kill immediately after the R4 commit that still rebuilds search after restart; the exclusion interleavings of §13.3; restoring an older snapshot while a long job runs never lets the job write to the replacement state, and an API mutation or operation envelope carrying the pre-restore epoch is refused with 409 `LIBRARY_EPOCH_CHANGED`; backup concurrent with writes and cleanup; format 1 refused with a clear message; an R3 lock timeout and an R4 rollback each leave the old data intact, clear the flag through abort finalization, and accept a new ordinary command at once without waiting for lease expiry, while an abort whose inbox undo fails keeps the flag set for recovery; a disk-full error (`53100`) injected in R1 and in R4 leaves the live Library unchanged, reports the restore as failed with that error, and a later cleanup pass drops the staging schema |
 | **L-D-1** Compose and health | PG-1, L-ID-1, L-J-1 | Dockerfile with psycopg, Compose of §12.3, `/healthz`, `/readyz`, graceful stop, `.env.example`, README deployment section (including PostgreSQL-volume capacity monitoring and headroom, §12.3), #612 configuration entries | Clean `docker compose up` smoke test in CI reaches `/readyz` and bootstrap; the database volume is mounted at `/var/lib/postgresql`; `web` and `worker` each list the `prks_database_url` secret and read it at start; data survives `down`/`up` and container recreation with the volume kept; wrong root/database pairing refused at start |
