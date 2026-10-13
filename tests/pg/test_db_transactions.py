@@ -283,8 +283,8 @@ class TransactionHelperTests(PostgresTestCase):
 class SearchPathTests(PostgresTestCase):
     """Unqualified names resolve through prks, then ext, never public (§6.1).
 
-    The class database gets stand-in prks/ext schemas (PG-2 owns the real
-    ones) and a public table that shadows a prks name.
+    The class database has the real prks/ext schemas from the migrated
+    template, plus a public table that shadows a prks name.
     """
 
     @classmethod
@@ -292,7 +292,6 @@ class SearchPathTests(PostgresTestCase):
         super().setUpClass()
         with psycopg.connect(cls.database_conninfo, autocommit=True) as conn:
             conn.execute(
-                "CREATE SCHEMA prks; CREATE SCHEMA ext; "
                 "CREATE TABLE public.probe (origin text); INSERT INTO public.probe VALUES ('public'); "
                 "CREATE TABLE prks.probe (origin text); INSERT INTO prks.probe VALUES ('prks'); "
                 "CREATE TABLE public.ext_only (origin text); INSERT INTO public.ext_only VALUES ('public'); "

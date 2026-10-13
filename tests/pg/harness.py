@@ -6,8 +6,10 @@ The harness never runs anything in that database except catalog reads and
 ``CREATE``/``COMMENT ON``/``DROP DATABASE``. Tests only ever receive
 connection strings for databases this harness created in this run.
 
-Ownership is marked with ``COMMENT ON DATABASE`` (``prks-test-harness:<run>``)
-until PG-2 adds ``instance.testing``. The harness refuses:
+Ownership is marked with ``COMMENT ON DATABASE`` (``prks-test-harness:<run>``).
+``instance.testing`` cannot carry it: the instance row exists only after
+bootstrap claims a data root (§9.2, L-ID-1), and a migrated database has none.
+The harness refuses:
 
 - a maintenance URL whose database is not ``postgres``, or one equal to
   ``PRKS_DATABASE_URL``;
@@ -15,9 +17,11 @@ until PG-2 adds ``instance.testing``. The harness refuses:
 - any database name that already exists (it never adopts or reuses one);
 - handing out, cloning or dropping a database whose marker is not this run's.
 
-Each run creates ``prks_test_<run>_template`` once (empty until PG-2 adds the
-schema files) and every test class gets its own ``CREATE DATABASE … TEMPLATE``
-clone, dropped when the class finishes.
+Every database uses the builtin ``PG_UNICODE_FAST`` locale (§8.2). Each run
+creates ``prks_test_<run>_template`` once, migrated from
+``backend/db/schema/`` by the PRKS runner, and every test class gets its own
+``CREATE DATABASE … TEMPLATE`` clone, dropped when the class finishes. Tests of
+the runner itself ask for an empty database instead (``empty=True``).
 """
 
 from __future__ import annotations
@@ -150,7 +154,7 @@ class PostgresHarness:
                     sql.SQL("CREATE DATABASE "), sql.Identifier(name),
                     sql.SQL(
                         " TEMPLATE template0 ENCODING 'UTF8' "
-                        "LOCALE_PROVIDER builtin BUILTIN_LOCALE 'C.UTF-8'"
+                        "LOCALE_PROVIDER builtin BUILTIN_LOCALE 'PG_UNICODE_FAST'"
                     ),
                 )
             try:
@@ -173,16 +177,21 @@ class PostgresHarness:
             return existing
         name = self._new_name("template")
         self._create(name, "template0")
-        # PG-2 applies the schema files here; PG-1 has no tables.
+        from backend.db.migrate import migrate
+
+        migrate(self.conninfo(name))
         with self._lock:
             self._template = name
         return name
 
-    def create_database(self, label: str = "c") -> str:
-        """A fresh database cloned from the run's template."""
+    def create_database(self, label: str = "c", *, empty: bool = False) -> str:
+        """A fresh database: a clone of the migrated template, or ``empty``."""
+        name = self._new_name(label)
+        if empty:
+            self._create(name, "template0")
+            return name
         template = self.template()
         self.verify_owned(template)
-        name = self._new_name(label)
         self._create(name, template)
         return name
 

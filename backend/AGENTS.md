@@ -249,6 +249,17 @@ Never swallow migration DDL failures.
 Never manually bump `schema_version` before migration success.
 Migrations may modify SQLite state only, not managed filesystem data.
 
+PostgreSQL schema (#624, `docs/postgresql-architecture.md` §4.4; not the
+running backend yet): `backend/db/schema/NNN_name.sql` are pre-1.0 baseline
+files applied in order by `backend/db/migrate.py`, which records each file's
+SHA-256 and refuses a database whose applied file has since changed. Each lane
+edits only the files it owns (§15.2), schema-qualifies every name (the runner
+applies files with an empty `search_path`), and regenerates
+`backend/db/schema/snapshot.json` with `scripts/check_pg_schema.py --write` in
+the same PR. Never index, default or generate a column from
+`prks.search_norm` (§8.3; the snapshot check fails it). The runner never reads
+or writes the data root; the root claim and start generation belong to L-ID-1.
+
 ## Bulk work mutations
 
 Bulk work mutations must be validated before modification and commit atomically.

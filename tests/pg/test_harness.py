@@ -16,7 +16,6 @@ from tests.pg.harness import (
     PostgresTestCase,
     admin_conninfo_from_env,
     compose,
-    fetch_one,
 )
 
 
@@ -165,7 +164,7 @@ class HarnessTests(PostgresTestCase):
             locale = conn.execute(
                 "SELECT datlocprovider, datlocale FROM pg_database WHERE datname = current_database()"
             ).fetchone()
-            self.assertEqual(locale, ("b", "C.UTF-8"))
+            self.assertEqual(locale, ("b", "PG_UNICODE_FAST"))
         self.assertEqual(self.harness.marker_of(second), self.harness.marker)
 
 
