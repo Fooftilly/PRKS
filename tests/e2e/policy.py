@@ -887,6 +887,33 @@ AFFECTED_RULES = (
         "skip": True,
         "note": "Non-E2E tests → no browser E2E selection",
     },
+    # PG-1/PG-2 plumbing isn't imported by the served SQLite/browser app.
+    # It is tested by the PostgreSQL Test Gate, not by Chromium. Keep this
+    # allowlist narrow: unknown backend/db files still require full E2E.
+    # tests/test_e2e_policy.py guards against leaving this exemption active
+    # when PostgreSQL becomes a runtime dependency.
+    {
+        "name": "postgres-migration-infrastructure",
+        "paths": (
+            "backend/db/__init__.py",
+            "backend/db/migrate.py",
+            "backend/db/schema/**",
+            "backend/db/schema_snapshot.py",
+            "backend/domain/__init__.py",
+        ),
+        "features": (),
+        "skip": True,
+        "note": "Isolated PostgreSQL schema/migrations → PostgreSQL tests, no browser E2E",
+    },
+    # This will eventually become shared login/identity logic; do not blanket
+    # skip it. Smoke is the small browser boundary; SQL/Python parity tests
+    # remain the authoritative normalization coverage.
+    {
+        "name": "postgres-text-identity",
+        "paths": ("backend/domain/text_identity.py",),
+        "features": ("smoke",),
+        "note": "Text identity helper → smoke; PostgreSQL parity checked separately",
+    },
     # Storybook is a maintainer catalog. It is not the Vue app and must not
     # explain a rebuilt frontend/vue bundle or select a feature suite.
     {
