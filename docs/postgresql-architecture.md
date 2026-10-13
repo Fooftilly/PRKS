@@ -821,8 +821,8 @@ in the UI, merges) stay gated; the schema only stops being the obstacle.
 | Instance and identity | `instance`, `users`, `libraries`, `library_memberships`, `devices`, `sessions`, `bootstrap_tokens`, `login_attempts`, `login_device_tokens` | New |
 | Works | `works` L, `manifestations` L, `assets` L, `manifestation_relations` L, `manifestation_identifiers` L, `work_notes` L, `sync_work_lifecycle` L, `duplicate_decisions` L | §6.4 |
 | Annotations | `annotations` L | `geometry jsonb`; primary key `(asset_id, id)` because the viewer mints the ID (global uniqueness of a client-minted viewer ID is not something PRKS controls) |
-| People | `persons` L, `person_aliases` L, `roles` L, `person_groups` L, `person_group_members` L, `publishers` L, `publisher_aliases` L | Aliases become rows with keys; `roles` drops the `rowid` tiebreak in favor of `order_index`; publisher and group names unique by identity key |
-| Organization | `tags` L, `tag_aliases` L, `work_tags` L, `folders` L, `folder_files` L, `folder_tags` L, `playlists` L, `playlist_items` L, `saved_views` L, `sync_tag_lifecycle` L | `folders.parent_id` + identity key unique per parent; `folder_files` stays the scalar Work-to-folder membership table (`work-folder` in `docs/work-identity-model.md`), now with `UNIQUE (library_id, work_id)` so the one-folder-per-Work rule (I8) that only code enforces today is a constraint; `playlist_items` keeps one playlist per Work |
+| People | `persons` L, `person_aliases` L, `roles` L, `person_groups` L, `person_group_members` L, `publishers` L, `publisher_aliases` L | Aliases become rows with keys; `roles` drops the `rowid` tiebreak in favor of `order_index`; publisher names and aliases share one `UNIQUE (library_id, key)` namespace through a `publisher_keys` table (§8.1); group names unique by identity key |
+| Organization | `tags` L, `tag_aliases` L, `work_tags` L, `folders` L, `folder_files` L, `folder_tags` L, `playlists` L, `playlist_items` L, `saved_views` L, `sync_tag_lifecycle` L | `folders.parent_id` + identity key unique per parent; `folder_files` stays the scalar Work-to-folder membership table (`work-folder` in `docs/work-identity-model.md`), now with `UNIQUE (library_id, work_id)` so the one-folder-per-Work rule (I8) that only code enforces today is a constraint; `playlist_items` keeps one playlist per Work; tag names and aliases share one `UNIQUE (library_id, key)` namespace through a `tag_keys` table (§8.1) |
 | Research | `concepts` L, `concept_aliases` L, `concept_parents` L, `positions` L, `arguments` L, `argument_verdicts` (global seed), `argument_target_positions` L, `argument_target_arguments` L, `argument_sources` L | Concept name and alias keys share one `UNIQUE (library_id, key)` namespace through a `concept_keys` table, replacing the full Python scan |
 | Processing | `processing_files` L, `processing_file_roles` L, `processing_file_tags` L | `abs_path` removed; `rel_path` relative to the inbox (#311 Phase B intent); nullable `restore_hold` and `restore_sha256` (§11.4); `imported` state between an import's commit and its source removal, with the source's `import_sha256` (§11.3) |
 | Settings | `library_settings` L, `instance_settings` | Split by scope (#612): which keys are Library-, instance- or account-scoped is decided with #612's configuration inventory |
@@ -965,6 +965,8 @@ New tests run two real connections against PostgreSQL and use barriers (or
   or convergent ACK per the decision table;
 - create tag with case-variant Greek/Cyrillic names concurrently → one
   succeeds, one `NAME_TAKEN`;
+- create tag "X" vs. adding alias "X" to another tag concurrently (and the
+  same for publishers) → one succeeds, one `NAME_TAKEN`;
 - cleanup claim settle vs. new reference adoption → never an unlinked
   referenced object;
 - tag merge vs. concurrent `ADD_WORK_TAG` on the source → serialization retry
@@ -1003,6 +1005,16 @@ identity_key(s) = casefold( collapse_whitespace( trim( NFC(s) ) ) )
   Turkish dotted/dotless i, combining sequences, astral characters) is run
   against all three implementations; any difference fails CI. This settles
   discussion #583's third class (normalized-identity drift).
+- **One namespace, one index.** Where today's code treats a name and its
+  aliases as one namespace (a tag alias may not equal another tag's name,
+  and the same for publishers and Concepts), separate unique indexes on
+  `tags` and `tag_aliases` cannot keep that rule: under READ COMMITTED a
+  concurrent `CREATE_TAG("X")` and an alias "X" write different tables and
+  both commit. So each such namespace has one key table, `tag_keys`,
+  `publisher_keys` and `concept_keys`, with `UNIQUE (library_id, key)` and
+  the owning row's ID. Creating, renaming, aliasing or merging writes the
+  key rows in the same transaction, and a collision on that index is
+  `NAME_TAKEN`.
 - **Immutability check.** Slice PG-2 must prove the function can be
   `IMMUTABLE` under the database's builtin locale (the 18 docs make
   `casefold` depend on the collation; pinning `pg_unicode_fast` inside the
@@ -2000,8 +2012,12 @@ CREATE INDEX jobs_expired ON prks.jobs (locked_until) WHERE state = 'running';
   same `(kind, dedupe_key)` may already be queued. The failure update
   therefore cancels instead of requeueing when a twin exists, in the same
   statement that checks the lease
-  (`SET state = CASE WHEN EXISTS (queued twin) THEN 'cancelled' ELSE 'queued'
-  END, last_error = …`); the queued twin does the same work. If a twin
+  (`SET state = CASE WHEN attempts >= max_attempts THEN 'failed' WHEN
+  EXISTS (queued twin) THEN 'cancelled' ELSE 'queued' END, last_error = …`,
+  and `lease_id = NULL`); the exhausted branch comes
+  first, so a job's last attempt never returns to `queued`, where the claim
+  would skip it forever while it held its dedupe key. The queued twin does
+  the same work. If a twin
   commits between that check and the update, the update fails with `23505` on
   `jobs_dedupe` and changes nothing, and the worker repeats it, now seeing the
   twin and cancelling. Reclaim never hits this, because a reclaimed job stays
@@ -2378,11 +2394,11 @@ merged; several run at the same time).
 | Slice | Depends on | Content | Acceptance criteria |
 | --- | --- | --- | --- |
 | **L-ID-1** Identity, bootstrap and sessions | PG-2 | Users, Libraries (with `epoch`), memberships, bootstrap tokens and command, Argon2id login with the attempt limiter, login-device tokens and `prks admin unlock-login`, sessions, `GET /api/session` (returns the epoch), `RequestContext` carrying the acted-on epoch and the command-helper epoch check, `authorize()`, loopback-owner mode for `--testing`; CSRF hardening | §13.3 bootstrap and session tests; a command with a stale or missing epoch is refused before writing; login throttling: without a login-device cookie, the sixth attempt for an account and the 21st for an address within the window get 429 with `Retry-After` without a password check, and window expiry or a successful login resets the account row; 20 simultaneous wrong-password requests for one account run at most 5 password checks; with the account limit tripped, the correct password from a browser holding a valid login-device cookie still signs in, and that cookie is limited on its own; `prks admin unlock-login` clears the account limit; two IPv6 addresses in one `/64` share an address key; a spoofed `X-Forwarded-For` from an untrusted peer does not change the address key; takeover after `ready` refused; secrets, the bootstrap token included, never in responses or logs (log-privacy test), and the token file is created `0600` outside the data root; removing a membership refuses the next read and write of that user's existing session for the Library, and demoting an editor to reader refuses the next write; `--testing` E2E unaffected |
-| **L-J-1** Jobs runtime | PG-2 | `jobs` claim/run/retry/lease, NOTIFY wakeup, embedded worker thread, `prks worker`, prune job, diagnostics counters | Kill-after-claim → lease expiry → exactly one reclaim → idempotent completion; stale-worker completion and heartbeat update nothing; repeated-crash job ends `failed` and frees its singleton key; dedupe tests, including a handled failure while a queued twin exists (A cancelled, B runs once); two concurrent workers with several queued jobs of one singleton key never run two and never surface `23505`; jobs of a Library in maintenance or of an older epoch are not claimed; worker graceful stop |
+| **L-J-1** Jobs runtime | PG-2 | `jobs` claim/run/retry/lease, NOTIFY wakeup, embedded worker thread, `prks worker`, prune job, diagnostics counters | Kill-after-claim → lease expiry → exactly one reclaim → idempotent completion; stale-worker completion and heartbeat update nothing; repeated-crash job ends `failed` and frees its singleton key; dedupe tests, including a handled failure while a queued twin exists (A cancelled, B runs once); a handled failure on the last attempt ends `failed`, never `queued`, and frees its dedupe key; two concurrent workers with several queued jobs of one singleton key never run two and never surface `23505`; jobs of a Library in maintenance or of an older epoch are not claimed; worker graceful stop |
 | **L-W-1** Works core | PG-3, L-ID-1 | `works`, `manifestations`, `assets` (catalogue only), `work_notes`, projection module producing today's JSON; create/get/browse/recent/open/metadata/source/delete commands; facade methods; `CREATE_WORK`, `DELETE_WORK`, `MARK_WORK_OPENED`, `SET_WORK_METADATA_FIELD`, `SET_WORK_SOURCE`, note handlers | Parametrized Work and sync-family tests pass on PostgreSQL; JSON parity tests against SQLite fixtures; the #60 §4.1 negative tests as schema tests; deferred pointer FKs proven |
 | **L-W-2** Bulk, BibTeX, wiki links, Work merge scaffolding | L-W-1 | Bulk actions (SERIALIZABLE), BibTeX via citation record, wiki-link resolution | Byte-identical BibTeX tests; bulk atomicity tests |
-| **L-P-1** People | L-W-1 | Persons, aliases as rows, roles (no `rowid`), person groups, publishers; their sync families | Parametrized tests; Greek/Cyrillic identity for publishers and groups; role order stable without `rowid` |
-| **L-O-1** Organization | L-W-1 | Tags (aliases, merge), folders, folder tags, playlists, Saved Views, settings split; their sync families | Parametrized tests; tag merge concurrency test; per-parent folder identity; one-playlist-per-Work |
+| **L-P-1** People | L-W-1 | Persons, aliases as rows, roles (no `rowid`), person groups, publishers; their sync families | Parametrized tests; Greek/Cyrillic identity for publishers and groups; a publisher name and another publisher's alias never share a key under concurrency (`publisher_keys`); role order stable without `rowid` |
+| **L-O-1** Organization | L-W-1 | Tags (aliases, merge), folders, folder tags, playlists, Saved Views, settings split; their sync families | Parametrized tests; tag merge concurrency test; a tag name and another tag's alias never share a key under concurrency (`tag_keys`); per-parent folder identity; one-playlist-per-Work |
 | **L-R-1** Research | L-W-1, L-J-1 | Concepts with `concept_keys`, Positions, Arguments, sources/targets, notes integration, derived mentions via `research.reindex_work`, graph projection | Parametrized tests; Research-ACK fence still observed by E2E; no Python full scan for concept resolution |
 | **L-A-1** Objects and annotations | L-W-1, L-J-1 | #311 Phase B on PostgreSQL: all managed-file paths through `StorageBackend`; immutable objects; cleanup claims, orphan sweep, and the `restore_run_objects` table counted by the reference check (§11.2); annotations, materialization, PDF replace, save-confirm from durable state; person portraits | Object lifecycle tests (§13.3), including a stalled ingest and a stalled rewrite whose new key the sweep settles failing cleanly at the adoption check; write-amplification measurement recorded in the PR; no `os.remove` outside the storage backend; parametrized annotation and sync tests pass |
 | **L-PR-1** Processing | L-A-1, L-P-1, L-O-1 | `processing_files`, `processing_file_roles` (persons) and `processing_file_tags` (tags), whose composite foreign keys need People and Organization; inbox scan as a job that never deletes a row held by restore, import through the objects lane; imports hold the inbox lock (§11.3) across their commit and source-file removal, with the `imported` row state | Parametrized processing tests; no absolute path stored; an import's lock is released on every success and failure path; a crash between an import's commit and its source removal is finished by the next scan and the file is never offered for import again; when the file at that path was replaced before the scan, the scan deletes only the `imported` row and lists the new file as pending |
