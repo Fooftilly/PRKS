@@ -13,10 +13,12 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from collections.abc import Callable
 
 import psycopg
+from psycopg.conninfo import make_conninfo
 
 from backend.db.migrate import (
     MIGRATION_LOCK_KEY,
@@ -169,6 +171,49 @@ class MigrateTests(EmptyDatabaseTestCase):
             holder.execute("SELECT pg_advisory_lock(%s)", (MIGRATION_LOCK_KEY,))
             self.assert_refused("lock_timeout", migrate, self.conninfo, lock_timeout_ms=200)
         self.assertEqual(self.query("SELECT to_regnamespace('prks') IS NULL"), [(True,)])
+
+    def test_inherited_statement_timeout_does_not_cut_the_lock_wait(self) -> None:
+        # A role/database statement_timeout shorter than the lock wait is
+        # neutralized; lock_timeout alone bounds the wait.
+        conninfo = make_conninfo(self.conninfo, options="-c statement_timeout=200")
+        with psycopg.connect(self.conninfo, autocommit=True) as holder:
+            holder.execute("SELECT pg_advisory_lock(%s)", (MIGRATION_LOCK_KEY,))
+            started = time.monotonic()
+            self.assert_refused("lock_timeout", migrate, conninfo, lock_timeout_ms=1500)
+            self.assertGreaterEqual(time.monotonic() - started, 1.2)
+        self.assertEqual(migrate(conninfo).current, 0)
+
+    def test_terminated_lock_wait_is_a_mapped_error(self) -> None:
+        errors: list[BaseException] = []
+        with psycopg.connect(self.conninfo, autocommit=True) as holder:
+            holder.execute("SELECT pg_advisory_lock(%s)", (MIGRATION_LOCK_KEY,))
+
+            def run() -> None:
+                try:
+                    migrate(self.conninfo, lock_timeout_ms=30_000)
+                except BaseException as exc:  # noqa: BLE001 - asserted below
+                    errors.append(exc)
+
+            thread = threading.Thread(target=run)
+            thread.start()
+            pid = None
+            for _ in range(200):
+                row = holder.execute(
+                    "SELECT pid FROM pg_stat_activity WHERE application_name = 'prks-migrate' "
+                    "AND wait_event_type = 'Lock' AND datname = current_database()"
+                ).fetchone()
+                if row is not None:
+                    pid = row[0]
+                    break
+                time.sleep(0.05)
+            self.assertIsNotNone(pid)
+            holder.execute("SELECT pg_terminate_backend(%s)", (pid,))
+            thread.join(30)
+        self.assertEqual(len(errors), 1)
+        error = errors[0]
+        self.assertIsInstance(error, MigrationError)
+        assert isinstance(error, MigrationError)
+        self.assertEqual(error.reason, "database_unavailable")
 
     def test_newer_schema_database_is_refused(self) -> None:
         migrate(self.conninfo)

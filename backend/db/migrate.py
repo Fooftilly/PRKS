@@ -210,6 +210,11 @@ def _connect(conninfo: str, lock_timeout_ms: int) -> psycopg.Connection[Any]:
         # error instead of a silent write to whatever schema comes first.
         conn.execute("SELECT set_config('search_path', '', false)")
         conn.execute("SELECT set_config('lock_timeout', %s, false)", (str(int(lock_timeout_ms)),))
+        # lock_timeout is the runner's only bound: a statement_timeout or
+        # transaction_timeout inherited from the role or database (common on
+        # managed servers) must not cancel the lock wait or a long file.
+        conn.execute("SELECT set_config('statement_timeout', '0', false)")
+        conn.execute("SELECT set_config('transaction_timeout', '0', false)")
     except psycopg.Error:
         conn.close()
         raise MigrationError("database_unavailable", "Cannot configure the database session.") from None
@@ -219,9 +224,14 @@ def _connect(conninfo: str, lock_timeout_ms: int) -> psycopg.Connection[Any]:
 def _lock(conn: psycopg.Connection[Any]) -> None:
     try:
         conn.execute("SELECT pg_advisory_lock(%s)", (MIGRATION_LOCK_KEY,))
-    except psycopg.errors.LockNotAvailable:
+    except (psycopg.errors.LockNotAvailable, psycopg.errors.QueryCanceled):
         raise MigrationError(
             "lock_timeout", "Another schema migration holds the lock; try again later."
+        ) from None
+    except psycopg.Error:
+        # The server restarted or the waiting session was terminated.
+        raise MigrationError(
+            "database_unavailable", "Lost the database connection while waiting for the lock."
         ) from None
 
 
