@@ -91,7 +91,7 @@ answers to the questions that needed an explicit choice.
 | PG9 | Text identity | One normalization rule (NFC, whitespace collapse, Unicode full case folding) shared by PostgreSQL, Python and TypeScript, proven by shared test vectors. Uniqueness is enforced by unique indexes on stored `*_key` columns (§8.1). |
 | PG10 | Collation | Databases are created with the **builtin** locale provider (`PG_UNICODE_FAST`), so indexes never depend on the host's glibc or ICU version. Natural-language ordering for display uses an explicit ICU collation where it matters (§8.2). |
 | PG11 | Search | PostgreSQL full-text search with a PRKS text-search configuration (`simple` dictionary plus `unaccent`, no stemming) and `pg_trgm` for substring and fuzzy matching. Search documents and extracted PDF text live in a rebuildable `derived` schema in the same database, excluded from backups (§8). |
-| PG12 | Isolation and locking | Commands run at READ COMMITTED and lock the revision rows they decide on. Commands that span many aggregates (merges, bulk edits, restore) run SERIALIZABLE with bounded automatic retry. Multi-statement reads run in a REPEATABLE READ READ ONLY snapshot (§7). |
+| PG12 | Isolation and locking | Commands run at READ COMMITTED and lock the revision rows they decide on. Commands that span many aggregates (merges, bulk edits, restore) run SERIALIZABLE with bounded automatic retry, and so does every writer of a table a merge declares as its peer table, because PostgreSQL's guarantee holds only among SERIALIZABLE transactions (§7.1). Multi-statement reads run in a REPEATABLE READ READ ONLY snapshot (§7). |
 | PG13 | Process-local state | Nothing that correctness depends on stays in process memory. The access gate, save-confirm tokens, path and materialization locks, backup staging tokens and the cleanup runner move to rows, row locks or advisory locks (§7.5). |
 | PG14 | Managed objects | Object bytes become **immutable per storage key**. Linearization, materialization and replacement write a new key and switch the Asset's locator in the catalogue transaction. The old key is released through the existing cleanup-claim model (§11.2). |
 | PG15 | Jobs and outbox | One PostgreSQL `jobs` table, enqueued in the same transaction as the mutation that needs it, claimed with `FOR UPDATE SKIP LOCKED`, woken by `LISTEN/NOTIFY`. The jobs table **is** the internal outbox. No Redis, no broker, no separate event table until an external subscriber exists (§12.1). |
@@ -875,11 +875,11 @@ the `applied_at` index makes bounded compaction possible later.
 
 | Work | Isolation | Why |
 | --- | --- | --- |
-| Single-aggregate command (most durable operations, most REST mutations) | READ COMMITTED + `SELECT … FOR UPDATE` on the revision row(s) it decides on | The revision row is the conflict unit's natural lock; two writers of the same scope serialize, writers of different scopes do not. |
-| Uniqueness decisions (create tag, rename concept) | READ COMMITTED + unique index | The index is the arbiter; `23505` maps to the domain refusal. No check-then-insert race. |
+| Single-aggregate command (most durable operations, most REST mutations) that writes no peer table (below) | READ COMMITTED + `SELECT … FOR UPDATE` on the revision row(s) it decides on | The revision row is the conflict unit's natural lock; two writers of the same scope serialize, writers of different scopes do not. |
+| Uniqueness decisions outside the peer tables (create or rename a concept, publisher or Person Group) | READ COMMITTED + unique index | The index is the arbiter; `23505` maps to the domain refusal. No check-then-insert race. |
 | Multi-aggregate commands (merge tags, merge Works, bulk edits, delete Person with protections, restore commit) | SERIALIZABLE, retried up to 3 times on `40001`/`40P01` | Correctness across many rows without hand-ordered locks. Retry is safe because a command has no side effects outside its transaction (§5.2). |
 | Queries and projections | REPEATABLE READ READ ONLY | One snapshot per response. |
-| Workers | READ COMMITTED; claim with `FOR UPDATE SKIP LOCKED` | §12.1 |
+| Workers | READ COMMITTED; claim with `FOR UPDATE SKIP LOCKED`; a handler that writes a peer table declares SERIALIZABLE like a command (none does in 0.8) | §12.1 |
 
 The isolation is declared by the command, and a test enumerates commands to
 make sure each one declares it.
@@ -888,15 +888,25 @@ make sure each one declares it.
 PostgreSQL's serializable guarantee holds only among SERIALIZABLE
 transactions. A READ COMMITTED writer can, for example, add a Work to the
 source tag after a tag merge has read the source's links, and the merge
-would then miss that Work instead of failing with `40001`. So every
-command that writes rows a multi-aggregate command reads to decide also
-runs SERIALIZABLE, with the same retry. For a tag merge that means adding,
-removing or renaming tags on Works and the tags themselves; for a Work
-merge, the Works' child rows; for a protected Person delete, the
-Person's links. Each multi-aggregate command declares the tables it
-decides on, and the isolation test fails if any command that writes one
-of them declares READ COMMITTED. Single-scope commands that touch none of
-those tables keep READ COMMITTED with the revision-row lock.
+would then miss that Work instead of failing with `40001`. So each
+multi-aggregate command declares its **peer tables**, the tables whose
+rows it reads to decide and that other commands write. Every command that
+writes a peer table runs SERIALIZABLE, with the same retry (the unique
+index stays the arbiter for names, and `23505` still maps to the domain
+refusal).
+
+| Command | Peer tables | Writers that run SERIALIZABLE because of them |
+| --- | --- | --- |
+| Tag merge | `tags`, `tag_aliases`, `tag_keys`, `work_tags`, `folder_tags`, `processing_file_tags`, `sync_tag_lifecycle` | Create, rename, alias and delete a tag; add or remove a tag on a Work, folder or processing file |
+| Work merge | `works`, `manifestations`, `work_notes`, `work_tags`, `folder_files`, `playlist_items`, `roles`, `sync_work_lifecycle` | Work metadata and lifecycle, Manifestation create and move, Research Notes, tags, folder and playlist membership, roles. Assets and annotations hang off a Manifestation and move with it, so the merge does not decide on them; `pdf.materialize` and annotation saves keep READ COMMITTED with their Asset row lock (§7.4) |
+| Protected Person delete | `persons`, `roles`, `person_group_members` | Adding or removing a role or a group membership; deleting a Person |
+| Bulk edits | none | Each item locks the revision row it decides on, as a single-aggregate command does; a row lock conflicts at every isolation level, so no peer writer needs SERIALIZABLE |
+| Restore commit (R4) | none | R3's exclusive maintenance lock has drained every writer of the Library, and the committed maintenance flag refuses new ones until R4 commits (§11.4), so no concurrent writer exists |
+
+The isolation test fails if any command that writes a listed peer table
+declares READ COMMITTED, and a new multi-aggregate command must add its
+row here. Commands that write none of these tables keep READ COMMITTED
+with the revision-row lock.
 
 ### 7.2 Revision protocol on PostgreSQL
 
@@ -2363,7 +2373,7 @@ parameters, search terms or library metadata are recorded, as today.
 | Schema snapshot (`check_pg_schema.py` + test) | `check_schema_change.py` SQLite parts, `validate_current_schema` | fresh schema equals snapshot; after 1.0, migrated equals fresh, migrations append-only and unedited |
 | Persistence boundary | (new) | `psycopg` imported only in `backend/db/` and `backend/domain/`; no SQL strings in `server.py`/`backend/api/`/`backend/sync/` |
 | Revision ownership | discussion #583 option (a) | DML on revisioned tables only in `backend/domain/`; FKs into revision-owning rows are not `ON DELETE CASCADE` unless listed with the command that tombstones them |
-| Isolation declared | (new) | every command declares its isolation level; no command writing a table a SERIALIZABLE command decides on declares READ COMMITTED (§7.1); a tag added to the source during a tag merge either lands on the target or makes the merge retry |
+| Isolation declared | (new) | every command declares its isolation level; no command writing a listed peer table declares READ COMMITTED (§7.1); a tag added to the source during a tag merge either lands on the target or makes the merge retry |
 | Text identity vectors | (new) | Python, SQL and TypeScript agree on every vector |
 | Library isolation | (new) | two-Library API sweep (§13.3) |
 | Correlated catalogue counts | kept, re-justified | PostgreSQL often decorrelates, but not always; keep the ratchet and re-baseline its allowlist with `EXPLAIN` evidence during the family ports |
