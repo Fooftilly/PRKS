@@ -208,21 +208,96 @@ def _text_search(conn: psycopg.Connection[Any]) -> dict[str, Any]:
     return {"dictionaries": dictionaries, "configurations": configurations}
 
 
+def _type_definition(conn: psycopg.Connection[Any], typid: int, kind: str) -> dict[str, Any]:
+    if kind == "d":
+        base, not_null, default, collation = _rows(
+            conn,
+            """
+            SELECT format_type(t.typbasetype, t.typtypmod), t.typnotnull, t.typdefault,
+                   CASE WHEN t.typcollation <> b.typcollation THEN c.collname END
+              FROM pg_type t
+              JOIN pg_type b ON b.oid = t.typbasetype
+              LEFT JOIN pg_collation c ON c.oid = t.typcollation
+             WHERE t.oid = %s
+            """,
+            (typid,),
+        )[0]
+        checks = [
+            [name, definition]
+            for name, definition in _rows(
+                conn,
+                "SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint "
+                "WHERE contypid = %s ORDER BY conname",
+                (typid,),
+            )
+        ]
+        return {
+            "base": base,
+            "not_null": not_null,
+            "default": default,
+            "collation": collation,
+            "constraints": checks,
+        }
+    if kind == "e":
+        labels = _rows(
+            conn, "SELECT enumlabel FROM pg_enum WHERE enumtypid = %s ORDER BY enumsortorder", (typid,)
+        )
+        return {"labels": [label for (label,) in labels]}
+    if kind == "c":
+        attributes = _rows(
+            conn,
+            """
+            SELECT a.attname, format_type(a.atttypid, a.atttypmod),
+                   CASE WHEN a.attcollation <> t.typcollation THEN c.collname END
+              FROM pg_attribute a
+              JOIN pg_type t ON t.oid = a.atttypid
+              LEFT JOIN pg_collation c ON c.oid = a.attcollation
+             WHERE a.attrelid = (SELECT typrelid FROM pg_type WHERE oid = %s)
+               AND a.attnum > 0 AND NOT a.attisdropped
+             ORDER BY a.attnum
+            """,
+            (typid,),
+        )
+        return {"attributes": [list(row) for row in attributes]}
+    if kind == "r":
+        subtype, opclass, collation, canonical, subdiff = _rows(
+            conn,
+            """
+            SELECT format_type(r.rngsubtype, NULL), o.opcname, c.collname,
+                   NULLIF(r.rngcanonical::regproc::text, '-'),
+                   NULLIF(r.rngsubdiff::regproc::text, '-')
+              FROM pg_range r
+              JOIN pg_opclass o ON o.oid = r.rngsubopc
+              LEFT JOIN pg_collation c ON c.oid = r.rngcollation
+             WHERE r.rngtypid = %s
+            """,
+            (typid,),
+        )[0]
+        return {
+            "subtype": subtype,
+            "opclass": opclass,
+            "collation": collation,
+            "canonical": canonical,
+            "subdiff": subdiff,
+        }
+    return {}  # a multirange follows from its range
+
+
 def _types(conn: psycopg.Connection[Any]) -> dict[str, Any]:
     # Free-standing types only (domains, enums, composites, ranges); a table's
     # row type and array types follow from the table.
     return {
-        f"{schema}.{name}": {"kind": kind}
-        for schema, name, kind in _rows(
+        f"{schema}.{name}": {"kind": kind, **_type_definition(conn, typid, kind)}
+        for typid, schema, name, kind in _rows(
             conn,
             """
-            SELECT n.nspname, t.typname, t.typtype
+            SELECT t.oid, n.nspname, t.typname, t.typtype
               FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
              WHERE n.nspname = ANY(%s)
                AND t.typtype IN ('d', 'e', 'c', 'r', 'm')
                AND (t.typrelid = 0
                     OR (SELECT relkind FROM pg_class WHERE oid = t.typrelid) = 'c')
-             ORDER BY 1, 2
+             ORDER BY 2, 3
             """,
             (list(OWNED_SCHEMAS),),
         )

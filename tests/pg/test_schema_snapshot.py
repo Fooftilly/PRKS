@@ -47,6 +47,44 @@ class TemplateCloneMatchesSnapshotTests(PostgresTestCase):
             self.assertEqual(catalog_snapshot(conn), checked_in_snapshot())
 
 
+class TypeDefinitionsTests(PostgresTestCase):
+    """A changed type definition changes the snapshot, not just a new type."""
+
+    def setUp(self) -> None:
+        self.conn = self.connect()
+        self.addCleanup(self.conn.rollback)
+        self.conn.execute(
+            "CREATE DOMAIN prks.probe_d AS text NOT NULL DEFAULT 'x' "
+            "CONSTRAINT probe_d_len CHECK (length(VALUE) < 10);"
+            "CREATE TYPE prks.probe_e AS ENUM ('a', 'b');"
+            "CREATE TYPE prks.probe_c AS (x int, y text);"
+            "CREATE TYPE prks.probe_r AS RANGE (subtype = int4)"
+        )
+
+    def types(self) -> object:
+        return catalog_snapshot(self.conn)["types"]
+
+    def test_each_kind_records_its_definition(self) -> None:
+        for change in (
+            "ALTER DOMAIN prks.probe_d SET DEFAULT 'y'",
+            "ALTER DOMAIN prks.probe_d DROP NOT NULL",
+            "ALTER DOMAIN prks.probe_d DROP CONSTRAINT probe_d_len",
+            "ALTER TYPE prks.probe_e ADD VALUE 'c'",
+            "ALTER TYPE prks.probe_e RENAME VALUE 'a' TO 'z'",
+            "ALTER TYPE prks.probe_c ADD ATTRIBUTE z bigint",
+            "ALTER TYPE prks.probe_c ALTER ATTRIBUTE x TYPE bigint",
+            "DROP TYPE prks.probe_r; CREATE TYPE prks.probe_r AS RANGE (subtype = int8)",
+        ):
+            with self.subTest(change):
+                self.conn.execute("SAVEPOINT change")
+                try:
+                    before = self.types()
+                    self.conn.execute(change)
+                    self.assertNotEqual(self.types(), before)
+                finally:
+                    self.conn.execute("ROLLBACK TO SAVEPOINT change")
+
+
 class SearchNormGuardTests(PostgresTestCase):
     """The guard reports what would store search_norm output (§8.3)."""
 
