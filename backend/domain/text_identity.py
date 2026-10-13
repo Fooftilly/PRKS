@@ -17,6 +17,15 @@ same file through SQL. The rule:
   sigma -> sigma), and nothing else: no NFKC, no diacritic stripping.
 
 The key is not re-normalized after folding, on either side.
+
+Unicode version skew: Python and PostgreSQL can ship different Unicode data
+(Python 3.12 has 15.0, PostgreSQL 18 has 16.0). Unicode's case-folding
+stability policy keeps the folding of an assigned character fixed, so the two
+can only disagree on a code point one side does not know yet. This module
+therefore refuses text holding a code point unassigned in Python's
+``unicodedata`` (:class:`UnsupportedTextError`) instead of returning a key
+that ``prks.identity_key`` might not produce. The stored key is always the
+SQL one.
 """
 
 from __future__ import annotations
@@ -35,8 +44,21 @@ WHITESPACE = (
 _WHITESPACE_RUN = re.compile("[" + re.escape(WHITESPACE) + "]+")
 
 
+class UnsupportedTextError(ValueError):
+    """The text holds a code point this Python's Unicode data does not know."""
+
+
 def identity_key(value: str) -> str:
-    """The identity key of ``value``; equal keys mean the same name."""
+    """The identity key of ``value``; equal keys mean the same name.
+
+    Raises :class:`UnsupportedTextError` for a code point unassigned in
+    ``unicodedata.unidata_version`` (see the module docstring).
+    """
+    for char in value:
+        if unicodedata.category(char) == "Cn":
+            raise UnsupportedTextError(
+                f"U+{ord(char):04X} is not assigned in Unicode {unicodedata.unidata_version}"
+            )
     text = unicodedata.normalize("NFC", value)
     text = _WHITESPACE_RUN.sub(" ", text).strip(" ")
     return text.casefold()

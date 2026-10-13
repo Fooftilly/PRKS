@@ -9,11 +9,12 @@ column with a unique index works in a builtin-locale database.
 from __future__ import annotations
 
 import re
+import unicodedata
 
 import psycopg
 from psycopg import sql
 
-from backend.domain.text_identity import WHITESPACE, identity_key
+from backend.domain.text_identity import WHITESPACE, UnsupportedTextError, identity_key
 from tests.pg.harness import PostgresTestCase, fetch_one
 from tests.test_text_identity import load_vectors
 
@@ -43,6 +44,19 @@ class IdentityKeySqlTests(PostgresTestCase):
             with self.subTest(vector["note"]):
                 self.assertEqual(self.sql_key(vector["input"]), vector["key"])
                 self.assertEqual(identity_key(vector["input"]), vector["key"])
+
+    def test_python_never_returns_a_key_sql_would_not(self) -> None:
+        # Unicode 16.0 letters PostgreSQL 18 folds; Python either knows them
+        # and agrees, or refuses them (case folding of an assigned character
+        # never changes, so unassigned code points are the only skew).
+        for codepoint in (0xA7CB, 0xA7CC, 0xA7DC, 0x1C89):
+            char = chr(codepoint)
+            with self.subTest(codepoint=hex(codepoint)):
+                if unicodedata.category(char) == "Cn":
+                    with self.assertRaises(UnsupportedTextError):
+                        identity_key(char)
+                else:
+                    self.assertEqual(identity_key(char), self.sql_key(char))
 
     def test_result_does_not_depend_on_the_callers_collation(self) -> None:
         for vector in load_vectors():

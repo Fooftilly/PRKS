@@ -9,9 +9,10 @@ from __future__ import annotations
 import json
 import os
 import sys
+import unicodedata
 import unittest
 
-from backend.domain.text_identity import WHITESPACE, identity_key
+from backend.domain.text_identity import WHITESPACE, UnsupportedTextError, identity_key
 from backend.research_markup import normalize_concept_key
 
 VECTORS_PATH = os.path.join(os.path.dirname(__file__), "fixtures", "text_identity_vectors.json")
@@ -51,6 +52,17 @@ class TextIdentityVectorTests(unittest.TestCase):
         self.assertNotEqual(identity_key("Résumé"), identity_key("Resume"))
         self.assertNotEqual(identity_key("ћ"), identity_key("ч"))
         self.assertEqual(identity_key("Ａ"), "ａ")
+
+    def test_code_points_unknown_to_this_python_are_refused(self) -> None:
+        # U+0378 has never been assigned; U+A7CB (Unicode 16.0) folds to
+        # U+0264 in PostgreSQL 18 but is unassigned before Python 3.14.
+        with self.assertRaises(UnsupportedTextError):
+            identity_key("tag" + chr(0x0378))
+        if unicodedata.category(chr(0xA7CB)) == "Cn":
+            with self.assertRaises(UnsupportedTextError):
+                identity_key(chr(0xA7CB))
+        else:
+            self.assertEqual(identity_key(chr(0xA7CB)), chr(0x0264))
 
 
 if __name__ == "__main__":
