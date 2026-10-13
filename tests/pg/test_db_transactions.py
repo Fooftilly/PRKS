@@ -243,13 +243,22 @@ class TransactionHelperTests(PostgresTestCase):
         Both read before either writes (a barrier on the first attempt), so
         PostgreSQL's SSI must fail one with 40001; the helper retries it and
         the retry sees the other's committed row.
+
+        The test's ``sleep`` is a no-op, so a retry would otherwise start at
+        once: SSI can fail the loser while the winner is between its
+        pre-commit check and its visible commit, and a retry begun in that
+        window is concurrent with the winner and fails again. Each retry
+        therefore waits until the other command has returned.
         """
         barrier = threading.Barrier(2, timeout=10)
+        finished = {1: threading.Event(), 2: threading.Event()}
         results: dict[int, tuple[int, int]] = {}
         errors: list[BaseException] = []
 
         def make(kind: int, reads: int):
             def body(tx: Transaction) -> tuple[int, int]:
+                if tx.attempt > 1:
+                    finished[reads].wait(10)
                 row = fetch_one(tx.execute("SELECT count(*) AS n FROM pg1_test.items WHERE kind = %s", (reads,)))
                 if tx.attempt == 1:
                     barrier.wait()
@@ -263,6 +272,8 @@ class TransactionHelperTests(PostgresTestCase):
                 results[kind] = self.db.command(make(kind, reads), isolation=Isolation.SERIALIZABLE)
             except BaseException as exc:  # noqa: BLE001 - surfaced by the assertion below
                 errors.append(exc)
+            finally:
+                finished[kind].set()
 
         threads = [
             threading.Thread(target=run, args=(1, 2)),
