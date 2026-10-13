@@ -36,6 +36,8 @@ free_port() {
   "$PY" -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
 }
 
+# start_docker and start_local run inside `! … && ! …`, where set -e is off,
+# so each step that can fail returns 1 itself and the next server is tried.
 start_docker() {
   command -v docker >/dev/null 2>&1 || return 1
   docker info >/dev/null 2>&1 || return 1
@@ -44,7 +46,10 @@ start_docker() {
   docker run -d --rm --name "$name" \
     -e POSTGRES_HOST_AUTH_METHOD=trust \
     -e POSTGRES_INITDB_ARGS="--locale-provider=builtin --builtin-locale=C.UTF-8" \
-    -p 127.0.0.1::5432 "$PG_IMAGE" >/dev/null
+    -p 127.0.0.1::5432 "$PG_IMAGE" >/dev/null || {
+    echo "test-postgres: could not start the Docker server" >&2
+    return 1
+  }
   CLEANUP+=("docker rm -f $name")
   local i
   for ((i = 0; i < 60; i++)); do
@@ -57,7 +62,8 @@ start_docker() {
     sleep 1
   done
   echo "test-postgres: the Docker server did not become ready" >&2
-  exit 1
+  docker rm -f "$name" >/dev/null 2>&1 || true
+  return 1
 }
 
 find_bindir() {
@@ -108,9 +114,15 @@ start_local() {
   port="$(free_port)"
   echo "test-postgres: starting a throwaway PostgreSQL $major cluster" >&2
   "${as[@]}" "$bindir/initdb" -D "$base/data" -U postgres --auth=trust \
-    --locale-provider=builtin --builtin-locale=C.UTF-8 --encoding=UTF8 >/dev/null
+    --locale-provider=builtin --builtin-locale=C.UTF-8 --encoding=UTF8 >/dev/null || {
+    echo "test-postgres: initdb failed" >&2
+    return 1
+  }
   "${as[@]}" "$bindir/pg_ctl" -D "$base/data" -l "$base/server.log" -w \
-    -o "-c listen_addresses='' -k $base -p $port -c fsync=off" start >/dev/null
+    -o "-c listen_addresses='' -k $base -p $port -c fsync=off" start >/dev/null || {
+    echo "test-postgres: the local server did not start" >&2
+    return 1
+  }
   CLEANUP+=("${as[*]} '$bindir/pg_ctl' -D '$base/data' -m immediate stop")
   export PRKS_TEST_DATABASE_URL="postgresql://postgres@/postgres?host=${base}&port=${port}"
 }
