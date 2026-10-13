@@ -85,6 +85,44 @@ class TypeDefinitionsTests(PostgresTestCase):
                     self.conn.execute("ROLLBACK TO SAVEPOINT change")
 
 
+class TableDefinitionTests(PostgresTestCase):
+    """Table and column settings beyond columns, constraints and indexes."""
+
+    def test_table_and_column_settings_are_recorded(self) -> None:
+        conn = self.connect()
+        self.addCleanup(conn.rollback)
+        conn.execute(
+            "CREATE TABLE prks.probe_t (id int PRIMARY KEY, v text);"
+            "CREATE TABLE prks.probe_parent (id int, v text);"
+            "CREATE TABLE prks.probe_p (id int) PARTITION BY RANGE (id);"
+            "CREATE TABLE prks.probe_p0 PARTITION OF prks.probe_p FOR VALUES FROM (0) TO (10)"
+        )
+        for change in (
+            "ALTER TABLE prks.probe_t SET UNLOGGED",
+            "ALTER TABLE prks.probe_t SET (fillfactor = 50)",
+            "ALTER TABLE prks.probe_t ENABLE ROW LEVEL SECURITY",
+            "ALTER TABLE prks.probe_t FORCE ROW LEVEL SECURITY",
+            "CREATE POLICY probe_pol ON prks.probe_t USING (id > 0)",
+            "ALTER TABLE prks.probe_t REPLICA IDENTITY FULL",
+            "ALTER TABLE prks.probe_t INHERIT prks.probe_parent",
+            "ALTER TABLE prks.probe_t ALTER COLUMN v SET STORAGE EXTERNAL",
+            "ALTER TABLE prks.probe_t ALTER COLUMN v SET COMPRESSION pglz",
+            "ALTER TABLE prks.probe_t ALTER COLUMN v SET STATISTICS 500",
+            "ALTER TABLE prks.probe_p DETACH PARTITION prks.probe_p0; "
+            "ALTER TABLE prks.probe_p ATTACH PARTITION prks.probe_p0 FOR VALUES FROM (0) TO (20)",
+            "DROP TABLE prks.probe_p; CREATE TABLE prks.probe_p (id int) PARTITION BY LIST (id); "
+            "CREATE TABLE prks.probe_p0 PARTITION OF prks.probe_p FOR VALUES IN (0)",
+        ):
+            with self.subTest(change):
+                conn.execute("SAVEPOINT change")
+                try:
+                    before = catalog_snapshot(conn)["tables"]
+                    conn.execute(change)
+                    self.assertNotEqual(catalog_snapshot(conn)["tables"], before)
+                finally:
+                    conn.execute("ROLLBACK TO SAVEPOINT change")
+
+
 class SequenceDefinitionTests(PostgresTestCase):
     def test_sequence_options_are_recorded(self) -> None:
         conn = self.connect()

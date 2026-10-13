@@ -42,12 +42,17 @@ def _rows(conn: psycopg.Connection[Any], query: Any, params: Any = None) -> list
 
 def _columns(conn: psycopg.Connection[Any], relid: int) -> list[dict[str, Any]]:
     columns = []
-    for name, type_, not_null, generated, identity, default, collation in _rows(
+    for (
+        name, type_, not_null, generated, identity, default, collation, storage, compression,
+        statistics,
+    ) in _rows(
         conn,
         """
         SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull,
                a.attgenerated, a.attidentity, pg_get_expr(d.adbin, d.adrelid),
-               CASE WHEN a.attcollation <> t.typcollation THEN c.collname END
+               CASE WHEN a.attcollation <> t.typcollation THEN c.collname END,
+               NULLIF(a.attstorage, t.typstorage), NULLIF(a.attcompression, ''),
+               a.attstattarget
           FROM pg_attribute a
           JOIN pg_type t ON t.oid = a.atttypid
           LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
@@ -66,8 +71,81 @@ def _columns(conn: psycopg.Connection[Any], relid: int) -> list[dict[str, Any]]:
             column["identity"] = identity
         if collation is not None:
             column["collation"] = collation
+        if storage is not None:
+            column["storage"] = storage
+        if compression is not None:
+            column["compression"] = compression
+        if statistics is not None and statistics >= 0:
+            column["statistics"] = statistics
         columns.append(column)
     return columns
+
+
+def _table_properties(conn: psycopg.Connection[Any], relid: int) -> dict[str, Any]:
+    """Table-level settings, each recorded only when it differs from the default."""
+    (
+        persistence, options, row_security, force_row_security, replica_identity,
+        access_method, tablespace, partition_key, partition_bound,
+    ) = _rows(
+        conn,
+        """
+        SELECT c.relpersistence, c.reloptions, c.relrowsecurity, c.relforcerowsecurity,
+               c.relreplident, am.amname, ts.spcname,
+               CASE WHEN c.relkind = 'p' THEN pg_get_partkeydef(c.oid) END,
+               pg_get_expr(c.relpartbound, c.oid)
+          FROM pg_class c
+          LEFT JOIN pg_am am ON am.oid = c.relam
+          LEFT JOIN pg_tablespace ts ON ts.oid = c.reltablespace
+         WHERE c.oid = %s
+        """,
+        (relid,),
+    )[0]
+    parents = [
+        parent
+        for (parent,) in _rows(
+            conn,
+            "SELECT inhparent::regclass::text FROM pg_inherits WHERE inhrelid = %s "
+            "ORDER BY inhseqno",
+            (relid,),
+        )
+    ]
+    policies = {
+        name: definition
+        for name, *definition in _rows(
+            conn,
+            """
+            SELECT polname, polcmd, polpermissive,
+                   ARRAY(SELECT rolname FROM pg_roles WHERE oid = ANY(polroles) ORDER BY 1),
+                   pg_get_expr(polqual, polrelid), pg_get_expr(polwithcheck, polrelid)
+              FROM pg_policy WHERE polrelid = %s ORDER BY polname
+            """,
+            (relid,),
+        )
+    }
+    properties: dict[str, Any] = {}
+    if persistence != "p":
+        properties["persistence"] = persistence
+    if options:
+        properties["options"] = sorted(options)
+    if row_security:
+        properties["row_security"] = True
+    if force_row_security:
+        properties["force_row_security"] = True
+    if policies:
+        properties["policies"] = policies
+    if replica_identity != "d":
+        properties["replica_identity"] = replica_identity
+    if access_method not in (None, "heap"):
+        properties["access_method"] = access_method
+    if tablespace is not None:
+        properties["tablespace"] = tablespace
+    if partition_key is not None:
+        properties["partition_key"] = partition_key
+    if parents:
+        properties["parents"] = parents
+    if partition_bound is not None:
+        properties["partition_bound"] = partition_bound
+    return properties
 
 
 def _relations(conn: psycopg.Connection[Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -152,6 +230,7 @@ def _relations(conn: psycopg.Connection[Any]) -> tuple[dict[str, Any], dict[str,
             table["partitioned"] = True
         if triggers:
             table["triggers"] = triggers
+        table.update(_table_properties(conn, relid))
         tables[qualified] = table
     return tables, views
 
