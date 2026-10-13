@@ -875,7 +875,7 @@ the `applied_at` index makes bounded compaction possible later.
 
 | Work | Isolation | Why |
 | --- | --- | --- |
-| Single-aggregate command (most durable operations, most REST mutations) that writes no peer table (below) | READ COMMITTED + `SELECT … FOR UPDATE` on the revision row(s) it decides on | The revision row is the conflict unit's natural lock; two writers of the same scope serialize, writers of different scopes do not. |
+| Single-aggregate command (most durable operations, most REST mutations) that adds no rows to a peer table and updates none of its tie columns (below) | READ COMMITTED + `SELECT … FOR UPDATE` on the revision row(s) it decides on | The revision row is the conflict unit's natural lock; two writers of the same scope serialize, writers of different scopes do not. |
 | Uniqueness decisions outside the peer tables (create or rename a concept, publisher or Person Group) | READ COMMITTED + unique index | The index is the arbiter; `23505` maps to the domain refusal. No check-then-insert race. |
 | Multi-aggregate commands (merge tags, merge Works, bulk edits, delete Person with protections, restore commit) | SERIALIZABLE, retried up to 3 times on `40001`/`40P01` | Correctness across many rows without hand-ordered locks. Retry is safe because a command has no side effects outside its transaction (§5.2). |
 | Queries and projections | REPEATABLE READ READ ONLY | One snapshot per response. |
@@ -884,7 +884,7 @@ the `applied_at` index makes bounded compaction possible later.
 The isolation is declared by the command, and a test enumerates commands to
 make sure each one declares it.
 
-**Writers of what a SERIALIZABLE command decides on are SERIALIZABLE too.**
+**Commands that add rows to what a SERIALIZABLE command reads are SERIALIZABLE too.**
 PostgreSQL's serializable guarantee holds only among SERIALIZABLE
 transactions. A READ COMMITTED writer can, for example, add a Work to the
 source tag after a tag merge has read the source's links, and the merge
