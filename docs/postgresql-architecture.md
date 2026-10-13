@@ -1339,7 +1339,11 @@ write:
   stored `text`, so a concurrent `text.extract` that rewrites the row is
   re-read before the update applies. It extracts again only where a row is
   missing or its `content_sha256` or `extractor_version` no longer
-  matches. A final transaction deletes `asset_text` rows whose Asset no
+  matches, and does so itself through the `text.extract` write path of
+  §8.3 (the Asset `FOR SHARE`, nothing written when the Asset is gone or
+  its hash changed), storing its last `asset_id` in the job's payload; it
+  completes only after those extractions finish, and a failed one fails
+  the rebuild, which resumes from the stored cursor. A final transaction deletes `asset_text` rows whose Asset no
   longer exists or whose `content_sha256` is no longer the Asset's, and a
   later `text.extract` cannot recreate them (§8.3, PDF text).
 - **research**: walks the Library's Works in `work_id` order and runs the
