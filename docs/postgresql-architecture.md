@@ -1519,19 +1519,42 @@ archive. Inbox files are not
   its source file, so no stale handler can touch the inbox afterwards. Then
   it publishes the files: each staged file is hard-linked into the inbox with
   exclusive create. An absent path is written and an identical file is
-  kept. A different file at the same path is never overwritten: the
+  kept. Parent directories are created one component at a time without
+  following links; a component that exists as a symlink or a non-directory
+  counts as a collision. A different file at the same path is never overwritten: the
   archived copy is linked at `restored-<run>/<rel_path>` instead, and the
   staged `processing_files` row is rewritten to that path, keeping its ID
-  and so its roles and tags.
+  and so its roles and tags. `restored-<run>/` is created with exclusive
+  `mkdir`; if it exists, the restore aborts.
+- **Durability.** R1 fsyncs every staged inbox file. Before R4 begins, R3
+  fsyncs every inbox directory it added a link to or created, and the
+  parent of each directory it created, through `backend/fs_durability.py`
+  (directory fsync follows that module's policy, as for objects). So R4
+  never commits a row for a link that a machine crash can still lose.
 - R4 then inserts the staged rows. Any row whose file R3 neither published
   nor found identical in place (because the user had deleted it before the
   backup, or because the inbox is `outside-root`) is held: `restore_hold =
   <run>` with `restore_sha256` from the manifest, or `NULL` when the
   manifest has no entry for that path.
-- A restore that aborts after R3 leaves the files it published (copies of
-  the user's own archived inbox files; nothing was overwritten); the next
-  scan lists them as new pending files. The stale sweep removes the staging
-  directory of a failed run.
+- **A restore that does not commit removes what R3 published.** The staged
+  file and its published link are one inode, so the staging directory is
+  the record of what R3 created; no journal is needed. Undo walks the
+  staged inbox files and unlinks the file at the inbox path or at
+  `restored-<run>/<rel_path>` only when it is the same inode as the staged
+  file (`os.path.samefile`) and still has the manifest's hash; a file the
+  user put there or changed is kept. Then it removes the empty
+  directories R3 created. It runs under the inbox lock exclusively, while
+  the Library is still in maintenance (so no import or scan can see the
+  links), and before the staging directory is deleted:
+  - R5 runs it on an abort after R3 while the restore connection is alive
+    and still holds its locks, after reading on that connection that the
+    run is not committed.
+  - When the restore connection was lost, recovery runs it inside its
+    clearing transaction (below), also holding
+    `pg_try_advisory_xact_lock((L,'inbox'))`; if any unlink fails, the
+    transaction rolls back and the flag stays set for the next attempt.
+  - The stale sweep deletes a failed run's staging directory only after
+    its undo has succeeded.
 - **Held rows.** `processing.scan` never deletes a held row. It clears the
   hold only when the file at that path has the recorded `restore_sha256`.
   A held row whose file is absent is listed as "file not found after
@@ -1541,6 +1564,26 @@ archive. Inbox files are not
   deletes the row; a row without a recorded hash is cleared only that way.
   Restored metadata is therefore never removed or misattached without the
   user seeing it.
+
+**Archive member and path checks.** R0 applies format 1's checks
+(`_normalize_zip_name`, `_zip_entry_kind` and the duplicate checks of
+`_verify_backup_inner` in `backend/backup_restore.py`) to format 2:
+
+- Every member name is a normalized relative POSIX path: no absolute or
+  drive path, no `.` or `..` component, no backslash, NUL or empty
+  component.
+- No symlink or special entry, and no duplicate member or manifest entry.
+- Every member belongs to the archive layout above (`manifest.json`,
+  `identities/*.csv`, `db/<table>.csv` for a content table, `objects/<key>`
+  with a valid key, `inbox/<rel_path>`), every member is listed in the
+  manifest, and every manifest entry is present.
+- Every `inbox` key and every archived `processing_files.rel_path` passes
+  the same path check and does not start with `restored-`.
+
+R1 extracts with exclusive create below the staging directory, so names
+that collide on a case-insensitive filesystem fail closed. R1 and R3 resolve
+every destination through the containment helper (`resolved_child_path`
+in `backend/storage/paths.py`) and never follow a link.
 
 **Encoding: text, not binary `COPY`.** PostgreSQL documents its binary
 `COPY` format as less portable across server versions and architectures and
@@ -1699,19 +1742,20 @@ Restore runs these phases, recorded in a `restore_runs` row with a lease
 
 | Phase | What happens | Visible to others |
 | --- | --- | --- |
-| R0 Validate | Hashes, manifest, schema and format version (newer refused; after 1.0 older accepted); before 1.0, `schema_fingerprint` and the `interchange` column lists must match the live database (see "Staging schema") | Nothing |
+| R0 Validate | Hashes, manifest, schema and format version (newer refused; after 1.0 older accepted); before 1.0, `schema_fingerprint` and the `interchange` column lists must match the live database (see "Staging schema"); archive members and inbox paths pass the containment checks of "Archive member and path checks" | Nothing |
 | R1 Stage | Create `restore_<id>` without the migration runner: for each table in `BACKUP_CONTENT_TABLES`, `CREATE TABLE restore_<id>.<t> (LIKE prks.<t> INCLUDING DEFAULTS INCLUDING CONSTRAINTS INCLUDING INDEXES INCLUDING GENERATED)`, plus the mapping tables; `COPY … FROM` with interchange casts, map identities, then check every foreign key of the live tables with generated anti-joins whose parent side is redirected (staged content tables, live plus newly mapped devices, live Libraries and users; see "Staging schema"); for each archive object, under the per-object lock `pg_advisory_xact_lock(hashtextextended('obj:'||key, 0))` that cleanup's settle also takes (§7.4), insert `restore_run_objects(run, key)` and commit; only then look at the file: missing → write it from the archive with exclusive create; present with the archive's hash → reuse; present with another hash → abort (a live object is never overwritten) | Nothing; reads and writes continue normally |
 | R2 Enter | One committed transaction: `UPDATE libraries SET maintenance = 'restore', maintenance_run = <run> WHERE id = L AND maintenance IS NULL` (refused if another maintenance is active, or if a backup run is active) | From here every new command refuses with `MAINTENANCE` |
 | R3 Drain | On the restore connection, in one explicit short transaction (`BEGIN; SET LOCAL lock_timeout = <drain timeout>`, then the three locks in this order, then `COMMIT` before R4's SERIALIZABLE transaction begins; §4.3), take `pg_advisory_lock(lib_key(L))` **exclusive** (waits for every in-flight command, which holds the shared lock, to commit or roll back) , `pg_advisory_lock((L,'objects'))` exclusive (waits for a running backup copy, bounded by a timeout that aborts the restore) and `pg_advisory_lock((L,'inbox'))` exclusive (waits for an import between its commit and its source removal, and for a backup's inbox copy; §11.3). Then re-check ownership: `libraries.maintenance_run` must still be this run; otherwise the run lost its lease, so release and abort. With cleanup now excluded by the objects lock, re-verify that every key in `restore_run_objects` exists with the archive's size; rewrite a missing one from the archive, abort on a mismatch. Then publish the staged inbox files (see "Processing inbox payload") | Commands that slipped in before R2 finish first |
 | R4 Commit | One SERIALIZABLE transaction that first locks the `libraries` row `FOR UPDATE` and aborts unless `maintenance = 'restore' AND maintenance_run = <run>` and the `restore_runs` row is still this run's live lease; then: delete the Library's rows of the content tables (the allowlist, never memberships, sessions or operational rows) and its `derived` rows; insert the devices the identity mapping marked as new, then the staged, mapped rows; record a `hold` cleanup claim for every object the old catalogue referenced and the new one does not; cancel the Library's queued and running jobs (`state = 'cancelled'`, `lease_id = NULL`, `last_error = 'restore_superseded'`); set `epoch = epoch + 1` and `maintenance = NULL`; **enqueue** `derived.rebuild`, a cleanup retry, and the orphan sweep at the new epoch; mark the run committed | Atomically: the old Library before COMMIT, the restored one (with its follow-up jobs already queued) after |
-| R5 Release | Release all three locks and drop the staging schema, in a `finally` that runs on success and on every abort (`pg_advisory_unlock_all()`, and the dedicated restore connection is closed, never returned to a pool); nothing else in R5 is needed for correctness | Normal operation |
+| R5 Release | On an abort after R3, undo the inbox publication first (see "Processing inbox payload"); release all three locks and drop the staging schema, in a `finally` that runs on success and on every abort (`pg_advisory_unlock_all()`, and the dedicated restore connection is closed, never returned to a pool); nothing else in R5 is needed for correctness | Normal operation |
 
 **Crash recovery.** PostgreSQL releases advisory locks when the restore
 connection dies. A crash before R2 leaves nothing to undo except the staging
 schema and staged objects (dropped, and swept as orphans). A crash between R2
 and R4 leaves the flag set with the live data untouched: when the run's lease
 expires, startup or the maintenance reaper clears `maintenance` for that
-`maintenance_run` and marks the run failed.
+`maintenance_run` and marks the run failed, first undoing any inbox files R3
+published ("Processing inbox payload").
 
 **Fencing a restore that lost its lease.** A restore process can stall
 rather than die, outlive its lease and then resume. Recovery therefore never
@@ -2106,6 +2150,16 @@ the lane that ports the relevant module.
   runs while R1 reuses K → either settle sees the `restore_run_objects` row
   and keeps K, or R1 finds K gone and rewrites it; R4 never commits a locator
   to a missing object.
+- Restore archive containment: archives with an absolute, drive, `..`,
+  backslash or duplicate member, a symlink entry, a member outside the
+  layout or missing from the manifest, or an inbox path that escapes the
+  inbox or starts with `restored-` are refused in R0, and nothing is
+  written outside the staging directory; an inbox subdirectory replaced by
+  a symlink is treated as a collision in R3.
+- Restore inbox undo: an R4 failure and a kill between R3 and R4 each leave
+  the inbox as it was before the restore (published links and
+  `restored-<run>/` removed, the user's identical and changed files kept),
+  and no scan lists the undone files.
 - Restore identity side effects: after a crash between R1 and R4,
   `prks.devices` is unchanged; after R4 every new device exists exactly once.
 - Restore staging vs sweep: an orphan sweep run during a stalled R1 older
@@ -2304,7 +2358,7 @@ merged; several run at the same time).
 | **L-PR-1** Processing | L-A-1 | Inbox scan as a job that never deletes a row held by restore, import through the objects lane; imports hold the inbox lock (§11.3) across their commit and source-file removal, with the `imported` row state | Parametrized processing tests; no absolute path stored; an import's lock is released on every success and failure path; a crash between an import's commit and its source removal is finished by the next scan and the file is never offered for import again |
 | **L-S-1** Search | L-W-1, L-J-1, L-P-1, L-O-1, L-A-1 | `derived.work_search` maintained by commands, `asset_text` via `text.extract`, trigram filters, parity ordering, Saved View execution, `rebuild-derived`; `backend/AGENTS.md` extracted-text rule amended for the `derived` schema (§16, decision 5) | §8.7 parity tests; search parametrized tests pass with the documented Unicode improvements replacing ASCII pins |
 | **L-S-2** Ranking | L-S-1 | Single weighted score | Before/after results on a synthetic multilingual corpus approved in review |
-| **L-B-1** Backup and restore format 2 | L-W-1, L-P-1, L-O-1, L-R-1, L-A-1, L-PR-1, L-S-1 | §11.4 | Round-trip test over a fixture covering every canonical table and object kind; text `COPY` with the interchange contract (no binary `COPY`); restore into the same and into a new instance with real sync operations, the archive Library mapped to the target Library and all library/user/device references resolving; a restore over a different Library whose IDs still exist is refused; R1 reuse of an existing object is lock-coupled to cleanup settle and re-verified in R3, so R4 never commits a locator to a missing object; new devices are inserted only by R4; a restore that outlives its lease aborts and never replaces writes accepted after recovery; export, staging and the R4 delete/insert use only the content-table allowlist, and a schema test classifies every library-scoped table; staging builds `restore_<id>` with `LIKE` from the live tables, never with the migration runner, checks foreign keys with redirected generated anti-joins, and refuses an archive of another schema fingerprint (§13.3 staging isolation); the round trip covers a table with a generated `*_key` column, which is not exported and is recomputed on restore; a backup with the inbox under the data root restores its pending files into a fresh instance, a file already at the same inbox path is never overwritten (the archived copy lands in `restored-<run>/` and its restored row, roles and tags follow it), a scan right after R4 deletes no restored row (a row whose file the user had deleted before the backup is held), a held `outside-root` row whose path holds a different file stays held and its roles and tags are not applied, an import that commits during a backup leaves the archive with either the pending row and its file or neither, an import handler paused between its commit and its file removal at R2 finishes before R3 publishes, and with an `outside-root` inbox the restored rows are held: a scan that finds no file keeps them and the Processing view offers to dismiss them, while a scan that finds the file with the recorded hash clears the hold; staged objects of a live run survive an orphan sweep (L-B-1 only writes `restore_run_objects` rows; the table and its term in the reference check belong to L-A-1); verification refuses tampered archives; fault injection at R0–R5, including a kill immediately after the R4 commit that still rebuilds search after restart; the exclusion interleavings of §13.3; restoring an older snapshot while a long job runs never lets the job write to the replacement state, and an API mutation or operation envelope carrying the pre-restore epoch is refused with 409 `LIBRARY_EPOCH_CHANGED`; backup concurrent with writes and cleanup; format 1 refused with a clear message |
+| **L-B-1** Backup and restore format 2 | L-W-1, L-P-1, L-O-1, L-R-1, L-A-1, L-PR-1, L-S-1 | §11.4 | Round-trip test over a fixture covering every canonical table and object kind; text `COPY` with the interchange contract (no binary `COPY`); restore into the same and into a new instance with real sync operations, the archive Library mapped to the target Library and all library/user/device references resolving; a restore over a different Library whose IDs still exist is refused; R1 reuse of an existing object is lock-coupled to cleanup settle and re-verified in R3, so R4 never commits a locator to a missing object; new devices are inserted only by R4; a restore that outlives its lease aborts and never replaces writes accepted after recovery; export, staging and the R4 delete/insert use only the content-table allowlist, and a schema test classifies every library-scoped table; staging builds `restore_<id>` with `LIKE` from the live tables, never with the migration runner, checks foreign keys with redirected generated anti-joins, and refuses an archive of another schema fingerprint (§13.3 staging isolation); the round trip covers a table with a generated `*_key` column, which is not exported and is recomputed on restore; a backup with the inbox under the data root restores its pending files into a fresh instance, a file already at the same inbox path is never overwritten (the archived copy lands in `restored-<run>/` and its restored row, roles and tags follow it), a scan right after R4 deletes no restored row (a row whose file the user had deleted before the backup is held), a held `outside-root` row whose path holds a different file stays held and its roles and tags are not applied, an import that commits during a backup leaves the archive with either the pending row and its file or neither, an import handler paused between its commit and its file removal at R2 finishes before R3 publishes, and with an `outside-root` inbox the restored rows are held: a scan that finds no file keeps them and the Processing view offers to dismiss them, while a scan that finds the file with the recorded hash clears the hold; staged objects of a live run survive an orphan sweep (L-B-1 only writes `restore_run_objects` rows; the table and its term in the reference check belong to L-A-1); verification refuses tampered archives, and archive members and inbox paths stay contained (§13.3 archive containment); a restore that does not commit leaves the inbox as it was (§13.3 inbox undo); fault injection at R0–R5, including a kill immediately after the R4 commit that still rebuilds search after restart; the exclusion interleavings of §13.3; restoring an older snapshot while a long job runs never lets the job write to the replacement state, and an API mutation or operation envelope carrying the pre-restore epoch is refused with 409 `LIBRARY_EPOCH_CHANGED`; backup concurrent with writes and cleanup; format 1 refused with a clear message |
 | **L-D-1** Compose and health | PG-1, L-ID-1, L-J-1 | Dockerfile with psycopg, Compose of §12.3, `/healthz`, `/readyz`, graceful stop, `.env.example`, README deployment section, #612 configuration entries | Clean `docker compose up` smoke test in CI reaches `/readyz` and bootstrap; the database volume is mounted at `/var/lib/postgresql`; `web` and `worker` each list the `prks_database_url` secret and read it at start; data survives `down`/`up` and container recreation with the volume kept; wrong root/database pairing refused at start |
 | **L-F-1** Browser store scoping, auth hold and restore epoch | L-ID-1 | §10.3–10.4 on the client | E2E: two accounts in one browser never see each other's drafts or queue; session expiry mid-queue holds and later delivers; pre-0.8 queue offered review-only, never auto-deleted; after the Library epoch changes, a pending edit is not applied, its text is offered in review-only recovery, and older-epoch drafts are never auto-restored; every Library-scoped mutation carries `PRKS-Library-Epoch` and login and bootstrap work without it; the client's epoch handling is proven against a 409 `LIBRARY_EPOCH_CHANGED` and a changed epoch from `/api/session` without a real restore (a real restore belongs to L-B-1, and the combined scenario to PG-C1); #465/#466 suites green |
 
