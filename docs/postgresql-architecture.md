@@ -10,6 +10,14 @@ this document is merged, in the order and with the ownership boundaries given
 there. Each implementation PR still needs the maintainer's explicit go before
 it starts and before it merges.
 
+**Post-merge corrections (2026-10-13).** Three review findings that arrived
+as #619 merged are corrected in place, without changing an approved
+decision: the root claim, its serialization and the start-generation
+reconcile and token (§11.1, §9.2, §6.2), root-folder uniqueness (§6.5),
+and rebuild and fan-out concurrency for `derived` rows (§8.3, §8.4,
+§8.6). The affected slices' acceptance criteria in §15.3 and
+the tests in §13.3 carry them.
+
 It follows the shape of [work-identity-model.md](work-identity-model.md) and
 [storage-architecture.md](storage-architecture.md): audit the code first, then
 decide. Every claim about current behavior was checked against `master` at
@@ -663,6 +671,8 @@ CREATE TABLE prks.instance (           -- exactly one row
   setup_state      text NOT NULL CHECK (setup_state IN ('unconfigured','bootstrapping','ready')),
   testing          boolean NOT NULL,    -- a testing database is never served by a non-testing process
   start_generation bigint NOT NULL DEFAULT 0 CHECK (start_generation >= 0),  -- §11.1
+  start_token      text,                -- random, drawn by each bump and the claim (§11.1)
+  prev_start_token text,                -- the token the last bump replaced (§11.1)
   created_at       timestamptz NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX instance_singleton ON prks.instance ((true));
@@ -828,7 +838,7 @@ is not in the 0.8 schema, and Slice K adds it with its own migration.
 | Works | `works` L, `manifestations` L, `assets` L, `manifestation_relations` L, `manifestation_identifiers` L, `work_notes` L, `sync_work_lifecycle` L, `duplicate_decisions` L | §6.4; `manifestation_credit_overrides` arrives with #60 Slice K, after 0.8 |
 | Annotations | `annotations` L | `geometry jsonb`; primary key `(asset_id, id)` because the viewer mints the ID (global uniqueness of a client-minted viewer ID is not something PRKS controls) |
 | People | `persons` L, `person_aliases` L, `roles` L, `person_groups` L, `person_group_members` L, `publishers` L, `publisher_aliases` L | Aliases become rows with keys; `roles` drops the `rowid` tiebreak in favor of `order_index`; publisher names and aliases share one `UNIQUE (library_id, key)` namespace through a `publisher_keys` table (§8.1); group names unique by identity key |
-| Organization | `tags` L, `tag_aliases` L, `work_tags` L, `folders` L, `folder_files` L, `folder_tags` L, `playlists` L, `playlist_items` L, `saved_views` L, `sync_tag_lifecycle` L | `folders.parent_id` + identity key unique per parent; `folder_files` stays the scalar Work-to-folder membership table (`work-folder` in `docs/work-identity-model.md`), now with `UNIQUE (library_id, work_id)` so the one-folder-per-Work rule (I8) that only code enforces today is a constraint; `playlist_items` keeps one playlist per Work; tag names and aliases share one `UNIQUE (library_id, key)` namespace through a `tag_keys` table (§8.1) |
+| Organization | `tags` L, `tag_aliases` L, `work_tags` L, `folders` L, `folder_files` L, `folder_tags` L, `playlists` L, `playlist_items` L, `saved_views` L, `sync_tag_lifecycle` L | `folders` identity is `UNIQUE NULLS NOT DISTINCT (library_id, parent_id, title_key)`, so root folders (`parent_id IS NULL`) share one scope as today's `COALESCE(parent_id, '')` index makes them; `folder_files` stays the scalar Work-to-folder membership table (`work-folder` in `docs/work-identity-model.md`), now with `UNIQUE (library_id, work_id)` so the one-folder-per-Work rule (I8) that only code enforces today is a constraint; `playlist_items` keeps one playlist per Work; tag names and aliases share one `UNIQUE (library_id, key)` namespace through a `tag_keys` table (§8.1) |
 | Research | `concepts` L, `concept_aliases` L, `concept_parents` L, `positions` L, `arguments` L, `argument_verdicts` (global seed), `argument_target_positions` L, `argument_target_arguments` L, `argument_sources` L | Concept name and alias keys share one `UNIQUE (library_id, key)` namespace through a `concept_keys` table, replacing the full Python scan |
 | Processing | `processing_files` L, `processing_file_roles` L, `processing_file_tags` L | `abs_path` removed; `rel_path` relative to the inbox (#311 Phase B intent); nullable `restore_hold` and `restore_sha256` (§11.4); `imported` state between an import's commit and its source removal, with the source's `import_sha256` (§11.3) |
 | Settings | `library_settings` L, `instance_settings` | Split by scope (#612): which keys are Library-, instance- or account-scoped is decided with #612's configuration inventory |
@@ -993,7 +1003,7 @@ RETURNING op_id;
 | `_PDF_MATERIALIZATION_LOCKS`, `_PDF_PATH_LOCKS` | Row lock and advisory lock (§7.4) |
 | `_ready_backups` tokens | `backup_runs` rows with an opaque download token hash and expiry |
 | Bound root, index singletons | Bound once per process at startup; the database pairing record decides validity (§11.1); no hot rebind across processes (#311 §12) |
-| `root.lock` lease | Kept, but its meaning changes from "one process per root" to "one instance per root". Every process of the paired instance (`migrate`, `web`, `worker`, admin commands) takes the OS lock **shared**; relocation and the offline storage tools take it **exclusive**. The one marker write made under the shared lock is the start-generation bump (§11.1). Format-2 restore does not: it writes new immutable keys into the live root while the application runs (§11.4). A process whose database names a different `storage_root_id` is refused before it touches the lock (§11.1). This is the PostgreSQL-era fencing that #311 §12 anticipates. The shared lock cannot tell two databases apart: a copy of the database carries the same `storage_root_id`, so a second instance started from a copy against the same root would pass the pairing check and share the lock. So at most one database ever runs against a root: once a copy (an upgraded cluster, a reloaded dump, a moved volume) has started against it, the database it came from is retired from that root, and the start generation refuses it if it is started there again (§11.1, §12.3, risk R20). Hot rebind stays a single-process capability and is unavailable while another process holds the shared lock. |
+| `root.lock` lease | Kept, but its meaning changes from "one process per root" to "one instance per root". Every process of the paired instance (`migrate`, `web`, `worker`, admin commands) takes the OS lock **shared**; relocation and the offline storage tools take it **exclusive**. The only marker writes made under the shared lock are bootstrap's one-time root claim (serialized by a separate, briefly held exclusive `root.claim` lock) and the start-generation bump and reconcile (§11.1). Format-2 restore does not: it writes new immutable keys into the live root while the application runs (§11.4). A process whose database names a different `storage_root_id` is refused before it touches the lock (§11.1). This is the PostgreSQL-era fencing that #311 §12 anticipates. The shared lock cannot tell two databases apart: a copy of the database carries the same `storage_root_id`, so a second instance started from a copy against the same root would pass the pairing check and share the lock. So at most one database ever runs against a root: once a copy (an upgraded cluster, a reloaded dump, a moved volume) has started against it, the database it came from is retired from that root, and the start generation refuses it if it is started there again (§11.1, §12.3, risk R20). Hot rebind stays a single-process capability and is unavailable while another process holds the shared lock. |
 | Performance registry | Stays per process by design, labelled with process role (§12.4) |
 
 ### 7.6 Concurrency tests
@@ -1157,16 +1167,66 @@ CREATE INDEX work_search_trgm ON derived.work_search USING gin (title_norm ext.g
 CREATE INDEX work_search_text_trgm ON derived.work_search USING gin (text_norm ext.gin_trgm_ops);
 ```
 
-- Metadata and note commands refresh the row **in the same transaction** (one
-  small statement), so metadata search is never stale, exactly as the FTS5
-  triggers behave today. This is the one place where a command writes
-  `derived`. The row is still derived: `prks admin rebuild-derived` truncates
-  and recomputes it, and restore does not carry it.
+- Every command that changes an input of a Work's row (its title, author
+  text, abstract or notes, or the name of a person linked to it) refreshes
+  that row **in the same transaction**, so metadata search is never stale,
+  exactly as the FTS5 triggers behave today. This is the one place where a
+  command writes `derived`. The row is still derived: `prks admin
+  rebuild-derived` recomputes it, and restore does not carry it.
+- **One refresh path.** Commands, the rebuild and the repair job all write
+  `work_search` only through `refresh_work_search(work_ids)` (L-S-1), which
+  runs these steps in the caller's transaction:
+  1. `SELECT … FROM works … FOR KEY SHARE` locks the given Works that
+     still exist, in `id` order, and deletes the `work_search` rows of
+     any given id whose Work is gone;
+  2. `INSERT … ON CONFLICT DO NOTHING` creates any missing row for the
+     Works locked in step 1, never for a Work that is gone;
+  3. `SELECT … FOR UPDATE` locks those rows in `work_id` order;
+  4. one `UPDATE … FROM` recomputes them from the canonical tables.
+
+  `DELETE_WORK` deletes the `works` row and then that Work's `work_search`
+  row in its transaction (L-S-1 adds this to the delete command, which
+  L-W-1 writes before `work_search` exists). The key-share lock orders
+  the two: a delete that starts first makes step 1 wait and then skip
+  the Work, and a refresh that locks first makes the delete wait until
+  the refresh has committed its row, which the delete then removes. So a refresh whose id list still
+  names a deleted Work (a rename fan-out, a late rebuild batch, the repair
+  job) never recreates its row.
+
+  Under READ COMMITTED the step-4 statement takes its snapshot after the
+  locks are granted. So it sees every transaction that refreshed these
+  rows before it, and any transaction that changes their inputs later
+  waits at step 3 and recomputes after it commits. A stale projection can
+  therefore never overwrite a newer one, whichever writer is slower. A
+  SERIALIZABLE command that meets a concurrent refresh gets `40001` and
+  is retried (§7.1).
+- **Fan-out inputs.** A person's name feeds the row of every Work linked
+  to that person, and a command that changes it picks those Works from
+  its own snapshot, so the `work_search` row lock alone cannot order it
+  against a command that links the person to another Work at the same
+  time. The `persons` row is the meeting point: a command that links or
+  unlinks a person and a Work takes `FOR SHARE` on that person's row
+  before it refreshes, and a command that changes a person's searchable
+  name (rename, merge) takes `FOR UPDATE` on every affected person row
+  before it collects the linked Works. Whichever runs second either waits
+  and then reads the other's committed links or name (READ COMMITTED), or
+  gets `40001` and is retried (SERIALIZABLE), so every linked Work ends
+  with the new name.
 - PDF text lives in `derived.asset_text(asset_id, content_sha256,
   extractor_version, status, truncated, text, doc tsvector)`, filled by the
   `text.extract` job (§12.1). It is keyed by Asset and by the content hash, so
   a new working object (PG14) is a new extraction, and a stale row can never
-  be served for new bytes.
+  be served for new bytes. `text.extract` locks the Asset row `FOR SHARE`
+  before it writes, and writes nothing when the Asset is gone or its
+  current `content_sha256` is no longer the one it extracted. In the same
+  transaction that changes the Asset row, an Asset delete then removes
+  that Asset's `asset_text` rows, and a content replace removes its rows
+  for any other `content_sha256` (L-S-1 adds both to L-A-1's paths).
+  The share lock orders them as in `refresh_work_search` (§8.3): a delete or
+  replace that starts first makes the extraction wait and then write
+  nothing, and an extraction that locks first commits its row before the
+  delete or replace removes it. So a stale extraction never leaves a row
+  behind.
 - **Ranking.** Phase 1 reproduces today's union order for parity (FTS hits,
   then title/abstract substring, then the per-token fallback, then people).
   Phase 2, as its own PR, replaces the union with one `ts_rank_cd`-weighted
@@ -1231,8 +1291,25 @@ in its transaction; the ACK no longer waits for the reindex (today it runs
 after commit in the request, `server.py:2645-2681`). The client already treats
 the Research-ACK fence as "Concept/Argument/Graph views may refresh", so it
 waits for the job through the existing `research_refs`/state endpoints, which
-now report `pending` until the job completes. The rule "the derived index is
-never authority for destructive mutation" is unchanged.
+now report `pending` until the job completes. `research.reindex_work`
+first takes `pg_advisory_xact_lock` on the Work's reindex key, then reads
+the Work's note `FOR SHARE` and writes its mentions and `work_note_state`
+in that one transaction. The per-Work lock serializes reindexes of the
+Work even when it has no note yet (a `FOR SHARE` on an absent row locks
+nothing), and every read follows the lock under READ COMMITTED, so each
+reindex sees every note commit before it. A note command enqueues its
+reindex in the transaction that writes the note, so that job can only
+run after the note is committed, and whichever reindex of the Work runs
+last reads the latest note, whatever order duplicate jobs run in; the
+`FOR SHARE` makes a note command that replaces the note mid-reindex wait
+until that reindex commits. After the lock it also reads the Work row; if
+the Work no longer exists, it deletes that Work's mention and
+`work_note_state` rows and writes nothing. A Work delete enqueues
+`research.reindex_work` for the Work in its transaction (L-R-1 adds this to
+the delete command), so a reindex always runs after the delete commits and
+removes whatever an earlier reindex of that Work wrote, and any stale job
+that runs later finds the Work gone and writes nothing. The rule "the derived index is never
+authority for destructive mutation" is unchanged.
 
 Concept resolution uses the `concept_keys` unique index instead of scanning
 every Concept in Python.
@@ -1246,13 +1323,54 @@ uniqueness change (identity key per Library).
 ### 8.6 Rebuild and verification
 
 `prks admin rebuild-derived [--library L] [--only search|text|research]`
-truncates and recomputes the `derived` schema, as a job with progress. The
-`text` scope keeps extracted text: it recomputes `asset_text.doc` from the
-stored `text`, and extracts again only where a row is missing or its
-`content_sha256` or `extractor_version` no longer matches. It runs
-automatically after restore and is the documented step after a PostgreSQL
-major upgrade. Normal startup never runs a full verification; a cheap
-consistency count (`works` without `work_search` rows) schedules a repair job.
+recomputes the `derived` schema, as a job with progress, while ordinary
+commands keep running. It never truncates a table that commands also
+write:
+
+- **search**: walks the Library's Works in `work_id` order, in batches of
+  a few hundred, each batch one short READ COMMITTED transaction that calls
+  `refresh_work_search` (§8.3) and stores the last `work_id` in the job's
+  payload. A final transaction deletes `work_search` rows whose Work no
+  longer exists; a later refresh cannot recreate them, because it never
+  inserts a row for a Work that is gone (§8.3). A Work created during the
+  rebuild gets its row from its own create command.
+- **text**: keeps extracted text. It recomputes `asset_text.doc` with one
+  `UPDATE` per batch whose new value is computed from the same row's
+  stored `text`, so a concurrent `text.extract` that rewrites the row is
+  re-read before the update applies. It extracts again only where a row is
+  missing or its `content_sha256` or `extractor_version` no longer
+  matches, and does so itself through the `text.extract` write path of
+  §8.3 (the Asset `FOR SHARE`, nothing written when the Asset is gone or
+  its hash changed), storing its last `asset_id` in the job's payload; it
+  completes only after those extractions finish. A PDF that cannot be
+  extracted (corrupt, encrypted, unreadable) is an outcome, not a failure:
+  its row is written with a failed `status`, as today, and the cursor moves
+  past it. Only a transaction or infrastructure error (a lock timeout, a
+  lost connection, an unavailable extractor) fails the rebuild, which
+  resumes from the stored cursor. A final transaction deletes `asset_text` rows whose Asset no
+  longer exists or whose `content_sha256` is no longer the Asset's, and a
+  later `text.extract` cannot recreate them (§8.3, PDF text).
+- **research**: walks the Library's Works in `work_id` order and runs the
+  `research.reindex_work` transaction (§8.4: the per-Work lock, the
+  gone-Work check, the note `FOR SHARE`) for each Work itself, one short
+  transaction per Work, storing the last `work_id` in the job's payload.
+  So mentions are written only by that one transaction, and the rebuild
+  completes only after every Work has been reindexed; a Work whose reindex
+  fails fails the rebuild, which resumes from the stored `work_id`.
+  A final transaction deletes `concept_mentions`, `argument_mentions` and
+  `work_note_state` rows whose Work no longer exists, as search does. A
+  reindex that runs after that delete (a note command's job) cannot
+  recreate them, because a reindex whose Work is gone writes nothing
+  (§8.4).
+
+Every batch recomputes from the canonical rows current when it runs, so a
+rebuild is idempotent and safe to retry: an interrupted run resumes from
+the stored `work_id`, or starts over, and either way leaves only rows that
+match committed data. It runs automatically after restore and is the
+documented step after a PostgreSQL major upgrade. Normal startup never runs
+a full verification; a cheap consistency count (`works` without
+`work_search` rows, or `work_search` rows without a Work) schedules a
+repair job, which uses the same refresh path.
 
 **Folding check.** `doc` vectors, `asset_text.doc` and the `*_norm` columns
 all fold through the same `unaccent` rules and the server's Unicode tables,
@@ -1355,13 +1473,15 @@ tokens use the new one, and searches would silently miss existing Works.
    outside the data root, and names that file in the log; automated installs
    supply it via `PRKS_BOOTSTRAP_TOKEN_FILE`. Without it, no setup
    endpoint does anything.
-3. One SERIALIZABLE transaction creates the instance row (with the bound
-   root's `storage_root_id`, and `start_generation` 1; the root must be at
-   generation 0 with no stored objects, and its marker is bumped to 1 once
-   the transaction commits, §11.1),
-   the owner user, the Library and the membership, and marks setup `ready`. Repeating it is a no-op that returns the existing
-   state, so a retried or double-submitted request cannot create a second
-   owner or Library.
+3. Bootstrap claims the root before it marks setup `ready`, in three
+   steps that a retry resumes from wherever a crash stopped them (§11.1,
+   "Root claim"): it commits the instance row in setup state
+   `bootstrapping` (with the bound root's `storage_root_id` and
+   `start_generation` 1), then writes the instance's `id` and generation 1
+   into the root marker, then one SERIALIZABLE transaction creates the
+   owner user, the Library and the membership and marks setup `ready`.
+   Repeating it is a no-op that returns the existing state, so a retried
+   or double-submitted request cannot create a second owner or Library.
 4. Once `ready`, every bootstrap endpoint answers 409 and the token is
    consumed. A later browser visit cannot take over the instance.
 
@@ -1562,13 +1682,14 @@ lets the schema drop `origin_work_id` and legacy operation mappings (§6.4).
 - `instance.storage_root_id` records the root the database belongs to.
   Startup reads the root marker (#311 §7.1) and refuses to serve when the IDs
   differ, naming both, never "fixing" either side.
-- A data root whose marker is at start generation 0 (or has no such field)
-  and holds no stored objects, with an empty database, is "new
-  installation": bootstrap writes the pairing (§9.2). Bootstrap refuses any
-  other root, because a marker above generation 0 or a non-empty object
-  store means an earlier database has already run against it (for example
-  after `docker compose down -v` or a lost database volume, which keep the
-  `./data` bind mount). The new Library would reference none of those
+- A data root whose marker names no instance, is at start generation 0
+  (or has no such field) and holds no stored objects, with an empty
+  database, is "new installation": bootstrap claims it (§9.2, "Root claim"
+  below). Bootstrap refuses any other root, because a marker that names
+  another instance, a marker above generation 0, or a non-empty object
+  store means an earlier database has already claimed or run against it
+  (for example after `docker compose down -v` or a lost database volume,
+  which keep the `./data` bind mount). The new Library would reference none of those
   objects, and the first orphan sweep (§11.2) would delete them. The
   refusal says the root belongs to an earlier database and points to
   whole-instance disaster recovery (database and root restored together,
@@ -1579,41 +1700,169 @@ lets the schema drop `origin_work_id` and legacy operation mappings (§6.4).
   process and vice versa, mirroring today's storage testing containment.
 - **Start generation.** `instance.start_generation` and a
   `start_generation` field in the root marker (absent counts as 0) count
-  the starts of the database that runs against the root. The migration
-  runner (§4.4: `prks migrate`, or `web` itself when
-  `PRKS_MIGRATE_ON_START=1`) refuses a database whose generation is behind
-  the root's, saying that another database has run against this root
-  since (§12.3). Otherwise it sets both to the larger value plus one: the
-  database first, committed, then the marker. A crash between the two
-  leaves the database ahead, which passes. Every other process (`worker`,
-  `web` without migrate-on-start, admin commands) applies the same refusal
-  without bumping.
-  - **First boot.** Before bootstrap there is no `instance` row (§9.2), so
-    the runner applies the schema and neither compares nor bumps, and
-    every other process skips the check while setup is `unconfigured`.
-    Bootstrap accepts only a root at generation 0 with no stored objects
-    (above), so its transaction (§9.2 step 3) creates the row with
-    `start_generation` 1, commits, and then bumps the marker to 1 under
-    the shared lease, so the
-    first ready start already has both fields in agreement. The normal
-    bump applies from the next start on.
-  - **Lock mode.** The bump runs under the **shared** `root.lock`, because
-    Compose runs the new `migrate` while the previous `web` and `worker`
-    still hold it shared, and a manual `prks migrate` meets a running stack
-    the same way. This amends #311's rule that only the exclusive lease
-    holder writes the marker, for this one field only: a new
-    `bump_start_generation(root, shared_lease)` re-reads the marker,
-    changes nothing but `start_generation`, and replaces it atomically
-    (`replace_file_atomically`); `write_marker` keeps requiring the
-    exclusive lease for every other change.
-  - **Serialization.** The runner's `pg_advisory_lock` serializes bumps from
-    one database. Relocation and the offline storage tools hold the lock
-    exclusive, so they never meet a bump. Two different databases bumping
-    at once is the concurrent-copy case: the atomic replace keeps the
-    marker whole (the last writer wins), and that case stays risk R20.
+  the starts of the database that runs against the root. The marker also
+  records `instance_id`, the `instance.id` of the database that claimed
+  the root (absent means unclaimed). A copy of a database carries the same
+  `instance.id`, so the field tells independently bootstrapped databases
+  apart, never a copy from its original (risk R20). Each bump and the claim
+  also draw a random `start_token`, stored in `instance.start_token` and
+  in the marker, and the database keeps the token its last bump replaced
+  in `instance.prev_start_token`. A generation number alone does not say
+  which database reached it: two copies that each bump from the same
+  generation reach the same number with different tokens.
+  - **Start check.** Every process (`migrate`, `web`, `worker`, admin
+    commands) runs the same check under the shared `root.lock` before it
+    serves, schedules work or changes data. With setup `ready`:
+    1. A marker whose `instance_id` is absent or differs from
+       `instance.id` is refused, naming both: the root is unclaimed or
+       belongs to another database.
+    2. A database whose generation is **behind** the marker's is refused:
+       another database has run against this root since (§12.3).
+    3. A database **exactly one ahead** of the marker, whose
+       `prev_start_token` equals the marker's token, is reconciled before
+       anything else: the process writes the database's generation and
+       token into the marker and reads it back. A marker it cannot write,
+       or that reads back different, refuses the start. This is the state
+       a crash between the two writes of a bump leaves behind, so no
+       process ever serves while the marker lags. Any other database
+       ahead of the marker is refused.
+    4. Equal generations with equal tokens pass. Equal generations with
+       different tokens are refused: another database reached this
+       generation separately (for example the old cluster restarted after
+       its copy's `migrate` crashed between its two writes, then the copy
+       started again).
+  - **Bump.** Every process that serves, schedules work or changes data
+    (`migrate`, `web`, `worker` and data-changing admin commands; a
+    read-only admin command only checks) bumps once at start, right after
+    its start check passes and before it does anything else: it sets both
+    generations to the database's plus one with a new token, the database
+    first (moving its old token to `prev_start_token`), committed, then
+    the marker. A crash between the two leaves the database ahead, and the
+    next start of any process reconciles it (step 3) before serving.
+    Bumping on every start, not only in the migration runner, is what
+    makes the token meaningful: an old database brought back through a
+    plain `web` or `worker` restart (`docker compose restart`, a manual
+    `prks worker`) moves the marker past a copy whose bump crashed, so
+    that copy is then refused at step 4 instead of being reconciled at
+    step 3. The cost is one marker write per process start. The runner's
+    schema work never reads or writes the root: the check and the bump
+    run after it, from the identity code
+    (`backend/domain/identity/root_pairing.py`, L-ID-1). A process that
+    started while setup was `unconfigured` or `bootstrapping` does no work
+    until it sees setup become `ready` (a `worker` checks on its idle
+    poll, and claims no job before then), and then runs the start check
+    and bump exactly as at a start before its first job or non-setup
+    request. The one process that performed the claim (the first-run
+    `web` that served the bootstrap request, or `prks admin bootstrap`)
+    counts the claim as its bump and does not bump again when it marks
+    setup `ready`.
+  - **Root claim (first boot).** Before bootstrap there is no `instance`
+    row (§9.2), so the runner applies the schema and neither compares nor
+    bumps, and every other process skips the check, while setup is
+    `unconfigured` or `bootstrapping`. Bootstrap then claims the root in
+    three steps, each durable before the next starts:
+    1. If no instance row exists, one transaction checks that the root
+       is a new installation (above), creates the instance row with a new
+       `id`, the root's `storage_root_id`, `start_generation` 1, a new
+       `start_token` and setup `bootstrapping`, and commits. If a
+       `bootstrapping` row already exists, this step creates nothing: the
+       retry reuses its `id` and token only if the bound root's
+       `storage_root_id` equals the row's, and is refused otherwise, so
+       one bootstrapping database never claims a second root (a retry or a
+       concurrent request configured with another root). Step 2's check
+       is then the guard, because after a crash past step 2 the root is no
+       longer a new installation.
+    2. `claim_root(root, instance_id, shared_lease)` takes the root's
+       **claim lock** exclusive (an OS lock on a dedicated `root.claim`
+       file beside `root.lock`, held only for this step), re-reads the
+       marker and accepts exactly two states: unclaimed at generation 0
+       with no stored objects (it then writes `instance_id`,
+       `start_generation` 1 and the instance's token), or already naming
+       this `instance_id` at generation 1 with this token and no stored
+       objects (a retry, which writes nothing). It replaces the marker
+       atomically, reads it back and releases the lock. Any other marker refuses bootstrap; in
+       particular a marker naming this `instance_id` above generation 1,
+       or a root holding objects, means the root has moved on without
+       this database (a copy taken while it was still bootstrapping), and
+       the claim never lowers a generation. A copy retried before its
+       original has bumped or stored anything cannot be told from a
+       retry; that is a concurrent copy (risk R20).
+    3. The bootstrap transaction (§9.2 step 3) marks setup `ready`.
+
+    A crash after step 1 leaves a `bootstrapping` row and an unclaimed
+    marker; retrying bootstrap resumes at step 2. A crash after step 2
+    leaves a claimed marker that names this database; the retry resumes
+    at step 3. While setup is `unconfigured` or `bootstrapping`, `web`
+    serves only the setup endpoints and no other process does any work.
+    A second empty database pointed at the root after step 2 (a recreated
+    volume, a wrong connection string) finds the marker naming another
+    instance and is refused, even though no object has been written yet.
+    Two empty databases bootstrapping against one root at the same moment
+    both pass step 1, but the claim lock serializes step 2: the first
+    claim commits to the marker before the second re-reads it, so the
+    second finds another `instance_id` and is refused. The claim lock is
+    held only for that one read-check-write-read, and nothing else takes
+    it.
+  - **Lock mode.** The claim, the bump and the reconcile run under the
+    **shared** `root.lock`, because Compose runs the new `migrate` while
+    the previous `web` and `worker` still hold it shared, and a manual
+    `prks migrate` meets a running stack the same way. This amends #311's
+    rule that only the exclusive lease holder writes the marker, for
+    `instance_id`, `start_generation` and `start_token` only: `claim_root` writes `instance_id` once (never
+    changing a value already there), and
+    `bump_start_generation(root, shared_lease, expected, to)` only moves
+    the marker from the `expected` generation and token to the next
+    generation and its token, and is a no-op when the marker already
+    holds `to`. Both re-read the marker, change nothing else and
+    replace it atomically (`replace_file_atomically`); `write_marker`
+    keeps requiring the exclusive lease for every other change.
+  - **Serialization.** The claim lock serializes root claims (above). A
+    session-level `pg_advisory_lock` on the **start key** (one fixed key,
+    distinct from the runner's schema lock), held across the start check,
+    the database commit and the marker write, serializes the checks and
+    bumps of every process of one database, so `web` and `worker`
+    starting together bump one after the other. Like the runner (§4.4),
+    every process takes it on a **dedicated connection** opened for the
+    start, never a pooled one, with its own bounded wait (`lock_timeout`
+    of 60 s, not the pool's 5 s; a start that times out stays not ready
+    and retries). The connection releases the lock with
+    `pg_advisory_unlock` in a `finally` and is then closed on every path,
+    including a refused start and a marker write that fails, so a process
+    left not ready never holds the start key.
+  - **Relocation and teardown (amends #311 §4, §8 and §12).** The pairing
+    fields belong to the root, so relocation carries them like
+    `storage_root_id`: the destination marker that P1 constructs copies
+    `instance_id`, `start_generation` and `start_token` from the source
+    marker, and P6 activates it unchanged. Relocation holds `root.lock`
+    exclusive, so no claim or bump runs between the copy and the
+    activation, and the relocated root passes the start check of the
+    database it belongs to. The claim lock file lives beside `root.lock`
+    (`.prks-maintenance/root.claim`) and is inventoried with it: it is
+    durable operational state, a lone `root.claim` counts as preflight
+    scaffold exactly as a lone `root.lock` does, and teardown and P10
+    cleanup remove it with `root.lock`. Unlinking it there is safe:
+    every claim runs under the shared `root.lock`, which the exclusive
+    holder excludes. Relocation and the offline storage tools hold the lock
+    exclusive, so they never meet a claim or a bump. Two different
+    databases writing at once is the concurrent-copy case: the atomic
+    replace keeps the marker whole (the last writer wins), and that case
+    stays risk R20.
 
   So an old cluster started again after its copy has run (a reverted image
   tag, a reattached volume) is refused before it touches the root.
+  The generation counts **starts**, not writes: it refuses a copy taken
+  before the last start whose marker write completed, never one taken
+  after it. A database that keeps serving after that point (no process
+  restarted, or a manual `prks migrate` whose marker write failed while
+  the running `web` and `worker` carried on) moves past every copy taken
+  in between without the marker recording it, and such a copy started
+  later passes. Start-generation fencing therefore does **not** guarantee
+  that every stale database copy is detected. That is the accepted copy
+  limitation (risk R20, confirmed by the maintainer on 2026-10-13 for
+  sequential use of stale copies as well as concurrent copies), not a gap
+  in the reconcile: the next start of the real database reconciles or
+  bumps the marker, and PRKS adds no running-process recheck, heartbeat
+  or write-time fencing to close it.
 - PostgreSQL's data directory is **never** inside the PRKS data root
   (#311 §9.1). Compose uses a separate named volume.
 - **Restore keeps the pairing.** A format-2 restore replaces one Library's
@@ -2362,7 +2611,7 @@ services:
     environment: &prks_env
       PRKS_DATABASE_URL_FILE: /run/secrets/prks_database_url
       PRKS_STORAGE: /data
-      PRKS_MIGRATE_ON_START: "0"   # the migrate service already ran (and bumped the start generation, §11.1)
+      PRKS_MIGRATE_ON_START: "0"   # the migrate service already ran; web and worker each still check and bump at start (§11.1)
     volumes: [./data:/data]        # migrate takes root.lock shared and bumps the root marker
     secrets: [prks_database_url]
     depends_on: {db: {condition: service_healthy}}
@@ -2414,8 +2663,8 @@ secrets:
 - **Upgrades**: `migrate` runs before `web`/`worker` start; both refuse to
   run against a schema newer or older than their code. Compose sets
   `PRKS_MIGRATE_ON_START=0` for every service, so the one-shot `migrate`
-  is the only runner and each `up` bumps the start generation once
-  (§11.1).
+  is the only runner; every service start bumps the start generation
+  once (§11.1).
 - **Database volume capacity.** The deployment documentation tells the
   operator to monitor free space on the PostgreSQL volume, which PRKS
   cannot see (§11.4, "Database capacity"). It recommends keeping free at
@@ -2427,9 +2676,17 @@ secrets:
 - **At most one database ever runs against a root.** Every copy of the
   database (an upgraded cluster, a reloaded dump, a moved volume) keeps the
   original's `storage_root_id`, so the pairing check cannot tell them apart
-  (§7.5, risk R20); the start generation (§11.1) refuses only an older
-  database started after a newer one. The deployment documentation
-  therefore says: once a
+  (§7.5, risk R20). The start generation and token (§11.1) count
+  starts, not writes: they refuse a database copied before the last start
+  whose marker write completed, or one whose generation another database
+  reached separately, but not a copy taken while PRKS kept serving after
+  that start (a volume snapshot or `pg_dump` taken with the stack up), so
+  it does not guarantee that every stale copy is detected (risk R20).
+  The deployment documentation therefore says: a database copy taken
+  while PRKS is serving is not fenced, so it is never started against
+  this root; it may only be started against its own root copy (the
+  §11.4 disaster-recovery pair), never alongside the original's root,
+  and rollback uses a copy pair taken offline (below); and once a
   copy has started against a root, the database it came from is retired,
   because the copy's orphan sweep may already have deleted objects that
   only the old database still references. Retiring is an action, not a
@@ -2606,6 +2863,54 @@ the lane that ports the relevant module.
 - Search parity (§8.7) and identity vectors (§8.1).
 - Bootstrap: empty install, repeated bootstrap, token expiry, takeover
   attempt after `ready`, restore not triggering bootstrap.
+- Root claim and start generation (§11.1), with fault injection between
+  each pair of writes:
+  - bootstrap killed after the `bootstrapping` commit, and again after the
+    marker claim: no process serves, and retrying bootstrap completes
+    with both generations at 1 and the marker naming the instance;
+  - a second empty database pointed at the root after the claim, with no
+    object written yet, is refused by bootstrap and the marker is
+    unchanged;
+  - bootstrap killed after the `bootstrapping` commit, then retried (or
+    run concurrently) with a different, empty root: the retry is refused
+    before it claims anything, and the other root's marker stays
+    unclaimed;
+  - generations reached separately: a copy's `migrate` killed after its
+    database bump commits, the original restarted and bumped, then the
+    copy started again: the copy is refused (equal generations, different
+    tokens), and a database two or more ahead of the marker is refused;
+  - a copy's `migrate` killed after its database bump commits, then the
+    original's `worker` restarted without `migrate` and storing an
+    object, then the copy started again: the restart moved the marker, so
+    the copy is refused;
+  - two empty databases claiming one root, with a barrier holding the
+    first claim between its marker re-read and its write: the second
+    claim waits on the claim lock, then is refused, and exactly one
+    database reaches `ready`;
+  - a copy of a database taken while it was `bootstrapping`, retried
+    after the original became `ready` and either bumped the marker or
+    stored an object, is refused, and the marker's generation and
+    objects are unchanged;
+  - `migrate` killed after the database bump commits and before the
+    marker write: `web` and `worker` started next reconcile the marker
+    before `/readyz` reports ready, and a copy of the database taken
+    before that bump is then refused;
+  - first-run Compose: a `worker` started before bootstrap claims no job
+    while setup is `unconfigured` or `bootstrapping`, and once bootstrap
+    completes it runs the start check (refused if its root is not the
+    claimed one) and bumps before its first job;
+  - a marker write that fails during `web`'s reconcile leaves `web` not
+    ready without holding the start key: a `worker` started next gets
+    past the lock;
+  - a relocated root keeps `instance_id`, `start_generation` and
+    `start_token`, and `web`, `worker` and admin commands start against
+    it after the move; P10 cleanup of the retired source removes
+    `root.claim` with `root.lock` and leaves no maintenance directory
+    behind;
+  - a marker that cannot be written during reconcile keeps the process
+    not ready;
+  - a recreated database volume: bootstrap refuses the used root and its
+    objects stay untouched.
 - Session and CSRF: missing/mismatched Origin, cross-site `Sec-Fetch-Site`,
   expired session pauses (does not drop) the browser queue (E2E).
 - Pool exhaustion and database restart (connection loss mid-request returns
@@ -2656,7 +2961,7 @@ checkpointing, rowid preservation) are listed as retired with the reason.
 | R17 | A restore races ordinary writers, jobs or cleanup | Medium | High | Committed maintenance flag, maintenance lock drain, objects lock (§11.4); interleaving tests (§13.3) |
 | R18 | Work begun before a restore (a running job, an open tab, a browser outbox) is applied to the restored Library | Medium | High | Library `epoch` checked by every command, job claim and job transaction; older-epoch browser rows go to review-only recovery (§10.4, §11.4); restore-fencing tests (§13.3) |
 | R19 | The PostgreSQL volume fills during restore staging | Low | Medium | Accepted by the maintainer (2026-10-13): no disk-space probe or headroom setting in 0.8; R1/R4 roll back, the failure is reported, cleanup is idempotent, and deployment docs cover monitoring and headroom (§11.4, §12.3) |
-| R20 | Two databases run against one data root, at once (a copy started alongside the original) or one after the other (the old cluster restarted after an upgrade or volume move), and one finds objects the other's orphan sweep deleted | Low | Critical | Accepted by the maintainer (2026-10-13) as a documented deployment limitation of 0.8: one canonical database per root, concurrent copies unsupported and not technically prevented, no heartbeat or cross-database fencing. The pairing check refuses any database paired with another root, and the start generation refuses a database started after a newer copy has run against the root (§11.1); copies running at the same time are not detected; the deployment docs say at most one database ever runs against a root, the old cluster's data directory is moved out or deleted once a copy has started, reverting the image tag is not a rollback, and rollback uses a root copy taken with the old data directory or a format-2 backup restored into a fresh instance (§12.3); the shared `root.lock` fences only exclusive tools (§7.5) |
+| R20 | Two databases run against one data root, at once (a copy started alongside the original) or one after the other (the old cluster restarted after an upgrade or volume move), and one finds objects the other's orphan sweep deleted | Low | Critical | Accepted by the maintainer (2026-10-13) as a documented deployment limitation of 0.8, covering both concurrent database copies and sequential use of stale copies the start generation cannot distinguish: one canonical database per root, such copies unsupported and not technically prevented, no continuous marker recheck, heartbeat, write-time or cross-database fencing. The pairing check refuses any database paired with another root, the root claim, serialized by the claim lock, refuses an independently bootstrapped database (the marker names another `instance_id`), and the start generation and token refuse a database started after a newer copy has run against the root, including one whose generation another database reached separately (§11.1); copies running at the same time are not detected, and neither is a copy taken after the last start whose marker write completed (the generation counts starts, not writes, §11.1); the deployment docs say at most one database ever runs against a root, a database copy taken while PRKS is serving is only ever started against its own root copy (§11.4), the old cluster's data directory is moved out or deleted once a copy has started, reverting the image tag is not a rollback, and rollback uses a root copy taken with the old data directory or a format-2 backup restored into a fresh instance (§12.3); the shared `root.lock` fences only exclusive tools (§7.5) |
 
 Dependencies: #60 (model, unchanged in meaning), #311 (Phase B is absorbed
 into the Assets lane; D–E later), #612 (bootstrap and configuration
@@ -2685,7 +2990,7 @@ stops for maintainer review. No PR is merged without explicit approval.
 | Lane | Owns (may create and edit) | Must not edit |
 | --- | --- | --- |
 | Foundation (PG-1, PG-2, PG-3) | `backend/db/**`, `backend/db/schema/000_*.sql`–`020_*.sql`, `tests/pg/**` harness, CI workflow DB service, `requirements*.txt`, `dependency-inventory.json`, `backend/pg_facade/__init__.py` | domain packages |
-| Identity (L-ID) | `backend/domain/identity/**`, `020_identity.sql` (after PG-2 hands it over), `backend/api/session.py`, auth admission hook in `server.py` (one function) | other domain packages |
+| Identity (L-ID) | `backend/domain/identity/**` (including `root_pairing.py`, §11.1), `020_identity.sql` (after PG-2 hands it over), `backend/api/session.py`, auth admission hook in `server.py` (one function), `claim_root` and `bump_start_generation` in `backend/storage/root_marker.py`, and in `backend/storage/**` only the pairing-field carry in relocation's destination marker and the `root.claim` entries in the inventory, scaffold and teardown rules (§11.1) | other domain packages |
 | Works (L-W) | `backend/domain/works/**`, `100_works.sql`, `backend/pg_facade/works.py`, `backend/sync/handlers/work_*.py` | people/organization/research files |
 | People (L-P) | `backend/domain/people/**`, `110_people.sql`, `pg_facade/people.py`, `sync/handlers/person*.py`, `work_role` handler | works schema (references only) |
 | Organization (L-O) | `backend/domain/organization/**`, `120_organization.sql`, `pg_facade/organization.py`, tag/folder/playlist handlers, `domain/saved_views`, `domain/settings` | |
@@ -2716,7 +3021,7 @@ explicit go, and PG-1 comes first.
 | Slice | Content | Acceptance criteria |
 | --- | --- | --- |
 | **PG-1** Database plumbing and test harness | psycopg + psycopg_pool pins; `backend/db/` config (`PRKS_DATABASE_URL`, `*_FILE`), pool, `command()`/`query()` helpers with isolation, error mapping table; harness-created test databases with template cloning and refusal of foreign databases (ownership marked with a `COMMENT ON DATABASE` until PG-2 adds `instance.testing`); `scripts/test-postgres`; CI service container in `test-gate.yml`. No domain tables. | Unit tests for helpers (commit, rollback on exception, SERIALIZABLE retry on injected `40001`, READ ONLY query refuses writes); error-mapping tests per SQLSTATE; pool exhaustion → typed error; harness refuses a pre-existing database; CI green with the service; existing SQLite suites untouched and green. |
-| **PG-2** Migration runner, schema layout and core tables | Runner with advisory lock and checksums; `000_extensions.sql`, `010_instance.sql`, `020_identity.sql`, `030_jobs.sql`, `040_sync.sql` (`entity_revisions`, `sync_operations`, `devices`); `prks.identity_key` with the immutability proof (§8.1); `prks.search_norm` with the snapshot assertion that no index expression or column default depends on it (§8.3); text identity vectors and Python implementation; schema snapshot test and `check_pg_schema.py`. | Fresh database matches the snapshot; concurrent `migrate` runs apply once; a newer-schema database is refused; a database whose applied baseline file has since changed is refused with the recreate message; identity vectors pass in SQL and Python; `IMMUTABLE` generated column works under the builtin locale (or the fallback is chosen and documented). |
+| **PG-2** Migration runner, schema layout and core tables | Runner with advisory lock and checksums; `000_extensions.sql`, `010_instance.sql`, `020_identity.sql`, `030_jobs.sql`, `040_sync.sql` (`entity_revisions`, `sync_operations`, `devices`); `prks.instance` with `start_token` and `prev_start_token` (§6.2, §11.1); `prks.identity_key` with the immutability proof (§8.1); `prks.search_norm` with the snapshot assertion that no index expression or column default depends on it (§8.3); text identity vectors and Python implementation; schema snapshot test and `check_pg_schema.py`. | Fresh database matches the snapshot; concurrent `migrate` runs apply once; a newer-schema database is refused; a database whose applied baseline file has since changed is refused with the recreate message; identity vectors pass in SQL and Python; `IMMUTABLE` generated column works under the builtin locale (or the fallback is chosen and documented); the runner itself never reads or writes the data root (the root claim and the start-generation check and bump run after it, L-ID-1, §11.1). |
 | **PG-3** Parity harness and facade skeleton | `PostgresLibrary` facade composed of empty mixins; a test fixture parametrizing selected modules over `sqlite` and `postgres`, with a registry marking which methods are ported (unported ones skip on `postgres`, not fail); a dual-run CI job. | Running `python run_tests.py` unchanged still runs SQLite only; the `postgres` leg runs and reports ported/unported counts; no lane needs to edit the fixture to register its family (one line in its mixin). |
 
 **Stage 2. Parallel lanes** (each may start once its dependencies are
@@ -2724,19 +3029,19 @@ merged; several run at the same time).
 
 | Slice | Depends on | Content | Acceptance criteria |
 | --- | --- | --- | --- |
-| **L-ID-1** Identity, bootstrap and sessions | PG-2 | Users, Libraries (with `epoch`), memberships, bootstrap tokens and command, Argon2id login with the attempt limiter, login-device tokens and `prks admin unlock-login`, sessions, `GET /api/session` (returns the epoch), `RequestContext` carrying the acted-on epoch and the command-helper epoch check, `authorize()`, loopback-owner mode for `--testing`; CSRF hardening | §13.3 bootstrap and session tests; a command with a stale or missing epoch is refused before writing; login throttling: without a login-device cookie, the sixth attempt for an account and the 21st for an address within the window get 429 with `Retry-After` without a password check, and window expiry or a successful login resets the account row; 20 simultaneous wrong-password requests for one account run at most 5 password checks; with the account limit tripped, the correct password from a browser holding a valid login-device cookie still signs in, and that cookie is limited on its own; `prks admin unlock-login` clears the account limit; two IPv6 addresses in one `/64` share an address key; a spoofed `X-Forwarded-For` from an untrusted peer does not change the address key; takeover after `ready` refused; secrets, the bootstrap token included, never in responses or logs (log-privacy test), and the token file is created `0600` outside the data root; removing a membership refuses the next read and write of that user's existing session for the Library, and demoting an editor to reader refuses the next write; `--testing` E2E unaffected |
+| **L-ID-1** Identity, bootstrap and sessions | PG-2 | Users, Libraries (with `epoch`), memberships, bootstrap tokens and command, Argon2id login with the attempt limiter, login-device tokens and `prks admin unlock-login`, sessions, `GET /api/session` (returns the epoch), `RequestContext` carrying the acted-on epoch and the command-helper epoch check, `authorize()`, loopback-owner mode for `--testing`; CSRF hardening | §13.3 bootstrap and session tests; a command with a stale or missing epoch is refused before writing; login throttling: without a login-device cookie, the sixth attempt for an account and the 21st for an address within the window get 429 with `Retry-After` without a password check, and window expiry or a successful login resets the account row; 20 simultaneous wrong-password requests for one account run at most 5 password checks; with the account limit tripped, the correct password from a browser holding a valid login-device cookie still signs in, and that cookie is limited on its own; `prks admin unlock-login` clears the account limit; two IPv6 addresses in one `/64` share an address key; a spoofed `X-Forwarded-For` from an untrusted peer does not change the address key; takeover after `ready` refused; secrets, the bootstrap token included, never in responses or logs (log-privacy test), and the token file is created `0600` outside the data root; removing a membership refuses the next read and write of that user's existing session for the Library, and demoting an editor to reader refuses the next write; `--testing` E2E unaffected; the root claim and start check of §11.1 (`root_pairing.py`, `claim_root`, `bump_start_generation`) with the §13.3 root-claim fault-injection tests: interrupted bootstrap resumes, interrupted bump is reconciled before serving, a second empty database is refused after the claim, two simultaneous claims leave exactly one `ready` database, a bootstrap retried with a different root is refused before claiming it, a bootstrapping copy retried after the root moved on is refused, a copy whose generation the original reached separately is refused (equal generations, different tokens), including when the original came back through a plain `worker` restart without `migrate`; every serving process start bumps once, and a `worker` started before bootstrap checks and bumps when it sees setup become `ready`, before its first job, holding the start key on a dedicated connection that releases it on every path (a failed marker write in `web` does not block the next `worker`); relocation carries the pairing fields into the destination marker and teardown removes `root.claim` with `root.lock` |
 | **L-J-1** Jobs runtime | PG-2 | `jobs` claim/run/retry/lease, NOTIFY wakeup, embedded worker thread, `prks worker`, prune job, diagnostics counters | Kill-after-claim → lease expiry → exactly one reclaim → idempotent completion; stale-worker completion and heartbeat update nothing; repeated-crash job ends `failed` and frees its singleton key; dedupe tests, including a handled failure while a queued twin exists (A cancelled, B runs once); a handled failure on the last attempt ends `failed`, never `queued`, and frees its dedupe key; two concurrent workers with several queued jobs of one singleton key never run two and never surface `23505`; jobs of a Library in maintenance or of an older epoch are not claimed; worker graceful stop |
 | **L-W-1** Works core | PG-3, L-ID-1 | Every Works-family table of §6.5 (`works`, `manifestations`, `assets` (catalogue only), `manifestation_relations`, `manifestation_identifiers`, `work_notes`, `sync_work_lifecycle`, `duplicate_decisions`), so later 0.8 Works slices add no canonical table (`manifestation_credit_overrides` comes with #60 Slice K, §6.4); projection module producing today's JSON; create/get/browse/recent/open/metadata/source/delete commands; facade methods; `CREATE_WORK`, `DELETE_WORK`, `MARK_WORK_OPENED`, `SET_WORK_METADATA_FIELD`, `SET_WORK_SOURCE`, note handlers | Parametrized Work and sync-family tests pass on PostgreSQL; JSON parity tests against SQLite fixtures; the #60 §4.1 negative tests as schema tests; deferred pointer FKs proven |
 | **L-W-2** Bulk, BibTeX, wiki links, Work merge scaffolding | L-W-1 | Bulk actions (SERIALIZABLE), BibTeX via citation record, wiki-link resolution, on the tables L-W-1 created (no new canonical table, so L-B-1 does not wait for it) | Byte-identical BibTeX tests; bulk atomicity tests |
-| **L-P-1** People | L-W-1 | Persons, aliases as rows, roles (no `rowid`), person groups, publishers; their sync families | Parametrized tests; Greek/Cyrillic identity for publishers and groups; a publisher name and another publisher's alias never share a key under concurrency (`publisher_keys`); role order stable without `rowid` |
-| **L-O-1** Organization | L-W-1 | Tags (aliases, merge), folders, folder tags, playlists, Saved Views, settings split; their sync families | Parametrized tests; tag merge concurrency test; a tag name and another tag's alias never share a key under concurrency (`tag_keys`); per-parent folder identity; one-playlist-per-Work |
-| **L-R-1** Research | L-W-1, L-J-1 | Concepts with `concept_keys`, Positions, Arguments, sources/targets, notes integration, derived mentions via `research.reindex_work`, graph projection | Parametrized tests; Research-ACK fence still observed by E2E; no Python full scan for concept resolution |
+| **L-P-1** People | L-W-1 | Persons, aliases as rows, roles (no `rowid`), person groups, publishers; their sync families | Parametrized tests; Greek/Cyrillic identity for publishers and groups; a publisher name and another publisher's alias never share a key under concurrency (`publisher_keys`); role order stable without `rowid`; role link and unlink take `FOR SHARE`, and rename and merge take `FOR UPDATE`, on the person rows before they refresh `work_search` (§8.3, fan-out inputs) |
+| **L-O-1** Organization | L-W-1 | Tags (aliases, merge), folders, folder tags, playlists, Saved Views, settings split; their sync families | Parametrized tests; tag merge concurrency test; a tag name and another tag's alias never share a key under concurrency (`tag_keys`); per-parent folder identity, with tests that two root folders of the same title key are refused (`NULLS NOT DISTINCT`), the same title under two different parents is allowed, and two concurrent creates of one root folder leave one row; one-playlist-per-Work |
+| **L-R-1** Research | L-W-1, L-J-1 | Concepts with `concept_keys`, Positions, Arguments, sources/targets, notes integration, derived mentions via `research.reindex_work`, graph projection | Parametrized tests; Research-ACK fence still observed by E2E; no Python full scan for concept resolution; `research.reindex_work` takes the per-Work reindex lock and holds the note `FOR SHARE` while it writes mentions, tested by a note edit committed while a reindex of the old note is paused (the final mentions match the new note) and by a first note created for a Work while a reindex that found no note is paused (the final mentions match the new note); a Work deleted while a reindex of it (a job's or a rebuild's) is paused, and one deleted before a stale reindex runs, leave no research rows for that Work |
 | **L-A-1** Objects and annotations | L-W-1, L-J-1, L-P-1 | #311 Phase B on PostgreSQL: all managed-file paths through `StorageBackend`; immutable objects; cleanup claims, orphan sweep, and the `restore_run_objects` table counted by the reference check (§11.2); annotations, materialization, PDF replace, save-confirm from durable state; person portraits | Object lifecycle tests (§13.3), including a stalled ingest and a stalled rewrite whose new key the sweep settles failing cleanly at the adoption check; write-amplification measurement recorded in the PR; no `os.remove` outside the storage backend; parametrized annotation and sync tests pass |
 | **L-PR-1** Processing | L-A-1, L-P-1, L-O-1 | `processing_files`, `processing_file_roles` (persons) and `processing_file_tags` (tags), whose composite foreign keys need People and Organization; inbox scan as a job that never deletes a row held by restore, import through the objects lane; imports hold the inbox lock (§11.3) across their commit and source-file removal, with the `imported` row state | Parametrized processing tests; no absolute path stored; an import's lock is released on every success and failure path; a crash between an import's commit and its source removal is finished by the next scan and the file is never offered for import again; when the file at that path was replaced before the scan, the scan deletes only the `imported` row and lists the new file as pending |
-| **L-S-1** Search | L-W-1, L-J-1, L-P-1, L-O-1, L-A-1 | `derived.work_search` maintained by commands, `asset_text` via `text.extract`, trigram filters, parity ordering, Saved View execution, `rebuild-derived`, the folding check (§8.6); `backend/AGENTS.md` extracted-text rule amended for the `derived` schema (§16, decision 5) | §8.7 parity tests; search parametrized tests pass with the documented Unicode improvements replacing ASCII pins; an infix token ("state" in "understatement") still finds a Work through its abstract and through its notes, and a diacritic infix ("šnja" in notes containing "Trešnja") finds it too, the §8.7 substring vectors; a changed folding, at start or seen on a worker's idle tick after the database restarts on a new release, enqueues the folding rebuild once even when two processes start together, and still enqueues it (a new job row, not a dedupe no-op) when only a search-only rebuild is queued, a failed or cancelled folding rebuild leaves `libraries.search_folding` unchanged and is enqueued again on the next start, and `--only text` recomputes `doc` without extracting again |
+| **L-S-1** Search | L-W-1, L-J-1, L-P-1, L-O-1, L-A-1 | `derived.work_search` maintained by commands, `asset_text` via `text.extract`, trigram filters, parity ordering, Saved View execution, `rebuild-derived`, the folding check (§8.6); `backend/AGENTS.md` extracted-text rule amended for the `derived` schema (§16, decision 5) | §8.7 parity tests; search parametrized tests pass with the documented Unicode improvements replacing ASCII pins; an infix token ("state" in "understatement") still finds a Work through its abstract and through its notes, and a diacritic infix ("šnja" in notes containing "Trešnja") finds it too, the §8.7 substring vectors; a changed folding, at start or seen on a worker's idle tick after the database restarts on a new release, enqueues the folding rebuild once even when two processes start together, and still enqueues it (a new job row, not a dedupe no-op) when only a search-only rebuild is queued, a failed or cancelled folding rebuild leaves `libraries.search_folding` unchanged and is enqueued again on the next start, and `--only text` recomputes `doc` without extracting again; rebuild concurrency (§8.6), with deterministic pause points: a metadata or note command committed while a rebuild batch holds its locks, and one committed after the batch read began, both leave the command's projection; a Work created during a rebuild keeps its row; a rebuild killed mid-run and run again leaves every row equal to a fresh recompute; running it twice changes nothing; a person rename committed while a role add linking that person to another Work is paused (and the reverse order) leaves both Works' rows with the new name; a Work deleted while a refresh naming it is paused, and a refresh naming a Work after its delete and after a rebuild's final delete, leave no `work_search` row for that Work; an Asset deleted or replaced while a `text.extract` of it is paused, and a rebuild with an `asset_text` row whose Asset is gone or replaced, leave no such row; a text rebuild over a Library with one corrupt PDF completes, records that Asset with a failed `status` and indexes the Assets after it; `--only research` completes only after every Work is reindexed, and a Work whose reindex fails fails the rebuild, which resumes from its stored `work_id` |
 | **L-S-2** Ranking (v0.9.0) | L-S-1 | Single weighted score | Before/after results on a synthetic multilingual corpus approved in review |
 | **L-B-1** Backup and restore format 2 | L-W-1, L-P-1, L-O-1, L-R-1, L-A-1, L-PR-1, L-S-1 | §11.4 | Round-trip test over a fixture covering every canonical table and object kind; text `COPY` with the interchange contract (no binary `COPY`); restore into the same and into a new instance with real sync operations, the archive Library mapped to the target Library and all library/user/device references resolving; a restore over a different Library whose IDs still exist is refused; R1 reuse of an existing object is lock-coupled to cleanup settle and re-verified in R3, so R4 never commits a locator to a missing object; new devices are inserted only by R4; a restore that outlives its lease aborts and never replaces writes accepted after recovery; export, staging and the R4 delete/insert use only the content-table allowlist, and a schema test classifies every library-scoped table; staging builds `restore_<id>` with `LIKE` from the live tables, never with the migration runner, checks foreign keys with redirected generated anti-joins, and refuses an archive of another schema fingerprint (§13.3 staging isolation); the round trip covers a table with a generated `*_key` column, which is not exported and is recomputed on restore; a backup with the inbox under the data root restores its pending files into a fresh instance, a file already at the same inbox path is never overwritten (the archived copy lands in `restored-<run>/` and its restored row, roles and tags follow it), a scan right after R4 deletes no restored pending row (a row whose file the user had deleted before the backup is held), and a restored `imported` row whose path holds a different file in the target's inbox loses only its row, never the file; a backup taken after a collision restore, with its `restored-<run>/` rows still pending, restores cleanly; a held `outside-root` row whose path holds a different file stays held and its roles and tags are not applied, an import that commits during a backup leaves the archive with either the pending row and its file or neither, an import handler paused between its commit and its file removal at R2 finishes before R3 publishes, and with an `outside-root` inbox the restored rows are held: a scan that finds no file keeps them and the Processing view offers to dismiss them, while a scan that finds the file with the recorded hash clears the hold; staged objects of a live run survive an orphan sweep (L-B-1 only writes `restore_run_objects` rows; the table and its term in the reference check belong to L-A-1); verification refuses tampered archives, and archive members and inbox paths stay contained (§13.3 archive containment); a restore that does not commit leaves the inbox's files as they were (§13.3 inbox undo); fault injection at R0–R5, including a kill immediately after the R4 commit that still rebuilds search after restart; the exclusion interleavings of §13.3; restoring an older snapshot while a long job runs never lets the job write to the replacement state, and an API mutation or operation envelope carrying the pre-restore epoch is refused with 409 `LIBRARY_EPOCH_CHANGED`; backup concurrent with writes and cleanup; format 1 refused with a clear message; an R3 lock timeout and an R4 rollback each leave the old data intact, clear the flag through abort finalization, and accept a new ordinary command at once without waiting for lease expiry, while an abort whose inbox undo fails keeps the flag set for recovery; a disk-full error (`53100`) injected in R1 and in R4 leaves the live Library unchanged, reports the restore as failed with that error, and a later cleanup pass drops the staging schema |
-| **L-D-1** Compose and health | PG-1, L-ID-1, L-J-1 | Dockerfile with psycopg, Compose of §12.3, `/healthz`, `/readyz`, graceful stop, `.env.example`, README deployment section (including PostgreSQL-volume capacity monitoring and headroom, and the one-database-per-root rule: retiring the old cluster's data directory after an upgrade or move, reverting the image tag is not a rollback, and rollback is a root copy taken with the old data directory or a format-2 backup restored into a fresh instance, §12.3), #612 configuration entries | Clean `docker compose up` smoke test in CI reaches `/readyz` and bootstrap; the database volume is mounted at `/var/lib/postgresql`; `web` and `worker` each list the `prks_database_url` secret and read it at start; data survives `down`/`up` and container recreation with the volume kept; wrong root/database pairing refused at start; the start generation (§11.1) is bumped by the migration runner database-first under the shared `root.lock`, including an upgrade run while the previous `web` and `worker` still hold it, and an older cluster started after a newer one is refused by `migrate`, `web` and `worker`; a clean `docker compose up` (schema applied, no bump) → bootstrap → restart leaves the database and marker generations equal, and a copy of the database taken before the restart is refused against the root afterwards; after bootstrap and a start, recreating the database volume and running `up` again makes bootstrap refuse the used root with its objects untouched; the README states that two databases running against one root at the same time can permanently delete files and that PRKS cannot detect it (R20) |
+| **L-D-1** Compose and health | PG-1, L-ID-1, L-J-1 | Dockerfile with psycopg, Compose of §12.3, `/healthz`, `/readyz`, graceful stop, `.env.example`, README deployment section (including PostgreSQL-volume capacity monitoring and headroom, and the one-database-per-root rule: a database copy taken while PRKS is serving is never started against this root, only against its own root copy (the §11.4 disaster-recovery pair), retiring the old cluster's data directory after an upgrade or move, reverting the image tag is not a rollback, and rollback is a root copy taken with the old data directory or a format-2 backup restored into a fresh instance, §12.3), #612 configuration entries | Clean `docker compose up` smoke test in CI reaches `/readyz` and bootstrap; the database volume is mounted at `/var/lib/postgresql`; `web` and `worker` each list the `prks_database_url` secret and read it at start; data survives `down`/`up` and container recreation with the volume kept; wrong root/database pairing refused at start; the start generation (§11.1) is bumped database-first by every starting `migrate`, `web` and `worker` under the shared `root.lock`, including an upgrade run while the previous `web` and `worker` still hold it, and an older cluster started after a newer one is refused by `migrate`, `web` and `worker`; a clean `docker compose up` (schema applied, no bump) → bootstrap → restart leaves the database and marker generations equal, and a copy of the database taken before the restart is refused against the root afterwards; `migrate` killed between its database bump and its marker write leaves `web` not ready until the marker is reconciled; after bootstrap and a start, recreating the database volume and running `up` again makes bootstrap refuse the used root with its objects untouched; the README states that two databases running against one root at the same time can permanently delete files and that PRKS cannot detect it, and that the start generation counts starts, not writes, so it does not detect every stale database copy (R20) |
 | **L-F-1** Browser store scoping, auth hold and restore epoch | L-ID-1 | §10.3–10.4 on the client | E2E: two accounts in one browser never see each other's drafts or queue; session expiry mid-queue holds and later delivers; pre-0.8 queue offered review-only, never auto-deleted; after the Library epoch changes, a pending edit is not applied, its text is offered in review-only recovery, and older-epoch drafts are never auto-restored; every Library-scoped mutation carries `PRKS-Library-Epoch` and login and bootstrap work without it; the client's epoch handling is proven against a 409 `LIBRARY_EPOCH_CHANGED` and a changed epoch from `/api/session` without a real restore (a real restore belongs to L-B-1, and the combined scenario to PG-C1); #465/#466 suites green |
 
 **Stage 3. Cutover (sequential).**
@@ -2818,13 +3123,17 @@ Decision 11 and the last two sentences of decision 10 were added on
     (2026-10-13): L-S-2 (ranking) and PG-C3 (route extraction, given that
     PG-C2 leaves a working, maintainable facade). PG-C2 is the last
     mandatory cutover slice of 0.8.
-11. **Concurrent database copies (R20).** Accepted as a documented
+11. **Concurrent or sequential stale database copies (R20).** Accepted as a documented
     deployment limitation for 0.8 (2026-10-13). A data root is supported by
     one canonical PostgreSQL database at a time; independent copies running
     against one root at once are unsupported and are not technically
     prevented. The `storage_root_id` pairing and the start generation
     (§11.1) stay; upgrades, moves and rollbacks follow §12.3; no heartbeat
-    or cross-database fencing is added.
+    or cross-database fencing is added. Confirmed on #647 (2026-10-13): the
+    limitation also covers sequential use of a stale copy that the start
+    generation cannot distinguish, because the generation counts starts,
+    not writes; no continuous marker recheck or write-time fencing is added
+    in 0.8.
 
 The compatibility boundary stays **v1.0.0**: before it, backend APIs,
 schemas and implementations may be replaced without prerelease
