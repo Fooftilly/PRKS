@@ -306,6 +306,21 @@ class MigrateTests(EmptyDatabaseTestCase):
             ("CREATE FUNCTION public.f() RETURNS int LANGUAGE sql AS 'SELECT 1'", "DROP FUNCTION public.f()"),
             ("CREATE TYPE public.mood AS ENUM ('ok')", "DROP TYPE public.mood"),
             ("CREATE EXTENSION pg_trgm SCHEMA public", "DROP EXTENSION pg_trgm"),
+            # Objects outside pg_class, pg_proc and pg_type.
+            (
+                "CREATE COLLATION public.foreign (provider = builtin, locale = 'C.UTF-8')",
+                "DROP COLLATION public.foreign",
+            ),
+            (
+                "CREATE OPERATOR public.=== (FUNCTION = int4eq, LEFTARG = int4, RIGHTARG = int4)",
+                "DROP OPERATOR public.=== (int4, int4)",
+            ),
+            (
+                "CREATE TEXT SEARCH CONFIGURATION public.ts (COPY = pg_catalog.simple)",
+                "DROP TEXT SEARCH CONFIGURATION public.ts",
+            ),
+            ("CREATE PUBLICATION everything", "DROP PUBLICATION everything"),
+            ("SELECT lo_create(0)", "SELECT lo_unlink(oid) FROM pg_largeobject_metadata"),
         ):
             with self.subTest(setup):
                 self.query(setup)
@@ -316,6 +331,18 @@ class MigrateTests(EmptyDatabaseTestCase):
                     )
                 finally:
                     self.query(cleanup)
+        self.assertEqual(len(migrate(self.conninfo).applied), len(load_schema_files()))
+
+    def test_empty_database_without_public_or_with_old_temp_namespaces_is_initialized(self) -> None:
+        # Dropping public is a hardening step; a session that used a temporary
+        # table leaves its pg_temp_N namespace behind. Neither is an object.
+        with psycopg.connect(self.conninfo, autocommit=True) as conn:
+            conn.execute("CREATE TEMP TABLE scratch (v int)")
+        self.assertNotEqual(
+            self.query("SELECT count(*) FROM pg_namespace WHERE nspname LIKE 'pg\\_temp\\_%'"),
+            [(0,)],
+        )
+        self.query("DROP SCHEMA public")
         self.assertEqual(len(migrate(self.conninfo).applied), len(load_schema_files()))
 
     def test_verify_refuses_an_empty_or_partial_database(self) -> None:

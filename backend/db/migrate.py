@@ -42,6 +42,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import psycopg
+from psycopg import sql
 
 SCHEMA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema")
 
@@ -235,27 +236,45 @@ def _lock(conn: psycopg.Connection[Any]) -> None:
         ) from None
 
 
+# initdb creates every built-in object below this OID; anything created later
+# (by a user, an extension or a restore) gets one at or above it.
+_FIRST_NORMAL_OBJECT_ID = 16384
+
+
 def _is_empty(conn: psycopg.Connection[Any]) -> bool:
-    """No user schema, no object in ``public`` and no extension but plpgsql."""
+    """True when no object was created in this database after initdb.
+
+    Every per-database catalog with an ``oid`` column is checked, so a
+    collation, operator, cast, event trigger, publication or large object
+    counts as well as tables, functions and types. Leftover temporary
+    namespaces and a re-created or dropped ``public`` schema do not.
+    """
+    catalogs = [
+        str(name)
+        for (name,) in conn.execute(
+            """
+            SELECT c.relname
+              FROM pg_catalog.pg_class c
+              JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attname = 'oid'
+             WHERE c.relnamespace = 'pg_catalog'::regnamespace
+               AND c.relkind = 'r'
+               AND NOT c.relisshared
+             ORDER BY c.relname
+            """
+        ).fetchall()
+    ]
+    probes: list[sql.Composable] = []
+    for name in catalogs:
+        probe = sql.SQL("SELECT 1 FROM pg_catalog.{} WHERE oid >= {}").format(
+            sql.Identifier(name), sql.Literal(_FIRST_NORMAL_OBJECT_ID)
+        )
+        if name == "pg_namespace":
+            probe = sql.SQL(
+                "{} AND nspname <> 'public' AND nspname !~ '^pg_(toast_)?temp_[0-9]+$'"
+            ).format(probe)
+        probes.append(sql.SQL("EXISTS ({})").format(probe))
     row = conn.execute(
-        """
-        SELECT NOT EXISTS (
-                 SELECT 1 FROM pg_namespace
-                  WHERE nspname NOT IN ('pg_catalog', 'information_schema', 'public')
-                    AND nspname NOT LIKE 'pg\\_toast%'
-                    AND nspname NOT LIKE 'pg\\_temp\\_%')
-           AND NOT EXISTS (
-                 SELECT 1 FROM pg_class
-                  WHERE relnamespace = 'public'::regnamespace)
-           AND NOT EXISTS (
-                 SELECT 1 FROM pg_proc
-                  WHERE pronamespace = 'public'::regnamespace)
-           AND NOT EXISTS (
-                 SELECT 1 FROM pg_type
-                  WHERE typnamespace = 'public'::regnamespace)
-           AND NOT EXISTS (
-                 SELECT 1 FROM pg_extension WHERE extname <> 'plpgsql')
-        """
+        sql.SQL("SELECT NOT ({})").format(sql.SQL(" OR ").join(probes))
     ).fetchone()
     return bool(row is not None and row[0])
 
