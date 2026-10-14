@@ -9,7 +9,7 @@ for linting (never silently skips lint).
 from __future__ import annotations
 
 import os
-import subprocess
+import subprocess  # nosec B404 - only invokes fixed git subcommands without a shell
 from pathlib import Path
 
 WATCHED_PATHS = (".github/workflows/", "scripts/ci_workflow_lint_scope.py")
@@ -20,7 +20,7 @@ def should_lint(event: str, root: Path) -> bool:
     if event != "pull_request":
         return True
 
-    parents = subprocess.run(
+    parents = subprocess.run(  # nosec B603,B607 - fixed git argv, trusted runner PATH
         ["git", "rev-list", "--parents", "-n", "1", "HEAD"],
         cwd=root,
         capture_output=True,
@@ -33,7 +33,7 @@ def should_lint(event: str, root: Path) -> bool:
     if parents.returncode or len(parents.stdout.split()) != 3:
         return True
 
-    changed = subprocess.run(
+    changed = subprocess.run(  # nosec B603,B607 - fixed git argv, trusted runner PATH
         ["git", "diff", "--quiet", "HEAD^1", "HEAD", "--", *WATCHED_PATHS],
         cwd=root,
         capture_output=True,
