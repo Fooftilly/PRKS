@@ -39,6 +39,7 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/research_markup.py",
     "backend/pdf_linearize.py",
     "backend/derived_cache_publish.py",
+    "backend/domain/text_identity.py",
 )
 PYRIGHT_TYPED_SLICE_INCLUDE = PYRIGHT_TYPED_SLICE_SCOPES
 PYRIGHT_TYPED_SLICE_MODES = frozenset({"basic", "standard", "strict"})
