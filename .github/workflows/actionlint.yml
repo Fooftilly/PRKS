@@ -37,7 +37,7 @@ jobs:
           set -euo pipefail
           version="1.7.12"
           archive="${RUNNER_TEMP}/actionlint.tar.gz"
-          curl --fail --location --silent --show-error --retry 3 --max-time 60 \
+          curl --proto '=https' --proto-redir '=https' --fail --location --silent --show-error --retry 3 --max-time 60 \
             --output "$archive" \
             "https://github.com/rhysd/actionlint/releases/download/v${version}/actionlint_${version}_linux_amd64.tar.gz"
           printf '%s  %s\n' \
@@ -51,7 +51,7 @@ jobs:
           set -euo pipefail
           version="0.11.0"
           archive="${RUNNER_TEMP}/shellcheck.tar.xz"
-          curl --fail --location --silent --show-error --retry 3 --max-time 60 \
+          curl --proto '=https' --proto-redir '=https' --fail --location --silent --show-error --retry 3 --max-time 60 \
             --output "$archive" \
             "https://github.com/koalaman/shellcheck/releases/download/v${version}/shellcheck-v${version}.linux.x86_64.tar.xz"
           printf '%s  %s\n' \
