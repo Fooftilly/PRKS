@@ -125,6 +125,7 @@ When a finding is fixed, obsolete, rejected, superseded, or duplicated, close it
 - `backend/storage/objects.py` `StorageBackend` / `LocalFilesystemStorage` (not yet routed; Phase B). Design: `docs/storage-architecture.md`
 - `backend/db_manager.py` SQLite
 - `backend/db/` PostgreSQL plumbing (#623, PG-1): config, bounded pool, `command()`/`query()` helpers, SQLSTATE error mapping; schema runner `migrate.py` over the baseline files in `backend/db/schema/` with `snapshot.json` (#624, PG-2); not used by the running app yet. Its tests live in `tests/pg/` and run only through `scripts/test-postgres` (needs PostgreSQL 18 and the psycopg pins in `requirements-dev.txt`)
+- `backend/pg_facade/` PostgreSQL transition facade (#625, PG-3): `PostgresLibrary` composed of one mixin per lane (empty until the lane ports its methods), registered per method with `@ported`; unported methods raise `NotPortedError`. Not used by the running app yet. The SQLite/PostgreSQL parity fixture is `tests/backend_parity.py`; `scripts/test-postgres --parity` runs both legs and reports ported/unported counts
 - `backend/domain/text_identity.py` the name identity key (NFC, whitespace collapse, full case folding), the Python twin of SQL `prks.identity_key`; shared vectors in `tests/fixtures/text_identity_vectors.json`
 - `backend/pdf_annotations.py` canonical PDF annotation metadata
 - `backend/db_migrations.py` ordered schema migrations

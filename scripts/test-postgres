@@ -16,6 +16,9 @@
 # Usage:
 #   scripts/test-postgres                      # all tests in tests/pg
 #   scripts/test-postgres tests.pg.test_harness [more unittest ids]
+#   scripts/test-postgres --parity [--json PATH]
+#       the SQLite/PostgreSQL backend parity leg and its coverage report
+#       (#625, scripts/run_backend_parity.py)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -148,7 +151,10 @@ fi
   exit 2
 }
 
-if [[ $# -gt 0 ]]; then
+if [[ "${1:-}" == "--parity" ]]; then
+  shift
+  "$PY" scripts/run_backend_parity.py "$@"
+elif [[ $# -gt 0 ]]; then
   "$PY" -m unittest -v "$@"
 else
   "$PY" -m unittest discover -v -s tests/pg -t .

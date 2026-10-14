@@ -2,7 +2,8 @@
 
 These call ``backend.api.saved_views`` with a fake handler — no threaded
 HTTP server — so the controller boundary stays testable without
-``server.py`` lifecycle.
+``server.py`` lifecycle. They run on SQLite and, in the backend parity leg
+(#625), against the PostgreSQL facade (``tests/backend_parity.py``).
 """
 
 from __future__ import annotations
@@ -21,10 +22,8 @@ from run_tests import apply_isolated_test_env
 apply_isolated_test_env(_PROJECT_DIR)
 
 from backend.api import saved_views as saved_views_api
-from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
-
-_SCHEMA_PATH = os.path.join(_PROJECT_DIR, "backend", "db_schema.sql")
+from tests.backend_parity import BackendParityTestCase, parametrize_backends
 
 
 class _FakeHandler:
@@ -42,12 +41,13 @@ class _FakeHandler:
         )
 
 
-class TestSavedViewsApiController(unittest.TestCase):
+@parametrize_backends
+class TestSavedViewsApiController(BackendParityTestCase):
     def setUp(self):
         self._tmpdir = tempfile.mkdtemp(prefix="prks-api-saved-views-")
         self.storage = StorageConfig.for_testing(self._tmpdir)
         os.makedirs(self.storage.pdfs_dir, exist_ok=True)
-        self.db = PRKSDatabase(storage=self.storage, schema_path=_SCHEMA_PATH)
+        self.db = self.open_library(self.storage)
         self.handler = _FakeHandler()
 
     def tearDown(self):
