@@ -493,6 +493,9 @@ describe('command boundary', () => {
     expect(preflightCloseTab(current, second.id, context)).toEqual({
       type: 'leave-tab', tabId: second.id, nextHash: '#/folders',
     })
+    const parked = tab('tab-3')
+    const withParked = { ...current, tabs: [...current.tabs, parked] }
+    expect(preflightCloseTab(withParked, parked.id, context)).toEqual({ type: 'none' })
     expect(preflightCloseTab(current, 'missing', context)).toEqual({ type: 'none' })
     const hidden = { ...current, mode: 'stacked' as const, focusedTabId: main.id }
     expect(preflightCloseTab(hidden, second.id, context)).toEqual({ type: 'none' })
@@ -568,7 +571,6 @@ describe('command boundary', () => {
     const context = { narrowFallback: false, homeHash: '#/folders' }
     const attempts = [
       { type: 'set-mode' as const, mode: 'invalid' },
-      { type: 'split-leaf' as const, targetTabId: second.id, newTabId: 'tab-3', axis: 'left-right', placement: 'first' },
       { type: 'move-pane' as const, sourceTabId: second.id, targetTabId: second.id, axis: 'left-right', placement: 'first' },
       { type: 'close-tab' as const, tabId: 'missing', homeTab: null },
     ]
@@ -577,6 +579,25 @@ describe('command boundary', () => {
       expect(result).toMatchObject({ ok: false, changed: false, state: current, effects: [] })
       expect(result.preflight).toEqual({ type: 'none' })
     }
+
+    // The new tab is valid and in state.tabs: only the missing ID factory blocks this split.
+    const splitReady = { ...current, tabs: [...current.tabs, tab('tab-3')] }
+    const splitCommand = {
+      type: 'split-leaf' as const,
+      targetTabId: second.id,
+      newTabId: 'tab-3',
+      axis: 'left-right',
+      placement: 'first',
+    }
+    const noFactory = applyWorkspaceCommand(splitReady, splitCommand, context)
+    expect(noFactory).toMatchObject({ ok: false, changed: false, state: splitReady, effects: [] })
+    expect(noFactory.preflight).toEqual({ type: 'none' })
+    const withFactory = applyWorkspaceCommand(splitReady, splitCommand, { ...context, nextSplitId: ids() })
+    expect(withFactory.ok).toBe(true)
+    expect(withFactory.changed).toBe(true)
+    expect(collectLeafTabIds(withFactory.state.secondaryTree)).toEqual(['tab-3', second.id])
+    expect(validateWorkspace(withFactory.state).ok).toBe(true)
+
     const hidden = { ...current, mode: 'stacked' as const, focusedTabId: main.id }
     const unchanged = applyWorkspaceCommand(hidden, { type: 'set-mode', mode: 'stacked' }, context)
     expect(unchanged).toMatchObject({ ok: true, changed: false, state: hidden, effects: [] })
