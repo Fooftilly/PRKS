@@ -322,6 +322,89 @@ def _succeed(
     return LoginResult(LoginOutcome.SUCCEEDED, session=session, device_token=token)
 
 
+@dataclass(frozen=True)
+class _Gate:
+    """A counted attempt: the presented device (if valid) and the key that gated it."""
+
+    device: Optional[LoginDeviceToken]
+    key: str
+
+
+def _gate(
+    db: Database, login_key: str, client: ClientAddress, device_cookie: object, limits: LoginLimits
+) -> Union[_Gate, LoginResult]:
+    """Count the attempt (step 2 and 3); a ``LoginResult`` when it is throttled."""
+    device = _known_device(db, device_cookie, login_key)
+    if device is not None:
+        gate = _Gate(device, login_limiter.device_key(device.digest))
+        keys = [gate.key]
+    else:
+        gate = _Gate(None, login_limiter.account_key(login_key))
+        keys = [gate.key, client.key]
+    throttled = login_limiter.count_attempt(db, keys, limits)
+    if throttled is None:
+        return gate
+    return LoginResult(
+        LoginOutcome.THROTTLED,
+        retry_after_seconds=throttled.retry_after_seconds,
+        throttled_kind=throttled.kind,
+    )
+
+
+def _refusal(stored: str, password: str, hasher: PasswordHasher) -> Optional[LoginResult]:
+    """One Argon2id check of ``password``; ``None`` when it matches ``stored``."""
+    try:
+        if passwords.verify_password(stored, password, hasher=hasher):
+            return None
+    except passwords.PasswordHashInvalid:
+        _burn(password, hasher)
+        return LoginResult(LoginOutcome.STORED_HASH_INVALID)
+    return LoginResult(LoginOutcome.INVALID_CREDENTIALS)
+
+
+def _commit(
+    db: Database,
+    account: _Account,
+    stored: str,
+    password: str,
+    hasher: PasswordHasher,
+    gate: _Gate,
+    library_id: Optional[str],
+    idle: timedelta,
+) -> LoginResult:
+    """Step 5 for a password just verified against ``stored``; retried when the hash changes."""
+    # Argon2 work (checks and rehashes) stays outside the transaction so the
+    # account row is never locked for the length of an Argon2 call.
+    for _ in range(_SUCCESS_TRIES):
+        new_hash = (
+            passwords.hash_password(password, hasher=hasher)
+            if passwords.needs_rehash(stored, hasher=hasher)
+            else None
+        )
+        try:
+            outcome = db.command(
+                functools.partial(
+                    _succeed,
+                    account=account,
+                    verified_hash=stored,
+                    gating_key=gate.key,
+                    device=gate.device,
+                    new_hash=new_hash,
+                    library_id=library_id,
+                    idle=idle,
+                )
+            )
+        except DatabaseError:
+            return LoginResult(LoginOutcome.UNAVAILABLE)
+        if isinstance(outcome, LoginResult):
+            return outcome
+        stored = outcome.current
+        refused = _refusal(stored, password, hasher)
+        if refused is not None:
+            return refused
+    return LoginResult(LoginOutcome.UNAVAILABLE)
+
+
 def login(
     db: Database,
     login_name: object,
@@ -340,27 +423,14 @@ def login(
     ``device_cookie`` the raw ``prks_login_device`` cookie value, if any;
     ``library_id`` the Library asked for (default: the account's only one).
     """
-    limits = limits or LoginLimits()
     hasher = hasher or passwords.default_hasher()
     login_key = login_names.login_key(login_name)
     if login_key is None or not passwords.usable_password(password):
         return LoginResult(LoginOutcome.INVALID_CREDENTIALS)
-
     try:
-        device = _known_device(db, device_cookie, login_key)
-        if device is not None:
-            gating_key = login_limiter.device_key(device.digest)
-            keys = [gating_key]
-        else:
-            gating_key = login_limiter.account_key(login_key)
-            keys = [gating_key, client.key]
-        throttled = login_limiter.count_attempt(db, keys, limits)
-        if throttled is not None:
-            return LoginResult(
-                LoginOutcome.THROTTLED,
-                retry_after_seconds=throttled.retry_after_seconds,
-                throttled_kind=throttled.kind,
-            )
+        gate = _gate(db, login_key, client, device_cookie, limits or LoginLimits())
+        if isinstance(gate, LoginResult):
+            return gate
         account = _account(db, login_key)
     except DatabaseError:
         return LoginResult(LoginOutcome.UNAVAILABLE)
@@ -369,45 +439,9 @@ def login(
         _burn(password, hasher)
         return LoginResult(LoginOutcome.INVALID_CREDENTIALS)
     stored = account.password_hash
-    try:
-        verified = passwords.verify_password(stored, password, hasher=hasher)
-    except passwords.PasswordHashInvalid:
-        _burn(password, hasher)
-        return LoginResult(LoginOutcome.STORED_HASH_INVALID)
-    if not verified:
-        return LoginResult(LoginOutcome.INVALID_CREDENTIALS)
+    refused = _refusal(stored, password, hasher)
+    if refused is not None:
+        return refused
     if account.library(library_id) is None:
         return LoginResult(LoginOutcome.NO_LIBRARY)
-
-    # Argon2 work (checks and rehashes) stays outside the transaction so the
-    # account row is never locked for the length of an Argon2 call.
-    for _ in range(_SUCCESS_TRIES):
-        new_hash = (
-            passwords.hash_password(password, hasher=hasher)
-            if passwords.needs_rehash(stored, hasher=hasher)
-            else None
-        )
-        try:
-            outcome = db.command(
-                functools.partial(
-                    _succeed,
-                    account=account,
-                    verified_hash=stored,
-                    gating_key=gating_key,
-                    device=device,
-                    new_hash=new_hash,
-                    library_id=library_id,
-                    idle=idle,
-                )
-            )
-        except DatabaseError:
-            return LoginResult(LoginOutcome.UNAVAILABLE)
-        if isinstance(outcome, LoginResult):
-            return outcome
-        stored = outcome.current
-        try:
-            if not passwords.verify_password(stored, password, hasher=hasher):
-                return LoginResult(LoginOutcome.INVALID_CREDENTIALS)
-        except passwords.PasswordHashInvalid:
-            return LoginResult(LoginOutcome.STORED_HASH_INVALID)
-    return LoginResult(LoginOutcome.UNAVAILABLE)
+    return _commit(db, account, stored, password, hasher, gate, library_id, idle)
