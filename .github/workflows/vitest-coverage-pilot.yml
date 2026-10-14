@@ -8,6 +8,8 @@ on:
       - ".github/workflows/vitest-coverage-pilot.yml"
       - "frontend-app/src/lifecycle/tab-leave.ts"
       - "frontend-app/src/lifecycle/tab-leave.test.ts"
+      - "frontend-app/src/query/retry.ts"
+      - "frontend-app/src/query/retry.test.ts"
       - "frontend-app/vite.config.ts"
       - "frontend-app/package.json"
       - "frontend-app/package-lock.json"
@@ -47,10 +49,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm exec -- vitest run src/lifecycle/tab-leave.test.ts \
+          npm exec -- vitest run src/lifecycle/tab-leave.test.ts src/query/retry.test.ts \
             --coverage.enabled \
             --coverage.provider=v8 \
-            --coverage.include=src/lifecycle/tab-leave.ts \
+            --coverage.include='src/{lifecycle/tab-leave,query/retry}.ts' \
             --coverage.reporter=text \
             --coverage.reporter=json-summary \
             --coverage.reportsDirectory="$RUNNER_TEMP/prks-vitest-coverage"
@@ -59,21 +61,45 @@ jobs:
           import { join } from 'node:path'
 
           const path = join(process.env.RUNNER_TEMP, 'prks-vitest-coverage', 'coverage-summary.json')
-          const { total } = JSON.parse(readFileSync(path, 'utf8'))
-          if (!total || !total.lines || !total.branches ||
-              total.lines.total <= 0 || total.branches.total <= 0) {
-            throw new Error('Expected non-empty line and branch metrics for tab-leave.ts')
+          const report = JSON.parse(readFileSync(path, 'utf8'))
+          const modules = ['src/lifecycle/tab-leave.ts', 'src/query/retry.ts']
+          const actual = Object.entries(report).filter(([name]) => name !== 'total')
+          if (actual.length !== modules.length) {
+            throw new Error(`Expected exactly ${modules.length} source files; got ${actual.length}`)
+          }
+          const metrics = (value, name) => {
+            if (!value?.lines || !value?.branches ||
+                value.lines.total <= 0 || value.branches.total <= 0) {
+              throw new Error(`Missing line or branch coverage for ${name}`)
+            }
+            return value
+          }
+          const perFile = modules.map((name) => {
+            const match = actual.filter(([source]) => source.replaceAll('\\', '/').endsWith('/' + name))
+            if (match.length !== 1) throw new Error(`Missing or duplicate coverage entry: ${name}`)
+            return [name, metrics(match[0][1], name)]
+          })
+          const total = metrics(report.total, 'aggregate')
+          for (const metric of ['lines', 'branches']) {
+            const sum = perFile.reduce((n, [, counts]) => n + counts[metric].total, 0)
+            const covered = perFile.reduce((n, [, counts]) => n + counts[metric].covered, 0)
+            if (total[metric].total !== sum || total[metric].covered !== covered) {
+              throw new Error(`Aggregate ${metric} count differs from the two source files`)
+            }
           }
           const format = (metric) =>
             `${metric.covered}/${metric.total} (${metric.pct.toFixed(1)}%)`
           const summary = [
-            '## Vitest coverage pilot: tab-leave.ts',
+            '## Vitest coverage pilot: two correctness modules',
             '',
-            `- Lines: ${format(total.lines)}`,
-            `- Branches: ${format(total.branches)}`,
+            '| Module | Lines | Branches |',
+            '| --- | ---: | ---: |',
+            ...perFile.map(([name, counts]) =>
+              `| \`${name}\` | ${format(counts.lines)} | ${format(counts.branches)} |`),
+            `| **Total (these modules)** | **${format(total.lines)}** | **${format(total.branches)}** |`,
             '',
-            'Informational only: no coverage threshold. This is one TypeScript module,',
-            'not frontend-wide coverage. Detailed data stays on the runner; no artifact upload.',
+            'Informational only: no coverage thresholds; not frontend-wide coverage.',
+            'Detailed data stays on the runner; no artifact upload.',
             '',
           ].join('\n')
           console.log(summary)
