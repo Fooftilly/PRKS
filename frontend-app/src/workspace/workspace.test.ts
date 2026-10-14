@@ -767,11 +767,14 @@ describe('workspace state recovery and snapshot boundaries', () => {
     expect(validateWorkspace(repaired).ok).toBe(true)
   })
 
-  it('refuses unresolved malformed split geometry rather than silently healing it', () => {
+  it('rejects malformed split geometry that survives stale-leaf repair', () => {
     const valid = makeSplit(
       'left-right', makeLeaf(secondary.id), makeLeaf(parked.id), 0.5, asSplitId('split'),
     )
     const current = { ...tiledState(), secondaryTree: { ...valid, ratio: Number.NaN } }
+    // The corrupt split survives unchanged. If repair prunes a stale leaf below
+    // it, rewritePath currently rebuilds the ancestor and clamps its ratio.
+    // This assertion must not be read as a universal fail-closed guarantee.
     expect(() => repairWorkspaceState(current)).toThrow(
       /workspace secondaryTree invariant violation: invalid ratio NaN/,
     )
@@ -788,13 +791,20 @@ describe('workspace state recovery and snapshot boundaries', () => {
 
   it('copies nested trees and tab histories without aliasing original state', () => {
     const longHistory = { ...main, history: ['#/folders', '#/works/W1'], historyIndex: 1 }
+    const tertiary = tab('tertiary')
     const current = state({
-      tabs: [longHistory, secondary, parked],
+      tabs: [longHistory, secondary, parked, tertiary],
       mainTabId: main.id,
       focusedTabId: secondary.id,
       mode: 'tiled',
       secondaryTree: makeSplit(
-        'top-bottom', makeLeaf(secondary.id), makeLeaf(parked.id), 0.3, asSplitId('nested'),
+        'top-bottom',
+        makeLeaf(secondary.id),
+        makeSplit(
+          'left-right', makeLeaf(parked.id), makeLeaf(tertiary.id), 0.65, asSplitId('inner'),
+        ),
+        0.3,
+        asSplitId('outer'),
       ),
     })
     freezeDeep(current)
@@ -811,6 +821,13 @@ describe('workspace state recovery and snapshot boundaries', () => {
     }
     expect(snap.secondaryTree.first).not.toBe(current.secondaryTree.first)
     expect(snap.secondaryTree.second).not.toBe(current.secondaryTree.second)
+    const copiedInner = snap.secondaryTree.second
+    const sourceInner = current.secondaryTree.second
+    if (copiedInner.type !== 'split' || sourceInner.type !== 'split') {
+      throw new Error('test requires a second-level Secondary split')
+    }
+    expect(copiedInner.first).not.toBe(sourceInner.first)
+    expect(copiedInner.second).not.toBe(sourceInner.second)
     ;(snap.tabs[0].history as string[]).push('#/unsaved')
     expect(current.tabs[0].history).toEqual(['#/folders', '#/works/W1'])
     expect(workspaceSnapshot(current)).toEqual(current)
