@@ -8,6 +8,11 @@ on:
     branches:
       - master
   workflow_dispatch:
+    inputs:
+      profile:
+        description: "Collect per-test infrastructure phase timings (diagnostic only)"
+        type: boolean
+        default: false
 
 concurrency:
   group: e2e-gate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -190,6 +195,8 @@ jobs:
 
       - name: Run E2E selection shard
         env:
+          # Manual benchmark only. Normal PR/master gates still persist timing history.
+          PRKS_E2E_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profile && '1' || '0' }}
           PRKS_E2E_MODE: ${{ needs.e2e-plan.outputs.mode }}
           PRKS_E2E_FEATURES: ${{ needs.e2e-plan.outputs.features }}
           # Use typed matrix values through the environment, rather than

@@ -147,6 +147,22 @@ configuration after CLI flags are exported into the environment, and the
 infrastructure-profile report prints for `PRKS_E2E_PROFILE=1` exactly as it
 does for `--profile`. Those exports last for the one runner invocation.
 
+### Profiling on GitHub Actions (manual only)
+
+The `PRKS Full E2E Gate` workflow has a `workflow_dispatch` input named
+`profile` (off by default). In **Actions → PRKS Full E2E Gate → Run workflow**,
+check **Collect per-test infrastructure phase timings** to obtain the phase
+totals and slowest profiled tests in each `E2E (N/total)` job log. The normal
+PR and master-push gates are unchanged and continue saving their usual local
+timing history; an explicitly profiled manual run does not train timing history
+or mutate last-failed data. As with local `--profile`, measurements include
+instrumentation overhead and must not be compared as if they were ordinary
+gate timings.
+
+This switch intentionally does not upload benchmark artifacts or test data.
+Compare equivalent test selections on the same runner type and examine which
+phases dominate before modifying the harness or its isolation boundaries.
+
 ### Opt-in hang diagnostics and Chromium recycle
 
 `PRKS_E2E_DIAGNOSTIC=1` prints privacy-safe stage heartbeats (`START`,
