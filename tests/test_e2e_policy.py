@@ -912,18 +912,21 @@ class AffectedMappingTests(unittest.TestCase):
             "backend/db/schema/040_sync.sql",
             "backend/db/schema/snapshot.json",
             "backend/db/schema_snapshot.py",
-            "backend/domain/__init__.py",
             "tests/pg/test_migrate.py",
             "tests/pg/test_schema_snapshot.py",
             "backend/AGENTS.md",
         ]
-        for path in paths[:10]:
+        for path in paths[:9]:
             with self.subTest(path=path):
                 classified = policy.classify_affected_path(path)
                 self.assertEqual(classified["rules"], ["postgres-migration-infrastructure"])
                 self.assertTrue(classified["skip"])
-        # A newly added executable under schema/ must never get the SQL-file exemption.
-        self.assertEqual(policy.plan_ci_e2e(["backend/db/schema/new_helper.py"])["mode"], "full")
+        # A newly added executable under schema/, or a shared domain
+        # package initializer, must not get the SQL/migration exemption.
+        for runtime in ("backend/db/schema/new_helper.py", "backend/domain/__init__.py"):
+            with self.subTest(runtime=runtime):
+                self.assertEqual(policy.plan_ci_e2e([runtime])["mode"], "full")
+                self.assertEqual(policy.plan_ci_e2e(paths + [runtime])["mode"], "full")
         plan = policy.plan_ci_e2e(paths)
         self.assertEqual(plan["mode"], "skip")
         self.assertFalse(plan["run"])
