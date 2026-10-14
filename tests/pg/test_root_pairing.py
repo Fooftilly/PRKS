@@ -22,10 +22,12 @@ from typing import Any, Callable
 from unittest.mock import patch
 
 import psycopg
+from argon2 import PasswordHasher
 
 from backend.db.config import DatabaseConfig
 from backend.db.database import Database
-from backend.domain.identity import root_pairing
+from backend.domain.identity import bootstrap_tokens, root_pairing
+from backend.domain.identity.bootstrap_tokens import BootstrapToken
 from backend.domain.identity.root_pairing import (
     BootstrapResult,
     OwnerSpec,
@@ -38,9 +40,13 @@ from backend.storage.file_lock import SharedFileLock
 from backend.storage.objects import LocalFilesystemStorage, StorageKey
 from backend.storage.root_marker import StartState
 from tests.pg.harness import PostgresHarness, fetch_one, get_harness
-from tests.pg.root_pairing_child import KILLED_EXIT
+from tests.pg.root_pairing_child import CHILD_TOKEN_ENV, KILLED_EXIT
 
-OWNER = OwnerSpec("owner", "Owner", "Library")
+# A real Argon2id hash with tiny parameters; bootstrap checks only that it is one.
+OWNER = OwnerSpec(
+    "owner", "Owner", "Library",
+    PasswordHasher(time_cost=1, memory_cost=8, parallelism=1).hash("owner password"),
+)
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -126,10 +132,17 @@ class RootPairingTestCase(unittest.TestCase):
         self.addCleanup(lease.release)
         return lease
 
+    def issue(self, name: str) -> BootstrapToken:
+        return bootstrap_tokens.issue_token(self.db(name)).token
+
     def bootstrap(self, name: str, root: str, **kwargs: Any) -> BootstrapResult:
         lease = kwargs.pop("lease", None) or self.lease(root)
         kwargs.setdefault("testing", True)
-        return root_pairing.bootstrap(self.db(name), OWNER, root=root, lease=lease, **kwargs)
+        token = kwargs.pop("token", None) or self.issue(name)
+        owner = kwargs.pop("owner", OWNER)
+        return root_pairing.bootstrap(
+            self.db(name), owner, token=token, root=root, lease=lease, **kwargs
+        )
 
     def start(self, name: str, root: str, **kwargs: Any) -> root_pairing.StartResult:
         lease = kwargs.pop("lease", None) or self.lease(root)
@@ -181,10 +194,13 @@ class RootPairingTestCase(unittest.TestCase):
         self.assertEqual(row["start_generation"], generation)
 
     def kill_child(self, action: str, name: str, root: str, kill_at: str) -> None:
+        env = dict(os.environ)
+        if action == "bootstrap":
+            env[CHILD_TOKEN_ENV] = self.issue(name).reveal()
         result = subprocess.run(
             [sys.executable, "-m", "tests.pg.root_pairing_child", action,
              self.harness.conninfo(name), root, kill_at],
-            cwd=_PROJECT_DIR, capture_output=True, timeout=120,
+            cwd=_PROJECT_DIR, capture_output=True, timeout=120, env=env,
         )
         self.assertEqual(result.returncode, KILLED_EXIT, result.stderr.decode(errors="replace"))
 
@@ -215,6 +231,7 @@ class BootstrapTests(RootPairingTestCase):
 
     def test_simultaneous_bootstraps_create_one_owner_and_library(self) -> None:
         name, root = self.database(), self.new_root()
+        token = self.issue(name)  # one setup double-submitted five times
         barrier = threading.Barrier(5)
         outcomes: list[Any] = []
 
@@ -222,7 +239,7 @@ class BootstrapTests(RootPairingTestCase):
             lease = root_binding.acquire_shared_root_lease(root)
             try:
                 barrier.wait(30)
-                outcomes.append(self.bootstrap(name, root, lease=lease))
+                outcomes.append(self.bootstrap(name, root, lease=lease, token=token))
             except RootPairingRefused as exc:
                 outcomes.append(exc.reason)
             finally:
@@ -249,10 +266,17 @@ class BootstrapTests(RootPairingTestCase):
     def test_repeated_final_step_returns_existing_state(self) -> None:
         name, root = self.database(), self.new_root()
         lease = self.lease(root)
-        claim = root_pairing.begin_bootstrap(self.db(name), root=root, lease=lease, testing=True)
+        token = self.issue(name)
+        claim = root_pairing.begin_bootstrap(
+            self.db(name), token=token, root=root, lease=lease, testing=True
+        )
         root_pairing.claim_bootstrap_root(root, claim, lease=lease)
-        first = root_pairing.finish_bootstrap(self.db(name), claim, OWNER, root=root, lease=lease)
-        again = root_pairing.finish_bootstrap(self.db(name), claim, OWNER, root=root, lease=lease)
+        first = root_pairing.finish_bootstrap(
+            self.db(name), claim, OWNER, token=token, root=root, lease=lease
+        )
+        again = root_pairing.finish_bootstrap(
+            self.db(name), claim, OWNER, token=token, root=root, lease=lease
+        )
         self.assertEqual((again.user_id, again.library_id, again.created), (first.user_id, first.library_id, False))
 
     def test_crash_after_each_bootstrap_step_resumes_and_no_process_serves_meanwhile(self) -> None:
@@ -433,6 +457,7 @@ class BootstrapTests(RootPairingTestCase):
 
     def test_concurrent_bootstrap_with_another_root_never_claims_it(self) -> None:
         name, root, other = self.database(), self.new_root(), self.new_root("other")
+        token = self.issue(name)  # the same setup, submitted against two roots
         paused, resume = threading.Event(), threading.Event()
         outcome: dict[str, Any] = {}
 
@@ -442,13 +467,13 @@ class BootstrapTests(RootPairingTestCase):
                 resume.wait(30)
 
         def first() -> None:
-            outcome["first"] = self.bootstrap(name, root, faults=hold)
+            outcome["first"] = self.bootstrap(name, root, faults=hold, token=token)
 
         t1 = threading.Thread(target=first)
         t1.start()
         self.assertTrue(paused.wait(30))
         before = self.marker_bytes(other)
-        self.refused("bootstrap_root_mismatch", self.bootstrap, name, other)
+        self.refused("bootstrap_root_mismatch", self.bootstrap, name, other, token=token)
         resume.set()
         t1.join(60)
         self.assertIsInstance(outcome["first"], BootstrapResult)
