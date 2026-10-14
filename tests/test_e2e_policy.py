@@ -43,6 +43,70 @@ FAKE_IDS = [
 ]
 
 
+class _RuntimeImports(ast.NodeVisitor):
+    """Static imports and literal importlib calls from one Python module."""
+
+    def __init__(self, *, path: Path, package: str):
+        self.path = path
+        self.package = package
+        self.imports: set[str] = set()
+        self.import_module_aliases = {"__import__", "import_module"}
+
+    def visit_If(self, node):
+        # Type-only imports do not activate a persistence backend.
+        if (
+            isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING"
+            or isinstance(node.test, ast.Attribute)
+            and node.test.attr == "TYPE_CHECKING"
+            and isinstance(node.test.value, ast.Name)
+            and node.test.value.id == "typing"
+        ):
+            for child in node.orelse:
+                self.visit(child)
+            return
+        self.generic_visit(node)
+
+    def visit_Import(self, node):
+        self.imports.update(alias.name for alias in node.names)
+
+    def visit_ImportFrom(self, node):
+        if node.level == 0 and node.module == "importlib":
+            self.import_module_aliases.update(
+                alias.asname or alias.name
+                for alias in node.names if alias.name == "import_module"
+            )
+        if node.level:
+            parts = self.package.split(".")
+            if node.level > len(parts):
+                raise AssertionError(f"invalid relative import in {self.path}")
+            base = ".".join(parts[:len(parts) - node.level + 1])
+            if node.module:
+                base += "." + node.module
+        else:
+            base = node.module or ""
+        if base:
+            self.imports.add(base)
+            self.imports.update(
+                base + "." + alias.name
+                for alias in node.names if alias.name != "*"
+            )
+
+    def visit_Call(self, node):
+        # Literal dynamic imports are checked. Computed module names still
+        # require manual review when the PostgreSQL cutover is approved.
+        func = node.func
+        if (
+            node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
+            if isinstance(func, ast.Name) and func.id in self.import_module_aliases:
+                self.imports.add(node.args[0].value)
+            elif isinstance(func, ast.Attribute) and func.attr == "import_module":
+                self.imports.add(node.args[0].value)
+        self.generic_visit(node)
+
+
 def _runtime_postgres_imports(root: Path) -> list[str]:
     """Conservatively trace local static imports from the shipped server entries.
 
@@ -86,59 +150,9 @@ def _runtime_postgres_imports(root: Path) -> list[str]:
         imports = set()
         import_module_aliases = {"__import__", "import_module"}
 
-        class Imports(ast.NodeVisitor):
-            def visit_If(self, node):
-                # Type-only hints do not activate a persistence backend.
-                if (
-                    isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING"
-                    or isinstance(node.test, ast.Attribute)
-                    and node.test.attr == "TYPE_CHECKING"
-                    and isinstance(node.test.value, ast.Name)
-                    and node.test.value.id == "typing"
-                ):
-                    for child in node.orelse:
-                        self.visit(child)
-                    return
-                self.generic_visit(node)
-
-            def visit_Import(self, node):
-                imports.update(alias.name for alias in node.names)
-
-            def visit_ImportFrom(self, node):
-                if node.level == 0 and node.module == "importlib":
-                    import_module_aliases.update(
-                        alias.asname or alias.name
-                        for alias in node.names if alias.name == "import_module"
-                    )
-                if node.level:
-                    parts = package.split(".")
-                    if node.level > len(parts):
-                        raise AssertionError(f"invalid relative import in {path}")
-                    base = ".".join(parts[:len(parts) - node.level + 1])
-                    if node.module:
-                        base += "." + node.module
-                else:
-                    base = node.module or ""
-                if base:
-                    imports.add(base)
-                    imports.update(
-                        base + "." + alias.name
-                        for alias in node.names if alias.name != "*"
-                    )
-
-            def visit_Call(self, node):
-                # Literal dynamic imports are common enough to check; variable
-                # module-name imports still require manual cutover auditing.
-                func = node.func
-                if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
-                    if isinstance(func, ast.Name) and func.id in import_module_aliases:
-                        imports.add(node.args[0].value)
-                    elif isinstance(func, ast.Attribute) and func.attr == "import_module":
-                        imports.add(node.args[0].value)
-                self.generic_visit(node)
-
-        Imports().visit(tree)
-        for target in sorted(imports):
+        scanner = _RuntimeImports(path=path, package=package)
+        scanner.visit(tree)
+        for target in sorted(scanner.imports):
             if any(target == prefix or target.startswith(prefix + ".") for prefix in pg_prefixes):
                 offenders.append(f"{module} imports {target}")
             # Include package __init__.py side effects in the reachable graph.
