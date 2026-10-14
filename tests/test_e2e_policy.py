@@ -76,6 +76,7 @@ def _runtime_postgres_imports(root: Path) -> list[str]:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         package = module if path.name == "__init__.py" else module.rpartition(".")[0]
         imports = set()
+        import_module_aliases = {"__import__", "import_module"}
 
         class Imports(ast.NodeVisitor):
             def visit_If(self, node):
@@ -96,6 +97,11 @@ def _runtime_postgres_imports(root: Path) -> list[str]:
                 imports.update(alias.name for alias in node.names)
 
             def visit_ImportFrom(self, node):
+                if node.level == 0 and node.module == "importlib":
+                    import_module_aliases.update(
+                        alias.asname or alias.name
+                        for alias in node.names if alias.name == "import_module"
+                    )
                 if node.level:
                     parts = package.split(".")
                     if node.level > len(parts):
@@ -117,7 +123,7 @@ def _runtime_postgres_imports(root: Path) -> list[str]:
                 # module-name imports still require manual cutover auditing.
                 func = node.func
                 if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
-                    if isinstance(func, ast.Name) and func.id == "__import__":
+                    if isinstance(func, ast.Name) and func.id in import_module_aliases:
                         imports.add(node.args[0].value)
                     elif isinstance(func, ast.Attribute) and func.attr == "import_module":
                         imports.add(node.args[0].value)
@@ -977,6 +983,16 @@ class AffectedMappingTests(unittest.TestCase):
             active.write_text("import backend.db.database\n", encoding="utf-8")
             self.assertTrue(any("backend.db" in entry for entry in _runtime_postgres_imports(root)))
             active.write_text("import importlib\nimportlib.import_module('backend.db.migrate')\n", encoding="utf-8")
+            self.assertTrue(any("backend.db" in entry for entry in _runtime_postgres_imports(root)))
+            active.write_text(
+                "from importlib import import_module\nimport_module('backend.db.migrate')\n",
+                encoding="utf-8",
+            )
+            self.assertTrue(any("backend.db" in entry for entry in _runtime_postgres_imports(root)))
+            active.write_text(
+                "from importlib import import_module as load_pg\nload_pg('backend.db.migrate')\n",
+                encoding="utf-8",
+            )
             self.assertTrue(any("backend.db" in entry for entry in _runtime_postgres_imports(root)))
 
     def test_unmapped_e2e_support_module_is_ci_full(self):
