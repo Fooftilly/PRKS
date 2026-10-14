@@ -1,0 +1,46 @@
+name: Dependency Review (advisory)
+
+on:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/**"
+      - ".github/dependabot.yml"
+      - "**/package.json"
+      - "**/package-lock.json"
+      - "**/npm-shrinkwrap.json"
+      - "**/requirements*.txt"
+      - "**/pyproject.toml"
+      - "**/poetry.lock"
+      - "**/uv.lock"
+      - "**/Dockerfile*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-review-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-review:
+    name: Review new dependency vulnerabilities (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # A2 pilot for #651: report newly introduced vulnerable dependencies
+      # without blocking the ongoing PostgreSQL migration. After validating
+      # coverage and signal, propose a blocking severity threshold separately.
+      # License policy and PR comments are intentionally out of scope.
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          warn-only: true
+          license-check: false
+          show-patched-versions: true
