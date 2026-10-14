@@ -963,20 +963,20 @@ class AffectedMappingTests(unittest.TestCase):
             root = Path(folder)
             (root / "backend" / "domain" / "identity").mkdir(parents=True)
             (root / "backend" / "db").mkdir(parents=True)
-            (root / "prks_app.py").write_text("from backend import server\\n", encoding="utf-8")
+            (root / "prks_app.py").write_text("from backend import server\n", encoding="utf-8")
             served = root / "backend" / "server.py"
-            served.write_text("from . import active\\n", encoding="utf-8")
+            served.write_text("from . import active\n", encoding="utf-8")
             active = root / "backend" / "active.py"
-            active.write_text("import json\\n", encoding="utf-8")
+            active.write_text("import json\n", encoding="utf-8")
             (root / "backend" / "domain" / "identity" / "root_pairing.py").write_text(
-                "from backend.db.database import Database\\n", encoding="utf-8",
+                "from backend.db.database import Database\n", encoding="utf-8",
             )
             self.assertEqual(_runtime_postgres_imports(root), [])
-            active.write_text("from backend.domain import text_identity\\n", encoding="utf-8")
+            active.write_text("from backend.domain import text_identity\n", encoding="utf-8")
             self.assertTrue(any("text_identity" in entry for entry in _runtime_postgres_imports(root)))
-            active.write_text("import backend.db.database\\n", encoding="utf-8")
+            active.write_text("import backend.db.database\n", encoding="utf-8")
             self.assertTrue(any("backend.db" in entry for entry in _runtime_postgres_imports(root)))
-            active.write_text("import importlib\\nimportlib.import_module('backend.db.migrate')\\n", encoding="utf-8")
+            active.write_text("import importlib\nimportlib.import_module('backend.db.migrate')\n", encoding="utf-8")
             self.assertTrue(any("backend.db" in entry for entry in _runtime_postgres_imports(root)))
 
     def test_unmapped_e2e_support_module_is_ci_full(self):
