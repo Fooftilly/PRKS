@@ -1,0 +1,87 @@
+name: Vitest coverage pilot
+
+on:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/vitest-coverage-pilot.yml"
+      - "frontend-app/src/lifecycle/tab-leave.ts"
+      - "frontend-app/src/lifecycle/tab-leave.test.ts"
+      - "frontend-app/vite.config.ts"
+      - "frontend-app/package.json"
+      - "frontend-app/package-lock.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vitest-coverage-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tab-leave-coverage:
+    name: Vitest tab-leave coverage (informational)
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ">=24.15.0 <25"
+          cache: npm
+          cache-dependency-path: frontend-app/package-lock.json
+
+      - name: Install locked frontend toolchain
+        run: npm ci --ignore-scripts --no-audit --prefix frontend-app
+
+      # Pilot-only instrumentation. Match the project's locked vitest@5.0.2;
+      # do not alter package.json, the lockfile, or the production build.
+      - name: Install matching V8 coverage provider without saving
+        run: >-
+          npm install --ignore-scripts --no-audit --no-save --package-lock=false
+          --prefix frontend-app "@vitest/coverage-v8@5.0.2"
+
+      - name: Run bounded Vitest line and branch coverage
+        working-directory: frontend-app
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm exec -- vitest run src/lifecycle/tab-leave.test.ts \
+            --coverage.enabled \
+            --coverage.provider=v8 \
+            --coverage.include=src/lifecycle/tab-leave.ts \
+            --coverage.reporter=text \
+            --coverage.reporter=json-summary \
+            --coverage.reportsDirectory="$RUNNER_TEMP/prks-vitest-coverage"
+          node --input-type=module <<'NODE'
+          import { readFileSync, appendFileSync } from 'node:fs'
+          import { join } from 'node:path'
+
+          const path = join(process.env.RUNNER_TEMP, 'prks-vitest-coverage', 'coverage-summary.json')
+          const { total } = JSON.parse(readFileSync(path, 'utf8'))
+          if (!total || !total.lines || !total.branches ||
+              total.lines.total <= 0 || total.branches.total <= 0) {
+            throw new Error('Expected non-empty line and branch metrics for tab-leave.ts')
+          }
+          const format = (metric) =>
+            `${metric.covered}/${metric.total} (${metric.pct.toFixed(1)}%)`
+          const summary = [
+            '## Vitest coverage pilot: tab-leave.ts',
+            '',
+            `- Lines: ${format(total.lines)}`,
+            `- Branches: ${format(total.branches)}`,
+            '',
+            'Informational only: no coverage threshold. This is one TypeScript module,',
+            'not frontend-wide coverage. Detailed data stays on the runner; no artifact upload.',
+            '',
+          ].join('\n')
+          console.log(summary)
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary, 'utf8')
+          NODE
