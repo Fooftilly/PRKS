@@ -9,6 +9,7 @@ password reaches output or logs except the deliberate terminal delivery.
 from __future__ import annotations
 
 import io
+import json
 import logging
 import os
 import stat
@@ -24,6 +25,7 @@ from backend.domain.identity import admin, bootstrap_tokens, passwords
 from backend.domain.identity.bootstrap_tokens import BootstrapToken
 from backend.domain.identity.errors import RootPairingRefused
 from backend.storage.errors import StorageRootInUse, StorageRootRefused
+from backend.storage.root_marker import MARKER_FILENAME
 from tests.pg.harness import fetch_one
 from tests.pg.test_root_pairing import RootPairingTestCase
 
@@ -440,6 +442,51 @@ class AdminBootstrapTests(RootPairingTestCase):
         self.assertEqual(self.token_rows(), 0)
         self.assertFalse(os.path.lexists(self.token_file))
         self.assertFalse(os.path.lexists(typo))
+
+    def test_an_unbindable_marker_is_refused_before_any_secret_is_asked(self) -> None:
+        marker = os.path.join(self.root, MARKER_FILENAME)
+        with open(marker, "rb") as handle:
+            original = handle.read()
+        retired = json.loads(original)
+        retired["state"] = "retired"
+        elsewhere = os.path.join(self.tmp, "marker-elsewhere.json")
+        with open(elsewhere, "wb") as handle:
+            handle.write(original)
+
+        def malformed() -> None:
+            with open(marker, "wb") as handle:
+                handle.write(b"{not json")
+
+        def linked() -> None:
+            os.unlink(marker)
+            os.symlink(elsewhere, marker)
+
+        def retire() -> None:
+            with open(marker, "w", encoding="utf-8") as handle:
+                json.dump(retired, handle)
+
+        asked: list[str] = []
+        for name, damage in (("malformed", malformed), ("link", linked), ("retired", retire)):
+            with self.subTest(marker=name):
+                damage()
+                asked.clear()
+                err = io.StringIO()
+                code = admin.main(
+                    ["bootstrap", "complete", "--root", self.root, "--login", "owner", "--testing"],
+                    environ=self.env, stdin=io.StringIO(), stdout=io.StringIO(), stderr=err,
+                    prompt=lambda label: asked.append(label) or "", open_database=self.open_db,
+                )
+                self.assertEqual(code, 1)
+                self.assertEqual(asked, [])
+                self.assertIn("cannot be used", err.getvalue())
+                issue = self.run_cli("issue-token", "--root", self.root)
+                self.assertEqual(issue.code, 1)
+                self.assertIn("cannot be used", issue.err)
+                self.assertEqual(self.token_rows(), 0)
+                self.assertFalse(os.path.lexists(self.token_file))
+                os.unlink(marker)
+                with open(marker, "wb") as handle:
+                    handle.write(original)
 
     def test_only_a_busy_root_is_reported_as_in_use(self) -> None:
         issued = self.run_cli("issue-token", "--root", self.root, tty=True)

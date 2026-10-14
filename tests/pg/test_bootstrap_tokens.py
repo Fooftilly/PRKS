@@ -483,3 +483,17 @@ class TokenFileTests(RootPairingTestCase):
             bootstrap_tokens, "_is_reparse_point", return_value=True
         ):
             self.refused("token_file_unreadable", bootstrap_tokens.read_token_file, other)
+
+    def test_a_removal_that_is_not_durable_is_not_reported_as_done(self) -> None:
+        root = self.new_root()
+        directory = os.path.join(self.tmp, "cfg")
+        path = os.path.join(directory, bootstrap_tokens.TOKEN_FILE_NAME)
+        token = bootstrap_tokens.new_token()
+        bootstrap_tokens.write_token_file(token, path, data_root=root)
+        stray = os.path.join(directory, f".{bootstrap_tokens.TOKEN_FILE_NAME}.x.tmp")
+        os.link(path, stray)
+        with mock.patch.object(bootstrap_tokens, "fsync_directory", return_value=False):
+            self.assertEqual(
+                bootstrap_tokens.sweep_temporary_token_files(directory, lambda held: held == token), 0
+            )
+            self.assertFalse(bootstrap_tokens.remove_token_file_if(path, token))

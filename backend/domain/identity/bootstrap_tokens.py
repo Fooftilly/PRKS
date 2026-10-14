@@ -364,7 +364,7 @@ def _unwritable() -> RootPairingRefused:
 
 
 def remove_token_file_if(path: str, token: BootstrapToken) -> bool:
-    """Delete ``path`` when it holds exactly ``token`` (consumed); True if it was removed.
+    """Delete ``path`` when it holds exactly ``token`` (consumed); True once that is durable.
 
     The check and the unlink happen under the directory lock, so a file
     another process publishes at ``path`` in between is never deleted.
@@ -385,8 +385,8 @@ def remove_token_file_if(path: str, token: BootstrapToken) -> bool:
             _sweep_locked(directory, lambda held_tmp: held_tmp == token)
     except OSError:
         return False
-    fsync_directory(directory)
-    return True
+    # Not durable means a power loss can bring the file back: not "deleted".
+    return fsync_directory(directory)
 
 
 def sweep_temporary_token_files(
@@ -402,9 +402,12 @@ def sweep_temporary_token_files(
     """
     try:
         with _token_file_lock(directory):
-            return _sweep_locked(directory, belongs)
+            removed = _sweep_locked(directory, belongs)
     except OSError:
         return 0
+    if removed and not fsync_directory(directory):
+        return 0  # not durable: a power loss can bring them back
+    return removed
 
 
 def _sweep_locked(directory: str, belongs: Callable[[BootstrapToken], bool]) -> int:

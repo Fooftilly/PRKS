@@ -57,7 +57,7 @@ from backend.domain.identity.bootstrap_tokens import BootstrapToken
 from backend.domain.identity.errors import RootPairingRefused
 from backend.storage.errors import StorageRootError
 from backend.storage.root_binding import acquire_shared_root_lease
-from backend.storage.root_marker import MARKER_FILENAME
+from backend.storage.root_marker import MARKER_FILENAME, binding_refusal, read_marker
 
 TOKEN_FILE_ENV = "PRKS_BOOTSTRAP_TOKEN_FILE"
 
@@ -320,13 +320,32 @@ def _complete_password(args: argparse.Namespace, io: _Io) -> str:
 
 
 def _check_root_bound(root: str) -> None:
-    """Refuse a missing or unbound ``--root`` before any secret is asked for."""
-    if not os.path.isdir(root) or not os.path.isfile(os.path.join(root, MARKER_FILENAME)):
-        raise RootPairingRefused(
-            "root_not_bound",
-            f"The data root does not exist or is not bound (it has no {MARKER_FILENAME}); "
-            "check --root.",
-        )
+    """Refuse a missing, unbound or unbindable ``--root`` before any secret is asked for.
+
+    The marker is read and judged by the same code ordinary startup uses, so
+    a malformed, linked, retired, fenced or staging marker is refused here,
+    before a token is issued or a password typed.
+    """
+    unbound = RootPairingRefused(
+        "root_not_bound",
+        f"The data root does not exist or is not bound (it has no {MARKER_FILENAME}); "
+        "check --root.",
+    )
+    if not os.path.isdir(root):
+        raise unbound
+    try:
+        marker = read_marker(root)
+    except StorageRootError as exc:
+        raise _unusable_root(exc.reason) from None
+    if marker is None:
+        raise unbound
+    refusal = binding_refusal(marker)
+    if refusal is not None:
+        raise _unusable_root(refusal.reason)
+
+
+def _unusable_root(reason: str) -> RootPairingRefused:
+    return RootPairingRefused(reason, f"The data root cannot be used ({reason}); check --root.")
 
 
 def _lease_refusal(exc: StorageRootError) -> RootPairingRefused:
@@ -334,7 +353,7 @@ def _lease_refusal(exc: StorageRootError) -> RootPairingRefused:
         return RootPairingRefused(exc.reason, "The data root is in use by a maintenance tool.")
     if exc.reason == "root_not_writable":
         return RootPairingRefused(exc.reason, "The data root does not exist or is not writable.")
-    return RootPairingRefused(exc.reason, f"The data root cannot be used ({exc.reason}).")
+    return _unusable_root(exc.reason)
 
 
 def _complete(args: argparse.Namespace, environ: Mapping[str, str], db: Database, io: _Io) -> int:
