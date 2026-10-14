@@ -1,0 +1,657 @@
+{
+  "extensions": {
+    "pg_trgm": "ext",
+    "unaccent": "ext"
+  },
+  "format": 1,
+  "functions": {
+    "prks.identity_key(text)": {
+      "definition": "CREATE OR REPLACE FUNCTION prks.identity_key(s text)\n RETURNS text\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nBEGIN ATOMIC\n SELECT casefold((btrim(regexp_replace(NORMALIZE(s, NFC), '[\\x09-\\x0D\\x1C-\\x20\\x85\\xA0\\x1680\\x2000-\\x200A\\x2028\\x2029\\x202F\\x205F\\x3000]+'::text, ' '::text, 'g'::text), ' '::text) COLLATE pg_unicode_fast)) AS casefold;\nEND\n",
+      "parallel": "s",
+      "strict": true,
+      "volatility": "i"
+    },
+    "prks.search_norm(text)": {
+      "definition": "CREATE OR REPLACE FUNCTION prks.search_norm(s text)\n RETURNS text\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nBEGIN ATOMIC\n SELECT ext.unaccent('prks.search_unaccent'::regdictionary, casefold((NORMALIZE(s, NFC) COLLATE pg_unicode_fast))) AS unaccent;\nEND\n",
+      "parallel": "s",
+      "strict": true,
+      "volatility": "i"
+    }
+  },
+  "schema_files": [
+    "000_extensions.sql",
+    "010_instance.sql",
+    "020_identity.sql",
+    "030_jobs.sql",
+    "040_sync.sql"
+  ],
+  "schemas": [
+    "derived",
+    "ext",
+    "prks"
+  ],
+  "tables": {
+    "prks.devices": {
+      "columns": [
+        {
+          "name": "id",
+          "not_null": true,
+          "type": "uuid"
+        },
+        {
+          "name": "user_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "label",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "default": "now()",
+          "name": "first_seen",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        },
+        {
+          "default": "now()",
+          "name": "last_seen",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": {
+        "devices_first_seen_not_null": "NOT NULL first_seen",
+        "devices_id_not_null": "NOT NULL id",
+        "devices_last_seen_not_null": "NOT NULL last_seen",
+        "devices_pkey": "PRIMARY KEY (id)",
+        "devices_user_id_fkey": "FOREIGN KEY (user_id) REFERENCES prks.users(id) ON DELETE CASCADE",
+        "devices_user_id_not_null": "NOT NULL user_id"
+      },
+      "indexes": {
+        "devices_pkey": "CREATE UNIQUE INDEX devices_pkey ON prks.devices USING btree (id)"
+      }
+    },
+    "prks.entity_revisions": {
+      "columns": [
+        {
+          "name": "library_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "scope_type",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "scope_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "revision",
+          "not_null": true,
+          "type": "bigint"
+        },
+        {
+          "default": "now()",
+          "name": "updated_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": {
+        "entity_revisions_library_id_fkey": "FOREIGN KEY (library_id) REFERENCES prks.libraries(id) ON DELETE CASCADE",
+        "entity_revisions_library_id_not_null": "NOT NULL library_id",
+        "entity_revisions_pkey": "PRIMARY KEY (library_id, scope_type, scope_id)",
+        "entity_revisions_revision_check": "CHECK (revision >= 0)",
+        "entity_revisions_revision_not_null": "NOT NULL revision",
+        "entity_revisions_scope_id_not_null": "NOT NULL scope_id",
+        "entity_revisions_scope_type_not_null": "NOT NULL scope_type",
+        "entity_revisions_updated_at_not_null": "NOT NULL updated_at"
+      },
+      "indexes": {
+        "entity_revisions_pkey": "CREATE UNIQUE INDEX entity_revisions_pkey ON prks.entity_revisions USING btree (library_id, scope_type, scope_id)"
+      }
+    },
+    "prks.instance": {
+      "columns": [
+        {
+          "name": "id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "storage_root_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "setup_state",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "testing",
+          "not_null": true,
+          "type": "boolean"
+        },
+        {
+          "default": "0",
+          "name": "start_generation",
+          "not_null": true,
+          "type": "bigint"
+        },
+        {
+          "name": "start_token",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "name": "prev_start_token",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "default": "now()",
+          "name": "created_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": {
+        "instance_created_at_not_null": "NOT NULL created_at",
+        "instance_id_check": "CHECK (id ~ '^IN-[0-9A-F]{32}$'::text)",
+        "instance_id_not_null": "NOT NULL id",
+        "instance_pkey": "PRIMARY KEY (id)",
+        "instance_setup_state_check": "CHECK (setup_state = ANY (ARRAY['unconfigured'::text, 'bootstrapping'::text, 'ready'::text]))",
+        "instance_setup_state_not_null": "NOT NULL setup_state",
+        "instance_start_generation_check": "CHECK (start_generation >= 0)",
+        "instance_start_generation_not_null": "NOT NULL start_generation",
+        "instance_storage_root_id_check": "CHECK (storage_root_id ~ '^SR-[0-9a-fA-F]{32}$'::text)",
+        "instance_storage_root_id_not_null": "NOT NULL storage_root_id",
+        "instance_testing_not_null": "NOT NULL testing"
+      },
+      "indexes": {
+        "instance_pkey": "CREATE UNIQUE INDEX instance_pkey ON prks.instance USING btree (id)",
+        "instance_singleton": "CREATE UNIQUE INDEX instance_singleton ON prks.instance USING btree ((true))"
+      }
+    },
+    "prks.jobs": {
+      "columns": [
+        {
+          "default": "uuidv7()",
+          "name": "id",
+          "not_null": true,
+          "type": "uuid"
+        },
+        {
+          "name": "library_id",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "name": "library_epoch",
+          "not_null": false,
+          "type": "bigint"
+        },
+        {
+          "name": "kind",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "'{}'::jsonb",
+          "name": "payload",
+          "not_null": true,
+          "type": "jsonb"
+        },
+        {
+          "name": "dedupe_key",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "name": "singleton_key",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "default": "'queued'::text",
+          "name": "state",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "0",
+          "name": "priority",
+          "not_null": true,
+          "type": "smallint"
+        },
+        {
+          "default": "now()",
+          "name": "run_after",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        },
+        {
+          "default": "0",
+          "name": "attempts",
+          "not_null": true,
+          "type": "integer"
+        },
+        {
+          "default": "10",
+          "name": "max_attempts",
+          "not_null": true,
+          "type": "integer"
+        },
+        {
+          "name": "lease_id",
+          "not_null": false,
+          "type": "uuid"
+        },
+        {
+          "name": "locked_by",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "name": "locked_until",
+          "not_null": false,
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "last_error",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "name": "progress",
+          "not_null": false,
+          "type": "jsonb"
+        },
+        {
+          "name": "created_by",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "default": "now()",
+          "name": "created_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "finished_at",
+          "not_null": false,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": {
+        "jobs_attempts_not_null": "NOT NULL attempts",
+        "jobs_check": "CHECK ((library_id IS NULL) = (library_epoch IS NULL))",
+        "jobs_created_at_not_null": "NOT NULL created_at",
+        "jobs_created_by_fkey": "FOREIGN KEY (created_by) REFERENCES prks.users(id)",
+        "jobs_id_not_null": "NOT NULL id",
+        "jobs_kind_not_null": "NOT NULL kind",
+        "jobs_library_id_fkey": "FOREIGN KEY (library_id) REFERENCES prks.libraries(id) ON DELETE CASCADE",
+        "jobs_max_attempts_not_null": "NOT NULL max_attempts",
+        "jobs_payload_not_null": "NOT NULL payload",
+        "jobs_pkey": "PRIMARY KEY (id)",
+        "jobs_priority_not_null": "NOT NULL priority",
+        "jobs_run_after_not_null": "NOT NULL run_after",
+        "jobs_state_check": "CHECK (state = ANY (ARRAY['queued'::text, 'running'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text]))",
+        "jobs_state_not_null": "NOT NULL state"
+      },
+      "indexes": {
+        "jobs_dedupe": "CREATE UNIQUE INDEX jobs_dedupe ON prks.jobs USING btree (kind, dedupe_key) WHERE (state = 'queued'::text)",
+        "jobs_expired": "CREATE INDEX jobs_expired ON prks.jobs USING btree (locked_until) WHERE (state = 'running'::text)",
+        "jobs_pkey": "CREATE UNIQUE INDEX jobs_pkey ON prks.jobs USING btree (id)",
+        "jobs_ready": "CREATE INDEX jobs_ready ON prks.jobs USING btree (priority DESC, run_after) WHERE (state = 'queued'::text)",
+        "jobs_singleton": "CREATE UNIQUE INDEX jobs_singleton ON prks.jobs USING btree (singleton_key) WHERE (state = 'running'::text)"
+      }
+    },
+    "prks.libraries": {
+      "columns": [
+        {
+          "name": "id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "name",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "maintenance",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "name": "maintenance_run",
+          "not_null": false,
+          "type": "uuid"
+        },
+        {
+          "default": "1",
+          "name": "epoch",
+          "not_null": true,
+          "type": "bigint"
+        },
+        {
+          "name": "search_folding",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "default": "now()",
+          "name": "created_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": {
+        "libraries_created_at_not_null": "NOT NULL created_at",
+        "libraries_epoch_check": "CHECK (epoch >= 1)",
+        "libraries_epoch_not_null": "NOT NULL epoch",
+        "libraries_id_check": "CHECK (id ~ '^LIB-[0-9A-F]{32}$'::text)",
+        "libraries_id_not_null": "NOT NULL id",
+        "libraries_maintenance_check": "CHECK (maintenance = ANY (ARRAY['restore'::text, 'rebuild'::text]))",
+        "libraries_name_not_null": "NOT NULL name",
+        "libraries_pkey": "PRIMARY KEY (id)"
+      },
+      "indexes": {
+        "libraries_pkey": "CREATE UNIQUE INDEX libraries_pkey ON prks.libraries USING btree (id)"
+      }
+    },
+    "prks.library_memberships": {
+      "columns": [
+        {
+          "name": "library_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "user_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "role",
+          "not_null": true,
+          "type": "text"
+        }
+      ],
+      "constraints": {
+        "library_memberships_library_id_fkey": "FOREIGN KEY (library_id) REFERENCES prks.libraries(id) ON DELETE CASCADE",
+        "library_memberships_library_id_not_null": "NOT NULL library_id",
+        "library_memberships_pkey": "PRIMARY KEY (library_id, user_id)",
+        "library_memberships_role_check": "CHECK (role = ANY (ARRAY['owner'::text, 'editor'::text, 'reader'::text]))",
+        "library_memberships_role_not_null": "NOT NULL role",
+        "library_memberships_user_id_fkey": "FOREIGN KEY (user_id) REFERENCES prks.users(id) ON DELETE CASCADE",
+        "library_memberships_user_id_not_null": "NOT NULL user_id"
+      },
+      "indexes": {
+        "library_memberships_pkey": "CREATE UNIQUE INDEX library_memberships_pkey ON prks.library_memberships USING btree (library_id, user_id)"
+      }
+    },
+    "prks.schema_migrations": {
+      "columns": [
+        {
+          "name": "version",
+          "not_null": true,
+          "type": "integer"
+        },
+        {
+          "name": "name",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "sha256",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "now()",
+          "name": "applied_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": {
+        "schema_migrations_applied_at_not_null": "NOT NULL applied_at",
+        "schema_migrations_name_not_null": "NOT NULL name",
+        "schema_migrations_pkey": "PRIMARY KEY (version)",
+        "schema_migrations_sha256_check": "CHECK (sha256 ~ '^[0-9a-f]{64}$'::text)",
+        "schema_migrations_sha256_not_null": "NOT NULL sha256",
+        "schema_migrations_version_check": "CHECK (version >= 0)",
+        "schema_migrations_version_not_null": "NOT NULL version"
+      },
+      "indexes": {
+        "schema_migrations_pkey": "CREATE UNIQUE INDEX schema_migrations_pkey ON prks.schema_migrations USING btree (version)"
+      }
+    },
+    "prks.sessions": {
+      "columns": [
+        {
+          "default": "uuidv7()",
+          "name": "id",
+          "not_null": true,
+          "type": "uuid"
+        },
+        {
+          "name": "token_sha256",
+          "not_null": true,
+          "type": "bytea"
+        },
+        {
+          "name": "user_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "library_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "now()",
+          "name": "created_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        },
+        {
+          "default": "now()",
+          "name": "last_used_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "expires_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "revoked_at",
+          "not_null": false,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": {
+        "sessions_created_at_not_null": "NOT NULL created_at",
+        "sessions_expires_at_not_null": "NOT NULL expires_at",
+        "sessions_id_not_null": "NOT NULL id",
+        "sessions_last_used_at_not_null": "NOT NULL last_used_at",
+        "sessions_library_id_not_null": "NOT NULL library_id",
+        "sessions_library_id_user_id_fkey": "FOREIGN KEY (library_id, user_id) REFERENCES prks.library_memberships(library_id, user_id) ON DELETE CASCADE",
+        "sessions_pkey": "PRIMARY KEY (id)",
+        "sessions_token_sha256_key": "UNIQUE (token_sha256)",
+        "sessions_token_sha256_not_null": "NOT NULL token_sha256",
+        "sessions_user_id_not_null": "NOT NULL user_id"
+      },
+      "indexes": {
+        "sessions_pkey": "CREATE UNIQUE INDEX sessions_pkey ON prks.sessions USING btree (id)",
+        "sessions_token_sha256_key": "CREATE UNIQUE INDEX sessions_token_sha256_key ON prks.sessions USING btree (token_sha256)"
+      }
+    },
+    "prks.sync_operations": {
+      "columns": [
+        {
+          "name": "op_id",
+          "not_null": true,
+          "type": "uuid"
+        },
+        {
+          "name": "library_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "device_id",
+          "not_null": true,
+          "type": "uuid"
+        },
+        {
+          "name": "user_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "operation_type",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "entity_type",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "entity_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "request_sha256",
+          "not_null": true,
+          "type": "bytea"
+        },
+        {
+          "name": "status",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "http_status",
+          "not_null": true,
+          "type": "smallint"
+        },
+        {
+          "name": "result",
+          "not_null": true,
+          "type": "jsonb"
+        },
+        {
+          "default": "now()",
+          "name": "applied_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": {
+        "sync_operations_applied_at_not_null": "NOT NULL applied_at",
+        "sync_operations_device_id_fkey": "FOREIGN KEY (device_id) REFERENCES prks.devices(id)",
+        "sync_operations_device_id_not_null": "NOT NULL device_id",
+        "sync_operations_entity_id_not_null": "NOT NULL entity_id",
+        "sync_operations_entity_type_not_null": "NOT NULL entity_type",
+        "sync_operations_http_status_not_null": "NOT NULL http_status",
+        "sync_operations_library_id_fkey": "FOREIGN KEY (library_id) REFERENCES prks.libraries(id) ON DELETE CASCADE",
+        "sync_operations_library_id_not_null": "NOT NULL library_id",
+        "sync_operations_op_id_not_null": "NOT NULL op_id",
+        "sync_operations_operation_type_not_null": "NOT NULL operation_type",
+        "sync_operations_pkey": "PRIMARY KEY (op_id)",
+        "sync_operations_request_sha256_not_null": "NOT NULL request_sha256",
+        "sync_operations_result_not_null": "NOT NULL result",
+        "sync_operations_status_not_null": "NOT NULL status",
+        "sync_operations_user_id_fkey": "FOREIGN KEY (user_id) REFERENCES prks.users(id)",
+        "sync_operations_user_id_not_null": "NOT NULL user_id"
+      },
+      "indexes": {
+        "sync_operations_device": "CREATE INDEX sync_operations_device ON prks.sync_operations USING btree (device_id, applied_at)",
+        "sync_operations_pkey": "CREATE UNIQUE INDEX sync_operations_pkey ON prks.sync_operations USING btree (op_id)"
+      }
+    },
+    "prks.users": {
+      "columns": [
+        {
+          "name": "id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "login_name",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "generated": "prks.identity_key(login_name)",
+          "name": "login_key",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "display_name",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "password_hash",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "name": "disabled_at",
+          "not_null": false,
+          "type": "timestamp with time zone"
+        },
+        {
+          "default": "now()",
+          "name": "created_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": {
+        "users_created_at_not_null": "NOT NULL created_at",
+        "users_display_name_not_null": "NOT NULL display_name",
+        "users_id_check": "CHECK (id ~ '^U-[0-9A-F]{32}$'::text)",
+        "users_id_not_null": "NOT NULL id",
+        "users_login_key_check": "CHECK (login_key <> ''::text)",
+        "users_login_key_key": "UNIQUE (login_key)",
+        "users_login_key_not_null": "NOT NULL login_key",
+        "users_login_name_not_null": "NOT NULL login_name",
+        "users_pkey": "PRIMARY KEY (id)"
+      },
+      "indexes": {
+        "users_login_key_key": "CREATE UNIQUE INDEX users_login_key_key ON prks.users USING btree (login_key)",
+        "users_pkey": "CREATE UNIQUE INDEX users_pkey ON prks.users USING btree (id)"
+      }
+    }
+  },
+  "text_search": {
+    "configurations": {},
+    "dictionaries": {
+      "prks.search_unaccent": {
+        "options": "rules = 'unaccent'",
+        "template": "ext.unaccent"
+      }
+    }
+  },
+  "types": {},
+  "views": {}
+}

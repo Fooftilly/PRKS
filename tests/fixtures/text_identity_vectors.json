@@ -1,0 +1,160 @@
+{
+  "description": "Shared vectors for the text identity key (docs/postgresql-architecture.md \u00a78.1). Every implementation (prks.identity_key in SQL, backend/domain/text_identity.py) must map each input to its key exactly.",
+  "vectors": [
+    {
+      "note": "ASCII case",
+      "input": "Plato",
+      "key": "plato"
+    },
+    {
+      "note": "trim and collapse ASCII whitespace",
+      "input": "  Plato \t\n Republic  ",
+      "key": "plato republic"
+    },
+    {
+      "note": "no-break and em spaces collapse",
+      "input": "Plato\u00a0\u2003Republic",
+      "key": "plato republic"
+    },
+    {
+      "note": "ideographic space and line separator",
+      "input": "\u3000Plato\u2028Republic\u3000",
+      "key": "plato republic"
+    },
+    {
+      "note": "U+001C..U+001F split like str.split()",
+      "input": "a\u001cb\u001fc",
+      "key": "a b c"
+    },
+    {
+      "note": "zero-width space is not whitespace",
+      "input": "a\u200bb",
+      "key": "a\u200bb"
+    },
+    {
+      "note": "whitespace only",
+      "input": " \t\u00a0\u3000 ",
+      "key": ""
+    },
+    {
+      "note": "empty",
+      "input": "",
+      "key": ""
+    },
+    {
+      "note": "diacritics kept",
+      "input": "R\u00e9sum\u00e9",
+      "key": "r\u00e9sum\u00e9"
+    },
+    {
+      "note": "no diacritic stripping",
+      "input": "Resume",
+      "key": "resume"
+    },
+    {
+      "note": "NFD composes to NFC",
+      "input": "Re\u0301sume\u0301",
+      "key": "r\u00e9sum\u00e9"
+    },
+    {
+      "note": "NFC canonical mark order",
+      "input": "q\u0307\u0323",
+      "key": "q\u0323\u0307"
+    },
+    {
+      "note": "Greek with tonos and final sigma",
+      "input": "\u03a3\u03c9\u03ba\u03c1\u03ac\u03c4\u03b7\u03c2",
+      "key": "\u03c3\u03c9\u03ba\u03c1\u03ac\u03c4\u03b7\u03c3"
+    },
+    {
+      "note": "Greek upper case",
+      "input": "\u03a3\u03a9\u039a\u03a1\u0386\u03a4\u0397\u03a3",
+      "key": "\u03c3\u03c9\u03ba\u03c1\u03ac\u03c4\u03b7\u03c3"
+    },
+    {
+      "note": "Greek iota with dialytika and tonos folds to a decomposed sequence",
+      "input": "\u0390",
+      "key": "\u03b9\u0308\u0301"
+    },
+    {
+      "note": "Serbian Cyrillic",
+      "input": "\u0402\u043e\u0440\u0452\u0435 \u040b\u0438\u0440\u0438\u045b",
+      "key": "\u0452\u043e\u0440\u0452\u0435 \u045b\u0438\u0440\u0438\u045b"
+    },
+    {
+      "note": "Serbian Cyrillic \u045b and \u0447 stay distinct",
+      "input": "\u040b",
+      "key": "\u045b"
+    },
+    {
+      "note": "Serbian Cyrillic \u0447",
+      "input": "\u0427",
+      "key": "\u0447"
+    },
+    {
+      "note": "Serbian Latin",
+      "input": "\u0110or\u0111e \u0106iri\u0107",
+      "key": "\u0111or\u0111e \u0107iri\u0107"
+    },
+    {
+      "note": "German sharp s",
+      "input": "Stra\u00dfe",
+      "key": "strasse"
+    },
+    {
+      "note": "German upper case SS",
+      "input": "STRASSE",
+      "key": "strasse"
+    },
+    {
+      "note": "German capital sharp s",
+      "input": "\u1e9e",
+      "key": "ss"
+    },
+    {
+      "note": "Turkish dotted capital I",
+      "input": "\u0130stanbul",
+      "key": "i\u0307stanbul"
+    },
+    {
+      "note": "Turkish dotless i stays",
+      "input": "\u0131l\u0131k",
+      "key": "\u0131l\u0131k"
+    },
+    {
+      "note": "ASCII capital I folds to i",
+      "input": "ISTANBUL",
+      "key": "istanbul"
+    },
+    {
+      "note": "ligature folded by full case folding",
+      "input": "\ufb01le",
+      "key": "file"
+    },
+    {
+      "note": "full-width forms are not NFKC-folded",
+      "input": "\uff21\uff22\uff23",
+      "key": "\uff41\uff42\uff43"
+    },
+    {
+      "note": "Armenian ech-yiwn expands",
+      "input": "\u0587",
+      "key": "\u0565\u0582"
+    },
+    {
+      "note": "astral Deseret letter folds",
+      "input": "\ud801\udc00",
+      "key": "\ud801\udc28"
+    },
+    {
+      "note": "astral symbol without case",
+      "input": "\ud835\udd04 \ud83d\udcda Books",
+      "key": "\ud835\udd04 \ud83d\udcda books"
+    },
+    {
+      "note": "Hangul unchanged",
+      "input": "\ud55c\uad6d\uc5b4",
+      "key": "\ud55c\uad6d\uc5b4"
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-"""PostgreSQL plumbing and harness tests (#623, PG-1).
+"""PostgreSQL plumbing, harness, migration runner and core schema tests (#623 PG-1, #624 PG-2).
 
 They need psycopg and a disposable PostgreSQL 18 server, so they load only
 when ``PRKS_TEST_DATABASE_URL`` is set (``scripts/test-postgres`` sets it).
