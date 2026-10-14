@@ -18,6 +18,7 @@ outside the data root).
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import os
@@ -25,10 +26,15 @@ import re
 import secrets
 import stat
 import tempfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Optional
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows has no token files
+    fcntl = None  # type: ignore[assignment]
 
 from backend.db.database import Database, Transaction
 from backend.db.errors import DatabaseError
@@ -287,6 +293,42 @@ def write_token_file(token: BootstrapToken, path: str, *, data_root: str) -> str
         )
     try:
         os.makedirs(directory, mode=0o700, exist_ok=True)
+        with _token_file_lock(directory):
+            _publish_token_file(token, path, directory)
+    except OSError:
+        raise _unwritable() from None
+    if not fsync_directory(directory):
+        raise RootPairingRefused(
+            "token_file_not_durable",
+            "The bootstrap token file could not be made durable.",
+            retryable=True,
+        )
+    return path
+
+
+@contextlib.contextmanager
+def _token_file_lock(directory: str) -> Iterator[None]:
+    """Hold an exclusive lock on ``directory`` (the configuration directory).
+
+    Publishing a token file and the conditional removals check the file and
+    then change the name; holding this lock across both means no other PRKS
+    process can replace the file in between, so a removal never deletes a
+    token it did not read. The lock is on the directory itself, so it leaves
+    no file behind. Raises ``OSError`` when the directory cannot be opened.
+    """
+    if fcntl is None:  # pragma: no cover - Windows has no token files
+        yield
+        return
+    fd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)  # releases the lock
+
+
+def _publish_token_file(token: BootstrapToken, path: str, directory: str) -> None:
+    try:
         # mkstemp creates the temporary 0600 whatever the umask.
         fd, tmp = tempfile.mkstemp(prefix=f".{TOKEN_FILE_NAME}.", suffix=".tmp", dir=directory)
     except OSError:
@@ -311,13 +353,6 @@ def write_token_file(token: BootstrapToken, path: str, *, data_root: str) -> str
             os.unlink(tmp)
         except OSError:
             pass
-    if not fsync_directory(directory):
-        raise RootPairingRefused(
-            "token_file_not_durable",
-            "The bootstrap token file could not be made durable.",
-            retryable=True,
-        )
-    return path
 
 
 def _unwritable() -> RootPairingRefused:
@@ -329,19 +364,27 @@ def _unwritable() -> RootPairingRefused:
 
 
 def remove_token_file_if(path: str, token: BootstrapToken) -> bool:
-    """Delete ``path`` when it holds exactly ``token`` (consumed); True if it was removed."""
+    """Delete ``path`` when it holds exactly ``token`` (consumed); True if it was removed.
+
+    The check and the unlink happen under the directory lock, so a file
+    another process publishes at ``path`` in between is never deleted.
+    """
+    directory = os.path.dirname(os.path.abspath(path))
     try:
-        held = read_token_file(path)
-    except RootPairingRefused:
-        return False
-    if held != token:
-        return False
-    try:
-        os.unlink(path)
+        with _token_file_lock(directory):
+            try:
+                held = read_token_file(path)
+            except RootPairingRefused:
+                return False
+            if held != token:
+                return False
+            try:
+                os.unlink(path)
+            except OSError:
+                return False
+            _sweep_locked(directory, lambda held_tmp: held_tmp == token)
     except OSError:
         return False
-    directory = os.path.dirname(os.path.abspath(path))
-    sweep_temporary_token_files(directory, lambda held_tmp: held_tmp == token)
     fsync_directory(directory)
     return True
 
@@ -357,6 +400,14 @@ def sweep_temporary_token_files(
     configuration directory can be shared by several deployments, so a
     leftover is deleted only when ``belongs`` claims its token.
     """
+    try:
+        with _token_file_lock(directory):
+            return _sweep_locked(directory, belongs)
+    except OSError:
+        return 0
+
+
+def _sweep_locked(directory: str, belongs: Callable[[BootstrapToken], bool]) -> int:
     removed = 0
     try:
         names = os.listdir(directory)

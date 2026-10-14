@@ -422,3 +422,30 @@ class TokenFileTests(RootPairingTestCase):
         self.assertTrue(bootstrap_tokens.remove_token_file_if(path, token))
         self.assertFalse(os.path.exists(path))
         self.assertFalse(bootstrap_tokens.remove_token_file_if(path, token))
+
+    def test_a_conditional_removal_never_deletes_a_file_published_meanwhile(self) -> None:
+        # Two cleaners and a second deployment share the directory: a
+        # removal that read token A must not unlink a B published at the same
+        # path afterwards. The directory lock makes check-and-unlink atomic.
+        root = self.new_root()
+        directory = os.path.join(self.tmp, "cfg")
+        path = os.path.join(directory, bootstrap_tokens.TOKEN_FILE_NAME)
+        first = bootstrap_tokens.new_token()
+        second = bootstrap_tokens.new_token()
+        bootstrap_tokens.write_token_file(first, path, data_root=root)
+        result: dict[str, bool] = {}
+        with bootstrap_tokens._token_file_lock(directory):
+            remover = threading.Thread(
+                target=lambda: result.update(removed=bootstrap_tokens.remove_token_file_if(path, first))
+            )
+            remover.start()
+            remover.join(0.5)
+            self.assertTrue(remover.is_alive(), "the removal ran without the lock")
+            # Another process replaces the file while the remover waits.
+            os.unlink(path)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w") as handle:
+                handle.write(second.reveal() + "\n")
+        remover.join(30)
+        self.assertFalse(result["removed"])
+        self.assertEqual(bootstrap_tokens.read_token_file(path), second)

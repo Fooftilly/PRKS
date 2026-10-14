@@ -199,9 +199,10 @@ class AdminBootstrapTests(RootPairingTestCase):
         self.assertEqual(bootstrap_tokens.read_token_file(self.token_file), token)
         self.assertEqual(self.token_rows(), rows)
 
-    def test_concurrent_headless_issuers_both_deliver_the_published_token(self) -> None:
+    def test_a_concurrent_issuer_refuses_the_file_another_run_is_registering(self) -> None:
         # A publishes its file and stops before registering; B runs to the end
-        # in that gap; then A registers. Neither revokes the published token.
+        # in that gap. B never adopts a token this database has not issued,
+        # and neither run revokes the published token.
         published = threading.Event()
         resume = threading.Event()
         result: dict[str, int] = {}
@@ -225,9 +226,10 @@ class AdminBootstrapTests(RootPairingTestCase):
             token = bootstrap_tokens.read_token_file(self.token_file)
             self.secrets.append(token.reveal())
             b = self.run_cli("issue-token", "--root", self.root)
-            self.assertEqual(b.code, 0, b.err)
+            self.assertEqual(b.code, 1)
+            self.assertIn("never issued", b.err)
             self.assert_no_secret(b)
-            self.assertEqual(self.outstanding_digest(), token.digest)
+            self.assertEqual(self.token_rows(), 0)
         finally:
             resume.set()
             thread.join(60)
@@ -235,7 +237,32 @@ class AdminBootstrapTests(RootPairingTestCase):
         self.assertEqual(self.token_rows(), 1)
         self.assertEqual(self.outstanding_digest(), token.digest)
         self.assertEqual(bootstrap_tokens.read_token_file(self.token_file), token)
+        # Once A registered it, B's rerun finds it ready to use.
+        again = self.run_cli("issue-token", "--root", self.root)
+        self.assertEqual(again.code, 0, again.err)
+        self.assertEqual(self.token_rows(), 1)
         self.assertEqual(self.complete_with_file().code, 0)
+
+    def test_another_deployments_token_file_is_never_registered(self) -> None:
+        # One configuration directory, two unconfigured deployments: the file
+        # was published by the other one, so this database refuses to adopt
+        # it and leaves it in place for its owner.
+        other = bootstrap_tokens.new_token()
+        self.secrets.append(other.reveal())
+        bootstrap_tokens.write_token_file(
+            other, self.token_file, data_root=os.path.join(self.tmp, "other-root")
+        )
+        run = self.run_cli("issue-token", "--root", self.root)
+        self.assertEqual(run.code, 1)
+        self.assertIn("never issued", run.err)
+        self.assert_no_secret(run)
+        self.assertEqual(self.token_rows(), 0)
+        self.assertEqual(bootstrap_tokens.read_token_file(self.token_file), other)
+        env = dict(self.env, PRKS_BOOTSTRAP_TOKEN_FILE=self.token_file)
+        refused = self.complete("--password-file", self.password_file, env=env)
+        self.assertEqual(refused.code, 1)
+        self.assertNotEqual(self.setup_state(), "ready")
+        self.assertTrue(os.path.lexists(self.token_file))
 
     def test_a_failed_file_delivery_revokes_nothing(self) -> None:
         delivered = self.run_cli("issue-token", "--root", self.root, tty=True)
@@ -254,21 +281,46 @@ class AdminBootstrapTests(RootPairingTestCase):
         )
         self.assertEqual(self.complete(prompts=[value, PASSWORD, PASSWORD]).code, 0)
 
-    def test_a_failed_registration_keeps_the_file_and_a_rerun_recovers(self) -> None:
+    def test_a_failed_registration_deletes_its_file_and_a_rerun_recovers(self) -> None:
         refusal = RootPairingRefused("database_unavailable", "db down", retryable=True)
         with mock.patch.object(bootstrap_tokens, "issue_token", side_effect=refusal):
             run = self.run_cli("issue-token", "--root", self.root)
         self.assertEqual(run.code, 1)
         self.assertIn("run issue-token again", run.err)
-        token = bootstrap_tokens.read_token_file(self.token_file)
-        self.secrets.append(token.reveal())
-        self.assert_no_secret(run)
+        self.assertFalse(os.path.lexists(self.token_file))
+        self.assertEqual(os.listdir(os.path.dirname(self.token_file)), [])
         self.assertEqual(self.token_rows(), 0)
         again = self.run_cli("issue-token", "--root", self.root)
         self.assertEqual(again.code, 0, again.err)
+        token = bootstrap_tokens.read_token_file(self.token_file)
+        self.secrets.append(token.reveal())
         self.assertEqual(self.outstanding_digest(), token.digest)
         self.assertEqual(self.complete_with_file().code, 0)
         self.assertEqual(self.setup_state(), "ready")
+
+    def test_a_run_interrupted_before_registering_leaves_a_file_a_rerun_refuses(self) -> None:
+        # Killed between publishing and registering: the file is unknown to
+        # the database, so a rerun refuses it and names the recovery.
+        def killed(point: str) -> None:
+            if point == admin.FAULT_TOKEN_FILE_PUBLISHED:
+                raise RootPairingRefused("killed", "killed")
+
+        killed_run = admin.main(
+            ["bootstrap", "issue-token", "--root", self.root],
+            environ=self.env, stdin=io.StringIO(), stdout=io.StringIO(),
+            stderr=io.StringIO(), open_database=self.open_db, faults=killed,
+        )
+        self.assertEqual(killed_run, admin.EXIT_REFUSED)
+        self.secrets.append(bootstrap_tokens.read_token_file(self.token_file).reveal())
+        rerun = self.run_cli("issue-token", "--root", self.root)
+        self.assertEqual(rerun.code, 1)
+        self.assertIn("delete the file and run issue-token again", rerun.err)
+        self.assert_no_secret(rerun)
+        os.unlink(self.token_file)
+        recovered = self.run_cli("issue-token", "--root", self.root)
+        self.assertEqual(recovered.code, 0, recovered.err)
+        self.secrets.append(bootstrap_tokens.read_token_file(self.token_file).reveal())
+        self.assertEqual(self.complete_with_file().code, 0)
 
     def test_a_retry_after_setup_committed_deletes_the_left_behind_token_file(self) -> None:
         self.assertEqual(self.run_cli("issue-token", "--root", self.root).code, 0)
@@ -304,7 +356,7 @@ class AdminBootstrapTests(RootPairingTestCase):
         self.secrets.append(bootstrap_tokens.read_token_file(self.token_file).reveal())
         directory = os.path.dirname(self.token_file)
         # Setup completed and its cleanup removed only the canonical name.
-        with mock.patch.object(bootstrap_tokens, "sweep_temporary_token_files", return_value=0):
+        with mock.patch.object(bootstrap_tokens, "_sweep_locked", return_value=0):
             self.assertEqual(self.complete_with_file().code, 0)
         self.assertEqual(len(os.listdir(directory)), 1)
         retry = self.run_cli("issue-token", "--root", self.root)

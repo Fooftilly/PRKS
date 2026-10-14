@@ -214,9 +214,11 @@ def _issue_to_file(
     Creating the file without overwriting is the reservation, so only the
     process that published it registers a new token, and a delivery that
     fails never revokes the token an earlier run delivered. A file that
-    already exists is never replaced: its token is registered again, which
-    is a no-op while it is outstanding and finishes a run that stopped
-    between publishing and registering.
+    already exists is never replaced. Its token is registered again only
+    when this database issued it (a no-op while it is outstanding): the
+    configuration directory can be shared by several deployments, so a file
+    this database never issued is refused, never adopted. A registration
+    that fails deletes the file it just published, so a rerun starts clean.
     """
     token = bootstrap_tokens.new_token()
     try:
@@ -231,13 +233,14 @@ def _issue_to_file(
     try:
         issued = bootstrap_tokens.issue_token(db, ttl=ttl, token=token)
     except RootPairingRefused as exc:
+        # The token is not registered, so nothing can use it, and a rerun
+        # would refuse the file as one this database never issued.
+        bootstrap_tokens.remove_token_file_if(path, token)
         if exc.reason == "already_ready":
-            # Nothing can use the token any more, so it is not left behind.
-            bootstrap_tokens.remove_token_file_if(path, token)
             raise
         raise RootPairingRefused(
             exc.reason,
-            f"{exc.message} The token file {path} is kept; run issue-token again to register it.",
+            f"{exc.message} No token was issued; run issue-token again.",
             retryable=exc.retryable,
         ) from None
     io.say(f"Wrote the one-time bootstrap token to {path} (mode 0600).")
@@ -247,6 +250,14 @@ def _issue_to_file(
 
 def _register_token_file(path: str, ttl: timedelta, db: Database, io: _Io) -> int:
     held = bootstrap_tokens.read_token_file(path)
+    if not bootstrap_tokens.issued_here(db, held):
+        raise RootPairingRefused(
+            "token_file_foreign",
+            f"The bootstrap token file {path} holds a token this database never issued: it "
+            "belongs to another deployment sharing the configuration directory, or to an "
+            "issue-token run that is still registering it or was interrupted. If none of "
+            "these is so, delete the file and run issue-token again.",
+        )
     try:
         issued = bootstrap_tokens.issue_token(db, ttl=ttl, token=held)
     except RootPairingRefused as exc:

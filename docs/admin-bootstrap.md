@@ -53,11 +53,21 @@ that is set.
 - The file is refused inside the data root.
 - The file is written before the token is registered. If writing it fails,
   nothing is revoked, and a token delivered earlier stays usable.
+- If registering the token fails (for example when the database is
+  unreachable), the file just written is deleted and no token is issued; run
+  `issue-token` again.
 - An existing file is never overwritten. Running `issue-token` again keeps it
-  and registers its token: that is a no-op while the token is outstanding, and
-  it finishes a run that stopped after writing the file (for example when the
-  database was unreachable). If the file's token has expired or was used or
-  replaced, `issue-token` refuses; delete the file and run it again.
+  when this database issued its token: that is a no-op while the token is
+  outstanding. If the file's token has expired or was used or replaced,
+  `issue-token` refuses; delete the file and run it again.
+- `issue-token` refuses a file whose token this database never issued. Several
+  deployments can share one configuration directory, so such a file may be
+  another deployment's, or belong to an `issue-token` run that is still
+  registering it. If neither is so (a run was killed after writing it), delete
+  the file and run `issue-token` again.
+- Writing the file and the deletions after setup hold a lock on the
+  configuration directory, so a deletion never removes a file another
+  deployment wrote in the meantime.
 
 Then complete setup with that file and an owner-only password file:
 
