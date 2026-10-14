@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyWorkspaceCommand, preflightHideLeaf, preflightMakeMain, preflightSetMode } from './commands'
+import { applyWorkspaceCommand, preflightCloseTab, preflightHideLeaf, preflightMakeMain, preflightSetMode } from './commands'
 import { MAX_SECONDARY_LEAVES } from './constants'
 import { hiddenSecondaryTabIds, logicalTabRole, parkedTabIds, visibleTabIds } from './derive'
 import { validateWorkspace } from './invariants'
@@ -482,5 +482,198 @@ describe('command boundary', () => {
     expect(result.changed).toBe(false)
     expect(result.state).toBe(only)
     expect(result.effects).toEqual([])
+  })
+
+  it('routes main close to a real successor but leaves parked and hidden tabs alone', () => {
+    const current = base()
+    const context = { narrowFallback: false, homeHash: '#/folders' }
+    expect(preflightCloseTab(current, main.id, context)).toEqual({
+      type: 'leave-tab', tabId: main.id, nextHash: second.route,
+    })
+    expect(preflightCloseTab(current, second.id, context)).toEqual({
+      type: 'leave-tab', tabId: second.id, nextHash: '#/folders',
+    })
+    const parked = tab('tab-3')
+    const withParked = { ...current, tabs: [...current.tabs, parked] }
+    expect(preflightCloseTab(withParked, parked.id, context)).toEqual({ type: 'none' })
+    expect(preflightCloseTab(current, 'missing', context)).toEqual({ type: 'none' })
+    const hidden = { ...current, mode: 'stacked' as const, focusedTabId: main.id }
+    expect(preflightCloseTab(hidden, second.id, context)).toEqual({ type: 'none' })
+    expect(preflightCloseTab(current, second.id, { ...context, narrowFallback: true })).toEqual({ type: 'none' })
+  })
+
+  it('rejects invisible focus and skips effects on an already-focused tab', () => {
+    const current = base()
+    const context = { narrowFallback: false, homeHash: '#/folders' }
+    const already = applyWorkspaceCommand(current, { type: 'focus', tabId: second.id }, context)
+    expect(already).toMatchObject({ ok: true, changed: false, state: current, effects: [] })
+    for (const [tabId, presentation] of [
+      ['missing', context],
+      [second.id, { ...context, narrowFallback: true }],
+    ] as const) {
+      const rejected = applyWorkspaceCommand(current, { type: 'focus', tabId }, presentation)
+      expect(rejected).toMatchObject({ ok: false, changed: false, state: current, effects: [] })
+    }
+    const mainFocus = applyWorkspaceCommand(current, { type: 'focus', tabId: main.id }, context)
+    expect(mainFocus.state.mainTabId).toBe(main.id)
+    expect(mainFocus.state.focusedTabId).toBe(main.id)
+    expect(mainFocus.effects).toEqual([{ type: 'paint-focus' }, { type: 'refresh-focused-panel' }])
+    expect(mainFocus.preflight).toEqual({ type: 'none' })
+  })
+
+  it('distinguishes a role swap from cold-parking an untileable Main', () => {
+    const current = base()
+    const command = { type: 'make-main' as const, tabId: second.id }
+    const context = { narrowFallback: false, homeHash: '#/folders' }
+    const swapped = applyWorkspaceCommand(current, command, { ...context, oldMainSupportsTile: true })
+    expect(swapped).toMatchObject({ ok: true, changed: true })
+    expect(swapped.preflight).toEqual({
+      type: 'main-promotion', oldMainId: main.id, requiresLeave: false, nextHash: main.route,
+    })
+    expect(swapped.state.mainTabId).toBe(second.id)
+    expect(swapped.state.mode).toBe('tiled')
+    expect(swapped.state.secondaryTree).toEqual(makeLeaf(main.id))
+    expect(swapped.effects.some((effect) => effect.type === 'cold-park')).toBe(false)
+
+    const parked = applyWorkspaceCommand(current, command, { ...context, oldMainSupportsTile: false })
+    expect(parked.preflight).toEqual({
+      type: 'main-promotion', oldMainId: main.id, requiresLeave: true, nextHash: main.route,
+    })
+    expect(parked.state.mainTabId).toBe(second.id)
+    expect(parked.state.mode).toBe('stacked')
+    expect(parked.state.secondaryTree).toBeNull()
+    expect(parked.effects).toContainEqual({ type: 'cold-park', tabId: main.id })
+    expect(parked.effects).toContainEqual({
+      type: 'commit-main-url', tabId: second.id, history: 'replace',
+    })
+    expect(current.mainTabId).toBe(main.id)
+    expect(validateWorkspace(swapped.state).ok).toBe(true)
+    expect(validateWorkspace(parked.state).ok).toBe(true)
+  })
+
+  it('hides an already-hidden secondary without prompting or parking an unmounted pane', () => {
+    const current = { ...base(), mode: 'stacked' as const, focusedTabId: main.id }
+    const context = { narrowFallback: false, homeHash: '#/folders', mounted: true }
+    const removed = applyWorkspaceCommand(current, { type: 'hide-leaf', tabId: second.id }, context)
+    expect(removed).toMatchObject({ ok: true, changed: true })
+    expect(removed.preflight).toEqual({ type: 'none' })
+    expect(removed.effects.some((effect) => effect.type === 'cold-park')).toBe(false)
+    expect(removed.state.secondaryTree).toBeNull()
+    expect(removed.state.focusedTabId).toBe(main.id)
+    expect(validateWorkspace(removed.state).ok).toBe(true)
+    expect(current.secondaryTree).toEqual(makeLeaf(second.id))
+    expect(applyWorkspaceCommand(current, { type: 'hide-leaf', tabId: 'missing' }, context))
+      .toMatchObject({ ok: false, changed: false, state: current, effects: [] })
+  })
+
+  it('preserves command failure and no-op contracts before performing effects', () => {
+    const current = base()
+    const context = { narrowFallback: false, homeHash: '#/folders' }
+    const attempts = [
+      { type: 'set-mode' as const, mode: 'invalid' },
+      { type: 'move-pane' as const, sourceTabId: second.id, targetTabId: second.id, axis: 'left-right', placement: 'first' },
+      { type: 'close-tab' as const, tabId: 'missing', homeTab: null },
+    ]
+    for (const command of attempts) {
+      const result = applyWorkspaceCommand(current, command, context)
+      expect(result).toMatchObject({ ok: false, changed: false, state: current, effects: [] })
+      expect(result.preflight).toEqual({ type: 'none' })
+    }
+
+    // The new tab is valid and in state.tabs: only the missing ID factory blocks this split.
+    const splitReady = { ...current, tabs: [...current.tabs, tab('tab-3')] }
+    const splitCommand = {
+      type: 'split-leaf' as const,
+      targetTabId: second.id,
+      newTabId: 'tab-3',
+      axis: 'left-right',
+      placement: 'first',
+    }
+    const noFactory = applyWorkspaceCommand(splitReady, splitCommand, context)
+    expect(noFactory).toMatchObject({ ok: false, changed: false, state: splitReady, effects: [] })
+    expect(noFactory.preflight).toEqual({ type: 'none' })
+    const withFactory = applyWorkspaceCommand(splitReady, splitCommand, { ...context, nextSplitId: ids() })
+    expect(withFactory.ok).toBe(true)
+    expect(withFactory.changed).toBe(true)
+    expect(collectLeafTabIds(withFactory.state.secondaryTree)).toEqual(['tab-3', second.id])
+    expect(validateWorkspace(withFactory.state).ok).toBe(true)
+
+    const hidden = { ...current, mode: 'stacked' as const, focusedTabId: main.id }
+    const unchanged = applyWorkspaceCommand(hidden, { type: 'set-mode', mode: 'stacked' }, context)
+    expect(unchanged).toMatchObject({ ok: true, changed: false, state: hidden, effects: [] })
+    expect(preflightSetMode(current, 'stacked', { ...context, narrowFallback: true, mountedTabIds: [second.id] }))
+      .toEqual({ type: 'none' })
+  })
+
+  it('keeps close effects scoped to the destroyed tab and the new Main', () => {
+    const current = base()
+    const context = { narrowFallback: false, homeHash: '#/folders' }
+    const promoted = applyWorkspaceCommand(current, { type: 'close-tab', tabId: main.id, homeTab: null }, context)
+    expect(promoted.ok).toBe(true)
+    expect(promoted.preflight).toEqual({ type: 'leave-tab', tabId: main.id, nextHash: second.route })
+    expect(promoted.state.mainTabId).toBe(second.id)
+    expect(promoted.effects).toEqual([
+      { type: 'destroy-context', tabId: main.id },
+      { type: 'commit-main-url', tabId: second.id, history: 'replace' },
+      { type: 'paint-and-restore', tabId: second.id },
+    ])
+    const secondary = applyWorkspaceCommand(current, { type: 'close-tab', tabId: second.id, homeTab: null }, context)
+    expect(secondary.state.mainTabId).toBe(main.id)
+    expect(secondary.effects).toEqual([
+      { type: 'destroy-context', tabId: second.id },
+      { type: 'paint-and-restore', tabId: main.id },
+    ])
+    const only = state({ tabs: [main] })
+    const home = tab('home', '#/folders')
+    const replacement = applyWorkspaceCommand(only, { type: 'close-tab', tabId: main.id, homeTab: home }, context)
+    expect(replacement.ok).toBe(true)
+    expect(replacement.state.mainTabId).toBe(home.id)
+    expect(replacement.effects).toContainEqual({ type: 'commit-main-url', tabId: home.id, history: 'replace' })
+    expect(validateWorkspace(replacement.state).ok).toBe(true)
+  })
+
+  it('preflights only mounted visible secondaries when hiding a split', () => {
+    const current = base()
+    const context = {
+      narrowFallback: false,
+      homeHash: '#/folders',
+      mountedTabIds: [main.id, second.id, 'not-a-leaf'],
+    }
+    const hiding = applyWorkspaceCommand(current, { type: 'set-mode', mode: 'stacked' }, context)
+    expect(hiding.preflight).toEqual({
+      type: 'leave-tabs', tabIds: [second.id], nextHash: '#/folders',
+    })
+    expect(hiding.effects.filter((effect) => effect.type === 'cold-park')).toEqual([
+      { type: 'cold-park', tabId: second.id },
+    ])
+    const hidden = { ...current, mode: 'stacked' as const, focusedTabId: main.id }
+    const showing = applyWorkspaceCommand(hidden, { type: 'set-mode', mode: 'tiled' }, context)
+    expect(showing.ok).toBe(true)
+    expect(showing.state.mode).toBe('tiled')
+    expect(showing.preflight).toEqual({ type: 'none' })
+    expect(showing.effects.some((effect) => effect.type === 'cold-park')).toBe(false)
+  })
+
+  it('splits and moves secondary leaves without ever relocating Main', () => {
+    const third = tab('tab-3')
+    const current = { ...base(), tabs: [main, second, third] }
+    const context = { narrowFallback: false, homeHash: '#/folders', nextSplitId: ids() }
+    const split = applyWorkspaceCommand(current, {
+      type: 'split-leaf', targetTabId: second.id, newTabId: third.id,
+      axis: 'top-bottom', placement: 'first',
+    }, context)
+    expect(split.ok).toBe(true)
+    expect(collectLeafTabIds(split.state.secondaryTree)).toEqual([third.id, second.id])
+    expect(split.state.mainTabId).toBe(main.id)
+    expect(validateWorkspace(split.state).ok).toBe(true)
+    const moved = applyWorkspaceCommand(split.state, {
+      type: 'move-pane', sourceTabId: third.id, targetTabId: second.id,
+      axis: 'left-right', placement: 'second',
+    }, context)
+    expect(moved.ok).toBe(true)
+    expect(collectLeafTabIds(moved.state.secondaryTree)).toEqual([second.id, third.id])
+    expect(moved.state.mainTabId).toBe(main.id)
+    expect(validateWorkspace(moved.state).ok).toBe(true)
+    expect(current.secondaryTree).toEqual(makeLeaf(second.id))
   })
 })
