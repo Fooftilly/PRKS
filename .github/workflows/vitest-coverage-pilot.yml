@@ -41,35 +41,7 @@ jobs:
       - name: Install locked frontend toolchain
         run: npm ci --ignore-scripts --no-audit --prefix frontend-app
 
-      # Pilot-only instrumentation. Match the project's locked vitest@5.0.2;
-      # do not alter package.json, the lockfile, or the production build.
-      - name: Install matching V8 coverage provider without saving
-        run: >-
-          npm install --ignore-scripts --no-audit --no-save --package-lock=false
-          --prefix frontend-app "@vitest/coverage-v8@5.0.2"
-
-      # Temporary lock-generation diagnostic for review; removed after
-      # promoting the tested provider into the repository's npm lockfile.
-      - name: Generate coverage dependency lock delta
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm install --prefix frontend-app --save-dev --save-exact --package-lock-only \
-            --ignore-scripts --no-audit "@vitest/coverage-v8@5.0.2"
-          node --input-type=module <<'NODE'
-          import { readFileSync } from 'node:fs'
-          import { execFileSync } from 'node:child_process'
-          const before = JSON.parse(execFileSync('git', ['show', 'HEAD:frontend-app/package-lock.json'], { encoding: 'utf8' }))
-          const after = JSON.parse(readFileSync('frontend-app/package-lock.json', 'utf8'))
-          const changed = Object.fromEntries(Object.entries(after.packages).filter(
-            ([key, value]) => JSON.stringify(value) !== JSON.stringify(before.packages[key])
-          ))
-          const removed = Object.keys(before.packages).filter(key => !Object.hasOwn(after.packages, key))
-          console.log('PRKS_LOCK_DELTA_BEGIN')
-          console.log(JSON.stringify({ changed, removed, version: after.lockfileVersion }))
-          console.log('PRKS_LOCK_DELTA_END')
-          NODE
-
+      # The V8 provider is dev-only and locked alongside Vitest 5.0.2.
       - name: Run bounded Vitest line and branch coverage
         working-directory: frontend-app
         shell: bash
