@@ -332,6 +332,22 @@ def _complete(args: argparse.Namespace, environ: Mapping[str, str], db: Database
     return EXIT_OK
 
 
+def _remove_dead_token_file(environ: Mapping[str, str], io: _Io) -> None:
+    """Delete the configuration-directory token file once setup is ready.
+
+    No token can open setup after ``ready``, so a file a run left behind
+    (killed after setup committed, before its own cleanup) only holds a dead
+    secret. The operator's ``PRKS_BOOTSTRAP_TOKEN_FILE`` is never touched.
+    """
+    path = bootstrap_tokens.default_token_file(environ)
+    try:
+        held = bootstrap_tokens.read_token_file(path)
+    except RootPairingRefused:
+        return
+    if bootstrap_tokens.remove_token_file_if(path, held):
+        io.say(f"Deleted the used token file {path}.")
+
+
 def main(
     argv: Optional[Sequence[str]] = None,
     *,
@@ -357,8 +373,13 @@ def main(
     try:
         with db:
             # Once ready, every bootstrap command refuses before it reads a
-            # secret or touches a file.
-            bootstrap_tokens.refuse_when_ready(db)
+            # secret; the only file it touches is a dead token file to delete.
+            try:
+                bootstrap_tokens.refuse_when_ready(db)
+            except RootPairingRefused as exc:
+                if exc.reason == "already_ready":
+                    _remove_dead_token_file(env, io)
+                raise
             if args.step == "issue-token":
                 return _issue(args, env, db, io, faults)
             return _complete(args, env, db, io)

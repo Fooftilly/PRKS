@@ -270,21 +270,27 @@ def write_token_file(token: BootstrapToken, path: str, *, data_root: str) -> str
         raise RootPairingRefused(
             "token_file_in_data_root", "The bootstrap token file must be outside the data root."
         )
-    os.makedirs(directory, mode=0o700, exist_ok=True)
-    # mkstemp creates the temporary 0600 whatever the umask.
-    fd, tmp = tempfile.mkstemp(prefix=f".{TOKEN_FILE_NAME}.", suffix=".tmp", dir=directory)
+    try:
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        # mkstemp creates the temporary 0600 whatever the umask.
+        fd, tmp = tempfile.mkstemp(prefix=f".{TOKEN_FILE_NAME}.", suffix=".tmp", dir=directory)
+    except OSError:
+        raise _unwritable() from None
     try:
         with os.fdopen(fd, "wb") as handle:
             handle.write((token.reveal() + "\n").encode("ascii"))
             handle.flush()
             fsync_open_file(handle.fileno())
-        try:
-            os.link(tmp, path)
-        except FileExistsError:
-            raise RootPairingRefused(
-                "token_file_exists",
-                "A bootstrap token file already exists; use it, or remove it to issue a new one.",
-            ) from None
+        os.link(tmp, path)
+    except FileExistsError:
+        raise RootPairingRefused(
+            "token_file_exists",
+            "A bootstrap token file already exists; use it, or remove it to issue a new one.",
+        ) from None
+    except OSError:
+        # A full, read-only or vanished configuration directory: a fixed
+        # refusal, never a traceback naming the file.
+        raise _unwritable() from None
     finally:
         try:
             os.unlink(tmp)
@@ -297,6 +303,14 @@ def write_token_file(token: BootstrapToken, path: str, *, data_root: str) -> str
             retryable=True,
         )
     return path
+
+
+def _unwritable() -> RootPairingRefused:
+    return RootPairingRefused(
+        "token_file_unwritable",
+        "The bootstrap token file could not be written in the configuration directory.",
+        retryable=True,
+    )
 
 
 def remove_token_file_if(path: str, token: BootstrapToken) -> bool:
@@ -326,7 +340,12 @@ def read_owner_only_file(path: str, *, what: str, limit: int) -> bytes:
     except OSError:
         raise RootPairingRefused(f"{what}_file_unreadable", f"The {what} file cannot be read.") from None
     try:
-        info = os.fstat(fd)
+        try:
+            info = os.fstat(fd)
+        except OSError:
+            raise RootPairingRefused(
+                f"{what}_file_unreadable", f"The {what} file cannot be read."
+            ) from None
         if not stat.S_ISREG(info.st_mode):
             raise RootPairingRefused(
                 f"{what}_file_unreadable", f"The {what} file is not a regular file."
@@ -336,7 +355,12 @@ def read_owner_only_file(path: str, *, what: str, limit: int) -> bytes:
                 f"{what}_file_too_open",
                 f"The {what} file must be readable by its owner only (chmod 600).",
             )
-        return os.read(fd, limit)
+        try:
+            return os.read(fd, limit)
+        except OSError:
+            raise RootPairingRefused(
+                f"{what}_file_unreadable", f"The {what} file cannot be read."
+            ) from None
     finally:
         os.close(fd)
 

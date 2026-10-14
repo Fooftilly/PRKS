@@ -269,6 +269,35 @@ class AdminBootstrapTests(RootPairingTestCase):
         self.assertEqual(self.complete_with_file().code, 0)
         self.assertEqual(self.setup_state(), "ready")
 
+    def test_a_retry_after_setup_committed_deletes_the_left_behind_token_file(self) -> None:
+        self.assertEqual(self.run_cli("issue-token", "--root", self.root).code, 0)
+        token = bootstrap_tokens.read_token_file(self.token_file)
+        self.secrets.append(token.reveal())
+        # Killed after setup committed, before its own cleanup ran.
+        with mock.patch.object(bootstrap_tokens, "remove_token_file_if", return_value=False):
+            self.assertEqual(self.complete_with_file().code, 0)
+        self.assertEqual(self.setup_state(), "ready")
+        self.assertTrue(os.path.lexists(self.token_file))
+        retry = self.complete_with_file()
+        self.assertEqual(retry.code, 1)
+        self.assertIn("already set up", retry.err)
+        self.assertIn("Deleted the used token file", retry.out)
+        self.assert_no_secret(retry)
+        self.assertFalse(os.path.lexists(self.token_file))
+
+    def test_an_unwritable_config_directory_is_a_fixed_refusal(self) -> None:
+        # The configuration "directory" is a regular file, so it cannot be created.
+        blocker = os.path.join(self.tmp, "not-a-directory")
+        with open(blocker, "w", encoding="ascii") as handle:
+            handle.write("x")
+        env = dict(self.env, XDG_CONFIG_HOME=blocker)
+        run = self.run_cli("issue-token", "--root", self.root, env=env)
+        self.assertEqual(run.code, 1)
+        self.assertIn("could not be written", run.err)
+        self.assertNotIn("Traceback", run.err)
+        self.assertNotIn(blocker, run.err)
+        self.assertEqual(self.token_rows(), 0)
+
     def test_a_config_directory_inside_the_data_root_is_refused(self) -> None:
         env = dict(self.env, XDG_CONFIG_HOME=os.path.join(self.root, "cfg"))
         run = self.run_cli("issue-token", "--root", self.root, env=env)
