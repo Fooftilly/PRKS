@@ -207,7 +207,9 @@ class AdminBootstrapTests(RootPairingTestCase):
     def test_open_or_missing_secret_files_are_refused_before_setup(self) -> None:
         token = bootstrap_tokens.new_token()
         self.secrets.append(token.reveal())
-        open_token = self.secret_file("open-token", token.reveal(), mode=0o644)
+        # Any group or other bit is too open; execute-only bits keep the fixture
+        # from granting real read or write access to anyone else.
+        open_token = self.secret_file("open-token", token.reveal(), mode=0o601)
         run = self.run_cli(
             "issue-token", "--root", self.root, env=dict(self.env, PRKS_BOOTSTRAP_TOKEN_FILE=open_token)
         )
@@ -218,7 +220,7 @@ class AdminBootstrapTests(RootPairingTestCase):
         good = self.secret_file("token", token.reveal())
         env = dict(self.env, PRKS_BOOTSTRAP_TOKEN_FILE=good)
         self.assertEqual(self.run_cli("issue-token", "--root", self.root, env=env).code, 0)
-        open_password = self.secret_file("open-password", PASSWORD, mode=0o640)
+        open_password = self.secret_file("open-password", PASSWORD, mode=0o610)
         run = self.complete("--password-file", open_password, env=env)
         self.assertEqual(run.code, 1)
         self.assertIn("chmod 600", run.err)

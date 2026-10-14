@@ -379,8 +379,12 @@ class TokenFileTests(RootPairingTestCase):
         path = os.path.join(self.tmp, "token")
         with open(path, "w", encoding="ascii") as handle:
             handle.write(token.reveal() + "\n")
-        os.chmod(path, 0o644)
-        self.refused("token_file_too_open", bootstrap_tokens.read_token_file, path)
+        # Any group or other bit is refused; execute-only bits keep the fixture
+        # from granting real read or write access to anyone else.
+        for loose in (0o610, 0o601):
+            with self.subTest(mode=oct(loose)):
+                os.chmod(path, loose)
+                self.refused("token_file_too_open", bootstrap_tokens.read_token_file, path)
         os.chmod(path, 0o600)
         self.assertEqual(bootstrap_tokens.read_token_file(path), token)
         link = os.path.join(self.tmp, "link")
