@@ -22,6 +22,8 @@ concurrency:
 
 jobs:
   actionlint:
+    # Keep this historical job/check name stable for branch protection;
+    # following baseline triage the actionlint/ShellCheck step is blocking.
     name: Check workflow syntax (advisory)
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -89,33 +91,17 @@ jobs:
             exit 1
           fi
 
-      # Workflow syntax and embedded shell findings are advisory, but tool
-      # installation, integrity checks and the integration fixture are fatal.
-      # pyflakes remains disabled pending a separate signal review.
-      # GitHub supports concurrency.queue, but actionlint v1.7.12 does not yet
-      # recognize it. Remove this narrow ignore once upstream support ships:
+      # After the advisory pilot (#653/#674), the only observed finding was
+      # SC2309 at the E2E matrix-total interpolation. The shard runner now
+      # passes that numeric value via an environment variable. Stop a workflow
+      # change on new syntax/shell defects rather than greenwashing them.
+      # Preserve the narrowly reviewed concurrency.queue upstream exception.
+      # pyflakes stays disabled pending separate signal assessment.
       # https://github.com/rhysd/actionlint/pull/654
-      - name: Check all workflows (advisory)
-        id: lint
+      - name: Check all workflows (blocking findings)
         shell: bash
         run: |
           set -euo pipefail
-          if "$RUNNER_TEMP/actionlint" -oneline \
+          "$RUNNER_TEMP/actionlint" -oneline \
             -shellcheck="$RUNNER_TEMP/shellcheck-v0.11.0/shellcheck" -pyflakes= \
-            -ignore 'unexpected key "queue" for "concurrency" section'; then
-            echo "has_findings=false" >> "$GITHUB_OUTPUT"
-          else
-            code=$?
-            if [ "$code" -eq 1 ]; then
-              echo "has_findings=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "::error::actionlint execution failed (exit code $code)"
-              exit "$code"
-            fi
-          fi
-
-      - name: Surface actionlint findings
-        if: steps.lint.outputs.has_findings == 'true'
-        shell: bash
-        run: |
-          echo "::warning::actionlint/ShellCheck reported workflow findings; review advisory output before making checks blocking (see #651)."
+            -ignore 'unexpected key "queue" for "concurrency" section'
