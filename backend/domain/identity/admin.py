@@ -42,6 +42,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import getpass
+import math
 import os
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -59,6 +60,10 @@ from backend.storage.root_binding import acquire_shared_root_lease
 from backend.storage.root_marker import MARKER_FILENAME
 
 TOKEN_FILE_ENV = "PRKS_BOOTSTRAP_TOKEN_FILE"
+
+# --ttl-hours bounds: at least one minute, at most 30 days.
+MIN_TTL_HOURS = 1 / 60
+MAX_TTL_HOURS = 30 * 24.0
 
 EXIT_OK = 0
 EXIT_REFUSED = 1
@@ -162,10 +167,13 @@ def _issue(
     io: _Io,
     faults: Faults,
 ) -> int:
-    if not args.ttl_hours > 0:
-        io.refuse("--ttl-hours must be positive.")
+    # NaN, inf and huge values would escape as OverflowError, and a tiny one
+    # rounds to a zero duration: only a whole number of seconds in range.
+    hours = args.ttl_hours
+    if not (math.isfinite(hours) and MIN_TTL_HOURS <= hours <= MAX_TTL_HOURS):
+        io.refuse("--ttl-hours must be from one minute (1/60) to 30 days (720).")
         return EXIT_USAGE
-    ttl = timedelta(hours=args.ttl_hours)
+    ttl = timedelta(seconds=round(hours * 3600))
     root = _real_root(args.root)
     _check_root_bound(root)
     supplied = _env_token(environ)

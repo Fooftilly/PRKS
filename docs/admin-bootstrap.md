@@ -30,7 +30,7 @@ python -m backend.domain.identity.admin bootstrap issue-token --root /srv/prks
 ```
 
 This prints the token **once**, with its expiry (24 hours by default;
-`--ttl-hours` changes it). Nothing else stores or shows it.
+`--ttl-hours` changes it, from one minute to 30 days). Nothing else stores or shows it.
 
 ```
 python -m backend.domain.identity.admin bootstrap complete --root /srv/prks --login alice

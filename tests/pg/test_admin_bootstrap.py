@@ -337,6 +337,18 @@ class AdminBootstrapTests(RootPairingTestCase):
                     self.assertNotIn("maintenance tool", run.err)
         self.assertIsNone(self.setup_state())
 
+    def test_out_of_range_ttls_are_usage_errors(self) -> None:
+        for value in ("0", "-1", "nan", "inf", "1e100", "1e-9", "721"):
+            with self.subTest(ttl=value):
+                run = self.run_cli("issue-token", "--root", self.root, "--ttl-hours", value)
+                self.assertEqual(run.code, admin.EXIT_USAGE)
+                self.assertIn("--ttl-hours", run.err)
+        self.assertEqual(self.token_rows(), 0)
+        self.assertFalse(os.path.lexists(self.token_file))
+        run = self.run_cli("issue-token", "--root", self.root, "--ttl-hours", "720")
+        self.assertEqual(run.code, 0, run.err)
+        self.secrets.append(bootstrap_tokens.read_token_file(self.token_file).reveal())
+
     def test_a_config_directory_inside_the_data_root_is_refused(self) -> None:
         env = dict(self.env, XDG_CONFIG_HOME=os.path.join(self.root, "cfg"))
         run = self.run_cli("issue-token", "--root", self.root, env=env)
