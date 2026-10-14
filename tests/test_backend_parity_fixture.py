@@ -288,6 +288,33 @@ class SkipBehaviorTests(unittest.TestCase):
         )
         self.assertFalse(report_ok(report))
 
+    def test_an_unported_call_in_a_cleanup_skips_the_test(self):
+        def test_it(self):
+            self.addCleanup(self.db.create_saved_view, "n", {})
+            self.assertEqual(self.db.get_saved_views(), [{"id": "SV-1"}])
+
+        result, counts = self._postgres_counts({"test_it": test_it})
+        self.assertEqual(dict(counts), {"skipped_unported": 1})
+        self.assertTrue(result.wasSuccessful())
+
+    def test_a_cleanup_after_a_skip_reports_the_test_once(self):
+        def test_it(self):
+            self.addCleanup(lambda: self.db.delete_saved_view("SV-1"))
+            self.db.create_saved_view("n", {})
+
+        result, counts = self._postgres_counts({"test_it": test_it})
+        self.assertEqual(dict(counts), {"skipped_unported": 1})
+        self.assertEqual(len(result.skipped), 1)
+
+    def test_a_real_cleanup_error_still_errors(self):
+        def test_it(self):
+            self.addCleanup(lambda: 1 / 0)
+            self.db.get_saved_views()
+
+        result, counts = self._postgres_counts({"test_it": test_it})
+        self.assertEqual(counts["errors"], 1)
+        self.assertFalse(result.wasSuccessful())
+
     def test_a_test_reaching_no_library_method_is_not_parity_evidence(self):
         def test_it(self):
             self.assertTrue(True)

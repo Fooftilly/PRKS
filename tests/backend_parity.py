@@ -21,7 +21,7 @@ and its own temporary data root, so the two legs never share state.
 Unported methods never produce a misleading result on the ``postgres`` leg:
 every library attribute the test reaches is recorded, a method that is not
 registered as ported raises :class:`~backend.pg_facade.NotPortedError`, and a
-test (or its ``setUp``/``tearDown``) that touched one is reported as skipped
+test (or its ``setUp``/``tearDown`` or a cleanup) that touched one is reported as skipped
 with the unported names, whether it then failed, errored or passed (an
 exception the code under test swallowed). Only a test that touched nothing
 but ported methods counts as a ``postgres`` pass.
@@ -50,7 +50,7 @@ BACKENDS = (SQLITE, POSTGRES)
 TWIN_SUFFIX = "_postgres"
 SKIP_PREFIX = "not ported to PostgreSQL: "
 # Methods wrapped on the twin so an unported call anywhere in a test's
-# lifecycle becomes a skip.
+# lifecycle becomes a skip (cleanups are wrapped by its addCleanup).
 _GUARDED_LIFECYCLE = ("setUp", "tearDown")
 
 
@@ -61,8 +61,8 @@ def enabled_backends(environ: dict[str, str] | None = None) -> tuple[str, ...]:
     raw = env.get(ENV_PARITY_BACKENDS, "").strip()
     if not raw:
         return (SQLITE,)
-    names = tuple(dict.fromkeys(part.strip() for part in raw.split(",") if part.strip()))
-    unknown = [name for name in names if name not in BACKENDS]
+    names = {part.strip() for part in raw.split(",")} - {""}
+    unknown = sorted(names - set(BACKENDS))
     if unknown:
         raise ValueError(f"{ENV_PARITY_BACKENDS} names unknown backends: {', '.join(unknown)}")
     if SQLITE not in names:
@@ -76,6 +76,8 @@ class ParityLog:
 
     ported: set[str] = field(default_factory=set[str])
     unported: set[str] = field(default_factory=set[str])
+    # The test already ended as a skip; later parts must not report another.
+    skipped: bool = False
 
     def skip_reason(self) -> str:
         return SKIP_PREFIX + ", ".join(sorted(self.unported))
@@ -160,30 +162,46 @@ class BackendParityTestCase(unittest.TestCase):
         return ParityRecorder(library, frozenset(ported_methods(PostgresLibrary)), self.parity_log)
 
 
-def _guard(fn: Callable[..., Any]) -> Callable[..., Any]:
-    """Turn any outcome of a test that reached an unported method into a skip."""
+def _call_guarded(test: BackendParityTestCase, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """Run one part of a ``postgres`` test (setUp, body, tearDown or a cleanup).
 
+    Any outcome of a part that reached an unported method becomes a skip: an
+    exception (a failure that would mislead) and a normal return alike (the
+    code under test swallowed the refusal, so its pass would not be evidence
+    either). A test is reported as skipped once, by its first such part.
+    """
+    log = test.parity_log
+    before = frozenset(log.unported)
+    try:
+        result = fn(*args, **kwargs)
+    except unittest.SkipTest:
+        log.skipped = True
+        raise
+    except Exception as exc:
+        if not log.unported:
+            raise
+        if log.skipped:
+            return None
+        log.skipped = True
+        raise unittest.SkipTest(log.skip_reason()) from exc
+    if log.unported - before and not log.skipped:
+        log.skipped = True
+        raise unittest.SkipTest(log.skip_reason())
+    return result
+
+
+def _guard(fn: Callable[..., Any]) -> Callable[..., Any]:
     @functools.wraps(fn)
     def run(self: BackendParityTestCase, *args: Any, **kwargs: Any) -> Any:
-        log = self.parity_log
-        before = frozenset(log.unported)
-        try:
-            result = fn(self, *args, **kwargs)
-        except unittest.SkipTest:
-            raise
-        except Exception as exc:
-            if log.unported:
-                raise unittest.SkipTest(log.skip_reason()) from exc
-            raise
-        # A part that returned normally after reaching an unported method
-        # swallowed the refusal; its pass would not be evidence either. Only
-        # new names count, so a tearDown after an already skipped test does
-        # not report the same skip twice.
-        if log.unported - before:
-            raise unittest.SkipTest(log.skip_reason())
-        return result
+        return _call_guarded(self, fn, self, *args, **kwargs)
 
     return run
+
+
+def _guarded_add_cleanup(
+    self: BackendParityTestCase, function: Callable[..., Any], /, *args: Any, **kwargs: Any
+) -> None:
+    unittest.TestCase.addCleanup(self, _call_guarded, self, function, *args, **kwargs)
 
 
 def _postgres_twin(cls: type[BackendParityTestCase]) -> type[BackendParityTestCase]:
@@ -193,6 +211,7 @@ def _postgres_twin(cls: type[BackendParityTestCase]) -> type[BackendParityTestCa
         "__module__": cls.__module__,
         "__qualname__": cls.__qualname__ + TWIN_SUFFIX,
         "__doc__": cls.__doc__,
+        "addCleanup": _guarded_add_cleanup,
     }
     for name in (*loader.getTestCaseNames(cls), *_GUARDED_LIFECYCLE):
         namespace[name] = _guard(getattr(cls, name))

@@ -64,6 +64,14 @@ def _unwrap(attr: object) -> object:
     return attr
 
 
+def _kind(attr: object) -> str:
+    """How an attribute binds: the same parameters bind differently per kind."""
+    for kind in (staticmethod, classmethod, property):
+        if isinstance(attr, kind):
+            return kind.__name__
+    return "method" if callable(attr) else "attribute"
+
+
 def is_ported(attr: object) -> bool:
     return bool(getattr(_unwrap(attr), PORTED_MARKER, False))
 
@@ -115,8 +123,15 @@ def _registration_problems(library_cls: type, ref: type, registered: dict[str, s
         if not hasattr(ref, name):
             problems.append(f"{owner}.{name} is registered but {ref.__name__} has no {name}")
             continue
-        mine = _unwrap(inspect.getattr_static(library_cls, name))
-        theirs = _unwrap(inspect.getattr_static(ref, name))
+        raw_mine = inspect.getattr_static(library_cls, name)
+        raw_theirs = inspect.getattr_static(ref, name)
+        if _kind(raw_mine) != _kind(raw_theirs):
+            problems.append(
+                f"{owner}.{name} is a {_kind(raw_mine)} but {ref.__name__}.{name} "
+                f"is a {_kind(raw_theirs)}"
+            )
+            continue
+        mine, theirs = _unwrap(raw_mine), _unwrap(raw_theirs)
         if not (callable(mine) and callable(theirs)):
             continue
         if _comparable(inspect.signature(mine)) != _comparable(inspect.signature(theirs)):
@@ -137,8 +152,9 @@ def validate_registry(library_cls: type, reference: type | None = None) -> list[
     """Problems that would make the facade or its parity report wrong.
 
     - a registered name that ``PRKSDatabase`` does not have;
-    - a registered method whose parameters (names, kinds, defaults) differ
-      from the ``PRKSDatabase`` method it stands in for;
+    - a registered method whose parameters (names, kinds, defaults) or
+      binding (plain, static, class method or property) differ from the
+      ``PRKSDatabase`` method it stands in for;
     - a mixin method named like a ``PRKSDatabase`` method but not registered
       (it would serve production calls while the parity leg skips it).
     """

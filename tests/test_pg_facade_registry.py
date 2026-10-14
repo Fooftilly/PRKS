@@ -167,6 +167,34 @@ class RegistryDiscoveryTests(unittest.TestCase):
         self.assertIn("etag_for_representation", ported_methods(Library))
 
 
+class DescriptorKindTests(unittest.TestCase):
+    def test_a_plain_method_cannot_stand_in_for_a_static_method(self):
+        class Plain(FacadeMixin):
+            @ported
+            def etag_for_representation(label, rows):  # type: ignore[no-self-argument]
+                return "x"
+
+        class Library(Plain, PostgresLibrary):
+            pass
+
+        problems = validate_registry(Library)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("is a method but PRKSDatabase.etag_for_representation is a staticmethod", problems[0])
+
+    def test_a_matching_static_method_is_accepted(self):
+        class Static(FacadeMixin):
+            @staticmethod
+            @ported
+            def etag_for_representation(label, rows):
+                return "x"
+
+        class Library(Static, PostgresLibrary):
+            pass
+
+        self.assertEqual(validate_registry(Library), [])
+        self.assertEqual(Library(object()).etag_for_representation("w", []), "x")  # type: ignore[arg-type]
+
+
 class SurfaceTests(unittest.TestCase):
     def test_surface_is_what_the_adapter_calls_on_db(self):
         surface = facade_surface()
