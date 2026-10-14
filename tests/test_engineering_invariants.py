@@ -1276,6 +1276,7 @@ class EngineeringInvariantTests(unittest.TestCase):
         (root / "backend" / "storage").mkdir(parents=True)
         for scope in checker.PYRIGHT_TYPED_SLICE_SCOPES:
             if scope.endswith(".py"):
+                (root / scope).parent.mkdir(parents=True, exist_ok=True)
                 (root / scope).write_text("", encoding="utf-8")
         (root / ".github" / "workflows").mkdir(parents=True)
         (root / "pyrightconfig.json").write_text(
