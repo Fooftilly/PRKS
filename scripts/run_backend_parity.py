@@ -112,6 +112,17 @@ class ParityResult(unittest.TextTestResult):
         super().addUnexpectedSuccess(test)
         self._count(test, "unexpected_successes")
 
+    def addSubTest(self, test: unittest.TestCase, subtest: unittest.TestCase, err: Any) -> None:
+        if err is not None:
+            log = test.__dict__.get("_parity_log")
+            if _leg_of(test) == "postgres" and log is not None and log.unported:
+                # The refusal surfaced inside subTest(); the guard reports the
+                # whole test as skipped (unported), so this is not a failure.
+                return
+            failed = issubclass(err[0], test.failureException)
+            self._count(test, "failed" if failed else "errors")
+        super().addSubTest(test, subtest, err)
+
 
 OUTCOMES = (
     "passed",
@@ -154,12 +165,16 @@ def build_report(
         "unported_skips": dict(sorted(result.unported_skips.items())),
         "ported_without_passing_postgres_test": without_evidence,
         "registry_problems": problems,
+        # Backstop: any outcome the counters above missed still fails the run.
+        "unittest_successful": result.wasSuccessful(),
         "legs": legs,
     }
 
 
 def report_ok(report: dict[str, Any]) -> bool:
     if report["registry_problems"] or report["ported_without_passing_postgres_test"]:
+        return False
+    if not report["unittest_successful"]:
         return False
     for row in report["legs"].values():
         if row["failed"] or row["errors"] or row["unexpected_successes"]:

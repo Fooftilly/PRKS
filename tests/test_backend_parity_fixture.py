@@ -264,6 +264,30 @@ class SkipBehaviorTests(unittest.TestCase):
         self.assertEqual(counts["failed"], 1)
         self.assertEqual(result.ported_evidence, {"get_saved_views"})
 
+    def test_an_unported_call_inside_a_subtest_is_a_skip(self):
+        def test_it(self):
+            with self.subTest(case=1):
+                self.db.create_saved_view("n", {})
+
+        result, counts = self._postgres_counts({"test_it": test_it})
+        self.assertEqual(dict(counts), {"skipped_unported": 1})
+        self.assertTrue(result.wasSuccessful())
+
+    def test_a_failing_subtest_on_ported_calls_fails_the_run(self):
+        def test_it(self):
+            with self.subTest(case=1):
+                self.assertEqual(self.db.get_saved_views(), [])
+            with self.subTest(case=2):
+                self.assertEqual(self.db.get_saved_views(), [{"id": "SV-1"}])
+
+        result, counts = self._postgres_counts({"test_it": test_it})
+        self.assertEqual(counts["failed"], 1)
+        self.assertFalse(result.wasSuccessful())
+        report = build_report(
+            result, [], surface=frozenset(), ported={}, problems=[]
+        )
+        self.assertFalse(report_ok(report))
+
     def test_a_test_reaching_no_library_method_is_not_parity_evidence(self):
         def test_it(self):
             self.assertTrue(True)
@@ -332,6 +356,11 @@ class ReportTests(unittest.TestCase):
         empty = self._result()
         del empty.outcomes[POSTGRES]
         self.assertFalse(report_ok(self._report(empty, {})))
+
+    def test_an_unsuccessful_unittest_result_fails_even_if_counters_look_clean(self):
+        result = self._result(passed=1)
+        result.errors.append((unittest.FunctionTestCase(lambda: None), "uncounted"))
+        self.assertFalse(report_ok(self._report(result, {})))
 
     def test_registry_problems_fail(self):
         report = build_report(
