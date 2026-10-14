@@ -66,7 +66,12 @@ elsewhere, and never let testing mode consult the bootstrap file or a platform
 default. Every bootstrap-config write goes through `BootstrapConfigStore`
 (config lock, re-read, expected-state check, atomic replace). Only the holder of
 a root's `root.lock` lease writes its `prks-root.json`; lease diagnostics in the
-marker are never lock authority. The marker, the lease file and the bootstrap
+marker are never lock authority. The one exception is the PostgreSQL database
+pairing (`instance_id`, `start_generation`, `start_token`;
+`docs/postgresql-architecture.md` §11.1): only `root_marker.claim_root` (under
+the exclusive `root.claim` lock) and `root_marker.bump_start_generation` change
+those fields, under the **shared** `root.lock`, and `write_marker` refuses to
+change them. The marker, the lease file, `root.claim` and the bootstrap
 config are operational and never backup payload. Production operations are not
 yet routed through `storage/objects.py` (Phase B); do not route them
 incidentally.
