@@ -142,7 +142,10 @@ function rewritePath(
     if (!nextFirst && !nextSecond) return null
     if (!nextFirst) return nextSecond
     if (!nextSecond) return nextFirst
-    return makeSplit(node.axis, nextFirst, nextSecond, node.ratio, node.id)
+    // Preserve the existing split geometry while changing only its children.
+    // makeSplit intentionally clamps constructor input, but rebuilding a live
+    // tree through removeLeaf/replaceLeaf must not silently heal corruption.
+    return { ...node, first: nextFirst, second: nextSecond }
   }
 
   return { tree: walk(tree), replaced }
@@ -278,7 +281,9 @@ export function normalizeTree(tree: WorkspacePaneNode | null): WorkspacePaneNode
   if (!first) return second
   if (!second) return first
   if (first === tree.first && second === tree.second) return tree
-  return makeSplit(tree.axis, first, second, tree.ratio, tree.id)
+  // Normalization collapses empty structure; it must not modify the surviving
+  // split's ratio/axis as a side effect of dropping an unrelated leaf.
+  return { ...tree, first, second }
 }
 
 export interface TreeValidation {

@@ -142,7 +142,11 @@ var prksWorkspaceModel = (function(exports) {
 			if (!nextFirst && !nextSecond) return null;
 			if (!nextFirst) return nextSecond;
 			if (!nextSecond) return nextFirst;
-			return makeSplit(node.axis, nextFirst, nextSecond, node.ratio, node.id);
+			return {
+				...node,
+				first: nextFirst,
+				second: nextSecond
+			};
 		};
 		return {
 			tree: walk(tree),
@@ -219,7 +223,11 @@ var prksWorkspaceModel = (function(exports) {
 		if (!first) return second;
 		if (!second) return first;
 		if (first === tree.first && second === tree.second) return tree;
-		return makeSplit(tree.axis, first, second, tree.ratio, tree.id);
+		return {
+			...tree,
+			first,
+			second
+		};
 	}
 	function validateTree(tree) {
 		const errors = [];

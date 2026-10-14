@@ -194,7 +194,7 @@
       "runtime_files": [
         {
           "path": "/js/workspace-model.js",
-          "sha256": "33dc2241193a98a3bdff71357a56e0c41a66c3e3639ef55d836b137daef6ca15"
+          "sha256": "8edd800e6eb694cf5a7ce3eb94c2396bf31c278615a2727c828080d1f39b1467"
         }
       ],
       "source_category": "frontend-app:workspace-model",
