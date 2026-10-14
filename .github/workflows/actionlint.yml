@@ -37,7 +37,7 @@ jobs:
           set -euo pipefail
           version="1.7.12"
           archive="${RUNNER_TEMP}/actionlint.tar.gz"
-          curl --fail --location --silent --show-error --retry 3 --max-time 60 \
+          curl --proto '=https' --proto-redir '=https' --fail --location --silent --show-error --retry 3 --max-time 60 \
             --output "$archive" \
             "https://github.com/rhysd/actionlint/releases/download/v${version}/actionlint_${version}_linux_amd64.tar.gz"
           printf '%s  %s\n' \
@@ -45,8 +45,53 @@ jobs:
             "$archive" | sha256sum --check
           tar -xzf "$archive" -C "$RUNNER_TEMP" actionlint
 
-      # First rollout is advisory for lint findings, but tool failures remain
-      # fatal. ShellCheck/pyflakes are separate future slices.
+      - name: Install checksum-verified ShellCheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="0.11.0"
+          archive="${RUNNER_TEMP}/shellcheck.tar.xz"
+          curl --proto '=https' --proto-redir '=https' --fail --location --silent --show-error --retry 3 --max-time 60 \
+            --output "$archive" \
+            "https://github.com/koalaman/shellcheck/releases/download/v${version}/shellcheck-v${version}.linux.x86_64.tar.xz"
+          printf '%s  %s\n' \
+            '8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198' \
+            "$archive" | sha256sum --check
+          tar -xJf "$archive" -C "$RUNNER_TEMP" "shellcheck-v${version}/shellcheck"
+          "$RUNNER_TEMP/shellcheck-v${version}/shellcheck" --version
+
+      # Regression fixture proves actionlint really invokes the pinned
+      # ShellCheck integration rather than silently skipping embedded shell.
+      - name: Verify actionlint ShellCheck integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="$RUNNER_TEMP/actionlint-shellcheck-fixture.yml"
+          cat > "$fixture" <<'YAML'
+          name: ShellCheck integration fixture
+          on: push
+          jobs:
+            fixture:
+              runs-on: ubuntu-latest
+              steps:
+                - shell: bash
+                  run: echo $UNQUOTED_PATH
+          YAML
+          if "$RUNNER_TEMP/actionlint" -oneline \
+            -shellcheck="$RUNNER_TEMP/shellcheck-v0.11.0/shellcheck" -pyflakes= \
+            "$fixture" > "$RUNNER_TEMP/actionlint-fixture.log" 2>&1; then
+            echo "::error::actionlint failed to report the known ShellCheck fixture finding"
+            exit 1
+          fi
+          if ! grep -q 'SC2086' "$RUNNER_TEMP/actionlint-fixture.log"; then
+            cat "$RUNNER_TEMP/actionlint-fixture.log"
+            echo "::error::expected ShellCheck SC2086 was not reported by actionlint"
+            exit 1
+          fi
+
+      # Workflow syntax and embedded shell findings are advisory, but tool
+      # installation, integrity checks and the integration fixture are fatal.
+      # pyflakes remains disabled pending a separate signal review.
       # GitHub supports concurrency.queue, but actionlint v1.7.12 does not yet
       # recognize it. Remove this narrow ignore once upstream support ships:
       # https://github.com/rhysd/actionlint/pull/654
@@ -55,7 +100,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if "$RUNNER_TEMP/actionlint" -oneline -shellcheck= -pyflakes= \
+          if "$RUNNER_TEMP/actionlint" -oneline \
+            -shellcheck="$RUNNER_TEMP/shellcheck-v0.11.0/shellcheck" -pyflakes= \
             -ignore 'unexpected key "queue" for "concurrency" section'; then
             echo "has_findings=false" >> "$GITHUB_OUTPUT"
           else
@@ -72,4 +118,4 @@ jobs:
         if: steps.lint.outputs.has_findings == 'true'
         shell: bash
         run: |
-          echo "::warning::actionlint reported workflow findings; review the advisory step before making it blocking (see #651)."
+          echo "::warning::actionlint/ShellCheck reported workflow findings; review advisory output before making checks blocking (see #651)."
