@@ -136,6 +136,27 @@ class LoginOutcomeTests(IdentityTestCase):
         self.user("Loner", library=None)
         self.assertIs(self.login("Loner").outcome, LoginOutcome.NO_LIBRARY)
 
+    def test_no_library_is_refused_with_the_same_database_work_as_a_wrong_password(self) -> None:
+        self.user("Loner", library=None)
+        user_id = self.user("Member")
+        calls: dict[str, list[str]] = {}
+        for label, name, password, library in (
+            ("wrong password", "Loner", "wrong", None),
+            ("no membership", "Loner", PASSWORD, None),
+            ("not a member", "Member", PASSWORD, self.library("Elsewhere")),
+        ):
+            seen: list[str] = []
+            with mock.patch.object(self.db, "command", wraps=self.db.command) as command, \
+                    mock.patch.object(self.db, "query", wraps=self.db.query) as query, \
+                    mock.patch.object(login_module, "_succeed", side_effect=AssertionError("committed")):
+                result = self.login(name, password, library_id=library, client=ClientAddress.resolve(f"192.0.2.{len(calls) + 50}"))
+                seen = [f"command x{command.call_count}", f"query x{query.call_count}"]
+            self.assertEqual(result.public_reason, "invalid_credentials", label)
+            calls[label] = seen
+        self.assertEqual(calls["no membership"], calls["wrong password"])
+        self.assertEqual(calls["not a member"], calls["wrong password"])
+        self.assertEqual(self.run_sql("SELECT count(*) AS n FROM prks.sessions WHERE user_id = %s", (user_id,)), [{"n": 0}])
+
     def test_a_password_changed_during_the_check_is_refused(self) -> None:
         user_id = self.user("Owner")
 

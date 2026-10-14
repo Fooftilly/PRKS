@@ -227,19 +227,34 @@ class _Account:
     user_id: str
     password_hash: Optional[str]
     disabled: bool
+    libraries: tuple[str, ...]  # its memberships, read with the account
+
+    def library(self, library_id: Optional[str]) -> Optional[str]:
+        """The Library to sign in to: ``library_id`` if a member, else the only membership."""
+        if library_id is not None:
+            return library_id if library_id in self.libraries else None
+        return self.libraries[0] if len(self.libraries) == 1 else None
+
+
+# The memberships come in the same query as the account, so a correct
+# password for an account with no Library to sign in to is refused after
+# the same work as a wrong one: no extra round trip tells them apart.
+_ACCOUNT_SQL = """
+SELECT u.id, u.password_hash, u.disabled_at IS NOT NULL AS disabled,
+       coalesce(array_agg(m.library_id ORDER BY m.library_id)
+                FILTER (WHERE m.library_id IS NOT NULL), '{}') AS libraries
+  FROM prks.users u
+  LEFT JOIN prks.library_memberships m ON m.user_id = u.id
+ WHERE u.login_key = %s
+ GROUP BY u.id
+"""
 
 
 def _account(db: Database, login_key: str) -> Optional[_Account]:
-    row = db.query(
-        lambda tx: tx.execute(
-            "SELECT id, password_hash, disabled_at IS NOT NULL AS disabled "
-            "FROM prks.users WHERE login_key = %s",
-            (login_key,),
-        ).fetchone()
-    )
+    row = db.query(lambda tx: tx.execute(_ACCOUNT_SQL, (login_key,)).fetchone())
     if row is None:
         return None
-    return _Account(row["id"], row["password_hash"], row["disabled"])
+    return _Account(row["id"], row["password_hash"], row["disabled"], tuple(row["libraries"]))
 
 
 def _library_of(tx: Transaction, user_id: str, library_id: Optional[str]) -> Optional[str]:
@@ -361,6 +376,8 @@ def login(
         return LoginResult(LoginOutcome.STORED_HASH_INVALID)
     if not verified:
         return LoginResult(LoginOutcome.INVALID_CREDENTIALS)
+    if account.library(library_id) is None:
+        return LoginResult(LoginOutcome.NO_LIBRARY)
 
     # Argon2 work (checks and rehashes) stays outside the transaction so the
     # account row is never locked for the length of an Argon2 call.
