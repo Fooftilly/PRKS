@@ -22,6 +22,9 @@ Browser first-run setup, when it arrives, uses the same tokens.
   check `--root` first and refuse a missing or unbound root before asking for
   any secret.
 - Both commands take `--root PATH`, the data root this database will own.
+- On Windows, use the interactive (terminal) install. Token and password files
+  are refused there, because their owner-only protection is an ACL these
+  commands cannot check.
 
 ## Interactive install (a terminal)
 

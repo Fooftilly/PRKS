@@ -497,3 +497,18 @@ class TokenFileTests(RootPairingTestCase):
                 bootstrap_tokens.sweep_temporary_token_files(directory, lambda held: held == token), 0
             )
             self.assertFalse(bootstrap_tokens.remove_token_file_if(path, token))
+
+    def test_secret_files_are_refused_on_windows(self) -> None:
+        # Owner-only is an ACL there, which the mode check cannot verify.
+        token = bootstrap_tokens.new_token()
+        path = os.path.join(self.tmp, "token")
+        with open(path, "w", encoding="ascii") as handle:
+            handle.write(token.reveal() + "\n")
+        os.chmod(path, 0o600)
+        with mock.patch.object(bootstrap_tokens.os, "name", "nt"):
+            self.refused("token_file_unsupported", bootstrap_tokens.read_token_file, path)
+            self.refused(
+                "password_file_unsupported",
+                bootstrap_tokens.read_owner_only_file, path, what="password", limit=64,
+            )
+        self.assertEqual(bootstrap_tokens.read_token_file(path), token)

@@ -453,7 +453,14 @@ def read_owner_only_file(path: str, *, what: str, limit: int) -> bytes:
     (a symbolic link, or a Windows reparse point such as a junction), opened
     with ``O_NOFOLLOW`` where the platform has it, and the opened file must
     be the one ``lstat`` saw, so a link swapped in between is refused too.
+    Refused on Windows, where "owner only" is an ACL this check cannot
+    verify; use the terminal there.
     """
+    if os.name == "nt":
+        raise RootPairingRefused(
+            f"{what}_file_unsupported",
+            f"A {what} file is not supported on Windows; run this on a terminal.",
+        )
     try:
         named = os.lstat(path)
     except OSError:
@@ -481,7 +488,7 @@ def read_owner_only_file(path: str, *, what: str, limit: int) -> bytes:
             raise RootPairingRefused(
                 f"{what}_file_unreadable", f"The {what} file is not a regular file."
             )
-        if os.name != "nt" and info.st_mode & 0o077:
+        if info.st_mode & 0o077:
             raise RootPairingRefused(
                 f"{what}_file_too_open",
                 f"The {what} file must be readable by its owner only (chmod 600).",
