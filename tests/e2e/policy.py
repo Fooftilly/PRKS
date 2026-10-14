@@ -897,7 +897,8 @@ AFFECTED_RULES = (
         "paths": (
             "backend/db/__init__.py",
             "backend/db/migrate.py",
-            "backend/db/schema/**",
+            "backend/db/schema/*.sql",
+            "backend/db/schema/snapshot.json",
             "backend/db/schema_snapshot.py",
             "backend/domain/__init__.py",
         ),
