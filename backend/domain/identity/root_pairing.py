@@ -57,7 +57,7 @@ from backend.db.database import Database, Isolation, Transaction
 from backend.db.errors import DatabaseError
 from backend.storage.errors import StorageRootError
 from backend.storage.file_lock import SharedFileLock
-from backend.storage.objects import NAMESPACES, LocalFilesystemStorage, StorageObjectError
+from backend.storage.objects import root_holds_objects
 from backend.storage.root_marker import (
     RootMarker,
     StartState,
@@ -166,22 +166,6 @@ def _no_faults(_point: str) -> None:
 
 def _from_storage(exc: StorageRootError) -> RootPairingRefused:
     return RootPairingRefused(exc.reason, str(exc))
-
-
-def root_holds_objects(root: str) -> bool:
-    """Whether the root's object store holds any stored file (§11.1).
-
-    A namespace directory that is a link or not a directory counts as
-    holding objects: a claim refuses what it cannot prove is empty.
-    """
-    storage = LocalFilesystemStorage(root)
-    try:
-        for namespace in sorted(NAMESPACES):
-            for _key in storage.iter_keys(namespace):
-                return True
-    except (OSError, StorageObjectError):
-        return True
-    return False
 
 
 def _bound_marker(root: str) -> RootMarker:

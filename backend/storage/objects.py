@@ -546,6 +546,24 @@ class LocalFilesystemStorage:
         yield found[0]
 
 
+def root_holds_objects(root: str) -> bool:
+    """Whether the layout-1 object store under ``root`` holds any object.
+
+    Maintenance only: the PostgreSQL root claim (postgresql-architecture
+    §11.1) refuses a root that already holds stored files. A namespace that
+    cannot be listed safely (a link, not a directory, an I/O error) counts as
+    holding objects, because a claim refuses what it cannot prove is empty.
+    """
+    storage = LocalFilesystemStorage(root)
+    try:
+        for namespace in sorted(NAMESPACES):
+            for _key in storage.iter_keys(namespace):
+                return True
+    except (OSError, StorageObjectError):
+        return True
+    return False
+
+
 def _remove_quietly(path: str) -> None:
     try:
         os.remove(path)
