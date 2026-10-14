@@ -547,20 +547,34 @@ class LocalFilesystemStorage:
 
 
 def root_holds_objects(root: str) -> bool:
-    """Whether the layout-1 object store under ``root`` holds any object.
+    """Whether any layout-1 object namespace under ``root`` holds anything.
 
-    Maintenance only: the PostgreSQL root claim (postgresql-architecture
-    §11.1) refuses a root that already holds stored files. A namespace that
-    cannot be listed safely (a link, not a directory, an I/O error) counts as
-    holding objects, because a claim refuses what it cannot prove is empty.
+    The PostgreSQL root claim (postgresql-architecture §11.1) refuses a root
+    that already holds stored files, so this fails closed and deliberately
+    does not use :meth:`LocalFilesystemStorage.iter_keys`, which skips names
+    it cannot represent as keys. **Every** entry of an existing namespace
+    directory counts -- a file, a link, a subdirectory, a reserved or
+    temporary name -- and so does a namespace path that is a link or not a
+    directory, or that cannot be listed. Only a missing or empty namespace
+    directory counts as empty.
     """
-    storage = LocalFilesystemStorage(root)
-    try:
-        for namespace in sorted(NAMESPACES):
-            for _key in storage.iter_keys(namespace):
-                return True
-    except (OSError, StorageObjectError):
-        return True
+    root_real = os.path.realpath(root)
+    for rel in sorted(LAYOUT_1_NAMESPACE_DIRS.values()):
+        directory = os.path.join(root_real, rel)
+        try:
+            st = os.lstat(directory)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return True
+        if is_link_or_reparse_point(st) or not stat.S_ISDIR(st.st_mode):
+            return True
+        try:
+            with os.scandir(directory) as it:
+                if next(it, None) is not None:
+                    return True
+        except OSError:
+            return True
     return False
 
 

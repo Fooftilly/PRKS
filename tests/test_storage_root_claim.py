@@ -437,6 +437,49 @@ class TestBumpStartGeneration(RootClaimTestCase):
         self.assertEqual(self.marker_bytes(), before)
 
 
+class TestRootHoldsObjects(RootClaimTestCase):
+    """The claim's object check fails closed (§11.1): any namespace entry counts."""
+
+    def test_missing_or_empty_namespaces_are_empty(self):
+        from backend.storage.objects import root_holds_objects
+
+        self.assertFalse(root_holds_objects(self.root))
+        os.makedirs(os.path.join(self.root, "pdfs"))
+        os.makedirs(os.path.join(self.root, "people"))
+        self.assertFalse(root_holds_objects(self.root))
+        # Names outside the object namespaces are not objects.
+        open(os.path.join(self.root, "notes.txt"), "w").close()
+        self.assertFalse(root_holds_objects(self.root))
+
+    def test_every_kind_of_namespace_entry_counts(self):
+        from backend.storage.objects import root_holds_objects
+
+        makers = {
+            "object": lambda d: open(os.path.join(d, "a.pdf"), "wb").close(),
+            "symlink": lambda d: os.symlink(os.path.join(self.tmp, "x"), os.path.join(d, "a.pdf")),
+            "subdirectory": lambda d: os.mkdir(os.path.join(d, "nested")),
+            "reserved_name": lambda d: open(os.path.join(d, ".prks-write-1.tmp"), "wb").close(),
+            "linearize_temporary": lambda d: open(os.path.join(d, ".linearized_1"), "wb").close(),
+        }
+        for label, make in makers.items():
+            for namespace_dir in ("pdfs", "people"):
+                with self.subTest(entry=label, namespace=namespace_dir):
+                    root = self.new_root(f"{label}-{namespace_dir}")
+                    os.makedirs(os.path.join(root, namespace_dir))
+                    make(os.path.join(root, namespace_dir))
+                    self.assertTrue(root_holds_objects(root))
+
+    def test_namespace_that_is_a_link_or_a_file_counts(self):
+        from backend.storage.objects import root_holds_objects
+
+        os.makedirs(os.path.join(self.tmp, "outside"))
+        os.symlink(os.path.join(self.tmp, "outside"), os.path.join(self.root, "pdfs"))
+        self.assertTrue(root_holds_objects(self.root))
+        other = self.new_root("file-namespace")
+        open(os.path.join(other, "people"), "wb").close()
+        self.assertTrue(root_holds_objects(other))
+
+
 class TestClaimLockInventory(RootClaimTestCase):
     def test_lone_claim_lock_is_scaffold_of_a_new_root(self):
         root = os.path.join(self.tmp, "scaffold")

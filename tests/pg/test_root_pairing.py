@@ -296,6 +296,45 @@ class BootstrapTests(RootPairingTestCase):
         self.assertIsNone(self.instance(name))
         self.assertIsNone(self.marker(root).instance_id)
 
+    def test_unclaimed_root_with_any_namespace_entry_is_refused(self) -> None:
+        def symlink(namespace_dir: str) -> None:
+            os.symlink(os.path.join(self.tmp, "elsewhere.pdf"), os.path.join(namespace_dir, "a.pdf"))
+
+        def subdirectory(namespace_dir: str) -> None:
+            os.mkdir(os.path.join(namespace_dir, "nested"))
+
+        def reserved_name(namespace_dir: str) -> None:
+            open(os.path.join(namespace_dir, ".prks-write-1.tmp"), "wb").close()
+
+        for make in (symlink, subdirectory, reserved_name):
+            for namespace_dir in ("pdfs", "people"):
+                with self.subTest(entry=make.__name__, namespace=namespace_dir):
+                    name = self.database()
+                    root = self.new_root(f"{make.__name__}-{namespace_dir}")
+                    os.makedirs(os.path.join(root, namespace_dir), exist_ok=True)
+                    make(os.path.join(root, namespace_dir))
+                    before = self.marker_bytes(root)
+                    self.refused("root_used", self.bootstrap, name, root)
+                    self.assertIsNone(self.instance(name))
+                    self.assertEqual(self.marker_bytes(root), before)
+
+    def test_object_namespace_that_is_a_link_or_file_is_refused(self) -> None:
+        for kind in ("link", "file"):
+            with self.subTest(kind=kind):
+                name, root = self.database(), self.new_root("ns-" + kind)
+                target = os.path.join(root, "pdfs")
+                if os.path.isdir(target):
+                    os.rmdir(target)
+                if kind == "link":
+                    os.makedirs(os.path.join(self.tmp, "outside-" + kind))
+                    os.symlink(os.path.join(self.tmp, "outside-" + kind), target)
+                else:
+                    open(target, "wb").close()
+                before = self.marker_bytes(root)
+                self.refused("root_used", self.bootstrap, name, root)
+                self.assertIsNone(self.instance(name))
+                self.assertEqual(self.marker_bytes(root), before)
+
     def test_two_empty_databases_claiming_one_root_leave_exactly_one_ready(self) -> None:
         first, second, root = self.database(), self.database(), self.new_root()
         paused, resume, second_done = threading.Event(), threading.Event(), threading.Event()
