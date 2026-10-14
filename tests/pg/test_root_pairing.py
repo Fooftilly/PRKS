@@ -497,6 +497,48 @@ class StartTests(RootPairingTestCase):
         self.assertTrue(self.start(name, root).reconciled)
         self.assert_paired(name, root, 3)
 
+    def _without_durability(self) -> Any:
+        real_replace = root_marker.replace_file_atomically
+
+        def replace_without_directory_sync(path: str, data: bytes) -> bool:
+            real_replace(path, data)
+            return False
+
+        replace = patch.object(
+            root_marker, "replace_file_atomically", side_effect=replace_without_directory_sync
+        )
+        sync = patch.object(root_marker, "fsync_directory", return_value=False)
+        return replace, sync
+
+    def test_non_durable_marker_bump_is_never_ready(self) -> None:
+        name, root = self.ready()
+        replace, sync = self._without_durability()
+        with replace, sync:
+            error = self.refused("marker_not_durable", self.start, name, root)
+            self.assertTrue(error.retryable)
+            self.assertFalse(self._start_key_held(name))
+            # A retry finding the marker already written proves durability too.
+            self.refused("marker_not_durable", self.start, name, root)
+            self.assertFalse(self._start_key_held(name))
+        result = self.start(name, root, lock_timeout_ms=2_000)
+        self.assertEqual(result.status, StartStatus.READY)
+        self.assert_paired(name, root, result.start_generation or 0)
+
+    def test_non_durable_reconcile_is_never_ready(self) -> None:
+        name, root = self.ready()
+        with self.assertRaises(Crash):
+            self.start(name, root, faults=crash_at(root_pairing.FAULT_AFTER_DATABASE_BUMP))
+        replace, sync = self._without_durability()
+        with replace, sync:
+            for bump in (True, False):
+                with self.subTest(bump=bump):
+                    error = self.refused("marker_not_durable", self.start, name, root, bump=bump)
+                    self.assertTrue(error.retryable)
+                    self.assertFalse(self._start_key_held(name))
+        result = self.start(name, root, lock_timeout_ms=2_000)
+        self.assertEqual(result.status, StartStatus.READY)
+        self.assert_paired(name, root, result.start_generation or 0)
+
     def _start_key_held(self, name: str) -> bool:
         with psycopg.connect(self.harness.conninfo(name)) as conn:
             row = fetch_one(conn.execute(

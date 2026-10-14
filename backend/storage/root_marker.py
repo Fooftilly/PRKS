@@ -580,6 +580,16 @@ def _root_used(why: str) -> StorageRootRefused:
     )
 
 
+def marker_is_durable(root: str) -> bool:
+    """Sync the marker's directory: whether its current entry survives a crash.
+
+    A start that passes without writing the marker (a read-only check) still
+    proves this, because an earlier write of the same state may have landed
+    without its directory sync (§11.1).
+    """
+    return fsync_directory(root)
+
+
 def bump_start_generation(
     root: str,
     *,
@@ -595,8 +605,9 @@ def bump_start_generation(
     marker already at ``to`` is a no-op; one naming another instance, or at
     any state but ``expected``, is refused unchanged. Re-reads, changes only
     the pairing fields, replaces atomically and reads back. Returns the
-    marker and the directory durability answer; raises ``OSError`` when the
-    bytes could not be made durable (nothing replaced).
+    marker and whether the marker's directory entry is durable (a failed
+    directory sync is retried once, and the no-op path syncs too); raises
+    ``OSError`` when the bytes could not be made durable (nothing replaced).
     """
     if to.generation != expected.generation + 1 or not START_TOKEN_RE.fullmatch(to.token or ""):
         raise ValueError("a bump moves to the next generation with a new token")
@@ -612,11 +623,13 @@ def bump_start_generation(
         )
     current = marker.start_state
     if current == to:
-        return marker, True
+        # A retry of a bump whose write landed: prove it durable like a write.
+        return marker, fsync_directory(root)
     if current != expected:
         raise _refused(
             "marker_generation_moved",
             f"The storage root moved to start generation {current.generation} while "
             f"this process expected {expected.generation}.",
         )
-    return _write_pairing(root, marker, instance_id=instance_id, state=to)
+    written, durable = _write_pairing(root, marker, instance_id=instance_id, state=to)
+    return written, durable or fsync_directory(root)

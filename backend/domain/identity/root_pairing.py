@@ -64,6 +64,7 @@ from backend.storage.root_marker import (
     binding_refusal,
     bump_start_generation,
     claim_root,
+    marker_is_durable,
     new_start_token,
     read_marker,
     require_shared_lease,
@@ -512,7 +513,9 @@ def _marker_write(
     to: StartState,
 ) -> None:
     try:
-        bump_start_generation(root, lease=lease, instance_id=instance_id, expected=expected, to=to)
+        _marker, durable = bump_start_generation(
+            root, lease=lease, instance_id=instance_id, expected=expected, to=to
+        )
     except StorageRootError as exc:
         raise _from_storage(exc) from exc
     except OSError as exc:
@@ -522,6 +525,19 @@ def _marker_write(
             "stays not ready and the next start reconciles it.",
             retryable=True,
         ) from exc
+    if not durable:
+        # The marker may roll back on a crash; a process never serves on a
+        # pairing that is not durable. The next start retries the sync.
+        raise _not_durable()
+
+
+def _not_durable() -> RootPairingRefused:
+    return RootPairingRefused(
+        "marker_not_durable",
+        "The storage root marker prks-root.json could not be made crash-safe; this "
+        "process stays not ready and the next start retries.",
+        retryable=True,
+    )
 
 
 def _check_and_bump(
@@ -597,6 +613,8 @@ def _check_and_bump(
         )
 
     if not bump:
+        if not reconciled and not marker_is_durable(root):
+            raise _not_durable()
         return StartResult(
             StartStatus.READY, instance_id, database.generation, reconciled=reconciled
         )

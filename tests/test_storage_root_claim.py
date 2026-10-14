@@ -403,6 +403,32 @@ class TestBumpStartGeneration(RootClaimTestCase):
                 with self.assertRaises(ValueError):
                     self.bump(StartState(1, TOKEN), to)
 
+    def test_bump_reports_a_marker_it_could_not_make_durable(self):
+        real_replace = root_marker.replace_file_atomically
+
+        def replace_without_directory_sync(path, data):
+            real_replace(path, data)
+            return False
+
+        with patch.object(
+            root_marker, "replace_file_atomically", side_effect=replace_without_directory_sync
+        ), patch.object(root_marker, "fsync_directory", return_value=False):
+            _, durable = self.bump(StartState(1, TOKEN), StartState(2, NEXT_TOKEN))
+            self.assertFalse(durable)
+            # The retry finds the marker at its target and must prove it too.
+            _, durable = self.bump(StartState(1, TOKEN), StartState(2, NEXT_TOKEN))
+            self.assertFalse(durable)
+        with patch.object(root_marker, "fsync_directory", return_value=True) as sync:
+            _, durable = self.bump(StartState(1, TOKEN), StartState(2, NEXT_TOKEN))
+        self.assertTrue(durable)
+        sync.assert_called_once()
+        # A failed directory sync during the write is retried once.
+        with patch.object(
+            root_marker, "replace_file_atomically", side_effect=replace_without_directory_sync
+        ), patch.object(root_marker, "fsync_directory", return_value=True):
+            _, durable = self.bump(StartState(2, NEXT_TOKEN), StartState(3, OTHER_TOKEN))
+        self.assertTrue(durable)
+
     def test_failed_marker_write_leaves_the_marker_unchanged(self):
         before = self.marker_bytes()
         with patch.object(root_marker, "replace_file_atomically", side_effect=OSError("disk")):
