@@ -1,6 +1,7 @@
 """Unit coverage for tests.e2e.policy — no Chromium."""
 from __future__ import annotations
 
+import ast
 import contextlib
 import io
 import json
@@ -40,6 +41,124 @@ FAKE_IDS = [
     "tests.e2e.test_app.WorkCreateWorkflowTests.test_unified_create_control_and_menu",
     "tests.e2e.test_app.SettingsCategoryWorkflowTests.test_keyboard_category_navigation",
 ]
+
+
+class _RuntimeImports(ast.NodeVisitor):
+    """Static imports and literal importlib calls from one Python module."""
+
+    def __init__(self, *, path: Path, package: str):
+        self.path = path
+        self.package = package
+        self.imports: set[str] = set()
+        self.import_module_aliases = {"__import__", "import_module"}
+
+    def visit_If(self, node):
+        # Type-only imports do not activate a persistence backend.
+        if (
+            isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING"
+            or isinstance(node.test, ast.Attribute)
+            and node.test.attr == "TYPE_CHECKING"
+            and isinstance(node.test.value, ast.Name)
+            and node.test.value.id == "typing"
+        ):
+            for child in node.orelse:
+                self.visit(child)
+            return
+        self.generic_visit(node)
+
+    def visit_Import(self, node):
+        self.imports.update(alias.name for alias in node.names)
+
+    def visit_ImportFrom(self, node):
+        if node.level == 0 and node.module == "importlib":
+            self.import_module_aliases.update(
+                alias.asname or alias.name
+                for alias in node.names if alias.name == "import_module"
+            )
+        if node.level:
+            parts = self.package.split(".")
+            if node.level > len(parts):
+                raise AssertionError(f"invalid relative import in {self.path}")
+            base = ".".join(parts[:len(parts) - node.level + 1])
+            if node.module:
+                base += "." + node.module
+        else:
+            base = node.module or ""
+        if base:
+            self.imports.add(base)
+            self.imports.update(
+                base + "." + alias.name
+                for alias in node.names if alias.name != "*"
+            )
+
+    def visit_Call(self, node):
+        # Literal dynamic imports are checked. Computed module names still
+        # require manual review when the PostgreSQL cutover is approved.
+        func = node.func
+        if (
+            node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
+            if isinstance(func, ast.Name) and func.id in self.import_module_aliases:
+                self.imports.add(node.args[0].value)
+            elif isinstance(func, ast.Attribute) and func.attr == "import_module":
+                self.imports.add(node.args[0].value)
+        self.generic_visit(node)
+
+
+def _runtime_postgres_imports(root: Path) -> list[str]:
+    """Conservatively trace local static imports from the shipped server entries.
+
+    Staged PostgreSQL modules may import each other without being served yet.
+    Follow the actual runtime graph rather than flagging every backend module.
+    Direct Python imports, relative imports and literal dynamic imports are
+    included; nonliteral dynamic loading needs a deliberate policy review.
+    """
+    sources = {"prks_app": root / "prks_app.py"}
+    for path in (root / "backend").rglob("*.py"):
+        rel = path.relative_to(root).with_suffix("")
+        parts = rel.parts[:-1] if path.name == "__init__.py" else rel.parts
+        sources[".".join(parts)] = path
+
+    pending = ["prks_app", "backend.server"]
+    visited = set()
+    offenders = []
+    # These are the first staged PostgreSQL boundaries. Importing the facade
+    # from the served application is itself a cutover signal, even when the
+    # facade relies only on lazy/TYPE_CHECKING database references.
+    pg_prefixes = (
+        "backend.db",
+        "backend.pg_facade",
+        "backend.domain.identity",
+        "backend.domain.text_identity",
+    )
+
+    while pending:
+        module = pending.pop()
+        if module in visited:
+            continue
+        visited.add(module)
+        path = sources.get(module)
+        if path is None:
+            if module in ("prks_app", "backend.server"):
+                raise AssertionError(f"missing served entry: {module}")
+            continue
+
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        package = module if path.name == "__init__.py" else module.rpartition(".")[0]
+        scanner = _RuntimeImports(path=path, package=package)
+        scanner.visit(tree)
+        for target in sorted(scanner.imports):
+            if any(target == prefix or target.startswith(prefix + ".") for prefix in pg_prefixes):
+                offenders.append(f"{module} imports {target}")
+            # Include package __init__.py side effects in the reachable graph.
+            parts = target.split(".")
+            for index in range(1, len(parts) + 1):
+                candidate = ".".join(parts[:index])
+                if candidate in sources and candidate not in visited:
+                    pending.append(candidate)
+    return sorted(set(offenders))
 
 
 class SmokeSelectionTests(unittest.TestCase):
@@ -800,6 +919,112 @@ class AffectedMappingTests(unittest.TestCase):
         self.assertEqual(plan["mode"], "affected")
         for name in ("folders", "browse", "playlists", "smoke"):
             self.assertIn(name, plan["features"])
+
+    def test_postgres_schema_and_migration_only_diff_skips_browser_ci(self):
+        paths = [
+            "backend/db/__init__.py",
+            "backend/db/migrate.py",
+            "backend/db/schema/000_extensions.sql",
+            "backend/db/schema/010_instance.sql",
+            "backend/db/schema/020_identity.sql",
+            "backend/db/schema/030_jobs.sql",
+            "backend/db/schema/040_sync.sql",
+            "backend/db/schema/snapshot.json",
+            "backend/db/schema_snapshot.py",
+            "tests/pg/test_migrate.py",
+            "tests/pg/test_schema_snapshot.py",
+            "backend/AGENTS.md",
+        ]
+        for path in paths[:9]:
+            with self.subTest(path=path):
+                classified = policy.classify_affected_path(path)
+                self.assertEqual(classified["rules"], ["postgres-migration-infrastructure"])
+                self.assertTrue(classified["skip"])
+        # A newly added executable under schema/, or a shared domain
+        # package initializer, must not get the SQL/migration exemption.
+        for runtime in ("backend/db/schema/new_helper.py", "backend/domain/__init__.py"):
+            with self.subTest(runtime=runtime):
+                self.assertEqual(policy.plan_ci_e2e([runtime])["mode"], "full")
+                self.assertEqual(policy.plan_ci_e2e(paths + [runtime])["mode"], "full")
+        plan = policy.plan_ci_e2e(paths)
+        self.assertEqual(plan["mode"], "skip")
+        self.assertFalse(plan["run"])
+
+    def test_postgres_text_identity_helper_runs_smoke_not_full(self):
+        path = "backend/domain/text_identity.py"
+        classified = policy.classify_affected_path(path)
+        self.assertEqual(classified["rules"], ["postgres-text-identity"])
+        self.assertFalse(classified["skip"])
+        self.assertFalse(classified["unmapped"])
+        self.assertEqual(classified["features"], ["smoke"])
+        plan = policy.plan_ci_e2e([
+            path, "backend/db/schema/020_identity.sql",
+            "tests/pg/test_text_identity.py", "tests/test_text_identity.py",
+        ])
+        self.assertEqual(plan["mode"], "affected")
+        self.assertTrue(plan["run"])
+        self.assertEqual(plan["features"], ["smoke"])
+        self.assertFalse(plan["pointer_capture"])
+
+    def test_postgres_exemption_does_not_hide_runtime_or_unknown_changes(self):
+        pg_paths = ["backend/db/migrate.py", "backend/db/schema/040_sync.sql"]
+        for runtime in (
+            "prks_app.py", "backend/server.py", "backend/db_manager.py",
+            "backend/db/database.py", "backend/db/new_unknown_module.py",
+            "frontend/js/app.js", "tests/e2e/policy.py",
+        ):
+            with self.subTest(runtime=runtime):
+                self.assertEqual(policy.plan_ci_e2e(pg_paths + [runtime])["mode"], "full")
+        self.assertEqual(
+            policy.plan_ci_e2e(pg_paths + ["frontend/js/components/folders.js"])["mode"],
+            "affected",
+        )
+        self.assertEqual(policy.plan_ci_e2e(pg_paths, force_full=True)["mode"], "full")
+
+    def test_postgres_exemption_requires_no_runtime_imports(self):
+        # PG feature code can be built and tested before cutover; only imports
+        # reachable from the served application activate the browser boundary.
+        self.assertEqual(_runtime_postgres_imports(Path(_PROJECT_DIR)), [])
+
+    def test_postgres_import_guard_ignores_unserved_staging_but_detects_cutover(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "backend" / "domain" / "identity").mkdir(parents=True)
+            (root / "backend" / "db").mkdir(parents=True)
+            (root / "prks_app.py").write_text("from backend import server\n", encoding="utf-8")
+            served = root / "backend" / "server.py"
+            served.write_text("from . import active\n", encoding="utf-8")
+            active = root / "backend" / "active.py"
+            active.write_text("import json\n", encoding="utf-8")
+            (root / "backend" / "domain" / "identity" / "root_pairing.py").write_text(
+                "from backend.db.database import Database\n", encoding="utf-8",
+            )
+            (root / "backend" / "pg_facade").mkdir()
+            (root / "backend" / "pg_facade" / "__init__.py").write_text(
+                "# Facade can lazily receive database state; no static db import\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(_runtime_postgres_imports(root), [])
+            active.write_text("from backend.pg_facade import PostgresLibrary\n", encoding="utf-8")
+            self.assertTrue(any("backend.pg_facade" in entry for entry in _runtime_postgres_imports(root)))
+            active.write_text("from backend.domain.identity import root_pairing\n", encoding="utf-8")
+            self.assertTrue(any("backend.domain.identity" in entry for entry in _runtime_postgres_imports(root)))
+            active.write_text("from backend.domain import text_identity\n", encoding="utf-8")
+            self.assertTrue(any("text_identity" in entry for entry in _runtime_postgres_imports(root)))
+            active.write_text("import backend.db.database\n", encoding="utf-8")
+            self.assertTrue(any("backend.db" in entry for entry in _runtime_postgres_imports(root)))
+            active.write_text("import importlib\nimportlib.import_module('backend.db.migrate')\n", encoding="utf-8")
+            self.assertTrue(any("backend.db" in entry for entry in _runtime_postgres_imports(root)))
+            active.write_text(
+                "from importlib import import_module\nimport_module('backend.db.migrate')\n",
+                encoding="utf-8",
+            )
+            self.assertTrue(any("backend.db" in entry for entry in _runtime_postgres_imports(root)))
+            active.write_text(
+                "from importlib import import_module as load_pg\nload_pg('backend.db.migrate')\n",
+                encoding="utf-8",
+            )
+            self.assertTrue(any("backend.db" in entry for entry in _runtime_postgres_imports(root)))
 
     def test_unmapped_e2e_support_module_is_ci_full(self):
         # inventory.py / doctor.py / etc. must not skip the browser gate.
