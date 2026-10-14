@@ -147,9 +147,6 @@ def _runtime_postgres_imports(root: Path) -> list[str]:
 
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         package = module if path.name == "__init__.py" else module.rpartition(".")[0]
-        imports = set()
-        import_module_aliases = {"__import__", "import_module"}
-
         scanner = _RuntimeImports(path=path, package=package)
         scanner.visit(tree)
         for target in sorted(scanner.imports):
