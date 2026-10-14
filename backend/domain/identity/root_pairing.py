@@ -165,8 +165,15 @@ def _no_faults(_point: str) -> None:
     return None
 
 
+# Storage refusals that clear on their own: another claim holds ``root.claim``,
+# or the marker was written but its directory could not be fsynced yet.
+_RETRYABLE_STORAGE_REASONS = frozenset({"root_claim_busy", "marker_not_durable"})
+
+
 def _from_storage(exc: StorageRootError) -> RootPairingRefused:
-    return RootPairingRefused(exc.reason, str(exc))
+    return RootPairingRefused(
+        exc.reason, str(exc), retryable=exc.reason in _RETRYABLE_STORAGE_REASONS
+    )
 
 
 def _bound_marker(root: str) -> RootMarker:

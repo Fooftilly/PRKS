@@ -48,6 +48,21 @@ class Crash(Exception):
     """A process dying at a fault point."""
 
 
+def without_durability() -> tuple[Any, Any]:
+    """Patches making every marker write land but never reach a durable directory."""
+    real_replace = root_marker.replace_file_atomically
+
+    def replace_without_directory_sync(path: str, data: bytes) -> bool:
+        real_replace(path, data)
+        return False
+
+    replace = patch.object(
+        root_marker, "replace_file_atomically", side_effect=replace_without_directory_sync
+    )
+    sync = patch.object(root_marker, "fsync_directory", return_value=False)
+    return replace, sync
+
+
 def crash_at(point: str) -> Callable[[str], None]:
     def faults(current: str) -> None:
         if current == point:
@@ -264,6 +279,35 @@ class BootstrapTests(RootPairingTestCase):
                 self.assertEqual(self.marker(root).instance_id is not None, claimed)
                 self.bootstrap(name, root)
                 self.assert_paired(name, root, 1)
+
+    def test_busy_claim_lock_is_a_retryable_refusal(self) -> None:
+        name, root = self.database(), self.new_root()
+        held = root_marker.ExclusiveFileLock.acquire(root_marker.claim_lock_path(root))
+        real_claim = root_marker.claim_root
+        try:
+            with patch.object(
+                root_pairing, "claim_root", side_effect=lambda *a, **k: real_claim(*a, timeout=0.2, **k)
+            ):
+                error = self.refused("root_claim_busy", self.bootstrap, name, root)
+        finally:
+            held.release()
+        self.assertTrue(error.retryable)
+        self.assertEqual(self.instance(name)["setup_state"], "bootstrapping")  # type: ignore[index]
+        self.assertIsNone(self.marker(root).instance_id)
+        self.assertTrue(self.bootstrap(name, root).created)
+        self.assert_paired(name, root, 1)
+
+    def test_non_durable_claim_is_a_retryable_refusal(self) -> None:
+        name, root = self.database(), self.new_root()
+        replace, sync = without_durability()
+        with replace, sync:
+            for attempt in ("write", "retry finding the claim"):
+                with self.subTest(attempt=attempt):
+                    error = self.refused("marker_not_durable", self.bootstrap, name, root)
+                    self.assertTrue(error.retryable)
+                    self.assertEqual(self.instance(name)["setup_state"], "bootstrapping")  # type: ignore[index]
+        self.assertTrue(self.bootstrap(name, root).created)
+        self.assert_paired(name, root, 1)
 
     def test_second_empty_database_after_the_claim_is_refused(self) -> None:
         first, root = self.database(), self.new_root()
@@ -536,22 +580,9 @@ class StartTests(RootPairingTestCase):
         self.assertTrue(self.start(name, root).reconciled)
         self.assert_paired(name, root, 3)
 
-    def _without_durability(self) -> Any:
-        real_replace = root_marker.replace_file_atomically
-
-        def replace_without_directory_sync(path: str, data: bytes) -> bool:
-            real_replace(path, data)
-            return False
-
-        replace = patch.object(
-            root_marker, "replace_file_atomically", side_effect=replace_without_directory_sync
-        )
-        sync = patch.object(root_marker, "fsync_directory", return_value=False)
-        return replace, sync
-
     def test_non_durable_marker_bump_is_never_ready(self) -> None:
         name, root = self.ready()
-        replace, sync = self._without_durability()
+        replace, sync = without_durability()
         with replace, sync:
             error = self.refused("marker_not_durable", self.start, name, root)
             self.assertTrue(error.retryable)
@@ -567,7 +598,7 @@ class StartTests(RootPairingTestCase):
         name, root = self.ready()
         with self.assertRaises(Crash):
             self.start(name, root, faults=crash_at(root_pairing.FAULT_AFTER_DATABASE_BUMP))
-        replace, sync = self._without_durability()
+        replace, sync = without_durability()
         with replace, sync:
             for bump in (True, False):
                 with self.subTest(bump=bump):
