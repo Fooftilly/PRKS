@@ -187,7 +187,7 @@ def format_report(report: dict[str, Any]) -> str:
     lines = [
         "Backend parity (SQLite + PostgreSQL), #625",
         "",
-        f"Facade surface: {report['surface']} PRKSDatabase methods called by the HTTP adapter",
+        f"Facade surface: {report['surface']} PRKSDatabase methods the backend calls on db",
         f"  ported:   {report['ported']}",
         f"  unported: {report['unported']}",
         f"  ported outside the surface: {len(report['ported_outside_surface'])}",

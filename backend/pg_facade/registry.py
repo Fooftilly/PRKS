@@ -33,9 +33,13 @@ F = TypeVar("F", bound=Callable[..., Any])
 PORTED_MARKER = "__prks_ported__"
 
 _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# Where the adapter calls the library object (named ``db`` in each of them).
-_SURFACE_SOURCES = ("server.py", "api", "services")
+# The library object is named ``db`` wherever it is passed: the adapter
+# (``server.py``, ``api/``, ``services/``) and the helpers it hands ``db`` to
+# (``work_deletion.py``, the ``*_sync.py`` handlers, ...). Every backend module
+# is scanned except the SQLite class itself and the PostgreSQL packages.
 _SURFACE_RECEIVER = "db"
+_SURFACE_EXCLUDED_FILES = frozenset({"db_manager.py"})
+_SURFACE_EXCLUDED_DIRS = frozenset({"db", "pg_facade", "__pycache__"})
 
 
 class NotPortedError(RuntimeError):
@@ -169,22 +173,22 @@ def validate_registry(library_cls: type, reference: type | None = None) -> list[
 
 
 def _surface_files(backend_dir: str) -> Iterable[str]:
-    for entry in _SURFACE_SOURCES:
-        path = os.path.join(backend_dir, entry)
-        if os.path.isfile(path):
-            yield path
-        elif os.path.isdir(path):
-            for name in sorted(os.listdir(path)):
-                if name.endswith(".py"):
-                    yield os.path.join(path, name)
+    for root, dirs, files in os.walk(backend_dir):
+        top = root == backend_dir
+        dirs[:] = sorted(d for d in dirs if not (top and d in _SURFACE_EXCLUDED_DIRS))
+        for name in sorted(files):
+            if name.endswith(".py") and not (top and name in _SURFACE_EXCLUDED_FILES):
+                yield os.path.join(root, name)
 
 
 def facade_surface(reference: type | None = None, backend_dir: str = _BACKEND_DIR) -> frozenset[str]:
-    """``PRKSDatabase`` attributes the adapter reaches through ``db.<name>``.
+    """``PRKSDatabase`` attributes the backend reaches through ``db.<name>``.
 
-    Read from ``server.py``, ``backend/api/`` and ``backend/services/`` (the
-    code that receives the library object), so the count follows the adapter
-    without a hand-kept list. PG-C1 needs every name here ported.
+    Read from every backend module except ``db_manager.py``, ``backend/db/``
+    and ``backend/pg_facade/``: the adapter and every helper it passes the
+    library object to (``delete_library_work``, the sync handlers), so the
+    count follows the code without a hand-kept list. PG-C1 needs every name
+    here ported.
     """
     ref = reference if reference is not None else _reference_class()
     names: set[str] = set()

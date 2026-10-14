@@ -204,23 +204,32 @@ class SurfaceTests(unittest.TestCase):
         for name in surface:
             self.assertTrue(hasattr(PRKSDatabase, name), name)
 
-    def test_surface_reads_server_api_and_services_only(self):
+    def test_surface_includes_helpers_the_adapter_passes_db_to(self):
+        surface = facade_surface()
+        # server.py hands db to delete_library_work (work_deletion.py) and to
+        # the sync handlers; what they call on it is surface too.
+        for name in ("delete_work_record", "insert_person_on_conn", "merge_tags_into_on_conn"):
+            self.assertIn(name, surface)
+
+    def test_surface_reads_all_backend_modules_but_the_sqlite_class_and_pg_packages(self):
         with tempfile.TemporaryDirectory() as tmp:
-            os.makedirs(os.path.join(tmp, "api"))
-            os.makedirs(os.path.join(tmp, "services"))
-            os.makedirs(os.path.join(tmp, "elsewhere"))
+            for directory in ("api", "domain/works", "db", "pg_facade"):
+                os.makedirs(os.path.join(tmp, directory))
             files = {
                 "server.py": "db.get_work(1)\nother.get_person(2)\ndb.not_a_method()\n",
                 "api/x.py": "def f(db):\n    return db.get_saved_views()\n",
-                "services/y.py": "def g(db):\n    db.add_tag('t')\n",
-                "elsewhere/z.py": "db.delete_tag(1)\n",
+                "work_deletion.py": "def g(db):\n    db.delete_work_record('w')\n",
+                "domain/works/h.py": "def h(db):\n    db.add_tag('t')\n",
+                "db_manager.py": "db.delete_tag(1)\n",
+                "db/x.py": "db.get_person(1)\n",
+                "pg_facade/y.py": "db.add_person('p')\n",
             }
             for rel, body in files.items():
                 with open(os.path.join(tmp, rel), "w", encoding="utf-8") as handle:
                     handle.write(textwrap.dedent(body))
             self.assertEqual(
                 facade_surface(backend_dir=tmp),
-                frozenset({"get_work", "get_saved_views", "add_tag"}),
+                frozenset({"get_work", "get_saved_views", "delete_work_record", "add_tag"}),
             )
 
     def test_coverage_counts_ported_and_unported(self):
