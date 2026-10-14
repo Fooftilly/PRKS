@@ -3,8 +3,9 @@
 :func:`login` is the whole domain side of ``POST /api/login`` (the route is
 PR 5/5). In order:
 
-1. A login name or password that no account could have (not text, empty,
-   too long, NUL) is refused at once. That decision never reads the
+1. A login name or password that no account could have is refused at once
+   (bootstrap refuses the same ones: :mod:`login_names`,
+   :func:`passwords.usable_password`). That decision never reads the
    database, so it says nothing about which accounts exist.
 2. A ``prks_login_device`` token is looked up. It counts as a known device
    only when it is younger than :data:`DEVICE_TOKEN_LIFETIME` and belongs to
@@ -40,23 +41,19 @@ import threading
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import Enum
-from typing import Optional, TypeGuard, Union
+from typing import Optional, Union
 
 from argon2 import PasswordHasher
 
 from backend.db.database import Database, Transaction
 from backend.db.errors import DatabaseError
-from backend.domain.identity import login_limiter, passwords
+from backend.domain.identity import login_limiter, login_names, passwords
 from backend.domain.identity.login_limiter import ClientAddress, LoginLimits
 from backend.domain.identity.secret_tokens import LoginDeviceToken
 from backend.domain.identity.sessions import DEFAULT_IDLE, NewSession, create_session
-from backend.domain.text_identity import UnsupportedTextError, identity_key
 
 # The prks_login_device cookie lives one year; its row is valid as long.
 DEVICE_TOKEN_LIFETIME = timedelta(days=365)
-
-# Longer than any login name PRKS accepts; bounds the work of a bad request.
-MAX_LOGIN_NAME_CHARS = 256
 
 
 class LoginOutcome(Enum):
@@ -140,29 +137,6 @@ def dummy_hash(hasher: PasswordHasher) -> str:
 
 def _burn(password: str, hasher: PasswordHasher) -> None:
     passwords.verify_password(dummy_hash(hasher), password, hasher=hasher)
-
-
-# --- input -----------------------------------------------------------------------------
-
-
-def _login_key(login_name: object) -> Optional[str]:
-    if not isinstance(login_name, str) or not 0 < len(login_name) <= MAX_LOGIN_NAME_CHARS:
-        return None
-    try:
-        key = identity_key(login_name)
-    except UnsupportedTextError:
-        return None
-    return key or None
-
-
-def _usable_password(password: object) -> TypeGuard[str]:
-    if not isinstance(password, str) or password == "" or "\x00" in password:
-        return False
-    try:
-        encoded = password.encode("utf-8")
-    except UnicodeEncodeError:  # a lone surrogate is no password anyone can type
-        return False
-    return len(encoded) <= passwords.MAX_PASSWORD_BYTES
 
 
 # --- device tokens ---------------------------------------------------------------------
@@ -333,8 +307,8 @@ def login(
     """
     limits = limits or LoginLimits()
     hasher = hasher or passwords.default_hasher()
-    login_key = _login_key(login_name)
-    if login_key is None or not _usable_password(password):
+    login_key = login_names.login_key(login_name)
+    if login_key is None or not passwords.usable_password(password):
         return LoginResult(LoginOutcome.INVALID_CREDENTIALS)
 
     try:

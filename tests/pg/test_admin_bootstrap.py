@@ -443,6 +443,17 @@ class AdminBootstrapTests(RootPairingTestCase):
         self.assertFalse(os.path.lexists(self.token_file))
         self.assertFalse(os.path.lexists(typo))
 
+    def test_an_unusable_login_is_refused_before_any_secret_is_asked(self) -> None:
+        asked: list[str] = []
+        code = admin.main(
+            ["bootstrap", "complete", "--root", self.root, "--login", "x" * 257, "--testing"],
+            environ=self.env, stdin=io.StringIO(), stdout=io.StringIO(), stderr=(err := io.StringIO()),
+            prompt=lambda label: asked.append(label) or "", open_database=self.open_db,
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(asked, [])
+        self.assertIn("The owner login must be 1 to 256 characters", err.getvalue())
+
     def test_an_unbindable_marker_is_refused_before_any_secret_is_asked(self) -> None:
         marker = os.path.join(self.root, MARKER_FILENAME)
         with open(marker, "rb") as handle:

@@ -229,6 +229,16 @@ class BootstrapTests(RootPairingTestCase):
         with psycopg.connect(self.harness.conninfo(name)) as conn:
             self.assertEqual(fetch_one(conn.execute("SELECT count(*) FROM prks.users"))[0], 1)
 
+    def test_a_login_name_login_would_refuse_is_refused(self) -> None:
+        name, root = self.database(), self.new_root()
+        for login in ("x" * 257, "own\x00er", "own\U000e0080er"):
+            with self.subTest(length=len(login)):
+                owner = OwnerSpec(login, "Owner", "Library", OWNER.password_hash)
+                self.refused("owner_login_invalid", self.bootstrap, name, root, owner=owner)
+        self.assertIsNone(self.instance(name))
+        longest = OwnerSpec("x" * 256, "Owner", "Library", OWNER.password_hash)
+        self.assertTrue(self.bootstrap(name, root, owner=longest).created)
+
     def test_simultaneous_bootstraps_create_one_owner_and_library(self) -> None:
         name, root = self.database(), self.new_root()
         token = self.issue(name)  # one setup double-submitted five times

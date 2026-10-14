@@ -374,6 +374,7 @@ def _lease_refusal(exc: StorageRootError) -> RootPairingRefused:
 def _complete(args: argparse.Namespace, environ: Mapping[str, str], db: Database, io: _Io) -> int:
     root = _real_root(args.root)
     _check_root_bound(root)
+    root_pairing.check_owner_login(args.login)  # before any secret is asked for
     token = _complete_token(environ, io)
     password = _complete_password(args, io)
     owner = root_pairing.OwnerSpec(

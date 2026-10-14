@@ -15,7 +15,7 @@ or repeats one, and every refusal carries fixed text.
 from __future__ import annotations
 
 import re
-from typing import Optional
+from typing import Optional, TypeGuard
 
 from argon2 import PasswordHasher, Type, exceptions, extract_parameters, profiles
 
@@ -54,12 +54,28 @@ class PasswordHashInvalid(RootPairingRefused):
 def _check_password(password: str) -> bytes:
     if not isinstance(password, str) or password == "":
         raise RootPairingRefused("password_empty", "A password is required.")
-    encoded = password.encode("utf-8")
+    if "\x00" in password:
+        raise RootPairingRefused("password_invalid", "A password cannot contain a NUL character.")
+    try:
+        encoded = password.encode("utf-8")
+    except UnicodeEncodeError:  # a lone surrogate (e.g. undecodable bytes in a password file)
+        raise RootPairingRefused("password_invalid", "A password must be valid Unicode text.") from None
     if len(encoded) > MAX_PASSWORD_BYTES:
         raise RootPairingRefused(
             "password_too_long", f"A password is at most {MAX_PASSWORD_BYTES} bytes."
         )
     return encoded
+
+
+def usable_password(password: object) -> TypeGuard[str]:
+    """True for a password :func:`hash_password` accepts; login refuses any other at once."""
+    if not isinstance(password, str):
+        return False
+    try:
+        _check_password(password)
+    except RootPairingRefused:
+        return False
+    return True
 
 
 def is_argon2id_hash(value: object) -> bool:
