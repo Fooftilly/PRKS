@@ -13,7 +13,10 @@ operator never holds a token that is already spent:
    - otherwise, on a terminal, the new token is printed to that terminal;
    - otherwise (no terminal), it is written to ``bootstrap-token`` in the
      PRKS configuration directory, ``0600``, outside the data root, and only
-     the path is printed. An existing file there is never overwritten.
+     the path is printed. The file is published before the token is
+     registered, so a failed write revokes nothing. An existing file there is
+     never overwritten: a re-run registers the token it holds (a no-op while
+     that token is outstanding) and refuses when it expired or was used.
 
    Issuing a token revokes any earlier unused one. Once setup is ready no
    token is issued.
@@ -62,6 +65,17 @@ EXIT_USAGE = 2
 
 DatabaseFactory = Callable[[Mapping[str, str]], Database]
 Prompt = Callable[[str], str]
+Faults = Callable[[str], None]
+
+# Fault-injection point for tests: the headless token file is published and
+# its token is not registered yet.
+FAULT_TOKEN_FILE_PUBLISHED = "issue.token_file_published"
+
+_SPENT_TOKEN_REASONS = frozenset({"bootstrap_token_expired", "bootstrap_token_reused"})
+
+
+def _no_faults(_point: str) -> None:
+    return None
 
 
 def _open_database(environ: Mapping[str, str]) -> Database:
@@ -140,7 +154,13 @@ def _env_token(environ: Mapping[str, str]) -> Optional[BootstrapToken]:
     return bootstrap_tokens.read_token_file(path)
 
 
-def _issue(args: argparse.Namespace, environ: Mapping[str, str], db: Database, io: _Io) -> int:
+def _issue(
+    args: argparse.Namespace,
+    environ: Mapping[str, str],
+    db: Database,
+    io: _Io,
+    faults: Faults,
+) -> int:
     if not args.ttl_hours > 0:
         io.refuse("--ttl-hours must be positive.")
         return EXIT_USAGE
@@ -148,7 +168,16 @@ def _issue(args: argparse.Namespace, environ: Mapping[str, str], db: Database, i
     root = _real_root(args.root)
     supplied = _env_token(environ)
     if supplied is not None:
-        issued = bootstrap_tokens.issue_token(db, ttl=ttl, token=supplied)
+        try:
+            issued = bootstrap_tokens.issue_token(db, ttl=ttl, token=supplied)
+        except RootPairingRefused as exc:
+            if exc.reason not in _SPENT_TOKEN_REASONS:
+                raise
+            raise RootPairingRefused(
+                exc.reason,
+                f"The token in {TOKEN_FILE_ENV} has expired or was already used or replaced; "
+                "write a new token to that file and run issue-token again.",
+            ) from None
         io.say(
             f"Registered the bootstrap token from {TOKEN_FILE_ENV}; it expires "
             f"{issued.expires_at.isoformat(timespec='seconds')}."
@@ -164,18 +193,68 @@ def _issue(args: argparse.Namespace, environ: Mapping[str, str], db: Database, i
         io.say(f"It expires {issued.expires_at.isoformat(timespec='seconds')}.")
         io.say("Next: prks admin bootstrap complete --root ROOT --login NAME (it asks for the token).")
         return EXIT_OK
-    path = bootstrap_tokens.default_token_file(environ)
-    if os.path.lexists(path):
+    return _issue_to_file(bootstrap_tokens.default_token_file(environ), root, ttl, db, io, faults)
+
+
+def _issue_to_file(
+    path: str, root: str, ttl: timedelta, db: Database, io: _Io, faults: Faults
+) -> int:
+    """Headless delivery: the file is published before the token is registered.
+
+    Creating the file without overwriting is the reservation, so only the
+    process that published it registers a new token, and a delivery that
+    fails never revokes the token an earlier run delivered. A file that
+    already exists is never replaced: its token is registered again, which
+    is a no-op while it is outstanding and finishes a run that stopped
+    between publishing and registering.
+    """
+    token = bootstrap_tokens.new_token()
+    try:
+        bootstrap_tokens.write_token_file(token, path, data_root=root)
+    except RootPairingRefused as exc:
+        if exc.reason == "token_file_not_durable":
+            bootstrap_tokens.remove_token_file_if(path, token)
+        if exc.reason != "token_file_exists":
+            raise
+        return _register_token_file(path, ttl, db, io)
+    faults(FAULT_TOKEN_FILE_PUBLISHED)
+    try:
+        issued = bootstrap_tokens.issue_token(db, ttl=ttl, token=token)
+    except RootPairingRefused as exc:
+        if exc.reason == "already_ready":
+            # Nothing can use the token any more, so it is not left behind.
+            bootstrap_tokens.remove_token_file_if(path, token)
+            raise
         raise RootPairingRefused(
-            "token_file_exists",
-            "A bootstrap token file already exists; use it, or remove it to issue a new one.",
-        )
-    issued = bootstrap_tokens.issue_token(db, ttl=ttl)
-    bootstrap_tokens.write_token_file(issued.token, path, data_root=root)
+            exc.reason,
+            f"{exc.message} The token file {path} is kept; run issue-token again to register it.",
+            retryable=exc.retryable,
+        ) from None
     io.say(f"Wrote the one-time bootstrap token to {path} (mode 0600).")
+    _say_next(io, path, issued)
+    return EXIT_OK
+
+
+def _register_token_file(path: str, ttl: timedelta, db: Database, io: _Io) -> int:
+    held = bootstrap_tokens.read_token_file(path)
+    try:
+        issued = bootstrap_tokens.issue_token(db, ttl=ttl, token=held)
+    except RootPairingRefused as exc:
+        if exc.reason not in _SPENT_TOKEN_REASONS:
+            raise
+        raise RootPairingRefused(
+            "token_file_stale",
+            f"The bootstrap token file {path} holds a token that has expired or was already "
+            "used or replaced; delete the file and run issue-token again.",
+        ) from None
+    io.say(f"The bootstrap token file {path} already exists; its token is ready to use.")
+    _say_next(io, path, issued)
+    return EXIT_OK
+
+
+def _say_next(io: _Io, path: str, issued: bootstrap_tokens.IssuedToken) -> None:
     io.say(f"It expires {issued.expires_at.isoformat(timespec='seconds')}.")
     io.say(f"Next: {TOKEN_FILE_ENV}={path} prks admin bootstrap complete --root ROOT --login NAME")
-    return EXIT_OK
 
 
 def _read_password_file(path: str) -> str:
@@ -262,6 +341,7 @@ def main(
     stderr: Optional[TextIO] = None,
     prompt: Optional[Prompt] = None,
     open_database: DatabaseFactory = _open_database,
+    faults: Faults = _no_faults,
 ) -> int:
     env = os.environ if environ is None else environ
     io = _Io(stdin or sys.stdin, stdout or sys.stdout, stderr or sys.stderr, prompt)
@@ -280,7 +360,7 @@ def main(
             # secret or touches a file.
             bootstrap_tokens.refuse_when_ready(db)
             if args.step == "issue-token":
-                return _issue(args, env, db, io)
+                return _issue(args, env, db, io, faults)
             return _complete(args, env, db, io)
     except RootPairingRefused as exc:
         io.refuse(exc.message)

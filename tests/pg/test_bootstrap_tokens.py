@@ -127,6 +127,23 @@ class TokenStoreTests(RootPairingTestCase):
             "already_ready", bootstrap_tokens.issue_token, self.db(name), token=supplied
         )
 
+    def test_an_expired_supplied_token_is_refused_not_reregistered(self) -> None:
+        name = self.database()
+        supplied = bootstrap_tokens.new_token()
+        bootstrap_tokens.issue_token(self.db(name), token=supplied)
+        with psycopg.connect(self.harness.conninfo(name)) as conn:
+            conn.execute(
+                "UPDATE prks.bootstrap_tokens SET created_at = now() - interval '2 days', "
+                "expires_at = now() - interval '1 second'"
+            )
+        before = self.tokens(name)
+        error = self.refused(
+            "bootstrap_token_expired", bootstrap_tokens.issue_token, self.db(name), token=supplied
+        )
+        self.assertNotIn(supplied.reveal(), error.message)
+        # Its lifetime is not extended, and nothing else changed.
+        self.assertEqual(self.tokens(name), before)
+
     def test_no_token_is_issued_once_ready(self) -> None:
         name, root = self.database(), self.new_root()
         self.bootstrap(name, root)

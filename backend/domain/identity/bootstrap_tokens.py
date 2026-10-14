@@ -114,7 +114,8 @@ def issue_token(
     Revokes any other outstanding token. Issuing the token that is already
     outstanding again keeps it (and its expiry), so a retried automated
     install is idempotent; a token that was consumed or revoked never comes
-    back. Refused once setup is ``ready``.
+    back, and an expired one is refused rather than given a new lifetime.
+    Refused once setup is ``ready``.
     """
     if ttl <= timedelta(0):
         raise ValueError("ttl must be positive")
@@ -129,11 +130,17 @@ def issue_token(
         tx.execute("LOCK TABLE prks.bootstrap_tokens IN SHARE ROW EXCLUSIVE MODE")
         _refuse_when_ready(tx)
         existing = tx.execute(
-            "SELECT consumed_at IS NULL AND revoked_at IS NULL AS outstanding, expires_at "
+            "SELECT consumed_at IS NULL AND revoked_at IS NULL AS outstanding, "
+            "expires_at <= now() AS expired, expires_at "
             "FROM prks.bootstrap_tokens WHERE token_sha256 = %s",
             (issued.digest,),
         ).fetchone()
         if existing is not None:
+            if existing["outstanding"] and existing["expired"]:
+                raise RootPairingRefused(
+                    "bootstrap_token_expired",
+                    "This bootstrap token has expired; supply or issue a new one.",
+                )
             if existing["outstanding"]:
                 return IssuedToken(issued, existing["expires_at"])
             raise RootPairingRefused(

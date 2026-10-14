@@ -12,7 +12,9 @@ import io
 import logging
 import os
 import stat
+import threading
 from typing import Any, Optional
+from unittest import mock
 
 import psycopg
 
@@ -20,6 +22,7 @@ from backend.db.config import DatabaseConfig
 from backend.db.database import Database
 from backend.domain.identity import admin, bootstrap_tokens, passwords
 from backend.domain.identity.bootstrap_tokens import BootstrapToken
+from backend.domain.identity.errors import RootPairingRefused
 from tests.pg.harness import fetch_one
 from tests.pg.test_root_pairing import RootPairingTestCase
 
@@ -143,18 +146,128 @@ class AdminBootstrapTests(RootPairingTestCase):
         self.assertIn("already set up", again.err)
         self.assertFalse(os.path.lexists(self.token_file))
 
-    def test_an_existing_token_file_is_never_overwritten_and_no_token_is_issued(self) -> None:
+    def outstanding_digest(self) -> Optional[bytes]:
+        with psycopg.connect(self.harness.conninfo(self.name)) as conn:
+            row = conn.execute(
+                "SELECT token_sha256 FROM prks.bootstrap_tokens "
+                "WHERE consumed_at IS NULL AND revoked_at IS NULL"
+            ).fetchone()
+        return None if row is None else bytes(row[0])
+
+    def expire_tokens(self) -> None:
+        with psycopg.connect(self.harness.conninfo(self.name)) as conn:
+            conn.execute(
+                "UPDATE prks.bootstrap_tokens SET created_at = now() - interval '2 days', "
+                "expires_at = now() - interval '1 second'"
+            )
+
+    def complete_with_file(self) -> _Run:
+        env = dict(self.env, PRKS_BOOTSTRAP_TOKEN_FILE=self.token_file)
+        return self.complete("--password-file", self.password_file, env=env)
+
+    def test_rerunning_keeps_the_existing_token_file_and_its_token(self) -> None:
         first = self.run_cli("issue-token", "--root", self.root)
         self.assertEqual(first.code, 0, first.err)
         with open(self.token_file, "rb") as handle:
             before = handle.read()
+        token = bootstrap_tokens.read_token_file(self.token_file)
+        self.secrets.append(token.reveal())
         rows = self.token_rows()
         second = self.run_cli("issue-token", "--root", self.root)
-        self.assertEqual(second.code, 1)
-        self.assertIn("already exists", second.err)
+        self.assertEqual(second.code, 0, second.err)
+        self.assertIn("already exists", second.out)
+        self.assert_no_secret(second)
         with open(self.token_file, "rb") as handle:
             self.assertEqual(handle.read(), before)
+        # Nothing was revoked: the delivered token is still the outstanding one.
         self.assertEqual(self.token_rows(), rows)
+        self.assertEqual(self.outstanding_digest(), token.digest)
+        self.assertEqual(self.complete_with_file().code, 0)
+        self.assertEqual(self.setup_state(), "ready")
+
+    def test_a_token_file_holding_a_spent_token_is_refused_not_replaced(self) -> None:
+        self.assertEqual(self.run_cli("issue-token", "--root", self.root).code, 0)
+        token = bootstrap_tokens.read_token_file(self.token_file)
+        self.secrets.append(token.reveal())
+        self.expire_tokens()
+        rows = self.token_rows()
+        run = self.run_cli("issue-token", "--root", self.root)
+        self.assertEqual(run.code, 1)
+        self.assertIn("delete the file", run.err)
+        self.assert_no_secret(run)
+        self.assertEqual(bootstrap_tokens.read_token_file(self.token_file), token)
+        self.assertEqual(self.token_rows(), rows)
+
+    def test_concurrent_headless_issuers_both_deliver_the_published_token(self) -> None:
+        # A publishes its file and stops before registering; B runs to the end
+        # in that gap; then A registers. Neither revokes the published token.
+        published = threading.Event()
+        resume = threading.Event()
+        result: dict[str, int] = {}
+
+        def pause(point: str) -> None:
+            if point == admin.FAULT_TOKEN_FILE_PUBLISHED:
+                published.set()
+                self.assertTrue(resume.wait(30))
+
+        def run_a() -> None:
+            result["a"] = admin.main(
+                ["bootstrap", "issue-token", "--root", self.root],
+                environ=self.env, stdin=io.StringIO(), stdout=io.StringIO(),
+                stderr=io.StringIO(), open_database=self.open_db, faults=pause,
+            )
+
+        thread = threading.Thread(target=run_a)
+        thread.start()
+        try:
+            self.assertTrue(published.wait(30))
+            token = bootstrap_tokens.read_token_file(self.token_file)
+            self.secrets.append(token.reveal())
+            b = self.run_cli("issue-token", "--root", self.root)
+            self.assertEqual(b.code, 0, b.err)
+            self.assert_no_secret(b)
+            self.assertEqual(self.outstanding_digest(), token.digest)
+        finally:
+            resume.set()
+            thread.join(60)
+        self.assertEqual(result.get("a"), 0)
+        self.assertEqual(self.token_rows(), 1)
+        self.assertEqual(self.outstanding_digest(), token.digest)
+        self.assertEqual(bootstrap_tokens.read_token_file(self.token_file), token)
+        self.assertEqual(self.complete_with_file().code, 0)
+
+    def test_a_failed_file_delivery_revokes_nothing(self) -> None:
+        delivered = self.run_cli("issue-token", "--root", self.root, tty=True)
+        value = next(line.strip() for line in delivered.out.splitlines() if len(line.strip()) == 43)
+        self.secrets.append(value)
+        rows = self.token_rows()
+        with mock.patch.object(bootstrap_tokens, "fsync_directory", return_value=False):
+            run = self.run_cli("issue-token", "--root", self.root)
+        self.assertEqual(run.code, 1)
+        self.assertIn("durable", run.err)
+        self.assertFalse(os.path.lexists(self.token_file))
+        # The token delivered earlier is still the outstanding one, and works.
+        self.assertEqual(self.token_rows(), rows)
+        self.assertEqual(
+            self.outstanding_digest(), bootstrap_tokens.parse_token(value).digest
+        )
+        self.assertEqual(self.complete(prompts=[value, PASSWORD, PASSWORD]).code, 0)
+
+    def test_a_failed_registration_keeps_the_file_and_a_rerun_recovers(self) -> None:
+        refusal = RootPairingRefused("database_unavailable", "db down", retryable=True)
+        with mock.patch.object(bootstrap_tokens, "issue_token", side_effect=refusal):
+            run = self.run_cli("issue-token", "--root", self.root)
+        self.assertEqual(run.code, 1)
+        self.assertIn("run issue-token again", run.err)
+        token = bootstrap_tokens.read_token_file(self.token_file)
+        self.secrets.append(token.reveal())
+        self.assert_no_secret(run)
+        self.assertEqual(self.token_rows(), 0)
+        again = self.run_cli("issue-token", "--root", self.root)
+        self.assertEqual(again.code, 0, again.err)
+        self.assertEqual(self.outstanding_digest(), token.digest)
+        self.assertEqual(self.complete_with_file().code, 0)
+        self.assertEqual(self.setup_state(), "ready")
 
     def test_a_config_directory_inside_the_data_root_is_refused(self) -> None:
         env = dict(self.env, XDG_CONFIG_HOME=os.path.join(self.root, "cfg"))
@@ -203,6 +316,24 @@ class AdminBootstrapTests(RootPairingTestCase):
         self.assert_no_secret(done)
         self.assertIn("PRKS_BOOTSTRAP_TOKEN_FILE is used up", done.out)
         self.assertEqual(self.setup_state(), "ready")
+
+    def test_an_expired_operator_token_is_refused_with_a_rotate_instruction(self) -> None:
+        token = bootstrap_tokens.new_token()
+        self.secrets.append(token.reveal())
+        supplied = self.secret_file("supplied-token", token.reveal() + "\n")
+        env = dict(self.env, PRKS_BOOTSTRAP_TOKEN_FILE=supplied)
+        self.assertEqual(self.run_cli("issue-token", "--root", self.root, env=env).code, 0)
+        self.expire_tokens()
+        run = self.run_cli("issue-token", "--root", self.root, env=env)
+        self.assertEqual(run.code, 1)
+        self.assertIn("write a new token to that file", run.err)
+        self.assert_no_secret(run)
+        self.assertEqual(self.token_rows(), 1)
+        # The old lifetime was not extended: setup still refuses the token.
+        done = self.complete("--password-file", self.password_file, env=env)
+        self.assertEqual(done.code, 1)
+        self.assertIn("expired", done.err)
+        self.assertIsNone(self.setup_state())
 
     def test_open_or_missing_secret_files_are_refused_before_setup(self) -> None:
         token = bootstrap_tokens.new_token()

@@ -49,8 +49,13 @@ that is set.
 
 - The file is mode `0600`. Only its path is printed.
 - The file is refused inside the data root.
-- If the file already exists, `issue-token` refuses and issues nothing. Use
-  the existing token, or delete the file to issue a new one.
+- The file is written before the token is registered. If writing it fails,
+  nothing is revoked, and a token delivered earlier stays usable.
+- An existing file is never overwritten. Running `issue-token` again keeps it
+  and registers its token: that is a no-op while the token is outstanding, and
+  it finishes a run that stopped after writing the file (for example when the
+  database was unreachable). If the file's token has expired or was used or
+  replaced, `issue-token` refuses; delete the file and run it again.
 
 Then complete setup with that file and an owner-only password file:
 
@@ -77,7 +82,9 @@ python -m backend.domain.identity.admin bootstrap complete --root /srv/prks \
 ```
 
 - `issue-token` registers that token and never prints it. Running it again is
-  a no-op.
+  a no-op while the token is outstanding. If the token has expired or was used
+  or replaced, it refuses and does not extend it: write a new token to the file
+  and run `issue-token` again.
 - `complete` consumes the token.
 - PRKS does not delete your file. Delete it once setup is done; the token in it
   cannot be used again.
