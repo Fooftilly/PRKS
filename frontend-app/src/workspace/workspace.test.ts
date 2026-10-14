@@ -31,7 +31,7 @@ import {
   planTabHistory,
   repairWorkspaceState,
 } from './transitions'
-import { asSplitId, asTabId, type WorkspaceState, type WorkspaceTab } from './types'
+import { asSplitId, asTabId, type WorkspacePaneNode, type WorkspaceState, type WorkspaceTab } from './types'
 
 const wide = { narrowFallback: false }
 const narrow = { narrowFallback: true }
@@ -675,5 +675,170 @@ describe('command boundary', () => {
     expect(moved.state.mainTabId).toBe(main.id)
     expect(validateWorkspace(moved.state).ok).toBe(true)
     expect(current.secondaryTree).toEqual(makeLeaf(second.id))
+  })
+})
+
+describe('workspace state recovery and snapshot boundaries', () => {
+  const main = tab('main', '#/folders')
+  const secondary = tab('secondary')
+  const parked = tab('parked')
+
+  function tiledState(): WorkspaceState {
+    return state({
+      mode: 'tiled',
+      tabs: [main, secondary, parked],
+      mainTabId: main.id,
+      focusedTabId: secondary.id,
+      secondaryTree: makeLeaf(secondary.id),
+    })
+  }
+
+  it('recovers an absent Main from the first tab and restores stacked focus', () => {
+    const current = state({ tabs: [main, secondary], mainTabId: null, focusedTabId: null })
+    const repaired = repairWorkspaceState(current)
+    expect(repaired).not.toBe(current)
+    expect(repaired.mainTabId).toBe(main.id)
+    expect(repaired.focusedTabId).toBe(main.id)
+    expect(repaired.mode).toBe('stacked')
+    expect(validateWorkspace(repaired)).toEqual({ ok: true, errors: [] })
+    expect(current.mainTabId).toBeNull()
+    expect(current.focusedTabId).toBeNull()
+  })
+
+  it('preserves a hidden Secondary tree while repairing stacked-mode focus', () => {
+    const current = state({
+      tabs: [main, secondary],
+      mainTabId: main.id,
+      focusedTabId: secondary.id,
+      mode: 'stacked',
+      secondaryTree: makeLeaf(secondary.id),
+    })
+    freezeDeep(current)
+    const repaired = repairWorkspaceState(current)
+    expect(repaired.focusedTabId).toBe(main.id)
+    expect(repaired.secondaryTree).toBe(current.secondaryTree)
+    expect(repaired.mode).toBe('stacked')
+    expect(validateWorkspace(repaired).ok).toBe(true)
+    expect(repairWorkspaceState(repaired)).toBe(repaired)
+  })
+
+  it('repairs focus on a parked tab without promoting or displaying it', () => {
+    const current = { ...tiledState(), focusedTabId: parked.id }
+    const repaired = repairWorkspaceState(current)
+    expect(repaired.mainTabId).toBe(main.id)
+    expect(repaired.focusedTabId).toBe(main.id)
+    expect(repaired.mode).toBe('tiled')
+    expect(repaired.secondaryTree).toBe(current.secondaryTree)
+    expect(repaired.tabs).toBe(current.tabs)
+    expect(validateWorkspace(repaired).ok).toBe(true)
+  })
+
+  it('removes nonexistent and Main leaves without discarding a surviving Secondary', () => {
+    const nested = makeSplit(
+      'top-bottom', makeLeaf('deleted'), makeLeaf(secondary.id), 0.4, asSplitId('inner'),
+    )
+    const root = makeSplit('left-right', makeLeaf(main.id), nested, 0.5, asSplitId('outer'))
+    const current = { ...tiledState(), secondaryTree: root }
+    freezeDeep(current)
+    const repaired = repairWorkspaceState(current)
+    expect(repaired.secondaryTree).toEqual(makeLeaf(secondary.id))
+    expect(repaired.mode).toBe('tiled')
+    expect(repaired.focusedTabId).toBe(secondary.id)
+    expect(validateWorkspace(repaired).ok).toBe(true)
+    expect(current.secondaryTree).toBe(root)
+  })
+
+  it('collapses an emptied Secondary tree and falls back from tiled to stacked', () => {
+    const badTree = makeSplit(
+      'left-right', makeLeaf('deleted'), makeLeaf(main.id), 0.5, asSplitId('gone'),
+    )
+    const current = state({
+      mode: 'tiled',
+      tabs: [main],
+      mainTabId: main.id,
+      focusedTabId: asTabId('deleted'),
+      secondaryTree: badTree,
+    })
+    const repaired = repairWorkspaceState(current)
+    expect(repaired.secondaryTree).toBeNull()
+    expect(repaired.mode).toBe('stacked')
+    expect(repaired.mainTabId).toBe(main.id)
+    expect(repaired.focusedTabId).toBe(main.id)
+    expect(validateWorkspace(repaired).ok).toBe(true)
+  })
+
+  it('refuses unresolved malformed split geometry rather than silently healing it', () => {
+    const valid = makeSplit(
+      'left-right', makeLeaf(secondary.id), makeLeaf(parked.id), 0.5, asSplitId('split'),
+    )
+    const current = { ...tiledState(), secondaryTree: { ...valid, ratio: Number.NaN } }
+    expect(() => repairWorkspaceState(current)).toThrow(
+      /workspace secondaryTree invariant violation: invalid ratio NaN/,
+    )
+    expect(Number.isNaN(current.secondaryTree.ratio)).toBe(true)
+  })
+
+  it('keeps the exact state reference when all structural invariants already hold', () => {
+    const current = tiledState()
+    freezeDeep(current)
+    expect(validateWorkspace(current)).toEqual({ ok: true, errors: [] })
+    expect(repairWorkspaceState(current)).toBe(current)
+    expect(repairWorkspaceState(repairWorkspaceState(current))).toBe(current)
+  })
+
+  it('copies nested trees and tab histories without aliasing original state', () => {
+    const longHistory = { ...main, history: ['#/folders', '#/works/W1'], historyIndex: 1 }
+    const current = state({
+      tabs: [longHistory, secondary, parked],
+      mainTabId: main.id,
+      focusedTabId: secondary.id,
+      mode: 'tiled',
+      secondaryTree: makeSplit(
+        'top-bottom', makeLeaf(secondary.id), makeLeaf(parked.id), 0.3, asSplitId('nested'),
+      ),
+    })
+    freezeDeep(current)
+    const snap = workspaceSnapshot(current)
+    expect(snap).toEqual(current)
+    expect(snap).not.toBe(current)
+    expect(snap.tabs).not.toBe(current.tabs)
+    expect(snap.tabs[0]).not.toBe(current.tabs[0])
+    expect(snap.tabs[0].history).not.toBe(current.tabs[0].history)
+    expect(snap.secondaryTree).not.toBe(current.secondaryTree)
+    expect(snap.secondaryTree?.type).toBe('split')
+    if (snap.secondaryTree?.type !== 'split' || current.secondaryTree?.type !== 'split') {
+      throw new Error('test requires a nested Secondary split')
+    }
+    expect(snap.secondaryTree.first).not.toBe(current.secondaryTree.first)
+    expect(snap.secondaryTree.second).not.toBe(current.secondaryTree.second)
+    ;(snap.tabs[0].history as string[]).push('#/unsaved')
+    expect(current.tabs[0].history).toEqual(['#/folders', '#/works/W1'])
+    expect(workspaceSnapshot(current)).toEqual(current)
+  })
+
+  it('rejects duplicate tabs, impossible ratios, and excess Secondary leaves', () => {
+    const current = tiledState()
+    const duplicate = validateWorkspace({ ...current, tabs: [...current.tabs, main] })
+    expect(duplicate.ok).toBe(false)
+    expect(duplicate.errors).toContain('duplicate tab id ' + main.id)
+
+    const badRatio = validateWorkspace({ ...current, mainSplitRatio: Number.POSITIVE_INFINITY })
+    expect(badRatio.ok).toBe(false)
+    expect(badRatio.errors.some((error) => error.includes('invalid mainSplitRatio'))).toBe(true)
+
+    const ids = Array.from({ length: MAX_SECONDARY_LEAVES + 1 }, (_, i) => 'leaf-' + i)
+    const overflow = ids.slice(1).reduce<WorkspacePaneNode>(
+      (tree, id, i) => makeSplit('left-right', tree, makeLeaf(id), 0.5, asSplitId('over-' + i)),
+      makeLeaf(ids[0]),
+    )
+    const tooMany = validateWorkspace(state({
+      tabs: [main, ...ids.map((id) => tab(id))],
+      mainTabId: main.id,
+      focusedTabId: main.id,
+      mode: 'tiled',
+      secondaryTree: overflow,
+    }))
+    expect(tooMany.ok).toBe(false)
+    expect(tooMany.errors).toContain('pane cap exceeded ' + ids.length)
   })
 })
