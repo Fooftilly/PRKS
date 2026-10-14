@@ -156,7 +156,11 @@ def issue_token(
             "VALUES (%s, now() + %s) RETURNING expires_at",
             (issued.digest, ttl),
         ).fetchone()
-        assert row is not None
+        if row is None:
+            raise RootPairingRefused(
+                "database_unavailable", "The database could not record the bootstrap token.",
+                retryable=True,
+            )
         return IssuedToken(issued, row["expires_at"])
 
     try:
