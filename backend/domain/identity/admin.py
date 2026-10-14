@@ -372,6 +372,7 @@ def _remove_dead_token_file(environ: Mapping[str, str], io: _Io) -> None:
     try:
         held = bootstrap_tokens.read_token_file(path)
     except RootPairingRefused:
+        bootstrap_tokens.sweep_temporary_token_files(os.path.dirname(path))
         return
     if bootstrap_tokens.remove_token_file_if(path, held):
         io.say(f"Deleted the used token file {path}.")

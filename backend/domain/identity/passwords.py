@@ -97,10 +97,10 @@ def verify_password(
         return (hasher or default_hasher()).verify(stored_hash, encoded)
     except exceptions.VerifyMismatchError:
         return False
-    except exceptions.InvalidHashError:
+    except (exceptions.InvalidHashError, exceptions.VerificationError):
+        # Only VerifyMismatchError means a wrong password; anything else (bad
+        # parameters such as a too-small memory cost) is a corrupt stored hash.
         raise PasswordHashInvalid() from None
-    except exceptions.VerificationError:
-        return False
 
 
 def needs_rehash(stored_hash: str, *, hasher: Optional[PasswordHasher] = None) -> bool:

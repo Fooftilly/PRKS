@@ -59,14 +59,18 @@ class PasswordHashTests(unittest.TestCase):
                 self.assertEqual(ctx.exception.reason, "password_hash_invalid")
                 self.assertFalse(passwords.is_argon2id_hash(stored))
 
+    def test_a_well_formed_hash_with_impossible_parameters_is_invalid_not_a_mismatch(self) -> None:
+        stored = passwords.hash_password("p", hasher=FAST).replace("$m=8,", "$m=1,")
+        self.assertTrue(passwords.is_argon2id_hash(stored))
+        with self.assertRaises(passwords.PasswordHashInvalid):
+            passwords.verify_password(stored, "p", hasher=FAST)
+
     def test_a_truncated_hash_does_not_verify(self) -> None:
         stored = passwords.hash_password("p", hasher=FAST)
         cut = stored[:-6]
-        if passwords.is_argon2id_hash(cut):
-            self.assertFalse(passwords.verify_password(cut, "p", hasher=FAST))
-        else:
-            with self.assertRaises(passwords.PasswordHashInvalid):
-                passwords.verify_password(cut, "p", hasher=FAST)
+        # A corrupt hash raises; it never verifies.
+        with self.assertRaises(passwords.PasswordHashInvalid):
+            passwords.verify_password(cut, "p", hasher=FAST)
 
     def test_empty_and_oversized_passwords_are_refused_without_echo(self) -> None:
         with self.assertRaises(RootPairingRefused) as ctx:

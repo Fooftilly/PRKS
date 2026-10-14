@@ -325,8 +325,41 @@ def remove_token_file_if(path: str, token: BootstrapToken) -> bool:
         os.unlink(path)
     except OSError:
         return False
-    fsync_directory(os.path.dirname(os.path.abspath(path)))
+    directory = os.path.dirname(os.path.abspath(path))
+    sweep_temporary_token_files(directory)
+    fsync_directory(directory)
     return True
+
+
+def sweep_temporary_token_files(directory: str) -> int:
+    """Delete ``.bootstrap-token.*.tmp`` leftovers in ``directory``; return how many.
+
+    :func:`write_token_file` links its temporary into place and then unlinks
+    it; a run killed between the two leaves a second name for the token.
+    Only called once the token is spent (after setup, or once ready), when
+    no issuer can be mid-write.
+    """
+    removed = 0
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return 0
+    for name in names:
+        if not (name.startswith(f".{TOKEN_FILE_NAME}.") and name.endswith(".tmp")):
+            continue
+        path = os.path.join(directory, name)
+        try:
+            info = os.lstat(path)
+        except OSError:
+            continue
+        if not stat.S_ISREG(info.st_mode):
+            continue
+        try:
+            os.unlink(path)
+        except OSError:
+            continue
+        removed += 1
+    return removed
 
 
 def read_owner_only_file(path: str, *, what: str, limit: int) -> bytes:

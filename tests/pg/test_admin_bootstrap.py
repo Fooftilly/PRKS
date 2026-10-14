@@ -286,6 +286,31 @@ class AdminBootstrapTests(RootPairingTestCase):
         self.assert_no_secret(retry)
         self.assertFalse(os.path.lexists(self.token_file))
 
+    def test_a_temporary_token_link_left_by_a_crash_is_swept_after_setup(self) -> None:
+        # Killed after linking the temporary into place, before unlinking it.
+        with mock.patch.object(bootstrap_tokens.os, "unlink", side_effect=OSError("killed")):
+            self.assertEqual(self.run_cli("issue-token", "--root", self.root).code, 0)
+        token = bootstrap_tokens.read_token_file(self.token_file)
+        self.secrets.append(token.reveal())
+        directory = os.path.dirname(self.token_file)
+        leftovers = [n for n in os.listdir(directory) if n.endswith(".tmp")]
+        self.assertEqual(len(leftovers), 1)
+        self.assertEqual(self.complete_with_file().code, 0)
+        self.assertEqual(os.listdir(directory), [])
+
+    def test_a_ready_retry_sweeps_a_temporary_link_without_the_token_file(self) -> None:
+        with mock.patch.object(bootstrap_tokens.os, "unlink", side_effect=OSError("killed")):
+            self.assertEqual(self.run_cli("issue-token", "--root", self.root).code, 0)
+        self.secrets.append(bootstrap_tokens.read_token_file(self.token_file).reveal())
+        directory = os.path.dirname(self.token_file)
+        # Setup completed and its cleanup removed only the canonical name.
+        with mock.patch.object(bootstrap_tokens, "sweep_temporary_token_files", return_value=0):
+            self.assertEqual(self.complete_with_file().code, 0)
+        self.assertEqual(len(os.listdir(directory)), 1)
+        retry = self.run_cli("issue-token", "--root", self.root)
+        self.assertEqual(retry.code, 1)
+        self.assertEqual(os.listdir(directory), [])
+
     def test_an_unwritable_config_directory_is_a_fixed_refusal(self) -> None:
         # The configuration "directory" is a regular file, so it cannot be created.
         blocker = os.path.join(self.tmp, "not-a-directory")
