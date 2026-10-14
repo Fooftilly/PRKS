@@ -388,12 +388,14 @@ def _remove_dead_token_file(environ: Mapping[str, str], db: Database, io: _Io) -
 
     try:
         try:
-            held = bootstrap_tokens.read_token_file(path)
+            held: Optional[BootstrapToken] = bootstrap_tokens.read_token_file(path)
         except RootPairingRefused:
-            bootstrap_tokens.sweep_temporary_token_files(os.path.dirname(path), ours)
-            return
-        if ours(held) and bootstrap_tokens.remove_token_file_if(path, held):
+            held = None
+        if held is not None and ours(held) and bootstrap_tokens.remove_token_file_if(path, held):
             io.say(f"Deleted the used token file {path}.")
+        # Whoever owns the canonical file, this database's own temporary
+        # leftovers are dead secrets too.
+        bootstrap_tokens.sweep_temporary_token_files(os.path.dirname(path), ours)
     except RootPairingRefused:
         # Cleanup is best effort; the caller still refuses with already_ready.
         return
