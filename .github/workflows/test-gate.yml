@@ -91,13 +91,14 @@ jobs:
           cache: pip
 
       - name: Install pinned runtime and PostgreSQL dependencies
-        # Runtime pins from requirements.txt plus the psycopg pins from
-        # requirements-dev.txt (#623). Explicit package== pins plus
-        # --only-binary, as in the unit job above.
+        # Runtime pins from requirements.txt plus the psycopg (#623) and
+        # argon2-cffi (#626) pins from requirements-dev.txt. Explicit
+        # package== pins plus --only-binary, as in the unit job above.
         run: >-
           python -m pip install --isolated --disable-pip-version-check
           "--only-binary=:all:" "PyMuPDF==1.28.2" "Pillow==12.3.0" "pydantic==2.13.5"
           "psycopg==3.3.6" "psycopg-binary==3.3.6" "psycopg-pool==3.3.3"
+          "argon2-cffi==25.1.0"
 
       - name: Run PostgreSQL helper and harness tests
         env:
@@ -143,11 +144,12 @@ jobs:
 
       - name: Install pinned runtime and PostgreSQL dependencies for parity
         # Same pins as the PostgreSQL helper job: requirements.txt plus the
-        # psycopg pins from requirements-dev.txt.
+        # psycopg and argon2-cffi pins from requirements-dev.txt.
         run: >-
           python -m pip install --isolated --disable-pip-version-check
           "--only-binary=:all:" "PyMuPDF==1.28.2" "Pillow==12.3.0" "pydantic==2.13.5"
           "psycopg==3.3.6" "psycopg-binary==3.3.6" "psycopg-pool==3.3.3"
+          "argon2-cffi==25.1.0"
 
       - name: Run SQLite and PostgreSQL backend parity legs
         # Fails on any failure in either leg; skipped (unported) PostgreSQL

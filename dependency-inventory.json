@@ -81,6 +81,17 @@
       "dependabot_monitored": true
     },
     {
+      "name": "argon2-cffi",
+      "scope": "test",
+      "authoritative_source": "requirements-dev.txt",
+      "manifest": "requirements-dev.txt",
+      "lockfile": null,
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": true,
+      "dependabot_monitored": true
+    },
+    {
       "name": "psycopg-pool",
       "scope": "test",
       "authoritative_source": "requirements-dev.txt",

@@ -31,6 +31,58 @@
     "prks"
   ],
   "tables": {
+    "prks.bootstrap_tokens": {
+      "columns": [
+        {
+          "default": "uuidv7()",
+          "name": "id",
+          "not_null": true,
+          "type": "uuid"
+        },
+        {
+          "name": "token_sha256",
+          "not_null": true,
+          "type": "bytea"
+        },
+        {
+          "default": "now()",
+          "name": "created_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "expires_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "consumed_at",
+          "not_null": false,
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "revoked_at",
+          "not_null": false,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": {
+        "bootstrap_tokens_check": "CHECK (expires_at > created_at)",
+        "bootstrap_tokens_check1": "CHECK (consumed_at IS NULL OR revoked_at IS NULL)",
+        "bootstrap_tokens_created_at_not_null": "NOT NULL created_at",
+        "bootstrap_tokens_expires_at_not_null": "NOT NULL expires_at",
+        "bootstrap_tokens_id_not_null": "NOT NULL id",
+        "bootstrap_tokens_pkey": "PRIMARY KEY (id)",
+        "bootstrap_tokens_token_sha256_check": "CHECK (octet_length(token_sha256) = 32)",
+        "bootstrap_tokens_token_sha256_key": "UNIQUE (token_sha256)",
+        "bootstrap_tokens_token_sha256_not_null": "NOT NULL token_sha256"
+      },
+      "indexes": {
+        "bootstrap_tokens_one_outstanding": "CREATE UNIQUE INDEX bootstrap_tokens_one_outstanding ON prks.bootstrap_tokens USING btree ((true)) WHERE ((consumed_at IS NULL) AND (revoked_at IS NULL))",
+        "bootstrap_tokens_pkey": "CREATE UNIQUE INDEX bootstrap_tokens_pkey ON prks.bootstrap_tokens USING btree (id)",
+        "bootstrap_tokens_token_sha256_key": "CREATE UNIQUE INDEX bootstrap_tokens_token_sha256_key ON prks.bootstrap_tokens USING btree (token_sha256)"
+      }
+    },
     "prks.devices": {
       "columns": [
         {

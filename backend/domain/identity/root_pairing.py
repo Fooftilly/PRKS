@@ -7,6 +7,10 @@ writes the root (§4.4).
 **Root claim (first boot).** :func:`bootstrap` runs §9.2's three durable
 steps, and a retry resumes from wherever a crash stopped them:
 
+Every step needs the one-time bootstrap token
+(:mod:`backend.domain.identity.bootstrap_tokens`): step 1 checks it before
+anything else, step 3 consumes it.
+
 1. :func:`begin_bootstrap`: with no instance row, one transaction checks the
    root is a new installation and commits the row as ``bootstrapping`` (new
    ``id``, the root's ``storage_root_id``, ``start_generation`` 1, a new
@@ -16,8 +20,9 @@ steps, and a retry resumes from wherever a crash stopped them:
 2. :func:`claim_bootstrap_root`: ``root_marker.claim_root`` under the
    exclusive ``root.claim`` lock.
 3. :func:`finish_bootstrap`: one SERIALIZABLE transaction re-checks the
-   claim, creates the owner, the Library and the membership and marks setup
-   ``ready``; repeating it returns the existing state.
+   claim, consumes the token, creates the owner, the Library and the
+   membership and marks setup ``ready``; repeating it with the token that
+   completed it returns the existing state.
 
 **Start check and bump.** Every process that serves, schedules work or
 changes data calls :func:`start_process` with ``bump=True`` before it does
@@ -55,6 +60,14 @@ from psycopg.rows import dict_row
 from backend import entity_ids
 from backend.db.database import Database, Isolation, Transaction
 from backend.db.errors import DatabaseError
+from backend.domain.identity import passwords
+from backend.domain.identity.bootstrap_tokens import (
+    BootstrapToken,
+    check_token,
+    consume_token,
+    consumed_token,
+)
+from backend.domain.identity.errors import RootPairingRefused
 from backend.storage.errors import StorageRootError
 from backend.storage.file_lock import SharedFileLock
 from backend.storage.objects import root_holds_objects
@@ -90,6 +103,7 @@ FAULT_AFTER_INSTANCE_COMMIT = "bootstrap.after_instance_commit"
 FAULT_CLAIM_BEFORE_WRITE = "bootstrap.claim_before_write"
 FAULT_AFTER_CLAIM = "bootstrap.after_claim"
 FAULT_AFTER_DATABASE_BUMP = "start.after_database_bump"
+FAULT_READY_BEFORE_COMMIT = "bootstrap.ready_before_commit"
 
 Faults = Callable[[str], None]
 
@@ -97,21 +111,6 @@ _RECOVERY_HINT = (
     "Use whole-instance disaster recovery (this root restored together with its "
     "own database), or a new data root and a library backup restore."
 )
-
-
-class RootPairingRefused(Exception):
-    """A bootstrap or start was refused; nothing that should not change did.
-
-    ``retryable`` is true when the same process may try again later and
-    expect a different answer (the start key was busy, the database or the
-    marker could not be written); the process stays not ready meanwhile.
-    """
-
-    def __init__(self, reason: str, message: str, *, retryable: bool = False) -> None:
-        super().__init__(message)
-        self.reason = reason
-        self.message = message
-        self.retryable = retryable
 
 
 class StartStatus(enum.Enum):
@@ -147,10 +146,22 @@ class OwnerSpec:
     login_name: str
     display_name: str
     library_name: str
-    password_hash: Optional[str] = None
+    password_hash: str  # Argon2id (:mod:`backend.domain.identity.passwords`)
 
     def __repr__(self) -> str:  # never print a password hash
         return f"OwnerSpec(login_name={self.login_name!r})"
+
+
+def _check_owner(owner: OwnerSpec) -> None:
+    for value in (owner.login_name, owner.display_name, owner.library_name):
+        if not isinstance(value, str) or not value.strip():
+            raise RootPairingRefused(
+                "owner_invalid", "The owner login, display name and Library name are required."
+            )
+    if not passwords.is_argon2id_hash(owner.password_hash):
+        raise RootPairingRefused(
+            "owner_password_invalid", "Bootstrap needs the owner's Argon2id password hash."
+        )
 
 
 @dataclass(frozen=True)
@@ -213,12 +224,17 @@ def _instance_row(tx: Transaction, *, lock: bool) -> Optional[dict[str, Any]]:
 def begin_bootstrap(
     db: Database,
     *,
+    token: BootstrapToken,
     root: str,
     lease: SharedFileLock,
     testing: bool,
     holds_objects: Optional[Callable[[], bool]] = None,
 ) -> BootstrapClaim:
-    """Step 1: commit (or find) the ``bootstrapping`` instance row (§11.1)."""
+    """Step 1: commit (or find) the ``bootstrapping`` instance row (§11.1).
+
+    Nothing about the root is looked at in the database, and nothing is
+    written, until ``token`` checks out (§9.2: without it, setup does nothing).
+    """
     _lease(root, lease)
     marker = _bound_marker(root)
     check_objects = holds_objects or (lambda: root_holds_objects(root))
@@ -230,7 +246,7 @@ def begin_bootstrap(
         and not check_objects()
     )
     instance_id = entity_ids.generate("IN")
-    token = new_start_token()
+    start_token = new_start_token()
 
     def step(tx: Transaction) -> BootstrapClaim:
         # Serializes every step 1 of this database (the lock conflicts with
@@ -238,6 +254,9 @@ def begin_bootstrap(
         # row instead of racing it to the singleton index.
         tx.execute("LOCK TABLE prks.instance IN SHARE ROW EXCLUSIVE MODE")
         row = _instance_row(tx, lock=False)
+        if row is not None and row["setup_state"] == SETUP_READY:
+            raise _already_ready()
+        check_token(tx, token)
         if row is None:
             if not root_is_new:
                 raise RootPairingRefused(
@@ -248,9 +267,9 @@ def begin_bootstrap(
             tx.execute(
                 "INSERT INTO prks.instance (id, storage_root_id, setup_state, testing, "
                 "start_generation, start_token) VALUES (%s, %s, 'bootstrapping', %s, 1, %s)",
-                (instance_id, marker.storage_root_id, testing, token),
+                (instance_id, marker.storage_root_id, testing, start_token),
             )
-            return BootstrapClaim(instance_id, marker.storage_root_id, token)
+            return BootstrapClaim(instance_id, marker.storage_root_id, start_token)
         return _resume(row, marker=marker, testing=testing)
 
     try:
@@ -262,12 +281,16 @@ def begin_bootstrap(
         ) from exc
 
 
+def _already_ready() -> RootPairingRefused:
+    return RootPairingRefused(
+        "already_ready", "This PRKS instance is already set up; bootstrap is closed."
+    )
+
+
 def _resume(row: dict[str, Any], *, marker: RootMarker, testing: bool) -> BootstrapClaim:
     state = row["setup_state"]
     if state == SETUP_READY:
-        raise RootPairingRefused(
-            "already_ready", "This PRKS instance is already set up; bootstrap is closed."
-        )
+        raise _already_ready()
     if state != SETUP_BOOTSTRAPPING:
         raise RootPairingRefused(
             "instance_state_invalid", "The instance row is in an unexpected setup state."
@@ -330,14 +353,20 @@ def finish_bootstrap(
     claim: BootstrapClaim,
     owner: OwnerSpec,
     *,
+    token: BootstrapToken,
     root: str,
     lease: SharedFileLock,
+    faults: Faults = _no_faults,
 ) -> BootstrapResult:
     """Step 3: create the owner, the Library and the membership; mark ``ready``.
 
     Re-reads the marker first and requires the claim exactly as step 2 left
-    it: a root that moved on since is refused here too.
+    it: a root that moved on since is refused here too. The same transaction
+    consumes ``token``; once setup is ``ready``, only a retry presenting the
+    token that completed it gets the existing state back, anything else is
+    ``already_ready``.
     """
+    _check_owner(owner)
     _lease(root, lease)
     marker = _bound_marker(root)
     if marker.instance_id != claim.instance_id or marker.start_state != StartState(
@@ -352,12 +381,18 @@ def finish_bootstrap(
     library_id = entity_ids.generate("LIB")
 
     def step(tx: Transaction) -> BootstrapResult:
+        # Lock order instance → tokens, as in bootstrap_tokens.issue_token: an
+        # issuer holding SHARE on the instance makes this wait here, before
+        # it touches the tokens, instead of deadlocking with it.
+        tx.execute("LOCK TABLE prks.instance IN ROW EXCLUSIVE MODE")
         row = _instance_row(tx, lock=True)
         if row is None or row["id"] != claim.instance_id:
             raise RootPairingRefused(
                 "instance_state_invalid", "The instance row does not match this bootstrap."
             )
         if row["setup_state"] == SETUP_READY:
+            if not consumed_token(tx, token):
+                raise _already_ready()
             existing = tx.execute(
                 "SELECT library_id, user_id FROM prks.library_memberships "
                 "WHERE role = 'owner' ORDER BY library_id, user_id LIMIT 1"
@@ -371,6 +406,7 @@ def finish_bootstrap(
             raise RootPairingRefused(
                 "instance_state_invalid", "The instance row does not match this bootstrap."
             )
+        consume_token(tx, token)
         tx.execute(
             "INSERT INTO prks.users (id, login_name, display_name, password_hash) "
             "VALUES (%s, %s, %s, %s)",
@@ -386,6 +422,7 @@ def finish_bootstrap(
             (library_id, user_id),
         )
         tx.execute("UPDATE prks.instance SET setup_state = 'ready' WHERE id = %s", (row["id"],))
+        faults(FAULT_READY_BEFORE_COMMIT)
         return BootstrapResult(row["id"], user_id, library_id, True)
 
     try:
@@ -401,6 +438,7 @@ def bootstrap(
     db: Database,
     owner: OwnerSpec,
     *,
+    token: BootstrapToken,
     root: str,
     lease: SharedFileLock,
     testing: bool,
@@ -412,13 +450,14 @@ def bootstrap(
     The calling process counts the claim as its start-generation bump: its
     own first :func:`start_process` afterwards passes ``bump=False``.
     """
+    _check_owner(owner)
     claim = begin_bootstrap(
-        db, root=root, lease=lease, testing=testing, holds_objects=holds_objects
+        db, token=token, root=root, lease=lease, testing=testing, holds_objects=holds_objects
     )
     faults(FAULT_AFTER_INSTANCE_COMMIT)
     claim_bootstrap_root(root, claim, lease=lease, holds_objects=holds_objects, faults=faults)
     faults(FAULT_AFTER_CLAIM)
-    return finish_bootstrap(db, claim, owner, root=root, lease=lease)
+    return finish_bootstrap(db, claim, owner, token=token, root=root, lease=lease, faults=faults)
 
 
 # --- start check and bump ----------------------------------------------------------

@@ -16,9 +16,12 @@ import sys
 from backend.db.config import DatabaseConfig
 from backend.db.database import Database
 from backend.domain.identity import root_pairing
+from backend.domain.identity.bootstrap_tokens import BootstrapToken
 from backend.storage.root_binding import acquire_shared_root_lease
 
 KILLED_EXIT = 77
+# The bootstrap token reaches the child through its environment, not argv.
+CHILD_TOKEN_ENV = "PRKS_TEST_CHILD_BOOTSTRAP_TOKEN"
 
 
 def main(argv: list[str]) -> int:
@@ -31,9 +34,12 @@ def main(argv: list[str]) -> int:
     lease = acquire_shared_root_lease(root)
     with Database(DatabaseConfig(conninfo=conninfo, role="test", pool_min=0)) as db:
         if action == "bootstrap":
+            from tests.pg.test_root_pairing import OWNER
+
             root_pairing.bootstrap(
                 db,
-                root_pairing.OwnerSpec("owner", "Owner", "Library"),
+                OWNER,
+                token=BootstrapToken(os.environ[CHILD_TOKEN_ENV]),
                 root=root,
                 lease=lease,
                 testing=True,
