@@ -55,6 +55,7 @@ from backend.storage.file_lock import (
     ExclusiveFileLock,
     LockBusy,
     LockUnavailable,
+    SharedFileLock,
     is_link_or_reparse_point,
 )
 from backend.storage.bootstrap_config import LOCK_SUFFIX
@@ -65,6 +66,7 @@ from backend.storage.preflight import (
     run_preflight,
 )
 from backend.storage.root_marker import (
+    CLAIM_LOCK_NAME,
     MAINTENANCE_DIRNAME,
     MARKER_FILENAME,
     ROOT_LOCK_NAME,
@@ -366,6 +368,7 @@ def _check_log_file_not_operational(
     operational = [
         os.path.join(root_real, MARKER_FILENAME),
         os.path.join(maintenance, ROOT_LOCK_NAME),
+        os.path.join(maintenance, CLAIM_LOCK_NAME),
     ]
     if config_file_path:
         config_real = os.path.realpath(config_file_path)
@@ -469,7 +472,11 @@ def _find_nested_marker(root_real: str) -> Optional[str]:
 
 
 def _maintenance_is_scaffold(path: str) -> bool:
-    """A ``.prks-maintenance/`` holding only a lone ``root.lock`` and/or preflight scaffold."""
+    """A ``.prks-maintenance/`` holding only lone lock files and/or preflight scaffold.
+
+    The lock files are ``root.lock`` and the claim lock ``root.claim``
+    (postgresql-architecture §11.1): each alone is scaffold, never content.
+    """
     st = _lstat(path)
     if st is None:
         return True
@@ -481,7 +488,7 @@ def _maintenance_is_scaffold(path: str) -> bool:
         return False
     for name in names:
         child = os.path.join(path, name)
-        if name == ROOT_LOCK_NAME:
+        if name in (ROOT_LOCK_NAME, CLAIM_LOCK_NAME):
             child_st = _lstat(child)
             if child_st is not None and (
                 is_link_or_reparse_point(child_st) or not stat.S_ISREG(child_st.st_mode)
@@ -1011,6 +1018,31 @@ def acquire_root_lease(root_real: str) -> ExclusiveFileLock:
             "root_in_use",
             "This PRKS storage root is already open in another PRKS process. PRKS "
             "supports exactly one server process per storage root." + _holder_hint(root_real),
+        ) from exc
+    except LockUnavailable as exc:
+        raise StorageRootRefused(
+            exc.reason,
+            "The storage root lock file .prks-maintenance/root.lock is not usable.",
+        ) from exc
+
+
+def acquire_shared_root_lease(root_real: str) -> SharedFileLock:
+    """Take ``root.lock`` **shared**, without waiting (postgresql-architecture §7.5).
+
+    Every process of one paired PostgreSQL instance holds the lease shared;
+    relocation and the offline storage tools hold it exclusive, so they never
+    meet a root claim or a start-generation bump (§11.1). Not used by the
+    SQLite runtime, whose single process keeps the exclusive lease.
+    """
+    maintenance = _ensure_maintenance_dir(root_real)
+    try:
+        return SharedFileLock.acquire(os.path.join(maintenance, ROOT_LOCK_NAME), timeout=0.0)
+    except LockBusy as exc:
+        raise StorageRootInUse(
+            "root_in_use",
+            "This PRKS storage root is held exclusively by another PRKS process "
+            "(a single-process server, a storage move or an offline storage tool)."
+            + _holder_hint(root_real),
         ) from exc
     except LockUnavailable as exc:
         raise StorageRootRefused(
