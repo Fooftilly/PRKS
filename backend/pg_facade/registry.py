@@ -109,6 +109,30 @@ def _comparable(sig: inspect.Signature) -> list[tuple[str, Any, Any]]:
     return [(p.name, p.kind, p.default) for p in sig.parameters.values()]
 
 
+def _registration_problems(library_cls: type, ref: type, registered: dict[str, str]) -> list[str]:
+    problems: list[str] = []
+    for name, owner in sorted(registered.items()):
+        if not hasattr(ref, name):
+            problems.append(f"{owner}.{name} is registered but {ref.__name__} has no {name}")
+            continue
+        mine = _unwrap(inspect.getattr_static(library_cls, name))
+        theirs = _unwrap(inspect.getattr_static(ref, name))
+        if not (callable(mine) and callable(theirs)):
+            continue
+        if _comparable(inspect.signature(mine)) != _comparable(inspect.signature(theirs)):
+            problems.append(f"{owner}.{name} does not have the signature of {ref.__name__}.{name}")
+    return problems
+
+
+def _unregistered_override_problems(library_cls: type, ref: type) -> list[str]:
+    return [
+        f"{mixin.__name__}.{name} overrides {ref.__name__}.{name} without @ported"
+        for mixin in facade_mixins(library_cls)
+        for name, attr in vars(mixin).items()
+        if not name.startswith("_") and not is_ported(attr) and hasattr(ref, name)
+    ]
+
+
 def validate_registry(library_cls: type, reference: type | None = None) -> list[str]:
     """Problems that would make the facade or its parity report wrong.
 
@@ -119,31 +143,13 @@ def validate_registry(library_cls: type, reference: type | None = None) -> list[
       (it would serve production calls while the parity leg skips it).
     """
     ref = reference if reference is not None else _reference_class()
-    problems: list[str] = []
     try:
         registered = ported_methods(library_cls)
     except RegistryError as exc:
         return [str(exc)]
-    for name, owner in sorted(registered.items()):
-        if not hasattr(ref, name):
-            problems.append(f"{owner}.{name} is registered but {ref.__name__} has no {name}")
-            continue
-        mine = _unwrap(inspect.getattr_static(library_cls, name))
-        theirs = _unwrap(inspect.getattr_static(ref, name))
-        if callable(mine) and callable(theirs):
-            if _comparable(inspect.signature(mine)) != _comparable(inspect.signature(theirs)):
-                problems.append(
-                    f"{owner}.{name} does not have the signature of {ref.__name__}.{name}"
-                )
-    for mixin in facade_mixins(library_cls):
-        for name, attr in vars(mixin).items():
-            if name.startswith("_") or is_ported(attr):
-                continue
-            if hasattr(ref, name):
-                problems.append(
-                    f"{mixin.__name__}.{name} overrides {ref.__name__}.{name} without @ported"
-                )
-    return problems
+    return _registration_problems(library_cls, ref, registered) + (
+        _unregistered_override_problems(library_cls, ref)
+    )
 
 
 def _surface_files(backend_dir: str) -> Iterable[str]:

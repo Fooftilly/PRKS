@@ -190,6 +190,14 @@ def format_report(report: dict[str, Any]) -> str:
             f" | {row['skipped_unported']} | {row['skipped_other']} |"
         )
     lines.append("")
+    lines.extend(_detail_lines(report))
+    lines.append("")
+    lines.append("Result: " + ("OK" if report_ok(report) else "FAILED"))
+    return "\n".join(lines)
+
+
+def _detail_lines(report: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
     lines.append(
         "Only postgres passes that reached ported methods are parity evidence. "
         "Skipped postgres tests touched a method that is not ported yet; "
@@ -209,9 +217,7 @@ def format_report(report: dict[str, Any]) -> str:
     if report["registry_problems"]:
         lines.append("FAIL: registry problems:")
         lines.extend(f"  {problem}" for problem in report["registry_problems"])
-    lines.append("")
-    lines.append("Result: " + ("OK" if report_ok(report) else "FAILED"))
-    return "\n".join(lines)
+    return lines
 
 
 def main(argv: list[str] | None = None) -> int:
