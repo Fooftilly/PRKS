@@ -105,7 +105,8 @@ python -m backend.domain.identity.admin bootstrap complete --root /srv/prks \
 - Once the instance is `ready`, every bootstrap command refuses, and no token
   is issued again. If a run was stopped after setup committed but before it
   deleted the configuration-directory token file, the next bootstrap command
-  deletes that file while it refuses.
+  deletes that file while it refuses, but only when this database issued its
+  token: another deployment sharing the directory keeps its file.
 - Tokens and passwords never appear in output, logs or error messages. The one
   exception is the token printed once by `issue-token` on a terminal.
 - Token and password files must be regular files readable only by their owner

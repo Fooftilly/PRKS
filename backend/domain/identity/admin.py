@@ -361,21 +361,31 @@ def _complete(args: argparse.Namespace, environ: Mapping[str, str], db: Database
     return EXIT_OK
 
 
-def _remove_dead_token_file(environ: Mapping[str, str], io: _Io) -> None:
-    """Delete the configuration-directory token file once setup is ready.
+def _remove_dead_token_file(environ: Mapping[str, str], db: Database, io: _Io) -> None:
+    """Delete this instance's configuration-directory token file once setup is ready.
 
     No token can open setup after ``ready``, so a file a run left behind
     (killed after setup committed, before its own cleanup) only holds a dead
-    secret. The operator's ``PRKS_BOOTSTRAP_TOKEN_FILE`` is never touched.
+    secret. The directory can be shared by several deployments, so only a
+    token this database issued is deleted. The operator's
+    ``PRKS_BOOTSTRAP_TOKEN_FILE`` is never touched.
     """
     path = bootstrap_tokens.default_token_file(environ)
+
+    def ours(token: BootstrapToken) -> bool:
+        return bootstrap_tokens.issued_here(db, token)
+
     try:
-        held = bootstrap_tokens.read_token_file(path)
+        try:
+            held = bootstrap_tokens.read_token_file(path)
+        except RootPairingRefused:
+            bootstrap_tokens.sweep_temporary_token_files(os.path.dirname(path), ours)
+            return
+        if ours(held) and bootstrap_tokens.remove_token_file_if(path, held):
+            io.say(f"Deleted the used token file {path}.")
     except RootPairingRefused:
-        bootstrap_tokens.sweep_temporary_token_files(os.path.dirname(path))
+        # Cleanup is best effort; the caller still refuses with already_ready.
         return
-    if bootstrap_tokens.remove_token_file_if(path, held):
-        io.say(f"Deleted the used token file {path}.")
 
 
 def main(
@@ -408,7 +418,7 @@ def main(
                 bootstrap_tokens.refuse_when_ready(db)
             except RootPairingRefused as exc:
                 if exc.reason == "already_ready":
-                    _remove_dead_token_file(env, io)
+                    _remove_dead_token_file(env, db, io)
                 raise
             if args.step == "issue-token":
                 return _issue(args, env, db, io, faults)

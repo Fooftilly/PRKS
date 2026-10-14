@@ -25,7 +25,7 @@ import re
 import secrets
 import stat
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Optional
@@ -170,6 +170,21 @@ def issue_token(
             "database_unavailable", "The database could not record the bootstrap token.",
             retryable=True,
         ) from exc
+
+
+def issued_here(db: Database, token: BootstrapToken) -> bool:
+    """True when this database ever issued ``token`` (whatever its state now)."""
+    try:
+        row = db.query(
+            lambda tx: tx.execute(
+                "SELECT 1 FROM prks.bootstrap_tokens WHERE token_sha256 = %s", (token.digest,)
+            ).fetchone()
+        )
+    except DatabaseError as exc:
+        raise RootPairingRefused(
+            "database_unavailable", "Cannot read the bootstrap tokens.", retryable=True
+        ) from exc
+    return row is not None
 
 
 def refuse_when_ready(db: Database) -> None:
@@ -326,18 +341,21 @@ def remove_token_file_if(path: str, token: BootstrapToken) -> bool:
     except OSError:
         return False
     directory = os.path.dirname(os.path.abspath(path))
-    sweep_temporary_token_files(directory)
+    sweep_temporary_token_files(directory, lambda held_tmp: held_tmp == token)
     fsync_directory(directory)
     return True
 
 
-def sweep_temporary_token_files(directory: str) -> int:
-    """Delete ``.bootstrap-token.*.tmp`` leftovers in ``directory``; return how many.
+def sweep_temporary_token_files(
+    directory: str, belongs: Callable[[BootstrapToken], bool]
+) -> int:
+    """Delete ``.bootstrap-token.*.tmp`` leftovers whose token ``belongs``; return how many.
 
     :func:`write_token_file` links its temporary into place and then unlinks
     it; a run killed between the two leaves a second name for the token.
-    Only called once the token is spent (after setup, or once ready), when
-    no issuer can be mid-write.
+    Only called once the token is spent (after setup, or once ready). The
+    configuration directory can be shared by several deployments, so a
+    leftover is deleted only when ``belongs`` claims its token.
     """
     removed = 0
     try:
@@ -353,6 +371,12 @@ def sweep_temporary_token_files(directory: str) -> int:
         except OSError:
             continue
         if not stat.S_ISREG(info.st_mode):
+            continue
+        try:
+            held = read_token_file(path)
+        except RootPairingRefused:
+            continue
+        if not belongs(held):
             continue
         try:
             os.unlink(path)

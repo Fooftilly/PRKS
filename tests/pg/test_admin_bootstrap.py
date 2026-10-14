@@ -311,6 +311,30 @@ class AdminBootstrapTests(RootPairingTestCase):
         self.assertEqual(retry.code, 1)
         self.assertEqual(os.listdir(directory), [])
 
+    def test_a_ready_instance_keeps_another_deployments_token_files(self) -> None:
+        # One OS account, one configuration directory, two deployments: this
+        # database is ready, the files belong to another, unconfigured one.
+        issued = self.run_cli("issue-token", "--root", self.root, tty=True)
+        value = next(line.strip() for line in issued.out.splitlines() if len(line.strip()) == 43)
+        self.secrets.append(value)
+        self.assertEqual(self.complete(prompts=[value, PASSWORD, PASSWORD]).code, 0)
+        other = bootstrap_tokens.new_token()
+        self.secrets.append(other.reveal())
+        root = os.path.join(self.tmp, "other-root")
+        bootstrap_tokens.write_token_file(other, self.token_file, data_root=root)
+        directory = os.path.dirname(self.token_file)
+        stray = os.path.join(directory, f".{bootstrap_tokens.TOKEN_FILE_NAME}.x.tmp")
+        os.link(self.token_file, stray)
+        run = self.run_cli("issue-token", "--root", self.root)
+        self.assertEqual(run.code, 1)
+        self.assertIn("already set up", run.err)
+        self.assertNotIn("Deleted", run.out)
+        self.assertEqual(bootstrap_tokens.read_token_file(self.token_file), other)
+        self.assertTrue(os.path.lexists(stray))
+        os.unlink(self.token_file)
+        self.assertEqual(self.run_cli("issue-token", "--root", self.root).code, 1)
+        self.assertTrue(os.path.lexists(stray))
+
     def test_an_unwritable_config_directory_is_a_fixed_refusal(self) -> None:
         # The configuration "directory" is a regular file, so it cannot be created.
         blocker = os.path.join(self.tmp, "not-a-directory")
