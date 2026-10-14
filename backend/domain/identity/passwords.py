@@ -21,6 +21,15 @@ from argon2 import PasswordHasher, Type, exceptions, extract_parameters, profile
 
 from backend.domain.identity.errors import RootPairingRefused
 
+# SECURITY PREREQUISITE before changing PARAMETERS (#677 review, accepted
+# deferral): a stored hash keeps the parameters it was made with until its
+# next successful login, while a failed login for an unknown account costs
+# what the *current* parameters cost (login.dummy_hash). After a change, a
+# wrong password against a not-yet-rehashed account would therefore take a
+# different time than one against a missing account, revealing that the
+# account exists. Rehash-on-success alone does not close that gap. Changing
+# these values needs a separate security review and tests covering
+# failed-login timing for old and new hashes. See docs/login-security.md.
 PARAMETERS = profiles.RFC_9106_LOW_MEMORY
 
 # Bounds the work an attacker can make one request do; longer passwords add

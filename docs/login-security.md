@@ -29,6 +29,25 @@ Wrong passwords, unknown logins, disabled accounts and accounts without a
 password all get the same answer (`invalid_credentials`) and cost the same
 Argon2id work, so the answer never tells whether an account exists.
 
+### Before changing the Argon2id parameters
+
+The parameters are pinned in `backend/domain/identity/passwords.py`
+(`PARAMETERS`, the RFC 9106 low-memory profile). Every stored hash today uses
+them, so failed logins cost the same whether or not the account exists.
+
+Changing them is a known future risk, deferred on purpose (#677 review), not a
+false positive. A stored hash keeps its old parameters until its account's
+next successful login. A failed login for a missing account costs what the
+new parameters cost. A wrong password against an account that has not been
+rehashed yet would take a different time, which reveals that the account
+exists. Rehashing at the next successful login does not close that gap.
+
+A parameter change therefore requires, before it ships:
+
+- a separate security review of the migration;
+- tests that measure failed-login timing for accounts with old and new
+  hashes and for missing accounts, and show they cannot be told apart.
+
 ### Settings
 
 | Variable | Default | Range |

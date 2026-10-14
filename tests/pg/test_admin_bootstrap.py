@@ -443,6 +443,19 @@ class AdminBootstrapTests(RootPairingTestCase):
         self.assertFalse(os.path.lexists(self.token_file))
         self.assertFalse(os.path.lexists(typo))
 
+    def test_a_password_login_would_refuse_creates_no_owner(self) -> None:
+        issued = self.run_cli("issue-token", "--root", self.root)
+        self.assertEqual(issued.code, 0, issued.err)
+        self.password_file = self.secret_file("nul-password", "pass\x00word\n")
+        done = self.complete_with_file()
+        self.assertEqual(done.code, 1)
+        self.assertIn("cannot contain a NUL character", done.err)
+        self.assertNotIn("pass", done.err.replace("password", ""))
+        self.assertNotEqual(self.setup_state(), "ready")
+        self.assertIsNotNone(self.outstanding_digest())  # the token was not spent
+        with psycopg.connect(self.harness.conninfo(self.name)) as conn:
+            self.assertEqual(fetch_one(conn.execute("SELECT count(*) FROM prks.users"))[0], 0)
+
     def test_an_unusable_login_is_refused_before_any_secret_is_asked(self) -> None:
         asked: list[str] = []
         code = admin.main(
@@ -453,6 +466,8 @@ class AdminBootstrapTests(RootPairingTestCase):
         self.assertEqual(code, 1)
         self.assertEqual(asked, [])
         self.assertIn("The owner login must be 1 to 256 characters", err.getvalue())
+        with psycopg.connect(self.harness.conninfo(self.name)) as conn:
+            self.assertEqual(fetch_one(conn.execute("SELECT count(*) FROM prks.users"))[0], 0)
 
     def test_an_unbindable_marker_is_refused_before_any_secret_is_asked(self) -> None:
         marker = os.path.join(self.root, MARKER_FILENAME)

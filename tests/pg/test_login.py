@@ -105,10 +105,14 @@ class LoginOutcomeTests(IdentityTestCase):
         user_id = self.user("Owner")
         second = self.library("Second")
         self.join(user_id, second)
+        self.login(password="wrong")
         both = self.login()
         self.assertIs(both.outcome, LoginOutcome.NO_LIBRARY)
-        self.assertEqual((both.public_reason, both.http_status), ("no_library", 403))
-        self.assertIsNotNone(both.device_token)  # the password was right
+        # No session, so no answer that confirms the password and no side effects.
+        self.assertEqual((both.public_reason, both.http_status), ("invalid_credentials", 401))
+        self.assertIsNone(both.device_token)
+        self.assertEqual(self.attempts()[account_key("owner")], 2)
+        self.assertEqual(self.run_sql("SELECT count(*) AS n FROM prks.login_device_tokens"), [{"n": 0}])
         chosen = self.login(library_id=second)
         assert chosen.session is not None
         self.assertEqual(chosen.session.library_id, second)

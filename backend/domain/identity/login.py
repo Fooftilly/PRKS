@@ -22,14 +22,15 @@ PR 5/5). In order:
 5. A correct password commits one transaction that resets the key that
    gated the attempt, replaces the presented device token (if any) with a
    new one, rewrites the hash when its parameters are out of date, and
-   creates the session. It re-reads the account under a row lock first: an
+   creates the session; when there is no Library to sign in to it commits
+   none of that (``NO_LIBRARY``, publicly ``invalid_credentials``). It re-reads the account under a row lock first: an
    account disabled since step 4 is refused, and when the hash changed (a
    concurrent login rehashed it, or the password was changed) the password
    is checked again against the new hash, outside the lock, before retrying.
 
 Results are stable codes (:class:`LoginOutcome`); :attr:`LoginResult.public_reason`
 maps the ones that must look alike to callers (an invalid stored hash looks
-like a wrong password). Nothing here logs; no result, exception or ``repr``
+like a wrong password, and so does a correct password that cannot sign in). Nothing here logs; no result, exception or ``repr``
 carries a password, hash or token.
 """
 
@@ -61,7 +62,7 @@ class LoginOutcome(Enum):
     INVALID_CREDENTIALS = "invalid_credentials"  # unknown, disabled, no password, wrong password
     STORED_HASH_INVALID = "stored_hash_invalid"  # the account's hash cannot be verified
     THROTTLED = "throttled"  # over a limiter key; no password check ran
-    NO_LIBRARY = "no_library"  # password correct, but no Library membership to sign in to
+    NO_LIBRARY = "no_library"  # password correct, no Library to sign in to; nothing committed
     UNAVAILABLE = "unavailable"  # the database failed; nothing of the login was committed
 
 
@@ -72,7 +73,8 @@ _PUBLIC = {
     LoginOutcome.INVALID_CREDENTIALS: ("invalid_credentials", 401),
     LoginOutcome.STORED_HASH_INVALID: ("invalid_credentials", 401),
     LoginOutcome.THROTTLED: ("too_many_attempts", 429),
-    LoginOutcome.NO_LIBRARY: ("no_library", 403),
+    # Not a distinct answer: it would confirm the password without a session.
+    LoginOutcome.NO_LIBRARY: ("invalid_credentials", 401),
     LoginOutcome.UNAVAILABLE: ("unavailable", 503),
 }
 
@@ -81,10 +83,9 @@ _PUBLIC = {
 class LoginResult:
     """The outcome of one login attempt.
 
-    ``session`` is set only on ``SUCCEEDED``. ``device_token`` is set whenever
-    the password was correct (``SUCCEEDED`` and ``NO_LIBRARY``): the HTTP
-    layer sets it as the new ``prks_login_device`` cookie, since the old one
-    no longer works. ``retry_after_seconds`` and ``throttled_kind`` are set
+    ``session`` and ``device_token`` are set only on ``SUCCEEDED``; the HTTP
+    layer sets the token as the new ``prks_login_device`` cookie, since the
+    old one no longer works. ``retry_after_seconds`` and ``throttled_kind`` are set
     only on ``THROTTLED``.
     """
 
@@ -273,6 +274,11 @@ def _succeed(
         # A concurrent login rehashed it, or the password was changed: the
         # caller checks the password against the new hash, outside this lock.
         return _HashChanged(current["password_hash"])
+    library = _library_of(tx, account.user_id, library_id)
+    if library is None:
+        # No session, so nothing a correct password earns: the count stays,
+        # no device token is issued, and callers see invalid_credentials.
+        return LoginResult(LoginOutcome.NO_LIBRARY)
     login_limiter.reset(tx, gating_key)
     token = issue_device_token(tx, account.user_id, replacing=device)
     if new_hash is not None:
@@ -280,9 +286,6 @@ def _succeed(
             "UPDATE prks.users SET password_hash = %s WHERE id = %s",
             (new_hash, account.user_id),
         )
-    library = _library_of(tx, account.user_id, library_id)
-    if library is None:
-        return LoginResult(LoginOutcome.NO_LIBRARY, device_token=token)
     session = create_session(tx, user_id=account.user_id, library_id=library, idle=idle)
     return LoginResult(LoginOutcome.SUCCEEDED, session=session, device_token=token)
 
