@@ -1,4 +1,4 @@
-name: actionlint pilot
+name: Workflow lint (actionlint + ShellCheck)
 
 on:
   pull_request:
@@ -22,9 +22,10 @@ concurrency:
 
 jobs:
   actionlint:
-    # Keep this historical job/check name stable for branch protection;
-    # following baseline triage the actionlint/ShellCheck step is blocking.
-    name: Check workflow syntax (advisory)
+    # Path-scoped, non-required check: lint findings fail this job, but
+    # master branch protection does not currently require this context.
+    # Requiring it would need an always-reporting check and ruleset change.
+    name: Workflow syntax and ShellCheck
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -91,14 +92,14 @@ jobs:
             exit 1
           fi
 
-      # After the advisory pilot (#653/#674), the only observed finding was
-      # SC2309 at the E2E matrix-total interpolation. The shard runner now
-      # passes that numeric value via an environment variable. Stop a workflow
-      # change on new syntax/shell defects rather than greenwashing them.
-      # Preserve the narrowly reviewed concurrency.queue upstream exception.
-      # pyflakes stays disabled pending separate signal assessment.
+      # The advisory pilot (#653/#674) found one E2E matrix-interpolation
+      # warning (SC2309); the shard runner now uses environment variables.
+      # Treat new lint findings as job failures, without claiming this check
+      # is required by branch protection. Keep the narrow concurrency.queue
+      # compatibility ignore until supported by upstream actionlint.
+      # pyflakes remains disabled pending separate signal assessment.
       # https://github.com/rhysd/actionlint/pull/654
-      - name: Check all workflows (blocking findings)
+      - name: Check all workflows (fail on findings)
         shell: bash
         run: |
           set -euo pipefail
