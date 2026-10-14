@@ -4,6 +4,9 @@ on:
   pull_request:
     branches:
       - master
+    # Only trigger for manifest ecosystems GitHub Dependency Review can
+    # evaluate; Docker base images and uv.lock need separate coverage.
+    # https://docs.github.com/en/code-security/reference/supply-chain-security/dependency-graph-supported-package-ecosystems
     paths:
       - ".github/workflows/**"
       - ".github/dependabot.yml"
@@ -13,8 +16,6 @@ on:
       - "**/requirements*.txt"
       - "**/pyproject.toml"
       - "**/poetry.lock"
-      - "**/uv.lock"
-      - "**/Dockerfile*"
 
 permissions:
   contents: read
@@ -35,6 +36,8 @@ jobs:
           persist-credentials: false
 
       # A2 pilot for #651: report newly introduced vulnerable dependencies
+      # recognized by GitHub dependency graph. Container-image/OS scanning
+      # is a separate follow-up under #339/#651 (not covered here).
       # without blocking the ongoing PostgreSQL migration. After validating
       # coverage and signal, propose a blocking severity threshold separately.
       # License policy and PR comments are intentionally out of scope.
