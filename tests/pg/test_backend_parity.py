@@ -15,7 +15,13 @@ import unittest.mock
 from typing import Any
 
 from backend.db.database import Transaction
-from backend.pg_facade import FacadeMixin, PostgresLibrary, ported, validate_registry
+from backend.pg_facade import (
+    FacadeMixin,
+    NotPortedError,
+    PostgresLibrary,
+    ported,
+    validate_registry,
+)
 from backend.storage.config import StorageConfig
 from tests.backend_parity import (
     POSTGRES,
@@ -23,6 +29,7 @@ from tests.backend_parity import (
     BackendParityTestCase,
     ParityLog,
     ParityRecorder,
+    with_refusal_log,
 )
 from tests.pg.harness import get_harness
 
@@ -53,6 +60,20 @@ class _SavedViewsFromPostgres(FacadeMixin):
 
 
 class _Library(_SavedViewsFromPostgres, PostgresLibrary):
+    pass
+
+
+class _SavedViewsCallingUnported(FacadeMixin):
+    @ported
+    def get_saved_views(self) -> list[dict[str, Any]]:
+        try:
+            self.create_saved_view("n", {})
+        except NotPortedError:
+            pass
+        return []
+
+
+class _NestingLibrary(_SavedViewsCallingUnported, PostgresLibrary):
     pass
 
 
@@ -119,6 +140,18 @@ class PostgresLegTests(unittest.TestCase):
         self.assertEqual(recorder.get_saved_views(), [{"db": name, "ro": "on"}])
         self.assertEqual(log.ported, {"get_saved_views"})
         self.assertEqual(log.unported, set())
+
+    def test_the_fixture_records_a_refusal_inside_a_ported_method(self) -> None:
+        probe, library = self._open()
+        self.addCleanup(probe.doCleanups)
+        self.assertEqual(type(library.parity_library).__name__, "PostgresLibrary")
+        log = ParityLog()
+        facade = with_refusal_log(_NestingLibrary, log)(object(), storage=self.storage)  # type: ignore[arg-type]
+        self.assertEqual(validate_registry(_NestingLibrary), [])
+        recorder = ParityRecorder(facade, frozenset({"get_saved_views"}), log)
+        self.assertEqual(recorder.get_saved_views(), [])
+        self.assertEqual(log.unported, {"create_saved_view"})
+        self.assertEqual(log.refusals, 1)
 
 
 def harness_dbname(conninfo: str) -> str:

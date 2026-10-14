@@ -18,6 +18,7 @@ import tempfile
 import types
 import unittest
 import unittest.mock
+from collections.abc import Callable
 from typing import Any
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -37,6 +38,7 @@ from tests.backend_parity import (
     ParityRecorder,
     enabled_backends,
     parametrize_backends,
+    with_refusal_log,
 )
 
 _SCRIPT = os.path.join(_PROJECT_DIR, "scripts", "run_backend_parity.py")
@@ -63,6 +65,26 @@ class _FakeLibrary:
         raise AssertionError("an unported method must never be reached")
 
 
+class _NestingFakeLibrary:
+    """A facade whose ported method calls an unported one through ``self``."""
+
+    def __init__(self, *, propagate: bool) -> None:
+        self.propagate = propagate
+
+    def get_saved_views(self):
+        try:
+            self.create_saved_view("n", {})
+        except NotPortedError:
+            if self.propagate:
+                raise
+        return [{"id": "SV-1"}]
+
+    def __getattr__(self, name):
+        if name == "create_saved_view":
+            raise NotPortedError(name)
+        raise AttributeError(name)
+
+
 def _module(name: str) -> types.ModuleType:
     module = types.ModuleType(name)
     sys.modules[name] = module
@@ -79,12 +101,16 @@ def _run(*classes: type) -> ParityResult:
     return result
 
 
-def _fake_postgres(cls: type[BackendParityTestCase]) -> type[BackendParityTestCase]:
+def _fake_postgres(
+    cls: type[BackendParityTestCase], make_library: Callable[[], Any] = _FakeLibrary
+) -> type[BackendParityTestCase]:
     """The class's twin, with the facade replaced by a recorder over a fake."""
 
     def open_library(self: BackendParityTestCase, storage: Any) -> Any:
         if self.parity_backend == POSTGRES:
-            return ParityRecorder(_FakeLibrary(), PORTED, self.parity_log)
+            library = make_library()
+            library.__class__ = with_refusal_log(type(library), self.parity_log)
+            return ParityRecorder(library, PORTED, self.parity_log)
         return _FakeLibrary()
 
     module = sys.modules[cls.__module__]
@@ -196,17 +222,21 @@ class SkipBehaviorTests(unittest.TestCase):
         self.module = _module("tests._parity_skip_probe")
         self.addCleanup(sys.modules.pop, self.module.__name__, None)
 
-    def _twin(self, body: dict[str, Any]) -> type[BackendParityTestCase]:
+    def _twin(
+        self, body: dict[str, Any], make_library: Callable[[], Any] = _FakeLibrary
+    ) -> type[BackendParityTestCase]:
         def setUp(self):
             self.db = self.open_library(None)
 
         cls = type("Probe", (BackendParityTestCase,), {"setUp": setUp, **body})
         cls.__module__ = self.module.__name__
         setattr(self.module, "Probe", cls)
-        return _fake_postgres(cls)
+        return _fake_postgres(cls, make_library)
 
-    def _postgres_counts(self, body: dict[str, Any]) -> tuple[ParityResult, Any]:
-        twin = self._twin(body)
+    def _postgres_counts(
+        self, body: dict[str, Any], make_library: Callable[[], Any] = _FakeLibrary
+    ) -> tuple[ParityResult, Any]:
+        twin = self._twin(body, make_library)
         result = _run(twin)
         return result, result.outcomes.get(POSTGRES, {})
 
@@ -252,6 +282,30 @@ class SkipBehaviorTests(unittest.TestCase):
 
         _result, counts = self._postgres_counts({"setUp": setUp, "test_it": test_it})
         self.assertEqual(dict(counts), {"skipped_unported": 1})
+
+    def test_a_ported_method_swallowing_a_nested_refusal_is_a_skip(self):
+        def test_it(self):
+            self.assertEqual(self.db.get_saved_views(), [{"id": "SV-1"}])
+
+        result, counts = self._postgres_counts(
+            {"test_it": test_it}, lambda: _NestingFakeLibrary(propagate=False)
+        )
+        self.assertEqual(dict(counts), {"skipped_unported": 1})
+        self.assertEqual(result.skipped[0][1], SKIP_PREFIX + "create_saved_view")
+        self.assertEqual(result.ported_evidence, set())
+
+    def test_a_nested_refusal_the_test_catches_is_a_skip(self):
+        def test_it(self):
+            try:
+                self.db.get_saved_views()
+            except NotPortedError:
+                pass
+
+        result, counts = self._postgres_counts(
+            {"test_it": test_it}, lambda: _NestingFakeLibrary(propagate=True)
+        )
+        self.assertEqual(dict(counts), {"skipped_unported": 1})
+        self.assertEqual(result.ported_evidence, set())
 
     def test_ported_calls_run_real_assertions(self):
         def test_passes(self):

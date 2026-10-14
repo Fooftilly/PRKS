@@ -20,7 +20,8 @@ and its own temporary data root, so the two legs never share state.
 
 Unported methods never produce a misleading result on the ``postgres`` leg:
 every library attribute the test reaches is recorded, a method that is not
-registered as ported raises :class:`~backend.pg_facade.NotPortedError`, and a
+registered as ported raises :class:`~backend.pg_facade.NotPortedError` (also
+when a ported method calls it internally), and a
 test (or its ``setUp``/``tearDown`` or a cleanup) that touched one is reported as skipped
 with the unported names, whether it then failed, errored or passed (an
 exception the code under test swallowed). Only a test that touched nothing
@@ -52,6 +53,8 @@ SKIP_PREFIX = "not ported to PostgreSQL: "
 # Methods wrapped on the twin so an unported call anywhere in a test's
 # lifecycle becomes a skip (cleanups are wrapped by its addCleanup).
 _GUARDED_LIFECYCLE = ("setUp", "tearDown")
+
+L = TypeVar("L")
 
 
 
@@ -107,6 +110,32 @@ def _record_use(log: ParityLog, name: str, attr: Any) -> Any:
         return attr(*args, **kwargs)
 
     return call
+
+
+def with_refusal_log(library_cls: type[L], log: ParityLog) -> type[L]:
+    """``library_cls`` with every ``NotPortedError`` it raises recorded in ``log``.
+
+    The recorder only sees what a test reaches on the library object; a ported
+    method calling an unported one goes through ``self`` and never passes it.
+    Recording at the facade's own refusal point catches that call too, even
+    when the ported method (or the code under test) swallows the error.
+    """
+    from backend.pg_facade import NotPortedError
+
+    class Recording(library_cls):
+        def __getattr__(self, name: str) -> Any:
+            fallback = getattr(super(), "__getattr__", None)
+            if fallback is None:
+                raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
+            try:
+                return fallback(name)
+            except NotPortedError as exc:
+                log.unported.add(exc.method)
+                log.refusals += 1
+                raise
+
+    Recording.__name__ = Recording.__qualname__ = library_cls.__name__
+    return Recording
 
 
 class ParityRecorder:
@@ -178,7 +207,7 @@ class BackendParityTestCase(unittest.TestCase):
             DatabaseConfig(conninfo=harness.conninfo(name), role="test", pool_min=0, pool_max=2)
         )
         self.addCleanup(database.close)
-        library = PostgresLibrary(database, storage=storage)
+        library = with_refusal_log(PostgresLibrary, self.parity_log)(database, storage=storage)
         return ParityRecorder(library, frozenset(ported_methods(PostgresLibrary)), self.parity_log)
 
 
