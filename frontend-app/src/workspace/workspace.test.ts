@@ -13,6 +13,7 @@ import {
   normalizeTree,
   removeLeaf,
   replaceTabId,
+  setSplitRatio,
   splitLeaf,
   validateTree,
   type SplitIdFactory,
@@ -857,5 +858,69 @@ describe('workspace state recovery and snapshot boundaries', () => {
     }))
     expect(tooMany.ok).toBe(false)
     expect(tooMany.errors).toContain('pane cap exceeded ' + ids.length)
+  })
+})
+
+describe('workspace split geometry during repair (#672)', () => {
+  const main = tab('main', '#/folders')
+  const a = tab('a')
+  const b = tab('b')
+
+  function withStaleLeaf(rootRatio: number): WorkspaceState {
+    const inner = makeSplit(
+      'top-bottom', makeLeaf(a.id), makeLeaf('deleted'), 0.4, asSplitId('inner'),
+    )
+    const outer = makeSplit('left-right', inner, makeLeaf(b.id), 0.63, asSplitId('outer'))
+    return state({
+      tabs: [main, a, b],
+      mode: 'tiled',
+      mainTabId: main.id,
+      focusedTabId: a.id,
+      secondaryTree: { ...outer, ratio: rootRatio },
+    })
+  }
+
+  it('rejects malformed surviving ancestors even when a stale child is pruned', () => {
+    for (const invalid of [Number.NaN, Number.POSITIVE_INFINITY, -0.2, 1.2]) {
+      const current = withStaleLeaf(invalid)
+      freezeDeep(current)
+      // The old rewritePath rebuilt the outer split via makeSplit and clamped
+      // these invalid ratios to a valid value during unrelated leaf cleanup.
+      expect(() => repairWorkspaceState(current)).toThrow(
+        /workspace secondaryTree invariant violation: invalid ratio/,
+      )
+      expect(current.secondaryTree?.type).toBe('split')
+      if (current.secondaryTree?.type === 'split') {
+        expect(Object.is(current.secondaryTree.ratio, invalid)).toBe(true)
+      }
+    }
+  })
+
+  it('preserves valid ancestor geometry and untouched input while repairing leaves', () => {
+    const current = withStaleLeaf(0.63)
+    freezeDeep(current)
+    const fixed = repairWorkspaceState(current)
+    expect(collectLeafTabIds(fixed.secondaryTree)).toEqual([a.id, b.id])
+    expect(fixed.secondaryTree).toMatchObject({
+      type: 'split', id: 'outer', axis: 'left-right', ratio: 0.63,
+      first: { type: 'leaf', tabId: a.id },
+      second: { type: 'leaf', tabId: b.id },
+    })
+    expect(validateWorkspace(fixed).ok).toBe(true)
+    expect(repairWorkspaceState(fixed)).toBe(fixed)
+    expect(collectLeafTabIds(current.secondaryTree)).toEqual([a.id, 'deleted', b.id])
+  })
+
+  it('retains intentional ratio clamping on construction and explicit resize', () => {
+    const split = makeSplit(
+      'left-right', makeLeaf(a.id), makeLeaf(b.id), Number.NaN, asSplitId('resize'),
+    )
+    expect(split.ratio).toBe(0.5)
+    const resized = setSplitRatio(split, 'resize', Number.POSITIVE_INFINITY)
+    expect(resized).toMatchObject({ type: 'split', ratio: 0.5 })
+    const clamped = setSplitRatio(split, 'resize', 1.4)
+    expect(clamped).toMatchObject({ type: 'split', ratio: 1 })
+    expect(split.ratio).toBe(0.5)
+    expect(validateTree(clamped).ok).toBe(true)
   })
 })
