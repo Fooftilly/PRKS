@@ -1,6 +1,7 @@
 name: Workflow lint (actionlint + ShellCheck)
 
 on:
+  # Always report the check for PRs, even when no workflows changed.
   pull_request:
     branches:
       - master
@@ -20,9 +21,8 @@ concurrency:
 
 jobs:
   actionlint:
-    # Path-scoped, non-required check: lint findings fail this job, but
-    # master branch protection does not currently require this context.
-    # Requiring it would need an always-reporting check and ruleset change.
+    # Always-reported PR check, suitable for a future required ruleset check.
+    # This PR does not itself change branch protection.
     name: Workflow syntax and ShellCheck
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -30,9 +30,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Two commits include the base parent of GitHub's PR merge commit.
+          fetch-depth: 2
           persist-credentials: false
 
+      - name: Determine whether to run workflow lint
+        id: scope
+        shell: bash
+        env:
+          PRKS_EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          run_lint="$(python3 scripts/ci_workflow_lint_scope.py)"
+          printf 'run_lint=%s\n' "$run_lint" >> "$GITHUB_OUTPUT"
+          if [[ "$run_lint" == "true" ]]; then
+            echo "Workflow lint selected."
+          else
+            echo "No workflow changes: successful check without tool downloads."
+          fi
+
       - name: Install pinned actionlint
+        if: steps.scope.outputs.run_lint == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -47,6 +65,7 @@ jobs:
           tar -xzf "$archive" -C "$RUNNER_TEMP" actionlint
 
       - name: Install checksum-verified ShellCheck
+        if: steps.scope.outputs.run_lint == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -64,6 +83,7 @@ jobs:
       # Regression fixture proves actionlint really invokes the pinned
       # ShellCheck integration rather than silently skipping embedded shell.
       - name: Verify actionlint ShellCheck integration
+        if: steps.scope.outputs.run_lint == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -98,6 +118,7 @@ jobs:
       # pyflakes remains disabled pending separate signal assessment.
       # https://github.com/rhysd/actionlint/pull/654
       - name: Check all workflows (fail on findings)
+        if: steps.scope.outputs.run_lint == 'true'
         shell: bash
         run: |
           set -euo pipefail
