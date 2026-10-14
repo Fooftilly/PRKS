@@ -74,8 +74,11 @@ def enabled_backends(environ: dict[str, str] | None = None) -> tuple[str, ...]:
 class ParityLog:
     """Library attributes one ``postgres`` test reached."""
 
+    # Ported methods the test called (not merely looked up).
     ported: set[str] = field(default_factory=set[str])
     unported: set[str] = field(default_factory=set[str])
+    # NotPortedError refusals raised so far; tells a part whether it hit one.
+    refusals: int = 0
     # The test already ended as a skip; later parts must not report another.
     skipped: bool = False
 
@@ -87,6 +90,23 @@ def _reference_has(name: str) -> bool:
     from backend.db_manager import PRKSDatabase
 
     return hasattr(PRKSDatabase, name)
+
+
+def _record_use(log: ParityLog, name: str, attr: Any) -> Any:
+    """Count a ported method as used when it is called, not when looked up.
+
+    A value attribute (a property's result) is used by reading it.
+    """
+    if not callable(attr):
+        log.ported.add(name)
+        return attr
+
+    @functools.wraps(attr)
+    def call(*args: Any, **kwargs: Any) -> Any:
+        log.ported.add(name)
+        return attr(*args, **kwargs)
+
+    return call
 
 
 class ParityRecorder:
@@ -106,12 +126,12 @@ class ParityRecorder:
         library = object.__getattribute__(self, "_library")
         log: ParityLog = object.__getattribute__(self, "_log")
         if name in object.__getattribute__(self, "_ported"):
-            log.ported.add(name)
-            return getattr(library, name)
+            return _record_use(log, name, getattr(library, name))
         if not name.startswith("__") and _reference_has(name):
             from backend.pg_facade import NotPortedError
 
             log.unported.add(name)
+            log.refusals += 1
             raise NotPortedError(name)
         return getattr(library, name)
 
@@ -169,22 +189,24 @@ def _call_guarded(test: BackendParityTestCase, fn: Callable[..., Any], *args: An
     exception (a failure that would mislead) and a normal return alike (the
     code under test swallowed the refusal, so its pass would not be evidence
     either). A test is reported as skipped once, by its first such part.
+    Only a part that itself hit a refusal is converted: any other exception,
+    including one from a cleanup after the test was skipped, still errors.
     """
     log = test.parity_log
-    before = frozenset(log.unported)
+    refusals_before = log.refusals
     try:
         result = fn(*args, **kwargs)
     except unittest.SkipTest:
         log.skipped = True
         raise
     except Exception as exc:
-        if not log.unported:
+        if log.refusals == refusals_before:
             raise
         if log.skipped:
             return None
         log.skipped = True
         raise unittest.SkipTest(log.skip_reason()) from exc
-    if log.unported - before and not log.skipped:
+    if log.refusals > refusals_before and not log.skipped:
         log.skipped = True
         raise unittest.SkipTest(log.skip_reason())
     return result

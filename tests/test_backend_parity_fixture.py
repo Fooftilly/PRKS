@@ -9,6 +9,7 @@ real facade over a harness database.
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import io
 from collections import Counter
 import os
@@ -306,6 +307,35 @@ class SkipBehaviorTests(unittest.TestCase):
         self.assertEqual(dict(counts), {"skipped_unported": 1})
         self.assertEqual(len(result.skipped), 1)
 
+    def test_an_unrelated_cleanup_error_after_a_skip_still_errors(self):
+        def test_it(self):
+            self.addCleanup(lambda: 1 / 0)
+            self.db.create_saved_view("n", {})
+
+        result, counts = self._postgres_counts({"test_it": test_it})
+        self.assertEqual(counts["skipped_unported"], 1)
+        self.assertEqual(counts["errors"], 1)
+        self.assertFalse(result.wasSuccessful())
+        report = build_report(result, [], surface=frozenset(), ported={}, problems=[])
+        self.assertFalse(report_ok(report))
+
+    def test_looking_up_a_ported_method_is_not_evidence(self):
+        def test_it(self):
+            self.assertTrue(callable(self.db.get_saved_views))
+
+        result, counts = self._postgres_counts({"test_it": test_it})
+        self.assertEqual(dict(counts), {"passed_no_library": 1})
+        self.assertEqual(result.ported_evidence, set())
+        report = build_report(
+            result,
+            [],
+            surface=frozenset({"get_saved_views"}),
+            ported={"get_saved_views": "OrganizationMixin"},
+            problems=[],
+        )
+        self.assertEqual(report["ported_without_passing_postgres_test"], ["get_saved_views"])
+        self.assertFalse(report_ok(report))
+
     def test_a_real_cleanup_error_still_errors(self):
         def test_it(self):
             self.addCleanup(lambda: 1 / 0)
@@ -337,7 +367,10 @@ class SkipBehaviorTests(unittest.TestCase):
         recorder = ParityRecorder(_FakeLibrary(), PORTED, log)
         with self.assertRaises(AttributeError):
             recorder.anything = 1
-        recorder.get_saved_views()
+        method = recorder.get_saved_views
+        self.assertEqual(log.ported, set())
+        self.assertEqual(inspect.signature(method), inspect.signature(_FakeLibrary().get_saved_views))
+        method()
         with self.assertRaises(NotPortedError):
             recorder.create_saved_view("n", {})
         self.assertEqual(log.ported, {"get_saved_views"})
