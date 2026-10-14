@@ -1,8 +1,16 @@
-"""``prks admin bootstrap`` (``docs/postgresql-architecture.md`` §9.2, §12; L-ID-1 #626).
+"""``prks admin`` (``docs/postgresql-architecture.md`` §9.2, §9.3, §12; L-ID-1 #626).
 
-Run as ``python -m backend.domain.identity.admin bootstrap …`` until the
-``prks`` entry point exists (L-D-1). Setup is two separate steps, so the
-operator never holds a token that is already spent:
+Run as ``python -m backend.domain.identity.admin …`` until the ``prks``
+entry point exists (L-D-1). Two commands:
+
+``unlock-login LOGIN`` deletes the account-wide (``acct:``) row of the login
+attempt limiter for the account named ``LOGIN`` (matched by its identity
+key, as login does), so its owner can sign in from a new browser while a
+guessing campaign keeps the limit tripped. Address and device rows are left
+alone. An unknown login is refused.
+
+``bootstrap`` is first-time setup, in two separate steps, so the operator
+never holds a token that is already spent:
 
 1. ``bootstrap issue-token --root ROOT`` stores a new one-time token (24 h by
    default; ``--ttl-hours``) and delivers it exactly once:
@@ -51,10 +59,11 @@ from typing import Optional, TextIO
 
 from backend.db.config import load_database_config
 from backend.db.database import Database
-from backend.db.errors import DatabaseConfigError
-from backend.domain.identity import bootstrap_tokens, passwords, root_pairing
+from backend.db.errors import DatabaseConfigError, DatabaseError
+from backend.domain.identity import bootstrap_tokens, login_limiter, passwords, root_pairing
 from backend.domain.identity.bootstrap_tokens import BootstrapToken
 from backend.domain.identity.errors import RootPairingRefused
+from backend.domain.text_identity import UnsupportedTextError, identity_key
 from backend.storage.errors import StorageRootError
 from backend.storage.root_binding import acquire_shared_root_lease
 from backend.storage.root_marker import MARKER_FILENAME, binding_refusal, read_marker
@@ -108,6 +117,11 @@ def _parser() -> argparse.ArgumentParser:
     complete.add_argument("--library-name", default="Library")
     complete.add_argument("--password-file", help="owner-only file holding the owner password")
     complete.add_argument("--testing", action="store_true", help="a disposable testing instance")
+
+    unlock = commands.add_parser(
+        "unlock-login", help="clear the account-wide login attempt limit of one account"
+    )
+    unlock.add_argument("login", help="the account's login name")
     return parser
 
 
@@ -123,6 +137,7 @@ class _Io:
         self.stdout = stdout
         self.stderr = stderr
         self._prompt = prompt
+        self.command = "bootstrap"
 
     def terminal_out(self) -> bool:
         return _isatty(self.stdout)
@@ -139,7 +154,7 @@ class _Io:
         print(text, file=self.stdout)
 
     def refuse(self, text: str) -> None:
-        print(f"bootstrap: {text}", file=self.stderr)
+        print(f"{self.command}: {text}", file=self.stderr)
 
 
 def _isatty(stream: TextIO) -> bool:
@@ -428,6 +443,27 @@ def _remove_dead_token_file(environ: Mapping[str, str], db: Database, io: _Io) -
         return
 
 
+def _unlock_login(args: argparse.Namespace, db: Database, io: _Io) -> int:
+    try:
+        identity_key(args.login)
+    except UnsupportedTextError:  # no stored login holds such text
+        io.refuse("No account has that login.")
+        return EXIT_REFUSED
+    try:
+        unlocked = login_limiter.unlock_account(db, args.login)
+    except DatabaseError:
+        io.refuse("The database could not be reached; nothing was changed.")
+        return EXIT_REFUSED
+    if unlocked is None:
+        io.refuse("No account has that login.")
+        return EXIT_REFUSED
+    if unlocked:
+        io.say("Cleared the account-wide login limit.")
+    else:
+        io.say("The account-wide login limit was not set; nothing to clear.")
+    return EXIT_OK
+
+
 def main(
     argv: Optional[Sequence[str]] = None,
     *,
@@ -445,11 +481,15 @@ def main(
         args = _parser().parse_args(list(sys.argv[1:] if argv is None else argv))
     except SystemExit as exc:
         return EXIT_USAGE if exc.code else EXIT_OK
+    io.command = args.command
     try:
         db = open_database(env)
     except DatabaseConfigError as exc:
         io.refuse(exc.message)
         return EXIT_USAGE
+    if args.command == "unlock-login":
+        with db:
+            return _unlock_login(args, db, io)
     try:
         with db:
             # Once ready, every bootstrap command refuses before it reads a
