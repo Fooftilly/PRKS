@@ -45,15 +45,31 @@ jobs:
             "$archive" | sha256sum --check
           tar -xzf "$archive" -C "$RUNNER_TEMP" actionlint
 
-      # First rollout is advisory until findings against existing workflows
-      # have been checked. ShellCheck/pyflakes are a separate future slice.
+      # First rollout is advisory for lint findings, but tool failures remain
+      # fatal. ShellCheck/pyflakes are separate future slices.
+      # GitHub supports concurrency.queue, but actionlint v1.7.12 does not yet
+      # recognize it. Remove this narrow ignore once upstream support ships:
+      # https://github.com/rhysd/actionlint/pull/654
       - name: Check all workflows (advisory)
         id: lint
-        continue-on-error: true
         shell: bash
         run: |
-          "$RUNNER_TEMP/actionlint" -oneline -shellcheck= -pyflakes=
+          set -euo pipefail
+          if "$RUNNER_TEMP/actionlint" -oneline -shellcheck= -pyflakes= \
+            -ignore 'unexpected key "queue" for "concurrency" section'; then
+            echo "has_findings=false" >> "$GITHUB_OUTPUT"
+          else
+            code=$?
+            if [ "$code" -eq 1 ]; then
+              echo "has_findings=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "::error::actionlint execution failed (exit code $code)"
+              exit "$code"
+            fi
+          fi
 
       - name: Surface actionlint findings
-        if: steps.lint.outcome == 'failure'
-        run: echo "::warning::actionlint reported workflow findings; review the advisory step before making it blocking (see #651)."
+        if: steps.lint.outputs.has_findings == 'true'
+        shell: bash
+        run: |
+          echo "::warning::actionlint reported workflow findings; review the advisory step before making it blocking (see #651)."
