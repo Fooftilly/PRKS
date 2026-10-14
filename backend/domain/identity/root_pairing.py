@@ -540,18 +540,8 @@ def _not_durable() -> RootPairingRefused:
     )
 
 
-def _check_and_bump(
-    conn: psycopg.Connection[Any],
-    *,
-    root: str,
-    lease: SharedFileLock,
-    testing: bool,
-    bump: bool,
-    faults: Faults,
-) -> StartResult:
-    row = _read_instance(conn)
-    if row is None or row["setup_state"] != SETUP_READY:
-        return StartResult(StartStatus.SETUP_PENDING)
+def _check_pairing(row: dict[str, Any], root: str, *, testing: bool) -> RootMarker:
+    """Refuse a root that is not this ready database's own (§11.1 step 1)."""
     instance_id = row["id"]
     if bool(row["testing"]) != testing:
         raise RootPairingRefused(
@@ -565,23 +555,26 @@ def _check_and_bump(
             f"This database belongs to storage root {row['storage_root_id']}, but the "
             f"selected root is {marker.storage_root_id}.",
         )
+    if marker.instance_id is None:
+        raise RootPairingRefused(
+            "root_unclaimed",
+            f"The storage root is not claimed, but this database (instance "
+            f"{instance_id}) is already set up. A root is never adopted by a "
+            "database that is not empty.",
+        )
     if marker.instance_id != instance_id:
-        if marker.instance_id is None:
-            raise RootPairingRefused(
-                "root_unclaimed",
-                f"The storage root is not claimed, but this database (instance "
-                f"{instance_id}) is already set up. A root is never adopted by a "
-                "database that is not empty.",
-            )
         raise RootPairingRefused(
             "root_claimed_by_other",
             f"This storage root belongs to PRKS instance {marker.instance_id}, not to "
             f"this database's instance {instance_id}. " + _RECOVERY_HINT,
         )
+    return marker
 
-    database = StartState(int(row["start_generation"]), row["start_token"])
-    on_root = marker.start_state
-    reconciled = False
+
+def _needs_reconcile(
+    database: StartState, on_root: StartState, prev_token: Optional[str]
+) -> bool:
+    """Compare generations (§11.1 steps 2-4): refuse, pass, or reconcile."""
     if database.generation < on_root.generation:
         raise RootPairingRefused(
             "database_behind",
@@ -592,8 +585,8 @@ def _check_and_bump(
     if database.generation > on_root.generation:
         if (
             database.generation != on_root.generation + 1
-            or row["prev_start_token"] is None
-            or row["prev_start_token"] != on_root.token
+            or prev_token is None
+            or prev_token != on_root.token
         ):
             raise RootPairingRefused(
                 "database_ahead",
@@ -601,24 +594,21 @@ def _check_and_bump(
                 f"the storage root ({on_root.generation}) by more than one interrupted "
                 "start of its own. It is not the database this root last ran with.",
             )
-        # A bump whose marker write never happened: finish it before anything.
-        _marker_write(root, lease=lease, instance_id=instance_id, expected=on_root, to=database)
-        reconciled = True
-    elif database.token != on_root.token:
+        return True
+    if database.token != on_root.token:
         raise RootPairingRefused(
             "generation_forked",
             f"Another database reached start generation {on_root.generation} on this "
             "storage root separately. This database is a copy and must not be started "
             "against it.",
         )
+    return False
 
-    if not bump:
-        if not reconciled and not marker_is_durable(root):
-            raise _not_durable()
-        return StartResult(
-            StartStatus.READY, instance_id, database.generation, reconciled=reconciled
-        )
 
+def _bump_database(
+    conn: psycopg.Connection[Any], instance_id: str, database: StartState
+) -> StartState:
+    """Commit the next generation and token, compare-and-set; database first."""
     after = StartState(database.generation + 1, new_start_token())
     try:
         with conn.transaction():
@@ -638,6 +628,38 @@ def _check_and_bump(
             "The start generation changed while this process held the start lock.",
             retryable=True,
         )
+    return after
+
+
+def _check_and_bump(
+    conn: psycopg.Connection[Any],
+    *,
+    root: str,
+    lease: SharedFileLock,
+    testing: bool,
+    bump: bool,
+    faults: Faults,
+) -> StartResult:
+    row = _read_instance(conn)
+    if row is None or row["setup_state"] != SETUP_READY:
+        return StartResult(StartStatus.SETUP_PENDING)
+    instance_id = row["id"]
+    marker = _check_pairing(row, root, testing=testing)
+    database = StartState(int(row["start_generation"]), row["start_token"])
+    on_root = marker.start_state
+    reconciled = _needs_reconcile(database, on_root, row["prev_start_token"])
+    if reconciled:
+        # A bump whose marker write never happened: finish it before anything.
+        _marker_write(root, lease=lease, instance_id=instance_id, expected=on_root, to=database)
+
+    if not bump:
+        if not reconciled and not marker_is_durable(root):
+            raise _not_durable()
+        return StartResult(
+            StartStatus.READY, instance_id, database.generation, reconciled=reconciled
+        )
+
+    after = _bump_database(conn, instance_id, database)
     faults(FAULT_AFTER_DATABASE_BUMP)
     _marker_write(root, lease=lease, instance_id=instance_id, expected=database, to=after)
     return StartResult(
