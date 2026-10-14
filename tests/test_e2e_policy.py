@@ -60,7 +60,15 @@ def _runtime_postgres_imports(root: Path) -> list[str]:
     pending = ["prks_app", "backend.server"]
     visited = set()
     offenders = []
-    pg_prefixes = ("backend.db", "backend.domain.text_identity")
+    # These are the first staged PostgreSQL boundaries. Importing the facade
+    # from the served application is itself a cutover signal, even when the
+    # facade relies only on lazy/TYPE_CHECKING database references.
+    pg_prefixes = (
+        "backend.db",
+        "backend.pg_facade",
+        "backend.domain.identity",
+        "backend.domain.text_identity",
+    )
 
     while pending:
         module = pending.pop()
@@ -980,7 +988,16 @@ class AffectedMappingTests(unittest.TestCase):
             (root / "backend" / "domain" / "identity" / "root_pairing.py").write_text(
                 "from backend.db.database import Database\n", encoding="utf-8",
             )
+            (root / "backend" / "pg_facade").mkdir()
+            (root / "backend" / "pg_facade" / "__init__.py").write_text(
+                "# Facade can lazily receive database state; no static db import\n",
+                encoding="utf-8",
+            )
             self.assertEqual(_runtime_postgres_imports(root), [])
+            active.write_text("from backend.pg_facade import PostgresLibrary\n", encoding="utf-8")
+            self.assertTrue(any("backend.pg_facade" in entry for entry in _runtime_postgres_imports(root)))
+            active.write_text("from backend.domain.identity import root_pairing\n", encoding="utf-8")
+            self.assertTrue(any("backend.domain.identity" in entry for entry in _runtime_postgres_imports(root)))
             active.write_text("from backend.domain import text_identity\n", encoding="utf-8")
             self.assertTrue(any("text_identity" in entry for entry in _runtime_postgres_imports(root)))
             active.write_text("import backend.db.database\n", encoding="utf-8")
