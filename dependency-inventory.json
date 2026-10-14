@@ -389,6 +389,18 @@
       "dependabot_monitored": true
     },
     {
+      "name": "@vitest/coverage-v8",
+      "scope": "build",
+      "authoritative_source": "frontend-app/package.json -> devDependencies.@vitest/coverage-v8",
+      "manifest": "frontend-app/package.json",
+      "lockfile": "frontend-app/package-lock.json",
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true,
+      "notes": "CI-only coverage instrumentation; no production runtime dependency."
+    },
+    {
       "name": "@vitejs/plugin-vue",
       "scope": "build",
       "authoritative_source": "frontend-app/package.json -> devDependencies.@vitejs/plugin-vue",
