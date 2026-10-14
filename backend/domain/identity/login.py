@@ -22,7 +22,9 @@ PR 5/5). In order:
    gated the attempt, replaces the presented device token (if any) with a
    new one, rewrites the hash when its parameters are out of date, and
    creates the session. It re-reads the account under a row lock first: an
-   account disabled or given a new password since step 4 is refused.
+   account disabled since step 4 is refused, and when the hash changed (a
+   concurrent login rehashed it, or the password was changed) the password
+   is checked again against the new hash, outside the lock, before retrying.
 
 Results are stable codes (:class:`LoginOutcome`); :attr:`LoginResult.public_reason`
 maps the ones that must look alike to callers (an invalid stored hash looks
@@ -32,12 +34,13 @@ carries a password, hash or token.
 
 from __future__ import annotations
 
+import functools
 import secrets
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import Enum
-from typing import Optional, TypeGuard
+from typing import Optional, TypeGuard, Union
 
 from argon2 import PasswordHasher
 
@@ -262,6 +265,18 @@ def _library_of(tx: Transaction, user_id: str, library_id: Optional[str]) -> Opt
     return rows[0]["library_id"] if len(rows) == 1 else None
 
 
+@dataclass(frozen=True)
+class _HashChanged:
+    """The account's hash is no longer the one the password was checked against."""
+
+    current: str = field(repr=False)
+
+
+# A hash that keeps changing under a login (each change needs one more
+# Argon2 check) ends it as UNAVAILABLE after this many tries.
+_SUCCESS_TRIES = 3
+
+
 def _succeed(
     tx: Transaction,
     *,
@@ -272,16 +287,18 @@ def _succeed(
     new_hash: Optional[str],
     library_id: Optional[str],
     idle: timedelta,
-) -> LoginResult:
+) -> Union[LoginResult, _HashChanged]:
     current = tx.execute(
-        "SELECT 1 FROM prks.users WHERE id = %s AND disabled_at IS NULL AND password_hash = %s "
-        "FOR UPDATE",
-        (account.user_id, verified_hash),
+        "SELECT password_hash FROM prks.users WHERE id = %s AND disabled_at IS NULL FOR UPDATE",
+        (account.user_id,),
     ).fetchone()
-    if current is None:
-        # Disabled, deleted or given a new password after the check: the
-        # password just verified is no longer the account's.
+    if current is None or current["password_hash"] is None:
+        # Disabled, deleted or without a password since the check.
         return LoginResult(LoginOutcome.INVALID_CREDENTIALS)
+    if current["password_hash"] != verified_hash:
+        # A concurrent login rehashed it, or the password was changed: the
+        # caller checks the password against the new hash, outside this lock.
+        return _HashChanged(current["password_hash"])
     login_limiter.reset(tx, gating_key)
     token = issue_device_token(tx, account.user_id, replacing=device)
     if new_hash is not None:
@@ -351,25 +368,35 @@ def login(
     if not verified:
         return LoginResult(LoginOutcome.INVALID_CREDENTIALS)
 
-    # Hash outside the transaction so the account row is never locked for
-    # the length of an Argon2 call.
-    new_hash = (
-        passwords.hash_password(password, hasher=hasher)
-        if passwords.needs_rehash(stored, hasher=hasher)
-        else None
-    )
-    try:
-        return db.command(
-            lambda tx: _succeed(
-                tx,
-                account=account,
-                verified_hash=stored,
-                gating_key=gating_key,
-                device=device,
-                new_hash=new_hash,
-                library_id=library_id,
-                idle=idle,
-            )
+    # Argon2 work (checks and rehashes) stays outside the transaction so the
+    # account row is never locked for the length of an Argon2 call.
+    for _ in range(_SUCCESS_TRIES):
+        new_hash = (
+            passwords.hash_password(password, hasher=hasher)
+            if passwords.needs_rehash(stored, hasher=hasher)
+            else None
         )
-    except DatabaseError:
-        return LoginResult(LoginOutcome.UNAVAILABLE)
+        try:
+            outcome = db.command(
+                functools.partial(
+                    _succeed,
+                    account=account,
+                    verified_hash=stored,
+                    gating_key=gating_key,
+                    device=device,
+                    new_hash=new_hash,
+                    library_id=library_id,
+                    idle=idle,
+                )
+            )
+        except DatabaseError:
+            return LoginResult(LoginOutcome.UNAVAILABLE)
+        if isinstance(outcome, LoginResult):
+            return outcome
+        stored = outcome.current
+        try:
+            if not passwords.verify_password(stored, password, hasher=hasher):
+                return LoginResult(LoginOutcome.INVALID_CREDENTIALS)
+        except passwords.PasswordHashInvalid:
+            return LoginResult(LoginOutcome.STORED_HASH_INVALID)
+    return LoginResult(LoginOutcome.UNAVAILABLE)

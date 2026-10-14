@@ -130,6 +130,21 @@ class LoginOutcomeTests(IdentityTestCase):
         self.assertEqual(self.run_sql("SELECT count(*) AS n FROM prks.sessions"), [{"n": 0}])
         self.assertEqual(self.run_sql("SELECT count(*) AS n FROM prks.login_device_tokens"), [{"n": 0}])
 
+    def test_a_concurrent_rehash_does_not_fail_a_correct_login(self) -> None:
+        user_id = self.user("Owner", hasher=CountingHasher(time_cost=2))
+        rehashed = passwords.hash_password(PASSWORD, hasher=self.hasher)
+
+        def other_login_rehashes() -> None:
+            self.hasher.on_verify = None
+            self.run_sql("UPDATE prks.users SET password_hash = %s WHERE id = %s", (rehashed, user_id))
+
+        self.hasher.on_verify = other_login_rehashes
+        result = self.login()
+        self.assertIs(result.outcome, LoginOutcome.SUCCEEDED)
+        self.assertEqual(self.hasher.verifies, 2)  # checked again against the new hash
+        stored = self.run_sql("SELECT password_hash FROM prks.users WHERE id = %s", (user_id,))
+        self.assertEqual(stored, [{"password_hash": rehashed}])  # not rehashed twice
+
     def test_an_account_disabled_during_the_check_is_refused(self) -> None:
         user_id = self.user("Owner")
         self.hasher.on_verify = lambda: self.run_sql(
