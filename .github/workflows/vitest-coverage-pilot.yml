@@ -12,6 +12,8 @@ on:
       - "frontend-app/src/lifecycle/owner-resource.test.ts"
       - "frontend-app/src/query/retry.ts"
       - "frontend-app/src/query/retry.test.ts"
+      - "frontend-app/src/workspace/transitions.ts"
+      - "frontend-app/src/workspace/workspace.test.ts"
       - "frontend-app/vite.config.ts"
       - "frontend-app/package.json"
       - "frontend-app/package-lock.json"
@@ -51,10 +53,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm exec -- vitest run src/lifecycle/tab-leave.test.ts src/lifecycle/owner-resource.test.ts src/query/retry.test.ts \
+          npm exec -- vitest run \
+            src/lifecycle/tab-leave.test.ts \
+            src/lifecycle/owner-resource.test.ts \
+            src/query/retry.test.ts \
+            src/workspace/workspace.test.ts \
             --coverage.enabled \
             --coverage.provider=v8 \
-            --coverage.include='src/{lifecycle/tab-leave,lifecycle/owner-resource,query/retry}.ts' \
+            --coverage.include='src/{lifecycle/tab-leave,lifecycle/owner-resource,query/retry,workspace/transitions}.ts' \
             --coverage.reporter=text \
             --coverage.reporter=json-summary \
             --coverage.reportsDirectory="$RUNNER_TEMP/prks-vitest-coverage"
@@ -68,6 +74,7 @@ jobs:
             'src/lifecycle/tab-leave.ts',
             'src/lifecycle/owner-resource.ts',
             'src/query/retry.ts',
+            'src/workspace/transitions.ts',
           ]
           const actual = Object.entries(report).filter(([name]) => name !== 'total')
           if (actual.length !== modules.length) {
@@ -96,7 +103,7 @@ jobs:
           const format = (metric) =>
             `${metric.covered}/${metric.total} (${metric.pct.toFixed(1)}%)`
           const summary = [
-            '## Vitest coverage pilot: three correctness modules',
+            '## Vitest coverage pilot: four correctness modules',
             '',
             '| Module | Lines | Branches |',
             '| --- | ---: | ---: |',
