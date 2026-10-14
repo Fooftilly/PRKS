@@ -53,7 +53,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm exec -- vitest run src/lifecycle/tab-leave.test.ts src/lifecycle/owner-resource.test.ts src/query/retry.test.ts src/workspace/workspace.test.ts \
+          npm exec -- vitest run \
+            src/lifecycle/tab-leave.test.ts \
+            src/lifecycle/owner-resource.test.ts \
+            src/query/retry.test.ts \
+            src/workspace/workspace.test.ts \
             --coverage.enabled \
             --coverage.provider=v8 \
             --coverage.include='src/{lifecycle/tab-leave,lifecycle/owner-resource,query/retry,workspace/transitions}.ts' \
