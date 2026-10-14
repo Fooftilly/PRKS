@@ -18,7 +18,9 @@ Browser first-run setup, when it arrives, uses the same tokens.
 
 - The database schema is applied (`python -m backend.db.migrate`) and
   `PRKS_DATABASE_URL` or `PRKS_DATABASE_URL_FILE` names the database.
-- The data root is already bound: it has a `prks-root.json`.
+- The data root is already bound: it has a `prks-root.json`. Both commands
+  check `--root` first and refuse a missing or unbound root before asking for
+  any secret.
 - Both commands take `--root PATH`, the data root this database will own.
 
 ## Interactive install (a terminal)

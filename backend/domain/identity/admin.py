@@ -56,6 +56,7 @@ from backend.domain.identity.bootstrap_tokens import BootstrapToken
 from backend.domain.identity.errors import RootPairingRefused
 from backend.storage.errors import StorageRootError
 from backend.storage.root_binding import acquire_shared_root_lease
+from backend.storage.root_marker import MARKER_FILENAME
 
 TOKEN_FILE_ENV = "PRKS_BOOTSTRAP_TOKEN_FILE"
 
@@ -166,6 +167,7 @@ def _issue(
         return EXIT_USAGE
     ttl = timedelta(hours=args.ttl_hours)
     root = _real_root(args.root)
+    _check_root_bound(root)
     supplied = _env_token(environ)
     if supplied is not None:
         try:
@@ -298,8 +300,27 @@ def _complete_password(args: argparse.Namespace, io: _Io) -> str:
     return first
 
 
+def _check_root_bound(root: str) -> None:
+    """Refuse a missing or unbound ``--root`` before any secret is asked for."""
+    if not os.path.isdir(root) or not os.path.isfile(os.path.join(root, MARKER_FILENAME)):
+        raise RootPairingRefused(
+            "root_not_bound",
+            f"The data root does not exist or is not bound (it has no {MARKER_FILENAME}); "
+            "check --root.",
+        )
+
+
+def _lease_refusal(exc: StorageRootError) -> RootPairingRefused:
+    if exc.reason == "root_in_use":
+        return RootPairingRefused(exc.reason, "The data root is in use by a maintenance tool.")
+    if exc.reason == "root_not_writable":
+        return RootPairingRefused(exc.reason, "The data root does not exist or is not writable.")
+    return RootPairingRefused(exc.reason, f"The data root cannot be used ({exc.reason}).")
+
+
 def _complete(args: argparse.Namespace, environ: Mapping[str, str], db: Database, io: _Io) -> int:
     root = _real_root(args.root)
+    _check_root_bound(root)
     token = _complete_token(environ, io)
     password = _complete_password(args, io)
     owner = root_pairing.OwnerSpec(
@@ -311,7 +332,7 @@ def _complete(args: argparse.Namespace, environ: Mapping[str, str], db: Database
     try:
         lease = acquire_shared_root_lease(root)
     except StorageRootError as exc:
-        raise RootPairingRefused(exc.reason, "The data root is in use by a maintenance tool.") from None
+        raise _lease_refusal(exc) from None
     try:
         result = root_pairing.bootstrap(
             db, owner, token=token, root=root, lease=lease, testing=bool(args.testing)

@@ -23,6 +23,7 @@ from backend.db.database import Database
 from backend.domain.identity import admin, bootstrap_tokens, passwords
 from backend.domain.identity.bootstrap_tokens import BootstrapToken
 from backend.domain.identity.errors import RootPairingRefused
+from backend.storage.errors import StorageRootInUse, StorageRootRefused
 from tests.pg.harness import fetch_one
 from tests.pg.test_root_pairing import RootPairingTestCase
 
@@ -297,6 +298,44 @@ class AdminBootstrapTests(RootPairingTestCase):
         self.assertNotIn("Traceback", run.err)
         self.assertNotIn(blocker, run.err)
         self.assertEqual(self.token_rows(), 0)
+
+    def test_a_mistyped_root_is_refused_before_any_secret_is_asked(self) -> None:
+        typo = os.path.join(self.tmp, "no-such-root")
+        asked: list[str] = []
+        code = admin.main(
+            ["bootstrap", "complete", "--root", typo, "--login", "owner", "--testing"],
+            environ=self.env, stdin=io.StringIO(), stdout=io.StringIO(), stderr=(err := io.StringIO()),
+            prompt=lambda label: asked.append(label) or "", open_database=self.open_db,
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(asked, [])
+        self.assertIn("does not exist or is not bound", err.getvalue())
+        self.assertNotIn(typo, err.getvalue())
+        issue = self.run_cli("issue-token", "--root", typo)
+        self.assertEqual(issue.code, 1)
+        self.assertIn("does not exist or is not bound", issue.err)
+        self.assertEqual(self.token_rows(), 0)
+        self.assertFalse(os.path.lexists(self.token_file))
+        self.assertFalse(os.path.lexists(typo))
+
+    def test_only_a_busy_root_is_reported_as_in_use(self) -> None:
+        issued = self.run_cli("issue-token", "--root", self.root, tty=True)
+        value = next(line.strip() for line in issued.out.splitlines() if len(line.strip()) == 43)
+        self.secrets.append(value)
+        cases = (
+            (StorageRootInUse("root_in_use", "held"), "in use by a maintenance tool"),
+            (StorageRootRefused("root_not_writable", "x"), "does not exist or is not writable"),
+            (StorageRootRefused("root_contains_link", "x"), "cannot be used (root_contains_link)"),
+        )
+        for error, text in cases:
+            with self.subTest(reason=error.reason):
+                with mock.patch.object(admin, "acquire_shared_root_lease", side_effect=error):
+                    run = self.complete(prompts=[value, PASSWORD, PASSWORD])
+                self.assertEqual(run.code, 1)
+                self.assertIn(text, run.err)
+                if error.reason != "root_in_use":
+                    self.assertNotIn("maintenance tool", run.err)
+        self.assertIsNone(self.setup_state())
 
     def test_a_config_directory_inside_the_data_root_is_refused(self) -> None:
         env = dict(self.env, XDG_CONFIG_HOME=os.path.join(self.root, "cfg"))
