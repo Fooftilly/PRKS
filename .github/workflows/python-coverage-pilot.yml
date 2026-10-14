@@ -50,7 +50,7 @@ jobs:
           python -m coverage run --branch --source=backend.domain.text_identity \
             -m unittest discover -s tests -p test_text_identity.py
           python -m coverage report --show-missing
-          python -m coverage json --output "$RUNNER_TEMP/prks-coverage.json"
+          python -m coverage json -o "$RUNNER_TEMP/prks-coverage.json"
           python - <<'PY'
           import json
           import os
