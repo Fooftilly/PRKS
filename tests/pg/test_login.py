@@ -8,6 +8,7 @@ from typing import Any
 from unittest import mock
 
 import psycopg
+from argon2 import PasswordHasher, extract_parameters
 
 from backend.db.config import DatabaseConfig
 from backend.db.database import Database
@@ -72,6 +73,21 @@ class LoginOutcomeTests(IdentityTestCase):
         self.login("Nobody", PASSWORD, hasher=slower)
         self.assertEqual(slower.verified, [params_of(slower)])
         self.assertFalse(passwords.verify_password(login_module.dummy_hash(slower), PASSWORD, hasher=slower))
+
+    def test_the_default_dummy_hash_is_precomputed_with_the_pinned_parameters(self) -> None:
+        default = passwords.default_hasher()
+        stored = login_module.dummy_hash(default)
+        params = extract_parameters(stored)
+        expected = passwords.PARAMETERS
+        self.assertEqual(
+            (params.type, params.time_cost, params.memory_cost, params.parallelism,
+             params.hash_len, params.salt_len),
+            (expected.type, expected.time_cost, expected.memory_cost, expected.parallelism,
+             expected.hash_len, expected.salt_len),
+        )
+        with mock.patch.object(PasswordHasher, "hash", side_effect=AssertionError("hashed")):
+            self.assertEqual(login_module.dummy_hash(default), stored)
+            login_module.warm_dummy_hash()
 
     def test_unusable_input_is_refused_without_any_work(self) -> None:
         self.user("Owner")

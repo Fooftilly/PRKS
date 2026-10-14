@@ -109,6 +109,15 @@ class LoginResult:
 _DUMMY_LOCK = threading.Lock()
 _DUMMY_HASHES: dict[tuple[object, ...], str] = {}
 
+# The dummy hash for passwords.PARAMETERS, made once from 32 random bytes
+# that were then discarded, so the first failed login of a process does no
+# extra Argon2 work for it (a test pins it to PARAMETERS). Any other
+# parameter set is made on first use; ``warm_dummy_hash`` does that ahead
+# of serving.
+_DEFAULT_DUMMY_HASH = (
+    "$argon2id$v=19$m=65536,t=3,p=4$JJoNNXGxf6UhdoUt9NBnSQ$WdVJw+ykKi/MISTNG5hJVk31on9msFQQmBZPhEWwupg"
+)
+
 
 def _hasher_key(hasher: PasswordHasher) -> tuple[object, ...]:
     return (
@@ -119,6 +128,14 @@ def _hasher_key(hasher: PasswordHasher) -> tuple[object, ...]:
         hasher.hash_len,
         hasher.salt_len,
     )
+
+
+_DUMMY_HASHES[_hasher_key(PasswordHasher.from_parameters(passwords.PARAMETERS))] = _DEFAULT_DUMMY_HASH
+
+
+def warm_dummy_hash(hasher: Optional[PasswordHasher] = None) -> None:
+    """Make the dummy hash for ``hasher`` now, before any login is served."""
+    dummy_hash(hasher or passwords.default_hasher())
 
 
 def dummy_hash(hasher: PasswordHasher) -> str:
