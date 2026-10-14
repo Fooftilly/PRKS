@@ -888,6 +888,8 @@ AFFECTED_RULES = (
         "note": "Non-E2E tests → no browser E2E selection",
     },
     # PG-1/PG-2 plumbing isn't imported by the served SQLite/browser app.
+    # Do not exempt shared backend/domain/__init__.py: it can gain runtime
+    # imports or side effects unrelated to isolated migration plumbing.
     # It is tested by the PostgreSQL Test Gate, not by Chromium. Keep this
     # allowlist narrow: unknown backend/db files still require full E2E.
     # tests/test_e2e_policy.py guards against leaving this exemption active
@@ -900,7 +902,6 @@ AFFECTED_RULES = (
             "backend/db/schema/*.sql",
             "backend/db/schema/snapshot.json",
             "backend/db/schema_snapshot.py",
-            "backend/domain/__init__.py",
         ),
         "features": (),
         "skip": True,
