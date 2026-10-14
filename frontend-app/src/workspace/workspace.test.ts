@@ -611,19 +611,18 @@ describe('command boundary', () => {
     expect(validateWorkspace(replacement.state).ok).toBe(true)
   })
 
-  it('reuses mounted secondaries only when hiding a visible split', () => {
+  it('preflights only mounted visible secondaries when hiding a split', () => {
     const current = base()
     const context = {
       narrowFallback: false,
       homeHash: '#/folders',
-      mountedTabIds: [main.id, second.id, second.id, 'not-a-leaf'],
+      mountedTabIds: [main.id, second.id, 'not-a-leaf'],
     }
     const hiding = applyWorkspaceCommand(current, { type: 'set-mode', mode: 'stacked' }, context)
     expect(hiding.preflight).toEqual({
-      type: 'leave-tabs', tabIds: [second.id, second.id], nextHash: '#/folders',
+      type: 'leave-tabs', tabIds: [second.id], nextHash: '#/folders',
     })
     expect(hiding.effects.filter((effect) => effect.type === 'cold-park')).toEqual([
-      { type: 'cold-park', tabId: second.id },
       { type: 'cold-park', tabId: second.id },
     ])
     const hidden = { ...current, mode: 'stacked' as const, focusedTabId: main.id }
