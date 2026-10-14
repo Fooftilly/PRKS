@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import subprocess
+import subprocess  # nosec B404 - fixed git fixture commands, shell=False
 import sys
 import tempfile
 import unittest
@@ -16,7 +16,7 @@ from scripts.ci_workflow_lint_scope import should_lint
 
 
 def _git(root: Path, *args: str) -> None:
-    proc = subprocess.run(
+    proc = subprocess.run(  # nosec B603,B607 - test-only fixed git argv
         ["git", *args], cwd=root, capture_output=True, text=True, check=False,
     )
     if proc.returncode:
