@@ -360,6 +360,14 @@ def _complete(args: argparse.Namespace, environ: Mapping[str, str], db: Database
         lease.release()
     default_file = bootstrap_tokens.default_token_file(environ)
     removed = bootstrap_tokens.remove_token_file_if(default_file, token)
+    # Setup is ready, so every token this database issued is dead, including
+    # an older one whose temporary alias a crashed issuance left behind.
+    try:
+        bootstrap_tokens.sweep_temporary_token_files(
+            os.path.dirname(default_file), lambda held: bootstrap_tokens.issued_here(db, held)
+        )
+    except RootPairingRefused:
+        pass  # best effort; a later ready refusal sweeps again
     if result.created:
         io.say(f"Setup complete: owner {args.login!r}, Library {args.library_name!r}.")
     else:

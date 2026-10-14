@@ -350,6 +350,21 @@ class AdminBootstrapTests(RootPairingTestCase):
         self.assertEqual(self.complete_with_file().code, 0)
         self.assertEqual(os.listdir(directory), [])
 
+    def test_completion_sweeps_an_older_tokens_temporary_alias(self) -> None:
+        # An earlier issuance crashed before unlinking its temporary; that
+        # token was later replaced. Completing with the newer token removes
+        # the older alias too, since setup being ready makes it dead.
+        with mock.patch.object(bootstrap_tokens.os, "unlink", side_effect=OSError("killed")):
+            self.assertEqual(self.run_cli("issue-token", "--root", self.root).code, 0)
+        self.secrets.append(bootstrap_tokens.read_token_file(self.token_file).reveal())
+        os.unlink(self.token_file)
+        directory = os.path.dirname(self.token_file)
+        self.assertEqual(len(os.listdir(directory)), 1)
+        self.assertEqual(self.run_cli("issue-token", "--root", self.root).code, 0)
+        self.secrets.append(bootstrap_tokens.read_token_file(self.token_file).reveal())
+        self.assertEqual(self.complete_with_file().code, 0)
+        self.assertEqual(os.listdir(directory), [])
+
     def test_a_ready_retry_sweeps_a_temporary_link_without_the_token_file(self) -> None:
         with mock.patch.object(bootstrap_tokens.os, "unlink", side_effect=OSError("killed")):
             self.assertEqual(self.run_cli("issue-token", "--root", self.root).code, 0)
