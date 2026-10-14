@@ -11,6 +11,7 @@ import os
 import pickle
 import stat
 import threading
+from unittest import mock
 from typing import Any
 
 import psycopg
@@ -449,3 +450,36 @@ class TokenFileTests(RootPairingTestCase):
         remover.join(30)
         self.assertFalse(result["removed"])
         self.assertEqual(bootstrap_tokens.read_token_file(path), second)
+
+    def test_links_are_refused_where_open_cannot_refuse_them(self) -> None:
+        # Windows has no O_NOFOLLOW, so open() follows a link; the lstat check
+        # and the identity check must refuse it without that flag.
+        token = bootstrap_tokens.new_token()
+        path = os.path.join(self.tmp, "token")
+        with open(path, "w", encoding="ascii") as handle:
+            handle.write(token.reveal() + "\n")
+        os.chmod(path, 0o600)
+        link = os.path.join(self.tmp, "link")
+        os.symlink(path, link)
+        with mock.patch.object(bootstrap_tokens.os, "O_NOFOLLOW", 0):
+            self.assertEqual(bootstrap_tokens.read_token_file(path), token)
+            self.refused("token_file_unreadable", bootstrap_tokens.read_token_file, link)
+            # A link swapped in after the lstat check is refused as well.
+            real_open = os.open
+            other = os.path.join(self.tmp, "other")
+            with open(other, "w", encoding="ascii") as handle:
+                handle.write(bootstrap_tokens.new_token().reveal() + "\n")
+            os.chmod(other, 0o600)
+
+            def swap_then_open(target: str, flags: int, *args: Any) -> int:
+                if target == path:
+                    os.unlink(path)
+                    os.symlink(other, path)
+                return real_open(target, flags, *args)
+
+            with mock.patch.object(bootstrap_tokens.os, "open", side_effect=swap_then_open):
+                self.refused("token_file_unreadable", bootstrap_tokens.read_token_file, path)
+        with mock.patch.object(
+            bootstrap_tokens, "_is_reparse_point", return_value=True
+        ):
+            self.refused("token_file_unreadable", bootstrap_tokens.read_token_file, other)

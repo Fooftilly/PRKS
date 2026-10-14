@@ -437,11 +437,28 @@ def _sweep_locked(directory: str, belongs: Callable[[BootstrapToken], bool]) -> 
     return removed
 
 
+def _is_reparse_point(info: os.stat_result) -> bool:
+    attributes = getattr(info, "st_file_attributes", 0)
+    return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+
+
 def read_owner_only_file(path: str, *, what: str, limit: int) -> bytes:
     """At most ``limit`` bytes of ``path``; refused unless it is a regular file only its owner can read.
 
     ``what`` names the file in the fixed refusal text (``token``, ``password``).
+    A link is refused on every platform: the path is checked with ``lstat``
+    (a symbolic link, or a Windows reparse point such as a junction), opened
+    with ``O_NOFOLLOW`` where the platform has it, and the opened file must
+    be the one ``lstat`` saw, so a link swapped in between is refused too.
     """
+    try:
+        named = os.lstat(path)
+    except OSError:
+        raise RootPairingRefused(f"{what}_file_unreadable", f"The {what} file cannot be read.") from None
+    if not stat.S_ISREG(named.st_mode) or _is_reparse_point(named):
+        raise RootPairingRefused(
+            f"{what}_file_unreadable", f"The {what} file is not a regular file."
+        )
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
         fd = os.open(path, flags)
@@ -454,7 +471,10 @@ def read_owner_only_file(path: str, *, what: str, limit: int) -> bytes:
             raise RootPairingRefused(
                 f"{what}_file_unreadable", f"The {what} file cannot be read."
             ) from None
-        if not stat.S_ISREG(info.st_mode):
+        if not stat.S_ISREG(info.st_mode) or (info.st_dev, info.st_ino) != (
+            named.st_dev,
+            named.st_ino,
+        ):
             raise RootPairingRefused(
                 f"{what}_file_unreadable", f"The {what} file is not a regular file."
             )
