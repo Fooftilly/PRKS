@@ -211,8 +211,9 @@ class ConnectionErrorMappingTests(unittest.TestCase):
     def test_constraint_errors_without_diagnostics_fail_closed(self) -> None:
         class NoDiagnosticsError(psycopg.Error):
             def __init__(self, state: str) -> None:
-                super().__init__("private constraint value")
+                # psycopg.Error.__init__ consults sqlstate immediately.
                 self._state = state
+                super().__init__("private constraint value")
 
             @property
             def sqlstate(self) -> str:
