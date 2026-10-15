@@ -55,10 +55,24 @@ def executable_lines(entry: dict, kind: str) -> tuple[set[int], set[int]] | None
         covered = set(map(int, entry["executed_lines"]))
         missing = set(map(int, entry["missing_lines"]))
         return covered | missing, covered
+    # Vitest's V8 provider uses Istanbul's JSON reporter. Unlike older
+    # Istanbul formats, coverage-final.json generally has statementMap/s
+    # but no precomputed line map. Combine statement hits on their start
+    # lines, using max so an uncovered statement cannot erase a covered one.
+    statements, hits = entry.get("statementMap"), entry.get("s")
+    if isinstance(statements, dict) and isinstance(hits, dict) and statements:
+        lines: dict[int, int] = {}
+        for statement_id, location in statements.items():
+            if statement_id not in hits:
+                return None
+            line = int(location["start"]["line"])
+            lines[line] = max(lines.get(line, 0), int(hits[statement_id]))
+        return set(lines), {line for line, count in lines.items() if count > 0}
+    # Older Istanbul JSON representations may include line hits directly.
     lines = entry.get("l")
     if not isinstance(lines, dict) or not lines:
         return None
-    return {int(n) for n in lines}, {int(n) for n, hits in lines.items() if hits > 0}
+    return {int(n) for n in lines}, {int(n) for n, count in lines.items() if count > 0}
 
 
 def changed_line_report(
