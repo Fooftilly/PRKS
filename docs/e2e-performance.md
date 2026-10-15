@@ -153,6 +153,9 @@ reported roughly `server_start=15.5s` and `app_ready=18.5s` in 40 serial
 tests. The subphases above identify whether launch/probing or navigation/DOM
 readiness is responsible before attempting another optimization. The sums are
 **profile-instrumented** and must not be mistaken for an unprofiled speedup.
+The runner's **slowest profiled tests** sort key excludes nested detail phases
+when an inclusive parent exists; otherwise it would count the same intervals
+twice. Individual phase details and aggregate phase totals remain visible.
 
 For a comparable measurement after this profiling change, manually run
 **Actions → E2E Routing A/B Benchmark → Run workflow** on the merged commit.
