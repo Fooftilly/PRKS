@@ -179,8 +179,9 @@ origin. `PRKS_E2E_ROUTE_FASTPATH=1` tries a conservative authority-and-path
 prefix first, falling back to the same parser for aliases/edge cases. **Both
 paths still intercept the same request patterns** and block off-origin HTTP
 through the same handler. Redirect behavior is unchanged; this experiment
-makes no new guarantees about Playwright redirect handling. There is no proxy/network-policy change, no
-test isolation change, and no change to what tests are selected. Playwright's
+makes no new guarantees about Playwright redirect handling. There is no
+proxy/network-policy change, no test isolation change, and no change to what
+tests are selected. Playwright's
 routing still disables the browser HTTP cache in both modes, so this benchmark
 does not measure any hypothetical cache win.
 
@@ -252,7 +253,9 @@ The `request_routing` phase includes blocking Playwright route dispatch and
 can overlap other timings; `routing_decision` isolates the pre-dispatch Python
 part. A conservative same-origin fast-path A/B experiment is available above;
 normal same-origin requests still cross Python and HTTP caching remains
-disabled. Avoid narrowing `page.route("**/*")` to an external-only URL matcher
+disabled. If off-origin `route.abort()` itself fails, the handler now raises
+instead of falling back to `route.continue_()` (which could fail open).
+Avoid narrowing `page.route("**/*")` to an external-only URL matcher
 without proving same-origin redirects cannot bypass the network guard.
 
 Risk: weakening the guarantee that E2E cannot silently depend on the public network.
