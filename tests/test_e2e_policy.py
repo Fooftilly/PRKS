@@ -2635,6 +2635,24 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                     runner._write_serial_benchmark_result(result, 1.0)
             self.assertFalse(destination.exists())
 
+    def test_manual_route_benchmark_warms_up_before_measuring(self):
+        """Do not charge one-time runner startup against the baseline arm."""
+        script = Path(".github/workflows/e2e-routing-benchmark.yml").read_text(
+            encoding="utf-8"
+        )
+        warmup = script.index("::group::Unmeasured baseline warm-up")
+        trials = script.index("for trial in 1 2 3 4; do")
+        self.assertLess(warmup, trials)
+        warmup_block = script[warmup:trials]
+        self.assertIn('PRKS_E2E_BENCHMARK_RESULT=""', warmup_block)
+        self.assertIn("PRKS_E2E_ROUTE_FASTPATH=0", warmup_block)
+        self.assertIn("--jobs 1 --no-pointer-capture --profile", warmup_block)
+        # The warm-up and measured runs must use identical selections.
+        self.assertEqual(script.count("--feature shell --feature work-create"), 2)
+        self.assertEqual(script.count("--jobs 1 --no-pointer-capture --profile"), 2)
+        self.assertIn("1|4) mode=baseline; flag=0", script)
+        self.assertIn("2|3) mode=fastpath; flag=1", script)
+
     def test_watchdog_does_not_touch_last_failed_in_profile_mode(self):
         """Even watchdog os._exit paths must preserve benchmark history."""
         from tests.e2e import run as runner
