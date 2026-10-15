@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import fnmatch
 import io
 import json
 import os
@@ -50,7 +51,22 @@ class _RuntimeImports(ast.NodeVisitor):
         self.path = path
         self.package = package
         self.imports: set[str] = set()
+        # Imports inside a function body run only when it is called, not when
+        # the module loads (the opt-in PRKS_AUTH start, for example).
+        self.deferred: set[str] = set()
+        self._function_depth = 0
         self.import_module_aliases = {"__import__", "import_module"}
+
+    def _add(self, *names: str) -> None:
+        (self.deferred if self._function_depth else self.imports).update(names)
+
+    def visit_FunctionDef(self, node):
+        self._function_depth += 1
+        self.generic_visit(node)
+        self._function_depth -= 1
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+    visit_Lambda = visit_FunctionDef
 
     def visit_If(self, node):
         # Type-only imports do not activate a persistence backend.
@@ -67,7 +83,7 @@ class _RuntimeImports(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Import(self, node):
-        self.imports.update(alias.name for alias in node.names)
+        self._add(*(alias.name for alias in node.names))
 
     def visit_ImportFrom(self, node):
         if node.level == 0 and node.module == "importlib":
@@ -85,11 +101,10 @@ class _RuntimeImports(ast.NodeVisitor):
         else:
             base = node.module or ""
         if base:
-            self.imports.add(base)
-            self.imports.update(
+            self._add(base, *(
                 base + "." + alias.name
                 for alias in node.names if alias.name != "*"
-            )
+            ))
 
     def visit_Call(self, node):
         # Literal dynamic imports are checked. Computed module names still
@@ -101,20 +116,32 @@ class _RuntimeImports(ast.NodeVisitor):
             and isinstance(node.args[0].value, str)
         ):
             if isinstance(func, ast.Name) and func.id in self.import_module_aliases:
-                self.imports.add(node.args[0].value)
+                self._add(node.args[0].value)
             elif isinstance(func, ast.Attribute) and func.attr == "import_module":
-                self.imports.add(node.args[0].value)
+                self._add(node.args[0].value)
         self.generic_visit(node)
 
 
-def _runtime_postgres_imports(root: Path) -> list[str]:
+def _runtime_postgres_imports(root: Path, *, deferred: bool = False) -> list[str]:
     """Conservatively trace local static imports from the shipped server entries.
 
     Staged PostgreSQL modules may import each other without being served yet.
     Follow the actual runtime graph rather than flagging every backend module.
     Direct Python imports, relative imports and literal dynamic imports are
     included; nonliteral dynamic loading needs a deliberate policy review.
+    By default only what loads with the modules is followed (what the SQLite
+    runtime imports); ``deferred=True`` also follows imports inside function
+    bodies, which run only on a code path such as the PRKS_AUTH start.
     """
+    return _trace_served_modules(root, deferred=deferred)[1]
+
+
+def _served_modules(root: Path) -> set[str]:
+    """Every local module the served app can import, deferred imports included."""
+    return _trace_served_modules(root, deferred=True)[0]
+
+
+def _trace_served_modules(root: Path, *, deferred: bool) -> tuple[set[str], list[str]]:
     sources = {"prks_app": root / "prks_app.py"}
     for path in (root / "backend").rglob("*.py"):
         rel = path.relative_to(root).with_suffix("")
@@ -149,7 +176,8 @@ def _runtime_postgres_imports(root: Path) -> list[str]:
         package = module if path.name == "__init__.py" else module.rpartition(".")[0]
         scanner = _RuntimeImports(path=path, package=package)
         scanner.visit(tree)
-        for target in sorted(scanner.imports):
+        targets = scanner.imports | scanner.deferred if deferred else scanner.imports
+        for target in sorted(targets):
             if any(target == prefix or target.startswith(prefix + ".") for prefix in pg_prefixes):
                 offenders.append(f"{module} imports {target}")
             # Include package __init__.py side effects in the reachable graph.
@@ -158,7 +186,7 @@ def _runtime_postgres_imports(root: Path) -> list[str]:
                 candidate = ".".join(parts[:index])
                 if candidate in sources and candidate not in visited:
                     pending.append(candidate)
-    return sorted(set(offenders))
+    return visited, sorted(set(offenders))
 
 
 class SmokeSelectionTests(unittest.TestCase):
@@ -922,7 +950,6 @@ class AffectedMappingTests(unittest.TestCase):
 
     def test_postgres_schema_and_migration_only_diff_skips_browser_ci(self):
         paths = [
-            "backend/db/__init__.py",
             "backend/db/migrate.py",
             "backend/db/schema/000_extensions.sql",
             "backend/db/schema/010_instance.sql",
@@ -935,7 +962,7 @@ class AffectedMappingTests(unittest.TestCase):
             "tests/pg/test_schema_snapshot.py",
             "backend/AGENTS.md",
         ]
-        for path in paths[:9]:
+        for path in paths[:8]:
             with self.subTest(path=path):
                 classified = policy.classify_affected_path(path)
                 self.assertEqual(classified["rules"], ["postgres-migration-infrastructure"])
@@ -970,7 +997,9 @@ class AffectedMappingTests(unittest.TestCase):
         pg_paths = ["backend/db/migrate.py", "backend/db/schema/040_sync.sql"]
         for runtime in (
             "prks_app.py", "backend/server.py", "backend/db_manager.py",
-            "backend/db/database.py", "backend/db/new_unknown_module.py",
+            "backend/db/__init__.py", "backend/db/database.py",
+            "backend/db/new_unknown_module.py", "backend/api/session.py",
+            "backend/domain/identity/web_start.py",
             "frontend/js/app.js", "tests/e2e/policy.py",
         ):
             with self.subTest(runtime=runtime):
@@ -984,7 +1013,27 @@ class AffectedMappingTests(unittest.TestCase):
     def test_postgres_exemption_requires_no_runtime_imports(self):
         # PG feature code can be built and tested before cutover; only imports
         # reachable from the served application activate the browser boundary.
+        # The SQLite runtime loads no PostgreSQL module; the opt-in PRKS_AUTH
+        # start (L-ID-1) imports identity and the pool inside functions.
         self.assertEqual(_runtime_postgres_imports(Path(_PROJECT_DIR)), [])
+
+    def test_no_e2e_skipped_python_file_is_reachable_from_the_served_app(self):
+        root = Path(_PROJECT_DIR)
+        served = _served_modules(root)
+        skipped = [
+            pattern
+            for rule in policy.AFFECTED_RULES if rule.get("skip")
+            for pattern in rule["paths"] if pattern.startswith("backend/")
+        ]
+        self.assertIn("backend/db/migrate.py", skipped)
+        for path in sorted(root.glob("backend/**/*.py")):
+            rel = path.relative_to(root).as_posix()
+            if not any(fnmatch.fnmatchcase(rel, pattern) for pattern in skipped):
+                continue
+            parts = path.relative_to(root).with_suffix("").parts
+            module = ".".join(parts[:-1] if path.name == "__init__.py" else parts)
+            with self.subTest(path=rel):
+                self.assertNotIn(module, served, f"{rel} is served but skips browser E2E")
 
     def test_postgres_import_guard_ignores_unserved_staging_but_detects_cutover(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -1005,6 +1054,18 @@ class AffectedMappingTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertEqual(_runtime_postgres_imports(root), [])
+            # An import inside a function is not loaded with the module, but
+            # the deferred trace still sees it.
+            active.write_text(
+                "def start():\n    from backend.domain.identity import root_pairing\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(_runtime_postgres_imports(root), [])
+            self.assertTrue(any(
+                "backend.domain.identity" in entry
+                for entry in _runtime_postgres_imports(root, deferred=True)
+            ))
+            self.assertIn("backend.domain.identity.root_pairing", _served_modules(root))
             active.write_text("from backend.pg_facade import PostgresLibrary\n", encoding="utf-8")
             self.assertTrue(any("backend.pg_facade" in entry for entry in _runtime_postgres_imports(root)))
             active.write_text("from backend.domain.identity import root_pairing\n", encoding="utf-8")

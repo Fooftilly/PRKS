@@ -1,11 +1,11 @@
 # Sign-in: attempt limits, login devices and sessions
 
 PostgreSQL deployments only (L-ID-1, #626; design in
-`docs/postgresql-architecture.md` §9.3). Nothing in the running SQLite
-application uses this yet, and the HTTP routes (`POST /api/login`,
-`/api/session`, sign-out) arrive in a later PR. Code:
-`backend/domain/identity/login.py`, `login_limiter.py`, `sessions.py` and
-`secret_tokens.py`.
+`docs/postgresql-architecture.md` §9.3). Sign-in is off unless `PRKS_AUTH` is
+set (see "Turning sign-in on" below); the SQLite application without it is
+unchanged. Code: `backend/domain/identity/login.py`, `login_limiter.py`,
+`sessions.py`, `secret_tokens.py` and `web_start.py`, and the HTTP boundary
+`backend/api/session.py`.
 
 ## Attempt limits
 
@@ -109,3 +109,66 @@ disabled, or when its Library membership is removed.
 The `sessions.prune` job (when the job runtime arrives) deletes expired and
 revoked sessions, ended attempt windows and login-device tokens older than a
 year.
+
+## Turning sign-in on
+
+| Variable | Values |
+| --- | --- |
+| `PRKS_AUTH` | unset (no sign-in, the SQLite application as before), `session`, or `loopback-owner` |
+| `PRKS_DATABASE_URL` / `PRKS_DATABASE_URL_FILE` | the PostgreSQL database; required by both modes |
+| `PRKS_PUBLIC_ORIGIN` | the origin browsers use behind an HTTPS reverse proxy, such as `https://prks.example.org` |
+
+Before it opens its storage root, the server runs the same start check as
+every PostgreSQL process (`docs/postgresql-architecture.md` §11.1): it refuses
+to start, with exit status 2, when the database belongs to another root, is a
+stale copy, is a testing database started without `--testing` (or the
+reverse), or has no completed setup (`docs/admin-bootstrap.md`). The check
+holds the root's shared lease only while it runs; the server then takes the
+exclusive single-process lease as before, so `admin unlock-login` (which needs
+the shared lease) runs while the server is stopped.
+
+**`session`.** Every `/api/` route except the three below needs a
+`prks_session` cookie.
+
+| Route | Answer |
+| --- | --- |
+| `POST /api/login` `{"login", "password"}` | 200 with both cookies and the session (as below); 401 `invalid_credentials`; 429 `too_many_attempts` with `Retry-After`; 503 `unavailable` |
+| `GET /api/session` | 200 `{auth_mode, instance_id, user: {id, display_name}, library: {id, name, role, epoch}, expires_at}`, or 401 `not_authenticated` |
+| `POST /api/logout` | 200; the session is revoked and its cookie cleared |
+
+**`loopback-owner`** is for development and local testing. Every request acts
+as the owner through an ordinary server-side session that never leaves the
+process; there is no login or logout. The server refuses to start in this
+mode unless it is a testing instance (`--testing`) bound to a loopback
+address (`--host 127.0.0.1` or `--host ::1`), and it answers no peer that is
+not a loopback address.
+
+### What every other route needs
+
+1. A live session (401 `not_authenticated`).
+2. The route's capability under the current membership (403 `forbidden`):
+   reading needs a reader, changing Library content an editor, backups and
+   Library settings the owner. A changed role or a removed membership applies
+   to the next request.
+3. For a change to Library content, the `PRKS-Library-Epoch` header, exactly
+   once, as a positive whole number without sign, spaces or leading zeros
+   (400 `LIBRARY_EPOCH_REQUIRED`), equal to the Library's current epoch (409
+   `LIBRARY_EPOCH_CHANGED`), with the Library not under maintenance (503
+   `MAINTENANCE`). Reads, browser error reports and sign-in routes take no
+   epoch.
+
+Admitted responses carry the Library's epoch in `PRKS-Library-Epoch`.
+
+### Cross-site requests
+
+Every `/api/` change (sign-in and sign-out included) must come from the PRKS
+page itself: `Sec-Fetch-Site`, when sent, must be `same-origin`, and the
+`Origin` header must be the expected origin. Without an `Origin`,
+`Sec-Fetch-Site: same-origin` is required. The expected origin is
+`PRKS_PUBLIC_ORIGIN` when set (and then only it), otherwise
+`http://<the Host the request was sent to>`. `X-Forwarded-Host`,
+`X-Forwarded-Proto` and `Forwarded` are never read. Anything else gets 403
+`origin_not_allowed` before the request is counted or authenticated.
+
+Cookies are `Secure` when `PRKS_PUBLIC_ORIGIN` is an `https` origin. Its host
+is accepted as a request host without listing it in `PRKS_TRUSTED_HOSTS`.

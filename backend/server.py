@@ -826,6 +826,64 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             return False
         return True
 
+    def _prks_admit(self, parsed_path) -> bool:
+        """Authentication admission for an ``/api/`` request (L-ID-1 #626).
+
+        True to dispatch the route; False when the request has been answered.
+        Without ``PRKS_AUTH`` (the SQLite runtime) only the existing Origin
+        check applies, to mutations. With it, ``backend.api.session`` answers
+        the identity routes and admits every other route only for a live
+        session with the route's capability and, for a Library mutation, the
+        Library's current epoch.
+        """
+        self._prks_library_epoch = None
+        method = (getattr(self, "command", "") or "").upper()
+        auth = getattr(self.server, "prks_auth", None)
+        if auth is None:
+            return method in ("GET", "HEAD") or self._validate_mutation_origin()
+        # Only an authenticated (PostgreSQL) process imports the identity code.
+        from backend.api import session as session_api
+
+        def read_json():
+            data = self._read_json_body()
+            if data is _JSON_BODY_REJECTED:
+                return session_api.ANSWERED
+            return {} if data is _JSON_BODY_ABSENT else data
+
+        outcome = session_api.handle(
+            auth,
+            session_api.HttpRequest(
+                method=method,
+                path=parsed_path.path,
+                headers=self.headers,
+                peer=str(self.client_address[0]),
+                request_host=self._prks_request_host,
+                parse_origin=parse_request_origin,
+                read_json=read_json,
+            ),
+        )
+        if isinstance(outcome, session_api.Admitted):
+            self._prks_library_epoch = outcome.epoch
+            return True
+        if isinstance(outcome, session_api.Reply):
+            if outcome.status >= 400:
+                LOGGER.info(
+                    "request_rejected reason=%s request_id=%s",
+                    safe_log_label(str(outcome.body.get("error", ""))),
+                    safe_log_id(self._prks_request_id),
+                )
+            body = b"" if method == "HEAD" else json.dumps(outcome.body).encode("utf-8")
+            self.send_response(outcome.status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            for name, value in outcome.headers:
+                self.send_header(name, value)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if body:
+                self.wfile.write(body)
+        return False
+
     def _read_json_body(self):
         types = self.headers.get_all("Content-Type") or []
         if len(types) != 1 or not json_content_type_allowed(types[0]):
@@ -939,6 +997,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             pass
         if self._prks_request_id:
             self.send_header("X-Request-ID", self._prks_request_id)
+        epoch = getattr(self, "_prks_library_epoch", None)
+        if epoch is not None:  # set only by an authenticated process's admission
+            from backend.api.session import EPOCH_HEADER
+
+            self.send_header(EPOCH_HEADER, str(epoch))
         # Every response declares its own Content-Type; no response may be
         # re-interpreted as HTML by MIME sniffing. This closes the reflected-XSS
         # class for JSON/API bodies that echo library content back to the page.
@@ -972,6 +1035,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             return
         parsed_path = urlparse(self.path)
         if parsed_path.path.startswith('/api/'):
+            if not self._prks_admit(parsed_path):
+                return
             with self._library_access(parsed_path):
                 self.handle_api_get(parsed_path)
         else:
@@ -994,6 +1059,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             return
         parsed_path = urlparse(self.path)
         if parsed_path.path.startswith('/api/'):
+            if not self._prks_admit(parsed_path):
+                return
             with self._library_access(parsed_path):
                 self.handle_api_head(parsed_path)
         else:
@@ -1015,7 +1082,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             return
         parsed_path = urlparse(self.path)
         if parsed_path.path.startswith('/api/'):
-            if not self._validate_mutation_origin():
+            if not self._prks_admit(parsed_path):
                 return
             if parsed_path.path == '/api/backups/stage':
                 self._handle_backup_stage(parsed_path)
@@ -1033,7 +1100,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             return
         parsed_path = urlparse(self.path)
         if parsed_path.path.startswith('/api/'):
-            if not self._validate_mutation_origin():
+            if not self._prks_admit(parsed_path):
                 return
             data = self._read_json_body()
             if data is _JSON_BODY_REJECTED:
@@ -1355,7 +1422,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             return
         parsed_path = urlparse(self.path)
         if parsed_path.path.startswith('/api/'):
-            if not self._validate_mutation_origin():
+            if not self._prks_admit(parsed_path):
                 return
             data = self._read_json_body()
             if data is _JSON_BODY_REJECTED:
@@ -1445,7 +1512,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             return
         parsed_path = urlparse(self.path)
         if parsed_path.path.startswith('/api/'):
-            if not self._validate_mutation_origin():
+            if not self._prks_admit(parsed_path):
                 return
             with self._library_access(parsed_path):
                 self.handle_api_delete(parsed_path)
@@ -3695,7 +3762,7 @@ class PRKSThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer
     allow_reuse_address = True
 
 
-def run_server(port=PORT, host=DEFAULT_HOST):
+def run_server(port=PORT, host=DEFAULT_HOST, auth=None):
     if _bound_storage is None:
         raise RuntimeError("storage is not bound; call bind_storage() before run_server()")
     host = normalize_listen_host(host)
@@ -3731,6 +3798,11 @@ def run_server(port=PORT, host=DEFAULT_HOST):
         httpd.prks_bind_host = host
         httpd.prks_trusted_hosts = trusted_hosts
         httpd.prks_access_gate = LibraryAccessGate()
+        # Authentication (PRKS_AUTH, backend.domain.identity.web_start); None
+        # keeps the SQLite runtime's behavior.
+        httpd.prks_auth = auth
+        if auth is not None and auth.settings.public_origin is not None:
+            httpd.prks_trusted_hosts = trusted_hosts | {auth.settings.public_origin[1]}
         LOGGER.info(
             "server_starting bind_scope=%s port=%s",
             safe_bind_scope(host),

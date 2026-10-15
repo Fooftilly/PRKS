@@ -891,17 +891,18 @@ AFFECTED_RULES = (
         "skip": True,
         "note": "Non-E2E tests → no browser E2E selection",
     },
-    # PG-1/PG-2 plumbing isn't imported by the served SQLite/browser app.
-    # Do not exempt shared backend/domain/__init__.py: it can gain runtime
-    # imports or side effects unrelated to isolated migration plumbing.
-    # It is tested by the PostgreSQL Test Gate, not by Chromium. Keep this
-    # allowlist narrow: unknown backend/db files still require full E2E.
-    # tests/test_e2e_policy.py guards against leaving this exemption active
-    # when PostgreSQL becomes a runtime dependency.
+    # The schema runner and its files aren't imported by the served app, not
+    # even by the opt-in PRKS_AUTH start (L-ID-1 PR 5/5), which loads
+    # backend/db/__init__.py and the pool lazily: that package initializer is
+    # therefore no longer exempt. Do not exempt shared backend/domain/__init__.py
+    # either: it can gain runtime imports or side effects unrelated to isolated
+    # migration plumbing. These files are tested by the PostgreSQL Test Gate,
+    # not by Chromium. Keep this allowlist narrow: unknown backend/db files
+    # still require full E2E. tests/test_e2e_policy.py fails when a skipped
+    # Python file becomes reachable from the served app, lazily or not.
     {
         "name": "postgres-migration-infrastructure",
         "paths": (
-            "backend/db/__init__.py",
             "backend/db/migrate.py",
             "backend/db/schema/*.sql",
             "backend/db/schema/snapshot.json",

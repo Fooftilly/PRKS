@@ -3,9 +3,11 @@
 Configuration, the bounded connection pool, the ``command()``/``query()``
 transaction helpers and the SQLSTATE error mapping (PG-1), plus the schema
 migration runner (:mod:`backend.db.migrate`), the baseline schema files in
-``schema/`` and the catalog snapshot (PG-2, #624). Nothing in the running
-application imports this package yet: SQLite stays the only backend until
-the cutover slices (§15.3). The transition facade belongs to PG-3.
+``schema/`` and the catalog snapshot (PG-2, #624). The running SQLite
+application does not import this package; only a web process started with
+``PRKS_AUTH`` loads it, lazily, for sign-in (L-ID-1, #626). SQLite stays the
+only backend for Library content until the cutover slices (§15.3). The
+transition facade belongs to PG-3.
 """
 
 from backend.db.config import DatabaseConfig, load_database_config

@@ -1,7 +1,7 @@
 """Password login (``docs/postgresql-architecture.md`` §9.3; L-ID-1 #626).
 
-:func:`login` is the whole domain side of ``POST /api/login`` (the route is
-PR 5/5). In order:
+:func:`login` is the whole domain side of ``POST /api/login``
+(:mod:`backend.api.session`). In order:
 
 1. A login name or password that no account could have is refused at once
    (bootstrap refuses the same ones: :mod:`login_names`,
