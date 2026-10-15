@@ -3,11 +3,13 @@
 Run as ``python -m backend.domain.identity.admin …`` until the ``prks``
 entry point exists (L-D-1). Two commands:
 
-``unlock-login LOGIN`` deletes the account-wide (``acct:``) row of the login
-attempt limiter for the account named ``LOGIN`` (matched by its identity
-key, as login does), so its owner can sign in from a new browser while a
-guessing campaign keeps the limit tripped. Address and device rows are left
-alone. An unknown login is refused.
+``unlock-login LOGIN --root ROOT`` deletes the account-wide (``acct:``) row
+of the login attempt limiter for the account named ``LOGIN`` (matched by its
+identity key, as login does), so its owner can sign in from a new browser
+while a guessing campaign keeps the limit tripped. Address and device rows
+are left alone. An unknown login is refused. Like every data-changing
+command it first runs the start check and bump against the bound data root
+(§11.1) and refuses a database that is not paired with it.
 
 ``bootstrap`` is first-time setup, in two separate steps, so the operator
 never holds a token that is already spent:
@@ -122,6 +124,8 @@ def _parser() -> argparse.ArgumentParser:
         "unlock-login", help="clear the account-wide login attempt limit of one account"
     )
     unlock.add_argument("login", help="the account's login name")
+    unlock.add_argument("--root", required=True, help="the bound PRKS data root")
+    unlock.add_argument("--testing", action="store_true", help="a disposable testing instance")
     return parser
 
 
@@ -450,11 +454,30 @@ def _unlock_login(args: argparse.Namespace, db: Database, io: _Io) -> int:
     except UnsupportedTextError:  # no stored login holds such text
         io.refuse("No account has that login.")
         return EXIT_REFUSED
+    # A data-changing admin command runs the start check and bump (§11.1)
+    # under the shared root lease, so it never changes a database that is
+    # not the one paired with this data root.
+    root = _real_root(args.root)
+    _check_root_bound(root)
     try:
-        unlocked = login_limiter.unlock_account(db, args.login)
-    except DatabaseError:
-        io.refuse("The database could not be reached; nothing was changed.")
-        return EXIT_REFUSED
+        lease = acquire_shared_root_lease(root)
+    except StorageRootError as exc:
+        raise _lease_refusal(exc) from None
+    try:
+        started = root_pairing.start_process(
+            db, root=root, lease=lease, testing=bool(args.testing), bump=True
+        )
+        if started.status is not root_pairing.StartStatus.READY:
+            raise RootPairingRefused(
+                "setup_pending", "Setup is not complete; there is no account to unlock."
+            )
+        try:
+            unlocked = login_limiter.unlock_account(db, args.login)
+        except DatabaseError:
+            io.refuse("The database could not be reached; nothing was changed.")
+            return EXIT_REFUSED
+    finally:
+        lease.release()
     if unlocked is None:
         io.refuse("No account has that login.")
         return EXIT_REFUSED
@@ -489,8 +512,12 @@ def main(
         io.refuse(exc.message)
         return EXIT_USAGE
     if args.command == "unlock-login":
-        with db:
-            return _unlock_login(args, db, io)
+        try:
+            with db:
+                return _unlock_login(args, db, io)
+        except RootPairingRefused as exc:
+            io.refuse(exc.message)
+            return EXIT_REFUSED
     try:
         with db:
             # Once ready, every bootstrap command refuses before it reads a

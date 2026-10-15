@@ -74,8 +74,13 @@ When the account limit is tripped and the owner needs to sign in from a new
 browser, run on the host:
 
 ```bash
-python -m backend.domain.identity.admin unlock-login <login>
+python -m backend.domain.identity.admin unlock-login <login> --root /path/to/data-root
 ```
+
+Like every command that changes data, it first checks that the database is
+the one paired with that data root (and records a start), so it refuses a
+copied, restored or foreign database. Add `--testing` for a disposable
+testing instance.
 
 It clears only that account's count; address and device counts stay. The
 login is matched the way sign-in matches it (case and spacing do not matter).
