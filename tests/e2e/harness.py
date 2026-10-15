@@ -919,6 +919,7 @@ class PageCollector:
     def _on_route(self, route):
         started = time.perf_counter()
         url = route.request.url
+        blocked_external = False
         try:
             if url.startswith("blob:") or url.startswith("data:") or url.startswith("about:"):
                 route.continue_()
@@ -943,11 +944,16 @@ class PageCollector:
                     route.continue_()
                     return
                 self.external.append(url)
+                blocked_external = True
                 _profile_phase("routing_decision", time.perf_counter() - started)
                 route.abort()
                 return
             route.continue_()
         except Exception:
+            if blocked_external:
+                # An abort error must never turn into an external request.
+                # Let the scenario fail rather than accidentally fail open.
+                raise
             try:
                 route.continue_()
             except Exception:
