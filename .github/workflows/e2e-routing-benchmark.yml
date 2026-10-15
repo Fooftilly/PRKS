@@ -106,7 +106,7 @@ jobs:
           summary = [
               "## E2E route fast-path A/B (manual, diagnostic)",
               "",
-              f"Commit: \`{os.environ['GITHUB_SHA'][:12]}\` · {rows[0][2]} selected tests per trial · same runner",
+              f"Commit: {os.environ['GITHUB_SHA'][:12]} · {rows[0][2]} selected tests per trial · same runner",
               "",
               "| Trial | Mode | E2E wall time | Routing decision sum |",
               "|---|---|---:|---:|",
