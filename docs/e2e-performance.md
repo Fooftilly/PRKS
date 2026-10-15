@@ -203,7 +203,10 @@ the real Chromium E2E runner with `--feature shell --feature work-create`,
 separate, fresh-isolation runs in **baseline → fast path → fast path → baseline**
 order on the same runner and commit. Ordinary PR and master full gates are not
 changed or shortened. This workflow is **manual-only**; it does not upload
-test artifacts or mutate ordinary E2E timing/last-failed history.
+test artifacts or mutate ordinary E2E timing/last-failed history, including
+when the per-test watchdog terminates a hung test. The summary verifies each
+trial's **runner-reported** active benchmark mode; missing/mismatched mode
+markers fail the job rather than silently reporting a false A/B comparison.
 
 Open **Actions → E2E Routing A/B Benchmark → Run workflow** on `master`.
 The job summary reports each trial's E2E runtime and the instrumented
