@@ -337,25 +337,72 @@ class LoginDeviceTests(IdentityTestCase):
         self.login(password="wrong", device_cookie=first.reveal())
         self.assertEqual(self.attempts()[account_key("owner")], 1)
 
-    def test_concurrent_logins_with_one_device_token_get_one_successor(self) -> None:
+    def assert_refused_with_nothing_committed(self, result: Any) -> None:
+        self.assertIs(result.outcome, LoginOutcome.DEVICE_REPLACED)
+        self.assertEqual((result.public_reason, result.http_status), ("invalid_credentials", 401))
+        self.assertIsNone(result.session)
+        self.assertIsNone(result.device_token)
+
+    def test_two_logins_presenting_one_device_token_consume_it_once(self) -> None:
         user_id = self.user("Owner")
         first = self.first_device()
-        racing: list[Any] = []
+        self.assertEqual(self.attempts(), {CLIENT.key: 1})
+        db = self.open_db(pool_max=4)
+        # Both requests pass the device check and the password check before
+        # either commits, then race for the account row.
+        both_checked = threading.Barrier(2, timeout=30)
+        self.hasher.on_verify = both_checked.wait
+        results: list[Any] = []
 
-        def other_tab_signs_in_first() -> None:
-            self.hasher.on_verify = None
-            racing.append(self.login(device_cookie=first.reveal()))
+        def sign_in() -> None:
+            results.append(login_module.login(
+                db, "Owner", PASSWORD, client=CLIENT, device_cookie=first.reveal(), hasher=self.hasher
+            ))
 
-        # Both logins pass the device check; the other one commits first.
-        self.hasher.on_verify = other_tab_signs_in_first
-        late = self.login(device_cookie=first.reveal())
-        self.assertIs(late.outcome, LoginOutcome.SUCCEEDED)
-        self.assertIsNotNone(late.session)
-        self.assertIsNone(late.device_token)  # the presented token was already consumed
-        winner = racing[0].device_token
-        assert winner is not None
+        threads = [threading.Thread(target=sign_in) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(60)
+        self.hasher.on_verify = None
+
+        self.assertEqual(sorted(r.outcome.value for r in results), ["device_replaced", "succeeded"])
+        winner = next(r for r in results if r.outcome is LoginOutcome.SUCCEEDED)
+        self.assert_refused_with_nothing_committed(next(r for r in results if r is not winner))
+        assert winner.device_token is not None and winner.session is not None
+        # One successor, one session: the refused request earned nothing.
         stored = self.run_sql("SELECT token_sha256 FROM prks.login_device_tokens WHERE user_id = %s", (user_id,))
-        self.assertEqual([bytes(row["token_sha256"]) for row in stored], [winner.digest])
+        self.assertEqual([bytes(row["token_sha256"]) for row in stored], [winner.device_token.digest])
+        self.assertEqual(self.run_sql("SELECT count(*) AS n FROM prks.sessions"), [{"n": 2}])  # first_device + winner
+        # Both were counted under dev: only (the winner's success reset it);
+        # neither touched acct: or ip:.
+        self.assertEqual(self.attempts(), {CLIENT.key: 1})
+
+        # The consumed token no longer gates anything: presented again, the
+        # login counts under acct: and ip: like any new browser.
+        self.assertIs(self.login(device_cookie=first.reveal()).outcome, LoginOutcome.SUCCEEDED)
+        self.assertEqual(self.attempts(), {CLIENT.key: 2})
+
+    def test_a_device_token_revoked_during_the_check_earns_nothing(self) -> None:
+        user_id = self.user("Owner")
+        first = self.first_device()
+        sessions_before = self.run_sql("SELECT count(*) AS n FROM prks.sessions")
+
+        def revoke() -> None:
+            self.hasher.on_verify = None
+            self.db.command(lambda tx: login_module.revoke_device_tokens(tx, user_id))
+
+        self.hasher.on_verify = revoke
+        self.assert_refused_with_nothing_committed(self.login(device_cookie=first.reveal()))
+        self.assertEqual(self.run_sql("SELECT count(*) AS n FROM prks.sessions"), sessions_before)
+        self.assertEqual(self.run_sql("SELECT count(*) AS n FROM prks.login_device_tokens"), [{"n": 0}])
+        # The device count stays (not reset); acct: was neither counted nor reset.
+        self.assertEqual(self.attempts(), {CLIENT.key: 1, device_key(first.digest): 1})
+
+        # Presented again, the revoked token is ignored and acct:/ip: apply.
+        self.login(password="wrong", device_cookie=first.reveal())
+        counts = self.attempts()
+        self.assertEqual((counts[account_key("owner")], counts[CLIENT.key]), (1, 2))
 
     def test_stale_revoked_malformed_and_foreign_tokens_are_ignored(self) -> None:
         owner = self.user("Owner")

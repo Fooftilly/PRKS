@@ -93,8 +93,10 @@ token; `HttpOnly`, `SameSite=Strict`, `Path=/api/login`, `Secure` on HTTPS,
 one year). The database keeps only its SHA-256. Each successful login replaces
 it with a new one; a token is accepted only for its own account and for one
 year from when it was issued. A token is replaced only once: when two logins
-present it at the same time, only the first gets a successor, and the other
-signs in without changing the cookie.
+present it at the same time, only the first signs in. The other is refused
+with `invalid_credentials` and nothing changes, as is a login whose token is
+revoked while its password is checked; signing in again then counts as a new
+browser.
 
 ## Sessions
 

@@ -63,6 +63,9 @@ class LoginOutcome(Enum):
     STORED_HASH_INVALID = "stored_hash_invalid"  # the account's hash cannot be verified
     THROTTLED = "throttled"  # over a limiter key; no password check ran
     NO_LIBRARY = "no_library"  # password correct, no Library to sign in to; nothing committed
+    # Password correct, but the device token that gated the attempt was
+    # consumed by a concurrent login or revoked before the commit; nothing committed.
+    DEVICE_REPLACED = "device_replaced"
     UNAVAILABLE = "unavailable"  # the database failed; nothing of the login was committed
 
 
@@ -75,6 +78,7 @@ _PUBLIC = {
     LoginOutcome.THROTTLED: ("too_many_attempts", 429),
     # Not a distinct answer: it would confirm the password without a session.
     LoginOutcome.NO_LIBRARY: ("invalid_credentials", 401),
+    LoginOutcome.DEVICE_REPLACED: ("invalid_credentials", 401),
     LoginOutcome.UNAVAILABLE: ("unavailable", 503),
 }
 
@@ -85,9 +89,7 @@ class LoginResult:
 
     ``session`` and ``device_token`` are set only on ``SUCCEEDED``; the HTTP
     layer sets the token as the new ``prks_login_device`` cookie, since the
-    old one no longer works. ``device_token`` is ``None`` on a success whose
-    presented token a concurrent login already replaced; the cookie is then
-    left alone (that login's response carries the one successor). ``retry_after_seconds`` and ``throttled_kind`` are set
+    old one no longer works. ``retry_after_seconds`` and ``throttled_kind`` are set
     only on ``THROTTLED``.
     """
 
@@ -194,8 +196,9 @@ def issue_device_token(
 ) -> Optional[LoginDeviceToken]:
     """Store a new device token for ``user_id``, consuming ``replacing``.
 
-    ``None`` when ``replacing`` is no longer stored: a concurrent login with
-    the same cookie already consumed it, so it gets one successor, not two.
+    ``None``, with nothing written, when ``replacing`` is no longer stored
+    (a concurrent login consumed it, or it was revoked): a token is consumed
+    at most once, so it never gets two successors.
     """
     if replacing is not None:
         consumed = tx.execute(
@@ -319,8 +322,13 @@ def _succeed(
         # No session, so nothing a correct password earns: the count stays,
         # no device token is issued, and callers see invalid_credentials.
         return LoginResult(LoginOutcome.NO_LIBRARY)
-    login_limiter.reset(tx, gating_key)
+    # The rotation goes first: when the presented token is already gone, the
+    # attempt was gated by a device that is no longer valid, so the login
+    # ends before it writes anything (no reset, no session, no new token).
     token = issue_device_token(tx, account.user_id, replacing=device)
+    if token is None:
+        return LoginResult(LoginOutcome.DEVICE_REPLACED)
+    login_limiter.reset(tx, gating_key)
     if new_hash is not None:
         tx.execute(
             "UPDATE prks.users SET password_hash = %s WHERE id = %s",
