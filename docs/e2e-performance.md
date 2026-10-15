@@ -144,6 +144,12 @@ representing extra work: do not add `server_spawn` and `server_http_ready`
 to `server_start`, or add the four `app_*` detail phases to `app_ready`.
 Timers do not alter the HTTP probe, fresh subprocess/storage, Playwright
 context, navigation or any UI assertions; a failed readiness check still fails.
+On bind-conflict retries, `server_spawn`, `server_http_ready` and
+`server_start` cover **only the successful attempt**; discarded attempts
+are reported separately as `server_spawn_failed` and
+`server_http_ready_failed`, rather than silently polluting the successful
+breakdown. A UI navigation/readiness wait that throws still records that
+subphase's elapsed time; the inclusive `app_ready` stays absent on failure.
 
 The first [same-runner route benchmark](https://github.com/Fooftilly/PRKS/actions/runs/38799768587)
 found a negligible **−0.68%** wall-time improvement from the experimental
