@@ -67,48 +67,65 @@ jobs:
               2|3) mode=fastpath; flag=1 ;;
             esac
             echo "::group::Trial $trial ($mode)"
-            PRKS_E2E_ROUTE_FASTPATH="$flag" python tests/e2e/run.py \
+            result_file="$RUNNER_TEMP/e2e-routing-ab-$trial.json"
+            rm -f "$result_file"
+            PRKS_E2E_BENCHMARK_RESULT="$result_file" \
+              PRKS_E2E_ROUTE_FASTPATH="$flag" python tests/e2e/run.py \
               --feature shell --feature work-create \
-              --jobs 1 --no-pointer-capture --profile \
-              2>&1 | tee "$RUNNER_TEMP/e2e-routing-ab-$trial.log"
+              --jobs 1 --no-pointer-capture --profile
             echo "::endgroup::"
           done
 
           python - <<'PY'
+          import json
+          import math
           import os
-          import re
           import statistics
           from pathlib import Path
 
           root = Path(os.environ["RUNNER_TEMP"])
           rows = []
+          required = {
+              "schema_version", "benchmark_modes", "workers", "tests",
+              "failures", "errors", "skipped", "wall_seconds", "phase_seconds",
+          }
           for trial, mode in enumerate(("baseline", "fastpath", "fastpath", "baseline"), 1):
-              log = (root / f"e2e-routing-ab-{trial}.log").read_text(encoding="utf-8")
-              # The runner, not the shell labels, is authoritative on which
-              # benchmark mode it actually used. Reject missing/extra markers.
-              expected = "profile" if mode == "baseline" else "profile,route-fastpath"
-              active_modes = re.findall(
-                  r"^benchmark mode \(([^)]+)\): not persisting timing or last-failed history$",
-                  log,
-                  re.MULTILINE,
-              )
-              if active_modes != [expected]:
-                  raise SystemExit(
-                      f"Trial {trial}: expected benchmark mode {expected!r}, got {active_modes!r}"
-                  )
-              samples = re.findall(
-                  r"E2E workers=1 tests=(\d+) failures=(\d+) errors=(\d+) skipped=(\d+) in ([\d.]+)s",
-                  log,
-              )
-              if len(samples) != 1:
-                  raise SystemExit(f"Trial {trial}: expected exactly one E2E result")
-              tests, failures, errors, skipped, seconds = samples[0]
-              if int(tests) < 1 or any(int(v) for v in (failures, errors, skipped)):
+              path = root / f"e2e-routing-ab-{trial}.json"
+              try:
+                  data = json.loads(path.read_text(encoding="utf-8"))
+              except (OSError, ValueError) as exc:
+                  raise SystemExit(f"Trial {trial}: missing/invalid benchmark JSON: {exc}") from exc
+              if not isinstance(data, dict) or set(data) != required:
+                  raise SystemExit(f"Trial {trial}: unsupported benchmark result schema")
+              expected = ["profile"] if mode == "baseline" else ["profile", "route-fastpath"]
+              if data["schema_version"] != 1 or data["benchmark_modes"] != expected:
+                  raise SystemExit(f"Trial {trial}: benchmark mode/schema mismatch")
+              if type(data["workers"]) is not int or data["workers"] != 1:
+                  raise SystemExit(f"Trial {trial}: wrong worker count")
+              if any(
+                  type(data[key]) is not int
+                  for key in ("tests", "failures", "errors", "skipped")
+              ):
+                  raise SystemExit(f"Trial {trial}: invalid test counts")
+              if data["tests"] < 1 or any(data[k] for k in ("failures", "errors", "skipped")):
                   raise SystemExit(f"Trial {trial}: incomplete/failed selection")
-              match = re.search(r"^\s*routing_decision\s+([\d.]+)s$", log, re.MULTILINE)
-              if match is None:
-                  raise SystemExit(f"Trial {trial}: missing routing decision profile")
-              rows.append((trial, mode, int(tests), float(seconds), float(match.group(1))))
+              seconds = data["wall_seconds"]
+              phases = data["phase_seconds"]
+              if (
+                  type(seconds) not in (int, float)
+                  or not math.isfinite(seconds)
+                  or seconds <= 0
+                  or not isinstance(phases, dict)
+              ):
+                  raise SystemExit(f"Trial {trial}: invalid performance metrics")
+              routing = phases.get("routing_decision")
+              if (
+                  type(routing) not in (int, float)
+                  or not math.isfinite(routing)
+                  or routing <= 0
+              ):
+                  raise SystemExit(f"Trial {trial}: missing/invalid routing metric")
+              rows.append((trial, mode, data["tests"], seconds, routing))
 
           if len(set(row[2] for row in rows)) != 1:
               raise SystemExit("A/B trials discovered different test counts")
