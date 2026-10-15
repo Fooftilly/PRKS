@@ -88,7 +88,7 @@ class MigrateTests(EmptyDatabaseTestCase):
         migrate(self.conninfo)
         for table in (
             "prks.instance", "prks.users", "prks.libraries", "prks.library_memberships",
-            "prks.sessions", "prks.jobs", "prks.devices", "prks.entity_revisions",
+            "prks.sessions", "prks.login_attempts", "prks.login_device_tokens", "prks.jobs", "prks.devices", "prks.entity_revisions",
             "prks.sync_operations",
         ):
             with self.subTest(table):
