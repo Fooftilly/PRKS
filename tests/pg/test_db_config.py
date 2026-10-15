@@ -114,6 +114,18 @@ class DatabaseConfigTests(unittest.TestCase):
         self.assertEqual((config.pool_min, config.pool_max, config.pool_timeout_seconds), (1, 10, 10.0))
         self.assertEqual(config.max_idle_seconds, 300.0)
 
+    def test_negative_pool_max_idle_refused_before_pool_is_created(self) -> None:
+        for seconds in (-1.0, -0.1):
+            with self.subTest(seconds=seconds), self.assertRaises(DatabaseConfigError) as caught:
+                DatabaseConfig(conninfo=URL, max_idle_seconds=seconds)
+            self.assertEqual(caught.exception.reason, "invalid_pool_idle")
+            self.assertEqual(caught.exception.http_status, 500)
+            self.assertNotIn(SENTINEL, str(caught.exception))
+
+        # Zero is permitted as an explicit immediate-idle policy; the
+        # configuration only prohibits negative idle intervals.
+        self.assertEqual(DatabaseConfig(conninfo=URL, max_idle_seconds=0).max_idle_seconds, 0)
+
     def test_invalid_explicit_values_refused(self) -> None:
         cases: tuple[dict[str, Any], ...] = (
             {"pool_min": 2, "pool_max": 1},
