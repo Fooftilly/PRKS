@@ -95,7 +95,19 @@ class UnlockLoginTests(RootPairingTestCase):
     def assert_refused_unchanged(self, code: int, err: str, name: str) -> None:
         self.assertEqual(code, admin.EXIT_REFUSED, err)
         self.assertTrue(err.startswith("unlock-login: "), err)
+        self.assertNotIn(self.tmp, err)  # no path, connection string or secret
+        self.assertNotIn("postgres", err.lower())
         self.assertEqual(self.attempts(name)[ACCT], 6)
+
+    def test_refusals_release_the_root_lease_and_start_key(self) -> None:
+        _other_name, other_root = self.paired("other")
+        for _ in range(3):
+            code, _out, err = self.run_cli("Straße Owner", root=other_root)
+            self.assert_refused_unchanged(code, err, self.name)
+        # Nothing is left held: the paired run, and an exclusive start, both go through.
+        code, _out, err = self.run_cli("Straße Owner")
+        self.assertEqual((code, err), (admin.EXIT_OK, ""))
+        self.start(self.name, self.root)
 
     def test_a_root_paired_with_another_database_is_refused(self) -> None:
         _other_name, other_root = self.paired("other")
