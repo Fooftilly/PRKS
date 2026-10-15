@@ -77,13 +77,13 @@ def changed_line_report(
     for source in sources:
         added = touched.get(source, set())
         if not added:
-            rows.append(f"| \`{source}\` | No added lines in this pilot |")
+            rows.append(f"| `{source}` | No added lines in this pilot |")
             continue
         entry = _find_entry(report, source, kind)
         detail = executable_lines(entry, kind) if entry is not None else None
         if detail is None:
             unavailable = True
-            rows.append(f"| \`{source}\` | Unavailable (no line-level coverage data) |")
+            rows.append(f"| `{source}` | Unavailable (no line-level coverage data) |")
             continue
         executable, covered = detail
         eligible = added & executable
@@ -91,9 +91,9 @@ def changed_line_report(
         covered_total += hit
         measured_total += len(eligible)
         if eligible:
-            rows.append(f"| \`{source}\` | {hit}/{len(eligible)} ({hit / len(eligible):.0%}) |")
+            rows.append(f"| `{source}` | {hit}/{len(eligible)} ({hit / len(eligible):.0%}) |")
         else:
-            rows.append(f"| \`{source}\` | No added executable lines |")
+            rows.append(f"| `{source}` | No added executable lines |")
     overall = (
         "Unavailable for some changed pilot files"
         if unavailable else
