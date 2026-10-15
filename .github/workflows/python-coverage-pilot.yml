@@ -10,6 +10,8 @@ on:
       - "backend/research_markup.py"
       - "tests/test_text_identity.py"
       - "tests/fixtures/text_identity_vectors.json"
+      - "scripts/changed_line_coverage.py"
+      - "tests/test_changed_line_coverage.py"
   workflow_dispatch:
 
 permissions:
@@ -28,6 +30,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # PR merge first parent is the baseline for changed executable lines.
+          fetch-depth: 2
           persist-credentials: false
 
       - name: Set up Python
@@ -83,3 +87,24 @@ jobs:
           with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as out:
               out.write(summary)
           PY
+
+      - name: Report newly changed executable lines (informational)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m unittest tests.test_changed_line_coverage
+          if [[ "$GITHUB_EVENT_NAME" != "pull_request" ]]; then
+            echo "No changed-line comparison on manual coverage runs." >> "$GITHUB_STEP_SUMMARY"
+          elif git rev-parse --verify 'HEAD^1^{commit}' >/dev/null 2>&1; then
+            patch="$RUNNER_TEMP/prks-python-changed.diff"
+            git diff --no-ext-diff --unified=0 HEAD^1 HEAD -- \
+              backend/domain/text_identity.py > "$patch"
+            python scripts/changed_line_coverage.py \
+              --format coveragepy \
+              --report "$RUNNER_TEMP/prks-coverage.json" \
+              --diff "$patch" \
+              --source backend/domain/text_identity.py \
+              --summary-file "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Changed-line comparison unavailable (missing PR merge parent); no ratio inferred." >> "$GITHUB_STEP_SUMMARY"
+          fi
