@@ -926,8 +926,8 @@ class PageCollector:
             # This prefix has an authority/path boundary, so an attacker-controlled
             # host such as 127.0.0.1:<port>.evil.test cannot match. Aliases and
             # unusual URL forms still use the original parsed-origin validator.
-            # Critically, page.route("**/*") is retained: external redirects and
-            # all other requests continue through the same fail-closed guard.
+            # Critically, page.route("**/*") is retained, preserving the
+            # interception patterns and redirect behavior of the default path.
             if self._fast_local_route and (
                 url == self.origin
                 or url.startswith(self.origin + "/")
