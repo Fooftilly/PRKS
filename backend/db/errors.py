@@ -272,7 +272,9 @@ def map_database_error(
     reg = registry if registry is not None else DEFAULT_REGISTRY
     sqlstate = exc.sqlstate
     diag = exc.diag
-    constraint = diag.constraint_name if sqlstate is not None else None
+    # Driver exceptions can lack a populated diagnostic object. Treat the
+    # constraint as unknown rather than raising while mapping the error.
+    constraint = diag.constraint_name if sqlstate is not None and diag is not None else None
 
     if sqlstate in RETRYABLE_SQLSTATES:
         return RetryTransactionError(sqlstate=sqlstate)
@@ -300,7 +302,7 @@ def map_database_error(
             http_status=400,
             sqlstate=sqlstate,
             constraint=constraint,
-            field=check_constraint_field(constraint, diag.table_name),
+            field=check_constraint_field(constraint, diag.table_name if diag is not None else None),
         )
     if sqlstate == READ_ONLY_SQL_TRANSACTION:
         # A write inside query(): a programming error, never a client error.

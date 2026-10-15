@@ -208,6 +208,40 @@ class ConnectionErrorMappingTests(unittest.TestCase):
         self.assertIsInstance(error, PoolExhaustedError)
         self.assertEqual((error.code, error.http_status), ("DATABASE_BUSY", 503))
 
+    def test_constraint_errors_without_diagnostics_fail_closed(self) -> None:
+        class NoDiagnosticsError(psycopg.Error):
+            def __init__(self, state: str) -> None:
+                # psycopg.Error.__init__ consults sqlstate immediately.
+                self._state = state
+                super().__init__("private constraint value")
+
+            @property
+            def sqlstate(self) -> str:
+                return self._state
+
+            @property
+            def diag(self) -> None:
+                return None
+
+        registry = ConstraintRegistry()
+        registry.register("things_name_key", "NAME_TAKEN")
+        for state in ("23505", "23503"):
+            with self.subTest(sqlstate=state):
+                error = map_database_error(NoDiagnosticsError(state), registry)
+                self.assertIsInstance(error, UnmappedDatabaseError)
+                self.assertEqual(
+                    (error.code, error.http_status, error.sqlstate, error.constraint),
+                    ("DATABASE_ERROR", 500, state, None),
+                )
+                self.assertNotIn("private constraint value", str(error))
+
+        check_error = map_database_error(NoDiagnosticsError("23514"), registry)
+        self.assertIsInstance(check_error, ConstraintViolationError)
+        self.assertEqual((check_error.code, check_error.http_status), ("INVALID_VALUE", 400))
+        self.assertEqual((check_error.sqlstate, check_error.constraint, check_error.field),
+                         ("23514", None, None))
+        self.assertNotIn("private constraint value", str(check_error))
+
     def test_non_database_error_is_500(self) -> None:
         self.assertIsInstance(map_database_error(RuntimeError("x")), UnmappedDatabaseError)
 
