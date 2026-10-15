@@ -89,6 +89,28 @@ class StartupReadinessProfileTests(unittest.TestCase):
             delta=0.00001,
         )
 
+    def test_slowest_ranking_does_not_double_count_inclusive_phases(self):
+        from tests.e2e import run as runner
+
+        phases = {
+            "server_start": 5.0,
+            "server_spawn": 2.0,
+            "server_http_ready": 3.0,
+            "app_ready": 8.0,
+            "app_navigation": 4.0,
+            "app_sidebar_wait": 1.0,
+            "app_folder_wait": 2.0,
+            "app_route_wait": 1.0,
+            "request_routing": 6.0,
+            "routing_decision": 0.1,
+            "seed_clone": 0.5,
+        }
+        self.assertEqual(runner._profile_infrastructure_total(phases), 19.5)
+        # Without inclusive parents the same detail phases still count.
+        for parent in ("server_start", "app_ready", "request_routing"):
+            phases.pop(parent)
+        self.assertEqual(runner._profile_infrastructure_total(phases), 19.6)
+
     def test_failed_readiness_never_reports_successful_app_ready(self):
         browser = mock.Mock()
         page = browser.new_context.return_value.new_page.return_value
