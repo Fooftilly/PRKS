@@ -2571,6 +2571,70 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             )
         return code, print_slow
 
+    def test_serial_benchmark_json_reports_real_metrics_and_modes(self):
+        """The A/B workflow consumes structured output, never console formatting."""
+        from tests.e2e import run as runner
+
+        result = mock.Mock()
+        result.testsRun = 2
+        result.failures = []
+        result.errors = []
+        result.skipped = []
+        result.phase_timings = {
+            "case.one": {"routing_decision": 0.015, "app_ready": 0.20},
+            "case.two": {"routing_decision": 0.025, "app_ready": 0.30},
+        }
+        with tempfile.TemporaryDirectory() as raw:
+            destination = Path(raw) / "benchmark.json"
+            for fastpath in ("0", "1"):
+                destination.unlink(missing_ok=True)
+                with mock.patch.dict(
+                    os.environ,
+                    {
+                        "PRKS_E2E_BENCHMARK_RESULT": str(destination),
+                        "PRKS_E2E_PROFILE": "1",
+                        "PRKS_E2E_ROUTE_FASTPATH": fastpath,
+                        "PRKS_E2E_SEED_CACHE": "1",
+                    },
+                ):
+                    runner._write_serial_benchmark_result(result, 4.5678)
+                data = json.loads(destination.read_text(encoding="utf-8"))
+                self.assertEqual(data["schema_version"], 1)
+                self.assertEqual(data["benchmark_modes"], (
+                    ["profile", "route-fastpath"] if fastpath == "1" else ["profile"]
+                ))
+                self.assertEqual(data["workers"], 1)
+                self.assertEqual(data["tests"], 2)
+                self.assertEqual(data["failures"], 0)
+                self.assertEqual(data["errors"], 0)
+                self.assertEqual(data["skipped"], 0)
+                self.assertEqual(data["wall_seconds"], 4.568)
+                self.assertAlmostEqual(data["phase_seconds"]["routing_decision"], 0.04)
+                self.assertAlmostEqual(data["phase_seconds"]["app_ready"], 0.5)
+
+    def test_serial_benchmark_json_is_opt_in_and_rejects_unprofiled_runs(self):
+        from tests.e2e import run as runner
+
+        result = mock.Mock()
+        result.phase_timings = {}
+        with tempfile.TemporaryDirectory() as raw:
+            destination = Path(raw) / "benchmark.json"
+            with mock.patch.dict(os.environ, {
+                "PRKS_E2E_BENCHMARK_RESULT": "",
+                "PRKS_E2E_PROFILE": "1",
+            }):
+                runner._write_serial_benchmark_result(result, 1.0)
+            self.assertFalse(destination.exists())
+            with mock.patch.dict(os.environ, {
+                "PRKS_E2E_BENCHMARK_RESULT": str(destination),
+                "PRKS_E2E_PROFILE": "0",
+                "PRKS_E2E_SEED_CACHE": "1",
+                "PRKS_E2E_ROUTE_FASTPATH": "0",
+            }):
+                with self.assertRaisesRegex(ValueError, "requires E2E profiling"):
+                    runner._write_serial_benchmark_result(result, 1.0)
+            self.assertFalse(destination.exists())
+
     def test_watchdog_does_not_touch_last_failed_in_profile_mode(self):
         """Even watchdog os._exit paths must preserve benchmark history."""
         from tests.e2e import run as runner
