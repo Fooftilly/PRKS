@@ -163,6 +163,36 @@ This switch intentionally does not upload benchmark artifacts or test data.
 Compare equivalent test selections on the same runner type and examine which
 phases dominate before modifying the harness or its isolation boundaries.
 
+### Experimental same-origin routing fast path (A/B only)
+
+The October 14 profiled full gate (836 tests, six runners; Actions run
+`38631524680`, attempt 2) reported `request_routing=4042s` across shards,
+more than the approximately 3272s combined test wall time. This metric wraps
+synchronous `route.continue_()`/Playwright dispatch and can overlap other
+work; it is **not** 4042 seconds of exclusively removable Python overhead.
+The new `routing_decision` profile phase stops at dispatch and isolates the
+Python URL decision work. It is also a sampled sum, not an additive component
+of `request_routing`.
+
+The ordinary path keeps `page.route("**/*", ...)` and validates the parsed
+origin. `PRKS_E2E_ROUTE_FASTPATH=1` tries a conservative authority-and-path
+prefix first, falling back to the same parser for aliases/edge cases. **Both
+paths still intercept all requests** and block off-origin HTTP, including
+requests that follow redirects. There is no proxy/network-policy change, no
+test isolation change, and no change to what tests are selected. Playwright's
+routing still disables the browser HTTP cache in both modes, so this benchmark
+does not measure any hypothetical cache win.
+
+To compare GitHub-hosted runners after merging, launch
+**Actions → PRKS Full E2E Gate → Run workflow** with **profile** enabled,
+first with **route_fastpath** unchecked and then checked. Repeat both runs
+on the same commit and compare shard/test wall time and `routing_decision`;
+`request_routing` alone is not evidence of a speedup. The fast-path mode is
+non-representative and does not train E2E timing/last-failed history, even if
+run without `profile`. Reject it if the wall-time difference is negligible,
+the regression gate fails, or external-network blocking weakens. Do not turn
+it on for normal PR/master gates without maintainer approval.
+
 ### Opt-in hang diagnostics and Chromium recycle
 
 `PRKS_E2E_DIAGNOSTIC=1` prints privacy-safe stage heartbeats (`START`,
@@ -217,9 +247,12 @@ in-page helper.
 external HTTP is blocked and recorded. Every same-origin CSS/JS/API/PDF request also
 passes through that Python callback.
 
-The `request_routing` profile phase measures this callback cost. If material,
-investigate a design that preserves fail-closed external-network detection without
-round-tripping normal same-origin traffic through Python.
+The `request_routing` phase includes blocking Playwright route dispatch and
+can overlap other timings; `routing_decision` isolates the pre-dispatch Python
+part. A conservative same-origin fast-path A/B experiment is available above;
+normal same-origin requests still cross Python and HTTP caching remains
+disabled. Avoid narrowing `page.route("**/*")` to an external-only URL matcher
+without proving same-origin redirects cannot bypass the network guard.
 
 Risk: weakening the guarantee that E2E cannot silently depend on the public network.
 

@@ -1837,6 +1837,19 @@ class BenchmarkModeTests(unittest.TestCase):
             ("profile", "no-seed-cache"),
         )
 
+    def test_fastpath_is_opt_in_and_never_trains_timing_history(self):
+        self.assertEqual(policy.benchmark_modes({"PRKS_E2E_ROUTE_FASTPATH": "0"}), ())
+        self.assertEqual(
+            policy.benchmark_modes({"PRKS_E2E_ROUTE_FASTPATH": "1"}),
+            ("route-fastpath",),
+        )
+        self.assertEqual(
+            policy.benchmark_modes(
+                {"PRKS_E2E_PROFILE": "1", "PRKS_E2E_ROUTE_FASTPATH": "yes"}
+            ),
+            ("profile", "route-fastpath"),
+        )
+
     def test_env_truthiness_is_shared_with_the_harness(self):
         """One definition decides how the harness reads a switch and how the
         runner judges the same switch."""
