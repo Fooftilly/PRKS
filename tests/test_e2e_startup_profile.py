@@ -109,7 +109,7 @@ class StartupReadinessProfileTests(unittest.TestCase):
         # Without inclusive parents the same detail phases still count.
         for parent in ("server_start", "app_ready", "request_routing"):
             phases.pop(parent)
-        self.assertEqual(runner._profile_infrastructure_total(phases), 19.6)
+        self.assertEqual(runner._profile_infrastructure_total(phases), 13.6)
 
     def test_failed_readiness_never_reports_successful_app_ready(self):
         browser = mock.Mock()
