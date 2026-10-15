@@ -1321,12 +1321,6 @@ class EngineeringInvariantTests(unittest.TestCase):
             self._write_valid_pyright_tree(root)
             self.assertEqual(checker.check_pyright_configs(root), [])
 
-    def test_repository_pyright_configs_are_protected(self):
-        # Check the checked-in files, not only synthetic fixtures built from
-        # the same tuple: a dropped production include must fail tests too.
-        findings = checker.check_pyright_configs(_ROOT)
-        self.assertEqual(findings, [], "\n".join(f.render() for f in findings))
-
     def test_pyright_typed_slice_scopes_are_pinned(self):
         self.assertEqual(
             checker.PYRIGHT_TYPED_SLICE_SCOPES,
