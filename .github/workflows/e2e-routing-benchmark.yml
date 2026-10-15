@@ -59,8 +59,18 @@ jobs:
           PRKS_E2E_PROFILE: "1"
         run: |
           set -euo pipefail
-          # The same tested commit, runner, test selection and worker count.
-          # ABBA reduces (but does not eliminate) warmed-run/order bias.
+          # Warm Python import/bytecode and first Chromium/server launch outside
+          # the measured trials. Use identical tests and profiling, but no JSON
+          # output: this run never participates in the A/B comparison.
+          echo "::group::Unmeasured baseline warm-up"
+          PRKS_E2E_BENCHMARK_RESULT="" \
+            PRKS_E2E_ROUTE_FASTPATH=0 python tests/e2e/run.py \
+            --feature shell --feature work-create \
+            --jobs 1 --no-pointer-capture --profile
+          echo "::endgroup::"
+
+          # Identical selection, runner, worker count and instrumentation.
+          # ABBA limits linear drift after the one-time warm-up is excluded.
           for trial in 1 2 3 4; do
             case "$trial" in
               1|4) mode=baseline; flag=0 ;;
