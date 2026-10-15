@@ -22,6 +22,8 @@ on:
       - "frontend-app/vite.config.ts"
       - "frontend-app/package.json"
       - "frontend-app/package-lock.json"
+      - "scripts/changed_line_coverage.py"
+      - "tests/test_changed_line_coverage.py"
   workflow_dispatch:
 
 permissions:
@@ -40,6 +42,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # PR merge first parent is the changed-line comparison baseline.
+          fetch-depth: 2
           persist-credentials: false
 
       - name: Set up Node.js
@@ -68,6 +72,7 @@ jobs:
             --coverage.include='src/{lifecycle/tab-leave,lifecycle/owner-resource,query/retry,workspace/transitions,workspace/invariants,workspace/tree,workspace/derive,workspace/commands,workspace/snapshot}.ts' \
             --coverage.reporter=text \
             --coverage.reporter=json-summary \
+            --coverage.reporter=json \
             --coverage.reportsDirectory="$RUNNER_TEMP/prks-vitest-coverage"
           node --input-type=module <<'NODE'
           import { readFileSync, appendFileSync } from 'node:fs'
@@ -128,3 +133,41 @@ jobs:
           console.log(summary)
           appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary, 'utf8')
           NODE
+
+      - name: Report newly changed executable lines (informational)
+        working-directory: frontend-app
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s ../tests -p test_changed_line_coverage.py
+          if [[ "$GITHUB_EVENT_NAME" != "pull_request" ]]; then
+            echo "No changed-line comparison on manual coverage runs." >> "$GITHUB_STEP_SUMMARY"
+          elif git rev-parse --verify 'HEAD^1^{commit}' >/dev/null 2>&1; then
+            patch="$RUNNER_TEMP/prks-vitest-changed.diff"
+            git diff --no-ext-diff --unified=0 HEAD^1 HEAD -- \
+              frontend-app/src/lifecycle/tab-leave.ts \
+              frontend-app/src/lifecycle/owner-resource.ts \
+              frontend-app/src/query/retry.ts \
+              frontend-app/src/workspace/transitions.ts \
+              frontend-app/src/workspace/invariants.ts \
+              frontend-app/src/workspace/tree.ts \
+              frontend-app/src/workspace/derive.ts \
+              frontend-app/src/workspace/commands.ts \
+              frontend-app/src/workspace/snapshot.ts > "$patch"
+            python3 ../scripts/changed_line_coverage.py \
+              --format istanbul \
+              --report "$RUNNER_TEMP/prks-vitest-coverage/coverage-final.json" \
+              --diff "$patch" \
+              --source frontend-app/src/lifecycle/tab-leave.ts \
+              --source frontend-app/src/lifecycle/owner-resource.ts \
+              --source frontend-app/src/query/retry.ts \
+              --source frontend-app/src/workspace/transitions.ts \
+              --source frontend-app/src/workspace/invariants.ts \
+              --source frontend-app/src/workspace/tree.ts \
+              --source frontend-app/src/workspace/derive.ts \
+              --source frontend-app/src/workspace/commands.ts \
+              --source frontend-app/src/workspace/snapshot.ts \
+              --summary-file "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Changed-line comparison unavailable (missing PR merge parent); no ratio inferred." >> "$GITHUB_STEP_SUMMARY"
+          fi
