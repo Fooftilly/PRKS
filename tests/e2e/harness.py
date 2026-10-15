@@ -1066,9 +1066,14 @@ class AppServer:
         for attempt in range(SERVER_START_ATTEMPTS):
             started = time.perf_counter()
             self._spawn(env)
+            spawned = time.perf_counter()
+            _profile_phase("server_spawn", spawned - started)
             try:
                 wait_http(self.origin + "/api/works")
-                _profile_phase("server_start", time.perf_counter() - started)
+                ready = time.perf_counter()
+                _profile_phase("server_http_ready", ready - spawned)
+                # Retain the original inclusive phase for historical comparison.
+                _profile_phase("server_start", ready - started)
                 e2e_heartbeat("SERVER_READY")
                 return self
             except Exception:
@@ -1235,10 +1240,19 @@ def open_app_page(browser, origin: str, service_workers: str = "block"):
     # Folders nav click was a pure re-navigation (~45ms median measured waste).
     # Do not invent fake init state — wait on the real shell + Folders surface.
     page.goto(origin + "/#/folders", wait_until="domcontentloaded")
+    navigated = time.perf_counter()
+    _profile_phase("app_navigation", navigated - started)
     page.wait_for_selector("#sidebar")
+    sidebar_ready = time.perf_counter()
+    _profile_phase("app_sidebar_wait", sidebar_ready - navigated)
     page.wait_for_selector(".prks-folder-library")
+    folder_ready = time.perf_counter()
+    _profile_phase("app_folder_wait", folder_ready - sidebar_ready)
     page.wait_for_function("() => location.hash === '#/folders'")
-    _profile_phase("app_ready", time.perf_counter() - started)
+    route_ready = time.perf_counter()
+    _profile_phase("app_route_wait", route_ready - folder_ready)
+    # Keep all original readiness assertions; detail phases partition app_ready.
+    _profile_phase("app_ready", route_ready - started)
     e2e_heartbeat("APP_READY")
     return page, context, collector
 
