@@ -1332,6 +1332,7 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/pdf_linearize.py",
                 "backend/derived_cache_publish.py",
                 "backend/domain/text_identity.py",
+                "backend/pdf_byte_mentions.py",
             ),
         )
 
