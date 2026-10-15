@@ -36,13 +36,20 @@ own transactions, and instance administration uses :func:`instance_command`.
 snapshot, authorized for ``READ_LIBRARY``, and gives the current epoch for
 the response to carry. Reads are not fenced by epoch.
 
-:meth:`LibraryScope.execute` only runs statements that name
-``%(library_id)s`` and fills that parameter from the context, so a caller
-cannot omit its Library or pick another one by accident. Statements on
-tables that have no Library column (users, devices) go through
-:meth:`LibraryScope.execute_unscoped`, so each one is visible in review.
-The helper checks for the parameter, not how the statement uses it; the
-composite foreign keys keep a join inside one Library (§9.4).
+**Trust boundary.** These helpers enforce the authenticated actor, the
+capability, the maintenance lock and the epoch. They do **not** enforce
+that a statement's rows belong to the Library: without row-level security
+(deferred past 0.8, §9.4) nothing in PostgreSQL does. The caller owns its
+SQL predicates. :meth:`LibraryScope.execute` only refuses a statement that
+does not mention ``%(library_id)s`` and binds that parameter from the
+context, which catches a forgotten or caller-chosen Library, not a
+predicate that fails to filter (``WHERE %(library_id)s = %(library_id)s``
+passes and touches every Library). :meth:`LibraryScope.execute_unscoped`
+bypasses even that check and is for trusted statements on tables without a
+Library column. So every command and query that later lanes build on these
+helpers must filter Library-scoped rows by ``library_id`` itself, have each
+``execute_unscoped`` use reviewed, and come with a cross-Library negative
+test (another Library's rows are neither returned nor changed).
 """
 
 from __future__ import annotations
@@ -99,7 +106,11 @@ class LibraryScope:
     def execute(
         self, query: LiteralString, params: Mapping[str, Any] | None = None
     ) -> psycopg.Cursor[DictRow]:
-        """Run a statement that filters by ``%(library_id)s``, bound to this Library."""
+        """Run a statement that mentions ``%(library_id)s``, with that parameter bound to this Library.
+
+        The check is textual: the caller must use the parameter as a real row
+        filter on every Library-scoped table it touches (see the module docs).
+        """
         if _SCOPE_PARAMETER not in query:
             raise ValueError("a Library-scoped statement must filter by %(library_id)s")
         if params is not None and "library_id" in params:
@@ -109,7 +120,11 @@ class LibraryScope:
     def execute_unscoped(
         self, query: LiteralString, params: Mapping[str, Any] | tuple[Any, ...] | None = None
     ) -> psycopg.Cursor[DictRow]:
-        """Run a statement on a table without a Library column (users, devices, instance)."""
+        """Trusted only: run a statement with no Library check at all.
+
+        For tables without a Library column (users, devices, instance). Every
+        use is reviewed, and it must never touch a Library-scoped table.
+        """
         return self._tx.execute(query, params)
 
 
