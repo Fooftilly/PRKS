@@ -84,6 +84,18 @@ jobs:
           rows = []
           for trial, mode in enumerate(("baseline", "fastpath", "fastpath", "baseline"), 1):
               log = (root / f"e2e-routing-ab-{trial}.log").read_text(encoding="utf-8")
+              # The runner, not the shell labels, is authoritative on which
+              # benchmark mode it actually used. Reject missing/extra markers.
+              expected = "profile" if mode == "baseline" else "profile,route-fastpath"
+              active_modes = re.findall(
+                  r"^benchmark mode \(([^)]+)\): not persisting timing or last-failed history$",
+                  log,
+                  re.MULTILINE,
+              )
+              if active_modes != [expected]:
+                  raise SystemExit(
+                      f"Trial {trial}: expected benchmark mode {expected!r}, got {active_modes!r}"
+                  )
               samples = re.findall(
                   r"E2E workers=1 tests=(\d+) failures=(\d+) errors=(\d+) skipped=(\d+) in ([\d.]+)s",
                   log,
