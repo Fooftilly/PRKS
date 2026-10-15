@@ -1333,6 +1333,7 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/derived_cache_publish.py",
                 "backend/domain/text_identity.py",
                 "backend/pdf_byte_mentions.py",
+                "backend/fs_durability.py",
             ),
         )
 
