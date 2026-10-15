@@ -21,7 +21,10 @@ class StartupReadinessProfileTests(unittest.TestCase):
                 try:
                     harness.start_test_profile("server-profile")
                     try:
-                        self.assertIs(server.start(), server)
+                        with mock.patch.object(
+                            harness.time, "perf_counter", side_effect=[100, 102, 107]
+                        ):
+                            self.assertIs(server.start(), server)
                         phases = harness.finish_test_profile("server-profile")
                     finally:
                         harness.finish_test_profile("server-profile")
@@ -29,15 +32,51 @@ class StartupReadinessProfileTests(unittest.TestCase):
                     wait_http.assert_called_once_with(
                         "http://127.0.0.1:42002/api/works"
                     )
-                    self.assertIn("server_spawn", phases)
-                    self.assertIn("server_http_ready", phases)
-                    self.assertIn("server_start", phases)
-                    self.assertGreater(phases["server_start"], 0)
+                    self.assertEqual(phases["server_spawn"], 2.0)
+                    self.assertEqual(phases["server_http_ready"], 5.0)
+                    self.assertEqual(phases["server_start"], 7.0)
                     self.assertAlmostEqual(
                         phases["server_spawn"] + phases["server_http_ready"],
                         phases["server_start"],
                         delta=0.00001,
                     )
+                finally:
+                    server.stop()
+
+    def test_failed_retry_is_separate_from_successful_server_breakdown(self):
+        with mock.patch.dict(os.environ, {"PRKS_E2E_PROFILE": "1"}):
+            with (
+                mock.patch.object(
+                    harness, "find_free_port", side_effect=[42002, 42004]
+                ),
+                mock.patch.object(harness, "apply_playwright_browser_env"),
+                mock.patch.object(harness.AppServer, "_spawn") as spawn,
+                mock.patch.object(
+                    harness, "wait_http", side_effect=[RuntimeError("bind"), None]
+                ) as wait_http,
+                mock.patch.object(harness, "_address_in_use", return_value=True),
+            ):
+                server = harness.AppServer()
+                try:
+                    harness.start_test_profile("server-retry")
+                    try:
+                        with mock.patch.object(
+                            harness.time,
+                            "perf_counter",
+                            side_effect=[100, 102, 105, 110, 112, 117],
+                        ):
+                            self.assertIs(server.start(), server)
+                        phases = harness.finish_test_profile("server-retry")
+                    finally:
+                        harness.finish_test_profile("server-retry")
+                    self.assertEqual(spawn.call_count, 2)
+                    self.assertEqual(wait_http.call_count, 2)
+                    self.assertEqual(server.port, 42004)
+                    self.assertEqual(phases["server_spawn"], 2.0)
+                    self.assertEqual(phases["server_http_ready"], 5.0)
+                    self.assertEqual(phases["server_start"], 7.0)
+                    self.assertEqual(phases["server_spawn_failed"], 2.0)
+                    self.assertEqual(phases["server_http_ready_failed"], 3.0)
                 finally:
                     server.stop()
 
@@ -49,7 +88,12 @@ class StartupReadinessProfileTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"PRKS_E2E_PROFILE": "1"}):
             harness.start_test_profile("app-profile")
             try:
-                result = harness.open_app_page(browser, origin)
+                with mock.patch.object(
+                    harness.time,
+                    "perf_counter",
+                    side_effect=[10, 11, 20, 24, 27, 32, 34],
+                ):
+                    result = harness.open_app_page(browser, origin)
                 phases = harness.finish_test_profile("app-profile")
             finally:
                 harness.finish_test_profile("app-profile")
@@ -66,15 +110,20 @@ class StartupReadinessProfileTests(unittest.TestCase):
         page.wait_for_function.assert_called_once_with(
             "() => location.hash === '#/folders'"
         )
-        for phase in (
-            "browser_context",
-            "app_navigation",
-            "app_sidebar_wait",
-            "app_folder_wait",
-            "app_route_wait",
-            "app_ready",
-        ):
-            self.assertIn(phase, phases)
+        self.assertEqual(
+            {name: phases[name] for name in (
+                "browser_context", "app_navigation", "app_sidebar_wait",
+                "app_folder_wait", "app_route_wait", "app_ready",
+            )},
+            {
+                "browser_context": 1.0,
+                "app_navigation": 4.0,
+                "app_sidebar_wait": 3.0,
+                "app_folder_wait": 5.0,
+                "app_route_wait": 2.0,
+                "app_ready": 14.0,
+            },
+        )
         self.assertAlmostEqual(
             sum(
                 phases[name]
@@ -118,12 +167,17 @@ class StartupReadinessProfileTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"PRKS_E2E_PROFILE": "1"}):
             harness.start_test_profile("failed-readiness")
             try:
-                with self.assertRaisesRegex(RuntimeError, "missing real sidebar"):
-                    harness.open_app_page(browser, "http://127.0.0.1:42003")
+                with mock.patch.object(
+                    harness.time, "perf_counter", side_effect=[10, 11, 20, 24, 27]
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "missing real sidebar"):
+                        harness.open_app_page(browser, "http://127.0.0.1:42003")
                 phases = harness.finish_test_profile("failed-readiness")
             finally:
                 harness.finish_test_profile("failed-readiness")
         self.assertNotIn("app_ready", phases)
+        self.assertEqual(phases["app_navigation"], 4.0)
+        self.assertEqual(phases["app_sidebar_wait"], 3.0)
 
 
 if __name__ == "__main__":
