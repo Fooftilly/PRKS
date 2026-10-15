@@ -2571,6 +2571,23 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             )
         return code, print_slow
 
+    def test_watchdog_does_not_touch_last_failed_in_profile_mode(self):
+        """Even watchdog os._exit paths must preserve benchmark history."""
+        from tests.e2e import run as runner
+
+        test_id = "tests.e2e.fake.BenchTests.test_hung"
+        for environment in (
+            {"PRKS_E2E_PROFILE": "1", "PRKS_E2E_ROUTE_FASTPATH": "0"},
+            {"PRKS_E2E_PROFILE": "1", "PRKS_E2E_ROUTE_FASTPATH": "1"},
+        ):
+            with self.subTest(environment=environment):
+                with mock.patch.dict(os.environ, environment, clear=True):
+                    with mock.patch.object(runner, "save_last_failed") as save:
+                        with mock.patch.object(runner, "load_last_failed") as load:
+                            runner._persist_watchdog_last_failed(test_id)
+                save.assert_not_called()
+                load.assert_not_called()
+
     def test_env_only_benchmark_modes_do_not_persist_history(self):
         """PRKS_E2E_PROFILE / PRKS_E2E_SEED_CACHE=0 are benchmark runs without a flag."""
         from tests.e2e.sharding import load_timings, save_timings
