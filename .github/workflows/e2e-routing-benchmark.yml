@@ -1,0 +1,128 @@
+name: E2E Routing A/B Benchmark
+
+# This is strictly diagnostic; it never runs on PRs or master pushes.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-routing-ab-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    name: Same-runner baseline vs fast path
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        with:
+          path: .playwright-browsers
+          key: >-
+            playwright-${{ runner.os }}-${{ hashFiles('requirements-dev.txt',
+            'tests/e2e/install_browser.py') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install runtime and E2E dependencies
+        # Same pinned runtime packages as the authoritative E2E gate.
+        run: >-
+          python -m pip install --isolated --disable-pip-version-check
+          "--only-binary=:all:" "PyMuPDF==1.28.2" "Pillow==12.3.0" "pydantic==2.13.5"
+          "playwright==1.63.0"
+
+      - name: Ensure Chromium in repo cache
+        run: python tests/e2e/install_browser.py
+
+      - name: Run alternating A/B trials
+        shell: bash
+        env:
+          PRKS_E2E_PROFILE: "1"
+        run: |
+          set -euo pipefail
+          # The same tested commit, runner, test selection and worker count.
+          # ABBA reduces (but does not eliminate) warmed-run/order bias.
+          for trial in 1 2 3 4; do
+            case "$trial" in
+              1|4) mode=baseline; flag=0 ;;
+              2|3) mode=fastpath; flag=1 ;;
+            esac
+            echo "::group::Trial $trial ($mode)"
+            PRKS_E2E_ROUTE_FASTPATH="$flag" python tests/e2e/run.py \
+              --feature shell --feature work-create \
+              --jobs 1 --no-pointer-capture --profile \
+              2>&1 | tee "$RUNNER_TEMP/e2e-routing-ab-$trial.log"
+            echo "::endgroup::"
+          done
+
+          python - <<'PY'
+          import os
+          import re
+          import statistics
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          rows = []
+          for trial, mode in enumerate(("baseline", "fastpath", "fastpath", "baseline"), 1):
+              log = (root / f"e2e-routing-ab-{trial}.log").read_text(encoding="utf-8")
+              samples = re.findall(
+                  r"E2E workers=1 tests=(\d+) failures=(\d+) errors=(\d+) skipped=(\d+) in ([\d.]+)s",
+                  log,
+              )
+              if len(samples) != 1:
+                  raise SystemExit(f"Trial {trial}: expected exactly one E2E result")
+              tests, failures, errors, skipped, seconds = samples[0]
+              if int(tests) < 1 or any(int(v) for v in (failures, errors, skipped)):
+                  raise SystemExit(f"Trial {trial}: incomplete/failed selection")
+              match = re.search(r"^\s*routing_decision\s+([\d.]+)s$", log, re.MULTILINE)
+              if match is None:
+                  raise SystemExit(f"Trial {trial}: missing routing decision profile")
+              rows.append((trial, mode, int(tests), float(seconds), float(match.group(1))))
+
+          if len(set(row[2] for row in rows)) != 1:
+              raise SystemExit("A/B trials discovered different test counts")
+          baseline = statistics.median(row[3] for row in rows if row[1] == "baseline")
+          fastpath = statistics.median(row[3] for row in rows if row[1] == "fastpath")
+          relative = 100.0 * (fastpath - baseline) / baseline
+          summary = [
+              "## E2E route fast-path A/B (manual, diagnostic)",
+              "",
+              f"Commit: \`{os.environ['GITHUB_SHA'][:12]}\` · {rows[0][2]} selected tests per trial · same runner",
+              "",
+              "| Trial | Mode | E2E wall time | Routing decision sum |",
+              "|---|---|---:|---:|",
+          ]
+          for trial, mode, _, seconds, routing in rows:
+              summary.append(f"| {trial} | {mode} | {seconds:.2f}s | {routing:.2f}s |")
+          summary += [
+              "",
+              f"Baseline median: **{baseline:.2f}s**; fast-path median: **{fastpath:.2f}s**.",
+              f"Fast-path change: **{relative:+.2f}%** (negative = faster).",
+              "",
+              "Single small-sample diagnostic only: runner variance and profiling overhead remain.",
+              "Do not enable the fast path by default without repeated and full-suite evidence.",
+          ]
+          report = "\n".join(summary) + "\n"
+          print(report)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as out:
+              out.write(report)
+          PY
