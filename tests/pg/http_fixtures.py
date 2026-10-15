@@ -156,16 +156,7 @@ class HttpAuthTestCase(IdentityTestCase):
         try:
             conn.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
             conn.putheader("Host", host or f"127.0.0.1:{self.port}")
-            if method != "GET" and method != "HEAD":
-                if origin is _SENTINEL:
-                    conn.putheader("Origin", self.origin)
-                elif origin is not None:
-                    conn.putheader("Origin", origin)
-            if cookies:
-                conn.putheader("Cookie", "; ".join(f"{k}={v}" for k, v in cookies.items()))
-            if epoch is not None:
-                conn.putheader("PRKS-Library-Epoch", str(epoch))
-            for name, value in headers or []:
+            for name, value in self._request_headers(method, cookies, headers, origin, epoch):
                 conn.putheader(name, value)
             payload = b""
             if body is not None:
@@ -184,6 +175,23 @@ class HttpAuthTestCase(IdentityTestCase):
                 cookie_name, parsed = _parse_set_cookie(value)
                 response.cookies[cookie_name] = parsed
         return response
+
+    def _request_headers(
+        self,
+        method: str,
+        cookies: Optional[dict[str, str]],
+        headers: Optional[list[tuple[str, str]]],
+        origin: Optional[str],
+        epoch: Any,
+    ) -> list[tuple[str, str]]:
+        out: list[tuple[str, str]] = []
+        if method not in ("GET", "HEAD") and origin is not None:
+            out.append(("Origin", self.origin if origin is _SENTINEL else origin))
+        if cookies:
+            out.append(("Cookie", "; ".join(f"{k}={v}" for k, v in cookies.items())))
+        if epoch is not None:
+            out.append(("PRKS-Library-Epoch", str(epoch)))
+        return out + list(headers or [])
 
     def sign_in(self, login: str = "Owner", password: str = PASSWORD, **kwargs: Any) -> Response:
         return self.call("POST", "/api/login", body={"login": login, "password": password}, **kwargs)

@@ -997,16 +997,19 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             pass
         if self._prks_request_id:
             self.send_header("X-Request-ID", self._prks_request_id)
-        epoch = getattr(self, "_prks_library_epoch", None)
-        if epoch is not None:  # set only by an authenticated process's admission
-            from backend.api.session import EPOCH_HEADER
-
-            self.send_header(EPOCH_HEADER, str(epoch))
+        self._send_library_epoch_header()
         # Every response declares its own Content-Type; no response may be
         # re-interpreted as HTML by MIME sniffing. This closes the reflected-XSS
         # class for JSON/API bodies that echo library content back to the page.
         self.send_header("X-Content-Type-Options", "nosniff")
         super().end_headers()
+
+    def _send_library_epoch_header(self):
+        epoch = getattr(self, "_prks_library_epoch", None)
+        if epoch is not None:  # set only by an authenticated process's admission
+            from backend.api.session import EPOCH_HEADER
+
+            self.send_header(EPOCH_HEADER, str(epoch))
 
     def log_request(self, code="-", size="-"):
         ctx = self._request_context()

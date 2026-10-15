@@ -141,13 +141,25 @@ def _served_modules(root: Path) -> set[str]:
     return _trace_served_modules(root, deferred=True)[0]
 
 
-def _trace_served_modules(root: Path, *, deferred: bool) -> tuple[set[str], list[str]]:
+def _local_sources(root: Path) -> dict[str, Path]:
     sources = {"prks_app": root / "prks_app.py"}
     for path in (root / "backend").rglob("*.py"):
         rel = path.relative_to(root).with_suffix("")
         parts = rel.parts[:-1] if path.name == "__init__.py" else rel.parts
         sources[".".join(parts)] = path
+    return sources
 
+
+def _module_imports(module: str, path: Path, *, deferred: bool) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    package = module if path.name == "__init__.py" else module.rpartition(".")[0]
+    scanner = _RuntimeImports(path=path, package=package)
+    scanner.visit(tree)
+    return scanner.imports | scanner.deferred if deferred else scanner.imports
+
+
+def _trace_served_modules(root: Path, *, deferred: bool) -> tuple[set[str], list[str]]:
+    sources = _local_sources(root)
     pending = ["prks_app", "backend.server"]
     visited = set()
     offenders = []
@@ -172,12 +184,7 @@ def _trace_served_modules(root: Path, *, deferred: bool) -> tuple[set[str], list
                 raise AssertionError(f"missing served entry: {module}")
             continue
 
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        package = module if path.name == "__init__.py" else module.rpartition(".")[0]
-        scanner = _RuntimeImports(path=path, package=package)
-        scanner.visit(tree)
-        targets = scanner.imports | scanner.deferred if deferred else scanner.imports
-        for target in sorted(targets):
+        for target in sorted(_module_imports(module, path, deferred=deferred)):
             if any(target == prefix or target.startswith(prefix + ".") for prefix in pg_prefixes):
                 offenders.append(f"{module} imports {target}")
             # Include package __init__.py side effects in the reachable graph.

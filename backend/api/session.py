@@ -350,8 +350,12 @@ def _login(auth: WebAuth, request: HttpRequest) -> Union[Reply, _Answered]:
         return _error(429, result.public_reason, (("Retry-After", str(result.retry_after_seconds or 1)),))
     if result.outcome is not LoginOutcome.SUCCEEDED or result.session is None or result.device_token is None:
         return _error(result.http_status, result.public_reason)
-    token = result.session.token.reveal()
-    headers = [_device_cookie(auth, result.device_token.reveal())]
+    return _signed_in(auth, request, result.session.token.reveal(), result.device_token.reveal())
+
+
+def _signed_in(auth: WebAuth, request: HttpRequest, token: str, device_token: str) -> Reply:
+    """Answer a successful login: replace the browser's earlier session and set both cookies."""
+    headers = [_device_cookie(auth, device_token)]
     try:
         previous = cookie(request, SESSION_COOKIE)
         if previous is not None:
