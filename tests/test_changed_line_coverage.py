@@ -65,6 +65,32 @@ class ChangedLineCoverageTests(unittest.TestCase):
         result = changed_line_report(patch, report, "istanbul", [TS_SOURCE])
         self.assertIn("2/3 (67%)", result)
 
+    def test_vitest_actual_coverage_final_statement_map_without_line_hits(self):
+        # Istanbul's JSON reporter usually supplies statementMap + s, not l.
+        patch = _diff(TS_SOURCE, 30, 4)
+        report = {
+            "/runner/prks/" + TS_SOURCE: {
+                "statementMap": {
+                    "0": {"start": {"line": 30, "column": 0}, "end": {"line": 30, "column": 8}},
+                    "1": {"start": {"line": 31, "column": 0}, "end": {"line": 31, "column": 8}},
+                    "2": {"start": {"line": 31, "column": 9}, "end": {"line": 31, "column": 20}},
+                    "3": {"start": {"line": 33, "column": 0}, "end": {"line": 33, "column": 8}},
+                },
+                "s": {"0": 4, "1": 0, "2": 3, "3": 0},
+            }
+        }
+        result = changed_line_report(patch, report, "istanbul", [TS_SOURCE])
+        self.assertIn("2/3 (67%)", result)
+
+    def test_missing_istanbul_statement_hits_are_unavailable(self):
+        incomplete = {
+            "statementMap": {
+                "0": {"start": {"line": 30, "column": 0}, "end": {"line": 30, "column": 3}},
+            },
+            "s": {},
+        }
+        self.assertIsNone(executable_lines(incomplete, "istanbul"))
+
     def test_unchanged_pilot_sources_do_not_claim_zero_coverage(self):
         report = {"files": {}}
         result = changed_line_report(_diff("docs/note.md", 1, 1), report, "coveragepy", [PYTHON_SOURCE])
