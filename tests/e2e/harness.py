@@ -1065,18 +1065,19 @@ class AppServer:
         env.update(self._extra_env)
         for attempt in range(SERVER_START_ATTEMPTS):
             started = time.perf_counter()
-            self._spawn(env)
+            try:
+                self._spawn(env)
+            except Exception:
+                _profile_phase("server_spawn_failed", time.perf_counter() - started)
+                raise
             spawned = time.perf_counter()
-            _profile_phase("server_spawn", spawned - started)
             try:
                 wait_http(self.origin + "/api/works")
-                ready = time.perf_counter()
-                _profile_phase("server_http_ready", ready - spawned)
-                # Retain the original inclusive phase for historical comparison.
-                _profile_phase("server_start", ready - started)
-                e2e_heartbeat("SERVER_READY")
-                return self
             except Exception:
+                # Keep failed/retried probes separate from the successful
+                # attempt's inclusive server_start and its two detail phases.
+                _profile_phase("server_spawn_failed", spawned - started)
+                _profile_phase("server_http_ready_failed", time.perf_counter() - spawned)
                 # Read the captured output *before* teardown: the log files live
                 # in the server's temporary directory, which cleanup deletes.
                 out = _read_file(self._stdout_path)
@@ -1094,6 +1095,13 @@ class AppServer:
                     "PRKS E2E server failed to start on %s\nstdout:\n%s\nstderr:\n%s"
                     % (self.origin, out[-4000:], err[-4000:])
                 ) from None
+            ready = time.perf_counter()
+            # Only successful attempts train the historical inclusive phase.
+            _profile_phase("server_spawn", spawned - started)
+            _profile_phase("server_http_ready", ready - spawned)
+            _profile_phase("server_start", ready - started)
+            e2e_heartbeat("SERVER_READY")
+            return self
         raise RuntimeError("PRKS E2E server could not obtain a free port")
 
     def _spawn(self, env):
@@ -1239,19 +1247,28 @@ def open_app_page(browser, origin: str, service_workers: str = "block"):
     # mounts .prks-folder-library with location.hash === '#/folders', so the old
     # Folders nav click was a pure re-navigation (~45ms median measured waste).
     # Do not invent fake init state — wait on the real shell + Folders surface.
-    page.goto(origin + "/#/folders", wait_until="domcontentloaded")
-    navigated = time.perf_counter()
-    _profile_phase("app_navigation", navigated - started)
-    page.wait_for_selector("#sidebar")
-    sidebar_ready = time.perf_counter()
-    _profile_phase("app_sidebar_wait", sidebar_ready - navigated)
-    page.wait_for_selector(".prks-folder-library")
-    folder_ready = time.perf_counter()
-    _profile_phase("app_folder_wait", folder_ready - sidebar_ready)
-    page.wait_for_function("() => location.hash === '#/folders'")
-    route_ready = time.perf_counter()
-    _profile_phase("app_route_wait", route_ready - folder_ready)
-    # Keep all original readiness assertions; detail phases partition app_ready.
+    try:
+        page.goto(origin + "/#/folders", wait_until="domcontentloaded")
+    finally:
+        navigated = time.perf_counter()
+        _profile_phase("app_navigation", navigated - started)
+    try:
+        page.wait_for_selector("#sidebar")
+    finally:
+        sidebar_ready = time.perf_counter()
+        _profile_phase("app_sidebar_wait", sidebar_ready - navigated)
+    try:
+        page.wait_for_selector(".prks-folder-library")
+    finally:
+        folder_ready = time.perf_counter()
+        _profile_phase("app_folder_wait", folder_ready - sidebar_ready)
+    try:
+        page.wait_for_function("() => location.hash === '#/folders'")
+    finally:
+        route_ready = time.perf_counter()
+        _profile_phase("app_route_wait", route_ready - folder_ready)
+    # Real readiness failures still propagate. The inclusive phase is recorded
+    # only for successful navigation and all three original checks.
     _profile_phase("app_ready", route_ready - started)
     e2e_heartbeat("APP_READY")
     return page, context, collector
