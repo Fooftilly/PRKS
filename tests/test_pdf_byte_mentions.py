@@ -58,11 +58,12 @@ class PdfByteMentionsTests(unittest.TestCase):
         )
 
     def test_invalid_utf8_and_empty_filtered_labels_do_not_hide_later_mentions(self) -> None:
-        data = b"[[\xff\xfe]] [[A@B]] [[Ren\xc3\xa9]] [[After]]"
+        data = b"[[\xff\xfe]] [[!@#$]] [[A@B]] [[Ren\xc3\xa9]] [[After]]"
         self.assertEqual(
             list(iter_pdf_mentioned_labels(data)), ["AB", "René", "After"]
         )
         self.assertEqual(normalize_pdf_mentioned_label(b"\xff\xfe"), "")
+        self.assertEqual(normalize_pdf_mentioned_label(b"!@#$"), "")
         self.assertEqual(normalize_pdf_mentioned_label(b" -- "), "--")
 
     def test_pathological_prefix_stays_linear(self) -> None:
