@@ -9,9 +9,11 @@ the idle period. Sign-out revokes the row; an expired or revoked session,
 one whose user is disabled, and one whose membership is gone (the foreign
 key deletes it) are refused.
 
-What a session may do (role, capabilities, the Library epoch) is decided by
-``RequestContext`` and ``authorize()`` in PR 4/5, from the membership row on
-every request; this module only answers who holds the cookie.
+What a session may do is decided per operation by
+:mod:`~backend.domain.identity.authorization` (``authorize()`` reads the
+membership row inside the operation's transaction) and, for Library
+mutations, the epoch check of :mod:`~backend.domain.identity.library_scope`;
+this module only answers who holds the cookie.
 """
 
 from __future__ import annotations
