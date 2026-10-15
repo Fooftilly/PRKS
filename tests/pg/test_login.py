@@ -337,6 +337,26 @@ class LoginDeviceTests(IdentityTestCase):
         self.login(password="wrong", device_cookie=first.reveal())
         self.assertEqual(self.attempts()[account_key("owner")], 1)
 
+    def test_concurrent_logins_with_one_device_token_get_one_successor(self) -> None:
+        user_id = self.user("Owner")
+        first = self.first_device()
+        racing: list[Any] = []
+
+        def other_tab_signs_in_first() -> None:
+            self.hasher.on_verify = None
+            racing.append(self.login(device_cookie=first.reveal()))
+
+        # Both logins pass the device check; the other one commits first.
+        self.hasher.on_verify = other_tab_signs_in_first
+        late = self.login(device_cookie=first.reveal())
+        self.assertIs(late.outcome, LoginOutcome.SUCCEEDED)
+        self.assertIsNotNone(late.session)
+        self.assertIsNone(late.device_token)  # the presented token was already consumed
+        winner = racing[0].device_token
+        assert winner is not None
+        stored = self.run_sql("SELECT token_sha256 FROM prks.login_device_tokens WHERE user_id = %s", (user_id,))
+        self.assertEqual([bytes(row["token_sha256"]) for row in stored], [winner.digest])
+
     def test_stale_revoked_malformed_and_foreign_tokens_are_ignored(self) -> None:
         owner = self.user("Owner")
         self.user("Other")

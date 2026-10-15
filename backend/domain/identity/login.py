@@ -85,7 +85,9 @@ class LoginResult:
 
     ``session`` and ``device_token`` are set only on ``SUCCEEDED``; the HTTP
     layer sets the token as the new ``prks_login_device`` cookie, since the
-    old one no longer works. ``retry_after_seconds`` and ``throttled_kind`` are set
+    old one no longer works. ``device_token`` is ``None`` on a success whose
+    presented token a concurrent login already replaced; the cookie is then
+    left alone (that login's response carries the one successor). ``retry_after_seconds`` and ``throttled_kind`` are set
     only on ``THROTTLED``.
     """
 
@@ -189,13 +191,19 @@ def _known_device(
 
 def issue_device_token(
     tx: Transaction, user_id: str, *, replacing: Optional[LoginDeviceToken] = None
-) -> LoginDeviceToken:
-    """Store a new device token for ``user_id``, deleting ``replacing`` if it is theirs."""
+) -> Optional[LoginDeviceToken]:
+    """Store a new device token for ``user_id``, consuming ``replacing``.
+
+    ``None`` when ``replacing`` is no longer stored: a concurrent login with
+    the same cookie already consumed it, so it gets one successor, not two.
+    """
     if replacing is not None:
-        tx.execute(
+        consumed = tx.execute(
             "DELETE FROM prks.login_device_tokens WHERE token_sha256 = %s AND user_id = %s",
             (replacing.digest, user_id),
-        )
+        ).rowcount
+        if consumed == 0:
+            return None
     token = LoginDeviceToken.new()
     tx.execute(
         "INSERT INTO prks.login_device_tokens (token_sha256, user_id) VALUES (%s, %s)",

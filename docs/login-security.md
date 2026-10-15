@@ -92,7 +92,9 @@ A successful password login sets a `prks_login_device` cookie (256-bit random
 token; `HttpOnly`, `SameSite=Strict`, `Path=/api/login`, `Secure` on HTTPS,
 one year). The database keeps only its SHA-256. Each successful login replaces
 it with a new one; a token is accepted only for its own account and for one
-year from when it was issued.
+year from when it was issued. A token is replaced only once: when two logins
+present it at the same time, only the first gets a successor, and the other
+signs in without changing the cookie.
 
 ## Sessions
 
