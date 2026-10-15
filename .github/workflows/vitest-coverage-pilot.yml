@@ -142,9 +142,9 @@ jobs:
           python3 -m unittest discover -s ../tests -p test_changed_line_coverage.py
           if [[ "$GITHUB_EVENT_NAME" != "pull_request" ]]; then
             echo "No changed-line comparison on manual coverage runs." >> "$GITHUB_STEP_SUMMARY"
-          elif git rev-parse --verify 'HEAD^1^{commit}' >/dev/null 2>&1; then
+          elif git -C .. rev-parse --verify 'HEAD^1^{commit}' >/dev/null 2>&1; then
             patch="$RUNNER_TEMP/prks-vitest-changed.diff"
-            git diff --no-ext-diff --unified=0 HEAD^1 HEAD -- \
+            git -C .. diff --no-ext-diff --unified=0 HEAD^1 HEAD -- \
               frontend-app/src/lifecycle/tab-leave.ts \
               frontend-app/src/lifecycle/owner-resource.ts \
               frontend-app/src/query/retry.ts \
