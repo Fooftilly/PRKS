@@ -204,9 +204,13 @@ separate, fresh-isolation runs in **baseline → fast path → fast path → bas
 order on the same runner and commit. Ordinary PR and master full gates are not
 changed or shortened. This workflow is **manual-only**; it does not upload
 test artifacts or mutate ordinary E2E timing/last-failed history, including
-when the per-test watchdog terminates a hung test. The summary verifies each
-trial's **runner-reported** active benchmark mode; missing/mismatched mode
-markers fail the job rather than silently reporting a false A/B comparison.
+when the per-test watchdog terminates a hung test. The serial runner emits a
+versioned, aggregate-only JSON report to `PRKS_E2E_BENCHMARK_RESULT` **only**
+when explicitly configured. Each trial writes its own temporary report on the
+runner; nothing is uploaded. The summary validates the JSON schema, active
+benchmark modes, test counts and phase metrics. Missing, mismatched or
+unprofiled data fails the job without presenting a misleading A/B result;
+the workflow does not depend on human-readable log formatting.
 
 Open **Actions → E2E Routing A/B Benchmark → Run workflow** on `master`.
 The job summary reports each trial's E2E runtime and the instrumented
