@@ -72,6 +72,19 @@ T = TypeVar("T")
 # expression.
 LIBRARY_LOCK_KEY_SQL: LiteralString = "hashtextextended('prks.library:' || %s, 0)"
 
+# The commands' shared try-lock on that key, written out in full (a test
+# pins it to LIBRARY_LOCK_KEY_SQL).
+_TRY_LOCK_SHARED_SQL: LiteralString = (
+    "SELECT pg_try_advisory_xact_lock_shared(hashtextextended('prks.library:' || %s, 0)) AS locked"
+)
+
+_EPOCH_SQL: LiteralString = (
+    "SELECT epoch, maintenance IS NOT NULL AS in_maintenance FROM prks.libraries WHERE id = %s"
+)
+_EPOCH_FOR_SHARE_SQL: LiteralString = (
+    "SELECT epoch, maintenance IS NOT NULL AS in_maintenance FROM prks.libraries WHERE id = %s FOR SHARE"
+)
+
 _SCOPE_PARAMETER = "%(library_id)s"
 
 
@@ -105,16 +118,12 @@ def _enter_library(tx: Transaction, library_id: str) -> None:
 
 
 def _take_maintenance_lock(tx: Transaction, library_id: str) -> bool:
-    row = tx.execute(
-        "SELECT pg_try_advisory_xact_lock_shared(" + LIBRARY_LOCK_KEY_SQL + ") AS locked",
-        (library_id,),
-    ).fetchone()
+    row = tx.execute(_TRY_LOCK_SHARED_SQL, (library_id,)).fetchone()
     return row is not None and bool(row["locked"])
 
 
 def _current_epoch(tx: Transaction, library_id: str, *, lock: bool) -> tuple[int, bool]:
-    query: LiteralString = "SELECT epoch, maintenance IS NOT NULL AS in_maintenance FROM prks.libraries WHERE id = %s"
-    row = tx.execute(query + " FOR SHARE" if lock else query, (library_id,)).fetchone()
+    row = tx.execute(_EPOCH_FOR_SHARE_SQL if lock else _EPOCH_SQL, (library_id,)).fetchone()
     if row is None:  # authorize() has just seen it; only a trusted context can get here
         raise AccessRefused(Refusal.FORBIDDEN)
     return int(row["epoch"]), bool(row["in_maintenance"])

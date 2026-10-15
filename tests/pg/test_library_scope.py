@@ -295,6 +295,11 @@ class ScopeHelperTests(ScopeTestCase):
             got = conn.execute("SELECT pg_try_advisory_lock(" + LIBRARY_LOCK_KEY_SQL + ")", (self.lib_a,)).fetchone()
         self.assertEqual((held, got), ((0,), (True,)))
 
+    def test_commands_take_the_published_maintenance_key(self) -> None:
+        from backend.domain.identity import library_scope
+
+        self.assertIn(LIBRARY_LOCK_KEY_SQL, library_scope._TRY_LOCK_SHARED_SQL)
+
     def test_queries_report_the_current_epoch(self) -> None:
         self.restore()
         self.assertEqual(library_query(self.db, self.ctx_a, lambda scope: scope.epoch), 2)
