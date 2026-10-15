@@ -177,8 +177,9 @@ of `request_routing`.
 The ordinary path keeps `page.route("**/*", ...)` and validates the parsed
 origin. `PRKS_E2E_ROUTE_FASTPATH=1` tries a conservative authority-and-path
 prefix first, falling back to the same parser for aliases/edge cases. **Both
-paths still intercept all requests** and block off-origin HTTP, including
-requests that follow redirects. There is no proxy/network-policy change, no
+paths still intercept the same request patterns** and block off-origin HTTP
+through the same handler. Redirect behavior is unchanged; this experiment
+makes no new guarantees about Playwright redirect handling. There is no proxy/network-policy change, no
 test isolation change, and no change to what tests are selected. Playwright's
 routing still disables the browser HTTP cache in both modes, so this benchmark
 does not measure any hypothetical cache win.
