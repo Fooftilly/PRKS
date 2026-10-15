@@ -1333,6 +1333,38 @@ def _print_worker_failure(worker, jobs, report):
 # --- serial parent -------------------------------------------------------
 
 
+# Machine-readable manual A/B reporting is independent of console formatting.
+# Absent this env var, normal E2E runs make no extra writes.
+BENCHMARK_RESULT_ENV = "PRKS_E2E_BENCHMARK_RESULT"
+
+
+def _write_serial_benchmark_result(result, wall_seconds: float) -> None:
+    """Write the opt-in, privacy-safe benchmark summary after a serial test run."""
+    destination = os.environ.get(BENCHMARK_RESULT_ENV)
+    if not destination:
+        return
+    modes = benchmark_modes()
+    if "profile" not in modes:
+        raise ValueError("%s requires E2E profiling" % BENCHMARK_RESULT_ENV)
+    totals = {}
+    for phases in result.phase_timings.values():
+        for name, seconds in phases.items():
+            totals[name] = totals.get(name, 0.0) + float(seconds)
+    payload = {
+        "schema_version": 1,
+        "benchmark_modes": list(modes),
+        "workers": 1,
+        "tests": result.testsRun,
+        "failures": len(result.failures),
+        "errors": len(result.errors),
+        "skipped": len(result.skipped),
+        "wall_seconds": round(wall_seconds, 3),
+        "phase_seconds": {name: round(seconds, 6) for name, seconds in totals.items()},
+    }
+    # Contains aggregate synthetic-test metrics only; no IDs, URLs or fixtures.
+    Path(destination).write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def run_serial(
     test_ids, fail_fast, *, enable_watchdog: bool = False
 ) -> tuple[bool, dict, list, dict]:
@@ -1352,6 +1384,7 @@ def run_serial(
     finally:
         clear_e2e_heartbeat()
     wall = time.perf_counter() - started
+    _write_serial_benchmark_result(result, wall)
     print("")
     print(
         "E2E workers=1 tests=%d failures=%d errors=%d skipped=%d in %.1fs"
