@@ -33,6 +33,7 @@ from tests.e2e.install_browser import (
 )
 from tests.e2e.policy import (
     PROFILE_ENV,
+    ROUTE_FASTPATH_ENV,
     SEED_CACHE_ENV,
     env_flag_enabled,
 )
@@ -835,6 +836,8 @@ class PageCollector:
         self.failed_requests = []
         self.http_5xx = []
         self.external = []
+        # Same-origin fast-path is opt-in; all requests remain intercepted.
+        self._fast_local_route = _env_enabled(ROUTE_FASTPATH_ENV)
         self._pdf_posts = []
         self._ann_posts = []
         self._save_confirms = []
@@ -916,20 +919,41 @@ class PageCollector:
     def _on_route(self, route):
         started = time.perf_counter()
         url = route.request.url
+        blocked_external = False
         try:
             if url.startswith("blob:") or url.startswith("data:") or url.startswith("about:"):
+                route.continue_()
+                return
+            # This prefix has an authority/path boundary, so an attacker-controlled
+            # host such as 127.0.0.1:<port>.evil.test cannot match. Aliases and
+            # unusual URL forms still use the original parsed-origin validator.
+            # Critically, page.route("**/*") is retained, preserving the
+            # interception patterns and redirect behavior of the default path.
+            if self._fast_local_route and (
+                url == self.origin
+                or url.startswith(self.origin + "/")
+                or url.startswith(self.origin + "?")
+            ):
+                _profile_phase("routing_decision", time.perf_counter() - started)
                 route.continue_()
                 return
             parsed = urlparse(url)
             if parsed.scheme in ("http", "https"):
                 if self._allowed_http_origin(url):
+                    _profile_phase("routing_decision", time.perf_counter() - started)
                     route.continue_()
                     return
                 self.external.append(url)
+                blocked_external = True
+                _profile_phase("routing_decision", time.perf_counter() - started)
                 route.abort()
                 return
             route.continue_()
         except Exception:
+            if blocked_external:
+                # An abort error must never turn into an external request.
+                # Let the scenario fail rather than accidentally fail open.
+                raise
             try:
                 route.continue_()
             except Exception:

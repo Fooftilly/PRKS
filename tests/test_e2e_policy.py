@@ -1837,6 +1837,19 @@ class BenchmarkModeTests(unittest.TestCase):
             ("profile", "no-seed-cache"),
         )
 
+    def test_fastpath_is_opt_in_and_never_trains_timing_history(self):
+        self.assertEqual(policy.benchmark_modes({"PRKS_E2E_ROUTE_FASTPATH": "0"}), ())
+        self.assertEqual(
+            policy.benchmark_modes({"PRKS_E2E_ROUTE_FASTPATH": "1"}),
+            ("route-fastpath",),
+        )
+        self.assertEqual(
+            policy.benchmark_modes(
+                {"PRKS_E2E_PROFILE": "1", "PRKS_E2E_ROUTE_FASTPATH": "yes"}
+            ),
+            ("profile", "route-fastpath"),
+        )
+
     def test_env_truthiness_is_shared_with_the_harness(self):
         """One definition decides how the harness reads a switch and how the
         runner judges the same switch."""
@@ -2583,6 +2596,7 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                 with mock.patch.dict(os.environ, {"PRKS_E2E": "1"}, clear=False):
                     os.environ.pop("PRKS_E2E_PROFILE", None)
                     os.environ.pop("PRKS_E2E_SEED_CACHE", None)
+                    os.environ.pop("PRKS_E2E_ROUTE_FASTPATH", None)
                     os.environ.update(env)
                     return self._invoke_runner_history_case(
                         repo,
@@ -2596,6 +2610,7 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                 {"PRKS_E2E_PROFILE": "1"},
                 {"PRKS_E2E_SEED_CACHE": "0"},
                 {"PRKS_E2E_PROFILE": "1", "PRKS_E2E_SEED_CACHE": "0"},
+                {"PRKS_E2E_ROUTE_FASTPATH": "1"},
             ):
                 code, print_slow = _run(env)
                 self.assertEqual(code, 0)

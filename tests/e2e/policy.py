@@ -26,6 +26,8 @@ FAILURE_DIAGNOSTICS_PATH = Path(".tests") / "e2e-failure-diagnostics.json"
 # runner reads the same names to decide whether a run may train history.
 PROFILE_ENV = "PRKS_E2E_PROFILE"
 SEED_CACHE_ENV = "PRKS_E2E_SEED_CACHE"
+# Opt-in experiment: identical catch-all interception with a cheaper local URL fast path.
+ROUTE_FASTPATH_ENV = "PRKS_E2E_ROUTE_FASTPATH"
 
 FALSE_ENV_VALUES = frozenset({"0", "false", "no", "off"})
 
@@ -53,6 +55,8 @@ def benchmark_modes(environ=None) -> tuple:
         modes.append("profile")
     if not env_flag_enabled(SEED_CACHE_ENV, default=True, environ=environ):
         modes.append("no-seed-cache")
+    if env_flag_enabled(ROUTE_FASTPATH_ENV, environ=environ):
+        modes.append("route-fastpath")
     return tuple(modes)
 
 
