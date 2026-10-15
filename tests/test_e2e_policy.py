@@ -2596,6 +2596,7 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                 with mock.patch.dict(os.environ, {"PRKS_E2E": "1"}, clear=False):
                     os.environ.pop("PRKS_E2E_PROFILE", None)
                     os.environ.pop("PRKS_E2E_SEED_CACHE", None)
+                    os.environ.pop("PRKS_E2E_ROUTE_FASTPATH", None)
                     os.environ.update(env)
                     return self._invoke_runner_history_case(
                         repo,
@@ -2609,6 +2610,7 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                 {"PRKS_E2E_PROFILE": "1"},
                 {"PRKS_E2E_SEED_CACHE": "0"},
                 {"PRKS_E2E_PROFILE": "1", "PRKS_E2E_SEED_CACHE": "0"},
+                {"PRKS_E2E_ROUTE_FASTPATH": "1"},
             ):
                 code, print_slow = _run(env)
                 self.assertEqual(code, 0)
