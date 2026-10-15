@@ -8,9 +8,12 @@ runs the caller's function in **one** transaction, in this order:
 2. ``pg_try_advisory_xact_lock_shared`` on the Library maintenance key. A
    restore takes the same key exclusively (R3) before it commits its
    replacement and advances the epoch (R4); if it holds or waits for it
-   now, the command refuses ``MAINTENANCE`` instead of queueing behind it.
-3. ``authorize(tx, ctx, capability)``, which locks the membership and user
-   rows ``FOR SHARE``.
+   now, the command refuses ``MAINTENANCE`` instead of queueing behind it,
+   after authorizing the actor, so only an authorized actor ever learns
+   that the Library is under maintenance.
+3. ``authorize(tx, ctx, capability)``, which locks the session, membership
+   and user rows ``FOR SHARE``. A command needs ``EDIT_LIBRARY`` or
+   ``ADMIN_LIBRARY``; ``READ_LIBRARY`` never authorizes a write.
 4. ``SELECT epoch, maintenance FROM prks.libraries … FOR SHARE``: a committed
    maintenance flag refuses ``MAINTENANCE``; an epoch other than
    ``ctx.epoch`` (older or newer) refuses ``LIBRARY_EPOCH_CHANGED``.
@@ -33,9 +36,13 @@ own transactions, and instance administration uses :func:`instance_command`.
 snapshot, authorized for ``READ_LIBRARY``, and gives the current epoch for
 the response to carry. Reads are not fenced by epoch.
 
-:meth:`LibraryScope.execute` only runs statements that filter by
+:meth:`LibraryScope.execute` only runs statements that name
 ``%(library_id)s`` and fills that parameter from the context, so a caller
-cannot omit its Library or pick another one.
+cannot omit its Library or pick another one by accident. Statements on
+tables that have no Library column (users, devices) go through
+:meth:`LibraryScope.execute_unscoped`, so each one is visible in review.
+The helper checks for the parameter, not how the statement uses it; the
+composite foreign keys keep a join inside one Library (§9.4).
 """
 
 from __future__ import annotations
@@ -50,6 +57,7 @@ from psycopg.rows import DictRow
 from backend.db.database import Database, Isolation, Transaction
 from backend.domain.identity.authorization import (
     LIBRARY_CAPABILITIES,
+    MUTATION_CAPABILITIES,
     AccessRefused,
     Capability,
     Refusal,
@@ -71,7 +79,7 @@ _SCOPE_PARAMETER = "%(library_id)s"
 class LibraryScope:
     """The transaction of an authorized, epoch-checked Library operation."""
 
-    tx: Transaction
+    _tx: Transaction
     library_id: str
     epoch: int  # the Library's current epoch (equal to ctx.epoch in a command)
 
@@ -83,20 +91,25 @@ class LibraryScope:
             raise ValueError("a Library-scoped statement must filter by %(library_id)s")
         if params is not None and "library_id" in params:
             raise ValueError("library_id comes from the request context, not the caller")
-        return self.tx.execute(query, {**(params or {}), "library_id": self.library_id})
+        return self._tx.execute(query, {**(params or {}), "library_id": self.library_id})
+
+    def execute_unscoped(
+        self, query: LiteralString, params: Mapping[str, Any] | tuple[Any, ...] | None = None
+    ) -> psycopg.Cursor[DictRow]:
+        """Run a statement on a table without a Library column (users, devices, instance)."""
+        return self._tx.execute(query, params)
 
 
 def _enter_library(tx: Transaction, library_id: str) -> None:
     tx.execute("SELECT set_config('prks.library_id', %s, true)", (library_id,))
 
 
-def _take_maintenance_lock(tx: Transaction, library_id: str) -> None:
+def _take_maintenance_lock(tx: Transaction, library_id: str) -> bool:
     row = tx.execute(
         "SELECT pg_try_advisory_xact_lock_shared(" + LIBRARY_LOCK_KEY_SQL + ") AS locked",
         (library_id,),
     ).fetchone()
-    if row is None or not row["locked"]:
-        raise AccessRefused(Refusal.MAINTENANCE)
+    return row is not None and bool(row["locked"])
 
 
 def _current_epoch(tx: Transaction, library_id: str, *, lock: bool) -> tuple[int, bool]:
@@ -120,8 +133,8 @@ def library_command(
     Raises :class:`AccessRefused` with nothing written when a check fails.
     ``fn`` may be called again when a SERIALIZABLE command is retried.
     """
-    if capability not in LIBRARY_CAPABILITIES:
-        raise ValueError("library_command takes a Library capability")
+    if capability not in MUTATION_CAPABILITIES:
+        raise ValueError("library_command takes EDIT_LIBRARY or ADMIN_LIBRARY")
     library_id = ctx.library_id
     if library_id is None:
         raise AccessRefused(Refusal.FORBIDDEN)
@@ -131,8 +144,10 @@ def library_command(
 
     def run(tx: Transaction) -> T:
         _enter_library(tx, library_id)
-        _take_maintenance_lock(tx, library_id)
+        locked = _take_maintenance_lock(tx, library_id)
         authorize(tx, ctx, capability)
+        if not locked:
+            raise AccessRefused(Refusal.MAINTENANCE)
         epoch, in_maintenance = _current_epoch(tx, library_id, lock=True)
         if in_maintenance:
             raise AccessRefused(Refusal.MAINTENANCE)

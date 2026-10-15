@@ -6,10 +6,11 @@ session row, the user row and the ``library_memberships`` row for a browser,
 the ``prks.jobs`` row for a worker. A role cached anywhere else, or anything a
 client sent, never grants a capability.
 
-In a read-write transaction the membership and user rows are locked
-``FOR SHARE`` until commit, so a demotion, a removed membership or a disabled
-account either commits before the check (and the check sees it) or waits
-until the protected write has committed. A read-only snapshot cannot lock;
+In a read-write transaction the session, membership and user rows (a job's
+row for a worker) are locked ``FOR SHARE`` until commit, so a sign-out, a
+demotion, a removed membership or a disabled account either commits before
+the check (and the check sees it) or waits until the protected write has
+committed. A read-only snapshot cannot lock;
 it sees the state of its snapshot.
 
 Refusals are :class:`AccessRefused` with a stable :class:`Refusal`. Their
@@ -39,6 +40,9 @@ class Capability(Enum):
 LIBRARY_CAPABILITIES = frozenset(
     {Capability.READ_LIBRARY, Capability.EDIT_LIBRARY, Capability.ADMIN_LIBRARY}
 )
+
+# What a Library mutation may require; READ_LIBRARY never authorizes a write.
+MUTATION_CAPABILITIES = frozenset({Capability.EDIT_LIBRARY, Capability.ADMIN_LIBRARY})
 
 # Role -> capabilities (§9.4). No role grants ADMIN_INSTANCE: in 0.8 only the
 # host admin CLI has it.
@@ -114,6 +118,7 @@ SELECT 1
  WHERE id = %(job_id)s
    AND lease_id = %(lease_id)s
    AND state = 'running'
+   AND locked_until > now()
    AND library_id IS NOT DISTINCT FROM %(library_id)s
 """
 
@@ -126,7 +131,7 @@ def _browser_capabilities(tx: Transaction, ctx: RequestContext) -> frozenset[Cap
     if ctx.session_id is None or ctx.user_id is None or ctx.library_id is None:
         raise AccessRefused(Refusal.NOT_AUTHENTICATED)
     row = tx.execute(
-        _locking(tx, _BROWSER_SQL, " FOR SHARE OF m, u"),
+        _locking(tx, _BROWSER_SQL, " FOR SHARE OF s, m, u"),
         {"session_id": ctx.session_id, "user_id": ctx.user_id, "library_id": ctx.library_id},
     ).fetchone()
     if row is None:
@@ -150,7 +155,7 @@ def _worker_capabilities(tx: Transaction, ctx: RequestContext) -> frozenset[Capa
         {"job_id": ctx.job_id, "lease_id": ctx.lease_id, "library_id": ctx.library_id},
     ).fetchone()
     if row is None:
-        # Reclaimed, cancelled (a restore cancels the Library's jobs) or finished.
+        # Reclaimed, expired, cancelled (a restore cancels the Library's jobs) or finished.
         raise AccessRefused(Refusal.NOT_AUTHENTICATED)
     return WORKER_CAPABILITIES if ctx.library_id is not None else frozenset()
 

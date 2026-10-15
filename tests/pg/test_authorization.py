@@ -139,6 +139,26 @@ class IdentityStateTests(ScopeTestCase):
         )
         self.assertEqual(len(library_query(self.db, ctx, read_all)), 2)
 
+    def test_a_sign_out_waits_for_an_authorized_write_in_flight(self) -> None:
+        editor = self.member("Editor", "editor")
+        ctx = self.ctx(editor)
+        paused = Paused()
+        writer = paused.start(lambda: library_command(self.db, ctx, Capability.EDIT_LIBRARY, paused.hold(bump("a1"))))
+        self.assertTrue(paused.inside.wait(30))
+        with self.connect() as other:
+            sign_out = Paused()
+            signer = sign_out.start(lambda: other.execute(
+                "UPDATE prks.sessions SET revoked_at = now() WHERE id = %s", (ctx.session_id,)
+            ))
+            self.wait_until(self.waiting_on_lock(other), "the sign-out to wait for the write")
+            paused.release.set()
+            writer.join(30)
+            signer.join(30)
+        self.assertEqual((paused.error, sign_out.error, paused.result), ([], [], [2]))
+        self.assert_refused(
+            Refusal.NOT_AUTHENTICATED, lambda: library_command(self.db, ctx, Capability.EDIT_LIBRARY, bump("a1"))
+        )
+
     def test_a_demotion_waits_for_an_authorized_write_in_flight(self) -> None:
         editor = self.member("Editor", "editor")
         ctx = self.ctx(editor)
@@ -169,6 +189,12 @@ class EscalationTests(ScopeTestCase):
         self.assertFalse(hasattr(ctx, "role"))
         with self.assertRaises(dataclasses.FrozenInstanceError):
             ctx.library_id = self.lib_b  # type: ignore[misc]
+        # Nor can a valid context be copied with another source, actor, Library or claim.
+        for change in ({"source": Source.ADMIN}, {"source": Source.WORKER}, {"library_id": self.lib_b},
+                       {"user_id": "U-" + "0" * 32}, {"epoch": 2}, {"device_id": None if ctx.device_id else uuid.uuid4()},
+                       {"session_id": uuid.uuid4()}, {"job_id": uuid.uuid4()}, {"lease_id": uuid.uuid4()}):
+            with self.subTest(change=change), self.assertRaises(TypeError):
+                dataclasses.replace(ctx, **change)
 
     def test_a_session_for_one_library_cannot_act_on_another(self) -> None:
         user = self.member("Both", "owner")

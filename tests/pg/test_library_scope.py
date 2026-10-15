@@ -132,6 +132,18 @@ class MaintenanceTests(ScopeTestCase):
         self.assert_refused(Refusal.LIBRARY_EPOCH_CHANGED,
                             lambda: library_command(self.db, self.ctx_a, EDIT, bump("a1")))
 
+    def test_maintenance_is_only_revealed_to_authorized_actors(self) -> None:
+        reader = self.ctx(self.member("Reader", "reader"))
+        removed_id = self.member("Removed", "editor")
+        removed = self.ctx(removed_id)
+        self.run_sql("DELETE FROM prks.library_memberships WHERE user_id = %s", (removed_id,))
+        with self.connect() as restore:
+            restore.execute("SELECT pg_advisory_lock(" + LIBRARY_LOCK_KEY_SQL + ")", (self.lib_a,))
+            self.assert_refused(Refusal.FORBIDDEN, lambda: library_command(self.db, reader, EDIT, bump("a1")))
+            self.assert_refused(Refusal.NOT_AUTHENTICATED,
+                                lambda: library_command(self.db, removed, EDIT, bump("a1")))
+            self.assert_refused(Refusal.MAINTENANCE, lambda: library_command(self.db, self.ctx_a, EDIT, bump("a1")))
+
     def test_a_restore_waits_for_a_command_in_flight_then_fences_the_next(self) -> None:
         paused = Paused()
         writer = paused.start(lambda: library_command(self.db, self.ctx_a, EDIT, paused.hold(bump("a1"))))
@@ -219,6 +231,16 @@ class WorkerFencingTests(ScopeTestCase):
         self.assert_refused(Refusal.NOT_AUTHENTICATED, lambda: library_command(self.db, done, EDIT, bump("a1")))
         self.assertEqual(self.revisions(), before)
 
+    def test_an_expired_lease_has_no_authority(self) -> None:
+        job_id, lease_id = self.job(self.lib_a, 1)
+        worker = RequestContext.for_job(self.db, job_id, lease_id)
+        assert worker is not None
+        self.run_sql("UPDATE prks.jobs SET locked_until = now() - interval '1 second' WHERE id = %s", (job_id,))
+        self.assertIsNone(RequestContext.for_job(self.db, job_id, lease_id))
+        before = self.revisions()
+        self.assert_refused(Refusal.NOT_AUTHENTICATED, lambda: library_command(self.db, worker, EDIT, bump("a1")))
+        self.assertEqual(self.revisions(), before)
+
     def test_a_worker_cannot_reach_another_library(self) -> None:
         job_id, lease_id = self.job(self.lib_b, 1)
         worker = RequestContext.for_job(self.db, job_id, lease_id)
@@ -253,7 +275,7 @@ class ScopeHelperTests(ScopeTestCase):
         self.addCleanup(db.close)
 
         def setting(scope: LibraryScope) -> Any:
-            return scope.tx.execute("SELECT current_setting('prks.library_id') AS v").fetchone()
+            return scope.execute_unscoped("SELECT current_setting('prks.library_id') AS v").fetchone()
 
         self.assertEqual(library_command(db, self.ctx_a, EDIT, setting), {"v": self.lib_a})
         self.assertEqual(library_query(db, self.ctx_a, setting), {"v": self.lib_a})
@@ -266,7 +288,10 @@ class ScopeHelperTests(ScopeTestCase):
             library_command(self.db, self.ctx(self.member("Reader", "reader")), EDIT, bump("a1"))
         self.assertIsNotNone(refused.exception)
         with psycopg.connect(self.harness.conninfo(self.name), autocommit=True) as conn:
-            held = conn.execute("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory'").fetchone()
+            held = conn.execute(
+                "SELECT count(*) FROM pg_locks l JOIN pg_database d ON d.oid = l.database "
+                "WHERE l.locktype = 'advisory' AND d.datname = current_database()"
+            ).fetchone()
             got = conn.execute("SELECT pg_try_advisory_lock(" + LIBRARY_LOCK_KEY_SQL + ")", (self.lib_a,)).fetchone()
         self.assertEqual((held, got), ((0,), (True,)))
 
@@ -275,8 +300,12 @@ class ScopeHelperTests(ScopeTestCase):
         self.assertEqual(library_query(self.db, self.ctx_a, lambda scope: scope.epoch), 2)
 
     def test_library_helpers_refuse_instance_capabilities_and_library_less_contexts(self) -> None:
-        with self.assertRaises(ValueError):
-            library_command(self.db, self.ctx_a, Capability.ADMIN_INSTANCE, bump("a1"))
+        reader = self.ctx(self.member("Reader", "reader"))
+        before = self.revisions()
+        for capability in (Capability.ADMIN_INSTANCE, Capability.READ_LIBRARY):
+            with self.subTest(capability=capability), self.assertRaises(ValueError):
+                library_command(self.db, reader, capability, bump("a1"))  # a read never authorizes a write
+        self.assertEqual(self.revisions(), before)
         self.assert_refused(Refusal.FORBIDDEN,
                             lambda: library_command(self.db, RequestContext.for_admin(epoch=1), EDIT, bump("a1")))
         admin = RequestContext.for_admin(library_id=self.lib_a, epoch=1)

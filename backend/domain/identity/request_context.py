@@ -48,7 +48,9 @@ class Source(Enum):
 
 
 # Only the constructors of this module hold it, so a context cannot be
-# assembled field by field from request values.
+# assembled field by field from request values. Each context is sealed with
+# the values it was issued with, so ``dataclasses.replace`` cannot change its
+# source, actor, Library, epoch or claims either.
 _ISSUER = object()
 
 
@@ -101,11 +103,25 @@ class RequestContext:
     session_id: Optional[uuid.UUID] = None
     job_id: Optional[uuid.UUID] = None
     lease_id: Optional[uuid.UUID] = None
-    _issuer: object = field(default=None, repr=False, compare=False)
+    _seal: object = field(default=None, repr=False, compare=False)
+
+    def _issued_values(self) -> tuple[object, ...]:
+        return (
+            _ISSUER, self.source, self.user_id, self.library_id, self.epoch,
+            self.device_id, self.session_id, self.job_id, self.lease_id,
+        )
 
     def __post_init__(self) -> None:
-        if self._issuer is not _ISSUER:
+        if self._seal != self._issued_values():
             raise TypeError("RequestContext is built by its for_session/for_job/for_admin constructors")
+
+    @classmethod
+    def _issue(cls, source: Source, user_id: Optional[str], library_id: Optional[str],
+               epoch: Optional[int], *, device_id: Optional[uuid.UUID] = None,
+               session_id: Optional[uuid.UUID] = None, job_id: Optional[uuid.UUID] = None,
+               lease_id: Optional[uuid.UUID] = None) -> RequestContext:
+        seal = (_ISSUER, source, user_id, library_id, epoch, device_id, session_id, job_id, lease_id)
+        return cls(source, user_id, library_id, epoch, device_id, session_id, job_id, lease_id, seal)
 
     @classmethod
     def for_session(
@@ -117,19 +133,18 @@ class RequestContext:
         ``PRKS-Library-Epoch`` header and the sync device id); a device id
         that is not a UUID raises :class:`DeviceClaimInvalid`.
         """
-        return cls(
+        return cls._issue(
             Source.BROWSER,
             session.user_id,
             session.library_id,
             parse_epoch(epoch),
             device_id=_parse_device(device_id),
             session_id=session.session_id,
-            _issuer=_ISSUER,
         )
 
     @classmethod
     def for_job(cls, db: Database, job_id: uuid.UUID, lease_id: uuid.UUID) -> Optional[RequestContext]:
-        """A worker running job ``job_id`` under ``lease_id``; ``None`` if it no longer holds it.
+        """A worker running job ``job_id`` under an unexpired ``lease_id``; ``None`` otherwise.
 
         Library and epoch are the job's own (``library_epoch`` was recorded at
         enqueue), never the worker's or the Library's current ones.
@@ -137,23 +152,22 @@ class RequestContext:
         row = db.query(
             lambda tx: tx.execute(
                 "SELECT library_id, library_epoch, created_by FROM prks.jobs "
-                "WHERE id = %s AND lease_id = %s AND state = 'running'",
+                "WHERE id = %s AND lease_id = %s AND state = 'running' AND locked_until > now()",
                 (job_id, lease_id),
             ).fetchone()
         )
         if row is None:
             return None
-        return cls(
+        return cls._issue(
             Source.WORKER,
             row["created_by"],
             row["library_id"],
             row["library_epoch"],
             job_id=job_id,
             lease_id=lease_id,
-            _issuer=_ISSUER,
         )
 
     @classmethod
     def for_admin(cls, *, library_id: Optional[str] = None, epoch: object = None) -> RequestContext:
         """The host admin CLI, after the root pairing start check; never an HTTP request."""
-        return cls(Source.ADMIN, None, library_id, parse_epoch(epoch), _issuer=_ISSUER)
+        return cls._issue(Source.ADMIN, None, library_id, parse_epoch(epoch))

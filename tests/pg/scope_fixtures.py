@@ -84,8 +84,8 @@ class ScopeTestCase(IdentityTestCase):
     def job(self, library_id: str, epoch: int, *, state: str = "running") -> tuple[uuid.UUID, uuid.UUID]:
         lease_id = uuid.uuid4()
         rows = self.run_sql(
-            "INSERT INTO prks.jobs (library_id, library_epoch, kind, state, lease_id) "
-            "VALUES (%s, %s, 'test.edit', %s, %s) RETURNING id",
+            "INSERT INTO prks.jobs (library_id, library_epoch, kind, state, lease_id, locked_until) "
+            "VALUES (%s, %s, 'test.edit', %s, %s, now() + interval '5 minutes') RETURNING id",
             (library_id, epoch, state, lease_id),
         )
         return rows[0]["id"], lease_id
