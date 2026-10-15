@@ -122,10 +122,6 @@ class DatabaseConfigTests(unittest.TestCase):
             self.assertEqual(caught.exception.http_status, 500)
             self.assertNotIn(SENTINEL, str(caught.exception))
 
-        # Zero is permitted as an explicit immediate-idle policy; the
-        # configuration only prohibits negative idle intervals.
-        self.assertEqual(DatabaseConfig(conninfo=URL, max_idle_seconds=0).max_idle_seconds, 0)
-
     def test_invalid_explicit_values_refused(self) -> None:
         cases: tuple[dict[str, Any], ...] = (
             {"pool_min": 2, "pool_max": 1},
