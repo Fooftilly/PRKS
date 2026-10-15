@@ -24,7 +24,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # #69 Pyright typed slice: genuine basic type checking for the protected
 # scopes below (backend/storage first, then small backend utility modules:
 # entity_ids, concurrency, research_markup, pdf_linearize, derived_cache_publish,
-# text_identity, pdf_byte_mentions, and fs_durability).
+# text_identity, pdf_byte_mentions, fs_durability, and db/config).
 # Kept next to the AST invariants so Fast Static Analysis fails if the typed
 # slice silently reverts to effectively-off mode or loses a protected scope.
 PYRIGHT_DATAFLOW_CONFIG = "pyrightconfig.json"
@@ -43,6 +43,7 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/domain/text_identity.py",
     "backend/pdf_byte_mentions.py",
     "backend/fs_durability.py",
+    "backend/db/config.py",
 )
 PYRIGHT_TYPED_SLICE_INCLUDE = PYRIGHT_TYPED_SLICE_SCOPES
 PYRIGHT_TYPED_SLICE_MODES = frozenset({"basic", "standard", "strict"})
