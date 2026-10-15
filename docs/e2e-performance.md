@@ -201,8 +201,12 @@ The independent **E2E Routing A/B Benchmark** GitHub Actions workflow runs
 the real Chromium E2E runner with `--feature shell --feature work-create`,
 `--jobs 1`, `--no-pointer-capture`, and `--profile`. It performs four
 separate, fresh-isolation runs in **baseline → fast path → fast path → baseline**
-order on the same runner and commit. Ordinary PR and master full gates are not
-changed or shortened. This workflow is **manual-only**; it does not upload
+order on the same runner and commit, **after an unmeasured baseline warm-up**
+of the identical selection (profiling enabled, no benchmark JSON output).
+The warm-up absorbs first-use Chromium, server, and Python import costs so the
+baseline is not automatically disadvantaged. All five selections must pass.
+Ordinary PR and master full gates are not changed or shortened. This workflow
+is **manual-only**; it does not upload
 test artifacts or mutate ordinary E2E timing/last-failed history, including
 when the per-test watchdog terminates a hung test. The serial runner emits a
 versioned, aggregate-only JSON report to `PRKS_E2E_BENCHMARK_RESULT` **only**
@@ -215,8 +219,8 @@ the workflow does not depend on human-readable log formatting.
 Open **Actions → E2E Routing A/B Benchmark → Run workflow** on `master`.
 The job summary reports each trial's E2E runtime and the instrumented
 `routing_decision` total, the two per-mode medians, and the relative change
-(negative is faster). Any failed trial fails the job; none is skipped or
-automatically retried. Run the experiment more than once, and confirm any
+(negative is faster). A failed warm-up or measured trial fails the job;
+none is skipped or automatically retried. Run the experiment more than once, and confirm any
 promising improvement using paired, fully profiled six-shard runs before
 changing defaults. Comparing four small feature selections does **not**
 establish a full-suite performance gain.
