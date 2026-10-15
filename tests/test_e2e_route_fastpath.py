@@ -59,6 +59,22 @@ class E2ERouteFastPathTests(unittest.TestCase):
                     route.continue_.assert_not_called()
                     self.assertEqual(collector.external, [url])
 
+    def test_abort_failure_never_falls_back_to_external_continue(self):
+        for fastpath in (False, True):
+            with self.subTest(fastpath=fastpath):
+                collector = object.__new__(PageCollector)
+                collector.origin = ORIGIN
+                collector.external = []
+                collector._fast_local_route = fastpath
+                route = mock.Mock()
+                route.request.url = "https://example.invalid/private-data"
+                route.abort.side_effect = RuntimeError("abort failed")
+                with self.assertRaisesRegex(RuntimeError, "abort failed"):
+                    collector._on_route(route)
+                route.abort.assert_called_once_with()
+                route.continue_.assert_not_called()
+                self.assertEqual(collector.external, [route.request.url])
+
     def test_route_registration_remains_catch_all_in_both_modes(self):
         for flag, expected in (("0", False), ("1", True)):
             page = mock.Mock()
