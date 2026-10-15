@@ -1330,6 +1330,25 @@ def _print_worker_failure(worker, jobs, report):
     sys.stderr.flush()
 
 
+def _profile_infrastructure_total(phases: dict) -> float:
+    """Rank profiled tests without counting detail phases inside their parents.
+
+    The inclusive labels remain visible in each test's phase details, but an
+    additive ranking must count either an inclusive parent or its children,
+    never both. Preserve the old result for profiles without detail phases.
+    """
+    nested = set()
+    if "server_start" in phases:
+        nested.update(("server_spawn", "server_http_ready"))
+    if "app_ready" in phases:
+        nested.update((
+            "app_navigation", "app_sidebar_wait", "app_folder_wait", "app_route_wait"
+        ))
+    if "request_routing" in phases:
+        nested.add("routing_decision")
+    return sum(float(seconds) for name, seconds in phases.items() if name not in nested)
+
+
 # --- serial parent -------------------------------------------------------
 
 
@@ -2085,7 +2104,7 @@ def _main(argv=None) -> int:
         print("Slowest profiled tests:")
         ranked = sorted(
             (
-                (sum(float(v) for v in phases.values()), test_id, phases)
+                (_profile_infrastructure_total(phases), test_id, phases)
                 for test_id, phases in phase_timings.items()
             ),
             reverse=True,
