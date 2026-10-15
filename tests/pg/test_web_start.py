@@ -32,6 +32,10 @@ from backend.storage.config import StorageConfig
 from tests.pg.test_root_pairing import Crash, RootPairingTestCase, crash_at
 
 
+# Not a bind: the address loopback-owner mode must refuse, and session mode accepts.
+ALL_INTERFACES = "0.0.0.0"  # nosec B104
+
+
 def settings(env: dict[str, str], *, testing: bool = True, host: str = "127.0.0.1") -> Any:
     return settings_from_env(env, testing=testing, host=host, parse_origin=parse_request_origin)
 
@@ -42,7 +46,7 @@ class SettingsTests(unittest.TestCase):
         self.assertIsNone(settings({"PRKS_AUTH": "  "}))
 
     def test_session_mode(self) -> None:
-        got = settings({"PRKS_AUTH": "session", "PRKS_SESSION_IDLE_DAYS": "7"}, testing=False, host="0.0.0.0")
+        got = settings({"PRKS_AUTH": "session", "PRKS_SESSION_IDLE_DAYS": "7"}, testing=False, host=ALL_INTERFACES)
         self.assertEqual(got.mode, AuthMode.SESSION)
         self.assertEqual(got.idle, timedelta(days=7))
         self.assertFalse(got.secure_cookies)
@@ -57,7 +61,7 @@ class SettingsTests(unittest.TestCase):
         for host in ("127.0.0.1", "127.0.0.2", "::1", "[::1]"):
             with self.subTest(host=host):
                 self.assertEqual(settings(env, host=host).mode, AuthMode.LOOPBACK_OWNER)
-        for host in ("0.0.0.0", "::", "192.168.1.5", "localhost", "prks.lan", "::ffff:10.0.0.1"):
+        for host in (ALL_INTERFACES, "::", "192.168.1.5", "localhost", "prks.lan", "::ffff:10.0.0.1"):
             with self.subTest(host=host), self.assertRaises(WebAuthConfigError):
                 settings(env, host=host)
         with self.assertRaises(WebAuthConfigError):
@@ -186,13 +190,13 @@ class AppStartTests(WebStartTestCase):
         self.assertEqual(ctx.exception.code, 2)
 
     def test_without_prks_auth_nothing_happens(self) -> None:
-        self.assertIsNone(prks_app.start_identity(self.args(host="0.0.0.0"), self.config(self.tmp), {}))
+        self.assertIsNone(prks_app.start_identity(self.args(host=ALL_INTERFACES), self.config(self.tmp), {}))
 
     def test_refusals_exit(self) -> None:
         name = self.database()
         root = self.new_root()
         url = {"PRKS_DATABASE_URL": self.harness.conninfo(name)}
-        self.exits({"PRKS_AUTH": "loopback-owner", **url}, root, host="0.0.0.0")
+        self.exits({"PRKS_AUTH": "loopback-owner", **url}, root, host=ALL_INTERFACES)
         self.exits({"PRKS_AUTH": "loopback-owner", **url}, root, testing=False)
         self.exits({"PRKS_AUTH": "session"}, root)  # no database configured
         self.exits({"PRKS_AUTH": "session", **url}, root)  # setup not done
