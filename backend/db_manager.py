@@ -5438,7 +5438,7 @@ class PRKSDatabase:
             # Support "Family, Given" and "Given Family" credit forms.
             family = first.split(",", 1)[0].strip() if "," in first else first.split()[-1]
             key_part = family.split()[0] if family.split() and "," in first else family
-            first_author_last = re.sub(r"[^\\w]", "", key_part) or "Unknown"
+            first_author_last = re.sub(r"[^\w]", "", key_part) or "Unknown"
         else:
             first_author_last = "Unknown"
         cite_key = f"{first_author_last}{year or 'UnknownYear'}"
