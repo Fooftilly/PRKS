@@ -50,6 +50,10 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/domain/identity/secret_tokens.py",
     "backend/domain/identity/login_names.py",
     "backend/domain/identity/errors.py",
+    "backend/domain/identity/passwords.py",
+    "backend/domain/identity/login_limiter.py",
+    "backend/domain/identity/bootstrap_tokens.py",
+    "backend/domain/identity/login.py",
 )
 PYRIGHT_TYPED_SLICE_INCLUDE = PYRIGHT_TYPED_SLICE_SCOPES
 PYRIGHT_TYPED_SLICE_MODES = frozenset({"basic", "standard", "strict"})

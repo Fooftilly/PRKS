@@ -127,24 +127,25 @@ jobs:
         with:
           node-version: "24"
 
-      # The typed slice now includes PostgreSQL config (#69). Resolve its real
-      # psycopg imports rather than weakening reportMissingImports. Install
-      # only the PostgreSQL pins from requirements-dev.txt, not browser tools.
-      - name: Set up Python for PostgreSQL type imports
+      # The typed slice includes PostgreSQL and identity login (#69).
+      # Resolve psycopg and argon2 imports rather than suppressing diagnostics.
+      # Install only pinned type imports from requirements-dev.txt.
+      - name: Set up Python for PostgreSQL and identity type imports
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
 
-      - name: Install pinned PostgreSQL type dependencies
+      - name: Install pinned PostgreSQL and identity type dependencies
         shell: bash
         run: |
           set -euo pipefail
           mapfile -t pg_pins < <(grep -E '^psycopg(-binary|-pool)?==[^[:space:]]+$' requirements-dev.txt)
-          if [[ "${#pg_pins[@]}" -ne 3 ]]; then
-            echo "Expected the three pinned PostgreSQL packages in requirements-dev.txt" >&2
+          mapfile -t argon_pins < <(grep -E '^argon2-cffi==[^[:space:]]+$' requirements-dev.txt)
+          if [[ "${#pg_pins[@]}" -ne 3 || "${#argon_pins[@]}" -ne 1 ]]; then
+            echo "Expected three pinned PostgreSQL packages and one argon2-cffi package in requirements-dev.txt" >&2
             exit 1
           fi
-          python -m pip install --disable-pip-version-check --only-binary=:all: "${pg_pins[@]}"
+          python -m pip install --disable-pip-version-check --only-binary=:all: "${pg_pins[@]}" "${argon_pins[@]}"
 
       # Narrow diagnostics across prks_app.py + backend (typeCheckingMode: off).
       - name: Run Pyright data-flow checks
