@@ -127,24 +127,357 @@ jobs:
         with:
           node-version: "24"
 
-      # The typed slice now includes PostgreSQL config (#69). Resolve its real
-      # psycopg imports rather than weakening reportMissingImports. Install
-      # only the PostgreSQL pins from requirements-dev.txt, not browser tools.
-      - name: Set up Python for PostgreSQL type imports
+      # The typed slice includes PostgreSQL config and identity login (#69).
+      # Resolve psycopg and argon2 imports rather than suppress diagnostics.
+      # Install only the pinned type imports from requirements-dev.txt.
+      - name: Set up Python for PostgreSQL and identity type imports
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
 
-      - name: Install pinned PostgreSQL type dependencies
+      - name: Install pinned PostgreSQL and identity type dependencies
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t pg_pins < <(grep -E '^psycopg(-binary|-pool)?==[^[:space:]]+$' requirements-dev.txt)
-          if [[ "${#pg_pins[@]}" -ne 3 ]]; then
-            echo "Expected the three pinned PostgreSQL packages in requirements-dev.txt" >&2
+          mapfile -t pg_pins < <(grep -E '^psycopg(-binary|-pool)?==[^[:space:]]+
+
+      # Narrow diagnostics across prks_app.py + backend (typeCheckingMode: off).
+      - name: Run Pyright data-flow checks
+        run: npm exec --yes --ignore-scripts --package="pyright@${PYRIGHT_VERSION}" -- pyright --project pyrightconfig.json
+
+      # Genuine basic type checking for the #69 typed slice (scopes pinned in
+      # scripts/check_invariants.py PYRIGHT_TYPED_SLICE_SCOPES).
+      - name: Run Pyright typed slice (backend/storage + backend utility modules; basic)
+        run: npm exec --yes --ignore-scripts --package="pyright@${PYRIGHT_VERSION}" -- pyright --project pyrightconfig.typed-slice.json
+
+  eslint:
+    permissions:
+      contents: read
+    name: ESLint bug checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Run high-signal JavaScript checks
+        run: npm exec --yes --ignore-scripts --package="eslint@${ESLINT_VERSION}" -- eslint --config eslint.config.mjs frontend tests/browser
+
+  vue:
+    permissions:
+      contents: read
+    name: Vue typecheck, test, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ">=24.15.0 <25"
+          cache: npm
+          cache-dependency-path: frontend-app/package-lock.json
+
+      - name: Install Vue toolchain from the lockfile
+        run: npm ci --ignore-scripts --prefix frontend-app
+
+      - name: OpenAPI TypeScript types match checked-in artifacts
+        run: npm run openapi:check --prefix frontend-app
+
+      - name: Vue/TypeScript ESLint
+        run: npm run lint --prefix frontend-app
+
+      - name: Typecheck
+        run: npm run typecheck --prefix frontend-app
+
+      - name: Vitest
+        run: npm test --prefix frontend-app
+
+      - name: Production build matches committed assets
+        run: |
+          set -euo pipefail
+          npm run build --prefix frontend-app
+          git diff --exit-code -- frontend/vue frontend/js/workspace-model.js frontend/js/work-route-projection.js frontend/js/search-query-codec.js frontend/js/tab-leave.js frontend/js/owner-resource.js frontend/js/editor-recovery.js frontend/js/route-model.js frontend/vendor/DEPENDENCY-MANIFEST.json frontend/sw.js
+          if [[ -n "$(git status --porcelain -- frontend/vue frontend/js/workspace-model.js frontend/js/work-route-projection.js frontend/js/search-query-codec.js frontend/js/tab-leave.js frontend/js/owner-resource.js frontend/js/editor-recovery.js frontend/js/route-model.js frontend/vendor/DEPENDENCY-MANIFEST.json frontend/sw.js)" ]]; then
+            echo "Vue production build changed committed assets" >&2
+            git status --porcelain -- frontend/vue frontend/js/workspace-model.js frontend/js/work-route-projection.js frontend/js/search-query-codec.js frontend/js/tab-leave.js frontend/js/owner-resource.js frontend/js/editor-recovery.js frontend/js/route-model.js frontend/vendor/DEPENDENCY-MANIFEST.json frontend/sw.js >&2
             exit 1
           fi
-          python -m pip install --disable-pip-version-check --only-binary=:all: "${pg_pins[@]}"
+
+      # Storybook is maintainer-only. pull_request and push build only
+      # after a successful diff against a defined baseline (PR base, or a
+      # fetched nonzero push before SHA) that touches frontend-app/ or this
+      # workflow. A missing baseline, a failed fetch, or a failed diff fails
+      # the step. A readable diff with no matching path is the only skip.
+      # workflow_dispatch builds with no diff and does not invent a baseline.
+      - name: Storybook build when frontend tooling changes
+        shell: bash
+        env:
+          PRKS_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PRKS_PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          pattern='^(frontend-app/|\.github/workflows/static-analysis\.yml$)'
+          zero_sha="0000000000000000000000000000000000000000"
+          event_name="${{ github.event_name }}"
+          run_storybook=false
+
+          # Capture git diff before matching. Do not pipe it into grep:
+          # under pipefail a SIGPIPE can look like "no match". -z keeps
+          # pathnames unquoted, so a name like Café.stories.ts cannot hide
+          # behind a leading quote. grep -z status 1 is "no match"; any
+          # other grep failure fails the step.
+          apply_successful_diff() {
+            local left="$1"
+            local diff_file diff_status grep_status
+            diff_file="$(mktemp)"
+            if git diff -z --name-only "$left" HEAD >"$diff_file"; then
+              diff_status=0
+            else
+              diff_status=$?
+            fi
+            if [[ "$diff_status" -ne 0 ]]; then
+              echo "Storybook path diff failed (status ${diff_status})" >&2
+              rm -f "$diff_file"
+              exit 1
+            fi
+            if grep -zEq "$pattern" "$diff_file"; then
+              run_storybook=true
+            else
+              grep_status=$?
+              if [[ "$grep_status" -ne 1 ]]; then
+                echo "Storybook path match failed (status ${grep_status})" >&2
+                rm -f "$diff_file"
+                exit 1
+              fi
+            fi
+            rm -f "$diff_file"
+          }
+
+          fetch_baseline() {
+            local sha="$1"
+            if ! git fetch --no-tags --depth=1 origin "$sha"; then
+              echo "Failed to fetch Storybook diff baseline ${sha}" >&2
+              exit 1
+            fi
+          }
+
+          if [[ "$event_name" == "pull_request" ]]; then
+            if [[ -z "${PRKS_PR_BASE_SHA:-}" ]]; then
+              echo "Pull request has no base SHA; cannot resolve Storybook diff." >&2
+              exit 1
+            fi
+            fetch_baseline "${PRKS_PR_BASE_SHA}"
+            apply_successful_diff "${PRKS_PR_BASE_SHA}"
+          elif [[ "$event_name" == "push" ]]; then
+            if [[ -z "${PRKS_PUSH_BEFORE:-}" || "${PRKS_PUSH_BEFORE}" == "$zero_sha" ]]; then
+              echo "Push before SHA is missing or zero; cannot resolve Storybook diff." >&2
+              exit 1
+            fi
+            fetch_baseline "${PRKS_PUSH_BEFORE}"
+            apply_successful_diff "${PRKS_PUSH_BEFORE}"
+          elif [[ "$event_name" == "workflow_dispatch" ]]; then
+            echo "Manual Fast Static Analysis run; building Storybook."
+            run_storybook=true
+          else
+            echo "No Storybook diff baseline for event ${event_name}." >&2
+            exit 1
+          fi
+          if [[ "$run_storybook" != "true" ]]; then
+            echo "Skipping Storybook build: diff does not touch frontend-app or this workflow."
+            exit 0
+          fi
+          npm run build-storybook --prefix frontend-app
+          if [[ -e frontend/storybook-static || -e frontend/vue/index.html || -e frontend/vue/iframe.html ]]; then
+            echo "Storybook wrote into the PRKS runtime tree" >&2
+            exit 1
+          fi
+ requirements-dev.txt)
+          mapfile -t argon_pins < <(grep -E '^argon2-cffi==[^[:space:]]+
+
+      # Narrow diagnostics across prks_app.py + backend (typeCheckingMode: off).
+      - name: Run Pyright data-flow checks
+        run: npm exec --yes --ignore-scripts --package="pyright@${PYRIGHT_VERSION}" -- pyright --project pyrightconfig.json
+
+      # Genuine basic type checking for the #69 typed slice (scopes pinned in
+      # scripts/check_invariants.py PYRIGHT_TYPED_SLICE_SCOPES).
+      - name: Run Pyright typed slice (backend/storage + backend utility modules; basic)
+        run: npm exec --yes --ignore-scripts --package="pyright@${PYRIGHT_VERSION}" -- pyright --project pyrightconfig.typed-slice.json
+
+  eslint:
+    permissions:
+      contents: read
+    name: ESLint bug checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Run high-signal JavaScript checks
+        run: npm exec --yes --ignore-scripts --package="eslint@${ESLINT_VERSION}" -- eslint --config eslint.config.mjs frontend tests/browser
+
+  vue:
+    permissions:
+      contents: read
+    name: Vue typecheck, test, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ">=24.15.0 <25"
+          cache: npm
+          cache-dependency-path: frontend-app/package-lock.json
+
+      - name: Install Vue toolchain from the lockfile
+        run: npm ci --ignore-scripts --prefix frontend-app
+
+      - name: OpenAPI TypeScript types match checked-in artifacts
+        run: npm run openapi:check --prefix frontend-app
+
+      - name: Vue/TypeScript ESLint
+        run: npm run lint --prefix frontend-app
+
+      - name: Typecheck
+        run: npm run typecheck --prefix frontend-app
+
+      - name: Vitest
+        run: npm test --prefix frontend-app
+
+      - name: Production build matches committed assets
+        run: |
+          set -euo pipefail
+          npm run build --prefix frontend-app
+          git diff --exit-code -- frontend/vue frontend/js/workspace-model.js frontend/js/work-route-projection.js frontend/js/search-query-codec.js frontend/js/tab-leave.js frontend/js/owner-resource.js frontend/js/editor-recovery.js frontend/js/route-model.js frontend/vendor/DEPENDENCY-MANIFEST.json frontend/sw.js
+          if [[ -n "$(git status --porcelain -- frontend/vue frontend/js/workspace-model.js frontend/js/work-route-projection.js frontend/js/search-query-codec.js frontend/js/tab-leave.js frontend/js/owner-resource.js frontend/js/editor-recovery.js frontend/js/route-model.js frontend/vendor/DEPENDENCY-MANIFEST.json frontend/sw.js)" ]]; then
+            echo "Vue production build changed committed assets" >&2
+            git status --porcelain -- frontend/vue frontend/js/workspace-model.js frontend/js/work-route-projection.js frontend/js/search-query-codec.js frontend/js/tab-leave.js frontend/js/owner-resource.js frontend/js/editor-recovery.js frontend/js/route-model.js frontend/vendor/DEPENDENCY-MANIFEST.json frontend/sw.js >&2
+            exit 1
+          fi
+
+      # Storybook is maintainer-only. pull_request and push build only
+      # after a successful diff against a defined baseline (PR base, or a
+      # fetched nonzero push before SHA) that touches frontend-app/ or this
+      # workflow. A missing baseline, a failed fetch, or a failed diff fails
+      # the step. A readable diff with no matching path is the only skip.
+      # workflow_dispatch builds with no diff and does not invent a baseline.
+      - name: Storybook build when frontend tooling changes
+        shell: bash
+        env:
+          PRKS_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PRKS_PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          pattern='^(frontend-app/|\.github/workflows/static-analysis\.yml$)'
+          zero_sha="0000000000000000000000000000000000000000"
+          event_name="${{ github.event_name }}"
+          run_storybook=false
+
+          # Capture git diff before matching. Do not pipe it into grep:
+          # under pipefail a SIGPIPE can look like "no match". -z keeps
+          # pathnames unquoted, so a name like Café.stories.ts cannot hide
+          # behind a leading quote. grep -z status 1 is "no match"; any
+          # other grep failure fails the step.
+          apply_successful_diff() {
+            local left="$1"
+            local diff_file diff_status grep_status
+            diff_file="$(mktemp)"
+            if git diff -z --name-only "$left" HEAD >"$diff_file"; then
+              diff_status=0
+            else
+              diff_status=$?
+            fi
+            if [[ "$diff_status" -ne 0 ]]; then
+              echo "Storybook path diff failed (status ${diff_status})" >&2
+              rm -f "$diff_file"
+              exit 1
+            fi
+            if grep -zEq "$pattern" "$diff_file"; then
+              run_storybook=true
+            else
+              grep_status=$?
+              if [[ "$grep_status" -ne 1 ]]; then
+                echo "Storybook path match failed (status ${grep_status})" >&2
+                rm -f "$diff_file"
+                exit 1
+              fi
+            fi
+            rm -f "$diff_file"
+          }
+
+          fetch_baseline() {
+            local sha="$1"
+            if ! git fetch --no-tags --depth=1 origin "$sha"; then
+              echo "Failed to fetch Storybook diff baseline ${sha}" >&2
+              exit 1
+            fi
+          }
+
+          if [[ "$event_name" == "pull_request" ]]; then
+            if [[ -z "${PRKS_PR_BASE_SHA:-}" ]]; then
+              echo "Pull request has no base SHA; cannot resolve Storybook diff." >&2
+              exit 1
+            fi
+            fetch_baseline "${PRKS_PR_BASE_SHA}"
+            apply_successful_diff "${PRKS_PR_BASE_SHA}"
+          elif [[ "$event_name" == "push" ]]; then
+            if [[ -z "${PRKS_PUSH_BEFORE:-}" || "${PRKS_PUSH_BEFORE}" == "$zero_sha" ]]; then
+              echo "Push before SHA is missing or zero; cannot resolve Storybook diff." >&2
+              exit 1
+            fi
+            fetch_baseline "${PRKS_PUSH_BEFORE}"
+            apply_successful_diff "${PRKS_PUSH_BEFORE}"
+          elif [[ "$event_name" == "workflow_dispatch" ]]; then
+            echo "Manual Fast Static Analysis run; building Storybook."
+            run_storybook=true
+          else
+            echo "No Storybook diff baseline for event ${event_name}." >&2
+            exit 1
+          fi
+          if [[ "$run_storybook" != "true" ]]; then
+            echo "Skipping Storybook build: diff does not touch frontend-app or this workflow."
+            exit 0
+          fi
+          npm run build-storybook --prefix frontend-app
+          if [[ -e frontend/storybook-static || -e frontend/vue/index.html || -e frontend/vue/iframe.html ]]; then
+            echo "Storybook wrote into the PRKS runtime tree" >&2
+            exit 1
+          fi
+ requirements-dev.txt)
+          if [[ "${#pg_pins[@]}" -ne 3 || "${#argon_pins[@]}" -ne 1 ]]; then
+            echo "Expected three pinned PostgreSQL packages and one argon2-cffi package in requirements-dev.txt" >&2
+            exit 1
+          fi
+          python -m pip install --disable-pip-version-check --only-binary=:all: "${pg_pins[@]}" "${argon_pins[@]}"
 
       # Narrow diagnostics across prks_app.py + backend (typeCheckingMode: off).
       - name: Run Pyright data-flow checks
