@@ -1344,6 +1344,12 @@ def _profile_infrastructure_total(phases: dict) -> float:
         nested.update((
             "app_navigation", "app_sidebar_wait", "app_folder_wait", "app_route_wait"
         ))
+    # Browser-native navigation timings overlap the inclusive Playwright page
+    # navigation; they explain its cost rather than add new infrastructure work.
+    if "app_navigation" in phases or "app_ready" in phases:
+        nested.update((
+            "nav_response_wait", "nav_response_body", "nav_dom_content_loaded"
+        ))
     if "request_routing" in phases:
         nested.add("routing_decision")
     return sum(float(seconds) for name, seconds in phases.items() if name not in nested)
