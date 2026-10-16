@@ -26,6 +26,7 @@ transaction explicitly with its isolation level.
 from __future__ import annotations
 
 import time
+import weakref
 from random import SystemRandom
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -96,7 +97,9 @@ class Transaction:
         self.isolation = isolation
         self.read_only = read_only
         self.attempt = attempt
-        self._cursors: list[psycopg.Cursor[DictRow]] = []
+        # Weak: a cursor the caller dropped is freed with its result at once;
+        # only cursors still reachable need closing when the handle ends.
+        self._cursors: weakref.WeakSet[psycopg.Cursor[DictRow]] = weakref.WeakSet()
         self._closed = False
 
     @property
@@ -106,14 +109,14 @@ class Transaction:
     def execute(self, query: QueryNoTemplate, params: Params | None = None) -> psycopg.Cursor[DictRow]:
         self._check_open()
         cursor = self._connection.cursor(row_factory=dict_row)
-        self._cursors.append(cursor)
+        self._cursors.add(cursor)
         cursor.execute(query, params)
         return cursor
 
     def close(self) -> None:
         """End the handle; called by the helper that issued it, on every path."""
         self._closed = True
-        cursors, self._cursors = self._cursors, []
+        cursors, self._cursors = list(self._cursors), weakref.WeakSet()
         for cursor in cursors:
             cursor.close()
 

@@ -21,7 +21,9 @@ the code #695 merged:
 from __future__ import annotations
 
 import ast
+import gc
 import uuid
+import weakref
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -40,7 +42,7 @@ from backend.domain.identity.library_scope import (
 )
 from backend.domain.identity.request_context import EPOCH_MAX, RequestContext, parse_epoch
 from backend.domain.identity.sessions import ValidSession
-from tests.pg.scope_fixtures import BUMP_SQL, Paused, ScopeTestCase, bump, read_all
+from tests.pg.scope_fixtures import BUMP_SQL, READ_SQL, Paused, ScopeTestCase, bump, read_all
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -141,6 +143,19 @@ class ScopeLifetimeTests(ScopeTestCase):
         with self.assertRaises(psycopg.InterfaceError):
             kept[0].execute("UPDATE prks.entity_revisions SET revision = 99")
         self.assertEqual(self.revisions()[(self.lib_a, "a1")], 2)
+
+    def test_a_dropped_cursor_is_not_held_until_the_end(self) -> None:
+        """Closing on exit tracks cursors weakly, so a long command does not keep every result (#708 review)."""
+
+        def run(scope: LibraryScope) -> bool:
+            cursor = scope.execute(READ_SQL)
+            cursor.fetchall()
+            ref = weakref.ref(cursor)
+            del cursor
+            gc.collect()
+            return ref() is None
+
+        self.assertTrue(library_command(self.db, self.ctx_a, Capability.EDIT_LIBRARY, run))
 
     def test_an_instance_transaction_kept_after_the_callback(self) -> None:
         kept: list[Transaction] = []
