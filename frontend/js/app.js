@@ -6130,84 +6130,93 @@ function initForms() {
     }
 
     if (folderBtn) {
+        // A second click must not mint a second durable CREATE_FOLDER id while
+        // the first save is still queued or resolving (including offline).
+        let folderCreateInFlight = false;
         folderBtn.onclick = async () => {
-            /* No offline guard: a folder is created durably, under an id this
-             * device mints, so it exists and is usable the moment it is saved. */
-            const ownerCtx =
-                typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
-            if (folderBtn.disabled) return;
-            const payload = {
-                title: document.getElementById('folder-title').value,
-                description: document.getElementById('folder-description').value,
-                parent_id: (() => {
-                    const raw = (document.getElementById('folder-parent-id')?.value || '').trim();
-                    return raw || null;
-                })()
-            };
-            let newFolderId;
+            if (folderCreateInFlight || folderBtn.disabled) return;
+            folderCreateInFlight = true;
             try {
-                newFolderId = await createFolder(payload.title, payload.description, {
-                    parent_id: payload.parent_id,
-                });
-            } catch (e) {
-                if (!prksOfflineWasGuardRefusal(e)) {
-                    await prksAlertMessage((e && e.message) || 'Could not create folder', 'Could not save');
-                }
-                return;
-            }
-            const data = { id: newFolderId };
-            const pending = window.__prksPendingWorkFolderAttach;
-            if (pending && pending.workId && typeof patchWorkFolder === 'function') {
-                const attachWid = String(pending.workId);
-                const opener = pending.tabId && typeof prksGetTabContext === 'function'
-                    ? prksGetTabContext(String(pending.tabId)) : null;
-                const still = function () {
-                    return typeof prksCapturedWorkPanelStill === 'function' &&
-                        prksCapturedWorkPanelStill(pending);
+                /* No offline guard: a folder is created durably, under an id this
+                 * device mints, so it exists and is usable the moment it is saved. */
+                const ownerCtx =
+                    typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+                if (folderBtn.disabled) return;
+                const payload = {
+                    title: document.getElementById('folder-title').value,
+                    description: document.getElementById('folder-description').value,
+                    parent_id: (() => {
+                        const raw = (document.getElementById('folder-parent-id')?.value || '').trim();
+                        return raw || null;
+                    })()
                 };
-                window.__prksPendingWorkFolderAttach = null;
-                closeModals();
-                if (!still()) return;
-                let attachCoherenceToken = null;
+                let newFolderId;
                 try {
-                    attachCoherenceToken = await patchWorkFolder(attachWid, data.id, still);
+                    newFolderId = await createFolder(payload.title, payload.description, {
+                        parent_id: payload.parent_id,
+                    });
                 } catch (e) {
-                    if (still()) {
-                        await prksAlertMessage(
-                            (e && e.message) || 'Folder created but could not assign this file.',
-                            'Error'
-                        );
+                    if (!prksOfflineWasGuardRefusal(e)) {
+                        await prksAlertMessage((e && e.message) || 'Could not create folder', 'Could not save');
                     }
+                    return;
                 }
-                if (!still()) return;
-                if (typeof fetchWorkDetails === 'function') {
-                    const _aw = await fetchWorkDetails(attachWid);
-                    if (_aw && typeof prksOfflineCacheEntityIfCurrent === 'function' && attachCoherenceToken != null) {
-                        void prksOfflineCacheEntityIfCurrent('work', attachWid, _aw, attachCoherenceToken);
-                    }
-                    if (typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(opener, attachWid, _aw)) {
-                        if (opener && opener.ui) opener.ui.workFolderEditing = false;
-                        if (typeof prksTabContextIsFocused === 'function' ? prksTabContextIsFocused(opener) : false) {
-                            updatePanelContent('details');
+                const data = { id: newFolderId };
+                const pending = window.__prksPendingWorkFolderAttach;
+                if (pending && pending.workId && typeof patchWorkFolder === 'function') {
+                    const attachWid = String(pending.workId);
+                    const opener = pending.tabId && typeof prksGetTabContext === 'function'
+                        ? prksGetTabContext(String(pending.tabId)) : null;
+                    const still = function () {
+                        return typeof prksCapturedWorkPanelStill === 'function' &&
+                            prksCapturedWorkPanelStill(pending);
+                    };
+                    window.__prksPendingWorkFolderAttach = null;
+                    closeModals();
+                    if (!still()) return;
+                    let attachCoherenceToken = null;
+                    try {
+                        attachCoherenceToken = await patchWorkFolder(attachWid, data.id, still);
+                    } catch (e) {
+                        if (still()) {
+                            await prksAlertMessage(
+                                (e && e.message) || 'Folder created but could not assign this file.',
+                                'Error'
+                            );
                         }
                     }
+                    if (!still()) return;
+                    if (typeof fetchWorkDetails === 'function') {
+                        const _aw = await fetchWorkDetails(attachWid);
+                        if (_aw && typeof prksOfflineCacheEntityIfCurrent === 'function' && attachCoherenceToken != null) {
+                            void prksOfflineCacheEntityIfCurrent('work', attachWid, _aw, attachCoherenceToken);
+                        }
+                        if (typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(opener, attachWid, _aw)) {
+                            if (opener && opener.ui) opener.ui.workFolderEditing = false;
+                            if (typeof prksTabContextIsFocused === 'function' ? prksTabContextIsFocused(opener) : false) {
+                                updatePanelContent('details');
+                            }
+                        }
+                    }
+                    return;
                 }
-                return;
+                closeModals();
+                const ownerRoute = ownerCtx && (ownerCtx.lastResolvedRoute || ownerCtx.route);
+                if (
+                    ownerRoute &&
+                    ownerRoute.name === 'folders' &&
+                    typeof prksNavigate === 'function'
+                ) {
+                    prksNavigate('#/folders', { replace: true, tabId: ownerCtx.tabId });
+                    return;
+                }
+                /* Not a reload: the record is local, and reloading would throw away
+                 * every other pending change on the page. The Folder Library is
+                 * where a new folder belongs, so go there. */
+                if (typeof prksNavigate === 'function') prksNavigate('#/folders');
+            } finally {
+                folderCreateInFlight = false;
             }
-            closeModals();
-            const ownerRoute = ownerCtx && (ownerCtx.lastResolvedRoute || ownerCtx.route);
-            if (
-                ownerRoute &&
-                ownerRoute.name === 'folders' &&
-                typeof prksNavigate === 'function'
-            ) {
-                prksNavigate('#/folders', { replace: true, tabId: ownerCtx.tabId });
-                return;
-            }
-            /* Not a reload: the record is local, and reloading would throw away
-             * every other pending change on the page. The Folder Library is
-             * where a new folder belongs, so go there. */
-            if (typeof prksNavigate === 'function') prksNavigate('#/folders');
         };
     }
 
