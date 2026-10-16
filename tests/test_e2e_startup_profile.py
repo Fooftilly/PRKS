@@ -84,6 +84,10 @@ class StartupReadinessProfileTests(unittest.TestCase):
         browser = mock.Mock()
         context = browser.new_context.return_value
         page = context.new_page.return_value
+        page.evaluate.return_value = {
+            "fetchStart": 10, "responseStart": 65,
+            "responseEnd": 70, "domContentLoadedEventEnd": 160,
+        }
         origin = "http://127.0.0.1:42002"
         with mock.patch.dict(os.environ, {"PRKS_E2E_PROFILE": "1"}):
             harness.start_test_profile("app-profile")
@@ -114,6 +118,7 @@ class StartupReadinessProfileTests(unittest.TestCase):
             {name: phases[name] for name in (
                 "browser_context", "app_navigation", "app_sidebar_wait",
                 "app_folder_wait", "app_route_wait", "app_ready",
+                "nav_response_wait", "nav_response_body", "nav_dom_content_loaded",
             )},
             {
                 "browser_context": 1.0,
@@ -122,8 +127,13 @@ class StartupReadinessProfileTests(unittest.TestCase):
                 "app_folder_wait": 5.0,
                 "app_route_wait": 2.0,
                 "app_ready": 14.0,
+                "nav_response_wait": 0.055,
+                "nav_response_body": 0.005,
+                "nav_dom_content_loaded": 0.09,
             },
         )
+        page.evaluate.assert_called_once()
+        self.assertIn("getEntriesByType('navigation')", page.evaluate.call_args.args[0])
         self.assertAlmostEqual(
             sum(
                 phases[name]
@@ -174,6 +184,47 @@ class StartupReadinessProfileTests(unittest.TestCase):
         # An inclusive successful interval must not hide failed-call details.
         self.assertEqual(runner._profile_infrastructure_total(phases), 23.0)
 
+    def test_browser_navigation_timing_missing_or_invalid_is_best_effort(self):
+        page = mock.Mock()
+        valid = {
+            "fetchStart": 10.0,
+            "responseStart": 20.0,
+            "responseEnd": 22.0,
+            "domContentLoadedEventEnd": 30.0,
+        }
+        samples = (
+            None,
+            {"fetchStart": 10},
+            {**valid, "responseEnd": float("nan")},
+            {**valid, "responseStart": 9},
+            {**valid, "fetchStart": True},
+        )
+        for sample in samples:
+            with self.subTest(sample=sample):
+                page.evaluate.return_value = sample
+                with mock.patch.dict(os.environ, {"PRKS_E2E_PROFILE": "1"}):
+                    harness.start_test_profile("bad-browser-timing")
+                    try:
+                        harness._profile_browser_navigation(page)
+                        phases = harness.finish_test_profile("bad-browser-timing")
+                    finally:
+                        harness.finish_test_profile("bad-browser-timing")
+                self.assertEqual(phases, {})
+        with mock.patch.dict(os.environ, {"PRKS_E2E_PROFILE": "1"}):
+            harness.start_test_profile("navigation-error")
+            try:
+                page.evaluate.side_effect = RuntimeError("performance entries unavailable")
+                harness._profile_browser_navigation(page)
+                self.assertEqual(harness.finish_test_profile("navigation-error"), {})
+            finally:
+                harness.finish_test_profile("navigation-error")
+
+        page.reset_mock()
+        with mock.patch.dict(os.environ, {"PRKS_E2E_PROFILE": "0"}):
+            harness.start_test_profile("no-browser-timing")
+            harness._profile_browser_navigation(page)
+        page.evaluate.assert_not_called()
+
     def test_unprofiled_page_and_server_take_no_extra_clock_samples(self):
         browser = mock.Mock()
         with mock.patch.dict(os.environ, {"PRKS_E2E_PROFILE": "0"}):
@@ -214,6 +265,10 @@ class StartupReadinessProfileTests(unittest.TestCase):
             "request_routing": 6.0,
             "routing_decision": 0.1,
             "seed_clone": 0.5,
+            # Browser-native details are diagnostic overlaps, not new work.
+            "nav_response_wait": 0.5,
+            "nav_response_body": 0.2,
+            "nav_dom_content_loaded": 0.6,
         }
         self.assertEqual(runner._profile_infrastructure_total(phases), 19.5)
         # Without inclusive parents the same detail phases still count.
