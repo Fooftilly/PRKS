@@ -6155,6 +6155,9 @@ function initForms() {
                     newFolderId = await createFolder(payload.title, payload.description, {
                         parent_id: payload.parent_id,
                     });
+                    // The create has settled; attachment work after closing the
+                    // modal must not block subsequent New Folder submissions.
+                    folderCreateInFlight = false;
                 } catch (e) {
                     if (!prksOfflineWasGuardRefusal(e)) {
                         await prksAlertMessage((e && e.message) || 'Could not create folder', 'Could not save');
