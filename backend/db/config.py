@@ -61,7 +61,7 @@ class DatabaseConfig:
             raise DatabaseConfigError("empty_url", "The database URL is empty.")
         if self.pool_min < 0 or self.pool_max < 1 or self.pool_min > self.pool_max:
             raise DatabaseConfigError("invalid_pool_size", "The database pool size is invalid.")
-        if self.pool_timeout_seconds <= 0:
+        if not math.isfinite(self.pool_timeout_seconds) or self.pool_timeout_seconds <= 0:
             raise DatabaseConfigError("invalid_pool_timeout", "The database pool timeout is invalid.")
         if not math.isfinite(self.max_idle_seconds) or self.max_idle_seconds <= 0:
             raise DatabaseConfigError("invalid_pool_idle", "The database pool idle time is invalid.")
