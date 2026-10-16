@@ -148,8 +148,14 @@ On bind-conflict retries, `server_spawn`, `server_http_ready` and
 `server_start` cover **only the successful attempt**; discarded attempts
 are reported separately as `server_spawn_failed` and
 `server_http_ready_failed`, rather than silently polluting the successful
-breakdown. A UI navigation/readiness wait that throws still records that
-subphase's elapsed time; the inclusive `app_ready` stays absent on failure.
+breakdown. If a UI navigation/readiness step raises, **all measured stages
+of that page-open attempt** use `app_navigation_failed`,
+`app_sidebar_wait_failed`, `app_folder_wait_failed`, or
+`app_route_wait_failed` as applicable. The inclusive `app_ready` covers
+only successful page opens. Thus a later failed page-open cannot be lost
+when an earlier page-open within the same unittest has already recorded
+`app_ready`. Ordinary unprofiled runs keep only their original inclusive
+clock reads: extra subphase clock samples are gated on an active profile.
 
 The first [same-runner route benchmark](https://github.com/Fooftilly/PRKS/actions/runs/38799768587)
 found a negligible **−0.68%** wall-time improvement from the experimental
@@ -159,9 +165,11 @@ reported roughly `server_start=15.5s` and `app_ready=18.5s` in 40 serial
 tests. The subphases above identify whether launch/probing or navigation/DOM
 readiness is responsible before attempting another optimization. The sums are
 **profile-instrumented** and must not be mistaken for an unprofiled speedup.
-The runner's **slowest profiled tests** sort key excludes nested detail phases
-when an inclusive parent exists; otherwise it would count the same intervals
-twice. Individual phase details and aggregate phase totals remain visible.
+The runner's **slowest profiled tests** sort key excludes successful
+nested detail phases when an inclusive parent exists; otherwise it would count
+the same intervals twice. Failed `*_failed` phases remain additive even when
+the test contains other successful attempts. Individual phase details and
+aggregate phase totals remain visible.
 
 For a comparable measurement after this profiling change, manually run
 **Actions → E2E Routing A/B Benchmark → Run workflow** on the merged commit.
