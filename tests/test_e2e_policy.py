@@ -2774,6 +2774,9 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                 "app_sidebar_wait": 3.0,
                 "app_folder_wait": 4.0,
                 "app_route_wait": 1.0,
+                "nav_response_wait": 3.0,
+                "nav_response_body": 0.4,
+                "nav_dom_content_loaded": 4.0,
             }
             for trial, mode in enumerate(
                 ("baseline", "fastpath", "fastpath", "baseline"), 1
@@ -2785,6 +2788,7 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                     # medians observably different; a mislabeled column fails.
                     phases["app_navigation"] = 9.0
                     phases["app_ready"] = 17.0
+                    phases["nav_response_wait"] = 2.0
                 result = {
                     "schema_version": 1,
                     "benchmark_modes": (
@@ -2818,6 +2822,10 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             self.assertIn("| ↳ Page navigation | 12.00s | 9.00s |", body)
             self.assertIn("| App readiness (inclusive) | 20.00s | 17.00s |", body)
             self.assertIn("| ↳ Python process spawn | 7.00s | 7.00s |", body)
+            self.assertIn("### Browser Navigation Timing (opt-in, diagnostic)", body)
+            self.assertIn("| Response wait / first byte | 3.00s | 2.00s |", body)
+            self.assertIn("| Response body transfer | 0.40s | 0.40s |", body)
+            self.assertIn("| DOM parsing to DOMContentLoaded | 4.00s | 4.00s |", body)
 
             bad = root / "e2e-routing-ab-2.json"
             original = json.loads(bad.read_text(encoding="utf-8"))
@@ -2847,6 +2855,22 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             failed = run_summary()
             self.assertNotEqual(failed.returncode, 0)
             self.assertIn("missing/invalid server_spawn metric", failed.stderr)
+
+            # Invalid optional telemetry is rejected rather than shown in
+            # medians; missing optional entries still allow the old A/B report.
+            payload = json.loads(json.dumps(original))
+            payload["phase_seconds"]["nav_response_wait"] = -1
+            bad.write_text(json.dumps(payload), encoding="utf-8")
+            failed = run_summary()
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertIn("invalid nav_response_wait metric", failed.stderr)
+
+            payload = json.loads(json.dumps(original))
+            del payload["phase_seconds"]["nav_response_wait"]
+            bad.write_text(json.dumps(payload), encoding="utf-8")
+            partial = run_summary()
+            self.assertEqual(partial.returncode, 0, partial.stderr)
+            self.assertIn("Navigation Timing unavailable/incomplete for 1 of 4 trials", partial.stdout)
 
     def test_watchdog_does_not_touch_last_failed_in_profile_mode(self):
         """Even watchdog os._exit paths must preserve benchmark history."""
