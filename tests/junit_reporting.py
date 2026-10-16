@@ -6,6 +6,7 @@ they are not sent to the external CI reporting service.
 """
 from __future__ import annotations
 
+import sys
 import time
 import unittest
 from pathlib import Path
@@ -35,11 +36,18 @@ class JUnitResultMixin:
         )
 
     def _record(self, test, outcome):
-        self._junit_outcomes[test] = outcome
-        # setUpClass/tearDownClass errors use unittest's _ErrorHolder, which
-        # never receives startTest/stopTest callbacks.
-        if test not in self._junit_started:
-            self._junit_fixture_errors.append((test.id(), outcome, 0.0))
+        # unittest passes _SubTest to addSkip; its id() contains arbitrary
+        # subTest parameter reprs. Use the parent test ID exclusively.
+        parent = getattr(test, "test_case", test)
+        if parent in self._junit_started:
+            priority = {"success": 0, "skipped": 1, "failure": 2, "error": 3}
+            previous = self._junit_outcomes.get(parent, "success")
+            if priority[outcome] > priority[previous]:
+                self._junit_outcomes[parent] = outcome
+        else:
+            # setUpClass/tearDownClass _ErrorHolder never calls startTest.
+            # Do not serialize a nested subtest ID even on unexpected paths.
+            self._junit_fixture_errors.append((parent.id(), outcome, 0.0))
 
     def addError(self, test, err):
         self._record(test, "error")
@@ -63,7 +71,8 @@ class JUnitResultMixin:
 
     def addSubTest(self, test, subtest, err):
         if err is not None:
-            self._record(test, "failure")
+            kind = "failure" if issubclass(err[0], test.failureException) else "error"
+            self._record(test, kind)
         super().addSubTest(test, subtest, err)
 
 
@@ -99,3 +108,17 @@ def write_junit_report(result, path, *, suite_name="PRKS"):
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     ET.ElementTree(root).write(target, encoding="utf-8", xml_declaration=True)
+
+
+def try_write_junit_report(result, path, *, suite_name="PRKS") -> bool:
+    """Best-effort telemetry: a reporter fault must never change test status."""
+    try:
+        write_junit_report(result, path, suite_name=suite_name)
+    except Exception as exc:  # noqa: BLE001 - optional external reporting
+        # Do not log exception text: paths and other diagnostics may be private.
+        print(
+            f"warning: optional JUnit report unavailable ({type(exc).__name__})",
+            file=sys.stderr,
+        )
+        return False
+    return True
