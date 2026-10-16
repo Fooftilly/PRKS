@@ -76,6 +76,7 @@ from tests.e2e.policy import (
     select_smoke,
     service_worker_diff_for_plan,
 )
+from tests.junit_reporting import JUnitResultMixin, write_junit_report
 from tests.e2e.sharding import (
     BASELINE_TIMINGS_PATH,
     TIMINGS_PATH,
@@ -323,7 +324,7 @@ def _executed_ids_from_observation(observed, failed_ids) -> list:
     return executed
 
 
-class _TimingResult(unittest.TextTestResult):
+class _TimingResult(JUnitResultMixin, unittest.TextTestResult):
     """TextTestResult that also records wall-clock duration per test ID."""
 
     def __init__(self, *args, **kwargs):
@@ -802,6 +803,13 @@ def run_worker(
             resultclass=_result_factory,
         )
         result = runner.run(_suite_for(test_ids))
+        junit_dir = os.environ.get("PRKS_JUNIT_REPORT_DIR")
+        if junit_dir:
+            write_junit_report(
+                result,
+                Path(junit_dir) / f"e2e-worker-{index}.xml",
+                suite_name="PRKS E2E",
+            )
         report["duration"] = time.perf_counter() - started
         report["tests"] = result.testsRun
         report["failures"] = len(result.failures)
