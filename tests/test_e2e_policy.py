@@ -2790,6 +2790,9 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                 "nav_response_wait": 3.0,
                 "nav_response_body": 0.4,
                 "nav_dom_content_loaded": 4.0,
+                "nav_until_interactive": 2.5,
+                "nav_interactive_to_dcl": 1.0,
+                "nav_dcl_handlers": 0.5,
             }
             for trial, mode in enumerate(
                 ("baseline", "fastpath", "fastpath", "baseline"), 1
@@ -2839,7 +2842,12 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             self.assertIn("### Browser Navigation Timing (opt-in, diagnostic)", body)
             self.assertIn("| Response wait / first byte | 3.00s | 2.00s |", body)
             self.assertIn("| Response body transfer | 0.40s | 0.40s |", body)
-            self.assertIn("| DOM parsing to DOMContentLoaded | 4.00s | 4.00s |", body)
+            self.assertIn(
+                "| Response-end → DOMContentLoaded (inclusive) | 4.00s | 4.00s |", body
+            )
+            self.assertIn("| ↳ Response-end → DOM interactive | 2.50s | 2.50s |", body)
+            self.assertIn("| ↳ DOM interactive → DCL event start | 1.00s | 1.00s |", body)
+            self.assertIn("| ↳ DCL event handlers | 0.50s | 0.50s |", body)
 
             bad = root / "e2e-routing-ab-2.json"
             original = json.loads(bad.read_text(encoding="utf-8"))
@@ -2878,6 +2886,25 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             failed = run_summary()
             self.assertNotEqual(failed.returncode, 0)
             self.assertIn("invalid nav_response_wait metric", failed.stderr)
+
+            # In complete-capture trials, the nested browser milestones
+            # must exactly partition responseEnd -> DCL, within rounding.
+            payload = json.loads(json.dumps(original))
+            payload["phase_seconds"]["nav_dcl_handlers"] = 1.5
+            bad.write_text(json.dumps(payload), encoding="utf-8")
+            inconsistent_dom = run_summary()
+            self.assertNotEqual(inconsistent_dom.returncode, 0)
+            self.assertIn("browser DOM milestone totals disagree", inconsistent_dom.stderr)
+
+            # Zero-valued nested intervals may be filtered by the recorder.
+            payload = json.loads(json.dumps(original))
+            payload["phase_seconds"]["nav_until_interactive"] = 4.0
+            payload["phase_seconds"]["nav_interactive_to_dcl"] = 0.0
+            payload["phase_seconds"]["nav_dcl_handlers"] = 0.0
+            bad.write_text(json.dumps(payload), encoding="utf-8")
+            zero_details = run_summary()
+            self.assertEqual(zero_details.returncode, 0, zero_details.stderr)
+            self.assertIn("| ↳ DCL event handlers |", zero_details.stdout)
 
             # Partial capture must suppress all browser medians even though
             # every sum key is present from other successful page opens.
