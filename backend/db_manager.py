@@ -5419,20 +5419,28 @@ class PRKSDatabase:
         forewords = cls._biblatex_names_for_role(roles, "Foreword")
         afterwords = cls._biblatex_names_for_role(roles, "Afterword")
 
-        if linked_authors:
-            author_str = " and ".join(linked_authors)
-        else:
-            author_str = None
+        # The visible Work credit line falls back to Author (text) when no
+        # linked Author exists. Preserve that credit in copied citations too.
+        text_authors = [
+            name.strip() for name in str(work.get("author_text") or "").split(";")
+            if name.strip()
+        ]
+        author_str = " and ".join(linked_authors or text_authors) or None
 
         # Year: prefer dedicated year field, fall back to published_date prefix
         year = work.get('year') or (work.get('published_date', '')[:4] if work.get('published_date') else None)
 
         first_author_person = next((p for p in roles if p["role_type"] == "Author"), None)
-        first_author_last = (
-            cls._biblatex_cite_key_part_from_person(first_author_person)
-            if first_author_person
-            else "Unknown"
-        )
+        if first_author_person:
+            first_author_last = cls._biblatex_cite_key_part_from_person(first_author_person)
+        elif text_authors:
+            first = text_authors[0]
+            # Support "Family, Given" and "Given Family" credit forms.
+            family = first.split(",", 1)[0].strip() if "," in first else first.split()[-1]
+            key_part = family.split()[0] if family.split() and "," in first else family
+            first_author_last = re.sub(r"[^\\w]", "", key_part) or "Unknown"
+        else:
+            first_author_last = "Unknown"
         cite_key = f"{first_author_last}{year or 'UnknownYear'}"
 
         raw_dt = work.get("doc_type")
