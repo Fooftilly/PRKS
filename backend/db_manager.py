@@ -5407,7 +5407,8 @@ class PRKSDatabase:
             if corporate_credit:
                 key_part = first.split()[0]
             elif "," in first:
-                key_part = first.split(",", 1)[0].strip().split()[0]
+                family_words = first.split(",", 1)[0].split()
+                key_part = family_words[0] if family_words else ""
             else:
                 key_part = first.split()[-1]
             first_author_last = re.sub(r"[^\w]", "", key_part) or "Unknown"
