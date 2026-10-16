@@ -2649,8 +2649,15 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
         result.errors = []
         result.skipped = []
         result.phase_timings = {
-            "case.one": {"routing_decision": 0.015, "app_ready": 0.20},
-            "case.two": {"routing_decision": 0.025, "app_ready": 0.30},
+            "case.one": {
+                "routing_decision": 0.015, "app_ready": 0.20,
+                "nav_timing_attempts": 2.0, "nav_timing_samples": 2.0,
+                "nav_response_wait": 0.01,
+            },
+            "case.two": {
+                "routing_decision": 0.025, "app_ready": 0.30,
+                "nav_timing_attempts": 1.0,
+            },
         }
         with tempfile.TemporaryDirectory() as raw:
             destination = Path(raw) / "benchmark.json"
@@ -2669,8 +2676,11 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                 data = json.loads(destination.read_text(encoding="utf-8"))
                 self.assertEqual(data["schema_version"], 2)
                 self.assertEqual(data["navigation_samples"], {
-                    "attempted": 0, "captured": 0,
+                    "attempted": 3, "captured": 2,
                 })
+                self.assertNotIn("nav_timing_attempts", data["phase_seconds"])
+                self.assertNotIn("nav_timing_samples", data["phase_seconds"])
+                self.assertEqual(data["phase_seconds"]["nav_response_wait"], 0.01)
                 self.assertEqual(data["benchmark_modes"], (
                     ["profile", "route-fastpath"] if fastpath == "1" else ["profile"]
                 ))
