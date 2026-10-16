@@ -96,6 +96,14 @@ jobs:
           root = Path(os.environ["RUNNER_TEMP"])
           rows = []
           phase_rows = []
+          browser_nav_rows = []
+          # Browser-native times are diagnostic subsets of page navigation,
+          # NOT another additive partition of Playwright's app_ready.
+          browser_nav_phases = (
+              ("Response wait / first byte", "nav_response_wait"),
+              ("Response body transfer", "nav_response_body"),
+              ("DOM parsing to DOMContentLoaded", "nav_dom_content_loaded"),
+          )
           # These phases were added by #699. Children partition an inclusive
           # parent; never sum parent and child columns as separate overhead.
           startup_phases = (
@@ -175,8 +183,21 @@ jobs:
                       raise SystemExit(
                           f"Trial {trial}: {parent} does not match its subphase totals"
                       )
+              browser_nav = {}
+              for _, key in browser_nav_phases:
+                  value = phases.get(key)
+                  if value is None:
+                      continue  # PerformanceNavigationTiming may be unavailable.
+                  if (
+                      type(value) not in (int, float)
+                      or not math.isfinite(value)
+                      or value < 0
+                  ):
+                      raise SystemExit(f"Trial {trial}: invalid {key} metric")
+                  browser_nav[key] = value
               rows.append((trial, mode, data["tests"], seconds, routing))
               phase_rows.append((mode, startup))
+              browser_nav_rows.append((mode, browser_nav))
 
           if len(set(row[2] for row in rows)) != 1:
               raise SystemExit("A/B trials discovered different test counts")
@@ -216,6 +237,40 @@ jobs:
               "Nested rows partition their inclusive parent; do not add them twice.",
               "Profile phase sums may overlap unrelated test work and are not equivalent",
               "to removable wall time.",
+              "",
+              "### Browser Navigation Timing (opt-in, diagnostic)",
+              "",
+          ]
+          coverage = sum(
+              all(key in phases for _, key in browser_nav_phases)
+              for _, phases in browser_nav_rows
+          )
+          if coverage == len(browser_nav_rows):
+              summary += [
+                  "| Browser milestone | Baseline median | Fast-path median |",
+                  "|---|---:|---:|",
+              ]
+              for label, key in browser_nav_phases:
+                  baseline_phase = statistics.median(
+                      phases[key] for mode, phases in browser_nav_rows if mode == "baseline"
+                  )
+                  fastpath_phase = statistics.median(
+                      phases[key] for mode, phases in browser_nav_rows if mode == "fastpath"
+                  )
+                  summary.append(
+                      f"| {label} | {baseline_phase:.2f}s | {fastpath_phase:.2f}s |"
+                  )
+              summary.append(
+                  "Browser measurements use the Navigation Timing API (milliseconds "
+                  "converted to seconds), not additional Python app-ready time."
+              )
+          else:
+              summary.append(
+                  f"Navigation Timing unavailable/incomplete for "
+                  f"{len(browser_nav_rows) - coverage} of {len(browser_nav_rows)} "
+                  "trials; existing routing and startup results are still valid."
+              )
+          summary += [
               "",
               "Single small-sample diagnostic only: runner variance and profiling overhead remain.",
               "Do not enable the fast path by default without repeated and full-suite evidence.",
