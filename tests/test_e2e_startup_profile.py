@@ -230,6 +230,17 @@ class StartupReadinessProfileTests(unittest.TestCase):
             harness._profile_browser_navigation(page)
         page.evaluate.assert_not_called()
 
+    def test_navigation_counter_name_validation_runs_without_assert(self):
+        with mock.patch.dict(os.environ, {"PRKS_E2E_PROFILE": "1"}):
+            harness.start_test_profile("bad-nav-counter")
+            try:
+                with self.assertRaisesRegex(ValueError, "unknown navigation timing counter"):
+                    harness._profile_nav_count("not_a_navigation_counter")
+                phases = harness.finish_test_profile("bad-nav-counter")
+            finally:
+                harness.finish_test_profile("bad-nav-counter")
+        self.assertEqual(phases, {})
+
     def test_browser_navigation_zero_duration_is_a_valid_captured_sample(self):
         page = mock.Mock()
         page.evaluate.return_value = {
