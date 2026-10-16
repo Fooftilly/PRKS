@@ -1349,6 +1349,9 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/domain/identity/request_context.py",
                 "backend/domain/identity/sessions.py",
                 "backend/domain/identity/web_start.py",
+                "backend/domain/identity/root_pairing.py",
+                "backend/domain/identity/admin.py",
+                "backend/api/session.py",
             ),
         )
 
