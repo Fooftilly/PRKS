@@ -348,6 +348,9 @@ def _login(auth: WebAuth, request: HttpRequest) -> Union[Reply, _Answered]:
         data.get("password"),
         client=client,
         device_cookie=cookie(request, LOGIN_DEVICE_COOKIE),
+        # Only the served Library: any other answers like a wrong password,
+        # with no session, device token or limiter reset.
+        library_id=auth.library_id,
         limits=auth.settings.limits,
         idle=auth.settings.idle,
         hasher=auth.hasher,

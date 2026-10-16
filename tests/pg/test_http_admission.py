@@ -173,6 +173,26 @@ class AuthorizationTests(AdmissionTestCase):
         after = self.run_sql("SELECT last_used_at, expires_at FROM prks.sessions WHERE id = %s", (new.session_id,))
         self.assertEqual(after, before)
 
+    def test_a_login_for_another_library_looks_like_a_wrong_password(self) -> None:
+        """No session, device token or limiter reset for a Library this server does not serve (#708 review)."""
+        other = self.library("Other")
+        stranger = self.user("Stranger", library=other, role="owner")
+        right = self.sign_in("Stranger")
+        wrong = self.sign_in("Stranger", password="not the password")
+        for res in (right, wrong):
+            self.assert_refused(res, 401, "invalid_credentials")
+            self.assertEqual(res.header("Set-Cookie"), [])
+        self.assertEqual(right.raw, wrong.raw)
+        self.assertEqual(self.run_sql("SELECT count(*) AS n FROM prks.sessions WHERE user_id = %s", (stranger,))[0]["n"], 0)
+
+    def test_a_member_of_several_libraries_signs_in_to_the_served_one(self) -> None:
+        other = self.library("Other")
+        both = self.user("Both", library=self.lib, role="editor")
+        self.join(both, other, "owner")
+        res = self.sign_in("Both")
+        self.assertEqual(res.status, 200, res.raw)
+        self.assertEqual(res.body["session"]["library"]["id"], self.lib)
+
     def test_a_login_for_another_library_keeps_the_browsers_session(self) -> None:
         other = self.library("Other")
         self.user("Stranger", library=other, role="owner")
