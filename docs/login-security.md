@@ -191,7 +191,10 @@ the route's write:
   admission yet.
 
 None of this is a fault of the gate; it is why `PRKS_AUTH` stays opt-in and
-off for production until the cutover (#614).
+off for production until the cutover (#614). Each Stage 2 lane moves its
+family's commands into `library_command`, and the cutover's switch (PG-C2,
+#641) removes the last SQLite route. From then on, every Library write runs
+inside the transaction that authorizes it and checks its epoch.
 
 ### Cross-site requests
 
