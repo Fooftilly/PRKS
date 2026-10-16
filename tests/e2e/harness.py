@@ -1265,6 +1265,8 @@ def _profile_browser_navigation(page) -> None:
                 fetchStart: entry.fetchStart,
                 responseStart: entry.responseStart,
                 responseEnd: entry.responseEnd,
+                domInteractive: entry.domInteractive,
+                domContentLoadedEventStart: entry.domContentLoadedEventStart,
                 domContentLoadedEventEnd: entry.domContentLoadedEventEnd
             };
         }""")
@@ -1273,18 +1275,23 @@ def _profile_browser_navigation(page) -> None:
     if not isinstance(timing, dict):
         return
     keys = (
-        "fetchStart", "responseStart", "responseEnd",
-        "domContentLoadedEventEnd",
+        "fetchStart", "responseStart", "responseEnd", "domInteractive",
+        "domContentLoadedEventStart", "domContentLoadedEventEnd",
     )
     values = [timing.get(key) for key in keys]
     if not all(type(value) in (int, float) and math.isfinite(value) for value in values):
         return
-    fetch, response_start, response_end, dcl = values
-    if not 0 <= fetch <= response_start <= response_end <= dcl:
+    fetch, response_start, response_end, interactive, dcl_start, dcl_end = values
+    if not 0 <= fetch <= response_start <= response_end <= interactive <= dcl_start <= dcl_end:
         return
     _profile_phase("nav_response_wait", (response_start - fetch) / 1000)
     _profile_phase("nav_response_body", (response_end - response_start) / 1000)
-    _profile_phase("nav_dom_content_loaded", (dcl - response_end) / 1000)
+    _profile_phase("nav_dom_content_loaded", (dcl_end - response_end) / 1000)
+    # Browser event milestones partition post-response DCL time, but cannot
+    # distinguish parser work from synchronous JavaScript and resource stalls.
+    _profile_phase("nav_until_interactive", (interactive - response_end) / 1000)
+    _profile_phase("nav_interactive_to_dcl", (dcl_start - interactive) / 1000)
+    _profile_phase("nav_dcl_handlers", (dcl_end - dcl_start) / 1000)
     _profile_nav_count("nav_timing_samples")
 
 
