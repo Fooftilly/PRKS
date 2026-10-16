@@ -173,6 +173,14 @@ class StartTests(WebStartTestCase):
             with self.subTest(mode=mode):
                 self.refused("database_behind", self.web_start, copy, root, mode)
 
+    def test_a_relocated_root_keeps_its_pairing_and_starts(self) -> None:
+        name, root = self.ready()
+        moved = self.relocated(root)
+        before = self.db_state(name)
+        auth = self.web_start(name, moved)
+        self.assertEqual(auth.instance_id, self.instance(name)["id"])
+        self.assert_paired(name, moved, before.generation + 1)
+
     def test_a_testing_mismatch_is_refused(self) -> None:
         name, root = self.ready()
         self.refused("testing_mismatch", self.web_start, name, root, testing=False)
