@@ -115,7 +115,8 @@ class DatabaseConfigTests(unittest.TestCase):
         self.assertEqual(config.max_idle_seconds, 300.0)
 
     def test_nonfinite_and_nonpositive_pool_acquisition_timeout_refused(self) -> None:
-        for seconds in (0, -1, -0.1, float("nan"), float("inf"), float("-inf")):
+        for seconds in (0, -1, -0.1, float("nan"), float("inf"), float("-inf"),
+                        10**400, -(10**400)):
             with self.subTest(seconds=seconds), self.assertRaises(DatabaseConfigError) as caught:
                 DatabaseConfig(conninfo=URL, pool_timeout_seconds=seconds)
             self.assertEqual(caught.exception.reason, "invalid_pool_timeout")
@@ -129,7 +130,8 @@ class DatabaseConfigTests(unittest.TestCase):
         )
 
     def test_invalid_pool_max_idle_refused_before_pool_is_created(self) -> None:
-        for seconds in (-1, -0.1, 0, 0.0, float("nan"), float("inf"), float("-inf")):
+        for seconds in (-1, -0.1, 0, 0.0, float("nan"), float("inf"), float("-inf"),
+                        10**400, -(10**400)):
             with self.subTest(seconds=seconds), self.assertRaises(DatabaseConfigError) as caught:
                 DatabaseConfig(conninfo=URL, max_idle_seconds=seconds)
             self.assertEqual(caught.exception.reason, "invalid_pool_idle")
