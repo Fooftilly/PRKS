@@ -10,7 +10,8 @@
     "backend/pdf_byte_mentions.py",
     "backend/fs_durability.py",
     "backend/db/config.py",
-    "backend/db/errors.py"
+    "backend/db/errors.py",
+    "backend/db/database.py"
   ],
   "exclude": [
     "**/__pycache__"

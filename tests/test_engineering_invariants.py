@@ -1336,6 +1336,7 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/fs_durability.py",
                 "backend/db/config.py",
                 "backend/db/errors.py",
+                "backend/db/database.py",
             ),
         )
 
