@@ -801,6 +801,15 @@ class TestDBManager(unittest.TestCase):
         self.assertIn("@book{Lovelace2020,", bibtex)
         self.assertIn("author = {Ada Lovelace}", bibtex)
 
+    def test_bibtex_empty_family_in_text_credit_does_not_crash(self):
+        w_id = self.db.add_work(
+            title="Incomplete Byline", author_text=", Anna",
+            year="2018", doc_type="book",
+        )
+        bibtex = self.db.generate_bibtex(w_id)
+        self.assertIn("@book{Unknown2018,", bibtex)
+        self.assertIn("author = {, Anna}", bibtex)
+
     def test_bibtex_blank_author_text_keeps_unknown_cite_key(self):
         w_id = self.db.add_work(
             title="Without Byline", author_text=" ;  ",
