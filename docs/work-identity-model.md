@@ -241,8 +241,11 @@ behind the "remember last page" setting).
 `playlist_items(work_id)` limits each Work to one playlist.
 
 **Citation and export.** `generate_bibtex()` is the only exporter. The cite
-key is **computed, never stored**: first Author family name + year. Authors,
-editors, translators, and introduction/foreword/afterword come from roles. The
+key is **computed, never stored**: first linked Author family name + year,
+or a name derived from `author_text` when no Author is linked. Author credits
+prefer linked roles; without them BibTeX falls back to free-text `author_text`
+(semicolon-delimited persons, or one braced corporate channel for videos).
+Editors, translators, and introduction/foreword/afterword come from roles. The
 entry type is `doc_type`, or, when that is empty, guessed from journal or
 publisher. `url` is `source_url`. `urldate` is taken from **`updated_at`**, not
 from the `urldate` column. A server-wide profile selects which fields are
