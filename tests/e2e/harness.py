@@ -1340,7 +1340,8 @@ def open_app_page(browser, origin: str, service_workers: str = "block"):
     e2e_heartbeat("APP_READY")
     # Profiling only: read browser-native milestones after the existing checks.
     # Never let telemetry exceptions relax or add to readiness assertions.
-    _profile_browser_navigation(page)
+    if profiled:
+        _profile_browser_navigation(page)
     return page, context, collector
 
 
