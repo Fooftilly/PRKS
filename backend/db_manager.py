@@ -5421,10 +5421,14 @@ class PRKSDatabase:
 
         # The visible Work credit line falls back to Author (text) when no
         # linked Author exists. Preserve that credit in copied citations too.
-        text_authors = [
-            name.strip() for name in str(work.get("author_text") or "").split(";")
-            if name.strip()
-        ]
+        text_credit = str(work.get("author_text") or "").strip()
+        # On a video, Author (text) is a channel/organization name, not
+        # semicolon-delimited Person names. BibLaTeX needs it braced as one.
+        corporate_credit = bool(text_credit) and work.get("source_kind") == "video" and not linked_authors
+        text_authors = (
+            [text_credit] if corporate_credit
+            else [name.strip() for name in text_credit.split(";") if name.strip()]
+        )
         author_str = " and ".join(linked_authors or text_authors) or None
 
         # Year: prefer dedicated year field, fall back to published_date prefix
@@ -5435,9 +5439,12 @@ class PRKSDatabase:
             first_author_last = cls._biblatex_cite_key_part_from_person(first_author_person)
         elif text_authors:
             first = text_authors[0]
-            # Support "Family, Given" and "Given Family" credit forms.
-            family = first.split(",", 1)[0].strip() if "," in first else first.split()[-1]
-            key_part = family.split()[0] if family.split() and "," in first else family
+            if corporate_credit:
+                key_part = first.split()[0]
+            elif "," in first:
+                key_part = first.split(",", 1)[0].strip().split()[0]
+            else:
+                key_part = first.split()[-1]
             first_author_last = re.sub(r"[^\w]", "", key_part) or "Unknown"
         else:
             first_author_last = "Unknown"
@@ -5464,7 +5471,10 @@ class PRKSDatabase:
         bibtex = f"@{entry_type}{{{cite_key},\n"
         bibtex += f"  title = {{{esc(work['title'])}}},\n"
         if author_str and _export("author"):
-            bibtex += f"  author = {{{esc(author_str)}}},\n"
+            author_value = esc(author_str)
+            if corporate_credit:
+                author_value = "{" + author_value + "}"  # BibLaTeX corporate name
+            bibtex += f"  author = {{{author_value}}},\n"
         if editors and _export("editor"):
             bibtex += f"  editor = {{{esc(' and '.join(editors))}}},\n"
         if translators and _export("translator"):
