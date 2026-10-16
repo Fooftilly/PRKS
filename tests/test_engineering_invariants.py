@@ -1352,6 +1352,10 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/domain/identity/root_pairing.py",
                 "backend/domain/identity/admin.py",
                 "backend/api/session.py",
+                "backend/work_identity.py",
+                "backend/work_projection.py",
+                "backend/work_metadata_sync.py",
+                "backend/work_role_sync.py",
             ),
         )
 
