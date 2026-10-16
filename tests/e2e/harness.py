@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import random
 import shutil
@@ -1230,6 +1231,45 @@ class FixtureServer:
             self.proc = None
 
 
+def _profile_browser_navigation(page) -> None:
+    """Capture opt-in Chromium navigation details without gating app readiness.
+
+    These are browser PerformanceNavigationTiming durations, not another
+    partition of the Python app_ready timer (which includes Playwright RPC).
+    A missing/unsupported entry must never turn a passing E2E into a failure.
+    """
+    if _ACTIVE_PROFILE is None:
+        return
+    try:
+        timing = page.evaluate("""() => {
+            const entry = performance.getEntriesByType('navigation')[0];
+            if (!entry) return null;
+            return {
+                fetchStart: entry.fetchStart,
+                responseStart: entry.responseStart,
+                responseEnd: entry.responseEnd,
+                domContentLoadedEventEnd: entry.domContentLoadedEventEnd
+            };
+        }""")
+    except Exception:
+        return
+    if not isinstance(timing, dict):
+        return
+    keys = (
+        "fetchStart", "responseStart", "responseEnd",
+        "domContentLoadedEventEnd",
+    )
+    values = [timing.get(key) for key in keys]
+    if not all(type(value) in (int, float) and math.isfinite(value) for value in values):
+        return
+    fetch, response_start, response_end, dcl = values
+    if not 0 <= fetch <= response_start <= response_end <= dcl:
+        return
+    _profile_phase("nav_response_wait", (response_start - fetch) / 1000)
+    _profile_phase("nav_response_body", (response_end - response_start) / 1000)
+    _profile_phase("nav_dom_content_loaded", (dcl - response_end) / 1000)
+
+
 def open_app_page(browser, origin: str, service_workers: str = "block"):
     started = time.perf_counter()
     # Prefer-reduced-motion is opt-in (`PRKS_E2E_REDUCED_MOTION=1`). Emulating
@@ -1298,6 +1338,9 @@ def open_app_page(browser, origin: str, service_workers: str = "block"):
     # successfully completed navigation and all three original checks only.
     _profile_phase("app_ready", ready - started)
     e2e_heartbeat("APP_READY")
+    # Profiling only: read browser-native milestones after the existing checks.
+    # Never let telemetry exceptions relax or add to readiness assertions.
+    _profile_browser_navigation(page)
     return page, context, collector
 
 
