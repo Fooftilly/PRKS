@@ -6,6 +6,8 @@ import sys
 import unittest
 from pathlib import Path
 
+from tests.junit_reporting import JUnitTextTestResult, write_junit_report
+
 
 def apply_isolated_test_env(project_dir: str) -> None:
     os.environ["PRKS_TESTING"] = "1"
@@ -104,8 +106,14 @@ def run_unit_tests(project_dir: str) -> int:
     print("Discovering and running tests...")
     loader = unittest.TestLoader()
     suite = loader.discover(start_dir=os.path.join(project_dir, "tests"), pattern="test_*.py")
-    runner = unittest.TextTestRunner(verbosity=2)
+    junit_path = os.environ.get("PRKS_JUNIT_REPORT")
+    runner = unittest.TextTestRunner(
+        verbosity=2,
+        resultclass=JUnitTextTestResult if junit_path else None,
+    )
     result = runner.run(suite)
+    if junit_path:
+        write_junit_report(result, junit_path, suite_name="PRKS unit and API tests")
     return 0 if result.wasSuccessful() else 1
 
 
