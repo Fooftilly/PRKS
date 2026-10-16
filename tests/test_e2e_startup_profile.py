@@ -138,6 +138,67 @@ class StartupReadinessProfileTests(unittest.TestCase):
             delta=0.00001,
         )
 
+    def test_success_then_failed_page_open_does_not_drop_failed_time(self):
+        from tests.e2e import run as runner
+
+        browser = mock.Mock()
+        page = browser.new_context.return_value.new_page.return_value
+        page.wait_for_selector.side_effect = [
+            None, None, RuntimeError("later sidebar never loaded")
+        ]
+        with mock.patch.dict(os.environ, {"PRKS_E2E_PROFILE": "1"}):
+            harness.start_test_profile("mixed-page-opens")
+            try:
+                with mock.patch.object(
+                    harness.time, "perf_counter",
+                    side_effect=[
+                        10, 11, 20, 24, 27, 32, 34,  # successful page open
+                        40, 41, 50, 54, 57,          # failed page open
+                    ],
+                ):
+                    harness.open_app_page(browser, "http://127.0.0.1:42002")
+                    with self.assertRaisesRegex(RuntimeError, "later sidebar"):
+                        harness.open_app_page(browser, "http://127.0.0.1:42002")
+                phases = harness.finish_test_profile("mixed-page-opens")
+            finally:
+                harness.finish_test_profile("mixed-page-opens")
+
+        self.assertEqual(phases["app_ready"], 14.0)
+        self.assertEqual(phases["app_navigation"], 4.0)
+        self.assertEqual(phases["app_sidebar_wait"], 3.0)
+        self.assertEqual(phases["app_folder_wait"], 5.0)
+        self.assertEqual(phases["app_route_wait"], 2.0)
+        self.assertEqual(phases["app_navigation_failed"], 4.0)
+        self.assertEqual(phases["app_sidebar_wait_failed"], 3.0)
+        self.assertEqual(phases["browser_context"], 2.0)
+        # An inclusive successful interval must not hide failed-call details.
+        self.assertEqual(runner._profile_infrastructure_total(phases), 23.0)
+
+    def test_unprofiled_page_and_server_take_no_extra_clock_samples(self):
+        browser = mock.Mock()
+        with mock.patch.dict(os.environ, {"PRKS_E2E_PROFILE": "0"}):
+            harness.finish_test_profile("none")
+            with mock.patch.object(
+                harness.time, "perf_counter", side_effect=[10, 11, 20, 34]
+            ) as clock:
+                harness.open_app_page(browser, "http://127.0.0.1:42002")
+            self.assertEqual(clock.call_count, 4)  # existing context + app totals
+            with (
+                mock.patch.object(harness, "find_free_port", return_value=42004),
+                mock.patch.object(harness, "apply_playwright_browser_env"),
+                mock.patch.object(harness.AppServer, "_spawn"),
+                mock.patch.object(harness, "wait_http"),
+            ):
+                server = harness.AppServer()
+                try:
+                    with mock.patch.object(
+                        harness.time, "perf_counter", side_effect=[100, 107]
+                    ) as clock:
+                        self.assertIs(server.start(), server)
+                    self.assertEqual(clock.call_count, 2)  # existing server total
+                finally:
+                    server.stop()
+
     def test_slowest_ranking_does_not_double_count_inclusive_phases(self):
         from tests.e2e import run as runner
 
@@ -176,8 +237,10 @@ class StartupReadinessProfileTests(unittest.TestCase):
             finally:
                 harness.finish_test_profile("failed-readiness")
         self.assertNotIn("app_ready", phases)
-        self.assertEqual(phases["app_navigation"], 4.0)
-        self.assertEqual(phases["app_sidebar_wait"], 3.0)
+        self.assertNotIn("app_navigation", phases)
+        self.assertNotIn("app_sidebar_wait", phases)
+        self.assertEqual(phases["app_navigation_failed"], 4.0)
+        self.assertEqual(phases["app_sidebar_wait_failed"], 3.0)
 
 
 if __name__ == "__main__":
