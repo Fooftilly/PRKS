@@ -42,6 +42,7 @@ pip-wheel-metadata/
 .playwright-browsers/
 
 # --- Testing / coverage ---
+/test-reports/  # Local JUnit exports (CI uploads to Mergify; never commit)
 # E2E per-test timing history (runner metadata; machine-specific)
 /.tests/
 .pytest_cache/
