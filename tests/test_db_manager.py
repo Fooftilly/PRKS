@@ -768,6 +768,18 @@ class TestDBManager(unittest.TestCase):
         self.assertIn("@book{Doe2026,", bibtex)
         self.assertIn(r"author = {Doe, A\%na \{X\} and Testerson, B}", bibtex)
 
+    def test_bibtex_video_channel_credit_is_a_single_corporate_author(self):
+        w_id = self.db.add_work(
+            title="Research Video", author_text="Kurzgesagt – In a Nutshell; and Friends",
+            source_kind="video",
+            source_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            year="2025", doc_type="online",
+        )
+        bibtex = self.db.generate_bibtex(w_id)
+        self.assertIn("@online{Kurzgesagt2025,", bibtex)
+        self.assertIn("author = {{Kurzgesagt – In a Nutshell; and Friends}}", bibtex)
+        self.assertNotIn("author = {Kurzgesagt – In a Nutshell and", bibtex)
+
     def test_bibtex_linked_author_precedes_author_text(self):
         w_id = self.db.add_work(
             title="Linked Credit", author_text="Fallback, Author",
