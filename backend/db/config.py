@@ -39,6 +39,15 @@ DEFAULT_SEARCH_PATH = ("prks", "ext")
 _SCHEMA_NAME_RE = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 
 
+def _finite_positive_pool_seconds(value: float) -> bool:
+    """Reject impossible pool intervals without leaking low-level conversion errors."""
+    try:
+        return math.isfinite(value) and value > 0
+    except (OverflowError, TypeError, ValueError):
+        # A caller can pass an enormous int despite the float annotation.
+        return False
+
+
 @dataclass(frozen=True)
 class DatabaseConfig:
     """Connection and pool settings for one process role."""
@@ -61,9 +70,9 @@ class DatabaseConfig:
             raise DatabaseConfigError("empty_url", "The database URL is empty.")
         if self.pool_min < 0 or self.pool_max < 1 or self.pool_min > self.pool_max:
             raise DatabaseConfigError("invalid_pool_size", "The database pool size is invalid.")
-        if not math.isfinite(self.pool_timeout_seconds) or self.pool_timeout_seconds <= 0:
+        if not _finite_positive_pool_seconds(self.pool_timeout_seconds):
             raise DatabaseConfigError("invalid_pool_timeout", "The database pool timeout is invalid.")
-        if not math.isfinite(self.max_idle_seconds) or self.max_idle_seconds <= 0:
+        if not _finite_positive_pool_seconds(self.max_idle_seconds):
             raise DatabaseConfigError("invalid_pool_idle", "The database pool idle time is invalid.")
         if not self.search_path or not all(
             _SCHEMA_NAME_RE.fullmatch(schema) for schema in self.search_path
