@@ -1344,6 +1344,11 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/domain/identity/login_limiter.py",
                 "backend/domain/identity/bootstrap_tokens.py",
                 "backend/domain/identity/login.py",
+                "backend/domain/identity/authorization.py",
+                "backend/domain/identity/library_scope.py",
+                "backend/domain/identity/request_context.py",
+                "backend/domain/identity/sessions.py",
+                "backend/domain/identity/web_start.py",
             ),
         )
 
