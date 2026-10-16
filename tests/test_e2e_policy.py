@@ -2721,6 +2721,133 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
         self.assertIn("1|4) mode=baseline; flag=0", script)
         self.assertIn("2|3) mode=fastpath; flag=1", script)
 
+    def test_manual_route_benchmark_summarizes_startup_phases(self):
+        """Benchmark summary must report complete, nonduplicated setup costs."""
+        script = Path(".github/workflows/e2e-routing-benchmark.yml").read_text(
+            encoding="utf-8"
+        )
+        for name in (
+            "server_start",
+            "server_spawn",
+            "server_http_ready",
+            "app_ready",
+            "app_navigation",
+            "app_sidebar_wait",
+            "app_folder_wait",
+            "app_route_wait",
+        ):
+            with self.subTest(phase=name):
+                self.assertIn(f'"{name}"', script)
+        self.assertIn('phase_rows.append((mode, startup))', script)
+        self.assertIn('math.isclose(', script)
+        self.assertIn('abs_tol=0.01', script)
+        self.assertIn('baseline_phase = statistics.median(', script)
+        self.assertIn('fastpath_phase = statistics.median(', script)
+        self.assertIn('Nested rows partition their inclusive parent', script)
+        self.assertIn('missing/invalid {key} metric', script)
+
+    def test_manual_route_benchmark_phase_summary_executes_and_rejects_bad_data(self):
+        """Exercise embedded report code on fixture JSON, not only its source text."""
+        script = Path(".github/workflows/e2e-routing-benchmark.yml").read_text(
+            encoding="utf-8"
+        )
+        python_block = script.split("          python - <<'PY'\n", 1)[1].split(
+            "\n          PY", 1
+        )[0]
+        code = "\n".join(line[10:] for line in python_block.splitlines()) + "\n"
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            summary_file = root / "step-summary.md"
+            env = os.environ.copy()
+            env.update({
+                "RUNNER_TEMP": raw,
+                "GITHUB_STEP_SUMMARY": str(summary_file),
+                "GITHUB_SHA": "a" * 40,
+            })
+            metric = {
+                "routing_decision": 0.19,
+                "server_start": 17.0,
+                "server_spawn": 7.0,
+                "server_http_ready": 10.0,
+                "app_ready": 20.0,
+                "app_navigation": 12.0,
+                "app_sidebar_wait": 3.0,
+                "app_folder_wait": 4.0,
+                "app_route_wait": 1.0,
+            }
+            for trial, mode in enumerate(
+                ("baseline", "fastpath", "fastpath", "baseline"), 1
+            ):
+                phases = dict(metric)
+                if mode == "fastpath":
+                    phases["routing_decision"] = 0.04
+                    # Keep the inclusive sum consistent but make the A/B
+                    # medians observably different; a mislabeled column fails.
+                    phases["app_navigation"] = 9.0
+                    phases["app_ready"] = 17.0
+                result = {
+                    "schema_version": 1,
+                    "benchmark_modes": (
+                        ["profile"] if mode == "baseline"
+                        else ["profile", "route-fastpath"]
+                    ),
+                    "workers": 1,
+                    "tests": 40,
+                    "failures": 0,
+                    "errors": 0,
+                    "skipped": 0,
+                    "wall_seconds": 60.0,
+                    "phase_seconds": phases,
+                }
+                (root / f"e2e-routing-ab-{trial}.json").write_text(
+                    json.dumps(result), encoding="utf-8"
+                )
+
+            def run_summary():
+                return subprocess.run(
+                    [sys.executable, "-c", code],
+                    env=env, capture_output=True, text=True, check=False,
+                )
+
+            ok = run_summary()
+            self.assertEqual(ok.returncode, 0, ok.stderr)
+            body = summary_file.read_text(encoding="utf-8")
+            self.assertIn("Server startup (inclusive)", body)
+            self.assertIn("HTTP /api/works readiness", body)
+            self.assertIn("Canonical route wait", body)
+            self.assertIn("| ↳ Page navigation | 12.00s | 9.00s |", body)
+            self.assertIn("| App readiness (inclusive) | 20.00s | 17.00s |", body)
+            self.assertIn("| ↳ Python process spawn | 7.00s | 7.00s |", body)
+
+            bad = root / "e2e-routing-ab-2.json"
+            original = json.loads(bad.read_text(encoding="utf-8"))
+
+            # The partition guard rejects an inconsistent parent/child sum.
+            payload = json.loads(json.dumps(original))
+            payload["phase_seconds"]["app_route_wait"] = 2.0
+            bad.write_text(json.dumps(payload), encoding="utf-8")
+            failed = run_summary()
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertIn("app_ready does not match", failed.stderr)
+
+            # The value guard must reject negative phases EVEN IF the parent
+            # exactly matches its children; a partition check alone would pass.
+            payload = json.loads(json.dumps(original))
+            payload["phase_seconds"]["server_spawn"] = -1.0
+            payload["phase_seconds"]["server_http_ready"] = 18.0
+            bad.write_text(json.dumps(payload), encoding="utf-8")
+            failed = run_summary()
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertIn("missing/invalid server_spawn metric", failed.stderr)
+
+            # Non-finite metrics likewise fail before summary generation.
+            payload = json.loads(json.dumps(original))
+            payload["phase_seconds"]["server_spawn"] = float("nan")
+            bad.write_text(json.dumps(payload), encoding="utf-8")
+            failed = run_summary()
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertIn("missing/invalid server_spawn metric", failed.stderr)
+
     def test_watchdog_does_not_touch_last_failed_in_profile_mode(self):
         """Even watchdog os._exit paths must preserve benchmark history."""
         from tests.e2e import run as runner

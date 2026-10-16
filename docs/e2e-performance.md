@@ -262,7 +262,15 @@ the workflow does not depend on human-readable log formatting.
 Open **Actions → E2E Routing A/B Benchmark → Run workflow** on `master`.
 The job summary reports each trial's E2E runtime and the instrumented
 `routing_decision` total, the two per-mode medians, and the relative change
-(negative is faster). A failed warm-up or measured trial fails the job;
+(negative is faster). It also reports **baseline and fast-path median phase
+sums** for the successful server startup (`server_spawn`,
+`server_http_ready`) and application readiness (`app_navigation`,
+`app_sidebar_wait`, `app_folder_wait`, `app_route_wait`) breakdowns from
+#699. The report fails closed if these metrics are absent, invalid, or do not
+partition their inclusive parent within rounding tolerance. Parent and child
+sums are not additive to each other and should not be confused with removable
+wall-clock time.
+A failed warm-up or measured trial fails the job;
 none is skipped or automatically retried. Run the experiment more than once, and confirm any
 promising improvement using paired, fully profiled six-shard runs before
 changing defaults. Comparing four small feature selections does **not**
