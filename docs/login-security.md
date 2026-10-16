@@ -122,7 +122,8 @@ Before it opens its storage root, the server runs the same start check as
 every PostgreSQL process (`docs/postgresql-architecture.md` §11.1): it refuses
 to start, with exit status 2, when the database belongs to another root, is a
 stale copy, is a testing database started without `--testing` (or the
-reverse), or has no completed setup (`docs/admin-bootstrap.md`). The check
+reverse), has no completed setup (`docs/admin-bootstrap.md`), or holds more than one
+Library (the SQLite store under the root holds one Library's content). The check
 holds the root's shared lease only while it runs; the server then takes the
 exclusive single-process lease as before, so `admin unlock-login` (which needs
 the shared lease) runs while the server is stopped.
@@ -145,19 +146,52 @@ not a loopback address.
 
 ### What every other route needs
 
-1. A live session (401 `not_authenticated`).
-2. The route's capability under the current membership (403 `forbidden`):
+They are checked in this order, and the first failure answers:
+
+1. A live session for the Library this server serves (401
+   `not_authenticated`).
+2. For a change to Library content, the `PRKS-Library-Epoch` header, exactly
+   once, as a whole number from 1 to 9223372036854775807 (the largest
+   PostgreSQL `bigint`) without sign, spaces or leading zeros (400
+   `LIBRARY_EPOCH_REQUIRED`). Its format says nothing about the Library.
+   Reads, browser error reports and sign-in routes take no epoch.
+3. The route's capability under the current membership (403 `forbidden`):
    reading needs a reader, changing Library content an editor, backups and
    Library settings the owner. A changed role or a removed membership applies
    to the next request.
-3. For a change to Library content, the `PRKS-Library-Epoch` header, exactly
-   once, as a positive whole number without sign, spaces or leading zeros
-   (400 `LIBRARY_EPOCH_REQUIRED`), equal to the Library's current epoch (409
-   `LIBRARY_EPOCH_CHANGED`), with the Library not under maintenance (503
-   `MAINTENANCE`). Reads, browser error reports and sign-in routes take no
-   epoch.
+4. Only then, so that only an authorized user learns the Library's state:
+   the Library not under maintenance (503 `MAINTENANCE`), and the header
+   equal to the Library's current epoch (409 `LIBRARY_EPOCH_CHANGED`). A
+   signed-out user or a reader sending a stale epoch gets 401 or 403, never
+   409.
 
 Admitted responses carry the Library's epoch in `PRKS-Library-Epoch`.
+
+### What admission does not cover before the cutover
+
+Until the SQLite-to-PostgreSQL cutover, a route's work still runs on the
+SQLite store. Admission is a separate PostgreSQL transaction that authorizes
+the request and checks the epoch, then **commits before** the SQLite route
+runs. It is a gate in front of the route, not transactional authorization of
+the route's write:
+
+- A sign-out, a demotion, a removed membership or a disabled account that
+  commits after admission does not stop a request already admitted; it
+  applies from the next request. (In a PostgreSQL command, the same change
+  waits for the write in flight.)
+- The epoch fence covers only the moment of admission, and nothing on the
+  SQLite side advances the epoch: today's SQLite backup restore does not
+  change it, and the PostgreSQL restore that does (L-B-1) does not exist yet.
+  Once Library commands run inside `library_command`, the fence holds until
+  their commit.
+- Admission does not check which rows a route touches. The SQLite store has
+  one Library, so the server serves exactly one: it refuses to start with
+  several, and a session for any other Library is nobody (401).
+- The browser sends no device id, so device ownership is not part of HTTP
+  admission yet.
+
+None of this is a fault of the gate; it is why `PRKS_AUTH` stays opt-in and
+off for production until the cutover (#614).
 
 ### Cross-site requests
 

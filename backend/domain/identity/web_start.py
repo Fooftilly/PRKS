@@ -163,6 +163,9 @@ class WebAuth:
     db: Database
     settings: WebAuthSettings
     instance_id: str
+    # The one Library this process serves: the SQLite store under the root holds
+    # one Library's content, so a session for any other Library is nobody here.
+    library_id: str
     # The Argon2id hasher logins use; ``None`` is ``passwords.default_hasher()``.
     hasher: Optional[PasswordHasher] = field(default=None, repr=False)
     _owner_cookie: Optional[str] = field(default=None, repr=False)
@@ -229,7 +232,14 @@ def start_web_identity(
             "Setup is not complete. Create the owner and Library first "
             "(python -m backend.domain.identity.admin bootstrap; docs/admin-bootstrap.md).",
         )
-    auth = WebAuth(db, settings, started.instance_id, hasher=hasher)
+    libraries = db.query(lambda tx: tx.execute("SELECT id FROM prks.libraries LIMIT 2").fetchall())
+    if len(libraries) != 1:
+        # Until the cutover the Library's content is the one SQLite store under
+        # the root; a second Library would share it.
+        raise RootPairingRefused(
+            "library_not_unique", "This web process serves exactly one Library; the database has several."
+        )
+    auth = WebAuth(db, settings, started.instance_id, libraries[0]["id"], hasher=hasher)
     if settings.mode is AuthMode.SESSION:
         warm_dummy_hash(hasher)
         return auth

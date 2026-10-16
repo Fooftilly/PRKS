@@ -21,19 +21,23 @@ either dispatches the route (:class:`Admitted`) or sends the :class:`Reply`.
 In loopback-owner mode there is no login or logout (404); every request acts
 as the owner.
 
-**Every other ``/api/`` route** needs a live session (401), then
-``authorize()`` for the route's capability in its own transaction:
-``library_query`` for reads and for mutations that change no Library content,
-``library_command`` (maintenance lock, epoch fence) for Library mutations.
-A Library mutation must send ``PRKS-Library-Epoch`` exactly once, as a
-positive decimal integer without sign, spaces or leading zeros (400
-``LIBRARY_EPOCH_REQUIRED`` otherwise); another epoch than the Library's is
-409 ``LIBRARY_EPOCH_CHANGED``, maintenance 503 ``MAINTENANCE``. Admitted
-responses carry the Library's current epoch in ``PRKS-Library-Epoch``.
+**Every other ``/api/`` route** needs a live session for the one Library this
+process serves (401), then ``authorize()`` for the route's capability in its
+own transaction: ``library_query`` for reads and for mutations that change no
+Library content, ``library_command`` (maintenance lock, epoch fence) for
+Library mutations. A Library mutation must send ``PRKS-Library-Epoch``
+exactly once, as a decimal integer from 1 to the largest ``bigint`` without
+sign, spaces or leading zeros (400 ``LIBRARY_EPOCH_REQUIRED`` otherwise,
+checked before the capability); then, for an authorized actor only,
+maintenance is 503 ``MAINTENANCE`` and another epoch than the Library's 409
+``LIBRARY_EPOCH_CHANGED``. Admitted responses carry the Library's current
+epoch in ``PRKS-Library-Epoch``.
 
 The admission check runs in its own transaction and commits before the route
 runs: today's routes still write SQLite, so no PostgreSQL transaction spans
-their write. Commands that move to PostgreSQL run inside ``library_command``
+their write. It is a gate in front of the route, not transactional
+authorization or epoch fencing of the route's write (see "What admission does
+not cover before the cutover" in ``docs/login-security.md``). Commands that move to PostgreSQL run inside ``library_command``
 themselves and are fenced up to their commit. As with every caller of these
 helpers, the route owns its Library predicates (``library_scope`` trust
 boundary); nothing here scopes rows.
@@ -56,7 +60,6 @@ body carries a token, a hash or a password.
 from __future__ import annotations
 
 import ipaddress
-import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -69,7 +72,7 @@ from backend.domain.identity.authorization import AccessRefused, Capability, Ref
 from backend.domain.identity.library_scope import LibraryScope, library_command, library_query
 from backend.domain.identity.login import DEVICE_TOKEN_LIFETIME, LoginOutcome, login
 from backend.domain.identity.login_limiter import ClientAddress
-from backend.domain.identity.request_context import RequestContext
+from backend.domain.identity.request_context import RequestContext, parse_epoch
 from backend.domain.identity.secret_tokens import (
     LOGIN_DEVICE_COOKIE,
     LOGIN_DEVICE_COOKIE_PATH,
@@ -86,7 +89,6 @@ SESSION_PATH = "/api/session"
 
 _MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _READ_METHODS = frozenset({"GET", "HEAD"})
-_EPOCH_RE = re.compile(r"^[1-9][0-9]{0,17}$")
 
 # Mutations that change Library administration rather than content.
 _ADMIN_MUTATIONS = frozenset({"/api/settings"})
@@ -226,9 +228,7 @@ def origin_allowed(request: HttpRequest, auth: WebAuth) -> bool:
 
 def _epoch_claim(request: HttpRequest) -> Optional[int]:
     values = request.all(EPOCH_HEADER)
-    if len(values) != 1 or _EPOCH_RE.fullmatch(values[0]) is None:
-        return None
-    return int(values[0], 10)
+    return parse_epoch(values[0]) if len(values) == 1 else None
 
 
 def route_capability(method: str, path: str) -> Capability:
@@ -253,11 +253,14 @@ def _is_loopback_peer(peer: str) -> bool:
 
 
 def _principal(auth: WebAuth, request: HttpRequest) -> Optional[ValidSession]:
-    """Who the request is from: a resolved server-side session, or nobody."""
+    """Who the request is from: a resolved server-side session for the served Library, or nobody."""
     if auth.mode is AuthMode.LOOPBACK_OWNER:
         # The bind is loopback-only; a peer that is not is refused all the same.
-        return auth.loopback_session() if _is_loopback_peer(request.peer) else None
-    return sessions.resolve_session(auth.db, cookie(request, SESSION_COOKIE), idle=auth.settings.idle)
+        session = auth.loopback_session() if _is_loopback_peer(request.peer) else None
+    else:
+        session = sessions.resolve_session(auth.db, cookie(request, SESSION_COOKIE), idle=auth.settings.idle)
+    # The SQLite routes behind admission act on the one served Library's store.
+    return session if session is not None and session.library_id == auth.library_id else None
 
 
 # --- identity routes -----------------------------------------------------------------------
@@ -361,6 +364,9 @@ def _signed_in(auth: WebAuth, request: HttpRequest, token: str, device_token: st
         if previous is not None:
             sessions.revoke_session(auth.db, previous)  # the browser's earlier session, if any
         session = sessions.resolve_session(auth.db, token, idle=auth.settings.idle)
+        if session is not None and session.library_id != auth.library_id:
+            sessions.revoke_session(auth.db, token)  # a Library this process does not serve
+            session = None
         if session is None:  # signed out or removed in the meantime
             return _error(401, "invalid_credentials", tuple(headers))
         body, epoch = _session_payload(auth, session)
