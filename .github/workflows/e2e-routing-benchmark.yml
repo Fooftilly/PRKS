@@ -96,6 +96,14 @@ jobs:
           root = Path(os.environ["RUNNER_TEMP"])
           rows = []
           phase_rows = []
+          browser_nav_rows = []
+          # Browser-native times are diagnostic subsets of page navigation,
+          # NOT another additive partition of Playwright's app_ready.
+          browser_nav_phases = (
+              ("Response wait / first byte", "nav_response_wait"),
+              ("Response body transfer", "nav_response_body"),
+              ("DOM parsing to DOMContentLoaded", "nav_dom_content_loaded"),
+          )
           # These phases were added by #699. Children partition an inclusive
           # parent; never sum parent and child columns as separate overhead.
           startup_phases = (
@@ -111,6 +119,7 @@ jobs:
           required = {
               "schema_version", "benchmark_modes", "workers", "tests",
               "failures", "errors", "skipped", "wall_seconds", "phase_seconds",
+              "navigation_samples",
           }
           for trial, mode in enumerate(("baseline", "fastpath", "fastpath", "baseline"), 1):
               path = root / f"e2e-routing-ab-{trial}.json"
@@ -121,7 +130,7 @@ jobs:
               if not isinstance(data, dict) or set(data) != required:
                   raise SystemExit(f"Trial {trial}: unsupported benchmark result schema")
               expected = ["profile"] if mode == "baseline" else ["profile", "route-fastpath"]
-              if data["schema_version"] != 1 or data["benchmark_modes"] != expected:
+              if data["schema_version"] != 2 or data["benchmark_modes"] != expected:
                   raise SystemExit(f"Trial {trial}: benchmark mode/schema mismatch")
               if type(data["workers"]) is not int or data["workers"] != 1:
                   raise SystemExit(f"Trial {trial}: wrong worker count")
@@ -175,8 +184,31 @@ jobs:
                       raise SystemExit(
                           f"Trial {trial}: {parent} does not match its subphase totals"
                       )
+              counts = data["navigation_samples"]
+              if (
+                  not isinstance(counts, dict)
+                  or set(counts) != {"attempted", "captured"}
+                  or any(type(counts[key]) is not int or counts[key] < 0 for key in counts)
+                  or counts["captured"] > counts["attempted"]
+              ):
+                  raise SystemExit(f"Trial {trial}: invalid navigation sample counts")
+              browser_nav = {}
+              for _, key in browser_nav_phases:
+                  # A correctly sampled zero may be omitted from phase_seconds
+                  # by finish_test_profile's positive-value filtering.
+                  if key not in phases:
+                      continue
+                  value = phases[key]
+                  if (
+                      type(value) not in (int, float)
+                      or not math.isfinite(value)
+                      or value < 0
+                  ):
+                      raise SystemExit(f"Trial {trial}: invalid {key} metric")
+                  browser_nav[key] = value
               rows.append((trial, mode, data["tests"], seconds, routing))
               phase_rows.append((mode, startup))
+              browser_nav_rows.append((mode, browser_nav, counts))
 
           if len(set(row[2] for row in rows)) != 1:
               raise SystemExit("A/B trials discovered different test counts")
@@ -216,6 +248,56 @@ jobs:
               "Nested rows partition their inclusive parent; do not add them twice.",
               "Profile phase sums may overlap unrelated test work and are not equivalent",
               "to removable wall time.",
+              "",
+              "### Browser Navigation Timing (opt-in, diagnostic)",
+              "",
+          ]
+          counts_text = ", ".join(
+              f"trial {trial}: {counts['captured']}/{counts['attempted']}"
+              for trial, (_, _, counts) in enumerate(browser_nav_rows, 1)
+          )
+          summary.append(f"Valid Navigation Timing samples (captured/attempted): {counts_text}.")
+          # Do not compare sums with incomplete page-open coverage or different
+          # numbers of measured navigations between A/B trials.
+          complete = (
+              all(
+                  counts["attempted"] > 0
+                  and counts["captured"] == counts["attempted"]
+                  for _, _, counts in browser_nav_rows
+              )
+              and len({
+                  counts["attempted"] for _, _, counts in browser_nav_rows
+              }) == 1
+          )
+          if complete:
+              summary += [
+                  "",
+                  "| Browser milestone | Baseline median | Fast-path median |",
+                  "|---|---:|---:|",
+              ]
+              for label, key in browser_nav_phases:
+                  baseline_phase = statistics.median(
+                      phases.get(key, 0.0)
+                      for mode, phases, _ in browser_nav_rows if mode == "baseline"
+                  )
+                  fastpath_phase = statistics.median(
+                      phases.get(key, 0.0)
+                      for mode, phases, _ in browser_nav_rows if mode == "fastpath"
+                  )
+                  summary.append(
+                      f"| {label} | {baseline_phase:.2f}s | {fastpath_phase:.2f}s |"
+                  )
+              summary.append(
+                  "Browser measurements use the Navigation Timing API (milliseconds "
+                  "converted to seconds), not additional Python app-ready time. "
+                  "A missing interval sum with complete capture is a valid zero."
+              )
+          else:
+              summary.append(
+                  "Navigation Timing incomplete or uneven across trials; no browser "
+                  "milestone medians are reported. Routing and startup results remain valid."
+              )
+          summary += [
               "",
               "Single small-sample diagnostic only: runner variance and profiling overhead remain.",
               "Do not enable the fast path by default without repeated and full-suite evidence.",
