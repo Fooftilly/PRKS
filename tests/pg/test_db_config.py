@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
 import unittest
 from typing import Any
 
@@ -116,7 +117,7 @@ class DatabaseConfigTests(unittest.TestCase):
 
     def test_nonfinite_and_nonpositive_pool_acquisition_timeout_refused(self) -> None:
         for seconds in (0, -1, -0.1, float("nan"), float("inf"), float("-inf"),
-                        10**400, -(10**400)):
+                        10**400, -(10**400), threading.TIMEOUT_MAX * 2):
             with self.subTest(seconds=seconds), self.assertRaises(DatabaseConfigError) as caught:
                 DatabaseConfig(conninfo=URL, pool_timeout_seconds=seconds)
             self.assertEqual(caught.exception.reason, "invalid_pool_timeout")
@@ -129,14 +130,28 @@ class DatabaseConfigTests(unittest.TestCase):
             0.1,
         )
 
+    def test_pool_acquisition_timeout_accepts_platform_wait_boundary(self) -> None:
+        self.assertEqual(
+            DatabaseConfig(
+                conninfo=URL, pool_timeout_seconds=threading.TIMEOUT_MAX
+            ).pool_timeout_seconds,
+            threading.TIMEOUT_MAX,
+        )
+
     def test_invalid_pool_max_idle_refused_before_pool_is_created(self) -> None:
         for seconds in (-1, -0.1, 0, 0.0, float("nan"), float("inf"), float("-inf"),
-                        10**400, -(10**400)):
+                        10**400, -(10**400), threading.TIMEOUT_MAX * 2):
             with self.subTest(seconds=seconds), self.assertRaises(DatabaseConfigError) as caught:
                 DatabaseConfig(conninfo=URL, max_idle_seconds=seconds)
             self.assertEqual(caught.exception.reason, "invalid_pool_idle")
             self.assertEqual(caught.exception.http_status, 500)
             self.assertNotIn(SENTINEL, str(caught.exception))
+
+    def test_pool_idle_accepts_platform_wait_boundary(self) -> None:
+        self.assertEqual(
+            DatabaseConfig(conninfo=URL, max_idle_seconds=threading.TIMEOUT_MAX).max_idle_seconds,
+            threading.TIMEOUT_MAX,
+        )
 
     def test_positive_pool_max_idle_is_allowed(self) -> None:
         self.assertEqual(DatabaseConfig(conninfo=URL, max_idle_seconds=0.1).max_idle_seconds, 0.1)
