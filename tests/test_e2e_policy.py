@@ -2781,6 +2781,10 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                 phases = dict(metric)
                 if mode == "fastpath":
                     phases["routing_decision"] = 0.04
+                    # Keep the inclusive sum consistent but make the A/B
+                    # medians observably different; a mislabeled column fails.
+                    phases["app_navigation"] = 9.0
+                    phases["app_ready"] = 17.0
                 result = {
                     "schema_version": 1,
                     "benchmark_modes": (
@@ -2811,15 +2815,38 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             self.assertIn("Server startup (inclusive)", body)
             self.assertIn("HTTP /api/works readiness", body)
             self.assertIn("Canonical route wait", body)
-            self.assertIn("|   Page navigation | 12.00s | 12.00s |", body)
+            self.assertIn("| ↳ Page navigation | 12.00s | 9.00s |", body)
+            self.assertIn("| App readiness (inclusive) | 20.00s | 17.00s |", body)
+            self.assertIn("| ↳ Python process spawn | 7.00s | 7.00s |", body)
 
             bad = root / "e2e-routing-ab-2.json"
-            payload = json.loads(bad.read_text(encoding="utf-8"))
+            original = json.loads(bad.read_text(encoding="utf-8"))
+
+            # The partition guard rejects an inconsistent parent/child sum.
+            payload = json.loads(json.dumps(original))
             payload["phase_seconds"]["app_route_wait"] = 2.0
             bad.write_text(json.dumps(payload), encoding="utf-8")
             failed = run_summary()
             self.assertNotEqual(failed.returncode, 0)
             self.assertIn("app_ready does not match", failed.stderr)
+
+            # The value guard must reject negative phases EVEN IF the parent
+            # exactly matches its children; a partition check alone would pass.
+            payload = json.loads(json.dumps(original))
+            payload["phase_seconds"]["server_spawn"] = -1.0
+            payload["phase_seconds"]["server_http_ready"] = 18.0
+            bad.write_text(json.dumps(payload), encoding="utf-8")
+            failed = run_summary()
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertIn("missing/invalid server_spawn metric", failed.stderr)
+
+            # Non-finite metrics likewise fail before summary generation.
+            payload = json.loads(json.dumps(original))
+            payload["phase_seconds"]["server_spawn"] = float("nan")
+            bad.write_text(json.dumps(payload), encoding="utf-8")
+            failed = run_summary()
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertIn("missing/invalid server_spawn metric", failed.stderr)
 
     def test_watchdog_does_not_touch_last_failed_in_profile_mode(self):
         """Even watchdog os._exit paths must preserve benchmark history."""
