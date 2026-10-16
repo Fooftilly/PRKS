@@ -16,6 +16,7 @@ that belongs to the lanes that build them, not to this pool configuration.
 
 from __future__ import annotations
 
+import math
 import os
 import re
 from collections.abc import Mapping
@@ -62,6 +63,8 @@ class DatabaseConfig:
             raise DatabaseConfigError("invalid_pool_size", "The database pool size is invalid.")
         if self.pool_timeout_seconds <= 0:
             raise DatabaseConfigError("invalid_pool_timeout", "The database pool timeout is invalid.")
+        if not math.isfinite(self.max_idle_seconds) or self.max_idle_seconds <= 0:
+            raise DatabaseConfigError("invalid_pool_idle", "The database pool idle time is invalid.")
         if not self.search_path or not all(
             _SCHEMA_NAME_RE.fullmatch(schema) for schema in self.search_path
         ):
