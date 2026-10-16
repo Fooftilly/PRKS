@@ -37,6 +37,7 @@ if str(REPO) not in sys.path:
 os.environ["PRKS_E2E"] = "1"
 
 from tests.e2e.harness import (
+    NAV_TIMING_COUNT_KEYS,
     apply_e2e_playwright_env,
     clear_e2e_heartbeat,
     e2e_heartbeat,
@@ -1352,6 +1353,7 @@ def _profile_infrastructure_total(phases: dict) -> float:
         ))
     if "request_routing" in phases:
         nested.add("routing_decision")
+    nested.update(NAV_TIMING_COUNT_KEYS)
     return sum(float(seconds) for name, seconds in phases.items() if name not in nested)
 
 
@@ -1372,11 +1374,17 @@ def _write_serial_benchmark_result(result, wall_seconds: float) -> None:
     if "profile" not in modes:
         raise ValueError("%s requires E2E profiling" % BENCHMARK_RESULT_ENV)
     totals = {}
+    navigation_counts = {"attempted": 0, "captured": 0}
     for phases in result.phase_timings.values():
         for name, seconds in phases.items():
-            totals[name] = totals.get(name, 0.0) + float(seconds)
+            if name in NAV_TIMING_COUNT_KEYS:
+                key = "attempted" if name == "nav_timing_attempts" else "captured"
+                navigation_counts[key] += int(seconds)
+            else:
+                totals[name] = totals.get(name, 0.0) + float(seconds)
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "navigation_samples": navigation_counts,
         "benchmark_modes": list(modes),
         "workers": 1,
         "tests": result.testsRun,
@@ -2099,13 +2107,23 @@ def _main(argv=None) -> int:
 
     if "profile" in active_benchmark_modes and phase_timings:
         totals = {}
+        navigation_counts = {"attempted": 0, "captured": 0}
         for phases in phase_timings.values():
             for name, seconds in phases.items():
-                totals[name] = totals.get(name, 0.0) + float(seconds)
+                if name in NAV_TIMING_COUNT_KEYS:
+                    key = "attempted" if name == "nav_timing_attempts" else "captured"
+                    navigation_counts[key] += int(seconds)
+                else:
+                    totals[name] = totals.get(name, 0.0) + float(seconds)
         print("")
         print("E2E infrastructure profile (sum across selected tests):")
         for name, seconds in sorted(totals.items(), key=lambda item: (-item[1], item[0])):
             print("  %-18s %8.2fs" % (name, seconds))
+        if navigation_counts["attempted"]:
+            print(
+                "  browser navigation samples: %d/%d"
+                % (navigation_counts["captured"], navigation_counts["attempted"])
+            )
         print("")
         print("Slowest profiled tests:")
         ranked = sorted(
@@ -2121,6 +2139,7 @@ def _main(argv=None) -> int:
                 for name, value in sorted(
                     phases.items(), key=lambda item: (-float(item[1]), item[0])
                 )
+                if name not in NAV_TIMING_COUNT_KEYS
             )
             print("  %7.2fs  %s  [%s]" % (infra_seconds, test_id, detail))
 
