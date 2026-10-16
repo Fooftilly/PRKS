@@ -100,13 +100,13 @@ jobs:
           # parent; never sum parent and child columns as separate overhead.
           startup_phases = (
               ("Server startup (inclusive)", "server_start"),
-              ("  Python process spawn", "server_spawn"),
-              ("  HTTP /api/works readiness", "server_http_ready"),
+              ("↳ Python process spawn", "server_spawn"),
+              ("↳ HTTP /api/works readiness", "server_http_ready"),
               ("App readiness (inclusive)", "app_ready"),
-              ("  Page navigation", "app_navigation"),
-              ("  Sidebar wait", "app_sidebar_wait"),
-              ("  Folder view wait", "app_folder_wait"),
-              ("  Canonical route wait", "app_route_wait"),
+              ("↳ Page navigation", "app_navigation"),
+              ("↳ Sidebar wait", "app_sidebar_wait"),
+              ("↳ Folder view wait", "app_folder_wait"),
+              ("↳ Canonical route wait", "app_route_wait"),
           )
           required = {
               "schema_version", "benchmark_modes", "workers", "tests",
