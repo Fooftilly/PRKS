@@ -2721,6 +2721,31 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
         self.assertIn("1|4) mode=baseline; flag=0", script)
         self.assertIn("2|3) mode=fastpath; flag=1", script)
 
+    def test_manual_route_benchmark_summarizes_startup_phases(self):
+        """Benchmark summary must report complete, nonduplicated setup costs."""
+        script = Path(".github/workflows/e2e-routing-benchmark.yml").read_text(
+            encoding="utf-8"
+        )
+        for name in (
+            "server_start",
+            "server_spawn",
+            "server_http_ready",
+            "app_ready",
+            "app_navigation",
+            "app_sidebar_wait",
+            "app_folder_wait",
+            "app_route_wait",
+        ):
+            with self.subTest(phase=name):
+                self.assertIn(f'"{name}"', script)
+        self.assertIn('phase_rows.append((mode, startup))', script)
+        self.assertIn('math.isclose(', script)
+        self.assertIn('abs_tol=0.01', script)
+        self.assertIn('baseline_phase = statistics.median(', script)
+        self.assertIn('fastpath_phase = statistics.median(', script)
+        self.assertIn('Nested rows partition their inclusive parent', script)
+        self.assertIn('missing/invalid {key} metric', script)
+
     def test_watchdog_does_not_touch_last_failed_in_profile_mode(self):
         """Even watchdog os._exit paths must preserve benchmark history."""
         from tests.e2e import run as runner
