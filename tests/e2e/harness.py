@@ -45,6 +45,9 @@ READY_TIMEOUT_S = 25.0
 STOP_TIMEOUT_S = 8.0
 
 _ACTIVE_PROFILE = None
+# These are event counters, not durations. The serial benchmark exports them
+# separately from phase_seconds so partial telemetry cannot look complete.
+NAV_TIMING_COUNT_KEYS = frozenset(("nav_timing_attempts", "nav_timing_samples"))
 _SEED_CACHE_TMP = None
 _SEED_SNAPSHOTS = {}
 
@@ -81,6 +84,16 @@ def _profile_phase(name: str, seconds: float) -> None:
         return
     phases = profile["phases"]
     phases[name] = phases.get(name, 0.0) + max(0.0, float(seconds))
+
+
+def _profile_nav_count(name: str) -> None:
+    """Count attempted/valid browser navigation samples, never elapsed seconds."""
+    profile = _ACTIVE_PROFILE
+    if profile is None:
+        return
+    assert name in NAV_TIMING_COUNT_KEYS
+    phases = profile["phases"]
+    phases[name] = phases.get(name, 0) + 1
 
 
 def finish_test_profile(test_id: str) -> dict:
@@ -1240,6 +1253,9 @@ def _profile_browser_navigation(page) -> None:
     """
     if _ACTIVE_PROFILE is None:
         return
+    # Every successful open_app_page enters here once. Even exceptions,
+    # unsupported entries and invalid ordering must count as missing samples.
+    _profile_nav_count("nav_timing_attempts")
     try:
         timing = page.evaluate("""() => {
             const entry = performance.getEntriesByType('navigation')[0];
@@ -1268,6 +1284,7 @@ def _profile_browser_navigation(page) -> None:
     _profile_phase("nav_response_wait", (response_start - fetch) / 1000)
     _profile_phase("nav_response_body", (response_end - response_start) / 1000)
     _profile_phase("nav_dom_content_loaded", (dcl - response_end) / 1000)
+    _profile_nav_count("nav_timing_samples")
 
 
 def open_app_page(browser, origin: str, service_workers: str = "block"):
