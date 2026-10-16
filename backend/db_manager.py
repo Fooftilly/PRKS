@@ -5424,7 +5424,12 @@ class PRKSDatabase:
         text_credit = str(work.get("author_text") or "").strip()
         # On a video, Author (text) is a channel/organization name, not
         # semicolon-delimited Person names. BibLaTeX needs it braced as one.
-        corporate_credit = bool(text_credit) and work.get("source_kind") == "video" and not linked_authors
+        corporate_credit = (
+            bool(text_credit) and not linked_authors
+            and effective_source_kind(
+                work.get("source_kind"), work.get("source_url"), work.get("file_path")
+            ) == "video"
+        )
         text_authors = (
             [text_credit] if corporate_credit
             else [name.strip() for name in text_credit.split(";") if name.strip()]
