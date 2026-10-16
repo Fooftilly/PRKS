@@ -91,7 +91,8 @@ def _profile_nav_count(name: str) -> None:
     profile = _ACTIVE_PROFILE
     if profile is None:
         return
-    assert name in NAV_TIMING_COUNT_KEYS
+    if name not in NAV_TIMING_COUNT_KEYS:
+        raise ValueError("unknown navigation timing counter")
     phases = profile["phases"]
     phases[name] = phases.get(name, 0) + 1
 
