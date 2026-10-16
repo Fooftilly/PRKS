@@ -258,7 +258,10 @@ def _principal(auth: WebAuth, request: HttpRequest) -> Optional[ValidSession]:
         # The bind is loopback-only; a peer that is not is refused all the same.
         session = auth.loopback_session() if _is_loopback_peer(request.peer) else None
     else:
-        session = sessions.resolve_session(auth.db, cookie(request, SESSION_COOKIE), idle=auth.settings.idle)
+        # A session for another Library is nobody here, and is not renewed.
+        session = sessions.resolve_session(
+            auth.db, cookie(request, SESSION_COOKIE), idle=auth.settings.idle, library_id=auth.library_id
+        )
     # The SQLite routes behind admission act on the one served Library's store.
     return session if session is not None and session.library_id == auth.library_id else None
 
@@ -360,15 +363,15 @@ def _signed_in(auth: WebAuth, request: HttpRequest, token: str, device_token: st
     """Answer a successful login: replace the browser's earlier session and set both cookies."""
     headers = [_device_cookie(auth, device_token)]
     try:
-        previous = cookie(request, SESSION_COOKIE)
-        if previous is not None:
-            sessions.revoke_session(auth.db, previous)  # the browser's earlier session, if any
-        session = sessions.resolve_session(auth.db, token, idle=auth.settings.idle)
-        if session is not None and session.library_id != auth.library_id:
-            sessions.revoke_session(auth.db, token)  # a Library this process does not serve
-            session = None
-        if session is None:  # signed out or removed in the meantime
+        session = sessions.resolve_session(auth.db, token, idle=auth.settings.idle, library_id=auth.library_id)
+        if session is None:
+            # Signed out or removed in the meantime, or a Library this process
+            # does not serve; the browser's earlier session is left as it was.
+            sessions.revoke_session(auth.db, token)
             return _error(401, "invalid_credentials", tuple(headers))
+        previous = cookie(request, SESSION_COOKIE)
+        if previous is not None and previous != token:
+            sessions.revoke_session(auth.db, previous)  # the browser's earlier session, if any
         body, epoch = _session_payload(auth, session)
     except AccessRefused:
         return _error(401, "invalid_credentials", tuple(headers))

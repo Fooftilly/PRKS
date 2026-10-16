@@ -160,6 +160,26 @@ class AuthorizationTests(AdmissionTestCase):
         self.assert_refused(self.add_tag(cookies, epoch=self.library_epoch(other)), 401, "not_authenticated")
         self.assertEqual(self.tags(), before)
 
+    def test_a_session_for_another_library_is_not_renewed(self) -> None:
+        other = self.library("Other")
+        stranger = self.user("Stranger", library=other, role="owner")
+        new = self.db.command(lambda tx: sessions.create_session(tx, user_id=stranger, library_id=other))
+        self.run_sql("UPDATE prks.sessions SET last_used_at = now() - interval '2 days' WHERE id = %s",
+                     (new.session_id,))
+        before = self.run_sql("SELECT last_used_at, expires_at FROM prks.sessions WHERE id = %s", (new.session_id,))
+        cookies = {"prks_session": new.token.reveal()}
+        self.assert_refused(self.call("GET", "/api/tags", cookies=cookies), 401, "not_authenticated")
+        self.assert_refused(self.call("GET", "/api/session", cookies=cookies), 401, "not_authenticated")
+        after = self.run_sql("SELECT last_used_at, expires_at FROM prks.sessions WHERE id = %s", (new.session_id,))
+        self.assertEqual(after, before)
+
+    def test_a_login_for_another_library_keeps_the_browsers_session(self) -> None:
+        other = self.library("Other")
+        self.user("Stranger", library=other, role="owner")
+        cookies = self.session_cookie()
+        self.assert_refused(self.sign_in("Stranger", cookies=cookies), 401, "invalid_credentials")
+        self.assertEqual(self.call("GET", "/api/session", cookies=cookies).status, 200)
+
     def test_no_route_needs_instance_administration(self) -> None:
         """Instance administration is the host admin CLI's only, so no HTTP route asks for it."""
         paths = ["/api/settings", "/api/backups", "/api/backups/download", "/api/tags", "/api/session",

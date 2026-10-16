@@ -29,6 +29,7 @@ from typing import Any
 import psycopg
 
 from backend.db.database import Isolation, Transaction, TransactionClosed
+from backend.domain.identity import sessions
 from backend.domain.identity.authorization import Capability, Refusal
 from backend.domain.identity.library_scope import (
     LibraryScope,
@@ -146,8 +147,8 @@ class ScopeLifetimeTests(ScopeTestCase):
         instance_command(self.db, RequestContext.for_admin(), kept.append)
         with self.assertRaises(TransactionClosed):
             kept[0].execute("SELECT 1")
-        with self.assertRaises(TransactionClosed):
-            kept[0].connection  # noqa: B018 - the access itself is refused
+        # The handle never hands out its pooled connection at all.
+        self.assertFalse(hasattr(kept[0], "connection"))
 
 
 class DeviceRaceTests(ScopeTestCase):
@@ -258,6 +259,27 @@ class ExpiryAfterLockWaitTests(ScopeTestCase):
         self.assertEqual([getattr(e, "refusal", e) for e in attempt.error], [Refusal.NOT_AUTHENTICATED])
         self.assertEqual(self.revisions()[(self.lib_a, "a1")], 1)
 
+    def test_a_session_that_expires_during_a_renewal_lock_wait_is_not_renewed(self) -> None:
+        """Renewal locks the row and re-checks it, so it never extends an expired session (#708 review)."""
+        owner = self.member("Owner", "owner")
+        new = self.db.command(lambda tx: sessions.create_session(tx, user_id=owner, library_id=self.lib_a))
+        self.run_sql(
+            "UPDATE prks.sessions SET last_used_at = clock_timestamp() - interval '2 days', "
+            "expires_at = clock_timestamp() + interval '1 second' WHERE id = %s",
+            (new.session_id,),
+        )
+        with self.connect() as blocker:
+            blocker.execute("BEGIN")
+            blocker.execute("SELECT 1 FROM prks.sessions WHERE id = %s FOR UPDATE", (new.session_id,))
+            attempt = Paused()
+            thread = attempt.start(lambda: sessions.resolve_session(self.db, new.token.reveal()))
+            self.wait_until(self.any_lock_wait, "the renewal to wait on the session row")
+            self.wait_until(self.has_expired("sessions", "expires_at", new.session_id), "the session to expire")
+            blocker.execute("ROLLBACK")
+            thread.join(30)
+        self.assertEqual((attempt.error, attempt.result), ([], [None]))
+        self.assertTrue(self.has_expired("sessions", "expires_at", new.session_id)())
+
     def test_valid_credentials_still_authorize_after_a_lock_wait(self) -> None:
         ctx = self.ctx(self.member("Editor", "editor"))
         with self.connect() as blocker:
@@ -346,7 +368,12 @@ class LibraryRowTests(ScopeTestCase):
                           "MERGE INTO prks.libraries l USING (SELECT %(library_id)s AS id) s ON l.id = s.id "
                           "WHEN MATCHED THEN UPDATE SET name = %(name)s",
                           "SELECT 1 FROM prks.libraries WHERE id = %(library_id)s FOR NO KEY UPDATE",
-                          "SELECT 1 FROM prks.libraries WHERE id = %(library_id)s FOR UPDATE"):
+                          "SELECT 1 FROM prks.libraries WHERE id = %(library_id)s FOR UPDATE",
+                          "UPDATE /* a comment */ prks.libraries SET name = %(name)s WHERE id = %(library_id)s",
+                          "INSERT INTO prks.libraries (id, name) VALUES (%(library_id)s, %(name)s) "
+                          "ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name",
+                          "WITH changed AS (UPDATE prks.libraries SET name = %(name)s WHERE id = %(library_id)s "
+                          "RETURNING id) SELECT id FROM changed"):
             with self.subTest(statement=statement), self.assertRaises(ValueError):
                 library_command(self.db, self.owner, Capability.ADMIN_LIBRARY,
                                 lambda scope, statement=statement: scope.execute(statement, {"name": "X"}))

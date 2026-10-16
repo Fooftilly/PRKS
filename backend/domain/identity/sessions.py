@@ -86,32 +86,52 @@ def create_session(
     return NewSession(row["id"], token, user_id, library_id, row["expires_at"])
 
 
+# Expiry is compared with ``clock_timestamp()`` (the time of the check), not
+# the transaction-start ``now()``: see ``authorization`` for why it matters
+# after a lock wait.
 _LOOKUP_SQL = """
 SELECT s.id, s.user_id, s.library_id, s.expires_at,
-       s.last_used_at <= now() - %(renew_after)s AS renew
+       s.last_used_at <= clock_timestamp() - %(renew_after)s AS renew
   FROM prks.sessions s
   JOIN prks.users u ON u.id = s.user_id
  WHERE s.token_sha256 = %(digest)s
    AND s.revoked_at IS NULL
-   AND s.expires_at > now()
+   AND s.expires_at > clock_timestamp()
    AND u.disabled_at IS NULL
+"""
+
+# Renewal locks the row first and only then re-checks it, so a session that
+# expired or was revoked while the renewal waited for the lock is never
+# extended (a row that was only locked, not changed, is not re-read by an
+# UPDATE that waited for it).
+_LOCK_FOR_RENEWAL_SQL = """
+SELECT expires_at
+  FROM prks.sessions
+ WHERE id = %(id)s AND revoked_at IS NULL
+   FOR NO KEY UPDATE
 """
 
 _RENEW_SQL = """
 UPDATE prks.sessions
-   SET last_used_at = now(), expires_at = now() + %(idle)s
- WHERE id = %(id)s AND revoked_at IS NULL AND expires_at > now()
+   SET last_used_at = clock_timestamp(), expires_at = clock_timestamp() + %(idle)s
+ WHERE id = %(id)s
 RETURNING expires_at
 """
 
 
 def resolve_session(
-    db: Database, cookie: object, *, idle: timedelta = DEFAULT_IDLE
+    db: Database,
+    cookie: object,
+    *,
+    idle: timedelta = DEFAULT_IDLE,
+    library_id: Optional[str] = None,
 ) -> Optional[ValidSession]:
     """The live session a cookie value names, renewed if due; ``None`` otherwise.
 
     A malformed, unknown, expired or revoked token, and the token of a
     disabled user, all return ``None``: the caller answers 401 the same way.
+    With ``library_id``, a session for any other Library is ``None`` too, and
+    is not renewed.
     """
     token = SessionToken.parse(cookie)
     if token is None:
@@ -121,12 +141,19 @@ def resolve_session(
         row = tx.execute(
             _LOOKUP_SQL, {"digest": token.digest, "renew_after": RENEW_AFTER}
         ).fetchone()
-        if row is None:
+        if row is None or (library_id is not None and row["library_id"] != library_id):
             return None
         expires_at = row["expires_at"]
         if row["renew"]:
+            locked = tx.execute(_LOCK_FOR_RENEWAL_SQL, {"id": row["id"]}).fetchone()
+            # A separate statement, so the clock is read after the lock wait.
+            live = locked is not None and tx.execute(
+                "SELECT %s > clock_timestamp() AS live", (locked["expires_at"],)
+            ).fetchone()
+            if not live or not live["live"]:  # revoked or expired since the lookup
+                return None
             renewed = tx.execute(_RENEW_SQL, {"idle": idle, "id": row["id"]}).fetchone()
-            if renewed is None:  # revoked or expired since the lookup
+            if renewed is None:  # pragma: no cover - the row is locked by this transaction
                 return None
             expires_at = renewed["expires_at"]
         return ValidSession(row["id"], row["user_id"], row["library_id"], expires_at)

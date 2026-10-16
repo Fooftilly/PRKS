@@ -103,11 +103,6 @@ class Transaction:
     def closed(self) -> bool:
         return self._closed
 
-    @property
-    def connection(self) -> psycopg.Connection[Any]:
-        self._check_open()
-        return self._connection
-
     def execute(self, query: QueryNoTemplate, params: Params | None = None) -> psycopg.Cursor[DictRow]:
         self._check_open()
         cursor = self._connection.cursor(row_factory=dict_row)
