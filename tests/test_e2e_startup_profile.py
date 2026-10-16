@@ -86,7 +86,9 @@ class StartupReadinessProfileTests(unittest.TestCase):
         page = context.new_page.return_value
         page.evaluate.return_value = {
             "fetchStart": 10, "responseStart": 65,
-            "responseEnd": 70, "domContentLoadedEventEnd": 160,
+            "responseEnd": 70, "domInteractive": 140,
+            "domContentLoadedEventStart": 150,
+            "domContentLoadedEventEnd": 160,
         }
         origin = "http://127.0.0.1:42002"
         with mock.patch.dict(os.environ, {"PRKS_E2E_PROFILE": "1"}):
@@ -119,6 +121,7 @@ class StartupReadinessProfileTests(unittest.TestCase):
                 "browser_context", "app_navigation", "app_sidebar_wait",
                 "app_folder_wait", "app_route_wait", "app_ready",
                 "nav_response_wait", "nav_response_body", "nav_dom_content_loaded",
+                "nav_until_interactive", "nav_interactive_to_dcl", "nav_dcl_handlers",
             )},
             {
                 "browser_context": 1.0,
@@ -130,6 +133,9 @@ class StartupReadinessProfileTests(unittest.TestCase):
                 "nav_response_wait": 0.055,
                 "nav_response_body": 0.005,
                 "nav_dom_content_loaded": 0.09,
+                "nav_until_interactive": 0.07,
+                "nav_interactive_to_dcl": 0.01,
+                "nav_dcl_handlers": 0.01,
             },
         )
         self.assertEqual(phases["nav_timing_attempts"], 1.0)
@@ -192,6 +198,8 @@ class StartupReadinessProfileTests(unittest.TestCase):
             "fetchStart": 10.0,
             "responseStart": 20.0,
             "responseEnd": 22.0,
+            "domInteractive": 24.0,
+            "domContentLoadedEventStart": 27.0,
             "domContentLoadedEventEnd": 30.0,
         }
         samples = (
@@ -199,6 +207,9 @@ class StartupReadinessProfileTests(unittest.TestCase):
             {"fetchStart": 10},
             {**valid, "responseEnd": float("nan")},
             {**valid, "responseStart": 9},
+            {**valid, "domInteractive": 21},
+            {**valid, "domContentLoadedEventStart": 31},
+            {**valid, "domContentLoadedEventStart": float("nan")},
             {**valid, "fetchStart": True},
         )
         for sample in samples:
@@ -245,7 +256,9 @@ class StartupReadinessProfileTests(unittest.TestCase):
         page = mock.Mock()
         page.evaluate.return_value = {
             "fetchStart": 10, "responseStart": 20,
-            "responseEnd": 20, "domContentLoadedEventEnd": 20,
+            "responseEnd": 20, "domInteractive": 20,
+            "domContentLoadedEventStart": 20,
+            "domContentLoadedEventEnd": 20,
         }
         with mock.patch.dict(os.environ, {"PRKS_E2E_PROFILE": "1"}):
             harness.start_test_profile("zero-nav")
@@ -261,6 +274,8 @@ class StartupReadinessProfileTests(unittest.TestCase):
         # Explicit coverage counters retain the distinction from missing data.
         self.assertNotIn("nav_response_body", phases)
         self.assertNotIn("nav_dom_content_loaded", phases)
+        for name in ("nav_until_interactive", "nav_interactive_to_dcl", "nav_dcl_handlers"):
+            self.assertNotIn(name, phases)
 
     def test_unprofiled_page_and_server_take_no_extra_clock_samples(self):
         browser = mock.Mock()
@@ -306,6 +321,9 @@ class StartupReadinessProfileTests(unittest.TestCase):
             "nav_response_wait": 0.5,
             "nav_response_body": 0.2,
             "nav_dom_content_loaded": 0.6,
+            "nav_until_interactive": 0.4,
+            "nav_interactive_to_dcl": 0.1,
+            "nav_dcl_handlers": 0.1,
             "nav_timing_attempts": 7.0,
             "nav_timing_samples": 6.0,
         }
