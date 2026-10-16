@@ -49,8 +49,10 @@ whether it comes from a browser, a durable operation or a job.
 instead, so two such commands queue on the row rather than both holding a
 share lock and deadlocking when each tries to upgrade it. It waits for
 content commands in flight and holds new ones only for its own short
-transaction. Without the flag, :class:`LibraryScope` refuses a statement
-that updates or deletes ``prks.libraries``. Lock order everywhere: the
+transaction. Without the flag, :class:`LibraryScope` refuses any statement
+that names the ``libraries`` table together with an ``UPDATE``, ``DELETE``
+or ``MERGE`` keyword (a broad textual check, so it also catches ``MERGE``,
+odd spacing, quoting and ``FOR UPDATE``). Lock order everywhere: the
 maintenance key, the Library row, then the identity rows.
 
 **Scope lifetime.** A :class:`LibraryScope` (and the transaction handle and
@@ -131,10 +133,18 @@ _EPOCH_FOR_UPDATE_SQL: LiteralString = (
 
 _SCOPE_PARAMETER = "%(library_id)s"
 
-# A statement that changes the Library row (textual, like the scope check).
-_LIBRARY_ROW_WRITE = re.compile(
-    r"\b(?:UPDATE|DELETE\s+FROM)\s+(?:ONLY\s+)?(?:\"?prks\"?\.)?\"?libraries\b", re.IGNORECASE
-)
+# A statement that may change or lock the Library row for update (textual, like
+# the scope check, and deliberately broad): it names the ``libraries`` table
+# anywhere and has an UPDATE, DELETE or MERGE keyword anywhere, so ``MERGE
+# INTO``, ``prks . libraries``, quoted names and ``FOR [NO KEY] UPDATE`` are
+# all caught. A content statement that only reads ``libraries`` inside an
+# UPDATE is refused too; it has no reason to touch that table.
+_LIBRARIES_TABLE = re.compile(r'(?<![\w$])"?libraries"?(?![\w$])', re.IGNORECASE)
+_WRITE_OR_LOCK_KEYWORD = re.compile(r"\b(?:UPDATE|DELETE|MERGE)\b", re.IGNORECASE)
+
+
+def _may_change_library_row(query: str) -> bool:
+    return bool(_LIBRARIES_TABLE.search(query) and _WRITE_OR_LOCK_KEYWORD.search(query))
 
 
 class ScopeClosed(RuntimeError):
@@ -185,7 +195,7 @@ class LibraryScope:
     def _check(self, query: str) -> None:
         if not self._lifetime.open:
             raise ScopeClosed("this Library scope has ended")
-        if not self._updates_library and _LIBRARY_ROW_WRITE.search(query):
+        if not self._updates_library and _may_change_library_row(query):
             raise ValueError("a command that changes prks.libraries must pass updates_library=True")
 
     def _close(self) -> None:

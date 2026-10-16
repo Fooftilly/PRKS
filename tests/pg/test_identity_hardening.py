@@ -340,7 +340,13 @@ class LibraryRowTests(ScopeTestCase):
 
     def test_a_library_row_write_needs_the_update_mode(self) -> None:
         for statement in (RENAME_SQL, "DELETE FROM prks.libraries WHERE id = %(library_id)s",
-                          'update "prks"."libraries" SET name = %(name)s WHERE id = %(library_id)s'):
+                          'update "prks"."libraries" SET name = %(name)s WHERE id = %(library_id)s',
+                          "UPDATE prks . libraries SET name = %(name)s WHERE id = %(library_id)s",
+                          "UPDATE\n  ONLY prks.\"libraries\" SET name = %(name)s WHERE id = %(library_id)s",
+                          "MERGE INTO prks.libraries l USING (SELECT %(library_id)s AS id) s ON l.id = s.id "
+                          "WHEN MATCHED THEN UPDATE SET name = %(name)s",
+                          "SELECT 1 FROM prks.libraries WHERE id = %(library_id)s FOR NO KEY UPDATE",
+                          "SELECT 1 FROM prks.libraries WHERE id = %(library_id)s FOR UPDATE"):
             with self.subTest(statement=statement), self.assertRaises(ValueError):
                 library_command(self.db, self.owner, Capability.ADMIN_LIBRARY,
                                 lambda scope, statement=statement: scope.execute(statement, {"name": "X"}))
@@ -350,6 +356,15 @@ class LibraryRowTests(ScopeTestCase):
         with self.assertRaises(ValueError):  # the update mode is Library administration only
             library_command(self.db, self.owner, Capability.EDIT_LIBRARY, rename("X"), updates_library=True)
         self.assertEqual(self.library_name(), "A")
+        # Reading the Library row, or a table whose name merely contains the word, is fine.
+        for statement in ("SELECT name FROM prks.libraries WHERE id = %(library_id)s",
+                          "SELECT role FROM prks.library_memberships WHERE library_id = %(library_id)s"):
+            with self.subTest(statement=statement):
+                self.assertIsNotNone(library_command(
+                    self.db, self.owner, Capability.ADMIN_LIBRARY,
+                    lambda scope, statement=statement: scope.execute(statement).fetchone(),
+                ))
+        self.assertEqual(library_command(self.db, self.owner, Capability.EDIT_LIBRARY, bump("a1")), 2)
 
     def test_the_update_mode_keeps_the_fence(self) -> None:
         stale = self.ctx(self.member("Owner 2", "owner"), epoch=2)
