@@ -780,6 +780,20 @@ class TestDBManager(unittest.TestCase):
         self.assertIn("author = {{Kurzgesagt – In a Nutshell; and Friends}}", bibtex)
         self.assertNotIn("author = {Kurzgesagt – In a Nutshell and", bibtex)
 
+    def test_bibtex_legacy_video_without_source_kind_is_corporate(self):
+        w_id = self.db.add_work(
+            title="Legacy Channel Credit", author_text="The Royal Institution",
+            source_kind="video",
+            source_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            year="2025", doc_type="online",
+        )
+        # Older rows could infer video from URL even when the persisted kind
+        # was absent; copying their citations must use that effective kind.
+        self.db.execute_query("UPDATE works SET source_kind = NULL WHERE id = ?", (w_id,))
+        bibtex = self.db.generate_bibtex(w_id)
+        self.assertIn("@online{The2025,", bibtex)
+        self.assertIn("author = {{The Royal Institution}}", bibtex)
+
     def test_bibtex_linked_author_precedes_author_text(self):
         w_id = self.db.add_work(
             title="Linked Credit", author_text="Fallback, Author",
