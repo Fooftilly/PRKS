@@ -132,6 +132,8 @@ class StartupReadinessProfileTests(unittest.TestCase):
                 "nav_dom_content_loaded": 0.09,
             },
         )
+        self.assertEqual(phases["nav_timing_attempts"], 1.0)
+        self.assertEqual(phases["nav_timing_samples"], 1.0)
         page.evaluate.assert_called_once()
         self.assertIn("getEntriesByType('navigation')", page.evaluate.call_args.args[0])
         self.assertAlmostEqual(
@@ -209,13 +211,16 @@ class StartupReadinessProfileTests(unittest.TestCase):
                         phases = harness.finish_test_profile("bad-browser-timing")
                     finally:
                         harness.finish_test_profile("bad-browser-timing")
-                self.assertEqual(phases, {})
+                self.assertEqual(phases, {"nav_timing_attempts": 1.0})
         with mock.patch.dict(os.environ, {"PRKS_E2E_PROFILE": "1"}):
             harness.start_test_profile("navigation-error")
             try:
                 page.evaluate.side_effect = RuntimeError("performance entries unavailable")
                 harness._profile_browser_navigation(page)
-                self.assertEqual(harness.finish_test_profile("navigation-error"), {})
+                self.assertEqual(
+                    harness.finish_test_profile("navigation-error"),
+                    {"nav_timing_attempts": 1.0},
+                )
             finally:
                 harness.finish_test_profile("navigation-error")
 
@@ -224,6 +229,27 @@ class StartupReadinessProfileTests(unittest.TestCase):
             harness.start_test_profile("no-browser-timing")
             harness._profile_browser_navigation(page)
         page.evaluate.assert_not_called()
+
+    def test_browser_navigation_zero_duration_is_a_valid_captured_sample(self):
+        page = mock.Mock()
+        page.evaluate.return_value = {
+            "fetchStart": 10, "responseStart": 20,
+            "responseEnd": 20, "domContentLoadedEventEnd": 20,
+        }
+        with mock.patch.dict(os.environ, {"PRKS_E2E_PROFILE": "1"}):
+            harness.start_test_profile("zero-nav")
+            try:
+                harness._profile_browser_navigation(page)
+                phases = harness.finish_test_profile("zero-nav")
+            finally:
+                harness.finish_test_profile("zero-nav")
+        self.assertEqual(phases["nav_timing_attempts"], 1.0)
+        self.assertEqual(phases["nav_timing_samples"], 1.0)
+        self.assertEqual(phases["nav_response_wait"], 0.01)
+        # finish_test_profile intentionally omits zero-duration phase sums.
+        # Explicit coverage counters retain the distinction from missing data.
+        self.assertNotIn("nav_response_body", phases)
+        self.assertNotIn("nav_dom_content_loaded", phases)
 
     def test_unprofiled_page_and_server_take_no_extra_clock_samples(self):
         browser = mock.Mock()
@@ -269,6 +295,8 @@ class StartupReadinessProfileTests(unittest.TestCase):
             "nav_response_wait": 0.5,
             "nav_response_body": 0.2,
             "nav_dom_content_loaded": 0.6,
+            "nav_timing_attempts": 7.0,
+            "nav_timing_samples": 6.0,
         }
         self.assertEqual(runner._profile_infrastructure_total(phases), 19.5)
         # Without inclusive parents the same detail phases still count.
