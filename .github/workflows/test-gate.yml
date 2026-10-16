@@ -51,7 +51,26 @@ jobs:
           "openapi-core==0.23.1"
 
       - name: Run PRKS unit, API, structural, and Node tests
+        id: tests
+        env:
+          PRKS_JUNIT_REPORT: test-reports/unit.xml
         run: python run_tests.py
+
+      # Upload test-level outcomes only. The reporter excludes traces and output.
+      # Non-blocking: third-party outages must not change the required Test Gate.
+      - name: Report unit test results to Mergify
+        if: >-
+          (success() || failure()) && !cancelled() &&
+          github.actor != 'dependabot[bot]' &&
+          (github.event_name != 'pull_request' ||
+           github.event.pull_request.head.repo.full_name == github.repository)
+        continue-on-error: true
+        uses: Mergifyio/gha-mergify-ci@392d123d84a27960993927aec1f2cbb059fb95c1 # v27
+        with:
+          action: junit-process
+          token: ${{ secrets.MERGIFY_TOKEN }}
+          report_path: test-reports/unit.xml
+          test_step_outcome: ${{ steps.tests.outcome }}
 
   postgres-helpers:
     permissions:
