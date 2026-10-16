@@ -62,7 +62,7 @@ ADMIN_CAPABILITIES = LIBRARY_CAPABILITIES | {Capability.ADMIN_INSTANCE}
 
 
 class Refusal(Enum):
-    """A stable refusal: (code, the HTTP status PR 5/5 maps it to, fixed message)."""
+    """A stable refusal: (code, the HTTP status ``backend.api.session`` answers with, fixed message)."""
 
     NOT_AUTHENTICATED = ("not_authenticated", 401, "Sign in again.")
     FORBIDDEN = ("forbidden", 403, "You do not have permission to do that.")

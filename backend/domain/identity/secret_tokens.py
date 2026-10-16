@@ -4,7 +4,7 @@ Both are 256 random bits sent to the browser in a cookie, and the database
 keeps only their SHA-256. A token object never prints its value: ``repr``
 and ``str`` are fixed text, it compares in constant time, and it refuses to
 be pickled. The value leaves the process only through :meth:`SecretToken.reveal`,
-which the HTTP layer (PR 5/5) calls once to set the cookie.
+which the HTTP layer (:mod:`backend.api.session`) calls to set the cookie.
 
 Cookie contracts the HTTP layer keeps (§9.3):
 
