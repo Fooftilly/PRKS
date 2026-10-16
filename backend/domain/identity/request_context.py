@@ -30,6 +30,7 @@ membership inside the transaction of every protected operation.
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
@@ -54,21 +55,30 @@ class Source(Enum):
 _ISSUER = object()
 
 
+# ``prks.libraries.epoch`` is a positive PostgreSQL ``bigint``.
+EPOCH_MAX = 2**63 - 1
+
+# The one accepted text form: canonical decimal, no sign, no leading zero, no
+# space, ASCII digits only, and at most 19 digits (EPOCH_MAX has 19).
+_EPOCH_TEXT = re.compile(r"[1-9][0-9]{0,18}", re.ASCII)
+
+
 def parse_epoch(value: object) -> Optional[int]:
     """A Library epoch as a client sends it (an int, or the header's decimal text).
 
-    ``None`` when it is missing or unusable; the command helper refuses a
-    Library-scoped mutation without one (400 ``LIBRARY_EPOCH_REQUIRED``).
+    Any positive ``bigint`` (1 to :data:`EPOCH_MAX`) is accepted. Text must be
+    canonical decimal: ``"007"``, ``"+7"``, ``" 7"``, ``"7.0"`` and non-ASCII
+    digits are refused, so this is also the ``PRKS-Library-Epoch`` header
+    rule. ``None`` when it is missing or unusable; the command helper refuses
+    a Library-scoped mutation without one (400 ``LIBRARY_EPOCH_REQUIRED``).
     """
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
-        return value if value >= 1 else None
-    if isinstance(value, str):
-        text = value.strip()
-        if text.isascii() and text.isdigit() and len(text) <= 18:
-            number = int(text, 10)
-            return number if number >= 1 else None
+        return value if 1 <= value <= EPOCH_MAX else None
+    if isinstance(value, str) and _EPOCH_TEXT.fullmatch(value) is not None:
+        number = int(value, 10)
+        return number if number <= EPOCH_MAX else None
     return None
 
 

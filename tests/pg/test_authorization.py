@@ -237,7 +237,7 @@ class EscalationTests(ScopeTestCase):
             self.ctx(editor, device_id="not-a-uuid")
 
     def test_epoch_claims_are_parsed_strictly(self) -> None:
-        for value, expected in ((1, 1), ("7", 7), (" 7 ", 7), (None, None), (0, None), (-1, None),
+        for value, expected in ((1, 1), ("7", 7), (" 7 ", None), (None, None), (0, None), (-1, None),
                                 (True, None), ("1.0", None), ("abc", None), ("", None), ("٣", None),
                                 ("9" * 19, None), (1.0, None)):
             with self.subTest(value=value):

@@ -118,7 +118,7 @@ class HttpAuthTestCase(IdentityTestCase):
         """Start a server on a free loopback port; ``auth=None`` serves the SQLite runtime."""
         module = self.server_module
         if auth is _SENTINEL:
-            auth = WebAuth(self.db, settings or self.settings(), self.instance_id, hasher=self.hasher)
+            auth = WebAuth(self.db, settings or self.settings(), self.instance_id, self.lib, hasher=self.hasher)
         httpd = module.PRKSThreadingTCPServer(("127.0.0.1", 0), module.PRKSHandler)
         httpd.prks_bind_host = "127.0.0.1"
         httpd.prks_trusted_hosts = frozenset()

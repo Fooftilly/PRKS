@@ -14,8 +14,10 @@ import psycopg
 
 from backend.api import session as session_api
 from backend.domain.identity import sessions
+from backend.domain.identity.authorization import Capability
 from backend.domain.identity.library_scope import LIBRARY_LOCK_KEY_SQL
 from backend.domain.identity.login_limiter import TrustedProxies
+from backend.domain.identity.request_context import EPOCH_MAX
 from backend.domain.identity.web_start import AuthMode
 from backend.server import parse_request_origin
 from tests.pg.http_fixtures import HttpAuthTestCase, Response
@@ -104,6 +106,109 @@ class AuthorizationTests(AdmissionTestCase):
         self.run_sql("UPDATE prks.library_memberships SET role = 'reader'")
         self.assert_refused(self.add_tag(cookies), 403, "forbidden")
 
+    def test_no_request_input_grants_administration(self) -> None:
+        """The actor and its authority come only from the session row and the membership (#695 finding 1)."""
+        self.user("Reader", library=self.lib, role="reader")
+        reader = self.session_cookie("Reader")
+        epoch = self.library_epoch()
+        spoofed = [
+            ("X-PRKS-Source", "admin"), ("X-PRKS-Role", "owner"), ("X-PRKS-Capability", "admin_instance"),
+            ("X-PRKS-User", self.owner), ("PRKS-Library-Id", self.lib), ("X-Forwarded-User", "Owner"),
+            ("Authorization", "Bearer admin"), ("X-PRKS-Session", "admin"),
+        ]
+        body = {"source": "admin", "role": "owner", "user_id": self.owner, "capability": "admin_instance"}
+        query = f"?source=admin&role=owner&user_id={self.owner}&library_id={self.lib}"
+        before = self.tags()
+        res = self.call("PATCH", "/api/settings" + query, body=body, cookies=reader, epoch=epoch, headers=spoofed)
+        self.assert_refused(res, 403, "forbidden")
+        self.assert_refused(
+            self.call("GET", "/api/backups/download" + query, cookies=reader, headers=spoofed), 403, "forbidden"
+        )
+        # Without a session the same inputs are nobody at all.
+        self.assert_refused(
+            self.call("PATCH", "/api/settings" + query, body=body, epoch=epoch, headers=spoofed),
+            401, "not_authenticated",
+        )
+        self.assert_refused(
+            self.call("POST", "/api/tags" + query, body={"name": "x", **body}, epoch=epoch, headers=spoofed),
+            401, "not_authenticated",
+        )
+        # A forged cookie in place of the session's token is nobody too.
+        for forged in ("admin", self.owner, "0" * 64):
+            with self.subTest(cookie=forged):
+                self.assert_refused(
+                    self.call("PATCH", "/api/settings", body={}, cookies={"prks_session": forged}, epoch=epoch),
+                    401, "not_authenticated",
+                )
+        self.assertEqual(self.tags(), before)
+
+    def test_only_the_served_library_is_reachable(self) -> None:
+        """The SQLite store behind admission is one Library's; a session for another is nobody."""
+        other = self.library("Other")
+        stranger = self.user("Stranger", library=other, role="owner")
+        before = self.tags()
+        res = self.sign_in("Stranger")
+        self.assert_refused(res, 401, "invalid_credentials")
+        self.assertEqual(
+            self.run_sql("SELECT count(*) AS n FROM prks.sessions WHERE user_id = %s AND revoked_at IS NULL",
+                         (stranger,))[0]["n"], 0,
+        )
+        new = self.db.command(lambda tx: sessions.create_session(tx, user_id=stranger, library_id=other))
+        cookies = {"prks_session": new.token.reveal()}
+        self.assert_refused(self.call("GET", "/api/session", cookies=cookies), 401, "not_authenticated")
+        self.assert_refused(self.call("GET", "/api/tags", cookies=cookies), 401, "not_authenticated")
+        self.assert_refused(self.add_tag(cookies, epoch=self.library_epoch(other)), 401, "not_authenticated")
+        self.assertEqual(self.tags(), before)
+
+    def test_a_session_for_another_library_is_not_renewed(self) -> None:
+        other = self.library("Other")
+        stranger = self.user("Stranger", library=other, role="owner")
+        new = self.db.command(lambda tx: sessions.create_session(tx, user_id=stranger, library_id=other))
+        self.run_sql("UPDATE prks.sessions SET last_used_at = now() - interval '2 days' WHERE id = %s",
+                     (new.session_id,))
+        before = self.run_sql("SELECT last_used_at, expires_at FROM prks.sessions WHERE id = %s", (new.session_id,))
+        cookies = {"prks_session": new.token.reveal()}
+        self.assert_refused(self.call("GET", "/api/tags", cookies=cookies), 401, "not_authenticated")
+        self.assert_refused(self.call("GET", "/api/session", cookies=cookies), 401, "not_authenticated")
+        after = self.run_sql("SELECT last_used_at, expires_at FROM prks.sessions WHERE id = %s", (new.session_id,))
+        self.assertEqual(after, before)
+
+    def test_a_login_for_another_library_looks_like_a_wrong_password(self) -> None:
+        """No session, device token or limiter reset for a Library this server does not serve (#708 review)."""
+        other = self.library("Other")
+        stranger = self.user("Stranger", library=other, role="owner")
+        right = self.sign_in("Stranger")
+        wrong = self.sign_in("Stranger", password="not the password")
+        for res in (right, wrong):
+            self.assert_refused(res, 401, "invalid_credentials")
+            self.assertEqual(res.header("Set-Cookie"), [])
+        self.assertEqual(right.raw, wrong.raw)
+        self.assertEqual(self.run_sql("SELECT count(*) AS n FROM prks.sessions WHERE user_id = %s", (stranger,))[0]["n"], 0)
+
+    def test_a_member_of_several_libraries_signs_in_to_the_served_one(self) -> None:
+        other = self.library("Other")
+        both = self.user("Both", library=self.lib, role="editor")
+        self.join(both, other, "owner")
+        res = self.sign_in("Both")
+        self.assertEqual(res.status, 200, res.raw)
+        self.assertEqual(res.body["session"]["library"]["id"], self.lib)
+
+    def test_a_login_for_another_library_keeps_the_browsers_session(self) -> None:
+        other = self.library("Other")
+        self.user("Stranger", library=other, role="owner")
+        cookies = self.session_cookie()
+        self.assert_refused(self.sign_in("Stranger", cookies=cookies), 401, "invalid_credentials")
+        self.assertEqual(self.call("GET", "/api/session", cookies=cookies).status, 200)
+
+    def test_no_route_needs_instance_administration(self) -> None:
+        """Instance administration is the host admin CLI's only, so no HTTP route asks for it."""
+        paths = ["/api/settings", "/api/backups", "/api/backups/download", "/api/tags", "/api/session",
+                 "/api/client-errors", "/api/diagnostics/performance/reset", "/api/admin", "/api/instance"]
+        for method in ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"):
+            for path in paths:
+                with self.subTest(method=method, path=path):
+                    self.assertIsNot(session_api.route_capability(method, path), Capability.ADMIN_INSTANCE)
+
 
 class EpochTests(AdmissionTestCase):
     def setUp(self) -> None:
@@ -120,7 +225,8 @@ class EpochTests(AdmissionTestCase):
     def test_malformed_epochs_are_refused(self) -> None:
         before = self.tags()
         # (Leading and trailing spaces are not part of a header value in HTTP.)
-        for value in ("abc", "0", "007", "+1", "-1", "1.0", "1 1", "1e3", "\u00b2", "9" * 19):
+        for value in ("abc", "0", "007", "01", "+1", "-1", "1.0", "1 1", "1e3", "\u00b2", "9" * 19,
+                      str(EPOCH_MAX + 1), "1" + "0" * 19):
             with self.subTest(value=value):
                 res = self.call(
                     "POST", "/api/tags", body={"name": "x"}, cookies=self.cookies,
@@ -145,6 +251,32 @@ class EpochTests(AdmissionTestCase):
         self.assertEqual(res.status, 200, res.raw)
         self.assertEqual(res.header("PRKS-Library-Epoch"), ["2"])
         self.assertEqual(self.tags(), before + 1)
+
+    def test_refusal_precedence(self) -> None:
+        """Only an authorized user learns that its epoch is stale (#695 finding 7)."""
+        self.user("Reader", library=self.lib, role="reader")
+        reader = self.session_cookie("Reader")
+        self.run_sql("UPDATE prks.libraries SET epoch = 2")
+        self.assert_refused(self.add_tag({"prks_session": "gone"}, epoch=1), 401, "not_authenticated")
+        self.assert_refused(self.add_tag({"prks_session": "gone"}, epoch=None), 401, "not_authenticated")
+        self.assert_refused(self.add_tag(reader, epoch=None), 400, "LIBRARY_EPOCH_REQUIRED")
+        self.assert_refused(self.add_tag(reader, epoch=1), 403, "forbidden")
+        self.assert_refused(self.add_tag(self.cookies, epoch=1), 409, "LIBRARY_EPOCH_CHANGED")
+        self.run_sql("UPDATE prks.libraries SET maintenance = 'restore'")
+        self.assert_refused(self.add_tag(reader, epoch=1), 403, "forbidden")
+        self.assert_refused(self.add_tag(self.cookies, epoch=1), 503, "MAINTENANCE")
+
+    def test_every_positive_bigint_epoch_is_accepted(self) -> None:
+        """A 19-digit epoch, up to the largest ``bigint``, fences like any other (#695 finding 5)."""
+        for epoch in (10**18, EPOCH_MAX):
+            with self.subTest(epoch=epoch):
+                self.run_sql("UPDATE prks.libraries SET epoch = %s", (epoch,))
+                res = self.add_tag(self.cookies, epoch=epoch)
+                self.assertEqual(res.status, 200, res.raw)
+                self.assertEqual(res.header("PRKS-Library-Epoch"), [str(epoch)])
+                self.assert_refused(self.add_tag(self.cookies, epoch=epoch - 1), 409, "LIBRARY_EPOCH_CHANGED")
+                session = self.call("GET", "/api/session", cookies=self.cookies)
+                self.assertEqual(session.body["library"]["epoch"], epoch)
 
     def test_reads_and_non_library_mutations_take_no_epoch(self) -> None:
         res = self.call("GET", "/api/tags", cookies=self.cookies)

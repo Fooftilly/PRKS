@@ -136,6 +136,21 @@ class StartTests(WebStartTestCase):
         self.db(name).command(lambda tx: tx.execute("UPDATE prks.users SET disabled_at = now()"))
         self.refused("loopback_owner_missing", self.web_start, name, root, AuthMode.LOOPBACK_OWNER)
 
+    def test_a_second_library_is_refused(self) -> None:
+        name, root = self.ready()
+        self.db(name).command(lambda tx: tx.execute(
+            "INSERT INTO prks.libraries (id, name) VALUES ('LIB-' || upper(md5(random()::text)), 'Second')"
+        ))
+        for mode in AuthMode:
+            with self.subTest(mode=mode):
+                self.refused("library_not_unique", self.web_start, name, root, mode)
+
+    def test_the_served_library_is_the_bootstrap_library(self) -> None:
+        name, root = self.ready()
+        auth = self.web_start(name, root)
+        library = self.db(name).query(lambda tx: tx.execute("SELECT id FROM prks.libraries").fetchone())
+        self.assertEqual(auth.library_id, library["id"])
+
     def test_unfinished_setup_is_refused(self) -> None:
         name = self.database()
         root = self.new_root()

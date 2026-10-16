@@ -7,11 +7,19 @@ the ``prks.jobs`` row for a worker. A role cached anywhere else, or anything a
 client sent, never grants a capability.
 
 In a read-write transaction the session, membership and user rows (a job's
-row for a worker) are locked ``FOR SHARE`` until commit, so a sign-out, a
-demotion, a removed membership or a disabled account either commits before
+row for a worker), and the device a browser claims, are locked ``FOR SHARE``
+until commit, so a sign-out, a demotion, a removed membership, a disabled
+account, or a device removed or moved to another user either commits before
 the check (and the check sees it) or waits until the protected write has
-committed. A read-only snapshot cannot lock;
-it sees the state of its snapshot.
+committed. A read-only snapshot cannot lock; it sees the state of its
+snapshot.
+
+Expiry (a session's ``expires_at``, a job's ``locked_until``) is compared
+with ``clock_timestamp()``, the time of the check, not ``now()``, which is
+fixed when the transaction began. The comparison runs again as the last step,
+after every lock wait, because a row that was only locked (not changed) by
+the transaction it waited for is not re-read: a session or lease that
+expired while authorization waited never authorizes.
 
 Refusals are :class:`AccessRefused` with a stable :class:`Refusal`. Their
 messages are fixed text that names no user, Library, session or device, so a
@@ -22,6 +30,7 @@ here logs.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
 from typing import LiteralString
@@ -100,7 +109,7 @@ class AccessRefused(Exception):
 
 
 _BROWSER_SQL = """
-SELECT m.role
+SELECT m.role, s.expires_at
   FROM prks.sessions s
   JOIN prks.users u ON u.id = s.user_id
   JOIN prks.library_memberships m ON m.library_id = s.library_id AND m.user_id = s.user_id
@@ -108,23 +117,32 @@ SELECT m.role
    AND s.user_id = %(user_id)s
    AND s.library_id = %(library_id)s
    AND s.revoked_at IS NULL
-   AND s.expires_at > now()
+   AND s.expires_at > clock_timestamp()
    AND u.disabled_at IS NULL
 """
 
 _WORKER_SQL = """
-SELECT 1
+SELECT locked_until
   FROM prks.jobs
  WHERE id = %(job_id)s
    AND lease_id = %(lease_id)s
    AND state = 'running'
-   AND locked_until > now()
+   AND locked_until > clock_timestamp()
    AND library_id IS NOT DISTINCT FROM %(library_id)s
 """
 
 
+_DEVICE_SQL: LiteralString = "SELECT 1 FROM prks.devices WHERE id = %s AND user_id = %s"
+
+
 def _locking(tx: Transaction, query: LiteralString, lock: LiteralString) -> LiteralString:
     return query if tx.read_only else query + lock
+
+
+def _still_unexpired(tx: Transaction, deadline: datetime) -> bool:
+    """``deadline`` is still ahead now, after the lock waits (see the module docs)."""
+    row = tx.execute("SELECT %s > clock_timestamp() AS live", (deadline,)).fetchone()
+    return row is not None and bool(row["live"])
 
 
 def _browser_capabilities(tx: Transaction, ctx: RequestContext) -> frozenset[Capability]:
@@ -139,11 +157,12 @@ def _browser_capabilities(tx: Transaction, ctx: RequestContext) -> frozenset[Cap
         raise AccessRefused(Refusal.NOT_AUTHENTICATED)
     if ctx.device_id is not None:
         device = tx.execute(
-            "SELECT 1 FROM prks.devices WHERE id = %s AND user_id = %s",
-            (ctx.device_id, ctx.user_id),
+            _locking(tx, _DEVICE_SQL, " FOR SHARE"), (ctx.device_id, ctx.user_id)
         ).fetchone()
         if device is None:
             raise AccessRefused(Refusal.FORBIDDEN)
+    if not _still_unexpired(tx, row["expires_at"]):
+        raise AccessRefused(Refusal.NOT_AUTHENTICATED)
     return ROLE_CAPABILITIES.get(row["role"], frozenset())
 
 
@@ -156,6 +175,8 @@ def _worker_capabilities(tx: Transaction, ctx: RequestContext) -> frozenset[Capa
     ).fetchone()
     if row is None:
         # Reclaimed, expired, cancelled (a restore cancels the Library's jobs) or finished.
+        raise AccessRefused(Refusal.NOT_AUTHENTICATED)
+    if not _still_unexpired(tx, row["locked_until"]):
         raise AccessRefused(Refusal.NOT_AUTHENTICATED)
     return WORKER_CAPABILITIES if ctx.library_id is not None else frozenset()
 
