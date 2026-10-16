@@ -19,6 +19,7 @@ from __future__ import annotations
 import math
 import os
 import re
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
@@ -42,7 +43,7 @@ _SCHEMA_NAME_RE = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 def _finite_positive_pool_seconds(value: float) -> bool:
     """Reject impossible pool intervals without leaking low-level conversion errors."""
     try:
-        return math.isfinite(value) and value > 0
+        return math.isfinite(value) and 0 < value <= threading.TIMEOUT_MAX
     except (OverflowError, TypeError, ValueError):
         # A caller can pass an enormous int despite the float annotation.
         return False
