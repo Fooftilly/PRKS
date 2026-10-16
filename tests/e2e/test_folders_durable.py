@@ -123,6 +123,55 @@ class DurableFolderTests(unittest.TestCase):
 
     # ---- creation -----------------------------------------------------------
 
+    def test_double_submit_new_folder_queues_one_create_offline(self):
+        server, page, context = self.start()
+        page.evaluate("() => prksOpenFolderModalFromLibrarySearch('Double-click Folder')")
+        page.wait_for_selector('#folder-modal:not(.hidden)')
+        self.offline(page, context)
+
+        # Both click events fire in one turn, before the asynchronous save
+        # resolves. The second must not mint a distinct durable folder ID.
+        page.evaluate("""() => {
+            const button = document.getElementById('save-folder-btn');
+            button.click();
+            button.click();
+        }""")
+        self.wait_for_family(page, 'CREATE_FOLDER')
+        creates = page.evaluate("""() => prksSync.store.listOperations().then(
+            rows => rows.filter(op => op.operation === 'CREATE_FOLDER'
+                && op.payload?.title === 'Double-click Folder')
+        )""")
+        self.assertEqual(len(creates), 1, 'double-click must queue one folder ID')
+
+        self.reconnect(page, context)
+        self.settled(page)
+        self.assertIn('Double-click Folder', self.folders_in_db(server))
+
+    def test_double_submit_new_folder_calls_create_once_online(self):
+        server, page, _context = self.start()
+        page.evaluate("() => prksOpenFolderModalFromLibrarySearch('Double-click Online')")
+        page.wait_for_selector('#folder-modal:not(.hidden)')
+        page.evaluate("""() => {
+            window.__folderCreateCalls = 0;
+            const original = window.createFolder;
+            window.createFolder = function (...args) {
+                window.__folderCreateCalls += 1;
+                return original.apply(this, args);
+            };
+            const button = document.getElementById('save-folder-btn');
+            button.click();
+            button.click();
+        }""")
+        self.assertEqual(page.evaluate("() => window.__folderCreateCalls"), 1)
+        wait_for_async(
+            page,
+            "() => fetchFolders().then(rows => rows.some("
+            "  row => row.title === 'Double-click Online'))",
+            timeout=60000,
+            message='one created folder should reach the server',
+        )
+        self.assertIn('Double-click Online', self.folders_in_db(server))
+
     def test_a_folder_created_offline_is_real_and_survives_reload(self):
         server, page, context = self.start()
         self.offline(page, context)
