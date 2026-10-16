@@ -95,6 +95,19 @@ jobs:
 
           root = Path(os.environ["RUNNER_TEMP"])
           rows = []
+          phase_rows = []
+          # These phases were added by #699. Children partition an inclusive
+          # parent; never sum parent and child columns as separate overhead.
+          startup_phases = (
+              ("Server startup (inclusive)", "server_start"),
+              ("  Python process spawn", "server_spawn"),
+              ("  HTTP /api/works readiness", "server_http_ready"),
+              ("App readiness (inclusive)", "app_ready"),
+              ("  Page navigation", "app_navigation"),
+              ("  Sidebar wait", "app_sidebar_wait"),
+              ("  Folder view wait", "app_folder_wait"),
+              ("  Canonical route wait", "app_route_wait"),
+          )
           required = {
               "schema_version", "benchmark_modes", "workers", "tests",
               "failures", "errors", "skipped", "wall_seconds", "phase_seconds",
@@ -135,7 +148,35 @@ jobs:
                   or routing <= 0
               ):
                   raise SystemExit(f"Trial {trial}: missing/invalid routing metric")
+              startup = {}
+              for _, key in startup_phases:
+                  value = phases.get(key)
+                  if (
+                      type(value) not in (int, float)
+                      or not math.isfinite(value)
+                      or value < 0
+                  ):
+                      raise SystemExit(f"Trial {trial}: missing/invalid {key} metric")
+                  startup[key] = value
+              for parent, children in (
+                  ("server_start", ("server_spawn", "server_http_ready")),
+                  (
+                      "app_ready",
+                      ("app_navigation", "app_sidebar_wait",
+                       "app_folder_wait", "app_route_wait"),
+                  ),
+              ):
+                  if not math.isclose(
+                      startup[parent],
+                      sum(startup[key] for key in children),
+                      rel_tol=0,
+                      abs_tol=0.01,
+                  ):
+                      raise SystemExit(
+                          f"Trial {trial}: {parent} does not match its subphase totals"
+                      )
               rows.append((trial, mode, data["tests"], seconds, routing))
+              phase_rows.append((mode, startup))
 
           if len(set(row[2] for row in rows)) != 1:
               raise SystemExit("A/B trials discovered different test counts")
@@ -156,6 +197,25 @@ jobs:
               "",
               f"Baseline median: **{baseline:.2f}s**; fast-path median: **{fastpath:.2f}s**.",
               f"Fast-path change: **{relative:+.2f}%** (negative = faster).",
+              "",
+              "### Server startup and app readiness (summed across selected tests)",
+              "",
+              "| Profile phase | Baseline median | Fast-path median |",
+              "|---|---:|---:|",
+          ]
+          for label, key in startup_phases:
+              baseline_phase = statistics.median(
+                  phases[key] for mode, phases in phase_rows if mode == "baseline"
+              )
+              fastpath_phase = statistics.median(
+                  phases[key] for mode, phases in phase_rows if mode == "fastpath"
+              )
+              summary.append(f"| {label} | {baseline_phase:.2f}s | {fastpath_phase:.2f}s |")
+          summary += [
+              "",
+              "Nested rows partition their inclusive parent; do not add them twice.",
+              "Profile phase sums may overlap unrelated test work and are not equivalent",
+              "to removable wall time.",
               "",
               "Single small-sample diagnostic only: runner variance and profiling overhead remain.",
               "Do not enable the fast path by default without repeated and full-suite evidence.",
