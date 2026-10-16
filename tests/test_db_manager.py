@@ -744,16 +744,59 @@ class TestDBManager(unittest.TestCase):
         self.assertIn("author = {Einstein, Albert}", bibtex)
         self.assertIn("edition = {2}", bibtex)
 
-    def test_bibtex_ignores_author_text_without_linked_author(self):
+    def test_bibtex_falls_back_to_author_text_without_linked_author(self):
         w_id = self.db.add_work(
-            title="Solo Text",
-            author_text="Someone, A.",
-            year="2015",
-            doc_type="book",
+            title="Solo Text", author_text="Synthetic, Ana; Testerson, Bo",
+            year="2015", doc_type="book",
         )
         bibtex = self.db.generate_bibtex(w_id)
-        self.assertNotIn("author = {Someone", bibtex)
-        self.assertIn("@book{Unknown2015", bibtex)
+        self.assertIn("@book{Synthetic2015,", bibtex)
+        self.assertIn("author = {Synthetic, Ana and Testerson, Bo}", bibtex)
+
+        self.db.patch_app_settings({"bibtex_export_fields": {"author": False}})
+        hidden = self.db.generate_bibtex(w_id)
+        self.assertNotIn("  author = {", hidden)
+        self.assertIn("@book{Synthetic2015,", hidden)
+
+    def test_bibtex_author_text_fallback_escapes_special_characters(self):
+        w_id = self.db.add_work(
+            title="Escaped Credit",
+            author_text="  Doe, A%na {X}; ; Testerson, B  ",
+            year="2026", doc_type="book",
+        )
+        bibtex = self.db.generate_bibtex(w_id)
+        self.assertIn("@book{Doe2026,", bibtex)
+        self.assertIn(r"author = {Doe, A\%na \{X\} and Testerson, B}", bibtex)
+
+    def test_bibtex_linked_author_precedes_author_text(self):
+        w_id = self.db.add_work(
+            title="Linked Credit", author_text="Fallback, Author",
+            year="2020", doc_type="book",
+        )
+        p_id = self.db.add_person(first_name="Ada", last_name="Lovelace")
+        self.db.add_role(p_id, w_id, "Author")
+        bibtex = self.db.generate_bibtex(w_id)
+        self.assertIn("@book{Lovelace2020,", bibtex)
+        self.assertIn("author = {Lovelace, Ada}", bibtex)
+        self.assertNotIn("Fallback, Author", bibtex)
+
+    def test_bibtex_plain_author_text_uses_last_word_for_cite_key(self):
+        w_id = self.db.add_work(
+            title="Plain Byline", author_text="Ada Lovelace",
+            year="2020", doc_type="book",
+        )
+        bibtex = self.db.generate_bibtex(w_id)
+        self.assertIn("@book{Lovelace2020,", bibtex)
+        self.assertIn("author = {Ada Lovelace}", bibtex)
+
+    def test_bibtex_blank_author_text_keeps_unknown_cite_key(self):
+        w_id = self.db.add_work(
+            title="Without Byline", author_text=" ;  ",
+            year="2021", doc_type="book",
+        )
+        bibtex = self.db.generate_bibtex(w_id)
+        self.assertIn("@book{Unknown2021,", bibtex)
+        self.assertNotIn("  author = {", bibtex)
 
     def test_bibtex_multiple_authors_follow_role_order(self):
         w_id = self.db.add_work(title="Coauthored", year="2021", doc_type="article")
