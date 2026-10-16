@@ -1337,6 +1337,7 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/db/config.py",
                 "backend/db/errors.py",
                 "backend/db/database.py",
+                "backend/domain/identity/secret_tokens.py",
             ),
         )
 

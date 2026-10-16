@@ -47,6 +47,7 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/db/config.py",
     "backend/db/errors.py",
     "backend/db/database.py",
+    "backend/domain/identity/secret_tokens.py",
 )
 PYRIGHT_TYPED_SLICE_INCLUDE = PYRIGHT_TYPED_SLICE_SCOPES
 PYRIGHT_TYPED_SLICE_MODES = frozenset({"basic", "standard", "strict"})
