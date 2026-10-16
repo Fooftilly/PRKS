@@ -1065,19 +1065,23 @@ class AppServer:
         env.update(self._extra_env)
         for attempt in range(SERVER_START_ATTEMPTS):
             started = time.perf_counter()
+            profiled = _ACTIVE_PROFILE is not None
             try:
                 self._spawn(env)
             except Exception:
-                _profile_phase("server_spawn_failed", time.perf_counter() - started)
+                if profiled:
+                    _profile_phase("server_spawn_failed", time.perf_counter() - started)
                 raise
-            spawned = time.perf_counter()
+            # Do not sample extra clocks during ordinary (unprofiled) E2E.
+            spawned = time.perf_counter() if profiled else None
             try:
                 wait_http(self.origin + "/api/works")
             except Exception:
                 # Keep failed/retried probes separate from the successful
                 # attempt's inclusive server_start and its two detail phases.
-                _profile_phase("server_spawn_failed", spawned - started)
-                _profile_phase("server_http_ready_failed", time.perf_counter() - spawned)
+                if profiled:
+                    _profile_phase("server_spawn_failed", spawned - started)
+                    _profile_phase("server_http_ready_failed", time.perf_counter() - spawned)
                 # Read the captured output *before* teardown: the log files live
                 # in the server's temporary directory, which cleanup deletes.
                 out = _read_file(self._stdout_path)
@@ -1097,8 +1101,9 @@ class AppServer:
                 ) from None
             ready = time.perf_counter()
             # Only successful attempts train the historical inclusive phase.
-            _profile_phase("server_spawn", spawned - started)
-            _profile_phase("server_http_ready", ready - spawned)
+            if profiled:
+                _profile_phase("server_spawn", spawned - started)
+                _profile_phase("server_http_ready", ready - spawned)
             _profile_phase("server_start", ready - started)
             e2e_heartbeat("SERVER_READY")
             return self
@@ -1247,29 +1252,51 @@ def open_app_page(browser, origin: str, service_workers: str = "block"):
     # mounts .prks-folder-library with location.hash === '#/folders', so the old
     # Folders nav click was a pure re-navigation (~45ms median measured waste).
     # Do not invent fake init state — wait on the real shell + Folders surface.
+    profiled = _ACTIVE_PROFILE is not None
+    # Stage details are held locally until this page opens successfully. If a
+    # later step fails, all elapsed stages of THIS attempt use *_failed names,
+    # so a prior successful app_ready in the same test cannot mask their cost.
+    stages = {} if profiled else None
+    stage_start = started
+    stage = "app_navigation"
     try:
         page.goto(origin + "/#/folders", wait_until="domcontentloaded")
-    finally:
-        navigated = time.perf_counter()
-        _profile_phase("app_navigation", navigated - started)
-    try:
+        if profiled:
+            now = time.perf_counter()
+            stages[stage] = now - stage_start
+            stage_start = now
+
+        stage = "app_sidebar_wait"
         page.wait_for_selector("#sidebar")
-    finally:
-        sidebar_ready = time.perf_counter()
-        _profile_phase("app_sidebar_wait", sidebar_ready - navigated)
-    try:
+        if profiled:
+            now = time.perf_counter()
+            stages[stage] = now - stage_start
+            stage_start = now
+
+        stage = "app_folder_wait"
         page.wait_for_selector(".prks-folder-library")
-    finally:
-        folder_ready = time.perf_counter()
-        _profile_phase("app_folder_wait", folder_ready - sidebar_ready)
-    try:
+        if profiled:
+            now = time.perf_counter()
+            stages[stage] = now - stage_start
+            stage_start = now
+
+        stage = "app_route_wait"
         page.wait_for_function("() => location.hash === '#/folders'")
-    finally:
-        route_ready = time.perf_counter()
-        _profile_phase("app_route_wait", route_ready - folder_ready)
-    # Real readiness failures still propagate. The inclusive phase is recorded
-    # only for successful navigation and all three original checks.
-    _profile_phase("app_ready", route_ready - started)
+    except Exception:
+        if profiled:
+            stages[stage] = time.perf_counter() - stage_start
+            for name, seconds in stages.items():
+                _profile_phase(name + "_failed", seconds)
+        raise
+
+    ready = time.perf_counter()
+    if profiled:
+        stages[stage] = ready - stage_start
+        for name, seconds in stages.items():
+            _profile_phase(name, seconds)
+    # Real readiness failures still propagate; this inclusive phase is for
+    # successfully completed navigation and all three original checks only.
+    _profile_phase("app_ready", ready - started)
     e2e_heartbeat("APP_READY")
     return page, context, collector
 
