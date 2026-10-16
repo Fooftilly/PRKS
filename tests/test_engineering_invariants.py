@@ -1340,6 +1340,10 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/domain/identity/secret_tokens.py",
                 "backend/domain/identity/login_names.py",
                 "backend/domain/identity/errors.py",
+                "backend/domain/identity/passwords.py",
+                "backend/domain/identity/login_limiter.py",
+                "backend/domain/identity/bootstrap_tokens.py",
+                "backend/domain/identity/login.py",
             ),
         )
 
