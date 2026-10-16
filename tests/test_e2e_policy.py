@@ -2667,7 +2667,10 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                 ):
                     runner._write_serial_benchmark_result(result, 4.5678)
                 data = json.loads(destination.read_text(encoding="utf-8"))
-                self.assertEqual(data["schema_version"], 1)
+                self.assertEqual(data["schema_version"], 2)
+                self.assertEqual(data["navigation_samples"], {
+                    "attempted": 0, "captured": 0,
+                })
                 self.assertEqual(data["benchmark_modes"], (
                     ["profile", "route-fastpath"] if fastpath == "1" else ["profile"]
                 ))
@@ -2790,7 +2793,8 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                     phases["app_ready"] = 17.0
                     phases["nav_response_wait"] = 2.0
                 result = {
-                    "schema_version": 1,
+                    "schema_version": 2,
+                    "navigation_samples": {"attempted": 40, "captured": 40},
                     "benchmark_modes": (
                         ["profile"] if mode == "baseline"
                         else ["profile", "route-fastpath"]
@@ -2865,12 +2869,44 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             self.assertNotEqual(failed.returncode, 0)
             self.assertIn("invalid nav_response_wait metric", failed.stderr)
 
+            # Partial capture must suppress all browser medians even though
+            # every sum key is present from other successful page opens.
             payload = json.loads(json.dumps(original))
-            del payload["phase_seconds"]["nav_response_wait"]
+            payload["navigation_samples"]["captured"] = 39
             bad.write_text(json.dumps(payload), encoding="utf-8")
             partial = run_summary()
             self.assertEqual(partial.returncode, 0, partial.stderr)
-            self.assertIn("Navigation Timing unavailable/incomplete for 1 of 4 trials", partial.stdout)
+            self.assertIn("trial 2: 39/40", partial.stdout)
+            self.assertIn("Navigation Timing incomplete or uneven", partial.stdout)
+            self.assertNotIn("| Response wait / first byte |", partial.stdout)
+
+            # Valid zero-duration totals are filtered out of phase_seconds,
+            # but captured=attempted proves that the missing key means zero.
+            for trial in (2, 3):
+                zero = json.loads(json.dumps(original))
+                del zero["phase_seconds"]["nav_response_body"]
+                (root / f"e2e-routing-ab-{trial}.json").write_text(
+                    json.dumps(zero), encoding="utf-8"
+                )
+            complete_zero = run_summary()
+            self.assertEqual(complete_zero.returncode, 0, complete_zero.stderr)
+            self.assertIn("| Response body transfer | 0.40s | 0.00s |", complete_zero.stdout)
+
+            # Uneven numbers of attempted navigations must not be compared
+            # even if both trials report 100% valid samples.
+            mismatch = json.loads(json.dumps(original))
+            mismatch["navigation_samples"] = {"attempted": 39, "captured": 39}
+            bad.write_text(json.dumps(mismatch), encoding="utf-8")
+            uneven = run_summary()
+            self.assertEqual(uneven.returncode, 0, uneven.stderr)
+            self.assertIn("Navigation Timing incomplete or uneven", uneven.stdout)
+
+            # Invalid count metadata must fail closed.
+            mismatch["navigation_samples"] = {"attempted": 39, "captured": 40}
+            bad.write_text(json.dumps(mismatch), encoding="utf-8")
+            invalid = run_summary()
+            self.assertNotEqual(invalid.returncode, 0)
+            self.assertIn("invalid navigation sample counts", invalid.stderr)
 
     def test_watchdog_does_not_touch_last_failed_in_profile_mode(self):
         """Even watchdog os._exit paths must preserve benchmark history."""
