@@ -83,3 +83,7 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "build(deps)"
+    groups:
+      codeql-action:
+        patterns:
+          - "github/codeql-action/*"
