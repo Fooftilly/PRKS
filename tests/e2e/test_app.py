@@ -4570,6 +4570,33 @@ class WorkspaceTabsTests(_BrowserE2E):
             "folder": False,
         })
 
+    def test_private_reminder_handoff_revert_cancels_never_sent_row(self):
+        server, page, _collector = self._start_app()
+        page.context.set_offline(True)
+        evidence = page.evaluate(
+            """async id => {
+                const base = { value: 'before', revision: 4 };
+                await prksSync.store.saveWorkNote(id, 'SET_WORK_PRIVATE_NOTE',
+                    'not yet sent', base);
+                const ctx = {
+                    ui: { workPrivateNoteSession: {
+                        entityId: id, handoffBase: base, handoffText: 'not yet sent'
+                    }},
+                    getResource: key => key === 'workNotesObserved'
+                        ? { private: base } : null,
+                };
+                const out = await prksSaveWorkPrivateNoteForSession(
+                    { ctx }, id, 'before'
+                );
+                const rows = await prksSync.store.listOperations();
+                return { code: out.result.code, opId: out.result.opId,
+                    active: rows.filter(r => r.operation === 'SET_WORK_PRIVATE_NOTE'
+                        && r.entity_id === id && r.status !== 'acknowledged').length };
+            }""",
+            arg=server.ids["work_a"],
+        )
+        self.assertEqual(evidence, {"code": "saved", "opId": None, "active": 0})
+
     def test_private_reminder_hide_show_prefers_unsettled_complete_draft(self):
         server, page, _collector = self._start_app()
         work_a = server.ids["work_a"]
@@ -4721,6 +4748,28 @@ class WorkspaceTabsTests(_BrowserE2E):
             }""",
             arg=ids["a"],
             timeout=15000,
+        )
+        persisted = page.request.get(server_url, timeout=5000)
+        self.assertTrue(persisted.ok)
+        self.assertEqual(persisted.json().get("private_notes"), new_text)
+        page.get_by_text(
+            "Reminder not saved — copy your text and reload this Work before retrying"
+        ).wait_for()
+
+        # A normal forward edit of the held value is still measured against
+        # its original base. The server already has new_text at R+1, so it
+        # must conflict in the durable queue, never overwrite silently.
+        forward_text = new_text + "!"
+        page.locator(selector).fill(forward_text)
+        page.locator(selector).press("Tab")
+        wait_for_async(
+            page,
+            """id => prksSync.store.listOperations().then(rows => rows.some(r =>
+                r.operation === 'SET_WORK_PRIVATE_NOTE' && r.entity_id === id
+                && r.status === 'conflict' && r.payload.text.endsWith('!')))""",
+            arg=work_a,
+            timeout=15000,
+            message="post-handoff forward edit did not reach a resolvable conflict",
         )
         persisted = page.request.get(server_url, timeout=5000)
         self.assertTrue(persisted.ok)
