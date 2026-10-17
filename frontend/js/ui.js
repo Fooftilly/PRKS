@@ -2859,6 +2859,7 @@ function prksReconcileSavedPrivateNote(family, ctx, settledSession, id, content)
      * base proof; later saves still conflict with foreign revisions. */
     if (family.entityType === 'work' && settledSession.settledBase) {
         current.settledBase = Object.assign({}, settledSession.settledBase);
+        current.settledOpId = settledSession.settledOpId || null;
     }
     current.updatedAt = Date.now();
     const live = typeof ctx.getResource === 'function' ? ctx.getResource('privateNotesEditor') : null;
@@ -2928,6 +2929,7 @@ function prksEnsurePrivateNoteSession(family, ctx, id, initialText) {
         latestSaveToken: priorCommitted ? existing.latestSaveToken : 0,
         latestSaveEditGeneration: 0,
         settledSaveToken: priorCommitted ? existing.settledSaveToken : 0,
+        settledOpId: priorCommitted ? existing.settledOpId : null,
         /* A locally saved draft remains tied to the base it was measured on.
          * Never let an edit of a carried value silently adopt the new route's
          * unrelated revision: that would overwrite a concurrent writer. */
@@ -3821,12 +3823,26 @@ async function prksSaveWorkPrivateNoteForSession(editor, entityId, content) {
     const session = editor.ctx && editor.ctx.ui ? editor.ctx.ui.workPrivateNoteSession : null;
     const handoff = session && String(session.entityId) === String(entityId)
         ? session.handoffBase : null;
-    const source = handoff || observed;
+    /* The ACK is keyed by this session's exact queued op ID. It survives a
+     * cold-park route replacement in memory, while a foreign write advances
+     * the server revision and still triggers an ordinary revision conflict.
+     * If the proof is absent (offline, eviction, reload), retain the earlier
+     * safe stale-base behavior instead of guessing from a route response. */
+    const receipt = handoff && session.settledOpId &&
+        typeof prksAcknowledgedWorkPrivateNote === 'function'
+        ? prksAcknowledgedWorkPrivateNote(session.settledOpId) : null;
+    const acked = receipt && receipt.entityId === String(entityId) &&
+        receipt.baseRevision === handoff.revision &&
+        Number.isSafeInteger(receipt.revision) &&
+        receipt.revision >= handoff.revision &&
+        typeof session.handoffText === 'string';
+    const source = acked
+        ? { value: session.handoffText, revision: receipt.revision }
+        : handoff || observed;
     const base = source ? { value: source.value, revision: source.revision } : null;
-    /* A revert to the pre-save base is a true no-op ONLY if our original
-     * Work note row is still never-sent. Enforce that proof atomically in
-     * IndexedDB: after acknowledgement, a false Saved would lose the revert. */
-    const options = handoff && content === handoff.value
+    /* Cancel the never-sent X row only when ACK proof is unavailable.
+     * An acknowledged revert to V is a real edit from X, not a no-op. */
+    const options = handoff && !acked && content === handoff.value
         ? { cancelPendingText: session.handoffText } : null;
     return { result: await prksSaveWorkNoteDurably(entityId, 'work-private-note', content, source, options), base: base };
 }
@@ -3970,6 +3986,7 @@ function prksEnqueuePrivateNoteSave(family, editor) {
             if (token !== session.latestSaveToken) return;
             const hasNewerDraft = session.editGeneration > session.latestSaveEditGeneration;
             session.settledSaveToken = token;
+            session.settledOpId = ok && result && typeof result.opId === 'string' ? result.opId : null;
             session.promise = null;
             const foreign = code === 'scope_busy' && result.foreign === true;
             session.foreignWaits = foreign && !hasNewerDraft ? (session.foreignWaits || 0) + 1 : 0;
