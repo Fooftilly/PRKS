@@ -82,15 +82,17 @@ class BrowseOfflineTests(unittest.TestCase):
 
         with page.expect_response(
             lambda response: (
-                response.status == 200
-                and urlparse(response.url).path == '/api/sync/operations'
+                urlparse(response.url).path == '/api/sync/operations'
                 and response.request.method == 'POST'
                 and (response.request.post_data_json or {}).get('operation') == 'MARK_WORK_OPENED'
                 and (response.request.post_data_json or {}).get('entity_id') == ids['work_a']
             ),
-            timeout=15000,
         ) as opened:
             o._open_work_from_home(page, WORK_A_TITLE)
+        self.assertEqual(
+            opened.value.status, 200,
+            'Work-open sync returned HTTP %d before Recent warm-up' % opened.value.status,
+        )
         self.assertEqual(opened.value.json().get('code'), 'ACKNOWLEDGED',
                          'Work-open event must be acknowledged before Recent warm-up')
         o._wait_entity_cached(page, 'work', ids['work_a'])
@@ -103,13 +105,13 @@ class BrowseOfflineTests(unittest.TestCase):
                 response.request.method == 'GET'
                 and urlparse(response.url).path == '/api/recent'
             ),
-            timeout=15000,
         ) as recent:
             self.recent(page)
         page.wait_for_function(
             "() => location.hash === '#/recent' && !!window.prksGetFocusedTabContext()"
         )
-        self.assertTrue(recent.value.ok, 'Recent projection GET must succeed')
+        self.assertTrue(recent.value.ok,
+                        'Recent projection GET returned HTTP %d' % recent.value.status)
         try:
             o._wait_list_cached(page, 'recent:index')
         except AssertionError as error:
