@@ -22,6 +22,12 @@ and [dependency-inventory.json](dependency-inventory.json).
 The PRKS PDF viewer includes several upstream components, including EmbedPDF,
 React, React DOM and PDFium. See its [dependency list](frontend/vendor/prks-pdf-viewer/THIRD_PARTY.md)
 and [individual upstream license files](frontend/vendor/prks-pdf-viewer/LICENSES).
+In particular, the [PDFium WASM engine's upstream license](frontend/vendor/prks-pdf-viewer/LICENSES/pdfium-runtime-LICENSE)
+contains PDFium's BSD-style copyright and redistribution conditions and the
+EmbedPDF runtime's accompanying Apache-2.0 terms. The separate
+`pdfium-LICENSE` file is the npm wrapper's MIT license, **not** a license
+for PDFium's native code. Both notices are preserved; the upstream engine
+source is [embedpdf/runtime](https://github.com/embedpdf/runtime).
 Generated JavaScript and WebAssembly are not relicensed by the PRKS root license.
 
 ## Packages installed separately

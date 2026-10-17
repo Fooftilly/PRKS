@@ -75,6 +75,14 @@ try {
 
 copyFileSync(wasmSrc, join(outDir, 'pdfium.wasm'));
 
+// @embedpdf/pdfium's npm LICENSE covers the JS wrapper, not the complete
+// PDFium engine contained in pdfium.wasm. Ship the engine's own upstream
+// BSD-style notice and bundled Apache-2.0 terms in every regenerated viewer.
+copyFileSync(
+    join(here, 'licenses', 'pdfium-runtime-LICENSE'),
+    join(outDir, 'LICENSES', 'pdfium-runtime-LICENSE'),
+);
+
 copyLicense('@embedpdf/core', 'embedpdf-core');
 copyLicense('@embedpdf/engines', 'embedpdf-engines');
 copyLicense('@embedpdf/pdfium', 'embedpdf-pdfium');
@@ -102,6 +110,7 @@ const thirdParty = [
     '@embedpdf/core ' + pkg.dependencies['@embedpdf/core'],
     '@embedpdf/engines ' + pkg.dependencies['@embedpdf/engines'],
     '@embedpdf/pdfium ' + pkg.dependencies['@embedpdf/pdfium'],
+    'PDFium WASM engine — see LICENSES/pdfium-runtime-LICENSE (BSD-style and Apache-2.0 upstream terms)',
     'react ' + pkg.dependencies.react,
     'react-dom ' + pkg.dependencies['react-dom'],
 ].join('\n');

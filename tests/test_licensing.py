@@ -171,6 +171,22 @@ assert.throws(() => renderLicenseInventory(source, pkg, future), /Unreviewed SPD
         viewer = ROOT / "frontend" / "vendor" / "prks-pdf-viewer"
         self.assertTrue((viewer / "THIRD_PARTY.md").is_file())
         self.assertTrue((viewer / "LICENSES" / "pdfium-LICENSE").is_file())
+        # The NPM pdfium-LICENSE is only the EmbedPDF JS wrapper MIT grant.
+        # The WASM engine separately requires the original PDFium notices.
+        upstream = (
+            ROOT / "tools" / "pdf-viewer" / "licenses" / "pdfium-runtime-LICENSE"
+        ).read_text(encoding="utf-8")
+        shipped = (
+            viewer / "LICENSES" / "pdfium-runtime-LICENSE"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(upstream, shipped)
+        self.assertIn("Copyright 2014 The PDFium Authors", shipped)
+        self.assertIn("Apache License", shipped)
+        self.assertIn("pdfium-runtime-LICENSE", (viewer / "THIRD_PARTY.md").read_text())
+        self.assertIn("pdfium-runtime-LICENSE", (
+            ROOT / "tools" / "pdf-viewer" / "build.mjs"
+        ).read_text())
+
 
 
 if __name__ == "__main__":
