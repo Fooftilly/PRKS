@@ -1,6 +1,8 @@
 """Guards for the isolated six-shard temporary classic-script bundle canary."""
 from __future__ import annotations
 
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from types import ModuleType
 import tempfile
@@ -254,6 +256,56 @@ class ClassicBundleCanaryTests(unittest.TestCase):
             page.reload.side_effect = lambda **kw: None
             with self.assertRaisesRegex(RuntimeError, "bundle responses"):
                 _browser_preflight()
+
+    def test_worker_never_controls_page_fails_promptly_with_diagnostics(self):
+        """A broken installer must not await serviceWorker.ready indefinitely."""
+        pw = MagicMock()
+        browser = pw.__enter__.return_value.chromium.launch.return_value
+        context = browser.new_context.return_value
+        page = context.new_page.return_value
+        server = MagicMock(origin="http://127.0.0.1:9876")
+        server.start.return_value = server
+        page.wait_for_function.side_effect = TimeoutError("worker control timeout")
+        captured = {}
+        page.on.side_effect = lambda kind, callback: captured.__setitem__(
+            kind, callback
+        )
+
+        def navigation(*, wait_until, timeout):
+            self.assertEqual(wait_until, "domcontentloaded")
+            captured["pageerror"](ValueError("bundle failed to initialize"))
+
+        page.goto.side_effect = navigation
+        fake_playwright = ModuleType("playwright")
+        fake_playwright.__path__ = []
+        fake_sync_api = ModuleType("playwright.sync_api")
+        fake_sync_api.sync_playwright = lambda: pw
+
+        report = StringIO()
+        with (
+            patch.dict("sys.modules", {
+                "playwright": fake_playwright,
+                "playwright.sync_api": fake_sync_api,
+            }),
+            patch("tests.e2e.install_browser.apply_playwright_browser_env"),
+            patch("tests.e2e.harness.AppServer", return_value=server),
+            redirect_stdout(report),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "did not complete offline reload"):
+                _browser_preflight()
+
+        self.assertIn("bundle failed to initialize", report.getvalue())
+        self.assertIn("worker control timeout", report.getvalue())
+        self.assertIn("service-worker-controlled=False", report.getvalue())
+        page.wait_for_function.assert_called_once_with(
+            "() => !!(navigator.serviceWorker && navigator.serviceWorker.controller)",
+            timeout=30000,
+        )
+        page.evaluate.assert_not_called()
+        context.set_offline.assert_not_called()
+        context.close.assert_called_once()
+        browser.close.assert_called_once()
+        server.stop.assert_called_once()
 
     def test_temporary_sw_includes_bundles_in_required_cache_and_fetch_allowlist(self):
         source = (ROOT / "frontend/sw.js").read_text(encoding="utf-8")
