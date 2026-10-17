@@ -240,7 +240,8 @@ def summarize(paths: list[Path], sha: str) -> str:
             continue
         medians = [
             statistics.median(
-                r["phase_seconds"][key] for m, r in zip(modes, rows) if m == variant
+                r["phase_seconds"].get(key, 0.0)
+                for m, r in zip(modes, rows) if m == variant
             )
             for variant in ("baseline", "bundled")
         ]
