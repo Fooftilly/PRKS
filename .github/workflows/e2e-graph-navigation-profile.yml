@@ -85,10 +85,33 @@ jobs:
                  for r in results):
               raise SystemExit("Graph profile does not contain three passing single-test runs")
 
-          names = sorted({name for r in results
-                          for name in r["phase_seconds"] if name.startswith("graph_nav_")})
-          if not names:
-              raise SystemExit("No Graph navigation phase timings recorded")
+          expected = {
+              "graph_nav_initial_setup",
+              "graph_nav_warm_record_cache",
+              "graph_nav_warm_graph_cache",
+              "graph_nav_go_offline",
+              "graph_nav_roundtrip_1_concept",
+              "graph_nav_roundtrip_2_position",
+              "graph_nav_roundtrip_3_argument",
+              "graph_nav_roundtrip_4_argument",
+              "graph_nav_roundtrip_5_person",
+              "graph_nav_uncached_destination",
+              "graph_nav_uncached_graph",
+          }
+          # A missing phase or a merged Argument pair invalidates the profile;
+          # never interpret a partial report's zero as a successful fast phase.
+          for i, result in enumerate(results, start=1):
+              phases = result["phase_seconds"]
+              missing = expected - phases.keys()
+              if missing:
+                  raise SystemExit(
+                      f"Graph profile trial {i} missing phases: {sorted(missing)}"
+                  )
+              failures = [name for name in phases
+                          if name.startswith("graph_nav_") and name.endswith("_failed")]
+              if failures:
+                  raise SystemExit(f"Graph profile trial {i} failed phases: {failures}")
+          names = sorted(expected)
           summary = [
               "## Offline Graph navigation phase profile",
               "",
