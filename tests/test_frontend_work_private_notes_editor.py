@@ -1,5 +1,6 @@
 """Work private notes stay on the owning TabContext and the existing note API."""
 import unittest
+import subprocess
 from pathlib import Path
 
 _PROJECT = Path(__file__).resolve().parents[1]
@@ -32,6 +33,78 @@ class WorkPrivateNotesEditorContractTests(unittest.TestCase):
         self.assertNotIn("prksVueDismissWorkPrivateNotes", early)
         self.assertNotIn("prksDismissWorkPanelRead()", early)
         self.assertIn("workPrivateNoteHolds", _UI)
+
+    def test_committed_work_reminders_survive_stale_generation_reads_without_new_save(self):
+        """Execute the actual shared JS session helpers, not a copied Python model."""
+        javascript = r"""
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const src = fs.readFileSync(process.argv[1] + '/frontend/js/ui.js', 'utf8');
+const from = src.indexOf('function prksPrivateNoteFamily(');
+const to = src.indexOf('/** The pane\'s Folder Reminders', from);
+assert.ok(from > 0 && to > from, 'runtime session functions still discoverable');
+const family = {
+    entityType: 'work', idField: 'workId',
+    sessionSlot: 'workPrivateNoteSession', holdsSlot: 'workPrivateNoteHolds',
+    holdBasesSlot: null, tracksOwnQueued: false, recovery: null,
+    pendingText: (_id, text) => text,
+};
+const api = { PRKS_PRIVATE_NOTE_FAMILIES: { work: family } };
+vm.runInNewContext(src.slice(from, to), api, { filename: 'ui.js:private-sessions' });
+function old(overrides = {}) {
+    return {
+        entityType: 'work', entityId: 'a', workId: 'a',
+        ownerTabId: 'tab', ownerGeneration: 1, draftText: 'my saved text',
+        state: 'committed', dirty: false, retired: false, promise: null,
+        saveSequence: 1, latestSaveToken: 1, settledSaveToken: 1,
+        ...overrides,
+    };
+}
+function owner(previous, generation = 2) {
+    return { tabId: 'tab', generation,
+        ui: { workPrivateNoteSession: previous, workPrivateNoteHolds: {} } };
+}
+const ctx = owner(old());
+const remount = api.prksEnsurePrivateNoteSession(family, ctx, 'a', 'stale server text');
+assert.equal(remount.draftText, 'my saved text');
+assert.equal(remount.dirty, false, 'no second write should be enqueued');
+assert.equal(remount.state, 'committed');
+assert.equal(remount.settledSaveToken, 1, 'keep local save provenance');
+assert.equal(api.prksPrivateNoteText(family, ctx, 'a', 'stale server text'), 'my saved text');
+assert.equal(remount.retired, false);
+ctx.generation = 3;
+const remountAgain = api.prksEnsurePrivateNoteSession(family, ctx, 'a', 'stale server text');
+assert.equal(remountAgain.draftText, 'my saved text');
+assert.equal(remountAgain.dirty, false);
+assert.equal(api.prksPrivateNoteText(family, ctx, 'a', 'my saved text'), 'my saved text');
+assert.equal(remountAgain.retired, true, 'matching stored body retires the overlay');
+for (const previous of [
+    old({saveSequence:0, latestSaveToken:0, settledSaveToken:0}),
+    old({state:'committed', retired:true}),
+    old({state:'saving', promise:Promise.resolve()}),
+    old({latestSaveToken:2}),
+    old({entityId:'other', workId:'other'}),
+    old({ownerTabId:'other-tab'}),
+]) {
+    const clean = owner(previous);
+    const result = api.prksEnsurePrivateNoteSession(family, clean, 'a', 'server now');
+    assert.equal(result.draftText, 'server now', 'only a locally settled Work save may override');
+    assert.equal(result.dirty, false);
+}
+const unsaved = owner(old({state:'drafting', dirty:true, settledSaveToken:0}));
+const inherited = api.prksEnsurePrivateNoteSession(family, unsaved, 'a', 'old');
+assert.equal(inherited.draftText, 'my saved text');
+assert.equal(inherited.dirty, true, 'unsettled drafts still use recovery handoff');
+assert.equal(inherited.state, 'drafting');
+console.log('Work Reminders generation-handoff checks passed');
+"""
+        result = subprocess.run(
+            ["node", "-e", javascript, str(_PROJECT)], cwd=_PROJECT,
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("generation-handoff checks passed", result.stdout)
 
     def test_work_save_stays_on_the_owner_session(self):
         families = _UI[_UI.index("const PRKS_PRIVATE_NOTE_FAMILIES"):_UI.index("function prksPrivateNoteFamily(")]
