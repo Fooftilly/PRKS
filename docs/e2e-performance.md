@@ -346,6 +346,49 @@ Open **Actions → E2E Classic Script Deferral A/B Benchmark → Run workflow**
 on a `master` commit containing that workflow. Keep the existing routing
 A/B benchmark unchanged; the two experiments measure different decisions.
 
+### Measured script-loading experiments and next diagnostic
+
+The [October 17 routing benchmark](https://github.com/Fooftilly/PRKS/actions/runs/39011721006)
+found a **+1.49%** (slower) fast-path wall change on the 40-test serial
+selection, despite lower in-process routing decision time. Keep the route
+fast path disabled. Navigation Timing split the baseline response-end to DCL
+interval into ~82% before DOM interactive, 7% interactive to DCL event start,
+and 12% DCL handlers; these percentages are browser milestones, **not**
+exclusive CPU work.
+
+The [October 17 deferral benchmark](https://github.com/Fooftilly/PRKS/actions/runs/39017400245)
+passed all trials and observed baseline **59.50s** versus deferred **58.96s**
+median wall time (**−0.91%**). Across 38 page opens per trial, the baseline
+response-end to DCL sum was **14.70s**, versus **14.02s** deferred. Most of
+the time simply moved from before DOM interactive (12.00s → 0.88s)
+to between DOM interactive and the DCL event (0.95s → 11.63s).
+**Do not adopt blanket deferral from this small, marginal result.**
+
+A separate manual-only **E2E Classic Script Coalescing A/B Benchmark** now
+tests a different hypothesis: request volume may be material because
+`frontend/index.html` includes 84 external classic scripts. The runner
+generates **two temporary bundles**, one for head classics and one for body
+classics, keeping both parser-blocking boundaries, original classic source
+order, existing module tags and all real UI waits. It uses the same 40-test
+selection on one runner: unmeasured baseline warm-up, then baseline → bundled
+→ bundled → baseline. Both arms disable the route fast path and use real
+per-test server/storage/browser isolation and off-origin request blocking.
+
+This tests whether request coalescing is **worth investigating**, not whether
+the generated bundles are safe to ship. Combining separate scripts can change
+`document.currentScript`, strict-mode directive scope, source URLs,
+lexical initialization timing and runtime error attribution; offline service
+worker precache and content updates would also need separate design. The
+workflow syntax-checks each bundle before running, fails if a selected E2E
+test fails, requires complete structured benchmark summaries and restores
+the original index and removes temporary assets on normal exit. It never
+commits or uploads the candidate. As with other small experiments, require
+repeated measurements, dependency/semantics review, offline coverage and a
+full six-shard E2E gate before proposing any production adoption.
+
+Open **Actions → E2E Classic Script Coalescing A/B Benchmark → Run workflow**
+on a master commit that includes the workflow.
+
 ### Opt-in hang diagnostics and Chromium recycle
 
 `PRKS_E2E_DIAGNOSTIC=1` prints privacy-safe stage heartbeats (`START`,
