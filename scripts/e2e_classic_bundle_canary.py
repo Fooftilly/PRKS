@@ -16,6 +16,16 @@ import sys
 from .benchmark_classic_script_bundle import build_candidate, BODY_URL, HEAD_URL
 
 SHARD_COUNT = 6
+# Do not pass user-supplied shard strings to subprocess: this fixed map
+# contains only known external partition identifiers.
+SHARD_ARGUMENTS = {
+    1: "1/6",
+    2: "2/6",
+    3: "3/6",
+    4: "4/6",
+    5: "5/6",
+    6: "6/6",
+}
 BUNDLE_URLS = (HEAD_URL, BODY_URL)
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -118,7 +128,7 @@ def run_canary(root: Path, shard_index: int | None = None, *, preflight: bool = 
     if preflight:
         if shard_index is not None:
             raise ValueError("preflight may not also select a shard")
-    elif type(shard_index) is not int or not 1 <= shard_index <= SHARD_COUNT:
+    elif type(shard_index) is not int or shard_index not in SHARD_ARGUMENTS:
         raise ValueError("expected one shard index from 1 through 6")
 
     index = root / "frontend/index.html"
@@ -145,7 +155,7 @@ def run_canary(root: Path, shard_index: int | None = None, *, preflight: bool = 
         sys.executable,
         "tests/e2e/run.py",
         "--jobs", "1",
-        "--shard", f"{shard_index}/{SHARD_COUNT}",
+        "--shard", SHARD_ARGUMENTS[shard_index],
         "--no-pointer-capture",
     ] if not preflight else []
     try:
