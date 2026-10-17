@@ -4,11 +4,12 @@ from __future__ import annotations
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from scripts.benchmark_classic_script_bundle import HEAD_URL, BODY_URL
 from scripts.e2e_classic_bundle_canary import (
-    SHARD_COUNT, _require_boot_exports, _temporary_service_worker, run_canary,
+    SHARD_COUNT, _browser_preflight, _require_boot_exports,
+    _temporary_service_worker, run_canary,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -195,6 +196,54 @@ class ClassicBundleCanaryTests(unittest.TestCase):
             self.assertFalse((root / "frontend" / BODY_URL.lstrip("/")).exists())
             with self.assertRaisesRegex(ValueError, "preflight may not"):
                 run_canary(root, 1, preflight=True)
+
+    def test_browser_preflight_exercises_offline_reload_and_sw_cache(self):
+        """Do not regress to an online-only check: that missed run 39023728966."""
+        pw = MagicMock()
+        browser = pw.__enter__.return_value.chromium.launch.return_value
+        context = browser.new_context.return_value
+        page = context.new_page.return_value
+        server = MagicMock(origin="http://127.0.0.1:9876")
+        server.start.return_value = server
+        listeners = {}
+        page.on.side_effect = lambda name, cb: listeners.__setitem__(name, cb)
+
+        def navigate(*, wait_until, timeout):
+            self.assertEqual(wait_until, "domcontentloaded")
+            self.assertEqual(timeout, 30000)
+            context.set_offline.assert_called_once_with(True)
+            for url in (HEAD_URL, BODY_URL):
+                response = MagicMock(
+                    url=server.origin + url, status=200, from_service_worker=True
+                )
+                listeners["response"](response)
+
+        page.reload.side_effect = navigate
+        page.evaluate.side_effect = lambda expr: (
+            {key: "function" for key in (
+                "prksNavigate", "createPrksOfflineStore",
+                "prksOfflineNoteRequestFailure", "prksGetResearchGraphDebug",
+            )}
+            if "Object.fromEntries" in expr else True
+        )
+
+        with (
+            patch("tests.e2e.install_browser.apply_playwright_browser_env"),
+            patch("tests.e2e.harness.AppServer", return_value=server),
+            patch("playwright.sync_api.sync_playwright", return_value=pw),
+        ):
+            _browser_preflight()
+            browser.new_context.assert_called_once_with(service_workers="allow")
+            context.set_offline.assert_called_once_with(True)
+            page.reload.assert_called_once()
+            page.wait_for_function.assert_called_once()
+            self.assertIn("serviceWorker.controller", page.wait_for_function.call_args.args[0])
+            server.stop.assert_called_once()
+
+            # The online script responses must NOT satisfy the offline gate.
+            page.reload.side_effect = lambda **kw: None
+            with self.assertRaisesRegex(RuntimeError, "bundle responses"):
+                _browser_preflight()
 
     def test_temporary_sw_includes_bundles_in_required_cache_and_fetch_allowlist(self):
         source = (ROOT / "frontend/sw.js").read_text(encoding="utf-8")
