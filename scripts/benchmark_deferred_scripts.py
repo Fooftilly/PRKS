@@ -9,44 +9,75 @@ assets, module tags, their order, or application JavaScript.
 from __future__ import annotations
 
 import argparse
-import re
+from html.parser import HTMLParser
 from pathlib import Path
 
-_SCRIPT_TAG = re.compile(r'<script(?P<attrs>[^>]*)></script>')
-_SRC = re.compile(r'\bsrc="(/[^"]+)"')
-_TYPE = re.compile(r'\btype="([^"]+)"')
-_ATTRIBUTE = re.compile(r'\b(?:defer|async)(?=\s|$)')
+
+class _ScriptReader(HTMLParser):
+    """Independently verify script attributes/order after the line-based edit."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.scripts: list[list[tuple[str, str | None]]] = []
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        if tag == "script":
+            self.scripts.append(attrs)
+
+
+def _script_tags(text: str) -> list[list[tuple[str, str | None]]]:
+    reader = _ScriptReader()
+    reader.feed(text)
+    return reader.scripts
 
 
 def deferred_index(original: str) -> tuple[str, int]:
-    """Add defer only to classic external shell script tags, preserving order."""
+    """Add defer to classic external script lines, preserving bytewise order."""
+    changed = []
     count = 0
-
-    def replace(match: re.Match[str]) -> str:
-        nonlocal count
-        attrs = match.group("attrs")
-        if _SRC.search(attrs) is None:
-            return match.group()
-        type_match = _TYPE.search(attrs)
-        if type_match is not None:
-            # Module scripts already defer by default; do not change them.
-            if type_match.group(1) == "module":
-                return match.group()
-            raise ValueError("unexpected external script type")
-        if _ATTRIBUTE.search(attrs):
+    for line in original.splitlines(keepends=True):
+        tag = line.strip()
+        if not tag.startswith("<script"):
+            changed.append(line)
+        elif tag.startswith('<script type="module" src="/') and tag.endswith(
+            '"></script>'
+        ):
+            # Module scripts already defer implicitly; leave these untouched.
+            changed.append(line)
+        elif tag.startswith('<script src="/') and tag.endswith('"></script>'):
+            count += 1
+            changed.append(line.replace("<script ", "<script defer ", 1))
+        elif "defer" in tag or "async" in tag:
             raise ValueError("classic script already has async/defer attribute")
-        count += 1
-        return "<script defer" + attrs + "></script>"
+        else:
+            # Reject new inline/attribute variations rather than applying an
+            # unreliable partial HTML transformation.
+            raise ValueError("unsupported script tag in benchmark source")
 
-    result = _SCRIPT_TAG.sub(replace, original)
-    # Reject a no-op experiment; the number of classic scripts can change
-    # naturally as PRKS evolves, so do not impose an exact count on CI.
+    result = "".join(changed)
     if result == original:
         raise ValueError("no classic external scripts were found")
-    source_order = re.findall(r'<script[^>]*\bsrc="([^"]+)"', original)
-    transformed_order = re.findall(r'<script[^>]*\bsrc="([^"]+)"', result)
-    if source_order != transformed_order:
-        raise ValueError("script source order changed")
+
+    before = _script_tags(original)
+    after = _script_tags(result)
+    if len(before) != len(after):
+        raise ValueError("script tag list changed")
+    verified = 0
+    for old_attrs, new_attrs in zip(before, after):
+        original_type = dict(old_attrs).get("type")
+        if original_type == "module":
+            if new_attrs != old_attrs:
+                raise ValueError("module script was modified")
+        elif old_attrs and old_attrs[0][0] == "src":
+            if new_attrs != [("defer", None), *old_attrs]:
+                raise ValueError("classic script attributes/order changed")
+            verified += 1
+        else:
+            raise ValueError("unrecognized script tag in benchmark source")
+    if verified != count:
+        raise ValueError("transformed classic script count disagrees")
     return result, count
 
 
