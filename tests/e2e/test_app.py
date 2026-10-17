@@ -10716,10 +10716,15 @@ class MainSecondaryDividerTests(_BrowserE2E):
                 """() => new Promise(resolve =>
                     requestAnimationFrame(() => requestAnimationFrame(resolve)))"""
             )
+            if not mount_quiet() or len(requests) != snapshot:
+                continue
+            _capture_divider_runtime_ids(page)
+            # The runtime snapshot itself crosses an event-loop turn; if
+            # another mount request starts during it, settle again.
             if mount_quiet() and len(requests) == snapshot:
                 break
         mount_barrier_at = time.monotonic()
-        _capture_divider_runtime_ids(page)
+        barrier_last_activity = last_activity[0]
         before = len(requests)
         phase = "drag"
 
@@ -10741,7 +10746,7 @@ class MainSecondaryDividerTests(_BrowserE2E):
             "divider drags must not initiate Work/PDF reloads; "
             "mount barrier was %d ms after last network activity; "
             "initial mount GETs=%r; post-barrier GETs=%r" %
-            (round((mount_barrier_at - last_activity[0]) * 1000),
+            (round((mount_barrier_at - barrier_last_activity) * 1000),
              [r["path"] for r in requests[:before]], late_gets),
         )
         self.assertEqual(
