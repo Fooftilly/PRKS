@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from scripts.benchmark_classic_script_bundle import HEAD_URL, BODY_URL
-from scripts.e2e_classic_bundle_canary import SHARD_COUNT, run_canary
+from scripts.e2e_classic_bundle_canary import SHARD_COUNT, _require_boot_exports, run_canary
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/e2e-classic-bundle-canary.yml"
@@ -120,12 +120,68 @@ class ClassicBundleCanaryTests(unittest.TestCase):
             self.assertEqual(index.read_bytes(), before)
             self.assertFalse((root / "frontend" / HEAD_URL.lstrip("/")).exists())
 
+    def test_preflight_requires_critical_exports_and_script_responses(self):
+        available = {
+            "prksNavigate": "function",
+            "createPrksOfflineStore": "function",
+            "prksOfflineNoteRequestFailure": "function",
+            "prksGetResearchGraphDebug": "function",
+        }
+        responses = {HEAD_URL: 200, BODY_URL: 200}
+        _require_boot_exports(available, responses, [])
+        broken = dict(available, prksNavigate="undefined")
+        with self.assertRaisesRegex(RuntimeError, "prksNavigate"):
+            _require_boot_exports(broken, responses, [])
+        with self.assertRaisesRegex(RuntimeError, "bundle responses"):
+            _require_boot_exports(available, {HEAD_URL: 200}, [])
+        with self.assertRaisesRegex(RuntimeError, "500"):
+            _require_boot_exports(available, {HEAD_URL: 200, BODY_URL: 500}, [])
+        with self.assertRaisesRegex(RuntimeError, "script failure"):
+            _require_boot_exports(available, responses, ["script failure"])
+
+    def test_preflight_failure_restores_both_temporary_bundles(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _fixture(Path(td))
+            index = root / "frontend/index.html"
+            original = index.read_bytes()
+            invoked = []
+
+            def fail_after_browser_open():
+                invoked.append("browser")
+                self.assertNotEqual(index.read_bytes(), original)
+                self.assertIn(BODY_URL, index.read_text(encoding="utf-8"))
+                self.assertTrue((root / "frontend" / BODY_URL.lstrip("/")).exists())
+                raise RuntimeError("missing browser export")
+
+            def fake_check(command, *, cwd, check, env=None):
+                invoked.append("node")
+                self.assertTrue(check)
+                self.assertIsNone(env)
+                return None
+
+            with (
+                patch("scripts.e2e_classic_bundle_canary.shutil.which", return_value="/usr/bin/node"),
+                patch("scripts.e2e_classic_bundle_canary.subprocess.run", side_effect=fake_check),
+                patch("scripts.e2e_classic_bundle_canary._browser_preflight",
+                      side_effect=fail_after_browser_open),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "missing browser export"):
+                    run_canary(root, preflight=True)
+            self.assertEqual(invoked, ["node", "node", "browser"])
+            self.assertEqual(index.read_bytes(), original)
+            self.assertFalse((root / "frontend" / HEAD_URL.lstrip("/")).exists())
+            self.assertFalse((root / "frontend" / BODY_URL.lstrip("/")).exists())
+            with self.assertRaisesRegex(ValueError, "preflight may not"):
+                run_canary(root, 1, preflight=True)
+
     def test_workflow_is_explicit_six_shard_manual_canary(self):
         source = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("workflow_dispatch:", source)
         self.assertNotIn("pull_request:", source)
         self.assertNotIn("push:", source)
         self.assertIn("shard: [1, 2, 3, 4, 5, 6]", source)
+        self.assertIn("needs: preflight", source)
+        self.assertIn("python -m scripts.e2e_classic_bundle_canary --preflight", source)
         self.assertIn("fail-fast: false", source)
         self.assertIn("persist-credentials: false", source)
         self.assertIn("python -m scripts.e2e_classic_bundle_canary --shard", source)
