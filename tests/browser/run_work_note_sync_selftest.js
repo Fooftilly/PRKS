@@ -1107,6 +1107,20 @@ function committedPrivateAckProofIsExactAndBounded() {
     emit({ op: Object.assign({}, op, { op_id: 'old-revision' }),
         acknowledged: Object.assign({}, ack, { server_revision: 3 }) });
     assert.equal(globalThis.prksAcknowledgedWorkPrivateNote('old-revision'), null);
+
+    /* Only the most recent 64 valid receipts are kept. Evicted proof must
+     * be absent, so a carried edit falls back to its original safe base. */
+    for (let i = 1; i <= 65; i += 1) {
+        emit({ op: Object.assign({}, op, { op_id: 'bounded-' + i }),
+            acknowledged: ack });
+    }
+    assert.equal(globalThis.prksAcknowledgedWorkPrivateNote('own-ack-1'), null,
+        'oldest receipt is evicted when the map is bounded');
+    assert.equal(globalThis.prksAcknowledgedWorkPrivateNote('bounded-1'), null,
+        'the 65th new ACK evicts the first new receipt');
+    assert.deepEqual(globalThis.prksAcknowledgedWorkPrivateNote('bounded-65'),
+        { entityId: 'W-1', baseRevision: 4, revision: 5 },
+        'newest ACK remains available');
     delete globalThis.prksSync;
 }
 
