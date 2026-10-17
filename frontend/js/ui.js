@@ -2861,6 +2861,23 @@ function prksReconcileSavedPrivateNote(family, ctx, settledSession, id, content)
     if (shown == null || shown === saved) live.dirty = false;
 }
 
+/* A locally settled Work save can outlive a cold-parked route generation.
+ * The remount GET may contain the pre-ack body, even after the pending queue
+ * overlay has gone. Keep this specific same-tab body visible as clean text
+ * until a read agrees; never re-enqueue it or apply this rule to Folder notes.
+ */
+function prksWorkPrivateNoteNeedsCommittedHandoff(family, existing, ctx, id, initialText, carried) {
+    return !carried && family.entityType === 'work' &&
+        existing && !existing.retired && !existing.dirty && !existing.promise &&
+        existing.state === 'committed' &&
+        String(existing.entityId) === String(id) &&
+        String(existing.ownerTabId) === String(ctx.tabId) &&
+        Number.isSafeInteger(existing.settledSaveToken) &&
+        existing.settledSaveToken > 0 &&
+        existing.settledSaveToken === existing.latestSaveToken &&
+        String(existing.draftText) !== String(initialText == null ? '' : initialText);
+}
+
 function prksEnsurePrivateNoteSession(family, ctx, id, initialText) {
     if (!family || !ctx || !ctx.ui || id == null || String(id) === '') return null;
     const existing = ctx.ui[family.sessionSlot];
@@ -2875,26 +2892,9 @@ function prksEnsurePrivateNoteSession(family, ctx, id, initialText) {
     }
     const remembered = prksTakeRememberedPrivateNote(family, ctx, id);
     const carried = remembered != null;
-    /* A Work Reminders save is "committed" once its text is durable in the
-     * local queue, not necessarily when the remounted route's Work GET includes
-     * that text. If the old pane was cold-parked, its ack listener was removed;
-     * the new Work GET may predate the ack and paint an older body. Carry only
-     * this pane's successfully settled *local* save across that generation
-     * boundary as clean, display-only text. Never enqueue it a second time.
-     *
-     * This is distinct from an unsaved hold (and from Folder revisions). A
-     * clean session without a successful save has no authority to override
-     * fresh route data. The carried text retires when the stored body agrees.
-     */
-    const priorCommitted = !carried && family.entityType === 'work' &&
-        existing && !existing.retired && !existing.dirty && !existing.promise &&
-        existing.state === 'committed' &&
-        String(existing.entityId) === String(id) &&
-        String(existing.ownerTabId) === String(ctx.tabId) &&
-        Number.isSafeInteger(existing.settledSaveToken) &&
-        existing.settledSaveToken > 0 &&
-        existing.settledSaveToken === existing.latestSaveToken &&
-        String(existing.draftText) !== String(initialText == null ? '' : initialText);
+    const priorCommitted = prksWorkPrivateNoteNeedsCommittedHandoff(
+        family, existing, ctx, id, initialText, carried
+    );
     const session = {
         key: prksPrivateNoteSessionKey(family, ctx.tabId, id),
         entityType: family.entityType,
