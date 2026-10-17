@@ -8,6 +8,11 @@ on:
     branches:
       - master
   workflow_dispatch:
+  # Off-peak weekday testing for Mergify flaky-test detection.
+  # Time zone observes CET/CEST automatically; 03:17 avoids the DST switch hour.
+  schedule:
+    - cron: "17 3 * * 1-5"
+      timezone: Europe/Podgorica
 
 concurrency:
   group: test-gate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -19,7 +24,8 @@ jobs:
       contents: read
     name: Unit / API / contract tests
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Three full suites take longer than the single required PR/master run.
+    timeout-minutes: ${{ github.event_name == 'schedule' && 45 || 20 }}
 
     steps:
       - name: Checkout repository
@@ -52,9 +58,30 @@ jobs:
 
       - name: Run PRKS unit, API, structural, and Node tests
         id: tests
+        shell: bash
         env:
-          PRKS_JUNIT_REPORT: test-reports/unit.xml
-        run: python run_tests.py
+          RUN_COUNT: ${{ github.event_name == 'schedule' && '3' || '1' }}
+        run: |
+          set -uo pipefail
+          failed=0
+          # Each invocation uses a fresh process and a distinct JUnit report.
+          # PR/master checks still run once; only scheduled runs repeat.
+          for ((i=1; i<=RUN_COUNT; i++)); do
+            report="test-reports/unit.xml"
+            if [[ "$RUN_COUNT" -gt 1 ]]; then
+              report="test-reports/unit-${i}.xml"
+            fi
+            echo "::group::Unit suite repetition ${i}/${RUN_COUNT}"
+            if PRKS_JUNIT_REPORT="$report" python run_tests.py; then
+              echo "Repetition ${i}: PASS" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "Repetition ${i}: FAIL" >> "$GITHUB_STEP_SUMMARY"
+              failed=1
+            fi
+            echo "::endgroup::"
+          done
+          # A failure in any repetition is never converted into a green job.
+          exit "$failed"
 
       # Upload test-level outcomes only. The reporter excludes traces and output.
       # Non-blocking: third-party outages must not change the required Test Gate.
@@ -69,10 +96,13 @@ jobs:
         with:
           action: junit-process
           token: ${{ secrets.MERGIFY_TOKEN }}
-          report_path: test-reports/unit.xml
+          # Single report on PR/push; three reports on the scheduled run.
+          report_path: 'test-reports/unit*.xml'
           test_step_outcome: ${{ steps.tests.outcome }}
 
   postgres-helpers:
+    # Nightly detection only repeats the unit suite, not PostgreSQL jobs.
+    if: github.event_name != 'schedule'
     permissions:
       contents: read
     name: PostgreSQL helper tests
@@ -125,6 +155,7 @@ jobs:
         run: scripts/test-postgres
 
   backend-parity:
+    if: github.event_name != 'schedule'
     permissions:
       contents: read
     name: Backend parity (SQLite + PostgreSQL)
