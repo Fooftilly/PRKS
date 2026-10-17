@@ -1,0 +1,150 @@
+name: E2E Classic Production Distribution Gate
+
+# Non-required, exact packaged candidate validation for #736. This separate
+# workflow does not change normal PRKS E2E selection or required check names.
+on:
+  pull_request:
+    paths:
+      # Bundles and offline manifest derive from every shipped frontend asset.
+      # A frontend-only PR must not bypass packaged regression coverage.
+      - "frontend/**"
+      - Dockerfile
+      - scripts/build_classic_distribution.py
+      - scripts/benchmark_classic_script_bundle.py
+      - tests/test_classic_distribution.py
+      - .github/workflows/e2e-classic-distribution-gate.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-classic-distribution-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docker-build-modes:
+    name: Docker classic bundle and rollback build smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Build the actual default Docker target in both modes. Inspecting only
+      # frontend-builder would not verify runtime COPY or runtime dependencies.
+      - name: Verify bundled runtime image and copied assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --build-arg PRKS_CLASSIC_BUNDLES=1 -t prks-classic:runtime-bundled .
+          docker run --rm --entrypoint sh prks-classic:runtime-bundled -ec '
+            test -s /app/frontend/js/prks-classic-head.bundle.js
+            test -s /app/frontend/js/prks-classic-body.bundle.js
+            test -s /app/frontend/js/app.js
+            test -s /app/frontend/sw.js
+            test -s /app/dependency-inventory.json
+            grep -q prks-classic-head.bundle.js /app/frontend/index.html
+            grep -q prks-classic-body.bundle.js /app/frontend/index.html
+            grep -q CLASSIC_BUNDLE_REVISION /app/frontend/sw.js
+            command -v python >/dev/null 2>&1
+            ! command -v node >/dev/null 2>&1
+          '
+
+      - name: Verify unbundled runtime rollback image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --build-arg PRKS_CLASSIC_BUNDLES=0 -t prks-classic:runtime-rollback .
+          docker run --rm --entrypoint sh prks-classic:runtime-rollback -ec '
+            test -s /app/frontend/js/app.js
+            test -s /app/frontend/sw.js
+            test -s /app/dependency-inventory.json
+            grep -q /js/app.js /app/frontend/index.html
+            ! test -e /app/frontend/js/prks-classic-head.bundle.js
+            ! test -e /app/frontend/js/prks-classic-body.bundle.js
+            ! grep -q CLASSIC_BUNDLE_REVISION /app/frontend/sw.js
+            command -v python >/dev/null 2>&1
+            ! command -v node >/dev/null 2>&1
+          '
+
+  packaged-frontend:
+    name: Packaged classic bundles (${{ matrix.shard }}/6)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        with:
+          path: .playwright-browsers
+          key: >-
+            playwright-${{ runner.os }}-${{ hashFiles('requirements-dev.txt',
+            'tests/e2e/install_browser.py') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install runtime and E2E dependencies
+        run: >-
+          python -m pip install --isolated --disable-pip-version-check
+          "--only-binary=:all:" "PyMuPDF==1.28.2" "Pillow==12.3.0"
+          "pydantic==2.13.5" "playwright==1.63.0"
+
+      - name: Ensure Chromium in repo cache
+        run: python tests/e2e/install_browser.py
+
+      - name: Stage the exact deterministic production distribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m unittest tests.test_classic_distribution
+          mkdir -p .tests
+          python -m scripts.build_classic_distribution --root . --output .tests/classic-distribution
+          mv frontend .tests/classic-original
+          mv .tests/classic-distribution frontend
+          node --check frontend/js/prks-classic-head.bundle.js
+          node --check frontend/js/prks-classic-body.bundle.js
+          node --check frontend/sw.js
+          python -m unittest tests.test_frontend_service_worker
+
+      - name: Run complete E2E shard on the packaged frontend
+        env:
+          PRKS_E2E_SHARD_INDEX: ${{ matrix.shard }}
+          PRKS_E2E_ROUTE_FASTPATH: "0"
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/e2e/run.py --jobs 1 --shard "${PRKS_E2E_SHARD_INDEX}/6" --no-pointer-capture
+
+      - name: Upload shard failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: classic-distribution-shard-${{ matrix.shard }}-failure
+          path: |
+            .tests/e2e-failure-diagnostics.json
+            .tests/e2e-last-failed.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
