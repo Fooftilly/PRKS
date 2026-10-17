@@ -168,19 +168,6 @@ def _read_trial(path: Path, number: int) -> dict:
         raise ValueError(f"Trial {number}: tests were incomplete or failed")
     if type(data["wall_seconds"]) not in (int, float) or not math.isfinite(data["wall_seconds"]) or data["wall_seconds"] <= 0:
         raise ValueError(f"Trial {number}: invalid wall time")
-    phases = data["phase_seconds"]
-    if not isinstance(phases, dict):
-        raise ValueError(f"Trial {number}: missing phase map")
-    for _, key in PHASES:
-        value = phases.get(key)
-        if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
-            raise ValueError(f"Trial {number}: invalid {key}")
-    for parent, children in (
-        ("app_ready", ("app_navigation", "app_sidebar_wait", "app_folder_wait", "app_route_wait")),
-        ("nav_dom_content_loaded", ("nav_until_interactive", "nav_interactive_to_dcl", "nav_dcl_handlers")),
-    ):
-        if not math.isclose(phases[parent], sum(phases.get(x, 0) for x in children), rel_tol=0, abs_tol=0.01):
-            raise ValueError(f"Trial {number}: invalid {parent} partition")
     counts = data["navigation_samples"]
     if (
         not isinstance(counts, dict) or set(counts) != {"attempted", "captured"}
@@ -188,6 +175,28 @@ def _read_trial(path: Path, number: int) -> dict:
         or counts["captured"] > counts["attempted"]
     ):
         raise ValueError(f"Trial {number}: invalid navigation sample coverage")
+    phases = data["phase_seconds"]
+    if not isinstance(phases, dict):
+        raise ValueError(f"Trial {number}: missing phase map")
+    # The runner omits zero-valued aggregates, including all nav_* keys
+    # when Navigation Timing has no valid captures. These remain valid zero.
+    # Non-navigation milestones are required for every selected E2E trial.
+    for _, key in PHASES:
+        if key not in phases and not key.startswith("nav_"):
+            raise ValueError(f"Trial {number}: missing {key}")
+        value = phases.get(key, 0.0)
+        if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+            raise ValueError(f"Trial {number}: invalid {key}")
+    for parent, children in (
+        ("app_ready", ("app_navigation", "app_sidebar_wait", "app_folder_wait", "app_route_wait")),
+        ("nav_dom_content_loaded", ("nav_until_interactive", "nav_interactive_to_dcl", "nav_dcl_handlers")),
+    ):
+        if not math.isclose(
+            phases.get(parent, 0.0),
+            sum(phases.get(x, 0.0) for x in children),
+            rel_tol=0, abs_tol=0.01,
+        ):
+            raise ValueError(f"Trial {number}: invalid {parent} partition")
     return data
 
 
