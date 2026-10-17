@@ -1377,7 +1377,14 @@ def _profile_infrastructure_total(phases: dict) -> float:
     if "request_routing" in phases:
         nested.add("routing_decision")
     nested.update(NAV_TIMING_COUNT_KEYS)
-    return sum(float(seconds) for name, seconds in phases.items() if name not in nested)
+    # Inclusive, test-specific graph navigation diagnostics overlap existing
+    # async_wait, app and routing phases; show them in the phase table, never
+    # inflate the additive infrastructure ranking with their wall time.
+    return sum(
+        float(seconds)
+        for name, seconds in phases.items()
+        if name not in nested and not name.startswith("graph_nav_")
+    )
 
 
 # --- serial parent -------------------------------------------------------
