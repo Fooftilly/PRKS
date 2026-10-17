@@ -8,6 +8,52 @@ from unittest import mock
 from tests.e2e import harness
 
 
+class GraphNavigationPhaseProfileTests(unittest.TestCase):
+    def tearDown(self):
+        harness.finish_test_profile("graph-phase")
+        harness.finish_test_profile("unprofiled")
+
+    def test_phase_is_opt_in_and_records_success_and_failure(self):
+        with mock.patch.dict(os.environ, {"PRKS_E2E_PROFILE": "0"}):
+            harness.start_test_profile("unprofiled")
+            with mock.patch.object(harness.time, "perf_counter") as clock:
+                with harness.profile_e2e_phase("graph_nav_roundtrip_concept"):
+                    pass
+                clock.assert_not_called()
+            self.assertEqual(harness.finish_test_profile("unprofiled"), {})
+
+        with mock.patch.dict(os.environ, {"PRKS_E2E_PROFILE": "1"}):
+            harness.start_test_profile("graph-phase")
+            try:
+                with mock.patch.object(harness.time, "perf_counter",
+                                       side_effect=[10, 14, 20, 23, 30, 32]):
+                    with harness.profile_e2e_phase("graph_nav_roundtrip_concept"):
+                        pass
+                    with harness.profile_e2e_phase("graph_nav_roundtrip_concept"):
+                        pass
+                    with self.assertRaisesRegex(ValueError, "expected failure"):
+                        with harness.profile_e2e_phase("graph_nav_uncached_graph"):
+                            raise ValueError("expected failure")
+                phases = harness.finish_test_profile("graph-phase")
+            finally:
+                harness.finish_test_profile("graph-phase")
+        self.assertEqual(phases["graph_nav_roundtrip_concept"], 7.0)
+        self.assertEqual(phases["graph_nav_uncached_graph_failed"], 2.0)
+
+    def test_navigation_phase_is_diagnostic_not_additive_infrastructure(self):
+        from tests.e2e import run as runner
+
+        self.assertEqual(
+            runner._profile_infrastructure_total({
+                "server_start": 2.0,
+                "async_wait": 3.0,
+                "graph_nav_roundtrip_concept": 4.0,
+                "graph_nav_roundtrip_concept_failed": 1.0,
+            }),
+            5.0,
+        )
+
+
 class StartupReadinessProfileTests(unittest.TestCase):
     def test_server_subphases_keep_http_readiness_and_inclusive_total(self):
         with mock.patch.dict(os.environ, {"PRKS_E2E_PROFILE": "1"}):

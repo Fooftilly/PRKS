@@ -109,6 +109,33 @@ collapsed-chrome layout enough to break scroll-restore and compact-notes
 assertions. Enable it for motion-latency experiments; leave it off for the
 ordinary gate.
 
+### Opt-in offline Research Graph navigation phases
+
+The normal six-shard CI logs recorded a **27.1s** duration for
+`ResearchGraphOfflineTests.test_record_graph_navigation_both_directions`
+on [PR #742's checkout gate](https://github.com/Fooftilly/PRKS/actions/runs/39054070761).
+That was a single unprofiled CI observation, **not** a phase attribution or
+same-commit comparison.
+
+Use **Actions → E2E Offline Graph Navigation Profile → Run workflow**
+on a commit containing the profiler. The manual-only job runs one excluded
+warm-up, then **three isolated full Chromium test repeats on the same runner**
+using the normal application source checkout, with `--profile`. It publishes
+per-phase timings in the Actions job summary (no fixture paths, user records,
+or test data artifacts). Its phases show:
+- startup/initial page readiness, then warming five record caches;
+- warming core/people Graph snapshots and switching offline;
+- five record → Graph → record round trips (Concept, Position, two Arguments, Person);
+- the uncached destination and missing Graph cases.
+
+The phase labels start `graph_nav_` and **overlap** generic `async_wait`,
+request routing and startup phase totals. They are diagnostic breakdowns,
+excluded from the infrastructure-additive slowest-test ranking. Profiling
+runs do not train shard timing history and must not be compared as if ordinary
+CI were also instrumented. Keep all real DOM/navigation/offline assertions;
+use the largest measured phase to motivate a distinct, same-runner A/B
+optimization before touching production logic or test assertions.
+
 ### Opt-in infrastructure profiling
 
 `--profile` records per-test infrastructure phases without making ordinary runs
