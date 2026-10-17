@@ -275,12 +275,50 @@
      * park, and destroy stop it; warm park keeps it, so an acknowledgement
      * received while parked is on the entity at resume.
      */
+    /* A Work route's sync subscriber is removed on cold park. Keep a small,
+     * memory-only record of the exact successfully ACKed private-note op so a
+     * later route generation can edit its carried text against that ACK's
+     * revision, rather than conflicting with its own save. Never infer an ACK
+     * from route body/revision, and never retain private-note text here. */
+    const privateNoteAcks = new Map();
+    let privateNoteAcksBound = false;
+
+    function rememberPrivateNoteAck(event) {
+        const op = event && event.op;
+        const ack = event && event.acknowledged;
+        if (!op || !ack || op.operation !== PRIVATE_OP ||
+            ack.code !== 'ACKNOWLEDGED' || ack.note_kind !== PRIVATE_KIND ||
+            ack.work_id !== op.entity_id ||
+            typeof op.op_id !== 'string' ||
+            !Number.isSafeInteger(op.base_revision) || op.base_revision < 0 ||
+            !Number.isSafeInteger(ack.server_revision) ||
+            ack.server_revision < op.base_revision) return;
+        privateNoteAcks.delete(op.op_id);
+        privateNoteAcks.set(op.op_id, {
+            entityId: String(op.entity_id),
+            baseRevision: op.base_revision,
+            revision: ack.server_revision,
+        });
+        if (privateNoteAcks.size > 64) {
+            privateNoteAcks.delete(privateNoteAcks.keys().next().value);
+        }
+    }
+
+    function acknowledgedPrivateNote(opId) {
+        const ack = privateNoteAcks.get(opId);
+        return ack ? Object.assign({}, ack) : null;
+    }
+
     const syncBoundOwners = new WeakSet();
 
     function bindSync(ctx) {
         if (!ctx || ctx.destroyed || typeof ctx.registerCleanup !== 'function') return;
         if (syncBoundOwners.has(ctx)) return;
         if (!root.prksSync || typeof root.prksSync.subscribe !== 'function') return;
+        if (!privateNoteAcksBound) {
+            root.prksSync.subscribe(rememberPrivateNoteAck);
+            privateNoteAcksBound = true;
+        }
         const stop = root.prksSync.subscribe(function (event) {
             if (event && event.acknowledged) acceptAck(ctx, event);
             void refreshPending();
@@ -381,6 +419,7 @@
         prksEnsureWorkNotesBase: ensureBase,
         prksWorkNoteObserved: observed,
         prksBindWorkNotesSync: bindSync,
+        prksAcknowledgedWorkPrivateNote: acknowledgedPrivateNote,
         prksSaveWorkNoteDurably: saveWorkNote,
         prksNoteSyncHandler: handler,
     });
