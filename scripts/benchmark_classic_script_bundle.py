@@ -88,7 +88,13 @@ def build_candidate(root: Path) -> tuple[str, dict[str, str], dict[str, int]]:
     emitted = []
     outputs = []
     groups: dict[str, list[str]] = {"head": [], "body": []}
+    head_end = original.find("</head>")
+    if head_end < 0:
+        raise ValueError("missing head/body script boundary")
+    offset = 0
     for line in original.splitlines(keepends=True):
+        script_offset = offset
+        offset += len(line)
         stripped = line.strip()
         if not stripped.startswith("<script"):
             outputs.append(line)
@@ -99,7 +105,7 @@ def build_candidate(root: Path) -> tuple[str, dict[str, str], dict[str, int]]:
             raise ValueError("unsupported script markup in index.html")
         src = (classic or module).group(1)
         # A script's parser boundary must be independently known.
-        location = "head" if "</head>" not in original[: original.find(line)] else "body"
+        location = "head" if script_offset < head_end else "body"
         if classic:
             expected.append((location, [("src", src)]))
             if location not in groups:
