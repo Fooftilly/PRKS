@@ -4572,29 +4572,32 @@ class WorkspaceTabsTests(_BrowserE2E):
 
     def test_private_reminder_handoff_revert_cancels_never_sent_row(self):
         server, page, _collector = self._start_app()
-        # This is a direct IndexedDB cancellation check, not a network outage
-        # scenario. Calling store.saveWorkNote directly does not wake the sync
-        # coordinator; there is no need to take the entire browser offline,
-        # which could interrupt unrelated in-flight settings requests.
+        # The sync coordinator takes this same Web Lock with ifAvailable.
+        # Hold it across enqueue + cancellation so a startup reachability
+        # notification cannot claim the test row between IndexedDB awaits.
+        # Keep the browser online: unrelated settings requests must work.
         evidence = page.evaluate(
             """async id => {
-                const base = { value: 'before', revision: 4 };
-                await prksSync.store.saveWorkNote(id, 'SET_WORK_PRIVATE_NOTE',
-                    'not yet sent', base);
-                const ctx = {
-                    ui: { workPrivateNoteSession: {
-                        entityId: id, handoffBase: base, handoffText: 'not yet sent'
-                    }},
-                    getResource: key => key === 'workNotesObserved'
-                        ? { private: base } : null,
-                };
-                const out = await prksSaveWorkPrivateNoteForSession(
-                    { ctx }, id, 'before'
-                );
-                const rows = await prksSync.store.listOperations();
-                return { code: out.result.code, opId: out.result.opId,
-                    active: rows.filter(r => r.operation === 'SET_WORK_PRIVATE_NOTE'
-                        && r.entity_id === id && r.status !== 'acknowledged').length };
+                if (!navigator.locks) throw new Error('Web Locks required for cancellation check');
+                return navigator.locks.request('prks-sync', async () => {
+                    const base = { value: 'before', revision: 4 };
+                    await prksSync.store.saveWorkNote(id, 'SET_WORK_PRIVATE_NOTE',
+                        'not yet sent', base);
+                    const ctx = {
+                        ui: { workPrivateNoteSession: {
+                            entityId: id, handoffBase: base, handoffText: 'not yet sent'
+                        }},
+                        getResource: key => key === 'workNotesObserved'
+                            ? { private: base } : null,
+                    };
+                    const out = await prksSaveWorkPrivateNoteForSession(
+                        { ctx }, id, 'before'
+                    );
+                    const rows = await prksSync.store.listOperations();
+                    return { code: out.result.code, opId: out.result.opId,
+                        active: rows.filter(r => r.operation === 'SET_WORK_PRIVATE_NOTE'
+                            && r.entity_id === id && r.status !== 'acknowledged').length };
+                });
             }""",
             arg=server.ids["work_a"],
         )
