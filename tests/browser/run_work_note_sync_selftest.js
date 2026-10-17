@@ -1032,12 +1032,40 @@ async function reconciliation() {
 }
 
 
+async function guardedCarriedReminderCancellation() {
+    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const base = observed('V', 4);
+    const rows = async () => noteRows(await store.listOperations(), PRIVATE, 'W-1')
+        .filter(row => row.status !== 'acknowledged');
+    const cancel = text => store.saveWorkNote('W-1', PRIVATE, 'V', base, { cancelPendingText: text });
+
+    /* An acknowledged or missing predecessor is NOT a no-op. */
+    await assert.rejects(cancel('X'), e => e.prksLocalStoreCode === 'stale_handoff');
+    assert.equal((await rows()).length, 0);
+
+    /* While X is never-sent, reverting to V cancels X atomically. */
+    await store.saveWorkNote('W-1', PRIVATE, 'X', base);
+    await assert.rejects(cancel('foreign'), e => e.prksLocalStoreCode === 'stale_handoff');
+    assert.equal((await rows())[0].payload.text, 'X', 'a foreign row is never removed');
+    const cancelled = await cancel('X');
+    assert.equal(cancelled, null);
+    assert.equal((await rows()).length, 0, 'the never-sent row was cancelled');
+
+    /* Once claimed, X may be on the server and cancellation must not hide it. */
+    await store.saveWorkNote('W-1', PRIVATE, 'X', base);
+    const attempted = (await rows())[0];
+    await store.claimOperation(attempted.op_id);
+    await assert.rejects(cancel('X'), e => e.prksLocalStoreCode === 'scope_busy');
+    assert.equal((await rows()).length, 1, 'the attempted row stays immutable');
+}
+
 async function main() {
     acknowledgedBase();
     handlerContract();
     enqueueSelectsAcknowledgedObserved();
     await coalescingFor(RESEARCH, 'Research');
     await coalescingFor(PRIVATE, 'Private');
+    await guardedCarriedReminderCancellation();
     await scopesDoNotBlockEachOther();
     await byteLimits();
     await mutationTestAtoBtoA();
