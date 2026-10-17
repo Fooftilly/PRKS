@@ -2867,15 +2867,30 @@ function prksReconcileSavedPrivateNote(family, ctx, settledSession, id, content)
  * until a read agrees; never re-enqueue it or apply this rule to Folder notes.
  */
 function prksWorkPrivateNoteNeedsCommittedHandoff(family, existing, ctx, id, initialText, carried) {
-    return !carried && family.entityType === 'work' &&
-        existing && !existing.retired && !existing.dirty && !existing.promise &&
-        existing.state === 'committed' &&
-        String(existing.entityId) === String(id) &&
-        String(existing.ownerTabId) === String(ctx.tabId) &&
-        Number.isSafeInteger(existing.settledSaveToken) &&
-        existing.settledSaveToken > 0 &&
-        existing.settledSaveToken === existing.latestSaveToken &&
-        String(existing.draftText) !== String(initialText == null ? '' : initialText);
+    if (carried || family.entityType !== 'work' || !existing ||
+        existing.retired || existing.dirty || existing.promise ||
+        existing.state !== 'committed' ||
+        String(existing.entityId) !== String(id) ||
+        String(existing.ownerTabId) !== String(ctx.tabId) ||
+        !Number.isSafeInteger(existing.settledSaveToken) ||
+        existing.settledSaveToken <= 0 ||
+        existing.settledSaveToken !== existing.latestSaveToken) return false;
+    const base = existing.settledBase;
+    const canonical = ctx.getResource && ctx.getResource('workNotesCanonical');
+    if (!base || typeof base.value !== 'string' ||
+        !Number.isSafeInteger(base.revision) || base.revision < 0 ||
+        !canonical || String(canonical.id) !== String(id) ||
+        !canonical.sources || canonical.sources.private !== 'server' ||
+        canonical.private_notes !== base.value ||
+        canonical.private_notes === String(existing.draftText)) return false;
+    /* Read the body before overlay, not initialText: initialText may already
+     * be this pane's queued text. A different body cannot be proved stale;
+     * it could be another device's newer save. */
+    const painted = String(initialText == null ? '' : initialText);
+    if (painted !== base.value && painted !== String(existing.draftText)) return false;
+    const observed = ctx.getResource && ctx.getResource('workNotesObserved');
+    const rev = observed && observed.private ? observed.private.revision : null;
+    return !Number.isSafeInteger(rev) || rev <= base.revision + 1;
 }
 
 function prksEnsurePrivateNoteSession(family, ctx, id, initialText) {
@@ -2907,6 +2922,11 @@ function prksEnsurePrivateNoteSession(family, ctx, id, initialText) {
         latestSaveToken: priorCommitted ? existing.latestSaveToken : 0,
         latestSaveEditGeneration: 0,
         settledSaveToken: priorCommitted ? existing.settledSaveToken : 0,
+        /* A locally saved draft remains tied to the base it was measured on.
+         * Never let an edit of a carried value silently adopt the new route's
+         * unrelated revision: that would overwrite a concurrent writer. */
+        settledBase: priorCommitted ? Object.assign({}, existing.settledBase) : null,
+        handoffBase: priorCommitted ? Object.assign({}, existing.settledBase) : null,
         state: carried ? 'drafting' : 'committed',
         saveError: false,
         dirty: carried,
@@ -2943,7 +2963,11 @@ function prksPrivateNoteText(family, ctx, id, serverText) {
     /* Drop the draft only when the stored body matches it. A pending overlay
      * can equal the draft and then clear before that body is updated; retiring
      * on the overlay lets the next Reminders paint show the stale text. */
-    if (session.state === 'committed' && !session.promise && session.draftText === server) {
+    const canonical = family.entityType === 'work' && ctx.getResource
+        ? ctx.getResource('workNotesCanonical') : null;
+    const stored = canonical && String(canonical.id) === String(id)
+        ? String(canonical.private_notes == null ? '' : canonical.private_notes) : server;
+    if (session.state === 'committed' && !session.promise && session.draftText === stored) {
         session.retired = true;
         const drop = prksPrivateNoteRecoveryHook(family, 'drop');
         if (drop) drop(session);
@@ -3786,8 +3810,12 @@ async function prksSaveWorkPrivateNoteForSession(editor, entityId, content) {
         ? prksWorkNoteObserved(editor.ctx, 'work-private-note')
         : null;
     if (typeof prksSaveWorkNoteDurably !== 'function') return { result: { code: 'unavailable' }, base: null };
-    const base = observed ? { value: observed.value, revision: observed.revision } : null;
-    return { result: await prksSaveWorkNoteDurably(entityId, 'work-private-note', content, observed), base: base };
+    const session = editor.ctx && editor.ctx.ui ? editor.ctx.ui.workPrivateNoteSession : null;
+    const handoff = session && String(session.entityId) === String(entityId)
+        ? session.handoffBase : null;
+    const source = handoff || observed;
+    const base = source ? { value: source.value, revision: source.revision } : null;
+    return { result: await prksSaveWorkNoteDurably(entityId, 'work-private-note', content, source), base: base };
 }
 
 /**
@@ -3950,6 +3978,12 @@ function prksEnqueuePrivateNoteSave(family, editor) {
             session.updatedAt = Date.now();
             if (settled) settled(editor.ctx, entityId, session, result, savedGeneration, content);
             if (ok && !hasNewerDraft) {
+                if (family.entityType === 'work' && usedBase &&
+                    typeof usedBase.value === 'string' &&
+                    Number.isSafeInteger(usedBase.revision)) {
+                    session.settledBase = { value: usedBase.value, revision: usedBase.revision };
+                    session.handoffBase = null;
+                }
                 prksReconcileSavedPrivateNote(family, editor.ctx, session, entityId, content);
             }
             if (!prksPrivateNotesOwnerCurrent(editor)) return;
