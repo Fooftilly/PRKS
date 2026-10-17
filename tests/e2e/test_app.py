@@ -4572,7 +4572,10 @@ class WorkspaceTabsTests(_BrowserE2E):
 
     def test_private_reminder_handoff_revert_cancels_never_sent_row(self):
         server, page, _collector = self._start_app()
-        page.context.set_offline(True)
+        # This is a direct IndexedDB cancellation check, not a network outage
+        # scenario. Calling store.saveWorkNote directly does not wake the sync
+        # coordinator; there is no need to take the entire browser offline,
+        # which could interrupt unrelated in-flight settings requests.
         evidence = page.evaluate(
             """async id => {
                 const base = { value: 'before', revision: 4 };
