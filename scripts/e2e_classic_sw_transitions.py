@@ -45,9 +45,6 @@ class ReleaseSource:
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, directory=str(source.frontend), **kwargs)
 
-            def log_message(self, fmt, *args):
-                pass
-
             def end_headers(self):
                 # A SW update must not reuse a cached copy of /sw.js.
                 self.send_header("Cache-Control", "no-store")
