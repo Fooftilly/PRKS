@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import ModuleType
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
@@ -227,10 +228,19 @@ class ClassicBundleCanaryTests(unittest.TestCase):
             if "Object.fromEntries" in expr else True
         )
 
+        # The ordinary unit job deliberately does not install Playwright.
+        # Supply only its import seam so this contract test stays lightweight.
+        fake_playwright = ModuleType("playwright")
+        fake_playwright.__path__ = []
+        fake_sync_api = ModuleType("playwright.sync_api")
+        fake_sync_api.sync_playwright = lambda: pw
         with (
+            patch.dict("sys.modules", {
+                "playwright": fake_playwright,
+                "playwright.sync_api": fake_sync_api,
+            }),
             patch("tests.e2e.install_browser.apply_playwright_browser_env"),
             patch("tests.e2e.harness.AppServer", return_value=server),
-            patch("playwright.sync_api.sync_playwright", return_value=pw),
         ):
             _browser_preflight()
             browser.new_context.assert_called_once_with(service_workers="allow")
