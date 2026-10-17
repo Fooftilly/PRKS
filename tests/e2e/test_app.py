@@ -4765,17 +4765,35 @@ class WorkspaceTabsTests(_BrowserE2E):
         # The first forward edit uses this tab's proven ACK, rather than
         # conflicting against itself or adopting the stale route revision.
         desired_text = new_text + "!"
-        page.locator(selector).fill(desired_text)
-        page.locator(selector).press("Tab")
+        # Require the actual successful sync POST for this precise edit.
+        # A server GET plus rows.every(empty) alone could pass vacuously.
+        with page.expect_response(
+            lambda response: (
+                response.status == 200
+                and urlparse(response.url).path == "/api/sync/operations"
+                and response.request.method == "POST"
+                and (response.request.post_data_json or {}).get("operation")
+                == "SET_WORK_PRIVATE_NOTE"
+                and (response.request.post_data_json or {}).get("entity_id") == work_a
+                and (response.request.post_data_json or {}).get("payload", {}).get("text")
+                == desired_text
+            ),
+            timeout=15000,
+        ) as acknowledged:
+            page.locator(selector).fill(desired_text)
+            page.locator(selector).press("Tab")
+        self.assertEqual(acknowledged.value.json().get("code"), "ACKNOWLEDGED")
         wait_for_async(
             page,
-            """([id, text]) => Promise.all([
-                prksSync.store.listOperations(),
-                fetch('/api/works/' + id).then(r => r.ok ? r.json() : null)
-            ]).then(([rows, work]) =>
-                !!(work && work.private_notes === text
-                   && rows.every(r => r.operation !== 'SET_WORK_PRIVATE_NOTE'
-                       || r.entity_id !== id || r.status === 'acknowledged')))""",
+            """async ([id, text]) => {
+                const response = await fetch('/api/works/' + id);
+                if (!response.ok) return false;
+                const work = await response.json();
+                if ((work.private_notes ?? '') !== text) return false;
+                const rows = await prksSync.store.listOperations();
+                return rows.every(r => r.operation !== 'SET_WORK_PRIVATE_NOTE'
+                    || r.entity_id !== id || r.status === 'acknowledged');
+            }""",
             arg=[work_a, desired_text],
             timeout=20000,
             message="post-handoff edit was not acknowledged without a pending conflict",
@@ -4793,17 +4811,35 @@ class WorkspaceTabsTests(_BrowserE2E):
         # Empty reminders are stored as SQL NULL, so the GET returns JSON null.
         # The UI and note sync scope consistently treat it as empty text.
         desired_text = stale_work.get("private_notes") or ""
-        page.locator(selector).fill(desired_text)
-        page.locator(selector).press("Tab")
+        # Require the actual successful sync POST for this precise edit.
+        # A server GET plus rows.every(empty) alone could pass vacuously.
+        with page.expect_response(
+            lambda response: (
+                response.status == 200
+                and urlparse(response.url).path == "/api/sync/operations"
+                and response.request.method == "POST"
+                and (response.request.post_data_json or {}).get("operation")
+                == "SET_WORK_PRIVATE_NOTE"
+                and (response.request.post_data_json or {}).get("entity_id") == work_a
+                and (response.request.post_data_json or {}).get("payload", {}).get("text")
+                == desired_text
+            ),
+            timeout=15000,
+        ) as acknowledged:
+            page.locator(selector).fill(desired_text)
+            page.locator(selector).press("Tab")
+        self.assertEqual(acknowledged.value.json().get("code"), "ACKNOWLEDGED")
         wait_for_async(
             page,
-            """([id, text]) => Promise.all([
-                prksSync.store.listOperations(),
-                fetch('/api/works/' + id).then(r => r.ok ? r.json() : null)
-            ]).then(([rows, work]) =>
-                !!(work && (work.private_notes ?? '') === text
-                   && rows.every(r => r.operation !== 'SET_WORK_PRIVATE_NOTE'
-                       || r.entity_id !== id || r.status === 'acknowledged')))""",
+            """async ([id, text]) => {
+                const response = await fetch('/api/works/' + id);
+                if (!response.ok) return false;
+                const work = await response.json();
+                if ((work.private_notes ?? '') !== text) return false;
+                const rows = await prksSync.store.listOperations();
+                return rows.every(r => r.operation !== 'SET_WORK_PRIVATE_NOTE'
+                    || r.entity_id !== id || r.status === 'acknowledged');
+            }""",
             arg=[work_a, desired_text],
             timeout=20000,
             message="post-handoff edit was not acknowledged without a pending conflict",
