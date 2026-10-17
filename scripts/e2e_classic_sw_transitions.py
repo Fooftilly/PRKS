@@ -124,6 +124,29 @@ def offline_reload(context, page, script_urls: tuple[str, ...]) -> None:
     page.on("response", response_seen)
     page.on("pageerror", page_error)
     try:
+        diagnostics = page.evaluate(
+            """async () => {
+                const reg = await navigator.serviceWorker.getRegistration();
+                const names = await caches.keys();
+                const shell = names.find(name => name.startsWith('prks-shell-') &&
+                    !name.endsWith('-staging'));
+                const cache = shell ? await caches.open(shell) : null;
+                const root = cache && await cache.match('/');
+                const index = cache && await cache.match('/index.html');
+                return {
+                    controller: navigator.serviceWorker.controller?.scriptURL || null,
+                    registration: reg?.active?.state || null,
+                    cacheNames: names,
+                    rootCached: !!root,
+                    indexCached: !!index,
+                    rootStatus: root?.status || null,
+                    indexStatus: index?.status || null
+                };
+            }"""
+        )
+        print(f"SW offline reload preflight: {diagnostics}", flush=True)
+        if not diagnostics["controller"] or not diagnostics["rootCached"] or not diagnostics["indexCached"]:
+            raise AssertionError("service worker lacks cached navigation shell before offline reload")
         context.set_offline(True)
         page.reload(wait_until="domcontentloaded", timeout=CONTROL_TIMEOUT)
         page.wait_for_function(
@@ -173,7 +196,7 @@ def test_transitions(repo: Path = REPO) -> None:
                 context = browser.new_context(service_workers="allow")
                 try:
                     page = context.new_page()
-                    page.goto(origin + "/#/folders", wait_until="load", timeout=CONTROL_TIMEOUT)
+                    page.goto(origin + "/index.html#/folders", wait_until="load", timeout=CONTROL_TIMEOUT)
                     await_version(page, old_cache, set())
                     offline_reload(context, page, ("/js/app.js",))
                     print("PASS unbundled worker offline boot", flush=True)
