@@ -20,6 +20,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -84,6 +85,27 @@ def _profile_phase(name: str, seconds: float) -> None:
         return
     phases = profile["phases"]
     phases[name] = phases.get(name, 0.0) + max(0.0, float(seconds))
+
+
+@contextmanager
+def profile_e2e_phase(name: str):
+    """Time an opt-in test-specific phase without changing regular E2E work.
+
+    These inclusive navigation/interaction diagnostics overlap with existing
+    async_wait and infrastructure phases, so ranking must not add them twice.
+    Record failed intervals separately; never mask the original exception.
+    """
+    if _ACTIVE_PROFILE is None:
+        yield
+        return
+    started = time.perf_counter()
+    try:
+        yield
+    except BaseException:
+        _profile_phase(name + "_failed", time.perf_counter() - started)
+        raise
+    else:
+        _profile_phase(name, time.perf_counter() - started)
 
 
 def _profile_nav_count(name: str) -> None:
