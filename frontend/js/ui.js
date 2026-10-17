@@ -3986,7 +3986,11 @@ function prksEnqueuePrivateNoteSave(family, editor) {
             if (token !== session.latestSaveToken) return;
             const hasNewerDraft = session.editGeneration > session.latestSaveEditGeneration;
             session.settledSaveToken = token;
-            session.settledOpId = ok && result && typeof result.opId === 'string' ? result.opId : null;
+            /* A scope_busy retry did not save a new body. Keep the prior
+             * carried op ID until the original ACK can prove its revision;
+             * clearing it here would restore the first-edit self-conflict. */
+            if (ok) session.settledOpId =
+                result && typeof result.opId === 'string' ? result.opId : null;
             session.promise = null;
             const foreign = code === 'scope_busy' && result.foreign === true;
             session.foreignWaits = foreign && !hasNewerDraft ? (session.foreignWaits || 0) + 1 : 0;
