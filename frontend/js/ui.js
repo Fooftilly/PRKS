@@ -2933,6 +2933,7 @@ function prksEnsurePrivateNoteSession(family, ctx, id, initialText) {
          * unrelated revision: that would overwrite a concurrent writer. */
         settledBase: priorCommitted ? Object.assign({}, existing.settledBase) : null,
         handoffBase: priorCommitted ? Object.assign({}, existing.settledBase) : null,
+        handoffText: priorCommitted ? String(existing.draftText) : null,
         state: carried ? 'drafting' : 'committed',
         saveError: false,
         dirty: carried,
@@ -3650,6 +3651,7 @@ function prksPrivateNoteLatestSaveToken(editor) {
 function prksPrivateNotesStatusForResult(code, family) {
     if (code === 'saved' || code === 'queued' || code === 'unchanged') return 'Saved';
     if (code === 'scope_busy' || code === 'conflict') return 'Still syncing — wait or resolve the conflict in Diagnostics';
+    if (code === 'stale_handoff') return 'Reminder not saved — copy your text and reload this Work before retrying';
     if (code === 'unknown_base') {
         return (family || PRKS_PRIVATE_NOTE_FAMILIES.work).unknownBaseStatus;
     }
@@ -3821,14 +3823,12 @@ async function prksSaveWorkPrivateNoteForSession(editor, entityId, content) {
         ? session.handoffBase : null;
     const source = handoff || observed;
     const base = source ? { value: source.value, revision: source.revision } : null;
-    /* A carried value is displayed after our earlier write may have landed.
-     * Reverting to the old base is NOT an unchanged save: the server may now
-     * contain our acknowledged draft. The local queue short-circuits equal
-     * text as a no-op, so report a safe conflict rather than a false Saved. */
-    if (handoff && content === handoff.value) {
-        return { result: { code: 'conflict', opId: null }, base: base };
-    }
-    return { result: await prksSaveWorkNoteDurably(entityId, 'work-private-note', content, source), base: base };
+    /* A revert to the pre-save base is a true no-op ONLY if our original
+     * Work note row is still never-sent. Enforce that proof atomically in
+     * IndexedDB: after acknowledgement, a false Saved would lose the revert. */
+    const options = handoff && content === handoff.value
+        ? { cancelPendingText: session.handoffText } : null;
+    return { result: await prksSaveWorkNoteDurably(entityId, 'work-private-note', content, source, options), base: base };
 }
 
 /**
@@ -3994,7 +3994,7 @@ function prksEnqueuePrivateNoteSave(family, editor) {
             }
             /* A row that needs resolution: the text stays unsaved, and the next
              * edit, blur or leave tries again; a timer would only meet it again. */
-            const keepDirty = code === 'conflict' && !hasNewerDraft;
+            const keepDirty = (code === 'conflict' || code === 'stale_handoff') && !hasNewerDraft;
             session.saveError = !ok && !hasNewerDraft;
             session.state = hasNewerDraft ? 'drafting' : !ok ? 'error' : 'committed';
             session.dirty = hasNewerDraft || keepDirty;
