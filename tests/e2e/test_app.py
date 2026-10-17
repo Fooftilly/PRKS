@@ -4603,7 +4603,7 @@ class WorkspaceTabsTests(_BrowserE2E):
         )
         self.assertEqual(evidence, {"code": "saved", "opId": None, "active": 0})
 
-    def test_private_reminder_hide_show_prefers_unsettled_complete_draft(self):
+    def _prepare_private_reminder_acknowledged_handoff(self):
         server, page, collector = self._start_app()
         work_a = server.ids["work_a"]
         work_b = server.ids["work_b"]
@@ -4738,71 +4738,77 @@ class WorkspaceTabsTests(_BrowserE2E):
             arg={"selector": selector, "text": new_text},
         )
 
-        # The carried text still has the PRE-save base revision. Undoing to
-        # that base must not use the durable store's unchanged-value fast path:
-        # the server has already acknowledged new_text. Until a proven ack
-        # revision is available, reject the revert as a conflict, never Saved.
-        previous_text = stale_work.get("private_notes") or ""
-        page.locator(selector).fill(previous_text)
-        page.locator(selector).press("Tab")
-        page.wait_for_function(
-            """(id) => {
+        # Only the exact ACK of the carried operation authorizes a new save
+        # against its server revision. A stale route GET or another writer's
+        # revision is not sufficient evidence.
+        wait_for_async(
+            page,
+            """id => {
                 const ctx = window.prksGetTabContext(id);
-                const session = ctx && ctx.ui && ctx.ui.workPrivateNoteSession;
-                return !!(session && session.state === 'error'
-                    && session.dirty && session.saveError);
+                const s = ctx && ctx.ui && ctx.ui.workPrivateNoteSession;
+                if (!s || !s.handoffBase || !s.settledOpId) return false;
+                const ack = window.prksAcknowledgedWorkPrivateNote(s.settledOpId);
+                return !!(ack && ack.entityId === s.entityId
+                    && ack.baseRevision === s.handoffBase.revision
+                    && ack.revision > ack.baseRevision);
             }""",
             arg=ids["a"],
             timeout=15000,
+            message="the carried reminder is missing its own acknowledged revision",
         )
-        persisted = page.request.get(server_url, timeout=5000)
-        self.assertTrue(persisted.ok)
-        self.assertEqual(persisted.json().get("private_notes"), new_text)
-        page.get_by_text(
-            "Reminder not saved — copy your text and reload this Work before retrying"
-        ).wait_for()
+        return page, work_a, ids, selector, stale_work, new_text, server_url
 
-        # A normal forward edit of the held value is still measured against
-        # its original base. The server already has new_text at R+1, so it
-        # must conflict in the durable queue, never overwrite silently.
-        forward_text = new_text + "!"
-        page.locator(selector).fill(forward_text)
-        # A real revision conflict is the *expected* server response. Assert
-        # that exact 409 rather than turning the browser collector off for the
-        # whole test: Chromium also logs an HTTP 409 as a console error.
-        with page.expect_response(
-            lambda response: (
-                response.status == 409
-                and urlparse(response.url).path == "/api/sync/operations"
-                and response.request.method == "POST"
-            ),
-            timeout=15000,
-        ) as expected_conflict:
-            page.locator(selector).press("Tab")
-        self.assertEqual(expected_conflict.value.status, 409)
+    def test_private_reminder_hide_show_prefers_unsettled_complete_draft(self):
+        page, work_a, ids, selector, stale_work, new_text, server_url = (
+            self._prepare_private_reminder_acknowledged_handoff()
+        )
+        # The first forward edit uses this tab's proven ACK, rather than
+        # conflicting against itself or adopting the stale route revision.
+        desired_text = new_text + "!"
+        page.locator(selector).fill(desired_text)
+        page.locator(selector).press("Tab")
         wait_for_async(
             page,
-            """id => prksSync.store.listOperations().then(rows => rows.some(r =>
-                r.operation === 'SET_WORK_PRIVATE_NOTE' && r.entity_id === id
-                && r.status === 'conflict' && r.payload.text.endsWith('!')))""",
-            arg=work_a,
-            timeout=15000,
-            message="post-handoff forward edit did not reach a resolvable conflict",
+            """([id, text]) => Promise.all([
+                prksSync.store.listOperations(),
+                fetch('/api/works/' + id).then(r => r.ok ? r.json() : null)
+            ]).then(([rows, work]) =>
+                !!(work && work.private_notes === text
+                   && rows.every(r => r.operation !== 'SET_WORK_PRIVATE_NOTE'
+                       || r.entity_id !== id || r.status === 'acknowledged')))""",
+            arg=[work_a, desired_text],
+            timeout=20000,
+            message="post-handoff edit was not acknowledged without a pending conflict",
         )
         persisted = page.request.get(server_url, timeout=5000)
         self.assertTrue(persisted.ok)
-        self.assertEqual(persisted.json().get("private_notes"), new_text)
+        self.assertEqual(persisted.json().get("private_notes"), desired_text)
 
-        # Consume ONLY the known Chromium resource error for the verified
-        # intentional POST 409, preserving every other console-error gate.
-        expected_log = ("Failed to load resource: the server responded with a "
-                        "status of 409 (Conflict)")
-        expected_url = "/api/sync/operations"
-        intentional = [entry for entry in collector.console_errors
-                       if expected_log in entry and expected_url in entry]
-        self.assertLessEqual(len(intentional), 1)
-        if intentional:
-            collector.console_errors.remove(intentional[0])
+    def test_private_reminder_acknowledged_handoff_revert_persists(self):
+        page, work_a, ids, selector, stale_work, new_text, server_url = (
+            self._prepare_private_reminder_acknowledged_handoff()
+        )
+        # Reverting X to pre-save V after the X ACK must enqueue a real V edit.
+        # A false unchanged-success would leave X on the server.
+        desired_text = stale_work.get("private_notes") or ""
+        page.locator(selector).fill(desired_text)
+        page.locator(selector).press("Tab")
+        wait_for_async(
+            page,
+            """([id, text]) => Promise.all([
+                prksSync.store.listOperations(),
+                fetch('/api/works/' + id).then(r => r.ok ? r.json() : null)
+            ]).then(([rows, work]) =>
+                !!(work && work.private_notes === text
+                   && rows.every(r => r.operation !== 'SET_WORK_PRIVATE_NOTE'
+                       || r.entity_id !== id || r.status === 'acknowledged')))""",
+            arg=[work_a, desired_text],
+            timeout=20000,
+            message="post-handoff edit was not acknowledged without a pending conflict",
+        )
+        persisted = page.request.get(server_url, timeout=5000)
+        self.assertTrue(persisted.ok)
+        self.assertEqual(persisted.json().get("private_notes"), desired_text)
 
     def test_delayed_secondary_concept_mutation_refreshes_owner_not_main(self):
         server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
