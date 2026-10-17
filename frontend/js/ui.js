@@ -3821,6 +3821,13 @@ async function prksSaveWorkPrivateNoteForSession(editor, entityId, content) {
         ? session.handoffBase : null;
     const source = handoff || observed;
     const base = source ? { value: source.value, revision: source.revision } : null;
+    /* A carried value is displayed after our earlier write may have landed.
+     * Reverting to the old base is NOT an unchanged save: the server may now
+     * contain our acknowledged draft. The local queue short-circuits equal
+     * text as a no-op, so report a safe conflict rather than a false Saved. */
+    if (handoff && content === handoff.value) {
+        return { result: { code: 'conflict', opId: null }, base: base };
+    }
     return { result: await prksSaveWorkNoteDurably(entityId, 'work-private-note', content, source), base: base };
 }
 
