@@ -2,10 +2,11 @@
 'use strict';
 
 /* Exercise the real app.js Concept detail helpers in isolation. Their
- * catalogue read is the costly exception: no parent-set intent means the
- * acknowledged detail already has names for its parents and children.
- * These tests check that dropping the read cannot drop the pending overlay,
- * Work references, stale-route checks, or pending hierarchy names. */
+ * online catalogue read also rewarmed the list after domain invalidation.
+ * Only a confidently offline detail without parent-set intent may skip it:
+ * the acknowledged detail already names its parents and children.
+ * These tests cover cache rewarming, pending overlays, named relationships,
+ * Work references, stale-route checks and pending hierarchy names. */
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -22,10 +23,18 @@ const conceptOp = (operation, status = 'pending') => ({
     payload: { parent_ids: ['C-parent'] },
 });
 
-async function check(operations, catalogueExpected, staleAfter = null) {
+async function check(operations, catalogueExpected, options = {}) {
+    const { offline = true, staleAfter = null } = options;
+    const readExpected = !offline || catalogueExpected;
     const calls = [];
     const catalogue = [{ id: 'C-parent', name: 'Live Parent' }];
+    const namedDetail = {
+        id: 'C-child',
+        parents: [{ id: 'C-old-parent', name: 'Original parent' }],
+        children: [{ id: 'C-old-child', name: 'Original child' }],
+    };
     const sandbox = {
+        prksOfflineRuntimeState: () => offline ? 'offline' : 'online',
         prksHydratePendingWorkMetadata: async () => { calls.push('hydrate'); },
         prksEffectiveConceptCatalogue: async ops => {
             assert.strictEqual(ops, operations);
@@ -35,9 +44,9 @@ async function check(operations, catalogueExpected, staleAfter = null) {
         prksEffectiveConceptDetail: (item, ops, rows) => {
             assert.strictEqual(ops, operations);
             assert.equal(item.id, 'C-child');
-            assert.equal(rows.length, catalogueExpected ? 1 : 0);
+            assert.equal(rows.length, readExpected ? 1 : 0);
             calls.push('detail');
-            return { id: item.id, parents: rows };
+            return { ...item, catalogueCount: rows.length };
         },
         prksEffectiveWorkReferences: (kind, detail) => {
             assert.equal(kind, 'concept');
@@ -54,17 +63,19 @@ async function check(operations, catalogueExpected, staleAfter = null) {
         return staleAfter !== null && checks >= staleAfter;
     };
     const result = await sandbox.prksEffectiveConceptDetailView(
-        { id: 'C-child', parents: [] }, operations, stale,
+        namedDetail, operations, stale,
     );
     if (staleAfter !== null) {
         assert.equal(result, null);
         const expected = ['hydrate'];
-        if (staleAfter > 1 && catalogueExpected) expected.push('catalogue');
+        if (staleAfter > 1 && readExpected) expected.push('catalogue');
         assert.deepEqual(calls, expected);
     } else {
         assert.equal(result.id, 'C-child');
+        assert.equal(result.parents[0].name, 'Original parent');
+        assert.equal(result.children[0].name, 'Original child');
         assert.deepEqual(calls,
-            catalogueExpected
+            readExpected
                 ? ['hydrate', 'catalogue', 'detail', 'work-refs']
                 : ['hydrate', 'detail', 'work-refs']);
     }
@@ -87,11 +98,19 @@ async function check(operations, catalogueExpected, staleAfter = null) {
     // present on the acknowledged Concept detail, so it must read the list.
     await check([conceptOp('SET_CONCEPT_PARENTS')], true);
     await check([conceptOp('SET_CONCEPT_PARENTS', 'conflict')], true);
-    await check([conceptOp('SET_CONCEPT_PARENTS', 'queued')], true);
+    await check([conceptOp('SET_CONCEPT_PARENTS', 'syncing')], true);
+    await check([conceptOp('SET_CONCEPT_PARENTS', 'failed')], true);
     await check([conceptOp('SET_CONCEPT_FIELD'), conceptOp('SET_CONCEPT_PARENTS')], true);
+    // Online details must always rewarm concepts:index even without a
+    // pending hierarchy op, after research-note and concept invalidations.
+    await check([], false, { offline: false });
+    await check([conceptOp('SET_CONCEPT_PARENTS', 'acknowledged')], false,
+                { offline: false });
+    await check([conceptOp('SET_CONCEPT_FIELD')], false, { offline: false });
     // A stale owner must not continue work after either await.
-    await check([], false, 1);
-    await check([conceptOp('SET_CONCEPT_PARENTS')], true, 2);
+    await check([], false, { staleAfter: 1 });
+    await check([conceptOp('SET_CONCEPT_PARENTS')], true, { staleAfter: 2 });
+    await check([], false, { offline: false, staleAfter: 2 });
     console.log('concept detail catalogue fast-path checks passed');
 })().catch(err => {
     console.error(err);
