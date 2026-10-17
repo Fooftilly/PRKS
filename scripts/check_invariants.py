@@ -62,6 +62,10 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/domain/identity/root_pairing.py",
     "backend/domain/identity/admin.py",
     "backend/api/session.py",
+    "backend/work_identity.py",
+    "backend/work_projection.py",
+    "backend/work_metadata_sync.py",
+    "backend/work_role_sync.py",
 )
 PYRIGHT_TYPED_SLICE_INCLUDE = PYRIGHT_TYPED_SLICE_SCOPES
 PYRIGHT_TYPED_SLICE_MODES = frozenset({"basic", "standard", "strict"})
