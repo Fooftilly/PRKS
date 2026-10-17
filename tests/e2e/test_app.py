@@ -10707,15 +10707,20 @@ class MainSecondaryDividerTests(_BrowserE2E):
             }
             return true;
         }"""
-        page.wait_for_function(pdf_lifecycle_idle, timeout=20000)
 
         # A request-free instant can precede another mount-originated GET
         # (e.g. fetch A -> resolve -> enqueue B), so wait for a genuine
         # quiescent interval and THEN flush two paint frames. If those frames
         # initiate another request, begin a fresh quiet window. One 15-second
         # deadline bounds the whole barrier; no blind multi-second sleeps.
+        # A full PDF handoff may become idle after the last tracked GET.
+        # Require the quiet window AFTER observing that idle transition, not
+        # merely after the previous network completion.
+        pdf_idle_observed_at = [time.monotonic()]
+
         def mount_quiet():
-            return not inflight and time.monotonic() - last_activity[0] >= quiet_seconds
+            since = max(last_activity[0], pdf_idle_observed_at[0])
+            return not inflight and time.monotonic() - since >= quiet_seconds
 
         page.expose_function("__prksDividerMountQuiet", mount_quiet)
         deadline = time.monotonic() + 15
@@ -10727,6 +10732,16 @@ class MainSecondaryDividerTests(_BrowserE2E):
                     "inflight=%r, latest requests=%r" %
                     ([urlparse(req.url).path for req in inflight], requests[-8:])
                 )
+            # A lifecycle still busy with catch-up/materialization can schedule
+            # further Work/PDF requests after its gate clears. Wait for it
+            # first and start the measured quiet interval from that point.
+            page.wait_for_function(
+                pdf_lifecycle_idle, timeout=max(1, int(remaining * 1000))
+            )
+            pdf_idle_observed_at[0] = time.monotonic()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                continue
             wait_for_async(
                 page, "() => window.__prksDividerMountQuiet()",
                 timeout=max(1, int(remaining * 1000)),
@@ -10737,12 +10752,15 @@ class MainSecondaryDividerTests(_BrowserE2E):
                 """() => new Promise(resolve =>
                     requestAnimationFrame(() => requestAnimationFrame(resolve)))"""
             )
-            if not mount_quiet() or len(requests) != snapshot:
+            # Evaluate the PDF state before examining the Python-side request
+            # tracker: Playwright may dispatch new request events during the
+            # browser round-trip. Never allow that GET to slip past the guard.
+            if not page.evaluate(pdf_lifecycle_idle) or not mount_quiet() or len(requests) != snapshot:
                 continue
             _capture_divider_runtime_ids(page)
-            # The runtime snapshot itself crosses an event-loop turn; if
-            # another mount request starts during it, settle again.
-            if mount_quiet() and len(requests) == snapshot and page.evaluate(pdf_lifecycle_idle):
+            # Runtime capture also crosses an event-loop turn. Recheck lifecycle
+            # FIRST, then in-flight requests and the quiet interval.
+            if page.evaluate(pdf_lifecycle_idle) and mount_quiet() and len(requests) == snapshot:
                 break
         mount_barrier_at = time.monotonic()
         barrier_last_activity = last_activity[0]
