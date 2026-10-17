@@ -1,0 +1,125 @@
+name: E2E Offline Graph Navigation Profile
+
+# Diagnostic only. No PR/master trigger or automatic runner-minute cost.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-graph-navigation-profile-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  profile:
+    name: Profile real Chromium Graph round trips
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        with:
+          path: .playwright-browsers
+          key: >-
+            playwright-${{ runner.os }}-${{ hashFiles('requirements-dev.txt',
+            'tests/e2e/install_browser.py') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install runtime and E2E dependencies
+        run: >-
+          python -m pip install --isolated --disable-pip-version-check
+          "--only-binary=:all:" "PyMuPDF==1.28.2" "Pillow==12.3.0" "pydantic==2.13.5"
+          "playwright==1.63.0"
+
+      - name: Ensure Chromium in repo cache
+        run: python tests/e2e/install_browser.py
+
+      - name: Profile isolated Graph navigation with one unmeasured warm-up
+        shell: bash
+        env:
+          PRKS_E2E_PROFILE: "1"
+          TARGET: tests.e2e.test_research_graph_offline.ResearchGraphOfflineTests.test_record_graph_navigation_both_directions
+        run: |
+          set -euo pipefail
+          # Warm runner/browser imports once, excluding the warm-up's timings.
+          PRKS_E2E_BENCHMARK_RESULT="" \
+            python tests/e2e/run.py --jobs 1 --no-pointer-capture --profile "$TARGET"
+
+          for trial in 1 2 3; do
+            echo "::group::Profile iteration $trial"
+            result_file="$RUNNER_TEMP/graph-profile-$trial.json"
+            rm -f "$result_file"
+            PRKS_E2E_BENCHMARK_RESULT="$result_file" \
+              python tests/e2e/run.py --jobs 1 --no-pointer-capture --profile "$TARGET"
+            echo "::endgroup::"
+          done
+
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from statistics import median
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          results = [json.loads((root / f"graph-profile-{i}.json").read_text())
+                     for i in (1, 2, 3)]
+          if any(r["tests"] != 1 or r["failures"] or r["errors"] or r["skipped"]
+                 for r in results):
+              raise SystemExit("Graph profile does not contain three passing single-test runs")
+
+          names = sorted({name for r in results
+                          for name in r["phase_seconds"] if name.startswith("graph_nav_")})
+          if not names:
+              raise SystemExit("No Graph navigation phase timings recorded")
+          summary = [
+              "## Offline Graph navigation phase profile",
+              "",
+              "Source checkout, same hosted runner, one warm-up excluded, three passing serial repeats.",
+              "Phases are inclusive diagnostics and may overlap generic infrastructure/async waits.",
+              "",
+              "| Phase | Median (s) | Runs (s) |",
+              "| --- | ---: | --- |",
+          ]
+          for name in names:
+              values = [float(r["phase_seconds"].get(name, 0)) for r in results]
+              summary.append(
+                  f"| `{name}` | {median(values):.3f} | " +
+                  ", ".join(f"{x:.3f}" for x in values) + " |"
+              )
+          wall = [float(r["wall_seconds"]) for r in results]
+          summary.extend(["", f"Full single-test wall median: **{median(wall):.3f}s**.",
+                          "Do not compare profile-mode times directly to ordinary unprofiled CI."])
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as out:
+              out.write("\n".join(summary) + "\n")
+          print("\n".join(summary))
+          PY
+
+      - name: Upload failure diagnosis only
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: offline-graph-profile-failure
+          path: |
+            .tests/e2e-failure-diagnostics.json
+            .tests/e2e-last-failed.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
