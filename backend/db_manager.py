@@ -5384,20 +5384,41 @@ class PRKSDatabase:
         forewords = self._biblatex_names_for_role(roles, "Foreword")
         afterwords = self._biblatex_names_for_role(roles, "Afterword")
 
-        if linked_authors:
-            author_str = " and ".join(linked_authors)
-        else:
-            author_str = None
+        # The visible Work credit line falls back to Author (text) when no
+        # linked Author exists. Preserve that credit in copied citations too.
+        text_credit = str(work.get("author_text") or "").strip()
+        # On a video, Author (text) is a channel/organization name, not
+        # semicolon-delimited Person names. BibLaTeX needs it braced as one.
+        corporate_credit = (
+            bool(text_credit) and not linked_authors
+            and effective_source_kind(
+                work.get("source_kind"), work.get("source_url"), work.get("file_path")
+            ) == "video"
+        )
+        text_authors = (
+            [text_credit] if corporate_credit
+            else [name.strip() for name in text_credit.split(";") if name.strip()]
+        )
+        author_str = " and ".join(linked_authors or text_authors) or None
 
         # Year: prefer dedicated year field, fall back to published_date prefix
         year = work.get('year') or (work.get('published_date', '')[:4] if work.get('published_date') else None)
 
         first_author_person = next((p for p in roles if p["role_type"] == "Author"), None)
-        first_author_last = (
-            self._biblatex_cite_key_part_from_person(first_author_person)
-            if first_author_person
-            else "Unknown"
-        )
+        if first_author_person:
+            first_author_last = self._biblatex_cite_key_part_from_person(first_author_person)
+        elif text_authors:
+            first = text_authors[0]
+            if corporate_credit:
+                key_part = first.split()[0]
+            elif "," in first:
+                family_words = first.split(",", 1)[0].split()
+                key_part = family_words[0] if family_words else ""
+            else:
+                key_part = first.split()[-1]
+            first_author_last = re.sub(r"[^\w]", "", key_part) or "Unknown"
+        else:
+            first_author_last = "Unknown"
         cite_key = f"{first_author_last}{year or 'UnknownYear'}"
 
         raw_dt = work.get("doc_type")
@@ -5421,7 +5442,10 @@ class PRKSDatabase:
         bibtex = f"@{entry_type}{{{cite_key},\n"
         bibtex += f"  title = {{{esc(work['title'])}}},\n"
         if author_str and _export("author"):
-            bibtex += f"  author = {{{esc(author_str)}}},\n"
+            author_value = esc(author_str)
+            if corporate_credit:
+                author_value = "{" + author_value + "}"  # BibLaTeX corporate name
+            bibtex += f"  author = {{{author_value}}},\n"
         if editors and _export("editor"):
             bibtex += f"  editor = {{{esc(' and '.join(editors))}}},\n"
         if translators and _export("translator"):
