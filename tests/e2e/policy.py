@@ -342,6 +342,7 @@ FEATURES = {
         "description": "Offline foundation + broad offline coherence (Work cache)",
         "selectors": (
             "tests.e2e.test_offline.OfflineFoundationTests",
+            "tests.e2e.test_classic_sw_transitions",
             "tests.e2e.test_local_store_durability",
             "tests.e2e.test_editor_recovery_store",
         ),
