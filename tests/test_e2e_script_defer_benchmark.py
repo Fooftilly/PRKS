@@ -72,10 +72,10 @@ class ScriptDeferBenchmarkTests(unittest.TestCase):
 
     def test_manual_ab_summary_executes_on_both_modes(self):
         flow = WORKFLOW.read_text(encoding="utf-8")
-        embedded = flow.split("          python - <<'PY'\\n", 1)[1].split(
-            "\\n          PY", 1
+        embedded = flow.split("          python - <<'PY'\n", 1)[1].split(
+            "\n          PY", 1
         )[0]
-        code = "\\n".join(line[10:] for line in embedded.splitlines()) + "\\n"
+        code = "\n".join(line[10:] for line in embedded.splitlines()) + "\n"
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             summary_path = root / "summary.md"
