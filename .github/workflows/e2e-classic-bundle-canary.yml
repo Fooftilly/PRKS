@@ -1,0 +1,77 @@
+name: E2E Temporary Classic Bundle Full-Suite Canary
+
+# Diagnostic only: the ordinary E2E gate, frontend and offline manifest remain unchanged.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-classic-bundle-canary-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    name: Classic bundle canary (${{ matrix.shard }}/6)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        with:
+          path: .playwright-browsers
+          key: >-
+            playwright-${{ runner.os }}-${{ hashFiles('requirements-dev.txt',
+            'tests/e2e/install_browser.py') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install runtime and E2E dependencies
+        run: >-
+          python -m pip install --isolated --disable-pip-version-check
+          "--only-binary=:all:" "PyMuPDF==1.28.2" "Pillow==12.3.0" "pydantic==2.13.5"
+          "playwright==1.63.0"
+
+      - name: Ensure Chromium in repo cache
+        run: python tests/e2e/install_browser.py
+
+      - name: Run complete E2E suite shard with temporary bundles
+        env:
+          PRKS_E2E_SHARD_INDEX: ${{ matrix.shard }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m scripts.e2e_classic_bundle_canary --shard "$PRKS_E2E_SHARD_INDEX"
+
+      - name: Upload shard failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: bundle-canary-shard-${{ matrix.shard }}-failure
+          path: |
+            .tests/e2e-failure-diagnostics.json
+            .tests/e2e-last-failed.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7

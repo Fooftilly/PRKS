@@ -1,0 +1,135 @@
+"""Guards for the isolated six-shard temporary classic-script bundle canary."""
+from __future__ import annotations
+
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from scripts.benchmark_classic_script_bundle import HEAD_URL, BODY_URL
+from scripts.e2e_classic_bundle_canary import SHARD_COUNT, run_canary
+
+ROOT = Path(__file__).resolve().parents[1]
+WORKFLOW = ROOT / ".github/workflows/e2e-classic-bundle-canary.yml"
+
+
+def _fixture(root: Path) -> Path:
+    frontend = root / "frontend"
+    js = frontend / "js"
+    js.mkdir(parents=True)
+    (js / "head.js").write_text("window.headTest = 1;\n", encoding="utf-8")
+    (js / "body.js").write_text("window.bodyTest = 1;\n", encoding="utf-8")
+    (js / "tail.js").write_text("window.tailTest = 1;\n", encoding="utf-8")
+    (js / "module.js").write_text("export const test = 1;\n", encoding="utf-8")
+    (frontend / "index.html").write_text(
+        '<!doctype html><html>\n<head>\n'
+        '<script src="/js/head.js"></script>\n'
+        '</head>\n<body>\n'
+        '<script src="/js/body.js"></script>\n'
+        '<script type="module" src="/js/module.js"></script>\n'
+        '<script src="/js/tail.js"></script>\n'
+        '</body>\n</html>\n',
+        encoding="utf-8",
+    )
+    return root
+
+
+class ClassicBundleCanaryTests(unittest.TestCase):
+    def test_shard_uses_full_suite_single_worker_and_isolated_bundle_files(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _fixture(Path(td))
+            index = root / "frontend/index.html"
+            before = index.read_bytes()
+            seen = []
+
+            def fake_run(command, *, cwd, check, env=None):
+                self.assertEqual(cwd, root)
+                self.assertTrue(check)
+                seen.append((command, env))
+                if env is not None:
+                    self.assertIn(HEAD_URL, index.read_text(encoding="utf-8"))
+                    self.assertIn(BODY_URL, index.read_text(encoding="utf-8"))
+                    self.assertEqual(command[1:], [
+                        "tests/e2e/run.py", "--jobs", "1", "--shard",
+                        f"4/{SHARD_COUNT}", "--no-pointer-capture",
+                    ])
+                    self.assertNotIn("--feature", command)
+                    self.assertEqual(env["PRKS_E2E_ROUTE_FASTPATH"], "0")
+                    self.assertEqual(env["PRKS_E2E_MODE"], "full")
+                    self.assertEqual(env["PRKS_E2E"], "1")
+                    self.assertEqual(env["PRKS_E2E_PROFILE"], "0")
+                return None
+
+            with (
+                patch("scripts.e2e_classic_bundle_canary.shutil.which", return_value="/usr/bin/node"),
+                patch("scripts.e2e_classic_bundle_canary.subprocess.run", side_effect=fake_run),
+            ):
+                run_canary(root, 4)
+            self.assertEqual(len(seen), 3)
+            self.assertEqual(index.read_bytes(), before)
+            self.assertFalse((root / "frontend" / HEAD_URL.lstrip("/")).exists())
+            self.assertFalse((root / "frontend" / BODY_URL.lstrip("/")).exists())
+
+    def test_restores_index_after_real_candidate_run_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _fixture(Path(td))
+            index = root / "frontend/index.html"
+            before = index.read_bytes()
+
+            def fail_after_bundle(command, *, cwd, check, env=None):
+                if env is not None:
+                    self.assertNotEqual(index.read_bytes(), before)
+                    self.assertIn(BODY_URL, index.read_text(encoding="utf-8"))
+                    raise RuntimeError("simulated E2E failure")
+                return None
+
+            with (
+                patch("scripts.e2e_classic_bundle_canary.shutil.which", return_value="/usr/bin/node"),
+                patch("scripts.e2e_classic_bundle_canary.subprocess.run", side_effect=fail_after_bundle),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "simulated E2E failure"):
+                    run_canary(root, 2)
+            self.assertEqual(index.read_bytes(), before)
+            self.assertFalse((root / "frontend" / HEAD_URL.lstrip("/")).exists())
+            self.assertFalse((root / "frontend" / BODY_URL.lstrip("/")).exists())
+
+    def test_invalid_shards_and_preexisting_assets_fail_closed(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _fixture(Path(td))
+            index = root / "frontend/index.html"
+            before = index.read_bytes()
+            for bad in (0, 7, -1, 1.0, "1"):
+                with self.subTest(shard=bad), self.assertRaises(ValueError):
+                    run_canary(root, bad)
+            self.assertEqual(index.read_bytes(), before)
+            bundle = root / "frontend" / HEAD_URL.lstrip("/")
+            bundle.write_text("sentinel", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "already exists"):
+                run_canary(root, 1)
+            self.assertEqual(bundle.read_text(encoding="utf-8"), "sentinel")
+            self.assertEqual(index.read_bytes(), before)
+
+    def test_missing_node_does_not_mutate_source(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _fixture(Path(td))
+            index = root / "frontend/index.html"
+            before = index.read_bytes()
+            with patch("scripts.e2e_classic_bundle_canary.shutil.which", return_value=None):
+                with self.assertRaisesRegex(ValueError, "Node.js"):
+                    run_canary(root, 1)
+            self.assertEqual(index.read_bytes(), before)
+            self.assertFalse((root / "frontend" / HEAD_URL.lstrip("/")).exists())
+
+    def test_workflow_is_explicit_six_shard_manual_canary(self):
+        source = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("workflow_dispatch:", source)
+        self.assertNotIn("pull_request:", source)
+        self.assertNotIn("push:", source)
+        self.assertIn("shard: [1, 2, 3, 4, 5, 6]", source)
+        self.assertIn("fail-fast: false", source)
+        self.assertIn("persist-credentials: false", source)
+        self.assertIn("python -m scripts.e2e_classic_bundle_canary --shard", source)
+
+
+if __name__ == "__main__":
+    unittest.main()
