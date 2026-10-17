@@ -4790,6 +4790,8 @@ class WorkspaceTabsTests(_BrowserE2E):
         )
         # Reverting X to pre-save V after the X ACK must enqueue a real V edit.
         # A false unchanged-success would leave X on the server.
+        # Empty reminders are stored as SQL NULL, so the GET returns JSON null.
+        # The UI and note sync scope consistently treat it as empty text.
         desired_text = stale_work.get("private_notes") or ""
         page.locator(selector).fill(desired_text)
         page.locator(selector).press("Tab")
@@ -4799,7 +4801,7 @@ class WorkspaceTabsTests(_BrowserE2E):
                 prksSync.store.listOperations(),
                 fetch('/api/works/' + id).then(r => r.ok ? r.json() : null)
             ]).then(([rows, work]) =>
-                !!(work && work.private_notes === text
+                !!(work && (work.private_notes ?? '') === text
                    && rows.every(r => r.operation !== 'SET_WORK_PRIVATE_NOTE'
                        || r.entity_id !== id || r.status === 'acknowledged')))""",
             arg=[work_a, desired_text],
@@ -4808,7 +4810,7 @@ class WorkspaceTabsTests(_BrowserE2E):
         )
         persisted = page.request.get(server_url, timeout=5000)
         self.assertTrue(persisted.ok)
-        self.assertEqual(persisted.json().get("private_notes"), desired_text)
+        self.assertEqual(persisted.json().get("private_notes") or "", desired_text)
 
 
     def _assert_carried_reminder_conflict(self, page, collector, work_id,
