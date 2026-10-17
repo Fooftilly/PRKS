@@ -27,6 +27,13 @@ Do not encode conflicting overrides of load-bearing root invariants (storage
 safety, privacy/logging, issue taxonomy, etc.); keep nested files additive
 refinements and routers instead of relying on root precedence to win a conflict.
 
+## Pull request merge coordination
+
+- Every PR merge into `master` requires the maintainer's explicit approval. Agents may prepare, review, and fix PRs but must not merge them, enable GitHub auto-merge, comment `@mergifyio queue`, or enable Mergify's Merge Queue or auto-merge rules. The Mergify Merge Queue product is intentionally disabled in the dashboard; the `.mergify.yml` file cannot disable it by itself.
+- For a genuine **PR-to-PR merge prerequisite**, put a separate `Depends-On: #<PR number>` line in the dependent PR's description (or the fully qualified PR URL for a cross-repo dependency within the same organization). Use this only when the dependent PR cannot safely merge before the prerequisite PR. Do **not** use `Depends-On:` for GitHub Issue dependencies, generic related work, or merely overlapping changes.
+- After declaring a PR dependency, inspect the `Mergify Merge Protections` check and confirm that it identifies the outstanding prerequisite. Mergify's status is advisory until that check is added to the active GitHub `master` ruleset; agents must still check dependencies and stop before manual merging.
+- Do not close, resolve, or bypass a dependency by editing PR descriptions solely to obtain a green status. Reassess the actual technical prerequisite; removing a satisfied, obsolete, or incorrect dependency requires an explanation.
+
 ## Current implementation vs target architecture
 
 Agents must distinguish **implemented constraints** from **accepted target architecture**.
