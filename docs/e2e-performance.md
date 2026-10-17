@@ -389,6 +389,42 @@ full six-shard E2E gate before proposing any production adoption.
 Open **Actions → E2E Classic Script Coalescing A/B Benchmark → Run workflow**
 on a master commit that includes the workflow.
 
+### Classic script coalescing: measured improvement and full-suite canary
+
+The [October 17 classic-script coalescing benchmark](https://github.com/Fooftilly/PRKS/actions/runs/39022151709)
+passed all 40 selected tests in each of its four ABBA trials. Same-runner
+baseline trials took **61.69s** and **62.01s**; temporary head/body bundles
+took **57.38s** and **57.56s**. Median wall time changed **61.85s → 57.47s**
+(**−7.08%**). Across the same 38/38 navigations in each trial,
+response-end→DOMContentLoaded aggregate fell **15.67s → 11.59s**,
+and Playwright app-readiness aggregate fell **19.50s → 15.45s**.
+Nested timings overlap their parents and do not represent additional savings.
+This result supports *further testing*, not production deployment.
+
+The **E2E Temporary Classic Bundle Full-Suite Canary** workflow tests the
+same generated candidate against all six complete external E2E shards in
+parallel, without replacing the normal full gate. It must be invoked manually
+from Actions on a commit containing the workflow. Each job checks out an
+isolated workspace, generates the exact two temporary bundles using the
+existing diagnostic builder, validates JavaScript with `node --check`,
+rewrites the local `index.html` only for the job, then executes
+`python tests/e2e/run.py --jobs 1 --shard INDEX/6 --no-pointer-capture`.
+The routing fast path remains OFF. All jobs restore original HTML and remove
+temporary assets even on failure; pre-existing candidate filenames cause a
+fail-closed abort. Every shard must pass; there is no aggregate check that
+can mask one failed shard. The manual workflow never edits master or
+production assets.
+
+**Remaining caveats before adoption:** E2E browser contexts block service
+workers, so even a green six-shard canary does **not** establish offline/PWA
+equivalence. The service worker currently maintains an explicit static precache
+for all 84 individual script assets, and `DEPENDENCY_REVISION` is linked to
+the dependency manifest. A future production design must account for cache
+revision, offline install/upgrade, rollback and generated artifact freshness,
+and assess global/script semantics and source attribution. Recheck the
+performance result in additional same-runner ABBA runs before changing
+production. Do not merge a production bundle without these checks.
+
 ### Opt-in hang diagnostics and Chromium recycle
 
 `PRKS_E2E_DIAGNOSTIC=1` prints privacy-safe stage heartbeats (`START`,
