@@ -312,6 +312,40 @@ promising improvement using paired, fully profiled six-shard runs before
 changing defaults. Comparing four small feature selections does **not**
 establish a full-suite performance gain.
 
+### One-run classic-script deferral A/B (manual only)
+
+The independent **E2E Classic Script Deferral A/B Benchmark** is a targeted
+experiment following measured browser response-end → `domInteractive` costs.
+The baseline is the committed `frontend/index.html`. The alternate HTML
+adds `defer` to external classic script tags, preserving classic script
+source paths and relative order. Because a module tag originally appears amid
+parser-blocking classics (and normally runs after them), the temporary
+candidate moves the **unmodified module tags after the deferred classics**
+to preserve classic-before-module execution order. This is deliberate:
+deferring classics without moving the module tags would change their execution
+order and confound the experiment. The candidate preserves module source URLs
+and relative order. Only the manual workflow generates this variant in a
+temporary file and copies it over the
+working tree's HTML between runs. A shell trap restores the original HTML.
+**Production HTML, JavaScript, service-worker precache and ordinary CI are
+not changed.**
+
+The workflow runs the same real `--feature shell --feature work-create` E2E
+selection in **baseline → deferred → deferred → baseline** order, after an
+unmeasured baseline warm-up, on the same runner and commit. The routing fast
+path is OFF in both arms, and both use real browser readiness checks and
+per-test process/storage/context isolation. All trials must pass. The
+summary reports elapsed wall time, the inclusive startup phases, browser DOM
+milestones and verified navigation sample coverage. A failed/partial run
+cannot be treated as evidence for the alternate loading strategy. If the
+alternate mode is faster, repeat before proposing any production loading
+change, then confirm it with the full six-shard E2E gate. If it is slower or
+breaks behavior, do not change production script loading.
+
+Open **Actions → E2E Classic Script Deferral A/B Benchmark → Run workflow**
+on a `master` commit containing that workflow. Keep the existing routing
+A/B benchmark unchanged; the two experiments measure different decisions.
+
 ### Opt-in hang diagnostics and Chromium recycle
 
 `PRKS_E2E_DIAGNOSTIC=1` prints privacy-safe stage heartbeats (`START`,
