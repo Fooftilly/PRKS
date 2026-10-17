@@ -1031,7 +1031,7 @@ async function reconciliation() {
         'stale convergence fences People Graph');
 }
 
-function committedHandoffAcrossRouteGenerations() {
+async function committedHandoffAcrossRouteGenerations() {
     const vm = require('node:vm');
     const src = fs.readFileSync(path.join(__dirname, '../../frontend/js/ui.js'), 'utf8');
     const from = src.indexOf('function prksPrivateNoteFamily(');
@@ -1153,10 +1153,39 @@ function committedHandoffAcrossRouteGenerations() {
     const folderSession = api.prksEnsurePrivateNoteSession(folder, folderCtx, 'a', 'folder text');
     assert.equal(folderSession.draftText, 'folder text');
     assert.equal(folderSession.handoffBase, null, 'Folder revision handling is unchanged');
+
+    // Use the real Work save adapter to prove a held edit cannot silently
+    // adopt the new route's revision. A newer remote note (revision 6) must
+    // reject this write against the held text's earlier observed revision 4.
+    const saveStart = src.indexOf('async function prksSaveWorkPrivateNoteForSession(');
+    const saveEnd = src.indexOf('/**\\n * The Folder Reminders durable save', saveStart);
+    assert.ok(saveStart > 0 && saveEnd > saveStart, 'Work save adapter found');
+    let attempted;
+    const saveScope = {
+        prksWorkNoteObserved: () => ({ value: 'foreign device text', revision: 6 }),
+        prksSaveWorkNoteDurably: async (_id, _kind, _text, base) => {
+            attempted = { value: base.value, revision: base.revision };
+            return { code: base.revision === 6 ? 'saved' : 'conflict' };
+        },
+    };
+    vm.runInNewContext(src.slice(saveStart, saveEnd), saveScope, { filename: 'ui.js:work-save' });
+    const editor = {
+        ctx: { ui: { workPrivateNoteSession: remount },
+            getEntity: () => ({ id: 'a' }) },
+    };
+    const pinned = await saveScope.prksSaveWorkPrivateNoteForSession(
+        editor, 'a', 'an edit after hiding a remote change');
+    assert.deepEqual(attempted, { value: 'stale server text', revision: 4 });
+    assert.equal(pinned.result.code, 'conflict');
+    assert.deepEqual({ ...pinned.base }, { value: 'stale server text', revision: 4 });
+    editor.ctx.ui.workPrivateNoteSession = latest;
+    const normal = await saveScope.prksSaveWorkPrivateNoteForSession(editor, 'a', 'normal edit');
+    assert.deepEqual(attempted, { value: 'foreign device text', revision: 6 });
+    assert.equal(normal.result.code, 'saved');
 }
 
 async function main() {
-    committedHandoffAcrossRouteGenerations();
+    await committedHandoffAcrossRouteGenerations();
     acknowledgedBase();
     handlerContract();
     enqueueSelectsAcknowledgedObserved();
