@@ -108,7 +108,6 @@ _E2E_DIAG_LINE = re.compile(r"^\[e2e-diag\]\s+(\S+)(?:\s+(\S+))?\s*$")
 E2E_MODULES = (
     "tests.e2e.test_app",
     "tests.e2e.test_offline",
-    "tests.e2e.test_classic_sw_transitions",
     "tests.e2e.test_browse_offline",
     "tests.e2e.test_work_browsing",
     "tests.e2e.test_progress_route_surface",
@@ -145,6 +144,13 @@ E2E_MODULES = (
     "tests.e2e.test_modal_lifecycle",
     "tests.e2e.test_wait_for_async",
 )
+
+# Release-transition checks manipulate two distribution versions at one origin.
+# They require the *unbundled source* and are intentionally excluded from the
+# normal full/affected/published-distribution inventories. Still use this runner
+# to get named test IDs, last-failed data, timing and targeted reproduction.
+if os.environ.get("PRKS_E2E_CLASSIC_SW_TRANSITIONS") == "1":
+    E2E_MODULES += ("tests.e2e.test_classic_sw_transitions",)
 
 SLOWEST_LIMIT = 25
 WORKER_POLL_S = 0.25
