@@ -1,0 +1,149 @@
+name: E2E Graph First Navigation Probe
+
+# Temporary PR-only measurement. Remove the pull_request trigger after
+# collecting the same-runner default-vs-position-first results for #740.
+on:
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-graph-order-probe-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    if: github.head_ref == 'perf/graph-first-navigation-probe-740'
+    name: Compare first Graph round trip by record kind
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        with:
+          path: .playwright-browsers
+          key: >-
+            playwright-${{ runner.os }}-${{ hashFiles('requirements-dev.txt',
+            'tests/e2e/install_browser.py') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install pinned E2E dependencies
+        run: >-
+          python -m pip install --isolated --disable-pip-version-check
+          "--only-binary=:all:" "PyMuPDF==1.28.2" "Pillow==12.3.0" "pydantic==2.13.5"
+          "playwright==1.63.0"
+
+      - name: Ensure Chromium
+        run: python tests/e2e/install_browser.py
+
+      - name: Counterbalanced Graph navigation order probe
+        shell: bash
+        env:
+          PRKS_E2E_PROFILE: "1"
+          TARGET: tests.e2e.test_research_graph_offline.ResearchGraphOfflineTests.test_record_graph_navigation_both_directions
+        run: |
+          set -euo pipefail
+          # Both modes run identical cache warm-ups and all five assertions.
+          # Excluded warm-ups reduce Python/Chromium one-time setup effects.
+          for mode in default position_first; do
+            echo "::group::Warm-up $mode"
+            PRKS_E2E_GRAPH_NAV_ORDER="$mode" PRKS_E2E_BENCHMARK_RESULT="" \
+              python tests/e2e/run.py --jobs 1 --no-pointer-capture --profile "$TARGET"
+            echo "::endgroup::"
+          done
+          trial=0
+          for mode in default position_first position_first default default position_first; do
+            trial=$((trial + 1))
+            echo "::group::Measured trial $trial ($mode)"
+            PRKS_E2E_GRAPH_NAV_ORDER="$mode" \
+              PRKS_E2E_BENCHMARK_RESULT="$RUNNER_TEMP/graph-order-$trial.json" \
+              python tests/e2e/run.py --jobs 1 --no-pointer-capture --profile "$TARGET"
+            echo "::endgroup::"
+          done
+
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from statistics import median
+
+          modes = ("default", "position_first", "position_first",
+                   "default", "default", "position_first")
+          outputs = {}
+          for i, mode in enumerate(modes, start=1):
+              result = json.loads((Path(os.environ["RUNNER_TEMP"]) /
+                                   f"graph-order-{i}.json").read_text())
+              if any(result.get(k) != v for k, v in (
+                  ("tests", 1), ("failures", 0), ("errors", 0), ("skipped", 0)
+              )):
+                  raise SystemExit(f"Trial {i} ({mode}) did not run exactly one passing test")
+              outputs.setdefault(mode, []).append(result)
+
+          rows = [
+              ("Total test wall", "wall_seconds"),
+              ("Concept total", "graph_nav_roundtrip_1_concept"),
+              ("Position total", "graph_nav_roundtrip_2_position"),
+          ]
+          for kind, index in (("concept", 1), ("position", 2)):
+              for stage in ("enter", "to_graph", "return"):
+                  rows.append((
+                      f"{kind.title()} {stage}",
+                      f"graph_nav_stage_{index}_{kind}_{stage}",
+                  ))
+          summary = [
+              "## Graph order probe (same PR checkout, same runner)",
+              "",
+              "Two excluded warm-ups; six measured runs interleaved A B B A A B.",
+              "Default tests Concept first; position_first tests Position first.",
+              "Each run uses a fresh server, browser context, all five records and unchanged assertions.",
+              "",
+              "| Diagnostic | Concept-first median (s) | Position-first median (s) |",
+              "| --- | ---: | ---: |",
+          ]
+          for label, name in rows:
+              per_mode = {}
+              for mode, results in outputs.items():
+                  values = []
+                  for r in results:
+                      if name == "wall_seconds":
+                          values.append(float(r["wall_seconds"]))
+                      else:
+                          p = r["phase_seconds"]
+                          if name not in p:
+                              raise SystemExit(f"Missing {name} in {mode} trial")
+                          values.append(float(p[name]))
+                  per_mode[mode] = median(values)
+              summary.append(
+                  f"| {label} | {per_mode['default']:.3f} | "
+                  f"{per_mode['position_first']:.3f} |"
+              )
+          summary.extend([
+              "",
+              "Read total roundtrip against its position; stage timers are nested within",
+              "roundtrip totals. Do not sum nested or generic infrastructure phases.",
+              "No normal CI test order is modified outside this diagnostic run.",
+          ])
+          message = "\n".join(summary) + "\n"
+          print(message)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as out:
+              out.write(message)
+          PY
