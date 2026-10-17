@@ -430,10 +430,31 @@ function initPrksConceptDetailReturnRefresh() {
  * vocabulary supplies the NAME of a parent or child created on this device,
  * which no cache holds.
  */
+function prksConceptDetailNeedsCatalogue(ops) {
+    // The catalogue supplies names only when pending parent-set operations
+    // add/relink Concept parents or children. With no such operation, the
+    // acknowledged detail already names those relationships. This predicate
+    // must match concept-state.js pendingParents() (including conflicted rows).
+    return Array.isArray(ops) && ops.some(op => op &&
+        op.entity_type === 'concept' && op.operation === 'SET_CONCEPT_PARENTS' &&
+        op.status !== 'acknowledged');
+}
+
 async function prksEffectiveConceptDetailView(item, conceptOps, stale) {
     await prksHydratePendingWorkMetadata();
     if (stale()) return null;
-    const conceptCatalogue = typeof prksEffectiveConceptCatalogue === 'function'
+    // ONLINE: this read also refreshes concepts:index after Notes saves and
+    // Concept-domain invalidations, so it must stay awaited even when no
+    // hierarchy edit is pending. Otherwise a detail opened while connected
+    // would cease preparing the list for later offline reparenting.
+    // OFFLINE: a read cannot rewarm the index; without pending parent edits,
+    // the acknowledged detail already names its parents and children. Skip
+    // the extra failed fetch/cache fallback on this common navigation path.
+    const confidentlyOffline = typeof prksOfflineRuntimeState === 'function' &&
+        prksOfflineRuntimeState() === 'offline';
+    const needsCatalogue = !confidentlyOffline ||
+        prksConceptDetailNeedsCatalogue(conceptOps);
+    const conceptCatalogue = needsCatalogue && typeof prksEffectiveConceptCatalogue === 'function'
         ? await prksEffectiveConceptCatalogue(conceptOps) : [];
     if (stale()) return null;
     const overlaid = typeof prksEffectiveConceptDetail === 'function'

@@ -29,6 +29,15 @@ class ConceptSyncFrontendTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn('checks passed', proc.stdout)
 
+    def test_concept_detail_skips_catalogue_only_without_pending_hierarchy(self):
+        """Real app.js fast path preserves parent-intent, conflict and stale guards."""
+        proc = subprocess.run(
+            ['node', str(ROOT / 'tests' / 'browser' /
+                         'run_concept_detail_catalogue_selftest.js')],
+            cwd=ROOT, capture_output=True, text=True, timeout=30)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn('catalogue fast-path checks passed', proc.stdout)
+
     def test_an_acknowledged_definition_lands_before_its_revision(self):
         """#568: the shown text moves first, then the editor's base, whose text
         and revision are written together in the one state entry."""
