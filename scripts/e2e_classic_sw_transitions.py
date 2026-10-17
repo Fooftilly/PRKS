@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-import os
 from pathlib import Path
 import re
 import tempfile
@@ -28,9 +27,6 @@ EXPORTS = (
     "createPrksOfflineStore",
     "prksOfflineNoteRequestFailure",
     "prksGetResearchGraphDebug",
-)
-CACHE_DECL = re.compile(
-    r"const (SHELL_CACHE|STATIC_CACHE) = 'prks-(?:shell|static)-'"
 )
 CONTROL_TIMEOUT = 45000
 
