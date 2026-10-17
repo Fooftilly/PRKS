@@ -1073,11 +1073,13 @@ class RunnerDiscoveryTests(unittest.TestCase):
         it is not "not yet wired up" -- it is a suite nobody runs, which is
         indistinguishable from having no coverage at all."""
         with _import_runner() as runner:
-            listed = set(runner.E2E_MODULES)
+            normal = set(runner.DEFAULT_E2E_MODULES)
+            opt_in = set(runner.OPT_IN_E2E_MODULES)
         directory = Path(__file__).resolve().parents[1] / "tests" / "e2e"
         on_disk = {"tests.e2e." + path.stem for path in sorted(directory.glob("test_*.py"))}
-        self.assertEqual(on_disk - listed, set(), "add these to run.py's E2E_MODULES")
-        self.assertEqual(listed - on_disk, set(), "these E2E modules no longer exist")
+        self.assertFalse(normal & opt_in, "opt-in tests cannot be in required gates")
+        self.assertEqual(on_disk - normal - opt_in, set(), "register in default or opt-in inventory")
+        self.assertEqual((normal | opt_in) - on_disk, set(), "declared E2E module no longer exists")
 
     def test_discovery_yields_individual_test_ids_for_every_e2e_module(self):
         with _import_runner() as runner:
