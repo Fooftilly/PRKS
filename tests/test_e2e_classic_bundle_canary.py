@@ -7,7 +7,9 @@ import unittest
 from unittest.mock import patch
 
 from scripts.benchmark_classic_script_bundle import HEAD_URL, BODY_URL
-from scripts.e2e_classic_bundle_canary import SHARD_COUNT, _require_boot_exports, run_canary
+from scripts.e2e_classic_bundle_canary import (
+    SHARD_COUNT, _require_boot_exports, _temporary_service_worker, run_canary,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/e2e-classic-bundle-canary.yml"
@@ -31,6 +33,14 @@ def _fixture(root: Path) -> Path:
         '</body>\n</html>\n',
         encoding="utf-8",
     )
+    (frontend / "sw.js").write_text(
+        "const STATIC_PRECACHE_PATHS = [\n"
+        "        '/vue/prks-vue.js',\n"
+        "    ];\n"
+        "const STATIC_EXTRA_PATHS = "
+        "['/manifest.webmanifest', '/favicon.svg', '/logo.svg'];\n",
+        encoding="utf-8",
+    )
     return root
 
 
@@ -40,6 +50,8 @@ class ClassicBundleCanaryTests(unittest.TestCase):
             root = _fixture(Path(td))
             index = root / "frontend/index.html"
             before = index.read_bytes()
+            worker = root / "frontend/sw.js"
+            worker_before = worker.read_bytes()
             seen = []
 
             def fake_run(command, *, cwd, check, env=None):
@@ -47,6 +59,8 @@ class ClassicBundleCanaryTests(unittest.TestCase):
                 self.assertTrue(check)
                 seen.append((command, env))
                 if env is not None:
+                    self.assertIn(HEAD_URL, worker.read_text(encoding="utf-8"))
+                    self.assertIn(BODY_URL, worker.read_text(encoding="utf-8"))
                     self.assertIn(HEAD_URL, index.read_text(encoding="utf-8"))
                     self.assertIn(BODY_URL, index.read_text(encoding="utf-8"))
                     self.assertEqual(command[1:], [
@@ -65,8 +79,9 @@ class ClassicBundleCanaryTests(unittest.TestCase):
                 patch("scripts.e2e_classic_bundle_canary.subprocess.run", side_effect=fake_run),
             ):
                 run_canary(root, 4)
-            self.assertEqual(len(seen), 3)
+            self.assertEqual(len(seen), 4)
             self.assertEqual(index.read_bytes(), before)
+            self.assertEqual(worker.read_bytes(), worker_before)
             self.assertFalse((root / "frontend" / HEAD_URL.lstrip("/")).exists())
             self.assertFalse((root / "frontend" / BODY_URL.lstrip("/")).exists())
 
@@ -75,6 +90,8 @@ class ClassicBundleCanaryTests(unittest.TestCase):
             root = _fixture(Path(td))
             index = root / "frontend/index.html"
             before = index.read_bytes()
+            worker = root / "frontend/sw.js"
+            worker_before = worker.read_bytes()
 
             def fail_after_bundle(command, *, cwd, check, env=None):
                 if env is not None:
@@ -90,6 +107,7 @@ class ClassicBundleCanaryTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "simulated E2E failure"):
                     run_canary(root, 2)
             self.assertEqual(index.read_bytes(), before)
+            self.assertEqual(worker.read_bytes(), worker_before)
             self.assertFalse((root / "frontend" / HEAD_URL.lstrip("/")).exists())
             self.assertFalse((root / "frontend" / BODY_URL.lstrip("/")).exists())
 
@@ -144,6 +162,8 @@ class ClassicBundleCanaryTests(unittest.TestCase):
             root = _fixture(Path(td))
             index = root / "frontend/index.html"
             original = index.read_bytes()
+            worker = root / "frontend/sw.js"
+            worker_before = worker.read_bytes()
             invoked = []
 
             def fail_after_browser_open():
@@ -151,6 +171,7 @@ class ClassicBundleCanaryTests(unittest.TestCase):
                 self.assertNotEqual(index.read_bytes(), original)
                 self.assertIn(BODY_URL, index.read_text(encoding="utf-8"))
                 self.assertTrue((root / "frontend" / BODY_URL.lstrip("/")).exists())
+                self.assertIn(BODY_URL, worker.read_text(encoding="utf-8"))
                 raise RuntimeError("missing browser export")
 
             def fake_check(command, *, cwd, check, env=None):
@@ -167,12 +188,41 @@ class ClassicBundleCanaryTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(RuntimeError, "missing browser export"):
                     run_canary(root, preflight=True)
-            self.assertEqual(invoked, ["node", "node", "browser"])
+            self.assertEqual(invoked, ["node", "node", "node", "browser"])
             self.assertEqual(index.read_bytes(), original)
+            self.assertEqual(worker.read_bytes(), worker_before)
             self.assertFalse((root / "frontend" / HEAD_URL.lstrip("/")).exists())
             self.assertFalse((root / "frontend" / BODY_URL.lstrip("/")).exists())
             with self.assertRaisesRegex(ValueError, "preflight may not"):
                 run_canary(root, 1, preflight=True)
+
+    def test_temporary_sw_includes_bundles_in_required_cache_and_fetch_allowlist(self):
+        source = (ROOT / "frontend/sw.js").read_text(encoding="utf-8")
+        candidate = _temporary_service_worker(source)
+        self.assertNotEqual(candidate, source)
+        after_required = candidate.split("const STATIC_PRECACHE_PATHS = [", 1)[1]
+        for url in (HEAD_URL, BODY_URL):
+            self.assertNotIn(url, source)
+            self.assertIn("'" + url + "'", after_required)
+            self.assertIn("'" + url + "'", candidate.split("const STATIC_EXTRA_PATHS = [", 1)[1])
+        with self.assertRaisesRegex(ValueError, "already lists"):
+            _temporary_service_worker(candidate)
+        with self.assertRaisesRegex(ValueError, "manifest structure"):
+            _temporary_service_worker(source.replace(
+                "const STATIC_EXTRA_PATHS = ", "const STATIC_CHANGED_EXTRA_PATHS = "
+            ))
+
+    def test_service_worker_staging_failure_preserves_files(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _fixture(Path(td))
+            sw = root / "frontend/sw.js"
+            index = root / "frontend/index.html"
+            sw.write_text("unrecognized worker", encoding="utf-8")
+            before = index.read_bytes()
+            with self.assertRaisesRegex(ValueError, "manifest structure"):
+                run_canary(root, 1)
+            self.assertEqual(sw.read_text(encoding="utf-8"), "unrecognized worker")
+            self.assertEqual(index.read_bytes(), before)
 
     def test_workflow_is_explicit_six_shard_manual_canary(self):
         source = WORKFLOW.read_text(encoding="utf-8")
