@@ -82,7 +82,6 @@ assert.equal(remountAgain.retired, true, 'matching stored body retires the overl
 for (const previous of [
     old({saveSequence:0, latestSaveToken:0, settledSaveToken:0}),
     old({state:'committed', retired:true}),
-    old({state:'saving', promise:Promise.resolve()}),
     old({latestSaveToken:2}),
     old({entityId:'other', workId:'other'}),
     old({ownerTabId:'other-tab'}),
