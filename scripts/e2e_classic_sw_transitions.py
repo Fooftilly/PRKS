@@ -12,6 +12,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import re
 import tempfile
+import time
 from threading import Thread
 from typing import Iterator
 from urllib.parse import urlsplit
@@ -99,13 +100,22 @@ def await_version(page, expected: set[str], obsolete: set[str]) -> None:
     # Check cache promotion AND retirement, not merely the HTTP 200 of /sw.js.
     # The latter can succeed even if a required asset failed installation.
     page.wait_for_function(
-        """([expect, old]) => caches.keys().then(keys =>
-           expect.every(name => keys.includes(name)) &&
-           old.every(name => !keys.includes(name)) &&
-           !!(navigator.serviceWorker && navigator.serviceWorker.controller)
-        )""",
-        arg=[sorted(expected), sorted(obsolete)],
+        "() => !!(navigator.serviceWorker && navigator.serviceWorker.controller)",
         timeout=CONTROL_TIMEOUT,
+    )
+    deadline = time.monotonic() + CONTROL_TIMEOUT / 1000
+    names: set[str] = set()
+    while time.monotonic() < deadline:
+        # Explicit page.evaluate awaits the returned CacheStorage Promise.
+        # Do not depend on wait_for_function interpreting a Promise as a
+        # resolved boolean -- that let the staging-cache race slip through.
+        names = set(page.evaluate("() => caches.keys()"))
+        if expected.issubset(names) and not (obsolete & names):
+            return
+        time.sleep(0.2)
+    raise AssertionError(
+        f"service worker cache promotion timeout: expected={sorted(expected)}, "
+        f"obsolete={sorted(obsolete)}, found={sorted(names)}"
     )
 
 
