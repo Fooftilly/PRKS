@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import unittest
+from http.client import HTTPConnection
 from pathlib import Path
 
 from scripts.build_classic_distribution import render_assets
@@ -35,11 +36,16 @@ class ClassicReleaseTransitionTests(unittest.TestCase):
     def test_single_origin_can_switch_between_static_releases(self):
         source = ReleaseSource(ROOT / "frontend")
         with serve(source) as origin:
-            from urllib.request import urlopen
-            with urlopen(origin + "/sw.js", timeout=5) as response:
+            port = int(origin.rsplit(":", 1)[1])
+            connection = HTTPConnection("127.0.0.1", port, timeout=5)
+            try:
+                connection.request("GET", "/sw.js")
+                response = connection.getresponse()
                 self.assertEqual(response.status, 200)
-                self.assertEqual(response.headers["Cache-Control"], "no-store")
+                self.assertEqual(response.getheader("Cache-Control"), "no-store")
                 self.assertIn(b"DEPENDENCY_REVISION", response.read())
+            finally:
+                connection.close()
             self.assertEqual(source.frontend, ROOT / "frontend")
 
 
