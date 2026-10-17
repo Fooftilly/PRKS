@@ -70,6 +70,73 @@ class ScriptDeferBenchmarkTests(unittest.TestCase):
         self.assertIn('captured', flow)
         self.assertIn('browser DOM milestone totals disagree', flow)
 
+    def test_manual_ab_summary_executes_on_both_modes(self):
+        flow = WORKFLOW.read_text(encoding="utf-8")
+        embedded = flow.split("          python - <<'PY'\\n", 1)[1].split(
+            "\\n          PY", 1
+        )[0]
+        code = "\\n".join(line[10:] for line in embedded.splitlines()) + "\\n"
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            summary_path = root / "summary.md"
+            phases = {
+                "routing_decision": 0.13,
+                "server_start": 11.98,
+                "server_spawn": 0.02,
+                "server_http_ready": 11.96,
+                "app_ready": 13.92,
+                "app_navigation": 11.49,
+                "app_sidebar_wait": 1.79,
+                "app_folder_wait": 0.57,
+                "app_route_wait": 0.07,
+                "nav_response_wait": 0.25,
+                "nav_response_body": 0.03,
+                "nav_dom_content_loaded": 11.09,
+                "nav_until_interactive": 9.05,
+                "nav_interactive_to_dcl": 0.73,
+                "nav_dcl_handlers": 1.31,
+            }
+            for trial, mode in enumerate(
+                ("baseline", "deferred", "deferred", "baseline"), 1
+            ):
+                trial_phases = phases.copy()
+                if mode == "deferred":
+                    trial_phases["app_navigation"] -= 2.0
+                    trial_phases["app_ready"] -= 2.0
+                    trial_phases["nav_dom_content_loaded"] -= 2.0
+                    trial_phases["nav_until_interactive"] -= 2.0
+                payload = {
+                    "schema_version": 2,
+                    "benchmark_modes": ["profile"],
+                    "workers": 1,
+                    "tests": 40,
+                    "failures": 0,
+                    "errors": 0,
+                    "skipped": 0,
+                    "wall_seconds": 49.0 if mode == "baseline" else 45.0,
+                    "phase_seconds": trial_phases,
+                    "navigation_samples": {"attempted": 38, "captured": 38},
+                }
+                (root / f"e2e-script-defer-ab-{trial}.json").write_text(
+                    json.dumps(payload), encoding="utf-8"
+                )
+            env = {
+                **os.environ,
+                "RUNNER_TEMP": raw,
+                "GITHUB_STEP_SUMMARY": str(summary_path),
+                "GITHUB_SHA": "a" * 40,
+            }
+            run = subprocess.run(
+                [sys.executable, "-c", code],
+                env=env, capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(run.returncode, 0, run.stderr)
+            report = summary_path.read_text(encoding="utf-8")
+            self.assertIn("E2E classic-script deferral A/B", report)
+            self.assertIn("Deferred-script change: **-8.16%**", report)
+            self.assertIn("| ↳ Response-end → DOM interactive | 9.05s | 7.05s |", report)
+            self.assertIn("trial 4: 38/38", report)
+
     def test_cli_does_not_touch_source_file(self):
         original = INDEX.read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as raw:
