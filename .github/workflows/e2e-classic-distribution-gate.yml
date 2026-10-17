@@ -10,6 +10,8 @@ on:
       - "frontend/**"
       - Dockerfile
       - scripts/build_classic_distribution.py
+      - scripts/e2e_classic_sw_transitions.py
+      - tests/test_e2e_classic_sw_transitions.py
       - scripts/benchmark_classic_script_bundle.py
       - tests/test_classic_distribution.py
       - .github/workflows/e2e-classic-distribution-gate.yml
@@ -69,6 +71,46 @@ jobs:
             command -v python >/dev/null 2>&1
             ! command -v node >/dev/null 2>&1
           '
+
+  worker-upgrade-rollback:
+    name: Classic bundle SW upgrade and rollback (real Chromium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        with:
+          path: .playwright-browsers
+          key: >-
+            playwright-${{ runner.os }}-${{ hashFiles('requirements-dev.txt',
+            'tests/e2e/install_browser.py') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install Playwright
+        run: >-
+          python -m pip install --isolated --disable-pip-version-check
+          "--only-binary=:all:" "playwright==1.63.0"
+
+      - name: Ensure Chromium in repo cache
+        run: python tests/e2e/install_browser.py
+
+      - name: Validate SW cache versions and transition guard tests
+        run: python -m unittest tests.test_e2e_classic_sw_transitions
+
+      - name: Exercise online upgrade, offline boot, and downgrade
+        run: python -m scripts.e2e_classic_sw_transitions
 
   packaged-frontend:
     name: Packaged classic bundles (${{ matrix.shard }}/6)
