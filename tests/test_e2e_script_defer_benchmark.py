@@ -5,16 +5,19 @@ source ordering and disable the unrelated routing fast path in both arms.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
-import subprocess
+import runpy
 import sys
 import tempfile
 import unittest
+from io import StringIO
 from pathlib import Path
+from unittest import mock
 
-from scripts.benchmark_deferred_scripts import deferred_index
+from scripts.benchmark_deferred_scripts import deferred_index, main
 
 ROOT = Path(__file__).resolve().parents[1]
 INDEX = ROOT / "frontend" / "index.html"
@@ -128,11 +131,13 @@ class ScriptDeferBenchmarkTests(unittest.TestCase):
                 "GITHUB_STEP_SUMMARY": str(summary_path),
                 "GITHUB_SHA": "a" * 40,
             }
-            run = subprocess.run(
-                [sys.executable, "-c", code],
-                env=env, capture_output=True, text=True, check=False,
-            )
-            self.assertEqual(run.returncode, 0, run.stderr)
+            report_script = root / "summary-code.py"
+            report_script.write_text(code, encoding="utf-8")
+            with (
+                mock.patch.dict(os.environ, env),
+                contextlib.redirect_stdout(StringIO()),
+            ):
+                runpy.run_path(str(report_script), run_name="__main__")
             report = summary_path.read_text(encoding="utf-8")
             self.assertIn("E2E classic-script deferral A/B", report)
             self.assertIn("Deferred-script change: **-8.16%**", report)
@@ -144,13 +149,18 @@ class ScriptDeferBenchmarkTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             src, dest = Path(raw) / "input.html", Path(raw) / "candidate.html"
             src.write_text(original, encoding="utf-8")
-            result = subprocess.run(
-                [sys.executable, str(ROOT / "scripts" / "benchmark_deferred_scripts.py"),
-                 "--input", str(src), "--output", str(dest)],
-                capture_output=True, text=True, check=False,
+            printed = StringIO()
+            with (
+                mock.patch.object(sys, "argv", [
+                    "benchmark_deferred_scripts.py", "--input", str(src),
+                    "--output", str(dest),
+                ]),
+                contextlib.redirect_stdout(printed),
+            ):
+                main()
+            self.assertIn(
+                f"{deferred_index(original)[1]} classic scripts", printed.getvalue()
             )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn(f"{deferred_index(original)[1]} classic scripts", result.stdout)
             self.assertEqual(src.read_text(encoding="utf-8"), original)
             self.assertEqual(dest.read_text(encoding="utf-8"), deferred_index(original)[0])
 
