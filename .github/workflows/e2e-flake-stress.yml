@@ -191,7 +191,7 @@ jobs:
                   "                window.removeEventListener('pointerup', onRelease, true);\n"
                   '                setTimeout(() => {\n'
                   "                    void fetch('/api/works/PRKS_DIVIDER_DELAYED_NEGATIVE_CONTROL');\n"
-                  '                }, 250);\n'
+                  '                }, 200);\n'
                   '            }, true);\n'
                   '        }""")\n'
                   '        _drag_divider(page, 90)\n'
