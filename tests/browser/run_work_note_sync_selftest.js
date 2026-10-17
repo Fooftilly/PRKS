@@ -1031,7 +1031,69 @@ async function reconciliation() {
         'stale convergence fences People Graph');
 }
 
+function committedHandoffAcrossRouteGenerations() {
+    const vm = require('node:vm');
+    const src = fs.readFileSync(path.join(__dirname, '../../frontend/js/ui.js'), 'utf8');
+    const from = src.indexOf('function prksPrivateNoteFamily(');
+    const to = src.indexOf('/** The pane\'s Folder Reminders', from);
+    assert.ok(from > 0 && to > from, 'runtime session functions still discoverable');
+    const family = {
+        entityType: 'work', idField: 'workId',
+        sessionSlot: 'workPrivateNoteSession', holdsSlot: 'workPrivateNoteHolds',
+        holdBasesSlot: null, tracksOwnQueued: false, recovery: null,
+        pendingText: (_id, text) => text,
+    };
+    const api = { PRKS_PRIVATE_NOTE_FAMILIES: { work: family } };
+    vm.runInNewContext(src.slice(from, to), api, { filename: 'ui.js:private-sessions' });
+    function old(overrides = {}) {
+        return {
+            entityType: 'work', entityId: 'a', workId: 'a',
+            ownerTabId: 'tab', ownerGeneration: 1, draftText: 'my saved text',
+            state: 'committed', dirty: false, retired: false, promise: null,
+            saveSequence: 1, latestSaveToken: 1, settledSaveToken: 1,
+            ...overrides,
+        };
+    }
+    function owner(previous, generation = 2) {
+        return { tabId: 'tab', generation,
+            ui: { workPrivateNoteSession: previous, workPrivateNoteHolds: {} } };
+    }
+    const ctx = owner(old());
+    const remount = api.prksEnsurePrivateNoteSession(family, ctx, 'a', 'stale server text');
+    assert.equal(remount.draftText, 'my saved text');
+    assert.equal(remount.dirty, false, 'no second write should be enqueued');
+    assert.equal(remount.state, 'committed');
+    assert.equal(remount.settledSaveToken, 1, 'keep local save provenance');
+    assert.equal(api.prksPrivateNoteText(family, ctx, 'a', 'stale server text'), 'my saved text');
+    assert.equal(remount.retired, false);
+    ctx.generation = 3;
+    const remountAgain = api.prksEnsurePrivateNoteSession(family, ctx, 'a', 'stale server text');
+    assert.equal(remountAgain.draftText, 'my saved text');
+    assert.equal(remountAgain.dirty, false);
+    assert.equal(api.prksPrivateNoteText(family, ctx, 'a', 'my saved text'), 'my saved text');
+    assert.equal(remountAgain.retired, true, 'matching stored body retires the overlay');
+    for (const previous of [
+        old({saveSequence:0, latestSaveToken:0, settledSaveToken:0}),
+        old({state:'committed', retired:true}),
+        old({latestSaveToken:2}),
+        old({entityId:'other', workId:'other'}),
+        old({ownerTabId:'other-tab'}),
+    ]) {
+        const clean = owner(previous);
+        const result = api.prksEnsurePrivateNoteSession(family, clean, 'a', 'server now');
+        assert.equal(result.draftText, 'server now', 'only a locally settled Work save may override');
+        assert.equal(result.dirty, false);
+    }
+    const unsaved = owner(old({state:'drafting', dirty:true, settledSaveToken:0}));
+    const inherited = api.prksEnsurePrivateNoteSession(family, unsaved, 'a', 'old');
+    assert.equal(inherited.draftText, 'my saved text');
+    assert.equal(inherited.dirty, true, 'unsettled drafts still use recovery handoff');
+    assert.equal(inherited.state, 'drafting');
+    
+}
+
 async function main() {
+    committedHandoffAcrossRouteGenerations();
     acknowledgedBase();
     handlerContract();
     enqueueSelectsAcknowledgedObserved();
