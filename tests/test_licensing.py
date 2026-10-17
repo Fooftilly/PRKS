@@ -74,6 +74,17 @@ class LicensingStructureTests(unittest.TestCase):
                        "Floating UI contributors", "Atlassian Pty Ltd"):
             self.assertIn(holder, notices)
         self.assertIn("Apache License", notices)
+    def test_docker_distribution_includes_legal_notices(self):
+        dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+        dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
+        self.assertIn("COPY LICENSE THIRD_PARTY_NOTICES.md ./", dockerfile)
+        self.assertIn("COPY frontend ./frontend", dockerfile)
+        for exception in (
+            "!THIRD_PARTY_NOTICES.md",
+            "!frontend/vue/THIRD_PARTY_LICENSES.md",
+            "!frontend/vendor/prks-pdf-viewer/THIRD_PARTY.md",
+        ):
+            self.assertIn(exception, dockerignore)
     def test_vendor_notices_remain_present(self):
         for name in (
             "codemirror", "cytoscape", "dompurify", "easymde",
