@@ -35,54 +35,53 @@ def _script_tags(text: str) -> list[list[tuple[str, str | None]]]:
 
 def _defer_script_lines(original: str) -> tuple[str, int]:
     changed = []
+    module_lines = []
     count = 0
+    found_body_end = False
     for line in original.splitlines(keepends=True):
         tag = line.strip()
-        if not tag.startswith("<script"):
+        if tag == "</body>":
+            found_body_end = True
+            changed.extend(module_lines)
             changed.append(line)
         elif tag.startswith('<script type="module" src="/') and tag.endswith(
             '"></script>'
         ):
-            # Module scripts already defer implicitly; leave these untouched.
-            changed.append(line)
+            # Baseline executes *all* parser-blocking classics before modules.
+            # Append the unmodified modules after deferred classics to retain
+            # that ordering, rather than introducing a second experiment.
+            module_lines.append(line)
         elif tag.startswith('<script src="/') and tag.endswith('"></script>'):
             count += 1
             changed.append(line.replace("<script ", "<script defer ", 1))
-        elif "defer" in tag or "async" in tag:
-            raise ValueError("classic script already has async/defer attribute")
+        elif tag.startswith("<script"):
+            raise ValueError("unsupported or already-deferred script tag")
         else:
-            # Reject inline/attribute variations; never partially transform.
-            raise ValueError("unsupported script tag in benchmark source")
+            changed.append(line)
+    if not found_body_end:
+        raise ValueError("missing closing body tag in benchmark source")
     return "".join(changed), count
 
 
-def _verify_script_tags(original: str, result: str, count: int) -> None:
-    before = _script_tags(original)
-    after = _script_tags(result)
-    if len(before) != len(after):
-        raise ValueError("script tag list changed")
-    verified = 0
-    for old_attrs, new_attrs in zip(before, after):
-        original_type = dict(old_attrs).get("type")
-        if original_type == "module":
-            if new_attrs != old_attrs:
-                raise ValueError("module script was modified")
-        elif old_attrs and old_attrs[0][0] == "src":
-            if new_attrs != [("defer", None), *old_attrs]:
-                raise ValueError("classic script attributes/order changed")
-            verified += 1
-        else:
-            raise ValueError("unrecognized script tag in benchmark source")
-    if verified != count:
+def _verify_script_tags(before: list, result: str, count: int) -> None:
+    classics = [a for a in before if dict(a).get("type") != "module"]
+    modules = [a for a in before if dict(a).get("type") == "module"]
+    expected = [[("defer", None), *attrs] for attrs in classics] + modules
+    if _script_tags(result) != expected:
+        raise ValueError("classic/module script attributes or order changed")
+    if len(classics) != count:
         raise ValueError("transformed classic script count disagrees")
 
 
 def deferred_index(original: str) -> tuple[str, int]:
-    """Add defer to classic external script lines, preserving bytewise order."""
+    """Defer classic scripts but preserve classic-before-module evaluation."""
+    before = _script_tags(original)
+    if any("async" in dict(a) or "defer" in dict(a) for a in before):
+        raise ValueError("script already has async/defer attribute")
     result, count = _defer_script_lines(original)
     if result == original:
         raise ValueError("no classic external scripts were found")
-    _verify_script_tags(original, result, count)
+    _verify_script_tags(before, result, count)
     return result, count
 
 
