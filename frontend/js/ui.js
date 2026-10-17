@@ -2875,18 +2875,38 @@ function prksEnsurePrivateNoteSession(family, ctx, id, initialText) {
     }
     const remembered = prksTakeRememberedPrivateNote(family, ctx, id);
     const carried = remembered != null;
+    /* A Work Reminders save is "committed" once its text is durable in the
+     * local queue, not necessarily when the remounted route's Work GET includes
+     * that text. If the old pane was cold-parked, its ack listener was removed;
+     * the new Work GET may predate the ack and paint an older body. Carry only
+     * this pane's successfully settled *local* save across that generation
+     * boundary as clean, display-only text. Never enqueue it a second time.
+     *
+     * This is distinct from an unsaved hold (and from Folder revisions). A
+     * clean session without a successful save has no authority to override
+     * fresh route data. The carried text retires when the stored body agrees.
+     */
+    const priorCommitted = !carried && family.entityType === 'work' &&
+        existing && !existing.retired && !existing.dirty && !existing.promise &&
+        existing.state === 'committed' &&
+        String(existing.entityId) === String(id) &&
+        String(existing.ownerTabId) === String(ctx.tabId) &&
+        Number.isSafeInteger(existing.settledSaveToken) &&
+        existing.settledSaveToken > 0 &&
+        existing.settledSaveToken === existing.latestSaveToken &&
+        String(existing.draftText) !== String(initialText == null ? '' : initialText);
     const session = {
         key: prksPrivateNoteSessionKey(family, ctx.tabId, id),
         entityType: family.entityType,
         entityId: String(id),
         ownerTabId: String(ctx.tabId),
         ownerGeneration: ctx.generation,
-        draftText: carried ? remembered.text : String(initialText == null ? '' : initialText),
+        draftText: carried ? remembered.text : priorCommitted ? String(existing.draftText) : String(initialText == null ? '' : initialText),
         editGeneration: 0,
-        saveSequence: 0,
-        latestSaveToken: 0,
+        saveSequence: priorCommitted ? existing.saveSequence : 0,
+        latestSaveToken: priorCommitted ? existing.latestSaveToken : 0,
         latestSaveEditGeneration: 0,
-        settledSaveToken: 0,
+        settledSaveToken: priorCommitted ? existing.settledSaveToken : 0,
         state: carried ? 'drafting' : 'committed',
         saveError: false,
         dirty: carried,
