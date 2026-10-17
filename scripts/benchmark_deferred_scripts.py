@@ -3,8 +3,9 @@
 
 Only the manual E2E Script Delivery A/B workflow uses this tool. It copies
 production index.html to an external temporary file and changes *only* the
-loading attribute of classic external scripts. It never rewrites production
-assets, module tags, their order, or application JavaScript.
+loading attribute of classic external scripts. It moves unmodified module
+tags to the end of the temporary document so deferred classics still execute
+before them; no production assets or application JavaScript are altered.
 """
 from __future__ import annotations
 
@@ -79,7 +80,7 @@ def deferred_index(original: str) -> tuple[str, int]:
     if any("async" in dict(a) or "defer" in dict(a) for a in before):
         raise ValueError("script already has async/defer attribute")
     result, count = _defer_script_lines(original)
-    if result == original:
+    if count == 0 or result == original:
         raise ValueError("no classic external scripts were found")
     _verify_script_tags(before, result, count)
     return result, count
