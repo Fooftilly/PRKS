@@ -1071,6 +1071,45 @@ async function guardedCarriedReminderCancellation() {
     assert.equal((await rows()).length, 1, 'the attempted row stays immutable');
 }
 
+function committedPrivateAckProofIsExactAndBounded() {
+    const listeners = [];
+    globalThis.prksSync = { subscribe(fn) { listeners.push(fn); return () => {}; } };
+    const ctx = {
+        destroyed: false, tabId: 'ack-proof',
+        registerCleanup() {},
+        getEntity() { return null; },
+    };
+    globalThis.prksBindWorkNotesSync(ctx);
+    const emit = event => listeners.forEach(fn => fn(event));
+    const op = {
+        op_id: 'own-ack-1', operation: PRIVATE, entity_id: 'W-1',
+        base_revision: 4, payload: { text: 'X' },
+    };
+    const ack = {
+        code: 'ACKNOWLEDGED', work_id: 'W-1',
+        note_kind: PRIVATE_KIND, server_revision: 5,
+    };
+    emit({ op, acknowledged: ack });
+    const proof = globalThis.prksAcknowledgedWorkPrivateNote('own-ack-1');
+    assert.deepEqual(proof, { entityId: 'W-1', baseRevision: 4, revision: 5 });
+    proof.revision = 900;
+    assert.equal(globalThis.prksAcknowledgedWorkPrivateNote('own-ack-1').revision, 5,
+        'callers cannot modify the saved acknowledgement');
+    assert.equal(globalThis.prksAcknowledgedWorkPrivateNote('other-op'), null);
+
+    emit({ op: Object.assign({}, op, { op_id: 'foreign', entity_id: 'W-2' }),
+        acknowledged: ack });
+    assert.equal(globalThis.prksAcknowledgedWorkPrivateNote('foreign'), null,
+        'foreign Work bodies cannot borrow this acknowledgement');
+    emit({ op: Object.assign({}, op, { op_id: 'research', operation: RESEARCH }),
+        acknowledged: ack });
+    assert.equal(globalThis.prksAcknowledgedWorkPrivateNote('research'), null);
+    emit({ op: Object.assign({}, op, { op_id: 'old-revision' }),
+        acknowledged: Object.assign({}, ack, { server_revision: 3 }) });
+    assert.equal(globalThis.prksAcknowledgedWorkPrivateNote('old-revision'), null);
+    delete globalThis.prksSync;
+}
+
 async function main() {
     acknowledgedBase();
     handlerContract();
@@ -1094,6 +1133,7 @@ async function main() {
     await blockedRevertToTheStaleBaseIsNeverReadAsSaved();
     await aStaleWorksBlockedSettlementLeavesTheLiveRetry();
     await reconciliation();
+    committedPrivateAckProofIsExactAndBounded();
     console.log('All ' + checks + ' Work note checks passed');
 }
 
