@@ -59,7 +59,7 @@ class LicensingStructureTests(unittest.TestCase):
         package = json.loads((ROOT / "frontend-app" / "package.json").read_text())
         lock = json.loads((ROOT / "frontend-app" / "package-lock.json").read_text())
         production = {
-            path.removeprefix("node_modules/"): value
+            path.rsplit("node_modules/", 1)[-1]: value
             for path, value in lock["packages"].items()
             if path.startswith("node_modules/")
             and not value.get("dev") and not value.get("optional")
@@ -93,16 +93,26 @@ assert.equal(renderLicenseInventory(source, pkg, lock), source);
 const future = structuredClone(lock);
 future.packages['node_modules/example-license-fixture'] = { version: '9.8.7', license: 'MIT' };
 const updated = renderLicenseInventory(source, pkg, future);
-assert.match(updated, /\| `example-license-fixture` \| `9\\.8\\.7` \| `MIT` \|/);
+assert.ok(updated.includes('| `example-license-fixture` | `9.8.7` | `MIT` |'));
+future.packages['node_modules/container/node_modules/nested-license-fixture'] = { version: '1.2.3', license: 'MIT' };
+const nested = renderLicenseInventory(source, pkg, future);
+assert.ok(nested.includes('| `nested-license-fixture` | `1.2.3` | `MIT` |'));
+assert.ok(!nested.includes('container/node_modules/nested-license-fixture'));
+delete future.packages['node_modules/container/node_modules/nested-license-fixture'];
 assert.equal(renderLicenseInventory(updated, pkg, future), updated);
 assert.ok(updated.includes('### Full Apache License 2.0'));
 future.packages['node_modules/example-license-fixture'].license = '';
 assert.throws(() => renderLicenseInventory(source, pkg, future), /missing version\/license/);
+future.packages['node_modules/example-license-fixture'].license = 'SEE LICENSE IN LICENSE';
+assert.throws(() => renderLicenseInventory(source, pkg, future), /Unreviewed SPDX license/);
+future.packages['node_modules/example-license-fixture'].license = 'GPL-3.0-only OR MIT';
+assert.throws(() => renderLicenseInventory(source, pkg, future), /Unreviewed SPDX license/);
 """
-        subprocess.run(
+        result = subprocess.run(
             [node, "--input-type=module", "-e", check],
-            cwd=ROOT, check=True, capture_output=True, text=True,
+            cwd=ROOT, capture_output=True, text=True,
         )
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
 
     def test_docker_distribution_includes_legal_notices(self):
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")

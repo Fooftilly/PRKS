@@ -24,8 +24,12 @@ dependency inventory inside the latter is regenerated from
 `frontend-app/package-lock.json` by `npm run build`; keep the original
 upstream copyright and license **texts below the inventory** reviewed and
 up to date when introducing new libraries. A dependency bump needs a build
-commit, not manual editing of every inventory version row. License metadata
-that is missing or inconsistent fails before Vite clears its output.
+commit, not manual editing of every inventory version row. The build rejects
+missing package versions, direct-dependency version mismatches, and license
+metadata outside a deliberately small reviewed SPDX identifier allowlist
+before Vite clears its output. The check does not establish whether an
+upstream project's declared license is accurate or whether license changes
+require new notices; maintainers must still review those changes.
 
 ## Dependency gate
 

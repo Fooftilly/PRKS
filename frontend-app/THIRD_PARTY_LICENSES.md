@@ -23,12 +23,10 @@ Conservative list of the installed lockfile production graph (which includes som
 | `@tanstack/match-sorter-utils` | `9.1.2` | `MIT` |
 | `@tanstack/query-core` | `5.104.0` | `MIT` |
 | `@tanstack/vue-query` | `5.104.0` | `MIT` |
-| `@tanstack/vue-query/node_modules/vue-demi` | `0.14.10` | `MIT` |
 | `@types/web-bluetooth` | `0.0.21` | `MIT` |
 | `@vue/compiler-core` | `3.5.43` | `MIT` |
 | `@vue/compiler-dom` | `3.5.43` | `MIT` |
 | `@vue/compiler-sfc` | `3.5.43` | `MIT` |
-| `@vue/compiler-sfc/node_modules/magic-string` | `0.30.21` | `MIT` |
 | `@vue/compiler-ssr` | `3.5.43` | `MIT` |
 | `@vue/devtools-api` | `6.6.4` | `MIT` |
 | `@vue/reactivity` | `3.5.43` | `MIT` |
@@ -43,6 +41,7 @@ Conservative list of the installed lockfile production graph (which includes som
 | `csstype` | `3.2.3` | `MIT` |
 | `entities` | `7.0.1` | `BSD-2-Clause` |
 | `estree-walker` | `2.0.2` | `MIT` |
+| `magic-string` | `0.30.21` | `MIT` |
 | `nanoid` | `3.3.19` | `MIT` |
 | `picocolors` | `1.1.1` | `ISC` |
 | `postcss` | `8.5.28` | `MIT` |
@@ -51,6 +50,7 @@ Conservative list of the installed lockfile production graph (which includes som
 | `source-map-js` | `1.2.1` | `BSD-3-Clause` |
 | `typescript` | `5.9.2` | `Apache-2.0` |
 | `vue` | `3.5.43` | `MIT` |
+| `vue-demi` | `0.14.10` | `MIT` |
 <!-- END GENERATED PRODUCTION DEPENDENCY INVENTORY -->
 ## Original license and copyright notices of primary bundled runtime libraries
 

@@ -6,6 +6,18 @@
 export const INVENTORY_START = "<!-- BEGIN GENERATED PRODUCTION DEPENDENCY INVENTORY -->";
 export const INVENTORY_END = "<!-- END GENERATED PRODUCTION DEPENDENCY INVENTORY -->";
 
+// Conservatively accept only the SPDX identifiers reviewed in PRKS's current
+// production dependency graph. New licenses and compound expressions require
+// human review and an explicit policy update; never treat arbitrary metadata
+// (e.g. "SEE LICENSE IN LICENSE") as a verified SPDX grant.
+const REVIEWED_SPDX_LICENSE_IDS = new Set([
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "MIT",
+]);
+
 export function renderLicenseInventory(document, packageJson, lockfile) {
   const first = document.indexOf(INVENTORY_START);
   const last = document.indexOf(INVENTORY_END);
@@ -25,13 +37,23 @@ export function renderLicenseInventory(document, packageJson, lockfile) {
       if (!entry.version || !entry.license) {
         throw new Error(`Cannot generate license notice for ${path}: missing version/license metadata`);
       }
-      return { name: path.slice("node_modules/".length), version: entry.version, license: entry.license };
+      if (typeof entry.license !== "string" || !REVIEWED_SPDX_LICENSE_IDS.has(entry.license)) {
+        throw new Error(`Unreviewed SPDX license metadata for ${path}: ${String(entry.license)}. Review the upstream terms and notices before accepting a new license identifier.`);
+      }
+      // npm lock paths can include nested node_modules installation locations.
+      // Report the actual package name; the lockfile remains the provenance.
+      return {
+        name: path.slice(path.lastIndexOf("node_modules/") + "node_modules/".length),
+        version: entry.version,
+        license: entry.license,
+      };
     })
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));
 
-  const versions = new Map(packages.map(({ name, version }) => [name, version]));
+  // Direct dependencies must resolve to the root install, not a nested copy
+  // which might share a name but differ in version.
   for (const [name, version] of Object.entries(packageJson.dependencies || {})) {
-    if (versions.get(name) !== version) {
+    if (lockfile.packages[`node_modules/${name}`]?.version !== version) {
       throw new Error(`Vue dependency ${name}@${version} is missing or mismatched in production lockfile`);
     }
   }
