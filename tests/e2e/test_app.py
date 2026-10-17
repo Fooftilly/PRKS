@@ -10648,17 +10648,53 @@ class MainSecondaryDividerTests(_BrowserE2E):
     def test_divider_drag_causes_no_additional_route_or_pdf_requests(self):
         server, page, _collector = self._start_app()
         page.set_viewport_size({"width": 1600, "height": 900})
-        _open_work_work_split(page, server)
 
+        # Install the request tracker BEFORE mounting the two Work/PDF panes.
+        # A listener added only after viewer.getPageCount() becomes nonzero
+        # mistakes late mount-originated GETs for divider-triggered reloads.
         requests = []
+        inflight = set()
+        phase = "mount"
+
+        def relevant(req):
+            path = urlparse(req.url).path
+            return req.method == "GET" and (
+                path.startswith("/api/works/") or path.startswith("/api/pdfs/")
+            )
 
         def on_request(req):
-            path = urlparse(req.url).path
-            if req.method == "GET" and (path.startswith("/api/works/") or path.startswith("/api/pdfs/")):
-                requests.append(path)
+            if not relevant(req):
+                return
+            inflight.add(req)
+            requests.append({"path": urlparse(req.url).path, "phase": phase,
+                             "at": time.monotonic()})
+
+        def on_done(req):
+            inflight.discard(req)
 
         page.on("request", on_request)
+        page.on("requestfinished", on_done)
+        page.on("requestfailed", on_done)
+        _open_work_work_split(page, server)
+        _wait_pdf_annotation_gates_idle(page)
+
+        # The mount barrier needs BOTH rendered PDF resources and completion
+        # of the relevant Work/PDF network requests observed since mount.
+        # Two animation frames flush paint-driven starts without a fixed
+        # multi-second settle sleep. The same tracker stays active for drags.
+        page.evaluate(
+            """() => new Promise(resolve =>
+                requestAnimationFrame(() => requestAnimationFrame(resolve)))"""
+        )
+        page.expose_function("__prksDividerRequestsDrained", lambda: not inflight)
+        wait_for_async(
+            page, "() => window.__prksDividerRequestsDrained()",
+            timeout=15000,
+            message="initial Work/PDF mount requests did not drain",
+        )
+        _capture_divider_runtime_ids(page)
         before = len(requests)
+        phase = "drag"
 
         _drag_divider(page, 150)
         page.wait_for_timeout(150)
@@ -10667,8 +10703,19 @@ class MainSecondaryDividerTests(_BrowserE2E):
         _drag_divider(page, 90)
         page.wait_for_timeout(150)
 
-        self.assertEqual(len(requests), before, "divider drags must not fetch a Work route or reload a PDF")
-        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 2)
+        unexpected = requests[before:]
+        self.assertEqual(
+            unexpected, [],
+            "divider drags must not initiate Work/PDF reloads; "
+            "initial mount GETs=%r; drag-phase GETs=%r" %
+            ([r["path"] for r in requests[:before]], unexpected),
+        )
+        self.assertEqual(
+            _divider_runtime_ids_unchanged(page),
+            {"aPdf": True, "bPdf": True, "aNotes": True,
+             "bNotes": True, "mounted": 2},
+            "divider drag must preserve both mounted Work/PDF runtimes",
+        )
 
 
 class WorkspacePersistenceTests(_BrowserE2E):
