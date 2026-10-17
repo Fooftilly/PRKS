@@ -33,29 +33,41 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Verify bundled builder output
+      # Build the actual default Docker target in both modes. Inspecting only
+      # frontend-builder would not verify runtime COPY or runtime dependencies.
+      - name: Verify bundled runtime image and copied assets
         shell: bash
         run: |
           set -euo pipefail
-          docker build --target frontend-builder --build-arg PRKS_CLASSIC_BUNDLES=1 -t prks-classic:bundled .
-          docker run --rm --entrypoint sh prks-classic:bundled -ec '
-            test -s /build/dist/frontend/js/prks-classic-head.bundle.js
-            test -s /build/dist/frontend/js/prks-classic-body.bundle.js
-            grep -q prks-classic-body.bundle.js /build/dist/frontend/index.html
-            grep -q CLASSIC_BUNDLE_REVISION /build/dist/frontend/sw.js
+          docker build --build-arg PRKS_CLASSIC_BUNDLES=1 -t prks-classic:runtime-bundled .
+          docker run --rm --entrypoint sh prks-classic:runtime-bundled -ec '
+            test -s /app/frontend/js/prks-classic-head.bundle.js
+            test -s /app/frontend/js/prks-classic-body.bundle.js
+            test -s /app/frontend/js/app.js
+            test -s /app/frontend/sw.js
+            test -s /app/dependency-inventory.json
+            grep -q prks-classic-head.bundle.js /app/frontend/index.html
+            grep -q prks-classic-body.bundle.js /app/frontend/index.html
+            grep -q CLASSIC_BUNDLE_REVISION /app/frontend/sw.js
+            command -v python >/dev/null 2>&1
             ! command -v node >/dev/null 2>&1
           '
 
-      - name: Verify one-command unbundled rollback
+      - name: Verify unbundled runtime rollback image
         shell: bash
         run: |
           set -euo pipefail
-          docker build --target frontend-builder --build-arg PRKS_CLASSIC_BUNDLES=0 -t prks-classic:rollback .
-          docker run --rm --entrypoint sh prks-classic:rollback -ec '
-            test -s /build/dist/frontend/js/app.js
-            grep -q /js/app.js /build/dist/frontend/index.html
-            ! test -e /build/dist/frontend/js/prks-classic-body.bundle.js
-            ! grep -q CLASSIC_BUNDLE_REVISION /build/dist/frontend/sw.js
+          docker build --build-arg PRKS_CLASSIC_BUNDLES=0 -t prks-classic:runtime-rollback .
+          docker run --rm --entrypoint sh prks-classic:runtime-rollback -ec '
+            test -s /app/frontend/js/app.js
+            test -s /app/frontend/sw.js
+            test -s /app/dependency-inventory.json
+            grep -q /js/app.js /app/frontend/index.html
+            ! test -e /app/frontend/js/prks-classic-head.bundle.js
+            ! test -e /app/frontend/js/prks-classic-body.bundle.js
+            ! grep -q CLASSIC_BUNDLE_REVISION /app/frontend/sw.js
+            command -v python >/dev/null 2>&1
+            ! command -v node >/dev/null 2>&1
           '
 
   packaged-frontend:
