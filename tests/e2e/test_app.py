@@ -10648,17 +10648,124 @@ class MainSecondaryDividerTests(_BrowserE2E):
     def test_divider_drag_causes_no_additional_route_or_pdf_requests(self):
         server, page, _collector = self._start_app()
         page.set_viewport_size({"width": 1600, "height": 900})
-        _open_work_work_split(page, server)
 
+        # Install the request tracker BEFORE mounting the two Work/PDF panes.
+        # A listener added only after viewer.getPageCount() becomes nonzero
+        # mistakes late mount-originated GETs for divider-triggered reloads.
         requests = []
+        inflight = set()
+        phase = "mount"
+        # A single empty-set check is not a mount barrier: a request's
+        # completion can schedule a follow-up GET on a later task/frame.
+        # Require a measured request-free interval after the latest start or
+        # completion; the 300 ms observation window tests absence, not speed.
+        quiet_seconds = 0.3
+        last_activity = [time.monotonic()]
+
+        def relevant(req):
+            path = urlparse(req.url).path
+            return req.method == "GET" and (
+                path.startswith("/api/works/") or path.startswith("/api/pdfs/")
+            )
 
         def on_request(req):
-            path = urlparse(req.url).path
-            if req.method == "GET" and (path.startswith("/api/works/") or path.startswith("/api/pdfs/")):
-                requests.append(path)
+            if not relevant(req):
+                return
+            inflight.add(req)
+            at = time.monotonic()
+            last_activity[0] = at
+            requests.append({"path": urlparse(req.url).path, "phase": phase,
+                             "at": at})
+
+        def on_done(req):
+            if req in inflight:
+                inflight.discard(req)
+                last_activity[0] = time.monotonic()
 
         page.on("request", on_request)
+        page.on("requestfinished", on_done)
+        page.on("requestfailed", on_done)
+        _open_work_work_split(page, server)
+        _wait_pdf_annotation_gates_idle(page)
+
+        # Annotation catch-up can release _annotationMaterializing before its
+        # materialization handoff has acquired the next gate. It may schedule
+        # another PDF operation during that interval. Observe the complete
+        # PDF lifecycle, not just the original one-gate idle helper.
+        pdf_lifecycle_idle = """() => {
+            const snap = window.prksTabContextDebugSnapshot &&
+                window.prksTabContextDebugSnapshot();
+            const owners = (snap && snap.contexts) || [];
+            for (const owner of owners) {
+                if (!owner || !owner.mounted) continue;
+                const ctx = window.prksGetTabContext(owner.tabId);
+                const pdf = ctx && ctx.getResource && ctx.getResource('pdf');
+                if (pdf && (pdf._annotationMaterializing ||
+                    pdf._annotationMaterializationHandoff ||
+                    pdf._annotationCatchUpBlocksMutation ||
+                    pdf._annotationMaterializationGate)) return false;
+            }
+            return true;
+        }"""
+
+        # A request-free instant can precede another mount-originated GET
+        # (e.g. fetch A -> resolve -> enqueue B), so wait for a genuine
+        # quiescent interval and THEN flush two paint frames. If those frames
+        # initiate another request, begin a fresh quiet window. One 15-second
+        # deadline bounds the whole barrier; no blind multi-second sleeps.
+        # A full PDF handoff may become idle after the last tracked GET.
+        # Require the quiet window AFTER observing that idle transition, not
+        # merely after the previous network completion.
+        pdf_idle_observed_at = [time.monotonic()]
+
+        def mount_quiet():
+            since = max(last_activity[0], pdf_idle_observed_at[0])
+            return not inflight and time.monotonic() - since >= quiet_seconds
+
+        page.expose_function("__prksDividerMountQuiet", mount_quiet)
+        deadline = time.monotonic() + 15
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self.fail(
+                    "Work/PDF initial mount never became quiet: "
+                    "inflight=%r, latest requests=%r" %
+                    ([urlparse(req.url).path for req in inflight], requests[-8:])
+                )
+            # A lifecycle still busy with catch-up/materialization can schedule
+            # further Work/PDF requests after its gate clears. Wait for it
+            # first and start the measured quiet interval from that point.
+            page.wait_for_function(
+                pdf_lifecycle_idle, timeout=max(1, int(remaining * 1000))
+            )
+            pdf_idle_observed_at[0] = time.monotonic()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                continue
+            wait_for_async(
+                page, "() => window.__prksDividerMountQuiet()",
+                timeout=max(1, int(remaining * 1000)),
+                message="initial Work/PDF mount requests did not become quiescent",
+            )
+            snapshot = len(requests)
+            page.evaluate(
+                """() => new Promise(resolve =>
+                    requestAnimationFrame(() => requestAnimationFrame(resolve)))"""
+            )
+            # Evaluate the PDF state before examining the Python-side request
+            # tracker: Playwright may dispatch new request events during the
+            # browser round-trip. Never allow that GET to slip past the guard.
+            if not page.evaluate(pdf_lifecycle_idle) or not mount_quiet() or len(requests) != snapshot:
+                continue
+            _capture_divider_runtime_ids(page)
+            # Runtime capture also crosses an event-loop turn. Recheck lifecycle
+            # FIRST, then in-flight requests and the quiet interval.
+            if page.evaluate(pdf_lifecycle_idle) and mount_quiet() and len(requests) == snapshot:
+                break
+        mount_barrier_at = time.monotonic()
+        barrier_last_activity = last_activity[0]
         before = len(requests)
+        phase = "drag"
 
         _drag_divider(page, 150)
         page.wait_for_timeout(150)
@@ -10667,8 +10774,26 @@ class MainSecondaryDividerTests(_BrowserE2E):
         _drag_divider(page, 90)
         page.wait_for_timeout(150)
 
-        self.assertEqual(len(requests), before, "divider drags must not fetch a Work route or reload a PDF")
-        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 2)
+        unexpected = requests[before:]
+        late_gets = [
+            {"path": r["path"], "phase": r["phase"],
+             "after_barrier_ms": round((r["at"] - mount_barrier_at) * 1000)}
+            for r in unexpected
+        ]
+        self.assertEqual(
+            late_gets, [],
+            "divider drags must not initiate Work/PDF reloads; "
+            "mount barrier was %d ms after last network activity; "
+            "initial mount GETs=%r; post-barrier GETs=%r" %
+            (round((mount_barrier_at - barrier_last_activity) * 1000),
+             [r["path"] for r in requests[:before]], late_gets),
+        )
+        self.assertEqual(
+            _divider_runtime_ids_unchanged(page),
+            {"aPdf": True, "bPdf": True, "aNotes": True,
+             "bNotes": True, "mounted": 2},
+            "divider drag must preserve both mounted Work/PDF runtimes",
+        )
 
 
 class WorkspacePersistenceTests(_BrowserE2E):
