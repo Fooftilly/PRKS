@@ -221,13 +221,13 @@ def run_canary(root: Path, shard_index: int | None = None, *, preflight: bool = 
         "--no-pointer-capture",
     ] if not preflight else []
     try:
-        for url, text in bundles.items():
-            path = bundle_paths[url]
+        # The worker candidate is checked via the same argument-list-only Node
+        # invocation as the two JS bundles; never launch a second command path.
+        for url, text in (*bundles.items(), ("/sw.js", worker_candidate)):
+            path = worker if url == "/sw.js" else bundle_paths[url]
             path.write_text(text, encoding="utf-8")
             subprocess.run([node, "--check", str(path)], cwd=root, check=True)
         index.write_text(candidate, encoding="utf-8")
-        worker.write_text(worker_candidate, encoding="utf-8")
-        subprocess.run([node, "--check", str(worker)], cwd=root, check=True)
         if preflight:
             print("Temporary classic bundles staged for browser preflight.", flush=True)
             _browser_preflight()
