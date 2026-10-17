@@ -33,8 +33,7 @@ def _script_tags(text: str) -> list[list[tuple[str, str | None]]]:
     return reader.scripts
 
 
-def deferred_index(original: str) -> tuple[str, int]:
-    """Add defer to classic external script lines, preserving bytewise order."""
+def _defer_script_lines(original: str) -> tuple[str, int]:
     changed = []
     count = 0
     for line in original.splitlines(keepends=True):
@@ -52,14 +51,12 @@ def deferred_index(original: str) -> tuple[str, int]:
         elif "defer" in tag or "async" in tag:
             raise ValueError("classic script already has async/defer attribute")
         else:
-            # Reject new inline/attribute variations rather than applying an
-            # unreliable partial HTML transformation.
+            # Reject inline/attribute variations; never partially transform.
             raise ValueError("unsupported script tag in benchmark source")
+    return "".join(changed), count
 
-    result = "".join(changed)
-    if result == original:
-        raise ValueError("no classic external scripts were found")
 
+def _verify_script_tags(original: str, result: str, count: int) -> None:
     before = _script_tags(original)
     after = _script_tags(result)
     if len(before) != len(after):
@@ -78,6 +75,14 @@ def deferred_index(original: str) -> tuple[str, int]:
             raise ValueError("unrecognized script tag in benchmark source")
     if verified != count:
         raise ValueError("transformed classic script count disagrees")
+
+
+def deferred_index(original: str) -> tuple[str, int]:
+    """Add defer to classic external script lines, preserving bytewise order."""
+    result, count = _defer_script_lines(original)
+    if result == original:
+        raise ValueError("no classic external scripts were found")
+    _verify_script_tags(original, result, count)
     return result, count
 
 
