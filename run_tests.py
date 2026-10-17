@@ -101,8 +101,51 @@ def dependency_preflight(project_dir: str, mode: str) -> int:
     return 0
 
 
+def run_repeated_unit_tests(project_dir: str, report_path: str) -> int:
+    """Run three separate unit processes on the same checkout for Mergify.
+
+    Retain the exact `python run_tests.py` CI command required by the
+    dependency-gate allowlist. Children receive no repetition flag, so each
+    executes the usual single-run code path and produces its own JUnit XML.
+    """
+    path = Path(report_path)
+    failed = False
+    for index in range(1, 4):
+        child_env = os.environ.copy()
+        child_env.pop("PRKS_UNIT_REPETITIONS", None)
+        child_env["PRKS_JUNIT_REPORT"] = str(
+            path.with_name(f"{path.stem}-{index}{path.suffix}")
+        )
+        print(f"::group::Unit suite repetition {index}/3", flush=True)
+        try:
+            status = subprocess.call(
+                [sys.executable, os.path.join(project_dir, "run_tests.py")],
+                cwd=project_dir,
+                env=child_env,
+            )
+        except OSError as exc:
+            print(
+                f"Nightly repetition {index} could not start ({type(exc).__name__})",
+                file=sys.stderr,
+            )
+            status = 1
+        finally:
+            print("::endgroup::", flush=True)
+        print(f"Unit repetition {index}/3: {'PASS' if status == 0 else 'FAIL'}", flush=True)
+        failed |= status != 0
+    return int(failed)
+
+
 def run_unit_tests(project_dir: str) -> int:
     apply_isolated_test_env(project_dir)
+    repetitions = os.environ.get("PRKS_UNIT_REPETITIONS", "1")
+    if repetitions not in ("1", "3"):
+        raise ValueError("PRKS_UNIT_REPETITIONS must be 1 or 3")
+    if repetitions == "3":
+        report_path = os.environ.get("PRKS_JUNIT_REPORT")
+        if not report_path or not report_path.endswith(".xml"):
+            raise ValueError("nightly repetitions require PRKS_JUNIT_REPORT .xml path")
+        return run_repeated_unit_tests(project_dir, report_path)
     print("Discovering and running tests...")
     loader = unittest.TestLoader()
     suite = loader.discover(start_dir=os.path.join(project_dir, "tests"), pattern="test_*.py")

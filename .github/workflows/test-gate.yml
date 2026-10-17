@@ -8,9 +8,16 @@ on:
     branches:
       - master
   workflow_dispatch:
+  # Off-peak weekday testing for Mergify flaky-test detection.
+  # Time zone observes CET/CEST automatically; 03:17 avoids the DST switch hour.
+  schedule:
+    - cron: "17 3 * * 1-5"
+      timezone: Europe/Podgorica
 
 concurrency:
-  group: test-gate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Never let the nightly scan cancel an in-progress master push gate.
+  # Isolate scheduled runs so master pushes cannot cancel the scan either.
+  group: test-gate-${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -19,7 +26,8 @@ jobs:
       contents: read
     name: Unit / API / contract tests
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Three full suites take longer than the single required PR/master run.
+    timeout-minutes: ${{ github.event_name == 'schedule' && 45 || 20 }}
 
     steps:
       - name: Checkout repository
@@ -54,6 +62,9 @@ jobs:
         id: tests
         env:
           PRKS_JUNIT_REPORT: test-reports/unit.xml
+          # The Python runner spawns three fresh unit processes only overnight.
+          # Keep the approved command unchanged for the dependency gate (#180).
+          PRKS_UNIT_REPETITIONS: ${{ github.event_name == 'schedule' && '3' || '1' }}
         run: python run_tests.py
 
       # Upload test-level outcomes only. The reporter excludes traces and output.
@@ -69,10 +80,13 @@ jobs:
         with:
           action: junit-process
           token: ${{ secrets.MERGIFY_TOKEN }}
-          report_path: test-reports/unit.xml
+          # Single report on PR/push; three reports on the scheduled run.
+          report_path: 'test-reports/unit*.xml'
           test_step_outcome: ${{ steps.tests.outcome }}
 
   postgres-helpers:
+    # Nightly detection only repeats the unit suite, not PostgreSQL jobs.
+    if: github.event_name != 'schedule'
     permissions:
       contents: read
     name: PostgreSQL helper tests
@@ -125,6 +139,7 @@ jobs:
         run: scripts/test-postgres
 
   backend-parity:
+    if: github.event_name != 'schedule'
     permissions:
       contents: read
     name: Backend parity (SQLite + PostgreSQL)
