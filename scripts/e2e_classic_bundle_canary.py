@@ -53,60 +53,110 @@ def _require_boot_exports(available: dict, responses: dict, errors: list[str]) -
         )
 
 
-def _browser_preflight() -> None:
-    """Load the real PRKS shell in Chromium and report its *first* errors.
+def _temporary_service_worker(source: str) -> str:
+    """Make only the two temporary root-level bundles eligible and precached.
 
-    This runs only after the candidate index/bundles have been staged and
-    before the expensive six-shard matrix is allowed to start.
+    The production worker is unchanged. Fail closed if its known manifest
+    structure changes, rather than silently testing a broken offline shell.
     """
+    precache_anchor = "        '/vue/prks-vue.js',\n    ];"
+    extra_anchor = (
+        "const STATIC_EXTRA_PATHS = "
+        "['/manifest.webmanifest', '/favicon.svg', '/logo.svg'];"
+    )
+    if source.count(precache_anchor) != 1 or source.count(extra_anchor) != 1:
+        raise ValueError("service-worker manifest structure changed; cannot stage canary")
+    if any(url in source for url in BUNDLE_URLS):
+        raise ValueError("service worker already lists a temporary bundle")
+    paths = "".join(f"        '{url}',\n" for url in BUNDLE_URLS)
+    source = source.replace(
+        precache_anchor, paths + precache_anchor, 1,
+    )
+    expanded = (
+        "const STATIC_EXTRA_PATHS = "
+        "['/manifest.webmanifest', '/favicon.svg', '/logo.svg', "
+        + ", ".join(repr(url) for url in BUNDLE_URLS) + "];"
+    )
+    return source.replace(extra_anchor, expanded, 1)
+
+
+def _browser_preflight() -> None:
+    """Prove cached shell and both classic bundles work after an offline reload."""
     from tests.e2e.install_browser import apply_playwright_browser_env
 
     apply_playwright_browser_env()
     from playwright.sync_api import sync_playwright
     from tests.e2e.harness import AppServer
+
     server = AppServer().start()
     errors: list[str] = []
+    # Collected afresh on offline reload, so the successful online load cannot
+    # hide a missing offline script.
     responses: dict[str, int] = {}
+    sw_responses: set[str] = set()
     available: dict[str, str] = {}
+    controlled = False
+    offline_reloaded = False
     try:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
             try:
-                context = browser.new_context(service_workers="block")
+                context = browser.new_context(service_workers="allow")
                 try:
                     page = context.new_page()
                     page.on("pageerror", lambda error: errors.append(str(error)[:600]))
-                    page.on(
-                        "response",
-                        lambda response: responses.update({
-                            url: response.status
-                            for url in BUNDLE_URLS
-                            if response.url.split("?", 1)[0].endswith(url)
-                        }),
-                    )
-                    page.on(
-                        "requestfailed",
-                        lambda request: errors.append(
-                            "request failed: " + request.url.split("?", 1)[0].rsplit("/", 1)[-1]
-                        ) if any(
-                            request.url.split("?", 1)[0].endswith(url)
-                            for url in BUNDLE_URLS
-                        ) else None,
-                    )
+
+                    def capture_response(response):
+                        for url in BUNDLE_URLS:
+                            if response.url.split("?", 1)[0].endswith(url):
+                                responses[url] = response.status
+                                if response.from_service_worker:
+                                    sw_responses.add(url)
+
+                    def capture_failed_request(request):
+                        for url in BUNDLE_URLS:
+                            if request.url.split("?", 1)[0].endswith(url):
+                                errors.append(f"bundle request failed: {url}")
+
+                    page.on("response", capture_response)
+                    page.on("requestfailed", capture_failed_request)
                     try:
-                        page.goto(server.origin + "/#/folders", wait_until="domcontentloaded", timeout=30000)
+                        page.goto(
+                            server.origin + "/#/folders",
+                            wait_until="domcontentloaded",
+                            timeout=30000,
+                        )
+                        # Registration is wired to the load event in app.js,
+                        # not to DOMContentLoaded. ready waits through install,
+                        # activation and required asset precache.
+                        page.evaluate(
+                            "() => navigator.serviceWorker.ready.then(() => true)"
+                        )
+                        page.wait_for_function(
+                            "() => !!(navigator.serviceWorker && "
+                            "navigator.serviceWorker.controller)",
+                            timeout=30000,
+                        )
+                        controlled = True
+                        responses.clear()
+                        sw_responses.clear()
+                        context.set_offline(True)
+                        page.reload(wait_until="domcontentloaded", timeout=30000)
+                        offline_reloaded = True
+                        available = page.evaluate(
+                            """() => {
+                                const keys = [
+                                    'prksNavigate', 'createPrksOfflineStore',
+                                    'prksOfflineNoteRequestFailure',
+                                    'prksGetResearchGraphDebug'
+                                ];
+                                return Object.fromEntries(
+                                    keys.map(k => [k, typeof window[k]])
+                                );
+                            }"""
+                        )
                     except Exception as exc:
-                        errors.append("navigation: " + str(exc)[:600])
-                    try:
-                        available = page.evaluate("""() => {
-                            const keys = [
-                                'prksNavigate', 'createPrksOfflineStore',
-                                'prksOfflineNoteRequestFailure', 'prksGetResearchGraphDebug'
-                            ];
-                            return Object.fromEntries(keys.map(k => [k, typeof window[k]]));
-                        }""")
-                    except Exception as exc:
-                        errors.append("global probe: " + str(exc)[:600])
+                        errors.append("offline boot: " + str(exc)[:600])
                 finally:
                     context.close()
             finally:
@@ -115,12 +165,21 @@ def _browser_preflight() -> None:
         server.stop()
 
     print(
-        f"Bundled browser boot probe: exports={available}, "
-        f"script statuses={responses}, errors={errors[:8]}",
+        "Bundled offline reload probe: "
+        f"service-worker-controlled={controlled}, reloaded={offline_reloaded}, "
+        f"exports={available}, bundle statuses={responses}, "
+        f"from-service-worker={sorted(sw_responses)}, errors={errors[:8]}",
         flush=True,
     )
+    if not controlled or not offline_reloaded:
+        raise RuntimeError("temporary bundle preflight did not complete offline reload")
     _require_boot_exports(available, responses, errors)
-    print("Temporary classic bundle browser preflight passed.", flush=True)
+    if sw_responses != set(BUNDLE_URLS):
+        raise RuntimeError(
+            "offline bundle responses were not supplied by service worker: "
+            f"{sorted(sw_responses)}"
+        )
+    print("Temporary classic bundle offline browser preflight passed.", flush=True)
 
 
 def run_canary(root: Path, shard_index: int | None = None, *, preflight: bool = False) -> None:
@@ -132,7 +191,10 @@ def run_canary(root: Path, shard_index: int | None = None, *, preflight: bool = 
         raise ValueError("expected one shard index from 1 through 6")
 
     index = root / "frontend/index.html"
+    worker = root / "frontend/sw.js"
     original = index.read_bytes()
+    original_worker = worker.read_bytes()
+    worker_candidate = _temporary_service_worker(original_worker.decode("utf-8"))
     candidate, bundles, counts = build_candidate(root)
     if set(bundles) != set(BUNDLE_URLS):
         raise ValueError("unexpected classic bundle asset set")
@@ -164,6 +226,8 @@ def run_canary(root: Path, shard_index: int | None = None, *, preflight: bool = 
             path.write_text(text, encoding="utf-8")
             subprocess.run([node, "--check", str(path)], cwd=root, check=True)
         index.write_text(candidate, encoding="utf-8")
+        worker.write_text(worker_candidate, encoding="utf-8")
+        subprocess.run([node, "--check", str(worker)], cwd=root, check=True)
         if preflight:
             print("Temporary classic bundles staged for browser preflight.", flush=True)
             _browser_preflight()
@@ -177,6 +241,7 @@ def run_canary(root: Path, shard_index: int | None = None, *, preflight: bool = 
             subprocess.run(runner, cwd=root, env=env, check=True)
     finally:
         index.write_bytes(original)
+        worker.write_bytes(original_worker)
         for path in bundle_paths.values():
             path.unlink(missing_ok=True)
 
