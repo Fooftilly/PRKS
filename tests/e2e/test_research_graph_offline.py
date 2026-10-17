@@ -318,17 +318,10 @@ class ResearchGraphOfflineTests(unittest.TestCase):
             self.cache(page, ids)
         with profile_e2e_phase('graph_nav_go_offline'):
             self.offline(page, context)
-        # The profile-only order control tests whether the first offline Graph
-        # round trip is slower because of first-use work, not its record kind.
-        # Warm caches above in the same order in either mode; preserve the
-        # original stable profile label/index for each record when reordered.
-        order = os.environ.get('PRKS_E2E_GRAPH_NAV_ORDER', 'default')
-        if order not in ('default', 'position_first'):
-            raise AssertionError(f'Unsupported Graph navigation profile order: {order}')
-        roundtrips = list(enumerate(records, start=1))
-        if order == 'position_first':
-            roundtrips[0], roundtrips[1] = roundtrips[1], roundtrips[0]
-        for index, (kind, route, rid, selector) in roundtrips:
+        # Same original order and assertions; stage timers distinguish
+        # record-page readiness, Graph mount/focus and the return path.
+        # An opt-in CI probe proved Concept remains slower when run second.
+        for index, (kind, route, rid, selector) in enumerate(records, start=1):
             with self.subTest(kind=kind, rid=rid):
                 # Inclusive total plus non-overlapping internal steps. All
                 # original real-browser navigation and assertions are retained.
