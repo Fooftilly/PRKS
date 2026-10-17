@@ -1033,7 +1033,8 @@ async function reconciliation() {
 
 async function committedHandoffAcrossRouteGenerations() {
     const vm = require('node:vm');
-    const src = fs.readFileSync(path.join(__dirname, '../../frontend/js/ui.js'), 'utf8');
+    // The Python selftest runner executes Node with the repository as cwd.
+    const src = fs.readFileSync('frontend/js/ui.js', 'utf8');
     const from = src.indexOf('function prksPrivateNoteFamily(');
     const to = src.indexOf("/** The pane's Folder Reminders", from);
     assert.ok(from > 0 && to > from, 'runtime session functions still discoverable');
