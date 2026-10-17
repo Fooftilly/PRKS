@@ -6,7 +6,7 @@ import unittest
 
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import seed_arguments_library
-from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
+from tests.e2e.harness import AppServer, open_app_page, profile_e2e_phase, require_chromium, wait_for_async
 
 CORE = 'research-graph-core'
 PEOPLE = 'research-graph-people'
@@ -300,43 +300,52 @@ class ResearchGraphOfflineTests(unittest.TestCase):
         page.get_by_text('Note-mention edges unavailable. Canonical relationships still shown.', exact=True).wait_for()
 
     def test_record_graph_navigation_both_directions(self):
-        server, page, context = self.start()
+        # These optional, non-additive phases reveal the slow section of this
+        # browser-only navigation contract without weakening any assertions.
+        with profile_e2e_phase('graph_nav_initial_setup'):
+            server, page, context = self.start()
         ids = server.ids
         records = [('concept', 'concepts', ids['concept_child'], 'concept'),
                    ('position', 'positions', ids['position_a'], 'position'),
                    ('argument', 'arguments', ids['argument_a'], 'arg'),
                    ('argument', 'arguments', ids['stance'], 'arg'),
                    ('person', 'people', ids['person'], 'person')]
-        for kind, route, rid, selector in records:
-            page.evaluate('h => prksNavigate(h)', '#/' + route + '/' + rid)
-            o._wait_entity_cached(page, kind, rid)
-        self.cache(page, ids)
-        self.offline(page, context)
+        with profile_e2e_phase('graph_nav_warm_record_cache'):
+            for kind, route, rid, selector in records:
+                page.evaluate('h => prksNavigate(h)', '#/' + route + '/' + rid)
+                o._wait_entity_cached(page, kind, rid)
+        with profile_e2e_phase('graph_nav_warm_graph_cache'):
+            self.cache(page, ids)
+        with profile_e2e_phase('graph_nav_go_offline'):
+            self.offline(page, context)
         for kind, route, rid, selector in records:
             with self.subTest(kind=kind, rid=rid):
-                page.evaluate('h => prksNavigate(h)', '#/' + route + '/' + rid)
-                o._wait_offline_banner(page)
-                o._open_details_drawer_if_tiled(page)
-                page.locator('#prks-' + selector + '-view-graph').click()
-                self.mounted(page)
-                self.selected(page, kind + ':' + rid)
-                o._wait_offline_banner(page)
-                page.locator('#prks-graph-open').click()
-                page.wait_for_function('h => location.hash === h', arg='#/' + route + '/' + rid)
-                o._wait_offline_banner(page)
+                with profile_e2e_phase('graph_nav_roundtrip_' + kind):
+                    page.evaluate('h => prksNavigate(h)', '#/' + route + '/' + rid)
+                    o._wait_offline_banner(page)
+                    o._open_details_drawer_if_tiled(page)
+                    page.locator('#prks-' + selector + '-view-graph').click()
+                    self.mounted(page)
+                    self.selected(page, kind + ':' + rid)
+                    o._wait_offline_banner(page)
+                    page.locator('#prks-graph-open').click()
+                    page.wait_for_function('h => location.hash === h', arg='#/' + route + '/' + rid)
+                    o._wait_offline_banner(page)
         # Uncached destination belongs to Concept detail, never a Graph guard.
-        self.graph(page, 'concept:' + ids['concept_unvisited'])
-        self.selected(page, 'concept:' + ids['concept_unvisited'])
-        page.locator('#prks-graph-open').click()
-        o._wait_offline_unavailable(page)
-        self.assertIn('Concept not available offline', o._content_text(page))
+        with profile_e2e_phase('graph_nav_uncached_destination'):
+            self.graph(page, 'concept:' + ids['concept_unvisited'])
+            self.selected(page, 'concept:' + ids['concept_unvisited'])
+            page.locator('#prks-graph-open').click()
+            o._wait_offline_unavailable(page)
+            self.assertIn('Concept not available offline', o._content_text(page))
         # Cached Concept -> uncached Graph is also ordinary navigation.
-        page.evaluate('() => prksOfflineInvalidateEntity("research-graph-core", "snapshot")')
-        page.evaluate('h => prksNavigate(h)', '#/concepts/' + ids['concept_child'])
-        o._wait_offline_banner(page)
-        page.locator('#prks-concept-view-graph').click()
-        o._wait_offline_unavailable(page)
-        self.assertIn('Research Graph not available offline', o._content_text(page))
+        with profile_e2e_phase('graph_nav_uncached_graph'):
+            page.evaluate('() => prksOfflineInvalidateEntity("research-graph-core", "snapshot")')
+            page.evaluate('h => prksNavigate(h)', '#/concepts/' + ids['concept_child'])
+            o._wait_offline_banner(page)
+            page.locator('#prks-concept-view-graph').click()
+            o._wait_offline_unavailable(page)
+            self.assertIn('Research Graph not available offline', o._content_text(page))
 
     def test_core_canonical_mutations_and_alias_exclusion(self):
         server, page, context = self.start()
