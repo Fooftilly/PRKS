@@ -187,7 +187,7 @@ assert.throws(() => renderLicenseInventory(source, pkg, future), /Unreviewed SPD
             "(upstream BSD-style and Apache-2.0 terms)"
         )
         self.assertIn(
-            notice_line + "\\n", (viewer / "THIRD_PARTY.md").read_text()
+            notice_line + "\n", (viewer / "THIRD_PARTY.md").read_text()
         )
         self.assertIn(
             repr(notice_line).replace('"', "'"),
