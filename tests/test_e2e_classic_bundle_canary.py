@@ -271,8 +271,10 @@ class ClassicBundleCanaryTests(unittest.TestCase):
             kind, callback
         )
 
-        def navigation(*, wait_until, timeout):
+        def navigation(url, *, wait_until, timeout):
+            self.assertEqual(url, server.origin + "/#/folders")
             self.assertEqual(wait_until, "domcontentloaded")
+            self.assertEqual(timeout, 30000)
             captured["pageerror"](ValueError("bundle failed to initialize"))
 
         page.goto.side_effect = navigation
