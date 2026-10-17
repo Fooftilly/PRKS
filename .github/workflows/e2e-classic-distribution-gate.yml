@@ -32,7 +32,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: e2e-classic-distribution-${{ github.event.pull_request.number || github.ref }}
+  group: e2e-classic-distribution-${{ github.event.pull_request.number || format('{0}-{1}', github.ref, inputs.packaged_mode) }}
   cancel-in-progress: true
 
 jobs:
