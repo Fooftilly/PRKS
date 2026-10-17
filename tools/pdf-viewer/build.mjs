@@ -110,7 +110,7 @@ const thirdParty = [
     '@embedpdf/core ' + pkg.dependencies['@embedpdf/core'],
     '@embedpdf/engines ' + pkg.dependencies['@embedpdf/engines'],
     '@embedpdf/pdfium ' + pkg.dependencies['@embedpdf/pdfium'],
-    'PDFium WASM engine — see LICENSES/pdfium-runtime-LICENSE (BSD-style and Apache-2.0 upstream terms)',
+    'PDFium WASM engine — see LICENSES/pdfium-runtime-LICENSE (upstream BSD-style and Apache-2.0 terms)',
     'react ' + pkg.dependencies.react,
     'react-dom ' + pkg.dependencies['react-dom'],
 ].join('\n');

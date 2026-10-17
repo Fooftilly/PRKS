@@ -182,7 +182,17 @@ assert.throws(() => renderLicenseInventory(source, pkg, future), /Unreviewed SPD
         self.assertEqual(upstream, shipped)
         self.assertIn("Copyright 2014 The PDFium Authors", shipped)
         self.assertIn("Apache License", shipped)
-        self.assertIn("pdfium-runtime-LICENSE", (viewer / "THIRD_PARTY.md").read_text())
+        notice_line = (
+            "PDFium WASM engine — see LICENSES/pdfium-runtime-LICENSE "
+            "(upstream BSD-style and Apache-2.0 terms)"
+        )
+        self.assertIn(
+            notice_line + "\\n", (viewer / "THIRD_PARTY.md").read_text()
+        )
+        self.assertIn(
+            repr(notice_line).replace('"', "'"),
+            (ROOT / "tools" / "pdf-viewer" / "build.mjs").read_text(),
+        )
         # Pin the actual source-to-distribution copy operation. A bare
         # filename assertion would pass if only a comment still mentioned it.
         self.assertIn(
