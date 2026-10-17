@@ -183,9 +183,15 @@ assert.throws(() => renderLicenseInventory(source, pkg, future), /Unreviewed SPD
         self.assertIn("Copyright 2014 The PDFium Authors", shipped)
         self.assertIn("Apache License", shipped)
         self.assertIn("pdfium-runtime-LICENSE", (viewer / "THIRD_PARTY.md").read_text())
-        self.assertIn("pdfium-runtime-LICENSE", (
-            ROOT / "tools" / "pdf-viewer" / "build.mjs"
-        ).read_text())
+        # Pin the actual source-to-distribution copy operation. A bare
+        # filename assertion would pass if only a comment still mentioned it.
+        self.assertIn(
+            "copyFileSync(\n"
+            "    join(here, 'licenses', 'pdfium-runtime-LICENSE'),\n"
+            "    join(outDir, 'LICENSES', 'pdfium-runtime-LICENSE'),\n"
+            ");",
+            (ROOT / "tools" / "pdf-viewer" / "build.mjs").read_text(),
+        )
 
 
 
