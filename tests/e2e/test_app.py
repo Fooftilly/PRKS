@@ -4650,6 +4650,10 @@ class WorkspaceTabsTests(_BrowserE2E):
             route.fallback()
 
         page.route("**/api/works/*", hold_stale_work)
+        # Playwright emits the request event before delivering the route
+        # callback. Await the intercepted route itself, not merely the request
+        # event, without a wall-clock sleep or racing the Python event loop.
+        page.expose_function("__prksTestHeldWorkGet", lambda: bool(held))
         try:
             # Do not await: the route deliberately holds the Work GET until
             # the ack has completed. Awaiting tile here would deadlock.
@@ -4658,7 +4662,12 @@ class WorkspaceTabsTests(_BrowserE2E):
                 timeout=15000,
             ):
                 page.evaluate("id => { void window.prksWorkspaceTileTab(id); }", arg=ids["a"])
-            self.assertTrue(held, "re-tile did not make an interceptable Work GET")
+            wait_for_async(
+                page,
+                "() => window.__prksTestHeldWorkGet()",
+                timeout=15000,
+                message="re-tile did not make an interceptable Work GET",
+            )
             wait_for_async(
                 page,
                 """() => prksSync.store.listOperations().then(rows =>
@@ -4696,26 +4705,26 @@ class WorkspaceTabsTests(_BrowserE2E):
             arg={"selector": selector, "text": new_text},
         )
 
-        final_text = new_text + "!"
-        page.locator(selector).fill(final_text)
+        # The carried text still has the PRE-save base revision. Undoing to
+        # that base must not use the durable store's unchanged-value fast path:
+        # the server has already acknowledged new_text. Until a proven ack
+        # revision is available, reject the revert as a conflict, never Saved.
+        previous_text = stale_work.get("private_notes") or ""
+        page.locator(selector).fill(previous_text)
         page.locator(selector).press("Tab")
-        wait_for_async(page,
-            """() => prksSync.store.listOperations().then(rows =>
-                rows.filter(r => r.operation === 'SET_WORK_PRIVATE_NOTE').length === 0)""",
+        page.wait_for_function(
+            """(id) => {
+                const ctx = window.prksGetTabContext(id);
+                const session = ctx && ctx.ui && ctx.ui.workPrivateNoteSession;
+                return !!(session && session.state === 'error'
+                    && session.dirty && session.saveError);
+            }""",
+            arg=ids["a"],
             timeout=15000,
         )
-        wait_for_async(
-            page,
-            """(args) => fetch('/api/works/' + args.id).then(r => r.json()).then(w =>
-                w.private_notes === args.text)""",
-            arg={"id": work_a, "text": final_text},
-            timeout=15000,
-        )
-        persisted = page.evaluate(
-            """async (id) => (await (await fetch('/api/works/' + id)).json()).private_notes""",
-            arg=work_a,
-        )
-        self.assertEqual(persisted, final_text)
+        persisted = page.request.get(server_url, timeout=5000)
+        self.assertTrue(persisted.ok)
+        self.assertEqual(persisted.json().get("private_notes"), new_text)
 
     def test_delayed_secondary_concept_mutation_refreshes_owner_not_main(self):
         server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
