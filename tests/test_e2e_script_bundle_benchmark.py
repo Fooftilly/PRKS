@@ -138,13 +138,25 @@ class ClassicBundleBenchmarkTests(unittest.TestCase):
             root = fixture_root(Path(td))
             source = root / "frontend/index.html"
             baseline = source.read_bytes()
+            e2e_calls = []
+
+            def fail_on_bundled_trial(cmd, *args, **kwargs):
+                if cmd[0] != "node":
+                    e2e_calls.append(cmd)
+                    if len(e2e_calls) == 3:  # warmup, baseline, bundled
+                        self.assertNotEqual(source.read_bytes(), baseline)
+                        self.assertIn(BODY_URL, source.read_text(encoding="utf-8"))
+                        raise subprocess.CalledProcessError(1, cmd)
+                return subprocess.CompletedProcess(cmd, 0)
+
             with (
                 patch.dict(os.environ, {"PRKS_E2E_PROFILE": "1"}),
                 patch("scripts.benchmark_classic_script_bundle.subprocess.run",
-                      side_effect=subprocess.CalledProcessError(1, "node")),
+                      side_effect=fail_on_bundled_trial),
             ):
                 with self.assertRaises(subprocess.CalledProcessError):
                     run_benchmark(root)
+            self.assertEqual(len(e2e_calls), 3)
             self.assertEqual(source.read_bytes(), baseline)
             self.assertFalse((root / "frontend" / HEAD_URL.lstrip("/")).exists())
             self.assertFalse((root / "frontend" / BODY_URL.lstrip("/")).exists())
@@ -164,6 +176,22 @@ class ClassicBundleBenchmarkTests(unittest.TestCase):
             paths[1].write_text(json.dumps(corrupted), encoding="utf-8")
             partial_report = summarize(paths, "a" * 40)
             self.assertNotIn("Response → DOM interactive", partial_report)
+            corrupted["navigation_samples"]["captured"] = 0
+            for key in list(corrupted["phase_seconds"]):
+                if key.startswith("nav_"):
+                    del corrupted["phase_seconds"][key]
+            paths[1].write_text(json.dumps(corrupted), encoding="utf-8")
+            absent_report = summarize(paths, "a" * 40)
+            self.assertIn("0/38", absent_report)
+            self.assertIn("Page navigation", absent_report)
+            self.assertNotIn("Response → DCL", absent_report)
+            # Even complete browser coverage may legitimately omit zero phases.
+            zero_phase = trial_payload(40.0)
+            zero_phase["phase_seconds"]["nav_interactive_to_dcl"] = 0.0
+            zero_phase["phase_seconds"]["nav_dom_content_loaded"] = 13.0
+            del zero_phase["phase_seconds"]["nav_interactive_to_dcl"]
+            paths[1].write_text(json.dumps(zero_phase), encoding="utf-8")
+            self.assertIn("Response → DOM interactive", summarize(paths, "a" * 40))
             corrupted["failures"] = 1
             paths[1].write_text(json.dumps(corrupted), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "incomplete or failed"):
