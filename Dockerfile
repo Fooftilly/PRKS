@@ -25,6 +25,7 @@ RUN apt-get update \
 RUN mkdir -p /app /data/pdfs /app/data/pdfs \
     && chmod -R a+rX /app
 
+COPY LICENSE THIRD_PARTY_NOTICES.md ./
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
