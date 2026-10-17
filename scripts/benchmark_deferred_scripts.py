@@ -39,10 +39,10 @@ def deferred_index(original: str) -> tuple[str, int]:
         return "<script defer" + attrs + "></script>"
 
     result = _SCRIPT_TAG.sub(replace, original)
-    # Fail closed on HTML structure drift instead of measuring an accidental
-    # partially-transformed page. The measured reference has 84 classic tags.
-    if count != 84:
-        raise ValueError(f"expected 84 classic external scripts; found {count}")
+    # Reject a no-op experiment; the number of classic scripts can change
+    # naturally as PRKS evolves, so do not impose an exact count on CI.
+    if count == 0:
+        raise ValueError("no classic external scripts were found")
     source_order = re.findall(r'<script[^>]*\bsrc="([^"]+)"', original)
     transformed_order = re.findall(r'<script[^>]*\bsrc="([^"]+)"', result)
     if source_order != transformed_order:
