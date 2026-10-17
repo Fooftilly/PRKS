@@ -108,6 +108,7 @@ _E2E_DIAG_LINE = re.compile(r"^\[e2e-diag\]\s+(\S+)(?:\s+(\S+))?\s*$")
 E2E_MODULES = (
     "tests.e2e.test_app",
     "tests.e2e.test_offline",
+    "tests.e2e.test_classic_sw_transitions",
     "tests.e2e.test_browse_offline",
     "tests.e2e.test_work_browsing",
     "tests.e2e.test_progress_route_surface",
