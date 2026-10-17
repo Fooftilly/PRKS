@@ -5,6 +5,9 @@ name: E2E Classic Production Distribution Gate
 on:
   pull_request:
     paths:
+      # Bundles and offline manifest derive from every shipped frontend asset.
+      # A frontend-only PR must not bypass packaged regression coverage.
+      - "frontend/**"
       - Dockerfile
       - scripts/build_classic_distribution.py
       - scripts/benchmark_classic_script_bundle.py
