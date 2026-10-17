@@ -2854,6 +2854,12 @@ function prksReconcileSavedPrivateNote(family, ctx, settledSession, id, content)
     current.dirty = false;
     current.state = 'committed';
     current.saveError = false;
+    /* A save may settle on the replaced generation after its successor was
+     * mounted from an old Work GET. Transfer only the identical saved body's
+     * base proof; later saves still conflict with foreign revisions. */
+    if (family.entityType === 'work' && settledSession.settledBase) {
+        current.settledBase = Object.assign({}, settledSession.settledBase);
+    }
     current.updatedAt = Date.now();
     const live = typeof ctx.getResource === 'function' ? ctx.getResource('privateNotesEditor') : null;
     if (!live || String(live.entityType) !== family.entityType || String(live.entityId) !== key) return;
