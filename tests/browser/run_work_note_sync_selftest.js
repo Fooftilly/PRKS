@@ -1035,7 +1035,7 @@ function committedHandoffAcrossRouteGenerations() {
     const vm = require('node:vm');
     const src = fs.readFileSync(path.join(__dirname, '../../frontend/js/ui.js'), 'utf8');
     const from = src.indexOf('function prksPrivateNoteFamily(');
-    const to = src.indexOf('/** The pane\'s Folder Reminders', from);
+    const to = src.indexOf('/** The pane\\'s Folder Reminders', from);
     assert.ok(from > 0 && to > from, 'runtime session functions still discoverable');
     const family = {
         entityType: 'work', idField: 'workId',
@@ -1043,20 +1043,36 @@ function committedHandoffAcrossRouteGenerations() {
         holdBasesSlot: null, tracksOwnQueued: false, recovery: null,
         pendingText: (_id, text) => text,
     };
-    const api = { PRKS_PRIVATE_NOTE_FAMILIES: { work: family } };
+    const folder = {
+        ...family, entityType: 'folder', idField: 'folderId',
+        sessionSlot: 'folderPrivateNoteSession', holdsSlot: 'folderPrivateNoteHolds',
+    };
+    const api = { PRKS_PRIVATE_NOTE_FAMILIES: { work: family, folder } };
     vm.runInNewContext(src.slice(from, to), api, { filename: 'ui.js:private-sessions' });
+
     function old(overrides = {}) {
         return {
             entityType: 'work', entityId: 'a', workId: 'a',
             ownerTabId: 'tab', ownerGeneration: 1, draftText: 'my saved text',
             state: 'committed', dirty: false, retired: false, promise: null,
             saveSequence: 1, latestSaveToken: 1, settledSaveToken: 1,
+            settledBase: { value: 'stale server text', revision: 4 },
             ...overrides,
         };
     }
-    function owner(previous, generation = 2) {
-        return { tabId: 'tab', generation,
-            ui: { workPrivateNoteSession: previous, workPrivateNoteHolds: {} } };
+    function owner(previous, generation = 2, canonicalText = 'stale server text',
+                   revision = 5, source = 'server') {
+        const resources = {
+            workNotesCanonical: { id: 'a', private_notes: canonicalText,
+                sources: { private: source } },
+            workNotesObserved: { private: { value: canonicalText, revision } },
+        };
+        return {
+            tabId: 'tab', generation,
+            ui: { workPrivateNoteSession: previous, workPrivateNoteHolds: {} },
+            getResource: key => resources[key],
+            resources,
+        };
     }
     const ctx = owner(old());
     const remount = api.prksEnsurePrivateNoteSession(family, ctx, 'a', 'stale server text');
@@ -1064,32 +1080,79 @@ function committedHandoffAcrossRouteGenerations() {
     assert.equal(remount.dirty, false, 'no second write should be enqueued');
     assert.equal(remount.state, 'committed');
     assert.equal(remount.settledSaveToken, 1, 'keep local save provenance');
+    assert.deepEqual({ ...remount.handoffBase }, { value: 'stale server text', revision: 4 });
     assert.equal(api.prksPrivateNoteText(family, ctx, 'a', 'stale server text'), 'my saved text');
     assert.equal(remount.retired, false);
     ctx.generation = 3;
-    const remountAgain = api.prksEnsurePrivateNoteSession(family, ctx, 'a', 'stale server text');
-    assert.equal(remountAgain.draftText, 'my saved text');
+    const remountAgain = api.prksEnsurePrivateNoteSession(family, ctx, 'a', 'my saved text');
+    assert.equal(remountAgain.draftText, 'my saved text',
+        'queued overlay does not disguise a stale canonical route body');
     assert.equal(remountAgain.dirty, false);
+    assert.equal(remountAgain.retired, false);
+    assert.deepEqual({ ...remountAgain.handoffBase }, { value: 'stale server text', revision: 4 });
     assert.equal(api.prksPrivateNoteText(family, ctx, 'a', 'my saved text'), 'my saved text');
-    assert.equal(remountAgain.retired, true, 'matching stored body retires the overlay');
+    assert.equal(remountAgain.retired, false, 'pending overlay is not server convergence');
+    ctx.resources.workNotesCanonical.private_notes = 'my saved text';
+    assert.equal(api.prksPrivateNoteText(family, ctx, 'a', 'my saved text'), 'my saved text');
+    assert.equal(remountAgain.retired, true, 'matching canonical body retires the overlay');
+
+    // A new, unrelated remote save must win when the canonical body differs
+    // from this pane's saved base, even though it also differs from our draft.
+    const foreign = owner(old(), 2, 'foreign device text', 6);
+    const latest = api.prksEnsurePrivateNoteSession(family, foreign, 'a', 'foreign device text');
+    assert.equal(latest.draftText, 'foreign device text');
+    assert.equal(latest.handoffBase, null);
+    assert.equal(latest.dirty, false);
+    const advanced = owner(old(), 2, 'stale server text', 8);
+    assert.equal(api.prksEnsurePrivateNoteSession(family, advanced, 'a',
+        'stale server text').draftText, 'stale server text',
+    'newer note-state revision is not proof of our own acknowledgement');
+    const cache = owner(old(), 2, 'stale server text', 5, 'cache');
+    assert.equal(api.prksEnsurePrivateNoteSession(family, cache, 'a',
+        'stale server text').draftText, 'stale server text',
+    'unverified cached canonical bodies cannot qualify for a clean hold');
+    const foreignPending = owner(old(), 2, 'stale server text', 5);
+    assert.equal(api.prksEnsurePrivateNoteSession(family, foreignPending, 'a',
+        'a different pending writer').draftText, 'a different pending writer');
+
     for (const previous of [
         old({saveSequence:0, latestSaveToken:0, settledSaveToken:0}),
         old({state:'committed', retired:true}),
         old({latestSaveToken:2}),
         old({entityId:'other', workId:'other'}),
         old({ownerTabId:'other-tab'}),
+        old({settledBase:null}),
     ]) {
         const clean = owner(previous);
-        const result = api.prksEnsurePrivateNoteSession(family, clean, 'a', 'server now');
-        assert.equal(result.draftText, 'server now', 'only a locally settled Work save may override');
+        const result = api.prksEnsurePrivateNoteSession(family, clean, 'a', 'stale server text');
+        assert.equal(result.draftText, 'stale server text', 'only a settled save may override');
         assert.equal(result.dirty, false);
+        assert.equal(result.handoffBase, null);
+    }
+    for (const previous of [
+        old({state:'saving', promise: Promise.resolve()}),
+        old({state:'error', dirty:true}),
+    ]) {
+        const unsavedCtx = owner(previous);
+        const carried = api.prksEnsurePrivateNoteSession(family, unsavedCtx,
+            'a', 'stale server text');
+        assert.equal(carried.dirty, true, 'in-flight/error draft is never a clean handoff');
+        assert.equal(carried.state, 'drafting');
+        assert.equal(carried.handoffBase, null);
     }
     const unsaved = owner(old({state:'drafting', dirty:true, settledSaveToken:0}));
     const inherited = api.prksEnsurePrivateNoteSession(family, unsaved, 'a', 'old');
     assert.equal(inherited.draftText, 'my saved text');
     assert.equal(inherited.dirty, true, 'unsettled drafts still use recovery handoff');
     assert.equal(inherited.state, 'drafting');
-    
+
+    const folderPrevious = old({ entityType: 'folder', folderId: 'a' });
+    const folderCtx = owner(null);
+    folderCtx.ui.folderPrivateNoteSession = folderPrevious;
+    folderCtx.ui.folderPrivateNoteHolds = {};
+    const folderSession = api.prksEnsurePrivateNoteSession(folder, folderCtx, 'a', 'folder text');
+    assert.equal(folderSession.draftText, 'folder text');
+    assert.equal(folderSession.handoffBase, null, 'Folder revision handling is unchanged');
 }
 
 async function main() {
