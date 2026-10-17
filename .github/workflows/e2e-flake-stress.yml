@@ -80,7 +80,13 @@ jobs:
         shell: bash
         env:
           PRKS_E2E_TEST_ID: ${{ matrix.test_id }}
-          PRKS_E2E_STRESS_ITERATIONS: ${{ inputs.iterations || 20 }}
+          # format() converts numeric zero to the nonempty string '0' so the
+          # shell rejects it instead of the || fallback silently choosing 20.
+          PRKS_E2E_STRESS_ITERATIONS: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.iterations) || '20' }}
+          # PR runs check out a synthetic merge commit. Preserve both real
+          # parents for auditable 20/20 evidence even after that ref expires.
+          PRKS_E2E_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          PRKS_E2E_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           if ! [[ "$PRKS_E2E_STRESS_ITERATIONS" =~ ^[0-9]+$ ]] ||
@@ -89,7 +95,9 @@ jobs:
             exit 1
           fi
           echo "Case: $PRKS_E2E_TEST_ID (iterations: $PRKS_E2E_STRESS_ITERATIONS)"
-          echo "Commit: $GITHUB_SHA"
+          echo "Tested code: base $PRKS_E2E_BASE_SHA, head $PRKS_E2E_HEAD_SHA, checkout $GITHUB_SHA"
+          printf 'Tested code: base %s, head %s, checkout %s\n' \
+            "$PRKS_E2E_BASE_SHA" "$PRKS_E2E_HEAD_SHA" "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
           for ((i=1; i<=PRKS_E2E_STRESS_ITERATIONS; i++)); do
             printf '\n=== targeted iteration %d/%d ===\n' "$i" "$PRKS_E2E_STRESS_ITERATIONS"
             if ! python tests/e2e/run.py --jobs 1 --no-pointer-capture "$PRKS_E2E_TEST_ID"; then
