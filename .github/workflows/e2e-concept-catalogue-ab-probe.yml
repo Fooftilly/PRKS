@@ -1,0 +1,151 @@
+name: E2E Concept Catalogue A-B Probe
+
+# A temporary, branch-specific controlled experiment for issue #740.
+# Delete the entire workflow before proposing a merge.
+on:
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-concept-catalogue-ab-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    if: github.head_ref == 'perf/skip-concept-catalogue-without-hierarchy-740'
+    name: Compare Concept route on exact base and PR head
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout PR head with base history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        with:
+          path: .playwright-browsers
+          key: >-
+            playwright-${{ runner.os }}-${{ hashFiles('requirements-dev.txt',
+            'tests/e2e/install_browser.py') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install pinned E2E dependencies
+        run: >-
+          python -m pip install --isolated --disable-pip-version-check
+          "--only-binary=:all:" "PyMuPDF==1.28.2" "Pillow==12.3.0" "pydantic==2.13.5"
+          "playwright==1.63.0"
+
+      - name: Ensure Chromium in repo cache
+        run: python tests/e2e/install_browser.py
+
+      - name: Compare exact-commit Graph test with unchanged assertions
+        shell: bash
+        env:
+          PRKS_E2E_PROFILE: "1"
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          TARGET: tests.e2e.test_research_graph_offline.ResearchGraphOfflineTests.test_record_graph_navigation_both_directions
+        run: |
+          set -euo pipefail
+          git cat-file -e "$BASE_SHA^{commit}"
+          git cat-file -e "$HEAD_SHA^{commit}"
+
+          # Warm up both checkouts with the same real server/browser test; then
+          # counterbalance runner/browser noise across six measured iterations.
+          for label in base head; do
+            if [[ "$label" == base ]]; then rev="$BASE_SHA"; else rev="$HEAD_SHA"; fi
+            git -c advice.detachedHead=false checkout --detach "$rev"
+            echo "::group::Unmeasured warmup $label"
+            PRKS_E2E_BENCHMARK_RESULT="" \
+              python tests/e2e/run.py --jobs 1 --no-pointer-capture --profile "$TARGET"
+            echo "::endgroup::"
+          done
+
+          trial=0
+          for label in base head head base base head; do
+            trial=$((trial + 1))
+            if [[ "$label" == base ]]; then rev="$BASE_SHA"; else rev="$HEAD_SHA"; fi
+            git -c advice.detachedHead=false checkout --detach "$rev"
+            echo "::group::Measured trial $trial ($label)"
+            PRKS_E2E_BENCHMARK_RESULT="$RUNNER_TEMP/concept-ab-$trial.json" \
+              python tests/e2e/run.py --jobs 1 --no-pointer-capture --profile "$TARGET"
+            echo "::endgroup::"
+          done
+
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from statistics import median
+
+          labels = ("base", "head", "head", "base", "base", "head")
+          results = {"base": [], "head": []}
+          for i, label in enumerate(labels, 1):
+              path = Path(os.environ["RUNNER_TEMP"]) / f"concept-ab-{i}.json"
+              result = json.loads(path.read_text())
+              if any(result.get(name) != expected for name, expected in (
+                      ("tests", 1), ("failures", 0), ("errors", 0), ("skipped", 0))):
+                  raise SystemExit(f"{label} trial {i}: expected exactly one passing test")
+              results[label].append(result)
+          names = [
+              ("Whole E2E test", "wall_seconds"),
+              ("Concept roundtrip", "graph_nav_roundtrip_1_concept"),
+              ("Concept enter", "graph_nav_stage_1_concept_enter"),
+              ("Concept open Graph", "graph_nav_stage_1_concept_to_graph"),
+              ("Concept return", "graph_nav_stage_1_concept_return"),
+              ("Position control", "graph_nav_roundtrip_2_position"),
+          ]
+          lines = [
+              "## Same-runner Concept catalogue read A/B",
+              "",
+              f"Base: `{os.environ['BASE_SHA']}` (original catalogue read)",
+              f"PR head: `{os.environ['HEAD_SHA']}` (guarded skip)",
+              "Two excluded warm-ups, six A B B A A B repeats, isolated real Chromium",
+              "server/browser contexts and unchanged Graph navigation assertions.",
+              "",
+              "| Duration | Base median (s) | Candidate median (s) | Delta (s) |",
+              "| --- | ---: | ---: | ---: |",
+          ]
+          for title, name in names:
+              by_label = {}
+              for label, values in results.items():
+                  samples = []
+                  for record in values:
+                      if name == "wall_seconds":
+                          samples.append(float(record[name]))
+                      else:
+                          if name not in record["phase_seconds"]:
+                              raise SystemExit(f"Missing phase {name} in {label}")
+                          samples.append(float(record["phase_seconds"][name]))
+                  by_label[label] = median(samples)
+              diff = by_label["head"] - by_label["base"]
+              lines.append(
+                  f"| {title} | {by_label['base']:.3f} | "
+                  f"{by_label['head']:.3f} | {diff:+.3f} |"
+              )
+          lines.extend(["", "Stage values nest inside roundtrip values; do not add them.",
+                        "This comparison is diagnostic, not coverage equivalence."])
+          message = "\n".join(lines) + "\n"
+          print(message)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(message)
+          PY
