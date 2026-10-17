@@ -318,20 +318,27 @@ class ResearchGraphOfflineTests(unittest.TestCase):
             self.cache(page, ids)
         with profile_e2e_phase('graph_nav_go_offline'):
             self.offline(page, context)
+        # Same original order and assertions; stage timers distinguish
+        # record-page readiness, Graph mount/focus and the return path.
+        # An opt-in CI probe proved Concept remains slower when run second.
         for index, (kind, route, rid, selector) in enumerate(records, start=1):
             with self.subTest(kind=kind, rid=rid):
-                # The two Argument records are distinct timed round trips.
+                # Inclusive total plus non-overlapping internal steps. All
+                # original real-browser navigation and assertions are retained.
                 with profile_e2e_phase(f'graph_nav_roundtrip_{index}_{kind}'):
-                    page.evaluate('h => prksNavigate(h)', '#/' + route + '/' + rid)
-                    o._wait_offline_banner(page)
-                    o._open_details_drawer_if_tiled(page)
-                    page.locator('#prks-' + selector + '-view-graph').click()
-                    self.mounted(page)
-                    self.selected(page, kind + ':' + rid)
-                    o._wait_offline_banner(page)
-                    page.locator('#prks-graph-open').click()
-                    page.wait_for_function('h => location.hash === h', arg='#/' + route + '/' + rid)
-                    o._wait_offline_banner(page)
+                    with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_enter'):
+                        page.evaluate('h => prksNavigate(h)', '#/' + route + '/' + rid)
+                        o._wait_offline_banner(page)
+                        o._open_details_drawer_if_tiled(page)
+                    with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_to_graph'):
+                        page.locator('#prks-' + selector + '-view-graph').click()
+                        self.mounted(page)
+                        self.selected(page, kind + ':' + rid)
+                        o._wait_offline_banner(page)
+                    with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_return'):
+                        page.locator('#prks-graph-open').click()
+                        page.wait_for_function('h => location.hash === h', arg='#/' + route + '/' + rid)
+                        o._wait_offline_banner(page)
         # Uncached destination belongs to Concept detail, never a Graph guard.
         with profile_e2e_phase('graph_nav_uncached_destination'):
             self.graph(page, 'concept:' + ids['concept_unvisited'])
