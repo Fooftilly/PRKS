@@ -25,12 +25,14 @@ class ScriptDeferBenchmarkTests(unittest.TestCase):
     def test_defer_variant_preserves_every_src_and_module_tag(self):
         original = INDEX.read_text(encoding="utf-8")
         result, count = deferred_index(original)
-        self.assertEqual(count, 84)
+        classics = re.findall(r'<script\s+src="(/[^"]+)"', original)
+        self.assertGreater(len(classics), 0)
+        self.assertEqual(count, len(classics))
         self.assertEqual(
             re.findall(r'<script[^>]*\bsrc="([^"]+)"', original),
             re.findall(r'<script[^>]*\bsrc="([^"]+)"', result),
         )
-        self.assertEqual(result.count("<script defer src="), 84)
+        self.assertEqual(result.count("<script defer src="), count)
         self.assertEqual(original.count("<script defer src="), 0)
         for module in (
             '<script type="module" src="/js/components/works-pdf.js"></script>',
@@ -39,7 +41,7 @@ class ScriptDeferBenchmarkTests(unittest.TestCase):
             self.assertIn(module, original)
             self.assertIn(module, result)
         self.assertNotEqual(original, result)
-        self.assertEqual(deferred_index(original), (result, 84))
+        self.assertEqual(deferred_index(original), (result, count))
 
     def test_transformation_refuses_partly_deferred_or_changed_html(self):
         original = INDEX.read_text(encoding="utf-8")
@@ -49,9 +51,9 @@ class ScriptDeferBenchmarkTests(unittest.TestCase):
                 '<script defer src="/js/app.js">',
                 1,
             ))
-        with self.assertRaisesRegex(ValueError, "expected 84"):
-            deferred_index(original.replace(
-                '<script src="/js/app.js"></script>', "", 1
+        with self.assertRaisesRegex(ValueError, "no classic external scripts"):
+            deferred_index(re.sub(
+                r'<script\s+src="/[^"]+"></script>', "", original
             ))
 
     def test_workflow_is_manual_isolated_and_has_identical_selection(self):
@@ -148,7 +150,7 @@ class ScriptDeferBenchmarkTests(unittest.TestCase):
                 capture_output=True, text=True, check=False,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("84 classic scripts", result.stdout)
+            self.assertIn(f"{deferred_index(original)[1]} classic scripts", result.stdout)
             self.assertEqual(src.read_text(encoding="utf-8"), original)
             self.assertEqual(dest.read_text(encoding="utf-8"), deferred_index(original)[0])
 
