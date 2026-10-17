@@ -425,29 +425,40 @@ and assess global/script semantics and source attribution. Recheck the
 performance result in additional same-runner ABBA runs before changing
 production. Do not merge a production bundle without these checks.
 
-### Bundled full-suite canary failure and browser-boot preflight
+### Bundled full-suite canary: missing offline asset coverage
 
 The [October 17 full-suite canary](https://github.com/Fooftilly/PRKS/actions/runs/39023728966)
-failed all six shards in its first attempt (~139–140 tests per shard).
-Failures included missing global functions such as
-`prksNavigate`, `createPrksOfflineStore`,
-`prksOfflineNoteRequestFailure`, and
-`prksGetResearchGraphDebug`, plus many Playwright timeouts. This shows the
-two temporary bundles are **not yet proven boot-equivalent** to the original
-84 separately loaded classics. A green 40-test timing benchmark must never
-override broad correctness failures. Do not propose production bundling until
-the root cause is found and a full six-shard canary passes.
+failed all six shards in both attempts (~139–140 tests per shard).
+The failures concentrate in offline/service-worker cases and include
+missing `prksNavigate`, `createPrksOfflineStore`,
+`prksOfflineNoteRequestFailure` and `prksGetResearchGraphDebug`
+after offline reloads. The smaller 40-test A/B ran with service workers
+blocked, so its **−7.08%** timing result cannot establish offline safety.
 
-The manual six-shard workflow now gates the expensive matrix behind a
-single **real-browser boot preflight**. It builds the same temporary candidate,
-launches PRKS against a fresh temporary storage root, records both bundle
-HTTP response codes and uncaught Chromium page errors, and requires the
-four core classic-script globals above to be exported as functions. It prints
-bounded failure details and restores the original HTML and temporary bundle
-assets on every exit. If the preflight fails, all six full-suite shard jobs
-remain skipped instead of each timing out on the same broken shell.
-The preflight is *diagnostic*: passing it does not establish complete
-functional or offline/service-worker equivalence.
+Root cause for the missing globals in those scenarios: the diagnostic's
+temporary index referenced `/__e2e_classic_head_bundle.js` and
+`/__e2e_classic_body_bundle.js`, neither of which is present in the normal
+service worker's required static precache or its strict static-fetch allowlist.
+An offline reload used the cached shell but could not reload its two scripts.
+This is a **canary candidate/asset staging error**, not yet evidence of a
+JavaScript concatenation semantic regression.
+
+The manual-only canary now stages a **temporary copy of `sw.js`** alongside
+the generated bundle files and HTML in each isolated Actions checkout.
+The copy adds only the two temporary root-level script URLs to the required
+static precache and static fetch allowlist; it is validated with `node --check`
+and restored byte-for-byte even if the browser or E2E command fails. No
+production service worker, asset manifest, or normal E2E gate is changed.
+
+The canary's preflight now exercises the **failing path**: start the real
+server and Chromium with `service_workers='allow'`, complete service-worker
+installation and control, go offline and reload the cached shell, then verify
+all four globals, successful HTTP statuses for both bundle scripts, and that
+both responses came from the service worker. Preflight failure skips all
+six expensive shards. A passing preflight is a smoke gate, not proof of
+full-suite parity: all six shards must still pass. Before production adoption,
+a permanent bundler needs its own cache revision, dependency/update/rollback
+design, complete offline tests, and repeated speed measurements.
 
 ### Opt-in hang diagnostics and Chromium recycle
 
