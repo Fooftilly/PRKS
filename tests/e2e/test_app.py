@@ -4593,25 +4593,26 @@ class WorkspaceTabsTests(_BrowserE2E):
         try:
             # Do not await: the route deliberately holds the Work GET until
             # the ack has completed. Awaiting tile here would deadlock.
-            page.evaluate("id => { void window.prksWorkspaceTileTab(id); }", arg=ids["a"])
-            deadline = time.monotonic() + 12
-            while not held and time.monotonic() < deadline:
-                page.wait_for_timeout(30)
+            with page.expect_request(
+                lambda req: req.method == "GET" and urlparse(req.url).path == work_url,
+                timeout=15000,
+            ):
+                page.evaluate("id => { void window.prksWorkspaceTileTab(id); }", arg=ids["a"])
             self.assertTrue(held, "re-tile did not make an interceptable Work GET")
-            # APIRequestContext bypasses Playwright page.route, so checking
-            # the real server cannot accidentally consume the held response.
+            wait_for_async(
+                page,
+                """() => prksSync.store.listOperations().then(rows =>
+                    rows.every(r => r.operation !== 'SET_WORK_PRIVATE_NOTE'))""",
+                timeout=15000,
+            )
+            # APIRequestContext bypasses Playwright page.route. Once all
+            # pending Work note ops are acknowledged, the server is the oracle.
             server_url = (
                 urlparse(page.url).scheme + "://" + urlparse(page.url).netloc + work_url
             )
-            persisted = None
-            while time.monotonic() < deadline:
-                response = page.request.get(server_url, timeout=5000)
-                self.assertTrue(response.ok)
-                persisted = response.json().get("private_notes")
-                if persisted == new_text:
-                    break
-                page.wait_for_timeout(40)
-            self.assertEqual(persisted, new_text, "sync never acknowledged the local save")
+            response = page.request.get(server_url, timeout=5000)
+            self.assertTrue(response.ok)
+            self.assertEqual(response.json().get("private_notes"), new_text)
             held.pop(0).fulfill(
                 status=200, content_type="application/json", body=json.dumps(stale_work)
             )
