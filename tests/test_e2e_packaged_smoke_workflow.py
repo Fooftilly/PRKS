@@ -33,14 +33,26 @@ class PackagedSmokeWorkflowTests(unittest.TestCase):
             full,
         )
         self.assertIn("shard: [1, 2, 3, 4, 5, 6]", full)
-        self.assertIn("--shard", full)
-        self.assertIn("--no-pointer-capture", full)
+        self.assertIn("PRKS_E2E_SHARD_INDEX: ${{ matrix.shard }}", full)
+        self.assertIn(
+            'python tests/e2e/run.py --jobs 1 --shard "${PRKS_E2E_SHARD_INDEX}/6" --no-pointer-capture',
+            full,
+        )
 
         # Both real Docker packaging/rollback and browser SW transitions
         # remain standalone jobs on PRs and both manual modes.
         for job in ("docker-build-modes", "worker-upgrade-rollback"):
             source = job_source(workflow, job)
             self.assertNotIn("if: github.event_name", source)
+
+    def test_manual_modes_have_distinct_concurrency_groups(self):
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn(
+            "group: e2e-classic-distribution-${{ github.event.pull_request.number || "
+            "format('{0}-{1}', github.ref, inputs.packaged_mode) }}",
+            workflow,
+        )
+        self.assertIn("cancel-in-progress: true", workflow)
 
     def test_smoke_is_explicit_manual_only_and_stages_real_distribution(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
