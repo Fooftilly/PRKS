@@ -31,9 +31,18 @@ class ScriptDeferBenchmarkTests(unittest.TestCase):
         classics = re.findall(r'<script\s+src="(/[^"]+)"', original)
         self.assertGreater(len(classics), 0)
         self.assertEqual(count, len(classics))
-        self.assertEqual(
-            re.findall(r'<script[^>]*\bsrc="([^"]+)"', original),
-            re.findall(r'<script[^>]*\bsrc="([^"]+)"', result),
+        originals = re.findall(r'<script[^>]*\bsrc="([^"]+)"', original)
+        changed = re.findall(r'<script[^>]*\bsrc="([^"]+)"', result)
+        module_paths = [
+            "/js/components/works-pdf.js", "/vue/prks-vue.js",
+        ]
+        classics_only = [src for src in originals if src not in module_paths]
+        self.assertEqual(changed, classics_only + module_paths)
+        # Baseline module evaluation happens after all parser-blocking classic
+        # scripts. Preserve it after deferral by putting modules last.
+        self.assertLess(
+            result.index('<script defer src="/js/app.js"'),
+            result.index('<script type="module" src="/js/components/works-pdf.js"'),
         )
         self.assertEqual(result.count("<script defer src="), count)
         self.assertEqual(original.count("<script defer src="), 0)
@@ -54,6 +63,14 @@ class ScriptDeferBenchmarkTests(unittest.TestCase):
                 '<script defer src="/js/app.js">',
                 1,
             ))
+        for addition in ('defer=""', 'async="async"'):
+            with self.subTest(addition=addition):
+                with self.assertRaisesRegex(ValueError, "already has async/defer"):
+                    deferred_index(original.replace(
+                        '<script src="/js/app.js"></script>',
+                        f'<script src="/js/app.js" {addition}></script>',
+                        1,
+                    ))
         with self.assertRaisesRegex(ValueError, "no classic external scripts"):
             deferred_index(re.sub(
                 r'<script\s+src="/[^"]+"></script>', "", original
