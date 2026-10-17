@@ -430,10 +430,24 @@ function initPrksConceptDetailReturnRefresh() {
  * vocabulary supplies the NAME of a parent or child created on this device,
  * which no cache holds.
  */
+function prksConceptDetailNeedsCatalogue(ops) {
+    // The catalogue supplies names only when pending parent-set operations
+    // add/relink Concept parents or children. With no such operation, the
+    // acknowledged detail already names those relationships. This predicate
+    // must match concept-state.js pendingParents() (including conflicted rows).
+    return Array.isArray(ops) && ops.some(op => op &&
+        op.entity_type === 'concept' && op.operation === 'SET_CONCEPT_PARENTS' &&
+        op.status !== 'acknowledged');
+}
+
 async function prksEffectiveConceptDetailView(item, conceptOps, stale) {
     await prksHydratePendingWorkMetadata();
     if (stale()) return null;
-    const conceptCatalogue = typeof prksEffectiveConceptCatalogue === 'function'
+    // Avoid an additional IndexedDB/network read and full-catalogue overlay on
+    // ordinary Concept navigation. Never skip it for unsettled hierarchy edits:
+    // their newly created/reparented neighbours require names from the list.
+    const needsCatalogue = prksConceptDetailNeedsCatalogue(conceptOps);
+    const conceptCatalogue = needsCatalogue && typeof prksEffectiveConceptCatalogue === 'function'
         ? await prksEffectiveConceptCatalogue(conceptOps) : [];
     if (stale()) return null;
     const overlaid = typeof prksEffectiveConceptDetail === 'function'
