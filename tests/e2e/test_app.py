@@ -10655,6 +10655,12 @@ class MainSecondaryDividerTests(_BrowserE2E):
         requests = []
         inflight = set()
         phase = "mount"
+        # A single empty-set check is not a mount barrier: a request's
+        # completion can schedule a follow-up GET on a later task/frame.
+        # Require a measured request-free interval after the latest start or
+        # completion; the 300 ms observation window tests absence, not speed.
+        quiet_seconds = 0.3
+        last_activity = [time.monotonic()]
 
         def relevant(req):
             path = urlparse(req.url).path
@@ -10666,11 +10672,15 @@ class MainSecondaryDividerTests(_BrowserE2E):
             if not relevant(req):
                 return
             inflight.add(req)
+            at = time.monotonic()
+            last_activity[0] = at
             requests.append({"path": urlparse(req.url).path, "phase": phase,
-                             "at": time.monotonic()})
+                             "at": at})
 
         def on_done(req):
-            inflight.discard(req)
+            if req in inflight:
+                inflight.discard(req)
+                last_activity[0] = time.monotonic()
 
         page.on("request", on_request)
         page.on("requestfinished", on_done)
@@ -10678,20 +10688,37 @@ class MainSecondaryDividerTests(_BrowserE2E):
         _open_work_work_split(page, server)
         _wait_pdf_annotation_gates_idle(page)
 
-        # The mount barrier needs BOTH rendered PDF resources and completion
-        # of the relevant Work/PDF network requests observed since mount.
-        # Two animation frames flush paint-driven starts without a fixed
-        # multi-second settle sleep. The same tracker stays active for drags.
-        page.evaluate(
-            """() => new Promise(resolve =>
-                requestAnimationFrame(() => requestAnimationFrame(resolve)))"""
-        )
-        page.expose_function("__prksDividerRequestsDrained", lambda: not inflight)
-        wait_for_async(
-            page, "() => window.__prksDividerRequestsDrained()",
-            timeout=15000,
-            message="initial Work/PDF mount requests did not drain",
-        )
+        # A request-free instant can precede another mount-originated GET
+        # (e.g. fetch A -> resolve -> enqueue B), so wait for a genuine
+        # quiescent interval and THEN flush two paint frames. If those frames
+        # initiate another request, begin a fresh quiet window. One 15-second
+        # deadline bounds the whole barrier; no blind multi-second sleeps.
+        def mount_quiet():
+            return not inflight and time.monotonic() - last_activity[0] >= quiet_seconds
+
+        page.expose_function("__prksDividerMountQuiet", mount_quiet)
+        deadline = time.monotonic() + 15
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self.fail(
+                    "Work/PDF initial mount never became quiet: "
+                    "inflight=%r, latest requests=%r" %
+                    ([urlparse(req.url).path for req in inflight], requests[-8:])
+                )
+            wait_for_async(
+                page, "() => window.__prksDividerMountQuiet()",
+                timeout=max(1, int(remaining * 1000)),
+                message="initial Work/PDF mount requests did not become quiescent",
+            )
+            snapshot = len(requests)
+            page.evaluate(
+                """() => new Promise(resolve =>
+                    requestAnimationFrame(() => requestAnimationFrame(resolve)))"""
+            )
+            if mount_quiet() and len(requests) == snapshot:
+                break
+        mount_barrier_at = time.monotonic()
         _capture_divider_runtime_ids(page)
         before = len(requests)
         phase = "drag"
@@ -10704,11 +10731,18 @@ class MainSecondaryDividerTests(_BrowserE2E):
         page.wait_for_timeout(150)
 
         unexpected = requests[before:]
+        late_gets = [
+            {"path": r["path"], "phase": r["phase"],
+             "after_barrier_ms": round((r["at"] - mount_barrier_at) * 1000)}
+            for r in unexpected
+        ]
         self.assertEqual(
-            unexpected, [],
+            late_gets, [],
             "divider drags must not initiate Work/PDF reloads; "
-            "initial mount GETs=%r; drag-phase GETs=%r" %
-            ([r["path"] for r in requests[:before]], unexpected),
+            "mount barrier was %d ms after last network activity; "
+            "initial mount GETs=%r; post-barrier GETs=%r" %
+            (round((mount_barrier_at - last_activity[0]) * 1000),
+             [r["path"] for r in requests[:before]], late_gets),
         )
         self.assertEqual(
             _divider_runtime_ids_unchanged(page),
