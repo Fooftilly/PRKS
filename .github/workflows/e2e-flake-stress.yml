@@ -148,34 +148,7 @@ jobs:
       - name: Ensure Chromium in repo cache
         run: python tests/e2e/install_browser.py
 
-      - name: Inject a drag-initiated GET in the runner's temporary test copy
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path("tests/e2e/test_app.py")
-          source = path.read_text(encoding="utf-8")
-          anchor = '        phase = "drag"\n\n        _drag_divider(page, 150)\n'
-          if source.count(anchor) != 1:
-              raise SystemExit("Divider test anchor changed: negative control must fail closed")
-          injection = (
-              '        phase = "drag"\n\n'
-              '        # Deliberately broken behavior, injected ONLY in this runner.\n'
-              '        page.evaluate("""() => {\n'
-              '            window.addEventListener(\'pointermove\', function onMove(event) {\n'
-              '                if ((event.buttons & 1) === 0) return;\n'
-              '                window.removeEventListener(\'pointermove\', onMove, true);\n'
-              '                void fetch(\'/api/works/PRKS_DIVIDER_NEGATIVE_CONTROL\');\n'
-              '            }, true);\n'
-              '        }""")\n\n'
-              '        _drag_divider(page, 150)\n'
-          )
-          path.write_text(source.replace(anchor, injection), encoding="utf-8")
-          PY
-
-      - name: Verify the unchanged divider assertion rejects the reload
+      - name: Verify drag-time and post-release reloads both fail the oracle
         shell: bash
         env:
           PRKS_E2E_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
@@ -183,21 +156,72 @@ jobs:
         run: |
           set -euo pipefail
           target=tests.e2e.test_app.MainSecondaryDividerTests.test_divider_drag_causes_no_additional_route_or_pdf_requests
-          if python tests/e2e/run.py --jobs 1 --no-pointer-capture "$target" > negative-control.log 2>&1; then
-            cat negative-control.log
-            echo "::error::The divider regression oracle accepted a deliberate drag-triggered GET"
-            exit 1
-          fi
-          cat negative-control.log
-          # Failing for an unrelated timeout/setup error is not a valid
-          # negative control. Verify the exact unexpected GET and phase delta.
-          if ! grep -Fq 'divider drags must not initiate Work/PDF reloads' negative-control.log ||
-             ! grep -Fq '/api/works/PRKS_DIVIDER_NEGATIVE_CONTROL' negative-control.log ||
-             ! grep -Fq 'after_barrier_ms' negative-control.log; then
-            echo "::error::The test failed for a reason other than the injected post-barrier GET"
-            exit 1
-          fi
-          printf 'PASS (expected rejection): %s\n' "$target" >> "$GITHUB_STEP_SUMMARY"
+          cp tests/e2e/test_app.py "$RUNNER_TEMP/prks-divider-original-test.py"
+          for mode in during-drag after-release; do
+            # Each control runs INDEPENDENTLY so the first injected request
+            # cannot conceal a false negative in the delayed-request case.
+            cp "$RUNNER_TEMP/prks-divider-original-test.py" tests/e2e/test_app.py
+            PRKS_DIVIDER_NEGATIVE_CONTROL_MODE="$mode" python - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path("tests/e2e/test_app.py")
+          source = path.read_text(encoding="utf-8")
+          mode = os.environ["PRKS_DIVIDER_NEGATIVE_CONTROL_MODE"]
+          if mode == "during-drag":
+              anchor = '        phase = "drag"\n\n        _drag_divider(page, 150)\n'
+              injection = (
+                  '        phase = "drag"\n\n'
+                  '        # Deliberately broken behavior, only in this runner.\n'
+                  '        page.evaluate("""() => {\n'
+                  "            window.addEventListener('pointermove', function onMove(event) {\n"
+                  '                if ((event.buttons & 1) === 0) return;\n'
+                  "                window.removeEventListener('pointermove', onMove, true);\n"
+                  "                void fetch('/api/works/PRKS_DIVIDER_NEGATIVE_CONTROL');\n"
+                  '            }, true);\n'
+                  '        }""")\n\n'
+                  '        _drag_divider(page, 150)\n'
+              )
+          elif mode == "after-release":
+              anchor = '        _drag_divider(page, 90)\n'
+              injection = (
+                  '        # Delay the request beyond the former 150 ms tail.\n'
+                  '        page.evaluate("""() => {\n'
+                  "            window.addEventListener('pointerup', function onRelease() {\n"
+                  "                window.removeEventListener('pointerup', onRelease, true);\n"
+                  '                setTimeout(() => {\n'
+                  "                    void fetch('/api/works/PRKS_DIVIDER_DELAYED_NEGATIVE_CONTROL');\n"
+                  '                }, 250);\n'
+                  '            }, true);\n'
+                  '        }""")\n'
+                  '        _drag_divider(page, 90)\n'
+              )
+          else:
+              raise SystemExit("Unexpected negative-control mode")
+          if source.count(anchor) != 1:
+              raise SystemExit("Divider anchor changed: negative control must fail closed")
+          path.write_text(source.replace(anchor, injection), encoding="utf-8")
+          PY
+            log="$RUNNER_TEMP/prks-negative-control-${mode}.log"
+            if python tests/e2e/run.py --jobs 1 --no-pointer-capture "$target" > "$log" 2>&1; then
+              cat "$log"
+              echo "::error::The divider regression oracle accepted a deliberate ${mode} GET"
+              exit 1
+            fi
+            cat "$log"
+            case "$mode" in
+              during-drag) sentinel="/api/works/PRKS_DIVIDER_NEGATIVE_CONTROL" ;;
+              after-release) sentinel="/api/works/PRKS_DIVIDER_DELAYED_NEGATIVE_CONTROL" ;;
+            esac
+            # An unrelated setup/timeout failure must never count as a pass.
+            if ! grep -Fq 'divider drags must not initiate Work/PDF reloads' "$log" ||
+               ! grep -Fq "$sentinel" "$log" ||
+               ! grep -Fq 'after_barrier_ms' "$log"; then
+              echo "::error::${mode} test did not fail for the injected post-barrier GET"
+              exit 1
+            fi
+            printf 'PASS (expected rejection): %s %s\n' "$mode" "$target" >> "$GITHUB_STEP_SUMMARY"
+          done
           printf 'Tested code: base %s, head %s, checkout %s\n' \
             "$PRKS_E2E_BASE_SHA" "$PRKS_E2E_HEAD_SHA" "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
-          echo 'Negative control correctly rejected the deliberate drag-triggered Work GET'
+          echo 'Both independent negative controls correctly rejected deliberate Work GETs'
