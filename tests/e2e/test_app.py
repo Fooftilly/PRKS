@@ -4850,6 +4850,58 @@ class WorkspaceTabsTests(_BrowserE2E):
         if expected:
             collector.console_errors.remove(expected[0])
 
+    def test_private_reminder_ack_proof_must_match_work_and_base(self):
+        _server, page, _collector = self._start_app()
+        # Invoke the real UI save-selection boundary. Stub only durable
+        # enqueue (so no network mutation); wrong or absent receipts must
+        # NEVER replace the pinned handoff base with the newer revision.
+        bases = page.evaluate(
+            """async () => {
+                const save = window.prksSaveWorkNoteDurably;
+                const ack = window.prksAcknowledgedWorkPrivateNote;
+                const id = 'W-proof-scope';
+                const base = { value: 'V', revision: 4 };
+                const ctx = {
+                    ui: { workPrivateNoteSession: {
+                        entityId: id, handoffBase: base, handoffText: 'X',
+                        settledOpId: 'original-op',
+                    }},
+                    getResource: key => key === 'workNotesObserved'
+                        ? { private: base } : null,
+                };
+                let selected = null;
+                try {
+                    window.prksSaveWorkNoteDurably = (_id, _kind, _text, observed) => {
+                        selected = { value: observed.value, revision: observed.revision };
+                        return Promise.resolve({ code: 'saved', opId: null });
+                    };
+                    const cases = [
+                        null,
+                        { entityId: 'W-foreign', baseRevision: 4, revision: 5 },
+                        { entityId: id, baseRevision: 3, revision: 5 },
+                        { entityId: id, baseRevision: 4, revision: 5 },
+                    ];
+                    const result = [];
+                    for (const receipt of cases) {
+                        window.prksAcknowledgedWorkPrivateNote = () => receipt;
+                        selected = null;
+                        await prksSaveWorkPrivateNoteForSession({ ctx }, id, 'Y');
+                        result.push(selected);
+                    }
+                    return result;
+                } finally {
+                    window.prksSaveWorkNoteDurably = save;
+                    window.prksAcknowledgedWorkPrivateNote = ack;
+                }
+            }"""
+        )
+        self.assertEqual(bases, [
+            {"value": "V", "revision": 4},
+            {"value": "V", "revision": 4},
+            {"value": "V", "revision": 4},
+            {"value": "X", "revision": 5},
+        ])
+
     def test_private_reminder_handoff_without_ack_proof_still_conflicts(self):
         page, work_a, ids, selector, _stale, new_text, server_url, collector = (
             self._prepare_private_reminder_acknowledged_handoff()
