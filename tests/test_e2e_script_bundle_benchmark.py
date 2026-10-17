@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -86,6 +87,19 @@ class ClassicBundleBenchmarkTests(unittest.TestCase):
             bundles[BODY_URL].index("benchmark source: /js/app.js"),
         )
         self.assertEqual((ROOT / "frontend/index.html").read_text(encoding="utf-8"), original)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js required for JS parser check")
+    def test_generated_real_bundles_are_parseable_javascript(self):
+        _, bundles, _ = build_candidate(ROOT)
+        with tempfile.TemporaryDirectory() as td:
+            for name, content in bundles.items():
+                path = Path(td) / Path(name).name
+                path.write_text(content, encoding="utf-8")
+                result = subprocess.run(
+                    ["node", "--check", str(path)],
+                    text=True, capture_output=True, check=False,
+                )
+                self.assertEqual(result.returncode, 0, f"{name}: {result.stderr}")
 
     def test_explicit_script_boundaries_and_sources(self):
         with tempfile.TemporaryDirectory() as td:
