@@ -4510,6 +4510,66 @@ class WorkspaceTabsTests(_BrowserE2E):
         )
         self.assertEqual(persisted, final_text)
 
+    def test_private_reminder_committed_handoff_excludes_foreign_and_failed_saves(self):
+        _server, page, _collector = self._start_app()
+        evidence = page.evaluate(
+            """() => {
+                const guard = window.prksWorkPrivateNoteNeedsCommittedHandoff;
+                if (typeof guard !== 'function') throw Error('handoff guard missing');
+                const family = { entityType: 'work' };
+                const session = {
+                    entityId: 'W', ownerTabId: 'tab',
+                    state: 'committed', retired: false, dirty: false,
+                    promise: null, latestSaveToken: 1, settledSaveToken: 1,
+                    draftText: 'locally queued X',
+                    settledBase: { value: 'previous V', revision: 4 },
+                };
+                function test(patch = {}, canonicalText = 'previous V',
+                              revision = 5, source = 'server', displayed = 'previous V',
+                              familyType = family) {
+                    const existing = Object.assign({}, session, patch);
+                    const ctx = { tabId: 'tab', getResource: key => {
+                        if (key === 'workNotesCanonical') return {
+                            id: 'W', private_notes: canonicalText,
+                            sources: { private: source }
+                        };
+                        if (key === 'workNotesObserved') return {
+                            private: { revision }
+                        };
+                        return null;
+                    }};
+                    return guard(familyType, existing, ctx, 'W', displayed, false);
+                }
+                return {
+                    stale: test(),
+                    pendingOverlay: test({}, 'previous V', 5, 'server', 'locally queued X'),
+                    foreign: test({}, 'foreign B', 6, 'server', 'foreign B'),
+                    newerRevision: test({}, 'previous V', 7),
+                    cacheOnly: test({}, 'previous V', 5, 'cache'),
+                    inflight: test({ promise: {} }),
+                    failed: test({ state: 'error', dirty: true }),
+                    unsettled: test({ settledSaveToken: 0 }),
+                    noBase: test({ settledBase: null }),
+                    foreignTab: test({ ownerTabId: 'elsewhere' }),
+                    folder: test({}, 'previous V', 5, 'server',
+                        'previous V', { entityType: 'folder' }),
+                };
+            }"""
+        )
+        self.assertEqual(evidence, {
+            "stale": True,
+            "pendingOverlay": True,
+            "foreign": False,
+            "newerRevision": False,
+            "cacheOnly": False,
+            "inflight": False,
+            "failed": False,
+            "unsettled": False,
+            "noBase": False,
+            "foreignTab": False,
+            "folder": False,
+        })
+
     def test_private_reminder_hide_show_prefers_unsettled_complete_draft(self):
         server, page, _collector = self._start_app()
         work_a = server.ids["work_a"]
