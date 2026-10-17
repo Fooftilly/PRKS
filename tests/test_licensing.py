@@ -58,18 +58,44 @@ class LicensingStructureTests(unittest.TestCase):
         self.assertEqual(notices, source.read_text(encoding="utf-8"))
         package = json.loads((ROOT / "frontend-app" / "package.json").read_text())
         lock = json.loads((ROOT / "frontend-app" / "package-lock.json").read_text())
-        production = {
-            path.rsplit("node_modules/", 1)[-1]: value
-            for path, value in lock["packages"].items()
+        # Preserve every installation, including multiple versions of the
+        # same package in different node_modules locations. A dict keyed only
+        # by package name would silently discard all but one version.
+        from collections import Counter
+        import re
+
+        production_rows = [
+            (
+                path.rsplit("node_modules/", 1)[-1],
+                item["version"],
+                item["license"],
+            )
+            for path, item in lock["packages"].items()
             if path.startswith("node_modules/")
-            and not value.get("dev") and not value.get("optional")
-        }
-        for name, item in production.items():
-            with self.subTest(package=name):
-                expected = f"| `{name}` | `{item['version']}` | `{item['license']}` |"
-                self.assertIn(expected, notices)
+            and not item.get("dev") and not item.get("optional")
+        ]
+        inventory = notices.split(
+            "<!-- BEGIN GENERATED PRODUCTION DEPENDENCY INVENTORY -->", 1
+        )[1].split(
+            "<!-- END GENERATED PRODUCTION DEPENDENCY INVENTORY -->", 1
+        )[0]
+        table_lines = [
+            line for line in inventory.splitlines()
+            if line.startswith("|") and not line.startswith("| Package |")
+            and not line.startswith("| --- |")
+        ]
+        pattern = re.compile(r"\| `([^`]+)` \| `([^`]+)` \| `([^`]+)` \|")
+        parsed = [pattern.fullmatch(line) for line in table_lines]
+        self.assertTrue(all(parsed), "Malformed generated dependency inventory row")
+        actual_rows = [match.groups() for match in parsed if match]
+        self.assertEqual(
+            Counter(actual_rows),
+            Counter(production_rows),
+            "The published inventory must retain every lockfile installation, "
+            "including duplicate package names at different versions.",
+        )
         for name, version in package["dependencies"].items():
-            self.assertEqual(production[name]["version"], version)
+            self.assertEqual(lock["packages"][f"node_modules/{name}"]["version"], version)
         for holder in ("Vue contributors", "Tanner Linsley", "Anthony Fu",
                        "Floating UI contributors", "Atlassian Pty Ltd"):
             self.assertIn(holder, notices)
@@ -99,6 +125,12 @@ const nested = renderLicenseInventory(source, pkg, future);
 assert.ok(nested.includes('| `nested-license-fixture` | `1.2.3` | `MIT` |'));
 assert.ok(!nested.includes('container/node_modules/nested-license-fixture'));
 delete future.packages['node_modules/container/node_modules/nested-license-fixture'];
+future.packages['node_modules/container/node_modules/example-license-fixture'] =
+  { version: '8.8.8', license: 'MIT' };
+const duplicates = renderLicenseInventory(source, pkg, future);
+assert.ok(duplicates.includes('| `example-license-fixture` | `9.8.7` | `MIT` |'));
+assert.ok(duplicates.includes('| `example-license-fixture` | `8.8.8` | `MIT` |'));
+delete future.packages['node_modules/container/node_modules/example-license-fixture'];
 assert.equal(renderLicenseInventory(updated, pkg, future), updated);
 assert.ok(updated.includes('### Full Apache License 2.0'));
 future.packages['node_modules/example-license-fixture'].license = '';
