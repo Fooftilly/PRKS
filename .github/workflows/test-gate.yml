@@ -15,7 +15,9 @@ on:
       timezone: Europe/Podgorica
 
 concurrency:
-  group: test-gate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Never let the nightly scan cancel an in-progress master push gate.
+  # Isolate scheduled runs so master pushes cannot cancel the scan either.
+  group: test-gate-${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -58,30 +60,12 @@ jobs:
 
       - name: Run PRKS unit, API, structural, and Node tests
         id: tests
-        shell: bash
         env:
-          RUN_COUNT: ${{ github.event_name == 'schedule' && '3' || '1' }}
-        run: |
-          set -uo pipefail
-          failed=0
-          # Each invocation uses a fresh process and a distinct JUnit report.
-          # PR/master checks still run once; only scheduled runs repeat.
-          for ((i=1; i<=RUN_COUNT; i++)); do
-            report="test-reports/unit.xml"
-            if [[ "$RUN_COUNT" -gt 1 ]]; then
-              report="test-reports/unit-${i}.xml"
-            fi
-            echo "::group::Unit suite repetition ${i}/${RUN_COUNT}"
-            if PRKS_JUNIT_REPORT="$report" python run_tests.py; then
-              echo "Repetition ${i}: PASS" >> "$GITHUB_STEP_SUMMARY"
-            else
-              echo "Repetition ${i}: FAIL" >> "$GITHUB_STEP_SUMMARY"
-              failed=1
-            fi
-            echo "::endgroup::"
-          done
-          # A failure in any repetition is never converted into a green job.
-          exit "$failed"
+          PRKS_JUNIT_REPORT: test-reports/unit.xml
+          # The Python runner spawns three fresh unit processes only overnight.
+          # Keep the approved command unchanged for the dependency gate (#180).
+          PRKS_UNIT_REPETITIONS: ${{ github.event_name == 'schedule' && '3' || '1' }}
+        run: python run_tests.py
 
       # Upload test-level outcomes only. The reporter excludes traces and output.
       # Non-blocking: third-party outages must not change the required Test Gate.
