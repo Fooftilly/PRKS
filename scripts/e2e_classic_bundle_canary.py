@@ -126,12 +126,12 @@ def _browser_preflight() -> None:
                             wait_until="domcontentloaded",
                             timeout=30000,
                         )
-                        # Registration is wired to the load event in app.js,
-                        # not to DOMContentLoaded. ready waits through install,
-                        # activation and required asset precache.
-                        page.evaluate(
-                            "() => navigator.serviceWorker.ready.then(() => true)"
-                        )
+                        # Registration happens on the load event in app.js.
+                        # Do NOT await navigator.serviceWorker.ready here: if
+                        # registration never happens or install/precache fails,
+                        # it remains pending indefinitely. A controlling worker
+                        # only appears after successful activation (clients.claim).
+                        # A bounded Playwright poll reports failures promptly.
                         page.wait_for_function(
                             "() => !!(navigator.serviceWorker && "
                             "navigator.serviceWorker.controller)",
