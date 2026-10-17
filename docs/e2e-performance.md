@@ -317,9 +317,15 @@ establish a full-suite performance gain.
 The independent **E2E Classic Script Deferral A/B Benchmark** is a targeted
 experiment following measured browser response-end → `domInteractive` costs.
 The baseline is the committed `frontend/index.html`. The alternate HTML
-adds `defer` to external classic script tags, keeping their source paths and
-order intact; existing module scripts remain unchanged. Only the manual
-workflow generates this variant in a temporary file and copies it over the
+adds `defer` to external classic script tags, preserving classic script
+source paths and relative order. Because a module tag originally appears amid
+parser-blocking classics (and normally runs after them), the temporary
+candidate moves the **unmodified module tags after the deferred classics**
+to preserve classic-before-module execution order. This is deliberate:
+deferring classics without moving the module tags would change their execution
+order and confound the experiment. The candidate preserves module source URLs
+and relative order. Only the manual workflow generates this variant in a
+temporary file and copies it over the
 working tree's HTML between runs. A shell trap restores the original HTML.
 **Production HTML, JavaScript, service-worker precache and ordinary CI are
 not changed.**
