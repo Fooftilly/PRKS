@@ -31,11 +31,13 @@ PyMuPDF, Pillow and pydantic. They remain subject to their upstream licenses.
 **PyMuPDF** is distributed under an AGPL option or commercial license; the
 PRKS root license is not a commercial PyMuPDF license.
 
+The shipped Vue browser bundle `frontend/vue/prks-vue.js` has accompanying [upstream license notices](frontend/vue/THIRD_PARTY_LICENSES.md), including copyright texts for Vue, TanStack Query, VueUse and Floating UI and full Apache-2.0 terms for the Atlassian drag-and-drop packages. Its [version-controlled source notices](frontend-app/THIRD_PARTY_LICENSES.md) are copied into `frontend/vue/` after each Vite build.
+
 The Vue frontend, build tools, and PDF viewer source use dependencies declared
 in their respective `package.json` and lock files under `frontend-app/`,
 `tools/pdf-viewer/`, `tools/frontend-vendor/`, and `tools/research-graph/`.
-Review the installed packages' license and notice requirements when producing
-or distributing compiled output.
+Preserve any additional upstream license and copyright notices for every
+actually distributed component, including transitive dependencies.
 
 Do not remove or replace upstream notices while updating dependencies; consult
 [Dependencies and Vendoring](docs/wiki/Dependencies-and-Vendoring.md) before

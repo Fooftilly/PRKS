@@ -11,19 +11,15 @@ INDEX = ROOT / "frontend" / "index.html"
 
 
 class LicensingStructureTests(unittest.TestCase):
-    def test_agpl_license_is_full_unmodified_family_text(self):
-        license_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
-        self.assertTrue(
-            license_text.startswith(
-                "GNU AFFERO GENERAL PUBLIC LICENSE\nVersion 3, 19 November 2007"
-            )
-        )
-        self.assertIn(
-            "13. Remote Network Interaction; Use with the GNU General Public License.",
-            license_text,
-        )
-        self.assertGreater(len(license_text), 30000)
+    def test_agpl_license_matches_pinned_spdx_text(self):
+        import hashlib
 
+        license_bytes = (ROOT / "LICENSE").read_bytes()
+        git_blob = b"blob " + str(len(license_bytes)).encode("ascii") + b"\0" + license_bytes
+        self.assertEqual(
+            hashlib.sha1(git_blob, usedforsecurity=False).hexdigest(),
+            "0c97efd25b5974b974ed9a8a18207bc4f55bb338",
+        )
     def test_readme_has_spdx_and_notices(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("AGPL-3.0-only", readme)
@@ -43,15 +39,41 @@ class LicensingStructureTests(unittest.TestCase):
         for token in (
             'id="prks-settings-about-heading"',
             'id="prks-source-code-link"',
-            'href="https://github.com/Fooftilly/PRKS"',
+            'href="https://github.com/Fooftilly/PRKS" target="_blank" rel="noopener noreferrer">',
             'id="prks-license-link"',
-            'href="https://github.com/Fooftilly/PRKS/blob/master/LICENSE"',
-            'rel="noopener noreferrer"',
+            'href="https://github.com/Fooftilly/PRKS/blob/master/LICENSE" target="_blank" rel="noopener noreferrer">',
+            'id="prks-third-party-link"',
+            'href="https://github.com/Fooftilly/PRKS/blob/master/THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener noreferrer">',
             "AGPL-3.0-only",
             "no warranty",
         ):
             self.assertIn(token, diagnostics)
 
+    def test_vue_bundle_notices_cover_production_lockfile(self):
+        import json
+
+        bundle = ROOT / "frontend" / "vue" / "THIRD_PARTY_LICENSES.md"
+        source = ROOT / "frontend-app" / "THIRD_PARTY_LICENSES.md"
+        notices = bundle.read_text(encoding="utf-8")
+        self.assertEqual(notices, source.read_text(encoding="utf-8"))
+        package = json.loads((ROOT / "frontend-app" / "package.json").read_text())
+        lock = json.loads((ROOT / "frontend-app" / "package-lock.json").read_text())
+        production = {
+            path.removeprefix("node_modules/"): value
+            for path, value in lock["packages"].items()
+            if path.startswith("node_modules/")
+            and not value.get("dev") and not value.get("optional")
+        }
+        for name, item in production.items():
+            with self.subTest(package=name):
+                expected = f"| `{name}` | `{item['version']}` | `{item['license']}` |"
+                self.assertIn(expected, notices)
+        for name, version in package["dependencies"].items():
+            self.assertEqual(production[name]["version"], version)
+        for holder in ("Vue contributors", "Tanner Linsley", "Anthony Fu",
+                       "Floating UI contributors", "Atlassian Pty Ltd"):
+            self.assertIn(holder, notices)
+        self.assertIn("Apache License", notices)
     def test_vendor_notices_remain_present(self):
         for name in (
             "codemirror", "cytoscape", "dompurify", "easymde",

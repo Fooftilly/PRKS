@@ -28,7 +28,7 @@ When adding/updating a dependency, update every authoritative declaration/invent
 
 The project's own code is published under AGPL-3.0-only; this does not
 change the licenses of vendored third-party works. See the root
-[third-party notices](../../THIRD_PARTY_NOTICES.md) and keep each vendored
+[third-party notices](https://github.com/Fooftilly/PRKS/blob/master/THIRD_PARTY_NOTICES.md) and keep each vendored
 `LICENSE`, `LICENSES/`, copyright header and any required upstream notices
 intact when rebuilding or distributing artifacts.
 

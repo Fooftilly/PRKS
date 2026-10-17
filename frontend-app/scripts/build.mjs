@@ -6,7 +6,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolvePython } from "../../tools/resolve-python3.mjs";
@@ -14,7 +14,7 @@ import { resolvePython } from "../../tools/resolve-python3.mjs";
 const appRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = join(appRoot, "..");
 const outDir = join(repoRoot, "frontend", "vue");
-const allowedNames = new Set(["prks-vue.js", "BUILD-MANIFEST.json"]);
+const allowedNames = new Set(["prks-vue.js", "BUILD-MANIFEST.json", "THIRD_PARTY_LICENSES.md"]);
 
 function sha256(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
@@ -43,6 +43,17 @@ if (emittedCss.length) {
   process.exit(1);
 }
 
+// Vite clears the output directory on every build. Restore the legal notices.
+const licenseNoticesPath = join(appRoot, "THIRD_PARTY_LICENSES.md");
+const licenseNotices = readFileSync(licenseNoticesPath, "utf8");
+const pkg = JSON.parse(readFileSync(join(appRoot, "package.json"), "utf8"));
+for (const [name, version] of Object.entries(pkg.dependencies)) {
+  if (!licenseNotices.includes("| `" + name + "` | `" + version + "` |")) {
+    console.error("Missing pinned Vue bundle license notice", name, version);
+    process.exit(1);
+  }
+}
+copyFileSync(licenseNoticesPath, join(outDir, "THIRD_PARTY_LICENSES.md"));
 const unexpected = readdirSync(outDir).filter((name) => !allowedNames.has(name));
 if (unexpected.length) {
   console.error("unexpected Vite output in frontend/vue:", unexpected.join(", "));
@@ -55,7 +66,6 @@ if (!existsSync(jsPath)) {
   process.exit(1);
 }
 
-const pkg = JSON.parse(readFileSync(join(appRoot, "package.json"), "utf8"));
 const outputSha256 = {
   "prks-vue.js": sha256(jsPath),
 };
