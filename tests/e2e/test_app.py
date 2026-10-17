@@ -4598,7 +4598,7 @@ class WorkspaceTabsTests(_BrowserE2E):
         self.assertEqual(evidence, {"code": "saved", "opId": None, "active": 0})
 
     def test_private_reminder_hide_show_prefers_unsettled_complete_draft(self):
-        server, page, _collector = self._start_app()
+        server, page, collector = self._start_app()
         work_a = server.ids["work_a"]
         work_b = server.ids["work_b"]
 
@@ -4761,7 +4761,19 @@ class WorkspaceTabsTests(_BrowserE2E):
         # must conflict in the durable queue, never overwrite silently.
         forward_text = new_text + "!"
         page.locator(selector).fill(forward_text)
-        page.locator(selector).press("Tab")
+        # A real revision conflict is the *expected* server response. Assert
+        # that exact 409 rather than turning the browser collector off for the
+        # whole test: Chromium also logs an HTTP 409 as a console error.
+        with page.expect_response(
+            lambda response: (
+                response.status == 409
+                and urlparse(response.url).path == "/api/sync/operations"
+                and response.request.method == "POST"
+            ),
+            timeout=15000,
+        ) as expected_conflict:
+            page.locator(selector).press("Tab")
+        self.assertEqual(expected_conflict.value.status, 409)
         wait_for_async(
             page,
             """id => prksSync.store.listOperations().then(rows => rows.some(r =>
@@ -4774,6 +4786,17 @@ class WorkspaceTabsTests(_BrowserE2E):
         persisted = page.request.get(server_url, timeout=5000)
         self.assertTrue(persisted.ok)
         self.assertEqual(persisted.json().get("private_notes"), new_text)
+
+        # Consume ONLY the known Chromium resource error for the verified
+        # intentional POST 409, preserving every other console-error gate.
+        expected_log = ("Failed to load resource: the server responded with a "
+                        "status of 409 (Conflict)")
+        expected_url = "/api/sync/operations"
+        intentional = [entry for entry in collector.console_errors
+                       if expected_log in entry and expected_url in entry]
+        self.assertLessEqual(len(intentional), 1)
+        if intentional:
+            collector.console_errors.remove(intentional[0])
 
     def test_delayed_secondary_concept_mutation_refreshes_owner_not_main(self):
         server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
