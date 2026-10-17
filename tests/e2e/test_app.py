@@ -10688,6 +10688,27 @@ class MainSecondaryDividerTests(_BrowserE2E):
         _open_work_work_split(page, server)
         _wait_pdf_annotation_gates_idle(page)
 
+        # Annotation catch-up can release _annotationMaterializing before its
+        # materialization handoff has acquired the next gate. It may schedule
+        # another PDF operation during that interval. Observe the complete
+        # PDF lifecycle, not just the original one-gate idle helper.
+        pdf_lifecycle_idle = """() => {
+            const snap = window.prksTabContextDebugSnapshot &&
+                window.prksTabContextDebugSnapshot();
+            const owners = (snap && snap.contexts) || [];
+            for (const owner of owners) {
+                if (!owner || !owner.mounted) continue;
+                const ctx = window.prksGetTabContext(owner.tabId);
+                const pdf = ctx && ctx.getResource && ctx.getResource('pdf');
+                if (pdf && (pdf._annotationMaterializing ||
+                    pdf._annotationMaterializationHandoff ||
+                    pdf._annotationCatchUpBlocksMutation ||
+                    pdf._annotationMaterializationGate)) return false;
+            }
+            return true;
+        }"""
+        page.wait_for_function(pdf_lifecycle_idle, timeout=20000)
+
         # A request-free instant can precede another mount-originated GET
         # (e.g. fetch A -> resolve -> enqueue B), so wait for a genuine
         # quiescent interval and THEN flush two paint frames. If those frames
@@ -10721,7 +10742,7 @@ class MainSecondaryDividerTests(_BrowserE2E):
             _capture_divider_runtime_ids(page)
             # The runtime snapshot itself crosses an event-loop turn; if
             # another mount request starts during it, settle again.
-            if mount_quiet() and len(requests) == snapshot:
+            if mount_quiet() and len(requests) == snapshot and page.evaluate(pdf_lifecycle_idle):
                 break
         mount_barrier_at = time.monotonic()
         barrier_last_activity = last_activity[0]
