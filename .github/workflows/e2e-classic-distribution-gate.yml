@@ -11,6 +11,9 @@ on:
       - Dockerfile
       - scripts/build_classic_distribution.py
       - scripts/e2e_classic_sw_transitions.py
+      - tests/e2e/test_classic_sw_transitions.py
+      - tests/e2e/run.py
+      - tests/e2e/policy.py
       - tests/test_e2e_classic_sw_transitions.py
       - scripts/benchmark_classic_script_bundle.py
       - tests/test_classic_distribution.py
@@ -110,7 +113,9 @@ jobs:
         run: python -m unittest tests.test_e2e_classic_sw_transitions
 
       - name: Exercise online upgrade, offline boot, and downgrade
-        run: python -m scripts.e2e_classic_sw_transitions
+        run: >-
+          python tests/e2e/run.py --jobs 1 --no-pointer-capture
+          tests.e2e.test_classic_sw_transitions.ClassicSWTransitionTests.test_unbundled_bundled_unbundled
 
   packaged-frontend:
     name: Packaged classic bundles (${{ matrix.shard }}/6)
