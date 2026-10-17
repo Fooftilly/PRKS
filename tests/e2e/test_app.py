@@ -4604,7 +4604,7 @@ class WorkspaceTabsTests(_BrowserE2E):
         self.assertEqual(evidence, {"code": "saved", "opId": None, "active": 0})
 
     def _prepare_private_reminder_acknowledged_handoff(self):
-        server, page, collector = self._start_app()
+        server, page, _collector = self._start_app()
         work_a = server.ids["work_a"]
         work_b = server.ids["work_b"]
 
@@ -4759,7 +4759,7 @@ class WorkspaceTabsTests(_BrowserE2E):
         return page, work_a, ids, selector, stale_work, new_text, server_url
 
     def test_private_reminder_hide_show_prefers_unsettled_complete_draft(self):
-        page, work_a, ids, selector, stale_work, new_text, server_url = (
+        page, work_a, _, selector, _, new_text, server_url = (
             self._prepare_private_reminder_acknowledged_handoff()
         )
         # The first forward edit uses this tab's proven ACK, rather than
@@ -4785,7 +4785,7 @@ class WorkspaceTabsTests(_BrowserE2E):
         self.assertEqual(persisted.json().get("private_notes"), desired_text)
 
     def test_private_reminder_acknowledged_handoff_revert_persists(self):
-        page, work_a, ids, selector, stale_work, new_text, server_url = (
+        page, work_a, _, selector, stale_work, _, server_url = (
             self._prepare_private_reminder_acknowledged_handoff()
         )
         # Reverting X to pre-save V after the X ACK must enqueue a real V edit.
