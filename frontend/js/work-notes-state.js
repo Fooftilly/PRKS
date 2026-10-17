@@ -293,7 +293,7 @@
     }
 
     /* ---- save boundary ---- */
-    async function saveWorkNote(workId, kind, text, observed) {
+    async function saveWorkNote(workId, kind, text, observed, options) {
         if (!root.prksSync || !root.prksSync.store) return { code: 'unavailable' };
         const op = kind === RESEARCH_KIND ? RESEARCH_OP : PRIVATE_OP;
         if (!workId || typeof text !== 'string') return { code: 'invalid_envelope' };
@@ -305,7 +305,7 @@
         }
         let row;
         try {
-            row = await root.prksSync.store.saveWorkNote(workId, op, text, observed);
+            row = await root.prksSync.store.saveWorkNote(workId, op, text, observed, options);
         } catch (e) {
             return { code: (e && e.prksLocalStoreCode) || 'failed',
                 error: (e && e.message) || 'Store refused write.' };
