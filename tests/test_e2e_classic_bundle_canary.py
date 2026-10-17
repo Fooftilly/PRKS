@@ -1,7 +1,6 @@
 """Guards for the isolated six-shard temporary classic-script bundle canary."""
 from __future__ import annotations
 
-import os
 from pathlib import Path
 import tempfile
 import unittest
