@@ -24,6 +24,19 @@ The repository contains dependency-gate logic in `backend/dependency_gate.py` an
 
 When adding/updating a dependency, update every authoritative declaration/inventory required by the gate rather than patching only the file that first fails.
 
+## Distribution and licensing
+
+The project's own code is published under AGPL-3.0-only; this does not
+change the licenses of vendored third-party works. See the root
+[third-party notices](../../THIRD_PARTY_NOTICES.md) and keep each vendored
+`LICENSE`, `LICENSES/`, copyright header and any required upstream notices
+intact when rebuilding or distributing artifacts.
+
+PyMuPDF is offered by its upstream publisher under AGPL terms or a
+separate commercial agreement. Anyone choosing a different license for a
+distribution must independently satisfy that dependency's licensing terms.
+Do not present this project's AGPL license as a grant over PyMuPDF.
+
 ## PDF viewer
 
 The PRKS PDF viewer has its own tooling/documentation under `tools/pdf-viewer/` and vendored output under `frontend/vendor/prks-pdf-viewer/`.
