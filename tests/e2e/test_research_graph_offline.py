@@ -318,20 +318,34 @@ class ResearchGraphOfflineTests(unittest.TestCase):
             self.cache(page, ids)
         with profile_e2e_phase('graph_nav_go_offline'):
             self.offline(page, context)
-        for index, (kind, route, rid, selector) in enumerate(records, start=1):
+        # The profile-only order control tests whether the first offline Graph
+        # round trip is slower because of first-use work, not its record kind.
+        # Warm caches above in the same order in either mode; preserve the
+        # original stable profile label/index for each record when reordered.
+        order = os.environ.get('PRKS_E2E_GRAPH_NAV_ORDER', 'default')
+        if order not in ('default', 'position_first'):
+            raise AssertionError(f'Unsupported Graph navigation profile order: {order}')
+        roundtrips = list(enumerate(records, start=1))
+        if order == 'position_first':
+            roundtrips[0], roundtrips[1] = roundtrips[1], roundtrips[0]
+        for index, (kind, route, rid, selector) in roundtrips:
             with self.subTest(kind=kind, rid=rid):
-                # The two Argument records are distinct timed round trips.
+                # Inclusive total plus non-overlapping internal steps. All
+                # original real-browser navigation and assertions are retained.
                 with profile_e2e_phase(f'graph_nav_roundtrip_{index}_{kind}'):
-                    page.evaluate('h => prksNavigate(h)', '#/' + route + '/' + rid)
-                    o._wait_offline_banner(page)
-                    o._open_details_drawer_if_tiled(page)
-                    page.locator('#prks-' + selector + '-view-graph').click()
-                    self.mounted(page)
-                    self.selected(page, kind + ':' + rid)
-                    o._wait_offline_banner(page)
-                    page.locator('#prks-graph-open').click()
-                    page.wait_for_function('h => location.hash === h', arg='#/' + route + '/' + rid)
-                    o._wait_offline_banner(page)
+                    with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_enter'):
+                        page.evaluate('h => prksNavigate(h)', '#/' + route + '/' + rid)
+                        o._wait_offline_banner(page)
+                        o._open_details_drawer_if_tiled(page)
+                    with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_to_graph'):
+                        page.locator('#prks-' + selector + '-view-graph').click()
+                        self.mounted(page)
+                        self.selected(page, kind + ':' + rid)
+                        o._wait_offline_banner(page)
+                    with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_return'):
+                        page.locator('#prks-graph-open').click()
+                        page.wait_for_function('h => location.hash === h', arg='#/' + route + '/' + rid)
+                        o._wait_offline_banner(page)
         # Uncached destination belongs to Concept detail, never a Graph guard.
         with profile_e2e_phase('graph_nav_uncached_destination'):
             self.graph(page, 'concept:' + ids['concept_unvisited'])
