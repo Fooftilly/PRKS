@@ -318,9 +318,10 @@ class ResearchGraphOfflineTests(unittest.TestCase):
             self.cache(page, ids)
         with profile_e2e_phase('graph_nav_go_offline'):
             self.offline(page, context)
-        for kind, route, rid, selector in records:
+        for index, (kind, route, rid, selector) in enumerate(records, start=1):
             with self.subTest(kind=kind, rid=rid):
-                with profile_e2e_phase('graph_nav_roundtrip_' + kind):
+                # The two Argument records are distinct timed round trips.
+                with profile_e2e_phase(f'graph_nav_roundtrip_{index}_{kind}'):
                     page.evaluate('h => prksNavigate(h)', '#/' + route + '/' + rid)
                     o._wait_offline_banner(page)
                     o._open_details_drawer_if_tiled(page)
