@@ -26,4 +26,4 @@ merge_protections:
     if:
       - base = master
     success_conditions:
-      - '-title ~= (?i)(^|[^a-z])(wip|do not merge|dnm)([^a-z]|$)'
+      - '-title ~= (?i)(^|[^a-z])(wip|dnm|do[\s_-]+not[\s_-]+merge)([^a-z]|$)'
