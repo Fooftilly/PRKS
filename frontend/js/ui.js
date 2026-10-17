@@ -3887,6 +3887,17 @@ async function prksSaveFolderPrivateNoteInOrder(editor, entityId, content, sessi
     return { result: await prksFolderSaveDurably(ctx, entityId, content, base), base: base };
 }
 
+/* A settled local Work save records the body/revision it was measured on.
+ * Later cold-park generations may use this provenance without adopting the
+ * unrelated revision of a fresh route read. */
+function prksRememberSettledWorkPrivateNoteBase(family, session, usedBase) {
+    if (family.entityType !== 'work' || !usedBase ||
+        typeof usedBase.value !== 'string' ||
+        !Number.isSafeInteger(usedBase.revision)) return;
+    session.settledBase = { value: usedBase.value, revision: usedBase.revision };
+    session.handoffBase = null;
+}
+
 function prksEnqueuePrivateNoteSave(family, editor) {
     if (!family || !editor || !editor.ctx || !editor.ctx.ui) return null;
     const entityId = String(editor.entityId);
@@ -3978,12 +3989,7 @@ function prksEnqueuePrivateNoteSave(family, editor) {
             session.updatedAt = Date.now();
             if (settled) settled(editor.ctx, entityId, session, result, savedGeneration, content);
             if (ok && !hasNewerDraft) {
-                if (family.entityType === 'work' && usedBase &&
-                    typeof usedBase.value === 'string' &&
-                    Number.isSafeInteger(usedBase.revision)) {
-                    session.settledBase = { value: usedBase.value, revision: usedBase.revision };
-                    session.handoffBase = null;
-                }
+                prksRememberSettledWorkPrivateNoteBase(family, session, usedBase);
                 prksReconcileSavedPrivateNote(family, editor.ctx, session, entityId, content);
             }
             if (!prksPrivateNotesOwnerCurrent(editor)) return;
