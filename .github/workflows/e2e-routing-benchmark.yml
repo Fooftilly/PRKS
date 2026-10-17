@@ -102,7 +102,10 @@ jobs:
           browser_nav_phases = (
               ("Response wait / first byte", "nav_response_wait"),
               ("Response body transfer", "nav_response_body"),
-              ("DOM parsing to DOMContentLoaded", "nav_dom_content_loaded"),
+              ("Response-end → DOMContentLoaded (inclusive)", "nav_dom_content_loaded"),
+              ("↳ Response-end → DOM interactive", "nav_until_interactive"),
+              ("↳ DOM interactive → DCL event start", "nav_interactive_to_dcl"),
+              ("↳ DCL event handlers", "nav_dcl_handlers"),
           )
           # These phases were added by #699. Children partition an inclusive
           # parent; never sum parent and child columns as separate overhead.
@@ -270,6 +273,19 @@ jobs:
               }) == 1
           )
           if complete:
+              for mode, phases, _ in browser_nav_rows:
+                  # The three new browser-native details partition the
+                  # inclusive post-response interval. Missing validated
+                  # zero-duration details are correctly treated as zero.
+                  parent = phases.get("nav_dom_content_loaded", 0.0)
+                  children = sum(phases.get(key, 0.0) for key in (
+                      "nav_until_interactive", "nav_interactive_to_dcl",
+                      "nav_dcl_handlers",
+                  ))
+                  if not math.isclose(parent, children, abs_tol=0.01, rel_tol=0):
+                      raise SystemExit(
+                          f"{mode}: browser DOM milestone totals disagree"
+                      )
               summary += [
                   "",
                   "| Browser milestone | Baseline median | Fast-path median |",
@@ -287,6 +303,14 @@ jobs:
                   summary.append(
                       f"| {label} | {baseline_phase:.2f}s | {fastpath_phase:.2f}s |"
                   )
+              summary.append(
+                  "Nested DOM rows partition response-end to DOMContentLoaded; "
+                  "do not add them to their parent or to Playwright app readiness."
+              )
+              summary.append(
+                  "DOM-interactive delay includes HTML parsing, parser-blocking "
+                  "scripts, and any required resource waits; it is not CPU-only."
+              )
               summary.append(
                   "Browser measurements use the Navigation Timing API (milliseconds "
                   "converted to seconds), not additional Python app-ready time. "

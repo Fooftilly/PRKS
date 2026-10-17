@@ -127,7 +127,10 @@ pay profiling overhead:
   - `app_route_wait` (canonical `#/folders` hash confirmation)
 - `nav_response_wait` (browser Navigation Timing: `fetchStart` → `responseStart`)
 - `nav_response_body` (browser: `responseStart` → `responseEnd`)
-- `nav_dom_content_loaded` (browser: `responseEnd` → `domContentLoadedEventEnd`)
+- `nav_dom_content_loaded` (browser: `responseEnd` → `domContentLoadedEventEnd`, inclusive)
+  - `nav_until_interactive` (`responseEnd` → `domInteractive`: parsing, blocking scripts, resource waits)
+  - `nav_interactive_to_dcl` (`domInteractive` → `domContentLoadedEventStart`)
+  - `nav_dcl_handlers` (`domContentLoadedEventStart` → `domContentLoadedEventEnd`)
 - `async_wait`
 - `request_routing`
 - `server_stop`
@@ -178,10 +181,13 @@ are also excluded from the additive ranking when `app_navigation` or
 entry counts a `nav_timing_samples` event. These are *counts, not seconds*:
 the manual serial benchmark exports them in the distinct
 `navigation_samples` JSON object, excluding them from phase sums and
-slowest-test rankings. The three Navigation Timing intervals are a **subset
+slowest-test rankings. The browser Navigation Timing intervals are a **subset
 of browser navigation**, not additional app setup work and not an exact
 partition of the Playwright-measured `app_navigation`: browser event and
-Python RPC clocks differ. They are read only after real app readiness succeeds,
+Python RPC clocks differ. The three nested DOM milestones partition
+`nav_dom_content_loaded` (which is an inclusive parent, not extra work).
+`nav_until_interactive` includes synchronous scripts and blocking resource
+fetches; it is not a pure JavaScript execution/CPU timer. They are read only after real app readiness succeeds,
 under active profiling, with missing/unsupported browser entries skipped
 without masking or causing test failures. Individual phase details and
 aggregate phase totals remain visible.
@@ -279,7 +285,10 @@ The job summary reports each trial's E2E runtime and the instrumented
 `routing_decision` total, the two per-mode medians, and the relative change
 (negative is faster). When browser Navigation Timing is available in all four
 trials, an additional table shows browser response wait, response transfer,
-and parsing-to-DOMContentLoaded aggregates. Missing navigation entries instead
+and the inclusive response-to-DOMContentLoaded aggregate, split into response
+end → DOM interactive, DOM interactive → DCL event start, and DCL event
+handlers. The summary validates this nested partition without double-counting.
+Missing navigation entries instead
 produce an explicit coverage note without failing the routing A/B experiment;
 invalid/nonfinite navigation values are rejected. The benchmark requires
 `captured == attempted > 0` **in each trial**, with matching attempted

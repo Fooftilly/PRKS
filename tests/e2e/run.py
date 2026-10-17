@@ -1357,7 +1357,13 @@ def _profile_infrastructure_total(phases: dict) -> float:
     # navigation; they explain its cost rather than add new infrastructure work.
     if "app_navigation" in phases or "app_ready" in phases:
         nested.update((
-            "nav_response_wait", "nav_response_body", "nav_dom_content_loaded"
+            "nav_response_wait", "nav_response_body", "nav_dom_content_loaded",
+            "nav_until_interactive", "nav_interactive_to_dcl", "nav_dcl_handlers",
+        ))
+    elif "nav_dom_content_loaded" in phases:
+        # These three browser milestones partition the inclusive DCL interval.
+        nested.update((
+            "nav_until_interactive", "nav_interactive_to_dcl", "nav_dcl_handlers",
         ))
     if "request_routing" in phases:
         nested.add("routing_decision")
