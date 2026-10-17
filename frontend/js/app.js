@@ -1265,6 +1265,10 @@ function prksActivateSettingsCategory(categoryId, options) {
 window.prksActivateSettingsCategory = prksActivateSettingsCategory;
 
 function prksOpenSettingsToLastCategory() {
+    // matchMedia 'change' may be delivered after a viewport resize; the
+    // Settings modal must expose the orientation matching its current layout
+    // as soon as it opens, not only after the queued change event fires.
+    prksSyncSettingsNavOrientation();
     prksActivateSettingsCategory(__prksSettingsActiveCategory);
 }
 window.prksOpenSettingsToLastCategory = prksOpenSettingsToLastCategory;
