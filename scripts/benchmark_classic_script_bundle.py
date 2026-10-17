@@ -146,18 +146,7 @@ def build_candidate(root: Path) -> tuple[str, dict[str, str], dict[str, int]]:
     return candidate, bundles, counts
 
 
-def _read_trial(path: Path, number: int) -> dict:
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise ValueError(f"Trial {number}: invalid or absent report: {exc}") from exc
-    required = {
-        "schema_version", "benchmark_modes", "workers", "tests",
-        "failures", "errors", "skipped", "wall_seconds", "phase_seconds",
-        "navigation_samples",
-    }
-    if not isinstance(data, dict) or set(data) != required:
-        raise ValueError(f"Trial {number}: unexpected benchmark report schema")
+def _validate_report_metadata(data: dict, number: int) -> None:
     if data["schema_version"] != 2 or data["benchmark_modes"] != ["profile"]:
         raise ValueError(f"Trial {number}: benchmark flags/schema changed")
     if type(data["workers"]) is not int or data["workers"] != 1:
@@ -166,21 +155,25 @@ def _read_trial(path: Path, number: int) -> dict:
         raise ValueError(f"Trial {number}: invalid test counters")
     if data["tests"] < 1 or any(data[k] for k in ("failures", "errors", "skipped")):
         raise ValueError(f"Trial {number}: tests were incomplete or failed")
-    if type(data["wall_seconds"]) not in (int, float) or not math.isfinite(data["wall_seconds"]) or data["wall_seconds"] <= 0:
+    wall = data["wall_seconds"]
+    if type(wall) not in (int, float) or not math.isfinite(wall) or wall <= 0:
         raise ValueError(f"Trial {number}: invalid wall time")
-    counts = data["navigation_samples"]
+
+
+def _validate_navigation_samples(counts: object, number: int) -> None:
     if (
         not isinstance(counts, dict) or set(counts) != {"attempted", "captured"}
         or any(type(counts[k]) is not int or counts[k] < 0 for k in counts)
         or counts["captured"] > counts["attempted"]
     ):
         raise ValueError(f"Trial {number}: invalid navigation sample coverage")
-    phases = data["phase_seconds"]
+
+
+def _validate_phase_seconds(phases: object, number: int) -> None:
     if not isinstance(phases, dict):
         raise ValueError(f"Trial {number}: missing phase map")
-    # The runner omits zero-valued aggregates, including all nav_* keys
-    # when Navigation Timing has no valid captures. These remain valid zero.
-    # Non-navigation milestones are required for every selected E2E trial.
+    # E2E reporting omits zero-valued aggregates, including all nav_* values
+    # if no valid navigation samples were captured.
     for _, key in PHASES:
         if key not in phases and not key.startswith("nav_"):
             raise ValueError(f"Trial {number}: missing {key}")
@@ -197,6 +190,23 @@ def _read_trial(path: Path, number: int) -> dict:
             rel_tol=0, abs_tol=0.01,
         ):
             raise ValueError(f"Trial {number}: invalid {parent} partition")
+
+
+def _read_trial(path: Path, number: int) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"Trial {number}: invalid or absent report: {exc}") from exc
+    required = {
+        "schema_version", "benchmark_modes", "workers", "tests",
+        "failures", "errors", "skipped", "wall_seconds", "phase_seconds",
+        "navigation_samples",
+    }
+    if not isinstance(data, dict) or set(data) != required:
+        raise ValueError(f"Trial {number}: unexpected benchmark report schema")
+    _validate_report_metadata(data, number)
+    _validate_navigation_samples(data["navigation_samples"], number)
+    _validate_phase_seconds(data["phase_seconds"], number)
     return data
 
 
