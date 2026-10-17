@@ -6,6 +6,7 @@ This notice is shipped beside `prks-vue.js` in `frontend/vue/` and copied there 
 
 Conservative list of the installed lockfile production graph (which includes some build-only modules); not every listed module is necessarily in the browser bundle. Redistributors must preserve license and copyright notices for the components actually distributed.
 
+<!-- BEGIN GENERATED PRODUCTION DEPENDENCY INVENTORY -->
 | Package | Version | SPDX license |
 | --- | --- | --- |
 | `@atlaskit/pragmatic-drag-and-drop` | `4.0.0` | `Apache-2.0` |
@@ -50,7 +51,7 @@ Conservative list of the installed lockfile production graph (which includes som
 | `source-map-js` | `1.2.1` | `BSD-3-Clause` |
 | `typescript` | `5.9.2` | `Apache-2.0` |
 | `vue` | `3.5.43` | `MIT` |
-
+<!-- END GENERATED PRODUCTION DEPENDENCY INVENTORY -->
 ## Original license and copyright notices of primary bundled runtime libraries
 
 ### Vue

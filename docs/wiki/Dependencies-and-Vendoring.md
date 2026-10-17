@@ -18,6 +18,15 @@ The Vue 3 application source lives in `frontend-app/` (its own `package.json` an
 
 `dependency-inventory.json` records dependency inventory used by the repository's dependency checks.
 
+The production Vue bundle's `frontend/vue/THIRD_PARTY_LICENSES.md` is
+generated from `frontend-app/THIRD_PARTY_LICENSES.md`. The production
+dependency inventory inside the latter is regenerated from
+`frontend-app/package-lock.json` by `npm run build`; keep the original
+upstream copyright and license **texts below the inventory** reviewed and
+up to date when introducing new libraries. A dependency bump needs a build
+commit, not manual editing of every inventory version row. License metadata
+that is missing or inconsistent fails before Vite clears its output.
+
 ## Dependency gate
 
 The repository contains dependency-gate logic in `backend/dependency_gate.py` and `scripts/dependency_gate.py`. It exists to catch mismatches between declarations, vendored artifacts, and the supported dependency model.

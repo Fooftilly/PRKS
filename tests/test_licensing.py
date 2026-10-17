@@ -74,6 +74,36 @@ class LicensingStructureTests(unittest.TestCase):
                        "Floating UI contributors", "Atlassian Pty Ltd"):
             self.assertIn(holder, notices)
         self.assertIn("Apache License", notices)
+    def test_lockfile_inventory_generator_handles_dependency_updates(self):
+        """A lockfile bump regenerates notices without manual table edits."""
+        import shutil
+        import subprocess
+
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node is not available")
+        check = """
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { renderLicenseInventory } from './frontend-app/scripts/vue-license-inventory.mjs';
+const source = readFileSync('frontend-app/THIRD_PARTY_LICENSES.md', 'utf8');
+const pkg = JSON.parse(readFileSync('frontend-app/package.json', 'utf8'));
+const lock = JSON.parse(readFileSync('frontend-app/package-lock.json', 'utf8'));
+assert.equal(renderLicenseInventory(source, pkg, lock), source);
+const future = structuredClone(lock);
+future.packages['node_modules/example-license-fixture'] = { version: '9.8.7', license: 'MIT' };
+const updated = renderLicenseInventory(source, pkg, future);
+assert.match(updated, /\| `example-license-fixture` \| `9\\.8\\.7` \| `MIT` \|/);
+assert.equal(renderLicenseInventory(updated, pkg, future), updated);
+assert.ok(updated.includes('### Full Apache License 2.0'));
+future.packages['node_modules/example-license-fixture'].license = '';
+assert.throws(() => renderLicenseInventory(source, pkg, future), /missing version\/license/);
+"""
+        subprocess.run(
+            [node, "--input-type=module", "-e", check],
+            cwd=ROOT, check=True, capture_output=True, text=True,
+        )
+
     def test_docker_distribution_includes_legal_notices(self):
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
         dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
