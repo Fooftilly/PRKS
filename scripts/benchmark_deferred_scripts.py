@@ -12,7 +12,7 @@ import argparse
 import re
 from pathlib import Path
 
-_SCRIPT_TAG = re.compile(r'<script(?P<attrs>\s+[^>]*)></script>')
+_SCRIPT_TAG = re.compile(r'<script(?P<attrs>[^>]*)></script>')
 _SRC = re.compile(r'\bsrc="(/[^"]+)"')
 _TYPE = re.compile(r'\btype="([^"]+)"')
 _ATTRIBUTE = re.compile(r'\b(?:defer|async)(?=\s|$)')
@@ -41,7 +41,7 @@ def deferred_index(original: str) -> tuple[str, int]:
     result = _SCRIPT_TAG.sub(replace, original)
     # Reject a no-op experiment; the number of classic scripts can change
     # naturally as PRKS evolves, so do not impose an exact count on CI.
-    if count == 0:
+    if result == original:
         raise ValueError("no classic external scripts were found")
     source_order = re.findall(r'<script[^>]*\bsrc="([^"]+)"', original)
     transformed_order = re.findall(r'<script[^>]*\bsrc="([^"]+)"', result)
