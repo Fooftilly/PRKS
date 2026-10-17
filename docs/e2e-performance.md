@@ -425,6 +425,30 @@ and assess global/script semantics and source attribution. Recheck the
 performance result in additional same-runner ABBA runs before changing
 production. Do not merge a production bundle without these checks.
 
+### Bundled full-suite canary failure and browser-boot preflight
+
+The [October 17 full-suite canary](https://github.com/Fooftilly/PRKS/actions/runs/39023728966)
+failed all six shards in its first attempt (~139–140 tests per shard).
+Failures included missing global functions such as
+`prksNavigate`, `createPrksOfflineStore`,
+`prksOfflineNoteRequestFailure`, and
+`prksGetResearchGraphDebug`, plus many Playwright timeouts. This shows the
+two temporary bundles are **not yet proven boot-equivalent** to the original
+84 separately loaded classics. A green 40-test timing benchmark must never
+override broad correctness failures. Do not propose production bundling until
+the root cause is found and a full six-shard canary passes.
+
+The manual six-shard workflow now gates the expensive matrix behind a
+single **real-browser boot preflight**. It builds the same temporary candidate,
+launches PRKS against a fresh temporary storage root, records both bundle
+HTTP response codes and uncaught Chromium page errors, and requires the
+four core classic-script globals above to be exported as functions. It prints
+bounded failure details and restores the original HTML and temporary bundle
+assets on every exit. If the preflight fails, all six full-suite shard jobs
+remain skipped instead of each timing out on the same broken shell.
+The preflight is *diagnostic*: passing it does not establish complete
+functional or offline/service-worker equivalence.
+
 ### Opt-in hang diagnostics and Chromium recycle
 
 `PRKS_E2E_DIAGNOSTIC=1` prints privacy-safe stage heartbeats (`START`,
