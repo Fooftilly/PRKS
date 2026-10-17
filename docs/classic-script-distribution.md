@@ -90,11 +90,44 @@ node --check dist/frontend/js/prks-classic-body.bundle.js
 node --check dist/frontend/sw.js
 ```
 
-The dedicated PR workflow runs structural service-worker tests and the full
-E2E suite on the packaged assets. Check it **on the exact PR head**, plus the
-normal required CI and review findings. The script assembler preserves raw
-classic globals and source order, but still changes
-`document.currentScript`/source URL attribution and per-file parsing; keep
-these as explicit review risks. The user/maintainer approves every merge.
-This distribution build coordinates with [#340](https://github.com/Fooftilly/PRKS/issues/340);
+The dedicated PR workflow checks **both final runtime Docker image modes**,
+runs structural service-worker tests, and executes the full Chromium E2E
+suite against the generated frontend. The ordinary E2E browser harness
+blocks service workers by default; its offline/durable tests opt into them.
+Thus, not every test exercises the service-worker cache. Check the exact
+PR head, the independently controlled offline cases, normal required CI,
+and review findings before considering rollout.
+
+### Bundling changes JavaScript failure isolation
+
+The assembler preserves source order and existing classic globals, but
+concatenation changes execution-failure behavior. With individual classic
+`<script>` elements, a top-level uncaught exception in one source file
+aborts that file; the browser still executes subsequent script elements.
+Inside a combined bundle, the *same exception stops execution of all
+remaining source chunks in that bundle*. Later top-level lexical
+(`let`/`const`/`class`) bindings can remain uninitialized and the
+application bootstrap (including final `app.js`) may never execute.
+This can turn a feature-local failure into a blank application.
+
+No specific top-level crash was established in the current source inventory,
+and Chromium E2E passing is not evidence for every browser environment.
+**Required before general deployment:** audit top-level startup code for
+uncaught exceptions, especially storage/security APIs, vendor initialization,
+locked-down browsers, unsupported platform APIs, and per-file strict mode.
+Test startup/failure behavior in supported non-Chromium browsers and restrictive
+profiles. Treat a new top-level throw in a classic source as a packaging
+regression and consider preserving an isolated script boundary if the
+behavior cannot be made safe. Do not suppress exceptions with broad catches,
+wrap all scripts in IIFEs (which change global bindings), or claim that the
+bundle's two scripts preserve per-file exception isolation.
+
+Other changed semantics include `document.currentScript`, error stack/source
+attribution, automatic semicolon insertion and per-file parsing. A clean
+full-suite gate does not by itself validate all these properties. The
+unbundled Docker build flag is the immediate rollback switch if a runtime
+regression appears, and a prior image should be retained.
+
+The user/maintainer approves every merge. This distribution build
+coordinates with [#340](https://github.com/Fooftilly/PRKS/issues/340);
 do not add another permanent artifact/dependency pipeline.
