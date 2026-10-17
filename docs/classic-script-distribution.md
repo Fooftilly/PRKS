@@ -20,6 +20,38 @@ passed **837/837 tests**, including offline reload. These observations do
 The dedicated **E2E Classic Production Distribution Gate** runs all six shards
 against the actual generated files in this PR, not the diagnostic candidate.
 
+### Packaged E2E CI cost pilot (manual only)
+
+The non-required **E2E Classic Production Distribution Gate** retains its full
+six-shard packaged-browser matrix on every matching pull request. Docker
+bundle/rollback image checks and the real Chromium service-worker
+upgrade/offline-boot/downgrade test remain separate jobs.
+
+For an **opt-in measurement**, open Actions → E2E Classic Production
+Distribution Gate → Run workflow and select `packaged_mode=smoke`. The
+manual-only job stages the same deterministic production frontend, runs the
+nine curated real-Chromium smoke cases (shell, Work, offline cache and durable
+store), and additionally tests divider reload prevention and a PDF annotation
+interaction. The Docker and SW transition jobs still run. The default/manual
+`packaged_mode=full` and **every PR** run the original six packaged shards;
+there is no automatic coverage reduction.
+
+Baseline from [PR #742](https://github.com/Fooftilly/PRKS/pull/742)
+(October 17, 2026): [six checkout shards](https://github.com/Fooftilly/PRKS/actions/runs/39054070761)
+used about **53.8 summed runner-minutes**, while
+[six packaged shards](https://github.com/Fooftilly/PRKS/actions/runs/39054070827)
+used **52.3 summed runner-minutes**. Both executed 843 E2E tests. These
+numbers sum log start/end times, excluding queue time, billed-minute rounding,
+the Docker/SW jobs, and other workflows. No manual smoke runtime or
+equivalence claim has been established yet.
+
+Before considering any future routine-PR smoke policy, compare full and
+smoke **on the same commit and runner class**, measure actual runner cost,
+then document which failure classes would be missed (in particular
+bundled-only, offline/SW upgrade, PDF and shared frontend regressions).
+Keep complete packaged validation for releases and high-risk changes, and
+require maintainer approval before changing any automatic gate.
+
 ## Build and deterministic output
 
 From a checkout, run:
