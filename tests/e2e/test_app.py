@@ -4510,8 +4510,101 @@ class WorkspaceTabsTests(_BrowserE2E):
         )
         self.assertEqual(persisted, final_text)
 
-    def test_private_reminder_hide_show_prefers_unsettled_complete_draft(self):
+    def test_private_reminder_committed_handoff_excludes_foreign_and_failed_saves(self):
+        _server, page, _collector = self._start_app()
+        evidence = page.evaluate(
+            """() => {
+                const guard = window.prksWorkPrivateNoteNeedsCommittedHandoff;
+                if (typeof guard !== 'function') throw Error('handoff guard missing');
+                const family = { entityType: 'work' };
+                const session = {
+                    entityId: 'W', ownerTabId: 'tab',
+                    state: 'committed', retired: false, dirty: false,
+                    promise: null, latestSaveToken: 1, settledSaveToken: 1,
+                    draftText: 'locally queued X',
+                    settledBase: { value: 'previous V', revision: 4 },
+                };
+                function test(patch = {}, canonicalText = 'previous V',
+                              revision = 5, source = 'server', displayed = 'previous V',
+                              familyType = family) {
+                    const existing = Object.assign({}, session, patch);
+                    const ctx = { tabId: 'tab', getResource: key => {
+                        if (key === 'workNotesCanonical') return {
+                            id: 'W', private_notes: canonicalText,
+                            sources: { private: source }
+                        };
+                        if (key === 'workNotesObserved') return {
+                            private: { revision }
+                        };
+                        return null;
+                    }};
+                    return guard(familyType, existing, ctx, 'W', displayed, false);
+                }
+                return {
+                    stale: test(),
+                    pendingOverlay: test({}, 'previous V', 5, 'server', 'locally queued X'),
+                    foreign: test({}, 'foreign B', 6, 'server', 'foreign B'),
+                    newerRevision: test({}, 'previous V', 7),
+                    cacheOnly: test({}, 'previous V', 5, 'cache'),
+                    inflight: test({ promise: {} }),
+                    failed: test({ state: 'error', dirty: true }),
+                    unsettled: test({ settledSaveToken: 0 }),
+                    noBase: test({ settledBase: null }),
+                    foreignTab: test({ ownerTabId: 'elsewhere' }),
+                    folder: test({}, 'previous V', 5, 'server',
+                        'previous V', { entityType: 'folder' }),
+                };
+            }"""
+        )
+        self.assertEqual(evidence, {
+            "stale": True,
+            "pendingOverlay": True,
+            "foreign": False,
+            "newerRevision": False,
+            "cacheOnly": False,
+            "inflight": False,
+            "failed": False,
+            "unsettled": False,
+            "noBase": False,
+            "foreignTab": False,
+            "folder": False,
+        })
+
+    def test_private_reminder_handoff_revert_cancels_never_sent_row(self):
         server, page, _collector = self._start_app()
+        # The sync coordinator takes this same Web Lock with ifAvailable.
+        # Hold it across enqueue + cancellation so a startup reachability
+        # notification cannot claim the test row between IndexedDB awaits.
+        # Keep the browser online: unrelated settings requests must work.
+        evidence = page.evaluate(
+            """async id => {
+                if (!navigator.locks) throw new Error('Web Locks required for cancellation check');
+                return navigator.locks.request('prks-sync', async () => {
+                    const base = { value: 'before', revision: 4 };
+                    await prksSync.store.saveWorkNote(id, 'SET_WORK_PRIVATE_NOTE',
+                        'not yet sent', base);
+                    const ctx = {
+                        ui: { workPrivateNoteSession: {
+                            entityId: id, handoffBase: base, handoffText: 'not yet sent'
+                        }},
+                        getResource: key => key === 'workNotesObserved'
+                            ? { private: base } : null,
+                    };
+                    const out = await prksSaveWorkPrivateNoteForSession(
+                        { ctx }, id, 'before'
+                    );
+                    const rows = await prksSync.store.listOperations();
+                    return { code: out.result.code, opId: out.result.opId,
+                        active: rows.filter(r => r.operation === 'SET_WORK_PRIVATE_NOTE'
+                            && r.entity_id === id && r.status !== 'acknowledged').length };
+                });
+            }""",
+            arg=server.ids["work_a"],
+        )
+        self.assertEqual(evidence, {"code": "saved", "opId": None, "active": 0})
+
+    def _prepare_private_reminder_acknowledged_handoff(self):
+        server, page, collector = self._start_app()
         work_a = server.ids["work_a"]
         work_b = server.ids["work_b"]
 
@@ -4546,6 +4639,12 @@ class WorkspaceTabsTests(_BrowserE2E):
         )
         selector = "#prks-private-notes-work-" + work_a
         page.locator(selector).wait_for()
+        # Snapshot the *pre-edit* server Work. A delayed delivery of this GET
+        # after the acknowledgement reproduces the cold-park race reliably.
+        stale_work = page.evaluate(
+            "async id => (await (await fetch('/api/works/' + id)).json())",
+            arg=work_a,
+        )
         new_text = "PRIVATE-PARK-NEW-%s" % int(time.time() * 1000)
         page.locator(selector).fill(new_text)
         # Unsettled draft only: dirty editor, or draft overlay that still
@@ -4570,10 +4669,59 @@ class WorkspaceTabsTests(_BrowserE2E):
             }""",
             arg={"selector": selector, "text": new_text, "workId": work_a},
         )
-        # Hide/tile are async (leave preflight + flush). Awaiting both keeps the
-        # remount from racing the park and makes the unsettled draft observable.
+        # The hide flush makes the save durable. Retile with a held GET whose
+        # *body* predates the edit; only deliver it after the server has applied
+        # the sync op. No wall-clock sleep or production API mock is involved.
         page.evaluate("async id => { await window.prksWorkspaceHideLeaf(id); }", arg=ids["a"])
-        page.evaluate("async id => { await window.prksWorkspaceTileTab(id); }", arg=ids["a"])
+        held = []
+        work_url = "/api/works/" + work_a
+
+        def hold_stale_work(route):
+            if route.request.method == "GET" and urlparse(route.request.url).path == work_url:
+                held.append(route)
+                return
+            route.fallback()
+
+        page.route("**/api/works/*", hold_stale_work)
+        # Playwright emits the request event before delivering the route
+        # callback. Await the intercepted route itself, not merely the request
+        # event, without a wall-clock sleep or racing the Python event loop.
+        page.expose_function("__prksTestHeldWorkGet", lambda: bool(held))
+        try:
+            # Do not await: the route deliberately holds the Work GET until
+            # the ack has completed. Awaiting tile here would deadlock.
+            with page.expect_request(
+                lambda req: req.method == "GET" and urlparse(req.url).path == work_url,
+                timeout=15000,
+            ):
+                page.evaluate("id => { void window.prksWorkspaceTileTab(id); }", arg=ids["a"])
+            wait_for_async(
+                page,
+                "() => window.__prksTestHeldWorkGet()",
+                timeout=15000,
+                message="re-tile did not make an interceptable Work GET",
+            )
+            wait_for_async(
+                page,
+                """() => prksSync.store.listOperations().then(rows =>
+                    rows.every(r => r.operation !== 'SET_WORK_PRIVATE_NOTE'))""",
+                timeout=15000,
+            )
+            # APIRequestContext bypasses Playwright page.route. Once all
+            # pending Work note ops are acknowledged, the server is the oracle.
+            server_url = (
+                urlparse(page.url).scheme + "://" + urlparse(page.url).netloc + work_url
+            )
+            response = page.request.get(server_url, timeout=5000)
+            self.assertTrue(response.ok)
+            self.assertEqual(response.json().get("private_notes"), new_text)
+            held.pop(0).fulfill(
+                status=200, content_type="application/json", body=json.dumps(stale_work)
+            )
+        finally:
+            for pending in held:
+                pending.continue_()
+            page.unroute("**/api/works/*", hold_stale_work)
         page.wait_for_function(
             """() => {
                 const snap = window.prksWorkspaceSnapshot();
@@ -4590,26 +4738,265 @@ class WorkspaceTabsTests(_BrowserE2E):
             arg={"selector": selector, "text": new_text},
         )
 
-        final_text = new_text + "!"
-        page.locator(selector).fill(final_text)
-        page.locator(selector).press("Tab")
-        wait_for_async(page,
-            """() => prksSync.store.listOperations().then(rows =>
-                rows.filter(r => r.operation === 'SET_WORK_PRIVATE_NOTE').length === 0)""",
-            timeout=15000,
-        )
+        # Only the exact ACK of the carried operation authorizes a new save
+        # against its server revision. A stale route GET or another writer's
+        # revision is not sufficient evidence.
         wait_for_async(
             page,
-            """(args) => fetch('/api/works/' + args.id).then(r => r.json()).then(w =>
-                w.private_notes === args.text)""",
-            arg={"id": work_a, "text": final_text},
+            """id => {
+                const ctx = window.prksGetTabContext(id);
+                const s = ctx && ctx.ui && ctx.ui.workPrivateNoteSession;
+                if (!s || !s.handoffBase || !s.settledOpId) return false;
+                const ack = window.prksAcknowledgedWorkPrivateNote(s.settledOpId);
+                return !!(ack && ack.entityId === s.entityId
+                    && ack.baseRevision === s.handoffBase.revision
+                    && ack.revision > ack.baseRevision);
+            }""",
+            arg=ids["a"],
             timeout=15000,
+            message="the carried reminder is missing its own acknowledged revision",
         )
-        persisted = page.evaluate(
-            """async (id) => (await (await fetch('/api/works/' + id)).json()).private_notes""",
-            arg=work_a,
+        return page, work_a, ids, selector, stale_work, new_text, server_url, collector
+
+    def test_private_reminder_hide_show_prefers_unsettled_complete_draft(self):
+        page, work_a, _, selector, _, new_text, server_url, _collector = (
+            self._prepare_private_reminder_acknowledged_handoff()
         )
-        self.assertEqual(persisted, final_text)
+        # The first forward edit uses this tab's proven ACK, rather than
+        # conflicting against itself or adopting the stale route revision.
+        desired_text = new_text + "!"
+        # Require the actual successful sync POST for this precise edit.
+        # A server GET plus rows.every(empty) alone could pass vacuously.
+        with page.expect_response(
+            lambda response: (
+                response.status == 200
+                and urlparse(response.url).path == "/api/sync/operations"
+                and response.request.method == "POST"
+                and (response.request.post_data_json or {}).get("operation")
+                == "SET_WORK_PRIVATE_NOTE"
+                and (response.request.post_data_json or {}).get("entity_id") == work_a
+                and (response.request.post_data_json or {}).get("payload", {}).get("text")
+                == desired_text
+            ),
+            timeout=15000,
+        ) as acknowledged:
+            page.locator(selector).fill(desired_text)
+            page.locator(selector).press("Tab")
+        self.assertEqual(acknowledged.value.json().get("code"), "ACKNOWLEDGED")
+        wait_for_async(
+            page,
+            """async ([id, text]) => {
+                const response = await fetch('/api/works/' + id);
+                if (!response.ok) return false;
+                const work = await response.json();
+                if ((work.private_notes ?? '') !== text) return false;
+                const rows = await prksSync.store.listOperations();
+                return rows.every(r => r.operation !== 'SET_WORK_PRIVATE_NOTE'
+                    || r.entity_id !== id || r.status === 'acknowledged');
+            }""",
+            arg=[work_a, desired_text],
+            timeout=20000,
+            message="post-handoff edit was not acknowledged without a pending conflict",
+        )
+        persisted = page.request.get(server_url, timeout=5000)
+        self.assertTrue(persisted.ok)
+        self.assertEqual(persisted.json().get("private_notes"), desired_text)
+
+    def test_private_reminder_acknowledged_handoff_revert_persists(self):
+        page, work_a, _, selector, stale_work, _, server_url, _collector = (
+            self._prepare_private_reminder_acknowledged_handoff()
+        )
+        # Reverting X to pre-save V after the X ACK must enqueue a real V edit.
+        # A false unchanged-success would leave X on the server.
+        # Empty reminders are stored as SQL NULL, so the GET returns JSON null.
+        # The UI and note sync scope consistently treat it as empty text.
+        desired_text = stale_work.get("private_notes") or ""
+        # Require the actual successful sync POST for this precise edit.
+        # A server GET plus rows.every(empty) alone could pass vacuously.
+        with page.expect_response(
+            lambda response: (
+                response.status == 200
+                and urlparse(response.url).path == "/api/sync/operations"
+                and response.request.method == "POST"
+                and (response.request.post_data_json or {}).get("operation")
+                == "SET_WORK_PRIVATE_NOTE"
+                and (response.request.post_data_json or {}).get("entity_id") == work_a
+                and (response.request.post_data_json or {}).get("payload", {}).get("text")
+                == desired_text
+            ),
+            timeout=15000,
+        ) as acknowledged:
+            page.locator(selector).fill(desired_text)
+            page.locator(selector).press("Tab")
+        self.assertEqual(acknowledged.value.json().get("code"), "ACKNOWLEDGED")
+        wait_for_async(
+            page,
+            """async ([id, text]) => {
+                const response = await fetch('/api/works/' + id);
+                if (!response.ok) return false;
+                const work = await response.json();
+                if ((work.private_notes ?? '') !== text) return false;
+                const rows = await prksSync.store.listOperations();
+                return rows.every(r => r.operation !== 'SET_WORK_PRIVATE_NOTE'
+                    || r.entity_id !== id || r.status === 'acknowledged');
+            }""",
+            arg=[work_a, desired_text],
+            timeout=20000,
+            message="post-handoff edit was not acknowledged without a pending conflict",
+        )
+        persisted = page.request.get(server_url, timeout=5000)
+        self.assertTrue(persisted.ok)
+        self.assertEqual(persisted.json().get("private_notes") or "", desired_text)
+
+
+    def _assert_carried_reminder_conflict(self, page, collector, work_id,
+                                          selector, text, server_url, expected_server_text):
+        # This POST 409 is deliberately expected; do not suppress other
+        # console errors or HTTP failures from the test collector.
+        with page.expect_response(
+            lambda response: (
+                response.status == 409
+                and urlparse(response.url).path == "/api/sync/operations"
+                and response.request.method == "POST"
+            ),
+            timeout=15000,
+        ) as conflict:
+            page.locator(selector).fill(text)
+            page.locator(selector).press("Tab")
+        self.assertEqual(conflict.value.status, 409)
+        wait_for_async(
+            page,
+            """([id, desired]) => prksSync.store.listOperations().then(rows =>
+                rows.some(r => r.operation === 'SET_WORK_PRIVATE_NOTE'
+                    && r.entity_id === id && r.status === 'conflict'
+                    && r.payload.text === desired)
+                && rows.every(r => r.operation !== 'SET_WORK_PRIVATE_NOTE'
+                    || r.entity_id !== id || !['pending', 'syncing'].includes(r.status)))""",
+            arg=[work_id, text],
+            timeout=15000,
+            message="carried reminder failed to enter a terminal, resolvable conflict",
+        )
+        persisted = page.request.get(server_url, timeout=5000)
+        self.assertTrue(persisted.ok)
+        self.assertEqual(persisted.json().get("private_notes"), expected_server_text)
+        expected_log = ("Failed to load resource: the server responded with a "
+                        "status of 409 (Conflict)")
+        expected = [entry for entry in collector.console_errors
+                    if expected_log in entry
+                    and "/api/sync/operations" in entry]
+        self.assertLessEqual(len(expected), 1)
+        if expected:
+            collector.console_errors.remove(expected[0])
+
+    def test_private_reminder_ack_proof_must_match_work_and_base(self):
+        _server, page, _collector = self._start_app()
+        # Invoke the real UI save-selection boundary. Stub only durable
+        # enqueue (so no network mutation); wrong or absent receipts must
+        # NEVER replace the pinned handoff base with the newer revision.
+        bases = page.evaluate(
+            """async () => {
+                const save = window.prksSaveWorkNoteDurably;
+                const ack = window.prksAcknowledgedWorkPrivateNote;
+                const id = 'W-proof-scope';
+                const base = { value: 'V', revision: 4 };
+                const ctx = {
+                    ui: { workPrivateNoteSession: {
+                        entityId: id, handoffBase: base, handoffText: 'X',
+                        settledOpId: 'original-op',
+                    }},
+                    getResource: key => key === 'workNotesObserved'
+                        ? { private: base } : null,
+                };
+                let selected = null;
+                try {
+                    window.prksSaveWorkNoteDurably = (_id, _kind, _text, observed) => {
+                        selected = { value: observed.value, revision: observed.revision };
+                        return Promise.resolve({ code: 'saved', opId: null });
+                    };
+                    const cases = [
+                        null,
+                        { entityId: 'W-foreign', baseRevision: 4, revision: 5 },
+                        { entityId: id, baseRevision: 3, revision: 5 },
+                        { entityId: id, baseRevision: 4, revision: 5 },
+                    ];
+                    const result = [];
+                    for (const receipt of cases) {
+                        window.prksAcknowledgedWorkPrivateNote = () => receipt;
+                        selected = null;
+                        await prksSaveWorkPrivateNoteForSession({ ctx }, id, 'Y');
+                        result.push(selected);
+                    }
+                    return result;
+                } finally {
+                    window.prksSaveWorkNoteDurably = save;
+                    window.prksAcknowledgedWorkPrivateNote = ack;
+                }
+            }"""
+        )
+        self.assertEqual(bases, [
+            {"value": "V", "revision": 4},
+            {"value": "V", "revision": 4},
+            {"value": "V", "revision": 4},
+            {"value": "X", "revision": 5},
+        ])
+
+    def test_private_reminder_handoff_without_ack_proof_still_conflicts(self):
+        page, work_a, ids, selector, _stale, new_text, server_url, collector = (
+            self._prepare_private_reminder_acknowledged_handoff()
+        )
+        # Simulate a different tab having sent the op or its proof being
+        # evicted. The held body is still X but the pinned source is pre-save V.
+        page.evaluate(
+            """id => {
+                const ctx = prksGetTabContext(id);
+                const s = ctx && ctx.ui && ctx.ui.workPrivateNoteSession;
+                if (!s || !s.handoffBase || !s.settledOpId) throw new Error('no carried session');
+                s.settledOpId = null;
+            }""",
+            arg=ids["a"],
+        )
+        self._assert_carried_reminder_conflict(
+            page, collector, work_a, selector, new_text + '-without-proof',
+            server_url, new_text,
+        )
+
+    def test_private_reminder_handoff_proven_ack_rejects_foreign_write(self):
+        page, work_a, ids, selector, _stale, new_text, server_url, collector = (
+            self._prepare_private_reminder_acknowledged_handoff()
+        )
+        ack = page.evaluate(
+            """id => {
+                const s = prksGetTabContext(id).ui.workPrivateNoteSession;
+                return prksAcknowledgedWorkPrivateNote(s.settledOpId);
+            }""", arg=ids["a"],
+        )
+        self.assertEqual(ack["entityId"], work_a)
+        # APIRequestContext is independent from Playwright's stale-GET route.
+        # An external device advances the server revision after our own ACK,
+        # without updating this tab's held editor or its in-memory receipt.
+        from datetime import datetime, timezone
+        from uuid import uuid4
+        stamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        foreign_text = new_text + "-foreign"
+        external = dict(
+            op_id=str(uuid4()), device_id=str(uuid4()),
+            operation="SET_WORK_PRIVATE_NOTE", entity_type="work",
+            entity_id=work_a, payload={"text": foreign_text},
+            base_revision=ack["revision"], occurred_at=stamp,
+            created_at=stamp, depends_on=[],
+        )
+        origin = server_url.rsplit("/api/works/", 1)[0]
+        foreign = page.request.post(
+            origin + "/api/sync/operations", data=json.dumps(external),
+            headers={"Content-Type": "application/json"}, timeout=10000,
+        )
+        self.assertEqual(foreign.status, 200, foreign.text())
+        self.assertEqual(foreign.json().get("code"), "ACKNOWLEDGED")
+        self.assertGreater(foreign.json()["server_revision"], ack["revision"])
+        self._assert_carried_reminder_conflict(
+            page, collector, work_a, selector, new_text + "-my-edit",
+            server_url, foreign_text,
+        )
 
     def test_delayed_secondary_concept_mutation_refreshes_owner_not_main(self):
         server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
