@@ -443,10 +443,17 @@ function prksConceptDetailNeedsCatalogue(ops) {
 async function prksEffectiveConceptDetailView(item, conceptOps, stale) {
     await prksHydratePendingWorkMetadata();
     if (stale()) return null;
-    // Avoid an additional IndexedDB/network read and full-catalogue overlay on
-    // ordinary Concept navigation. Never skip it for unsettled hierarchy edits:
-    // their newly created/reparented neighbours require names from the list.
-    const needsCatalogue = prksConceptDetailNeedsCatalogue(conceptOps);
+    // ONLINE: this read also refreshes concepts:index after Notes saves and
+    // Concept-domain invalidations, so it must stay awaited even when no
+    // hierarchy edit is pending. Otherwise a detail opened while connected
+    // would cease preparing the list for later offline reparenting.
+    // OFFLINE: a read cannot rewarm the index; without pending parent edits,
+    // the acknowledged detail already names its parents and children. Skip
+    // the extra failed fetch/cache fallback on this common navigation path.
+    const confidentlyOffline = typeof prksOfflineRuntimeState === 'function' &&
+        prksOfflineRuntimeState() === 'offline';
+    const needsCatalogue = !confidentlyOffline ||
+        prksConceptDetailNeedsCatalogue(conceptOps);
     const conceptCatalogue = needsCatalogue && typeof prksEffectiveConceptCatalogue === 'function'
         ? await prksEffectiveConceptCatalogue(conceptOps) : [];
     if (stale()) return null;
