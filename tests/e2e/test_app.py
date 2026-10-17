@@ -13043,6 +13043,25 @@ def _open_settings(page):
     page.wait_for_selector("#settings-modal:not(.hidden)")
 
 
+def _settings_nav_orientation_on_open(page, stale_orientation):
+    # Force the pre-open attribute stale, then open and inspect in the *same*
+    # browser task. The matchMedia 'change' callback cannot rescue a missing
+    # synchronous modal-open update between these statements.
+    return page.evaluate(
+        """stale => {
+            const nav = document.getElementById('prks-settings-nav');
+            nav.setAttribute('aria-orientation', stale);
+            openModal('settings-modal');
+            return {
+                flex: getComputedStyle(nav).flexDirection,
+                aria: nav.getAttribute('aria-orientation'),
+                visible: !document.getElementById('settings-modal').classList.contains('hidden')
+            };
+        }""",
+        arg=stale_orientation,
+    )
+
+
 def _wait_settings_nav_orientation(page, orientation, direction):
     # CSS media-query layout can update before the matchMedia change handler
     # updates the ARIA state. Treat both as one observable accessibility
@@ -13220,9 +13239,8 @@ class SettingsCategoryWorkflowTests(_BrowserE2E):
     def test_responsive_narrow_category_strip(self):
         _server, page, _collector = self._start_app()
         page.set_viewport_size({"width": 420, "height": 800})
-        page.evaluate("() => { openModal('settings-modal'); }")
-        page.wait_for_selector("#settings-modal:not(.hidden)")
-        _wait_settings_nav_orientation(page, "horizontal", "row")
+        state = _settings_nav_orientation_on_open(page, "vertical")
+        self.assertEqual(state, {"flex": "row", "aria": "horizontal", "visible": True})
         page.locator("#prks-settings-tab-reading").click()
         page.wait_for_selector("#prks-settings-panel-reading:not([hidden])")
         overflow = page.evaluate("() => document.documentElement.scrollWidth > document.documentElement.clientWidth")
@@ -13241,8 +13259,8 @@ class SettingsCategoryWorkflowTests(_BrowserE2E):
     def test_desktop_category_layout_two_columns(self):
         _server, page, _collector = self._start_app()
         page.set_viewport_size({"width": 1280, "height": 800})
-        _open_settings(page)
-        _wait_settings_nav_orientation(page, "vertical", "column")
+        state = _settings_nav_orientation_on_open(page, "horizontal")
+        self.assertEqual(state, {"flex": "column", "aria": "vertical", "visible": True})
         workspace_display = page.evaluate(
             "() => getComputedStyle(document.getElementById('prks-settings-nav').parentElement).display"
         )
