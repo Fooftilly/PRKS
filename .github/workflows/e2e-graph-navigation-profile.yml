@@ -111,18 +111,31 @@ jobs:
                           if name.startswith("graph_nav_") and name.endswith("_failed")]
               if failures:
                   raise SystemExit(f"Graph profile trial {i} failed phases: {failures}")
-          names = sorted(expected)
+          # Detail-stage timers are optional: older profiler checkouts did not
+          # record them. Show them only when *every* trial measured the phase;
+          # a missing key must never masquerade as an instant zero-second step.
+          optional = {
+              name for result in results for name in result["phase_seconds"]
+              if name.startswith("graph_nav_") and name not in expected
+          }
+          complete_optional = {name for name in optional
+                               if all(name in result["phase_seconds"] for result in results)}
+          names = sorted(expected | complete_optional)
           summary = [
               "## Offline Graph navigation phase profile",
               "",
               "Source checkout, same hosted runner, one warm-up excluded, three passing serial repeats.",
-              "Phases are inclusive diagnostics and may overlap generic infrastructure/async waits.",
+              "Roundtrip totals *include* enter/to_graph/return stages; do not add them.",
+              "Graph diagnostics also overlap generic infrastructure/async waits.",
               "",
               "| Phase | Median (s) | Runs (s) |",
               "| --- | ---: | --- |",
           ]
+          incomplete = optional - complete_optional
+          if incomplete:
+              summary.insert(5, f"Incomplete optional phases omitted: {sorted(incomplete)}")
           for name in names:
-              values = [float(r["phase_seconds"].get(name, 0)) for r in results]
+              values = [float(r["phase_seconds"][name]) for r in results]
               summary.append(
                   f"| `{name}` | {median(values):.3f} | " +
                   ", ".join(f"{x:.3f}" for x in values) + " |"
