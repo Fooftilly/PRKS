@@ -59,11 +59,11 @@ def _browser_preflight() -> None:
     This runs only after the candidate index/bundles have been staged and
     before the expensive six-shard matrix is allowed to start.
     """
-    from playwright.sync_api import sync_playwright
-    from tests.e2e.harness import AppServer
     from tests.e2e.install_browser import apply_playwright_browser_env
 
     apply_playwright_browser_env()
+    from playwright.sync_api import sync_playwright
+    from tests.e2e.harness import AppServer
     server = AppServer().start()
     errors: list[str] = []
     responses: dict[str, int] = {}
