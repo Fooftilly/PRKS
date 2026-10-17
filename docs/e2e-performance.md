@@ -126,8 +126,25 @@ or test data artifacts). Its phases show:
 - startup/initial page readiness, then warming five record caches;
 - warming core/people Graph snapshots and switching offline;
 - five record → Graph → record round trips (Concept, Position, two Arguments, Person);
+- separate `graph_nav_stage_*` intervals for **entering the record** (navigate,
+  provenance, drawer), **opening the Graph** (click, Cytoscape mount/focus,
+  provenance), and **returning** (click, hash, provenance);
 - the uncached destination and missing Graph cases.
 
+A [temporary, PR-only counterbalanced probe](https://github.com/Fooftilly/PRKS/actions/runs/39070620726)
+on #752 tested Concept-first vs Position-first on one runner, using two
+excluded warm-ups and six measured runs. Concept still took **5.250s vs
+5.235s** when switched from first to second, while Position took **3.332s vs
+3.364s** when switched from second to first. Therefore the ~1.9s gap is
+**Concept-detail navigation/return work, not a first Graph mount effect**.
+The Concept-to-Graph step itself took ~1.2s in both orders, similar to
+Position. Do not infer the precise inner route function responsible from
+these grouped timings alone; a narrower experiment is needed before changing
+production behavior.
+
+The fine-grained stages are **nested in their parent roundtrip totals**,
+not extra time to add. A completed trial with an optional stage is displayed
+in the manual workflow summary only if every trial measured that stage.
 The phase labels start `graph_nav_` and **overlap** generic `async_wait`,
 request routing and startup phase totals. They are diagnostic breakdowns,
 excluded from the infrastructure-additive slowest-test ranking. Profiling
