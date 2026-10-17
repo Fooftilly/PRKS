@@ -10768,11 +10768,51 @@ class MainSecondaryDividerTests(_BrowserE2E):
         phase = "drag"
 
         _drag_divider(page, 150)
-        page.wait_for_timeout(150)
         _drag_divider(page, -220)
-        page.wait_for_timeout(150)
         _drag_divider(page, 90)
-        page.wait_for_timeout(150)
+
+        # A drag-end callback can enqueue a debounced reload on a later task
+        # (workspace persistence currently debounces by 200 ms). Start a
+        # measured quiet window AFTER the final pointerup rather than trusting
+        # a fixed 150 ms delay. Retain the mount's PDF lifecycle guard and
+        # double-frame check, with one deadline for the whole observation.
+        drag_ended_at = time.monotonic()
+
+        def drag_quiet():
+            return (not inflight and
+                    time.monotonic() - max(last_activity[0], drag_ended_at) >= quiet_seconds)
+
+        def drag_settled_or_reloaded():
+            # A broken drag can leave its request in flight; report the exact
+            # GET through the assertion instead of timing out on quietness.
+            return len(requests) > before or drag_quiet()
+
+        page.expose_function("__prksDividerDragSettledOrReloaded", drag_settled_or_reloaded)
+        drag_deadline = time.monotonic() + 8
+        while True:
+            remaining = drag_deadline - time.monotonic()
+            if remaining <= 0:
+                self.fail(
+                    "divider post-drag state never became quiet: "
+                    "inflight=%r, post-barrier GETs=%r" %
+                    ([urlparse(req.url).path for req in inflight], requests[before:])
+                )
+            wait_for_async(
+                page, "() => window.__prksDividerDragSettledOrReloaded()",
+                timeout=max(1, int(remaining * 1000)),
+                message="divider post-drag network did not settle",
+            )
+            if len(requests) > before:
+                break
+            snapshot = len(requests)
+            page.evaluate(
+                """() => new Promise(resolve =>
+                    requestAnimationFrame(() => requestAnimationFrame(resolve)))"""
+            )
+            if len(requests) > before:
+                break
+            if page.evaluate(pdf_lifecycle_idle) and drag_quiet() and len(requests) == snapshot:
+                break
 
         unexpected = requests[before:]
         late_gets = [
