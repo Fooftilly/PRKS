@@ -58,7 +58,7 @@ class ClassicDistributionTests(unittest.TestCase):
         self.assertEqual(set(bundles), {HEAD_BUNDLE, BODY_BUNDLE})
         self.assertEqual(html.count(f'<script src="{HEAD_BUNDLE}"></script>'), 1)
         self.assertEqual(html.count(f'<script src="{BODY_BUNDLE}"></script>'), 1)
-        self.assertEqual(html.count('<script type="module" src='), 3)
+        self.assertEqual(html.count('<script type="module" src='), 2)
         self.assertEqual(bundles[HEAD_BUNDLE].count("/* bundled source:"), 5)
         self.assertEqual(bundles[BODY_BUNDLE].count("/* bundled source:"), 79)
         self.assertIn(f"'{HEAD_BUNDLE}',", worker)
