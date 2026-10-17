@@ -195,6 +195,10 @@ Use [Developer Reference](docs/wiki/Developer-Reference.md) for targeted E2E mod
 
 ## Licensing
 
+Copyright © 2026 Nikola Perović and other PRKS contributors. Each contributor retains
+copyright in their own contributions. This notice does not claim ownership of
+vendored, third-party or user-supplied material.
+
 PRKS's original application code and documentation are made available under the
 [GNU Affero General Public License version 3 only](LICENSE)
 (`SPDX-License-Identifier: AGPL-3.0-only`), subject to the rights of

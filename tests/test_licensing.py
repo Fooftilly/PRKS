@@ -38,6 +38,10 @@ class LicensingStructureTests(unittest.TestCase):
         self.assertNotIn('id="prks-source-code-link"', general)
         for token in (
             'id="prks-settings-about-heading"',
+            'id="prks-copyright-notice"',
+            "Copyright © 2026 Nikola Perović and other PRKS contributors.",
+            "Each author retains copyright in their contributions;",
+            "third-party works retain their respective copyrights.",
             'id="prks-source-code-link"',
             'href="https://github.com/Fooftilly/PRKS" target="_blank" rel="noopener noreferrer">',
             'id="prks-license-link"',
