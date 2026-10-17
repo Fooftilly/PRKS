@@ -64,10 +64,10 @@ def _temporary_service_worker(source: str) -> str:
         "const STATIC_EXTRA_PATHS = "
         "['/manifest.webmanifest', '/favicon.svg', '/logo.svg'];"
     )
-    if source.count(precache_anchor) != 1 or source.count(extra_anchor) != 1:
-        raise ValueError("service-worker manifest structure changed; cannot stage canary")
     if any(url in source for url in BUNDLE_URLS):
         raise ValueError("service worker already lists a temporary bundle")
+    if source.count(precache_anchor) != 1 or source.count(extra_anchor) != 1:
+        raise ValueError("service-worker manifest structure changed; cannot stage canary")
     paths = "".join(f"        '{url}',\n" for url in BUNDLE_URLS)
     source = source.replace(
         precache_anchor, paths + precache_anchor, 1,
