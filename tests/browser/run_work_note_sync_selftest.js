@@ -1039,8 +1039,20 @@ async function guardedCarriedReminderCancellation() {
         .filter(row => row.status !== 'acknowledged');
     const cancel = text => store.saveWorkNote('W-1', PRIVATE, 'V', base, { cancelPendingText: text });
 
-    /* An acknowledged or missing predecessor is NOT a no-op. */
+    /* Missing predecessor is not proof of an unchanged value. */
     await assert.rejects(cancel('X'), e => e.prksLocalStoreCode === 'stale_handoff');
+    assert.equal((await rows()).length, 0);
+
+    /* Also exercise the acknowledged tombstone, not merely an empty store.
+     * An ACK must not be confused with a still-cancelable pending row. */
+    const acknowledged = await store.saveWorkNote('W-1', PRIVATE, 'X', base);
+    await store.updateOperationSyncState(acknowledged.op_id, {
+        status: 'acknowledged', server_revision: 5, server_result: null,
+    });
+    await assert.rejects(cancel('X'), e => e.prksLocalStoreCode === 'stale_handoff');
+    const persistedAck = await store.getOperation(acknowledged.op_id);
+    assert.equal(persistedAck.status, 'acknowledged');
+    assert.equal(persistedAck.payload.text, 'X');
     assert.equal((await rows()).length, 0);
 
     /* While X is never-sent, reverting to V cancels X atomically. */
