@@ -25,8 +25,19 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 HEAD_URL = "/__e2e_classic_head_bundle.js"
 BODY_URL = "/__e2e_classic_body_bundle.js"
-CLASSIC = re.compile(r'<script src="(/[a-zA-Z0-9_./-]+)"></script>')
-MODULE = re.compile(r'<script type="module" src="(/[a-zA-Z0-9_./-]+)"></script>')
+CLASSIC_PREFIX = '<script src="'
+MODULE_PREFIX = '<script type="module" src="'
+SCRIPT_SUFFIX = '"></script>'
+SAFE_SOURCE = re.compile(r"/[a-zA-Z0-9_./-]+")
+
+
+def _source_from_tag(tag: str, prefix: str) -> str | None:
+    """Accept only full-line trusted repo script tags, not arbitrary HTML."""
+    if not tag.startswith(prefix) or not tag.endswith(SCRIPT_SUFFIX):
+        return None
+    src = tag[len(prefix):-len(SCRIPT_SUFFIX)]
+    return src if SAFE_SOURCE.fullmatch(src) else None
+
 SELECTION = (
     sys.executable, "tests/e2e/run.py", "--feature", "shell",
     "--feature", "work-create", "--jobs", "1",
@@ -99,11 +110,11 @@ def build_candidate(root: Path) -> tuple[str, dict[str, str], dict[str, int]]:
         if not stripped.startswith("<script"):
             outputs.append(line)
             continue
-        classic = CLASSIC.fullmatch(stripped)
-        module = MODULE.fullmatch(stripped)
+        classic = _source_from_tag(stripped, CLASSIC_PREFIX)
+        module = _source_from_tag(stripped, MODULE_PREFIX)
         if not classic and not module:
             raise ValueError("unsupported script markup in index.html")
-        src = (classic or module).group(1)
+        src = classic or module
         # A script's parser boundary must be independently known.
         location = "head" if script_offset < head_end else "body"
         if classic:
