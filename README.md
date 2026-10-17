@@ -73,7 +73,9 @@ Build with `./docker-build.sh`, which builds `prks:latest` and prunes dangling i
 docker compose up -d
 ```
 
-Docker images build the classic frontend into two ordered JavaScript bundles (rather than 84 separate requests); the raw Python source checkout remains unbundled. To rebuild the previous frontend without bundles, use `docker compose build --build-arg PRKS_CLASSIC_BUNDLES=0` followed by `docker compose up -d`. This affects packaged static assets only, not library files or the database. Build details, cache versioning and validation: [Classic-script distribution](docs/classic-script-distribution.md).\n\nThe container process binds **0.0.0.0:8080** so Docker port forwarding can reach it. Compose then publishes that port on the **host loopback** only (`127.0.0.1:8080:8080`). Container `0.0.0.0` is not the same as exposing PRKS on every host interface.
+Docker images build the classic frontend into two ordered JavaScript bundles (rather than 84 separate requests); the raw Python source checkout remains unbundled. To rebuild the previous frontend without bundles, use `docker compose build --build-arg PRKS_CLASSIC_BUNDLES=0` followed by `docker compose up -d`. This affects packaged static assets only, not library files or the database. Build details, cache versioning and validation: [Classic-script distribution](docs/classic-script-distribution.md).
+
+The container process binds **0.0.0.0:8080** so Docker port forwarding can reach it. Compose then publishes that port on the **host loopback** only (`127.0.0.1:8080:8080`). Container `0.0.0.0` is not the same as exposing PRKS on every host interface.
 
 Open [http://127.0.0.1:8080](http://127.0.0.1:8080) on the machine that runs Compose. This also sets `PRKS_STORAGE=/data`, mounts **`./data` on the host to `/data` in the container**, and runs the process as **`${UID:-1000}:${GID:-1000}`** so files on the bind mount match your user. The entrypoint creates `/data/pdfs` if needed and runs `python /app/prks_app.py --host 0.0.0.0`.
 
