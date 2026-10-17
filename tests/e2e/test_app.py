@@ -4546,6 +4546,12 @@ class WorkspaceTabsTests(_BrowserE2E):
         )
         selector = "#prks-private-notes-work-" + work_a
         page.locator(selector).wait_for()
+        # Snapshot the *pre-edit* server Work. A delayed delivery of this GET
+        # after the acknowledgement reproduces the cold-park race reliably.
+        stale_work = page.evaluate(
+            "async id => (await (await fetch('/api/works/' + id)).json())",
+            arg=work_a,
+        )
         new_text = "PRIVATE-PARK-NEW-%s" % int(time.time() * 1000)
         page.locator(selector).fill(new_text)
         # Unsettled draft only: dirty editor, or draft overlay that still
@@ -4570,10 +4576,49 @@ class WorkspaceTabsTests(_BrowserE2E):
             }""",
             arg={"selector": selector, "text": new_text, "workId": work_a},
         )
-        # Hide/tile are async (leave preflight + flush). Awaiting both keeps the
-        # remount from racing the park and makes the unsettled draft observable.
+        # The hide flush makes the save durable. Retile with a held GET whose
+        # *body* predates the edit; only deliver it after the server has applied
+        # the sync op. No wall-clock sleep or production API mock is involved.
         page.evaluate("async id => { await window.prksWorkspaceHideLeaf(id); }", arg=ids["a"])
-        page.evaluate("async id => { await window.prksWorkspaceTileTab(id); }", arg=ids["a"])
+        held = []
+        work_url = "/api/works/" + work_a
+
+        def hold_stale_work(route):
+            if route.request.method == "GET" and urlparse(route.request.url).path == work_url:
+                held.append(route)
+                return
+            route.fallback()
+
+        page.route("**/api/works/*", hold_stale_work)
+        try:
+            # Do not await: the route deliberately holds the Work GET until
+            # the ack has completed. Awaiting tile here would deadlock.
+            page.evaluate("id => { void window.prksWorkspaceTileTab(id); }", arg=ids["a"])
+            deadline = time.monotonic() + 12
+            while not held and time.monotonic() < deadline:
+                page.wait_for_timeout(30)
+            self.assertTrue(held, "re-tile did not make an interceptable Work GET")
+            # APIRequestContext bypasses Playwright page.route, so checking
+            # the real server cannot accidentally consume the held response.
+            server_url = (
+                urlparse(page.url).scheme + "://" + urlparse(page.url).netloc + work_url
+            )
+            persisted = None
+            while time.monotonic() < deadline:
+                response = page.request.get(server_url, timeout=5000)
+                self.assertTrue(response.ok)
+                persisted = response.json().get("private_notes")
+                if persisted == new_text:
+                    break
+                page.wait_for_timeout(40)
+            self.assertEqual(persisted, new_text, "sync never acknowledged the local save")
+            held.pop(0).fulfill(
+                status=200, content_type="application/json", body=json.dumps(stale_work)
+            )
+        finally:
+            for pending in held:
+                pending.continue_()
+            page.unroute("**/api/works/*", hold_stale_work)
         page.wait_for_function(
             """() => {
                 const snap = window.prksWorkspaceSnapshot();
