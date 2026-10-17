@@ -1,13 +1,20 @@
-# PRKS Mergify configuration. Rules are introduced only in reviewed PRs.
-# Maintainer approval is required for every merge; Mergify must not merge,
-# queue, rebase, retry, quarantine, or modify PRs automatically.
+# PRKS Mergify configuration. Introduce rules only through reviewed PRs.
+# PRKS requires explicit maintainer approval for every merge.
+# No automatic merge, queue, rebase, retry, or quarantine rules are added here.
+# IMPORTANT: Merge Queue is already enabled in the Mergify dashboard. An
+# explicit @mergifyio queue command can still cause Mergify to merge a PR.
+# Disable Merge Queue in the dashboard to prohibit queue-driven merges.
 
-# Merge Protections may be enabled in the Mergify dashboard separately.
-# Report through the GitHub checks UI, without posting status comments.
+# Merge Protections is already active for this repository.
+# Keep GitHub check-run reporting but avoid protection status comments.
 merge_protections_settings:
   reporting_method: check-runs
   post_comment: false
 
-# No custom merge-blocking rules until a dedicated follow-up PR validates them.
-# Built-in Depends-On / Merge-After directives do not need YAML rules.
+# Hide the queue/requeue checkbox prompts; this does NOT disable queue commands.
+merge_queue:
+  queue_controls_comment: false
+
+# Introduce custom protection rules separately, with validation and review.
+# Depends-On / Merge-After directives are available without YAML rules.
 merge_protections: []
