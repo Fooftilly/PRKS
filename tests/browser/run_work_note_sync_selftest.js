@@ -1158,7 +1158,7 @@ async function committedHandoffAcrossRouteGenerations() {
     // adopt the new route's revision. A newer remote note (revision 6) must
     // reject this write against the held text's earlier observed revision 4.
     const saveStart = src.indexOf('async function prksSaveWorkPrivateNoteForSession(');
-    const saveEnd = src.indexOf('/**\\n * The Folder Reminders durable save', saveStart);
+    const saveEnd = src.indexOf('async function prksSaveFolderPrivateNoteForSession(', saveStart);
     assert.ok(saveStart > 0 && saveEnd > saveStart, 'Work save adapter found');
     let attempted;
     const saveScope = {
