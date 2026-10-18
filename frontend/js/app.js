@@ -5020,6 +5020,11 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                         routeSignal,
                         {
                             domain: PRKS_POSITIONS_DOMAIN,
+                            // Reuse an eligible, warmed Position snapshot only
+                            // when PRKS has already confirmed it is offline.
+                            // Online reads, cache misses, and invalidated
+                            // snapshots preserve the existing read-through.
+                            preferCacheWhenOffline: true,
                             validate: function (value) {
                                 return prksIsPositionShape(value, positionId);
                             },
