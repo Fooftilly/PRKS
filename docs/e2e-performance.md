@@ -321,6 +321,43 @@ and connectivity fences are owned and tested by `offline-runtime.js`
 (PR #760); this PR adds a route/wrapper contract test without changing that
 shared runtime. The temporary A/B workflow was removed after the result.
 
+### Graph Argument/Stance detail: confirmed-offline read-through A/B (#763)
+
+[One-runner Chromium A/B #39158307945](https://github.com/Fooftilly/PRKS/actions/runs/39158307945)
+tested the unchanged `ResearchGraphOfflineTests.test_record_graph_navigation_both_directions`
+from merged master `173fdad` and exact candidate head `dc6a982`. Each
+revision ran an excluded warm-up, then three **alternating**, passing,
+isolated Chromium trials on the same runner. The selected phase keys were
+required and missing samples or test failures aborted the experiment.
+
+| Real-browser profile phase | Baseline median (s) | Candidate median (s) | Change (s) |
+| --- | ---: | ---: | ---: |
+| Whole test | 21.559 | 17.606 | **-3.953 (-18.3%)** |
+| Argument roundtrip | 3.102 | 1.375 | -1.727 |
+| Argument detail entry | 1.033 | 0.025 | -1.008 |
+| Argument detail return | 0.926 | 0.075 | -0.851 |
+| Stance roundtrip | 3.328 | 1.194 | -2.134 |
+| Stance detail entry | 1.167 | 0.023 | -1.144 |
+| Stance detail return | 1.106 | 0.069 | -1.037 |
+| Concept roundtrip (control) | 1.210 | 1.272 | +0.062 |
+| Position roundtrip (control) | 1.365 | 1.299 | -0.066 |
+| Person roundtrip (control) | 3.479 | 3.321 | -0.158 |
+| Uncached Concept detail | 2.240 | 2.359 | +0.119 |
+| Uncached Graph | 1.199 | 1.166 | -0.033 |
+
+The opt-in is limited to **Argument detail route** reads. That route
+also renders Stances and preserves the same explicit `PRKS_ARGUMENTS_DOMAIN`,
+`prksIsArgumentShape` guard, pending creates/deletions, and Work/Position
+/Argument name overlays. The shared runtime's online server-first behavior,
+coherence/invalidations and connectivity-generation fences were not
+changed. The index remains server-first. Missing cached details still show
+the original unavailable state and don't fabricate entities.
+
+The percentages refer to this profiled test only, not the full E2E suite.
+Nested stage durations overlap their parents and cannot be summed; no
+assertions or browser isolation were relaxed. The temporary experiment
+workflow was deleted after recording its results.
+
 ### Opt-in infrastructure profiling
 
 `--profile` records per-test infrastructure phases without making ordinary runs
