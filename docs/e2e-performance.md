@@ -204,6 +204,58 @@ respective `arg_overlay_verify_{target,response}` totals; they explain, not
 supplement, those parents. Missing or failing subphases invalidate the manual
 profiler report. No real-browser assertion or test operation was removed.
 
+The next opt-in probe measures the real offline `updateArgument` writer
+*inside* each existing `arg_overlay_{target,response}_write` phase. Browser
+`performance.now()` wrappers time its operations snapshot, acknowledged
+revision/base acquisition, cached revision/entity reads, and durable field
+enqueue/after-hook. Wrappers are installed only around the existing awaited
+write, then restored in `finally`; ordinary E2E is not instrumented.
+The browser timings are returned to the Python runner and rejected if missing,
+non-finite, or negative. No acknowledged revision is guessed, no new network
+mutations are permitted, and no offline queue ordering is changed.
+
+[The first one-off writer run #39104403107](https://github.com/Fooftilly/PRKS/actions/runs/39104403107)
+completed all four Chromium executions (one excluded warm-up, three measured).
+The complete test wall median was **16.327s**. Target/response write medians
+were **1.972s / 2.015s**. The acknowledged-base subphases were
+**1.968s / 2.011s**, while durable enqueue was **0.002s** for both.
+Within base acquisition, target/response revision-state reads took
+**0.915s / 0.972s**, and Argument record reads **1.046s / 0.932s**.
+
+A reviewer identified a measurement-validity limitation in that first run:
+the original global cache-read wrappers classified by kind alone. Follow-up
+instrumentation matches the edited Argument id, measures cached reads only
+while acquiring that acknowledged base, and requires **exactly one** completed
+call for every expected stage; unexpected extra/missing calls or an impossible
+parent/child relationship invalidate the profile.
+
+[The corrected one-off run #39136910046](https://github.com/Fooftilly/PRKS/actions/runs/39136910046)
+passed one excluded warm-up and all three independent Chromium trials.
+Median whole-test wall time was **15.839s**. Per-rename medians (seconds):
+
+| Inner step | Target | Response |
+| --- | ---: | ---: |
+| Complete offline write | 1.767 | 1.986 |
+| Acknowledged base (inclusive) | 1.762 | 1.981 |
+| Revision-state read | 0.876 | 0.988 |
+| Argument record read | 0.888 | 0.957 |
+| Durable field enqueue/refresh | 0.002 | 0.002 |
+
+The corrected evidence points to two **sequential offline read-through
+attempts** during acknowledged-base acquisition, not to IndexedDB enqueue.
+The next optimization must separately test a safe offline-cache fast path
+while maintaining stale/domain-invalid cache fences and revision/conflict
+safety. This PR does **not** change the application's read semantics.
+
+The `write_base` parent **includes** its `write_revision_read` and
+`write_record_read` children. The profile fails when the child timings
+exceed the parent. `write_enqueue` is the existing durable writer including
+its pending-name refresh. Treat the original `write` Python timer as
+inclusive; browser timings can differ slightly because of IPC and
+diagnostic overhead. Collect measurements on one runner before deciding
+whether the dominant cost is safe to optimize. This is **not** authorization
+to bypass revision validation, cache invalidation, or durable persistence.
+
 Generic infrastructure and async wait telemetry may overlap all these
 diagnostics; do not double-count them. Use the dominant measured inner step
 to motivate a *separate* same-runner baseline/candidate experiment before
