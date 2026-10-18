@@ -87,6 +87,18 @@ def _profile_phase(name: str, seconds: float) -> None:
     phases[name] = phases.get(name, 0.0) + max(0.0, float(seconds))
 
 
+def record_e2e_phase_seconds(name: str, seconds: float) -> None:
+    """Record an externally timed phase (e.g. browser performance.now).
+
+    Only opt-in profiles retain the sample. Reject non-finite or negative
+    values rather than producing a convincing but invalid speed measurement.
+    """
+    value = float(seconds)
+    if not math.isfinite(value) or value < 0:
+        raise ValueError("E2E phase seconds must be finite and non-negative")
+    _profile_phase(name, value)
+
+
 @contextmanager
 def profile_e2e_phase(name: str):
     """Time an opt-in test-specific phase without changing regular E2E work.
