@@ -35,6 +35,7 @@ _ARGUMENT_WRITE_INNER_PROFILE_JS = """async ({id, name}) => {
     const elapsed = Object.create(null);
     const counts = Object.create(null);
     const restores = [];
+    let activeBaseReads = 0;
     function intercept(symbol, classify) {
         const original = window[symbol];
         if (typeof original !== 'function') {
@@ -44,9 +45,11 @@ _ARGUMENT_WRITE_INNER_PROFILE_JS = """async ({id, name}) => {
             const label = classify(...args);
             if (!label) return original.apply(this, args);
             const started = performance.now();
+            if (label === 'base') activeBaseReads += 1;
             try {
                 return await original.apply(this, args);
             } finally {
+                if (label === 'base') activeBaseReads -= 1;
                 elapsed[label] = (elapsed[label] || 0) +
                     (performance.now() - started) / 1000;
                 counts[label] = (counts[label] || 0) + 1;
@@ -57,12 +60,20 @@ _ARGUMENT_WRITE_INNER_PROFILE_JS = """async ({id, name}) => {
         if (window[symbol] !== timed) throw new Error('Hook not writable: ' + symbol);
     }
     try {
+        // The queue snapshot is a global function; reject additional calls
+        // rather than silently attributing concurrent work to this write.
         intercept('prksDurableOperationsOrNone', () => 'ops');
-        intercept('prksAcknowledgedArgumentBase', () => 'base');
-        intercept('prksSaveArgumentFieldsDurably', () => 'enqueue');
-        intercept('prksOfflineReadEntity', kind =>
-            kind === 'argument-state' ? 'revision_read' :
-            kind === 'argument' ? 'record_read' : null);
+        intercept('prksAcknowledgedArgumentBase',
+            entityId => entityId === id ? 'base' : null);
+        intercept('prksSaveArgumentFieldsDurably',
+            entityId => entityId === id ? 'enqueue' : null);
+        // The detail page displays a different Argument. Exclude its reads,
+        // and require that these reads happen within our awaited base lookup.
+        intercept('prksOfflineReadEntity', (kind, entityId) => {
+            if (activeBaseReads !== 1 || entityId !== id) return null;
+            return kind === 'argument-state' ? 'revision_read' :
+                kind === 'argument' ? 'record_read' : null;
+        });
         const result = await updateArgument(id, {name});
         if (!result || result.id !== id) {
             throw new Error('Instrumented Argument write returned wrong identity');
@@ -90,8 +101,14 @@ def profiled_argument_rename(page, argument_id, name, owner):
     elapsed = result.get("elapsed", {})
     counts = result.get("counts", {})
     for stage in _ARGUMENT_WRITE_PROFILE_STAGES:
-        if counts.get(stage, 0) < 1 or stage not in elapsed:
-            raise AssertionError("Missing real Argument write stage: " + stage)
+        if counts.get(stage, 0) != 1 or stage not in elapsed:
+            raise AssertionError(
+                "Argument write stage must execute exactly once: "
+                + stage + " (count=" + str(counts.get(stage, 0)) + ")"
+            )
+    if elapsed["revision_read"] + elapsed["record_read"] > elapsed["base"] + 0.01:
+        raise AssertionError("Argument cache reads exceed acknowledged base duration")
+    for stage in _ARGUMENT_WRITE_PROFILE_STAGES:
         record_e2e_phase_seconds(
             "arg_overlay_" + owner + "_write_" + stage, elapsed[stage]
         )
