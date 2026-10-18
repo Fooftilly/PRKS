@@ -243,9 +243,19 @@ Median whole-test wall time was **15.839s**. Per-rename medians (seconds):
 
 The corrected evidence points to two **sequential offline read-through
 attempts** during acknowledged-base acquisition, not to IndexedDB enqueue.
-The next optimization must separately test a safe offline-cache fast path
-while maintaining stale/domain-invalid cache fences and revision/conflict
-safety. This PR does **not** change the application's read semantics.
+A guarded follow-up implements opt-in `preferCacheWhenOffline` on entity
+read-through, used **only** for Argument acknowledged-base revision and
+record reads. When PRKS is confirmed offline and the cached entity is
+eligible, this skips a network attempt already known to be failing.
+
+The default remains server-first. The opt-in refuses to return a cached
+entry after an entity/domain coherence invalidation, when a domain is
+blocked, when reconnecting/online, or after a generation/connectivity
+change while an IndexedDB read is pending. Missing cache entries fall
+through to the existing read-through behavior: an unknown base is never
+synthesized. Future server acknowledgments and revision conflict checks
+remain mandatory. Validate performance with a same-runner A/B and all
+normal offline tests before claiming an improvement.
 
 The `write_base` parent **includes** its `write_revision_read` and
 `write_record_read` children. The profile fails when the child timings
