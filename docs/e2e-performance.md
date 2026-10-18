@@ -153,6 +153,32 @@ CI were also instrumented. Keep all real DOM/navigation/offline assertions;
 use the largest measured phase to motivate a distinct, same-runner A/B
 optimization before touching production logic or test assertions.
 
+### Opt-in offline Argument rename/Graph propagation phases
+
+The slowest non-Graph case observed in [PR #742's full checkout gate](https://github.com/Fooftilly/PRKS/actions/runs/39054070761)
+was `DurableArgumentTests.test_pending_rename_reaches_position_argument_picker_and_graph`,
+at **15.1s** in one unprofiled Chromium shard. That observation is not
+a measurement of which substep costs the time.
+
+Use **Actions → E2E Argument Overlay Phase Profile → Run workflow** after
+merging the instrumentation. The manual-only workflow runs the unchanged test
+with fresh test storage/browser contexts for one excluded warm-up and three
+serial profile repeats on the same hosted runner. It fails rather than
+summarizing incomplete or failing browser runs.
+
+The ten `arg_overlay_*` phases distinguish browser/server setup; warming
+Argument, Position and Graph snapshots; offline rename; Position, picker and
+Graph propagation; and renamed target/response navigation. The summary
+reports the median and each sample for every phase plus the whole-test wall
+median. These phases do **not** add default E2E cost, and neither storage
+isolation nor the real-browser/offline assertions are changed.
+
+These stages are sequential, but generic infrastructure and async wait
+telemetry may overlap them; do not double-count. Use the measured dominant
+phase to motivate a *separate* same-runner baseline/candidate experiment
+before altering production logic. Never infer speedup from profiled-vs-normal
+CI times alone.
+
 ### Opt-in infrastructure profiling
 
 `--profile` records per-test infrastructure phases without making ordinary runs

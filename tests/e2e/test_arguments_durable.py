@@ -18,7 +18,7 @@ from tests.e2e.fixtures import (
     POSITION_ARGUMENT_NAME,
     seed_arguments_library,
 )
-from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
+from tests.e2e.harness import AppServer, open_app_page, profile_e2e_phase, require_chromium, wait_for_async
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -287,45 +287,57 @@ class DurableArgumentTests(unittest.TestCase):
                 self.index(page); o._wait_content_contains(page, name)
 
     def test_pending_rename_reaches_position_argument_picker_and_graph(self):
-        server, page, context = self.start()
+        # Opt-in phase timings only: preserve real browser assertions and
+        # storage/context isolation; no extra waits or weaker success criteria.
+        with profile_e2e_phase("arg_overlay_setup"):
+            server, page, context = self.start()
         argument = server.ids["position_argument"]
-        self.prepare(page, argument)
-        self.prepare(page, server.ids["argument_target"])
-        self.prepare(page, server.ids["argument_response"])
-        # Warm every acknowledged surface before disconnect.
-        self.detail(page, server.ids["argument_a"])
-        o._wait_entity_cached(page, "argument", server.ids["argument_a"])
-        page.evaluate("id => prksNavigate('#/positions/' + id)", server.ids["position_a"])
-        o._wait_content_contains(page, server.ids["position_a_name"])
-        o._wait_entity_cached(page, "position", server.ids["position_a"])
-        page.evaluate("() => prksNavigate('#/graph')")
-        page.wait_for_function("() => { const d=prksGetResearchGraphDebug(); return !!(d&&d.cy); }")
-        o._wait_entity_cached(page, "research-graph-core", "snapshot")
-        self.offline(page, context)
-        page.evaluate("id => updateArgument(id,{name:'Pending Argument Name'})", argument)
+        with profile_e2e_phase("arg_overlay_warm_argument_details"):
+            self.prepare(page, argument)
+            self.prepare(page, server.ids["argument_target"])
+            self.prepare(page, server.ids["argument_response"])
+            # Warm every acknowledged surface before disconnect.
+            self.detail(page, server.ids["argument_a"])
+            o._wait_entity_cached(page, "argument", server.ids["argument_a"])
+        with profile_e2e_phase("arg_overlay_warm_position"):
+            page.evaluate("id => prksNavigate('#/positions/' + id)", server.ids["position_a"])
+            o._wait_content_contains(page, server.ids["position_a_name"])
+            o._wait_entity_cached(page, "position", server.ids["position_a"])
+        with profile_e2e_phase("arg_overlay_warm_graph"):
+            page.evaluate("() => prksNavigate('#/graph')")
+            page.wait_for_function("() => { const d=prksGetResearchGraphDebug(); return !!(d&&d.cy); }")
+            o._wait_entity_cached(page, "research-graph-core", "snapshot")
+        with profile_e2e_phase("arg_overlay_offline_rename"):
+            self.offline(page, context)
+            page.evaluate("id => updateArgument(id,{name:'Pending Argument Name'})", argument)
 
-        page.evaluate("id => prksNavigate('#/positions/' + id)", server.ids["position_a"])
-        o._wait_content_contains(page, "Pending Argument Name")
-        picker_name = page.evaluate("id => fetchArguments().then(rows => rows.find(x=>x.id===id).name)",
-                                    argument)
-        self.assertEqual(picker_name, "Pending Argument Name")
-        graph_name = page.evaluate("""async id => {
-            await prksRefreshPendingArgumentNames();
-            const result=await prksOfflineResearchGraphFetch(false);
-            const node=result.snapshot.nodes.find(n=>n.type==='argument'&&n.record_id===id);
-            return node&&node.label;
-        }""", argument)
-        self.assertEqual(graph_name, "Pending Argument Name")
+        with profile_e2e_phase("arg_overlay_verify_position"):
+            page.evaluate("id => prksNavigate('#/positions/' + id)", server.ids["position_a"])
+            o._wait_content_contains(page, "Pending Argument Name")
+        with profile_e2e_phase("arg_overlay_verify_picker"):
+            picker_name = page.evaluate("id => fetchArguments().then(rows => rows.find(x=>x.id===id).name)",
+                                        argument)
+            self.assertEqual(picker_name, "Pending Argument Name")
+        with profile_e2e_phase("arg_overlay_verify_graph"):
+            graph_name = page.evaluate("""async id => {
+                await prksRefreshPendingArgumentNames();
+                const result=await prksOfflineResearchGraphFetch(false);
+                const node=result.snapshot.nodes.find(n=>n.type==='argument'&&n.record_id===id);
+                return node&&node.label;
+            }""", argument)
+            self.assertEqual(graph_name, "Pending Argument Name")
 
         # Another Argument's target and response rows use same hydrated map.
-        target = server.ids["argument_target"]
-        page.evaluate("id => updateArgument(id,{name:'Pending Target Name'})", target)
-        self.detail(page, server.ids["argument_a"])
-        o._wait_content_contains(page, "Pending Target Name")
-        response = server.ids["argument_response"]
-        page.evaluate("id => updateArgument(id,{name:'Pending Response Name'})", response)
-        self.detail(page, server.ids["argument_a"])
-        o._wait_content_contains(page, "Pending Response Name")
+        with profile_e2e_phase("arg_overlay_verify_target"):
+            target = server.ids["argument_target"]
+            page.evaluate("id => updateArgument(id,{name:'Pending Target Name'})", target)
+            self.detail(page, server.ids["argument_a"])
+            o._wait_content_contains(page, "Pending Target Name")
+        with profile_e2e_phase("arg_overlay_verify_response"):
+            response = server.ids["argument_response"]
+            page.evaluate("id => updateArgument(id,{name:'Pending Response Name'})", response)
+            self.detail(page, server.ids["argument_a"])
+            o._wait_content_contains(page, "Pending Response Name")
 
 
 if __name__ == "__main__":
