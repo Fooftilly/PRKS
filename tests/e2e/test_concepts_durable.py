@@ -317,6 +317,35 @@ class DurableConceptTests(unittest.TestCase):
     # `theParentSetCancelGoesThroughApiWrapper` (production putConceptParents)
     # in run_concept_sync_selftest.js.
 
+    def test_opening_concept_online_rewarms_invalidated_hierarchy_catalogue(self):
+        """A detail visited online must prepare names for later offline reparenting.
+
+        Saving Research Notes or mutating Concepts invalidates concepts:index.
+        Opening the Concept detail without visiting the index must refresh
+        that list before disconnecting; otherwise an offline SET_CONCEPT_PARENTS
+        cannot name the new parent and hides the user's pending change.
+        """
+        server, page, context = self.start()
+        child = server.ids['concept_child']
+        unvisited = server.ids['concept_unvisited']
+        self.prepare(page, child)
+        self.prepare(page, unvisited)
+
+        # Mimic a real domain invalidation (only the catalogue), after both
+        # detail caches are ready. No #/concepts navigation may refill it.
+        page.evaluate("() => prksOfflineInvalidateList('concepts:index')")
+        o._wait_list_uncached(page, 'concepts:index')
+        self.detail(page, child)
+        o._wait_list_cached(page, 'concepts:index')
+
+        self.offline(page, context)
+        page.evaluate("([cid, pid]) => putConceptParents(cid, [pid])", [child, unvisited])
+        self.wait_for_family(page, 'SET_CONCEPT_PARENTS')
+        self.detail(page, child)
+        o._wait_content_contains(page, server.ids['concept_unvisited_name'])
+        self.detail(page, unvisited)
+        o._wait_content_contains(page, CONCEPT_CHILD_NAME)
+
     def test_a_cycle_comes_back_as_a_named_refusal(self):
         server, page, context = self.start()
         child = server.ids['concept_child']
