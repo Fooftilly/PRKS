@@ -91,7 +91,13 @@ jobs:
               "arg_overlay_verify_picker",
               "arg_overlay_verify_graph",
               "arg_overlay_verify_target",
+              "arg_overlay_target_write",
+              "arg_overlay_target_navigate",
+              "arg_overlay_target_visible",
               "arg_overlay_verify_response",
+              "arg_overlay_response_write",
+              "arg_overlay_response_navigate",
+              "arg_overlay_response_visible",
           )
           for i, result in enumerate(results, 1):
               if any(result.get(k) != n for k, n in (
@@ -109,8 +115,10 @@ jobs:
               "## Offline Argument name propagation: three measured trials",
               "",
               "One excluded warm-up; three passing Chromium runs using fresh test storage",
-              "and browser contexts. Phase timings are sequential, not nested;",
-              "generic infrastructure and async-wait totals may overlap them.",
+              "and browser contexts. Most phases are sequential; the target",
+              "and response write/navigate/visible steps are NESTED inside their",
+              "respective verification totals. Do not add parent + child phases.",
+              "Generic infrastructure and async-wait totals may overlap them.",
               "",
               "| Phase | Median (s) | Trials (s) |",
               "| --- | ---: | --- |",
