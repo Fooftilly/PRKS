@@ -173,11 +173,42 @@ reports the median and each sample for every phase plus the whole-test wall
 median. These phases do **not** add default E2E cost, and neither storage
 isolation nor the real-browser/offline assertions are changed.
 
-These stages are sequential, but generic infrastructure and async wait
-telemetry may overlap them; do not double-count. Use the measured dominant
-phase to motivate a *separate* same-runner baseline/candidate experiment
-before altering production logic. Never infer speedup from profiled-vs-normal
-CI times alone.
+The [first master run #39102509934](https://github.com/Fooftilly/PRKS/actions/runs/39102509934)
+passed all four Chromium executions: one excluded warm-up and three
+measured. Median single-test wall time was **16.176s**. The slowest
+**inclusive** phases were `arg_overlay_verify_target` (**2.862s**) and
+`arg_overlay_verify_response` (**3.095s**); together **5.957s**. The
+offline state transition plus first rename was **2.079s**, Argument cache
+warming **1.896s**, and initial setup **1.690s**. This does not prove
+whether time within the target/response stages was spent writing the
+offline operation, starting navigation or waiting for the visible names.
+
+A [temporary same-branch real-Chromium probe](https://github.com/Fooftilly/PRKS/actions/runs/39103351420)
+passed its excluded warm-up plus three measured trials. Median whole-test
+wall time was **16.353s**. Nested subphase medians (seconds) were:
+
+| Verification | Full phase | Offline write | Awaited route + detail render | Residual visible-text wait |
+| --- | ---: | ---: | ---: | ---: |
+| Target rename | 3.438 | 2.221 | 1.179 | 0.002 |
+| Response rename | 3.040 | 1.960 | 1.031 | 0.004 |
+
+The writer calls (≈2 seconds each) account for the largest component of
+these stages. The `render` step also includes route navigation: `prksNavigate`
+returns a promise that is only fulfilled after the current detail render
+completes. It must **not** be interpreted as just URL/history routing cost.
+The residual DOM checks are negligible because the awaited navigation already
+renders the visible content. The nested timers
+`arg_overlay_target_{write,render,visible}` and
+`arg_overlay_response_{write,render,visible}` are contained inside their
+respective `arg_overlay_verify_{target,response}` totals; they explain, not
+supplement, those parents. Missing or failing subphases invalidate the manual
+profiler report. No real-browser assertion or test operation was removed.
+
+Generic infrastructure and async wait telemetry may overlap all these
+diagnostics; do not double-count them. Use the dominant measured inner step
+to motivate a *separate* same-runner baseline/candidate experiment before
+altering production logic. Never infer speedup from profiled-vs-normal CI
+times alone.
 
 ### Opt-in infrastructure profiling
 
