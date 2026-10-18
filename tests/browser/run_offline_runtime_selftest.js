@@ -713,6 +713,199 @@ async function run() {
         assertEq('runtime transitioned to offline after the network failure', runtime.getState(), mod.PRKS_OFFLINE_STATE_OFFLINE);
     }
 
+    /* ---- opt-in confirmed-offline reads bypass repeated failed requests only for eligible cache ---- */
+    {
+        const store = makeFakeStore();
+        await store.putEntity('argument-state', 'A-1', { argument_id: 'A-1', revision: 7 }, '');
+        let requests = 0;
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                requests += 1;
+                return Promise.reject(new Error('offline'));
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        runtime.noteRequestFailure();
+        const fast = await runtime.readThroughEntity(
+            'argument-state', 'A-1', '/api/arguments/A-1/sync-state',
+            { preferCacheWhenOffline: true });
+        assertEq('opt-in offline read retains cache provenance', fast.source, 'cache');
+        assertEq('opt-in offline read returns stored revision', fast.value.revision, 7);
+        assertEq('opt-in offline read skips a known-failing network attempt', requests, 0);
+        const regular = await runtime.readThroughEntity(
+            'argument-state', 'A-1', '/api/arguments/A-1/sync-state');
+        assertEq('default read stays server-first even while offline', requests, 1);
+        assertEq('default offline failure retains cache fallback', regular.source, 'cache');
+
+        // Opt-in must still attempt the server if the cache entry is absent.
+        const missing = await runtime.readThroughEntity(
+            'argument-state', 'A-missing', '/api/arguments/A-missing/sync-state',
+            { preferCacheWhenOffline: true });
+        assertEq('missing base is unavailable, never synthesized', missing.source, 'unavailable');
+        assertEq('missing cache uses existing read-through behavior', requests, 2);
+    }
+
+    /* ---- opt-in never bypasses server if online or a cache generation is invalid ---- */
+    {
+        const store = makeFakeStore({
+            deleteEntity: async function () { return false; }, // invalid rows remain on disk
+        });
+        await store.putEntity('argument', 'A-stale', { id: 'A-stale', name: 'old' }, '');
+        let requests = 0;
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                requests += 1;
+                return Promise.reject(new Error('offline'));
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        runtime.markEntityChanged('argument', 'A-stale');
+        runtime.noteRequestFailure();
+        const invalidated = await runtime.readThroughEntity(
+            'argument', 'A-stale', '/api/arguments/A-stale',
+            { preferCacheWhenOffline: true });
+        assertEq('invalidated row cannot be used by cache-first path', invalidated.source, 'unavailable');
+        assertEq('invalidated row follows normal read-through attempt', requests, 1);
+    }
+    {
+        const store = makeFakeStore();
+        await store.putEntity('argument', 'A-blocked', { id: 'A-blocked', name: 'old' }, '');
+        let requests = 0;
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                requests += 1;
+                return Promise.reject(new Error('offline'));
+            },
+            store: Object.assign(store, {
+                deleteEntitiesByKind: async function () { return false; },
+            }),
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        runtime.noteRequestFailure();
+        await runtime.markDomainChanged('arguments', { entityKinds: ['argument'] });
+        const blocked = await runtime.readThroughEntity(
+            'argument', 'A-blocked', '/api/arguments/A-blocked',
+            { domain: 'arguments', preferCacheWhenOffline: true });
+        assertEq('blocked domain refuses cache-first read', blocked.source, 'unavailable');
+        assertEq('blocked domain still attempts normal request', requests, 1);
+    }
+    {
+        const store = makeFakeStore();
+        await store.putEntity('argument', 'A-online', { id: 'A-online', name: 'old' }, '');
+        let requests = 0;
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                requests += 1;
+                return Promise.resolve(okJsonResponse({ id: 'A-online', name: 'new' }));
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        const fresh = await runtime.readThroughEntity(
+            'argument', 'A-online', '/api/arguments/A-online',
+            { preferCacheWhenOffline: true });
+        assertEq('online opt-in always uses server data', fresh.value.name, 'new');
+        assertEq('online opt-in retains server provenance', fresh.source, 'server');
+        assertEq('online opt-in performs one request', requests, 1);
+    }
+
+    /* ---- a reconnect while IndexedDB is pending rejects stale cache-first result ---- */
+    {
+        let resumeCache;
+        const store = makeFakeStore({
+            getEntity: function () {
+                return new Promise(resolve => { resumeCache = resolve; });
+            },
+        });
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: () => Promise.resolve(okJsonResponse({ id: 'A-race', name: 'live' })),
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        runtime.noteRequestFailure();
+        const read = runtime.readThroughEntity(
+            'argument', 'A-race', '/api/arguments/A-race',
+            { preferCacheWhenOffline: true });
+        runtime.noteRequestSuccess();
+        resumeCache({ value: { id: 'A-race', name: 'stale' }, cachedAt: 1 });
+        const result = await read;
+        assertEq('reconnected read ignores pending stale cache', result.value.name, 'live');
+        assertEq('reconnected read restores server provenance', result.source, 'server');
+    }
+
+    /* ---- a full offline -> online -> offline cycle must invalidate a pending fast path ---- */
+    {
+        let resumeCache;
+        let reads = 0;
+        const store = makeFakeStore({
+            getEntity: function () {
+                reads += 1;
+                if (reads === 1) return new Promise(resolve => { resumeCache = resolve; });
+                return Promise.resolve(null);
+            },
+        });
+        let requests = 0;
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: () => {
+                requests += 1;
+                return Promise.resolve(okJsonResponse({ id: 'A-cycle', name: 'fresh' }));
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        runtime.noteRequestFailure();
+        const pending = runtime.readThroughEntity(
+            'argument', 'A-cycle', '/api/arguments/A-cycle',
+            { preferCacheWhenOffline: true });
+        runtime.noteRequestSuccess();
+        runtime.noteRequestFailure();
+        resumeCache({ value: { id: 'A-cycle', name: 'stale' }, cachedAt: 1 });
+        const result = await pending;
+        assertEq('offline/online/offline cycle discards old pending cache', result.value.name, 'fresh');
+        assertEq('offline/online/offline cycle rechecks the server', requests, 1);
+        assertEq('cycle read keeps truthful server provenance', result.source, 'server');
+    }
+
+    /* ---- coherence invalidation while a fast cache read is pending is fail-closed ---- */
+    {
+        let resumeCache;
+        const store = makeFakeStore({
+            getEntity: function () {
+                return new Promise(resolve => { resumeCache = resolve; });
+            },
+            deleteEntity: async function () { return false; },
+        });
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: () => Promise.reject(new Error('offline')),
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        runtime.noteRequestFailure();
+        const pending = runtime.readThroughEntity(
+            'argument', 'A-invalidate', '/api/arguments/A-invalidate',
+            { preferCacheWhenOffline: true });
+        runtime.markEntityChanged('argument', 'A-invalidate');
+        resumeCache({ value: { id: 'A-invalidate', name: 'stale' }, cachedAt: 1 });
+        const result = await pending;
+        assertEq('invalidation during cache read refuses stale return', result.source, 'unavailable');
+    }
+
     /* ---- explicit cache coherence: complete authoritative Work replaces cache; partial success invalidates it ---- */
     {
         const store = makeFakeStore();

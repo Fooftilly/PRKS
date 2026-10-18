@@ -243,9 +243,31 @@ Median whole-test wall time was **15.839s**. Per-rename medians (seconds):
 
 The corrected evidence points to two **sequential offline read-through
 attempts** during acknowledged-base acquisition, not to IndexedDB enqueue.
-The next optimization must separately test a safe offline-cache fast path
-while maintaining stale/domain-invalid cache fences and revision/conflict
-safety. This PR does **not** change the application's read semantics.
+A guarded follow-up implements opt-in `preferCacheWhenOffline` on entity
+read-through, used **only** for Argument acknowledged-base revision and
+record reads. When PRKS is confirmed offline and the cached entity is
+eligible, this skips a network attempt already known to be failing.
+
+The default remains server-first. The opt-in refuses to return a cached
+entry after an entity/domain coherence invalidation, when a domain is
+blocked, when reconnecting/online, or after a generation/connectivity
+change while an IndexedDB read is pending. Connectivity uses a monotonic
+transition generation, so even offline → online → offline while a cache read
+is pending cannot expose its older snapshot. Missing cache entries fall
+through to the existing read-through behavior: an unknown base is never
+synthesized. Future server acknowledgments and revision conflict checks
+remain mandatory.
+
+[The initial same-runner Chromium A/B run #39140250984](https://github.com/Fooftilly/PRKS/actions/runs/39140250984)
+passed baseline and candidate warm-ups plus three alternating measured trials
+for each side, checking out the pre-change master SHA `76be455` as baseline.
+Median test wall time changed **16.476s → 12.412s** (a **4.064s reduction,
+24.7%**). Target write time changed **1.875s → 0.005s**, and response
+write time **1.949s → 0.005s**. These figures apply to the profiled
+offline Argument E2E test, not the full suite or production usage. A later
+guard adds a monotonic connectivity generation for reconnect cycles; verify
+the final candidate with another exact-head test gate and compare on the
+same runner if available before merging.
 
 The `write_base` parent **includes** its `write_revision_read` and
 `write_record_read` children. The profile fails when the child timings
