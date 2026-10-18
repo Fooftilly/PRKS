@@ -5165,6 +5165,12 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                         routeSignal,
                         {
                             domain: PRKS_ARGUMENTS_DOMAIN,
+                            // Only a confirmed-offline, eligible cache entry
+                            // skips the known-failing network read. The shared
+                            // reader still fences changed/blocked Arguments,
+                            // reconnect races, and cache misses; online detail
+                            // and ordinary Argument index reads stay server-first.
+                            preferCacheWhenOffline: true,
                             validate: function (value) {
                                 return prksIsArgumentShape(value, argumentId);
                             },
