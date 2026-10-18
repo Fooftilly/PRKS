@@ -214,10 +214,27 @@ The browser timings are returned to the Python runner and rejected if missing,
 non-finite, or negative. No acknowledged revision is guessed, no new network
 mutations are permitted, and no offline queue ordering is changed.
 
+[The first one-off writer run #39104403107](https://github.com/Fooftilly/PRKS/actions/runs/39104403107)
+completed all four Chromium executions (one excluded warm-up, three measured).
+The complete test wall median was **16.327s**. Target/response write medians
+were **1.972s / 2.015s**. The acknowledged-base subphases were
+**1.968s / 2.011s**, while durable enqueue was **0.002s** for both.
+Within base acquisition, target/response revision-state reads took
+**0.915s / 0.972s**, and Argument record reads **1.046s / 0.932s**.
+
+A reviewer identified a measurement-validity limitation in that first run:
+the original global cache-read wrappers classified by kind alone. Follow-up
+instrumentation additionally matches the edited Argument id, measures cached
+reads only during the specific acknowledged-base call, and requires **exactly
+one** completed call for every expected stage; an unexpected extra/missing
+call invalidates the sample. The follow-up probe is required before treating
+the above figures as reliable causal evidence.
+
 The `write_base` parent **includes** its `write_revision_read` and
-`write_record_read` children. `write_enqueue` is the existing durable
-writer including its pending-name refresh. Treat the original `write` Python
-timer as inclusive; browser timings can differ slightly because of IPC and
+`write_record_read` children. The profile fails when the child timings
+exceed the parent. `write_enqueue` is the existing durable writer including
+its pending-name refresh. Treat the original `write` Python timer as
+inclusive; browser timings can differ slightly because of IPC and
 diagnostic overhead. Collect measurements on one runner before deciding
 whether the dominant cost is safe to optimize. This is **not** authorization
 to bypass revision validation, cache invalidation, or durable persistence.
