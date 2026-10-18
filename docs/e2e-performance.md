@@ -284,6 +284,43 @@ to motivate a *separate* same-runner baseline/candidate experiment before
 altering production logic. Never infer speedup from profiled-vs-normal CI
 times alone.
 
+### Graph → Concept offline cache read: same-runner A/B (#761)
+
+[Baseline/candidate Chromium run 39144040444](https://github.com/Fooftilly/PRKS/actions/runs/39144040444)
+completed one excluded warm-up **per ref** and three alternating measured
+trials per ref on the same runner. All eight isolated browser tests passed,
+retaining Graph selection, back-navigation, uncached destination, and
+uncached Graph assertions. The baseline was merged master `570239c`;
+the candidate opted in **only** Concept detail navigation to the
+already-merged `preferCacheWhenOffline` guard. All numbers below are
+medians of three independent measured runs, in seconds:
+
+| Real-browser phase | Baseline | Candidate | Delta |
+| --- | ---: | ---: | ---: |
+| Full Graph navigation test | 27.260 | 22.928 | -4.332 |
+| Concept roundtrip (inclusive) | 3.187 | 1.387 | -1.800 |
+| Concept detail entry | 0.969 | 0.038 | -0.931 |
+| Concept detail return | 1.117 | 0.068 | -1.049 |
+| Position roundtrip (control) | 3.162 | 3.292 | +0.130 |
+| Uncached Concept destination | 2.042 | 2.144 | +0.102 |
+| Uncached Graph | 3.033 | 0.994 | -2.039 |
+
+The 4.332-second (15.9%) whole-test improvement is **specific to this
+profiled test**, not a full-suite speedup claim. No source-graph test or
+availability assertion was removed. The position control and uncached
+destination did not materially improve; the Concept entry/return changes
+identify the targeted win. Other phase medians cannot be treated as additive
+because the test overlaps nested timing intervals.
+
+The Concept detail route retains its original `PRKS_CONCEPTS_DOMAIN`,
+`prksIsConceptShape` validation, pending-creation/deletion handling, and
+route generation checks. The opt-in reader only uses coherent, eligible
+cached entities in *confirmed offline* state and falls back to the normal
+server-first request for online/transition and cache misses. Its coherence
+and connectivity fences are owned and tested by `offline-runtime.js`
+(PR #760); this PR adds a route/wrapper contract test without changing that
+shared runtime. The temporary A/B workflow was removed after the result.
+
 ### Opt-in infrastructure profiling
 
 `--profile` records per-test infrastructure phases without making ordinary runs
