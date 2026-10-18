@@ -173,11 +173,29 @@ reports the median and each sample for every phase plus the whole-test wall
 median. These phases do **not** add default E2E cost, and neither storage
 isolation nor the real-browser/offline assertions are changed.
 
-These stages are sequential, but generic infrastructure and async wait
-telemetry may overlap them; do not double-count. Use the measured dominant
-phase to motivate a *separate* same-runner baseline/candidate experiment
-before altering production logic. Never infer speedup from profiled-vs-normal
-CI times alone.
+The [first master run #39102509934](https://github.com/Fooftilly/PRKS/actions/runs/39102509934)
+passed all four Chromium executions: one excluded warm-up and three
+measured. Median single-test wall time was **16.176s**. The slowest
+**inclusive** phases were `arg_overlay_verify_target` (**2.862s**) and
+`arg_overlay_verify_response` (**3.095s**); together **5.957s**. The
+offline state transition plus first rename was **2.079s**, Argument cache
+warming **1.896s**, and initial setup **1.690s**. This does not prove
+whether time within the target/response stages was spent writing the
+offline operation, starting navigation or waiting for the visible names.
+
+The follow-up profiler adds `arg_overlay_target_{write,navigate,visible}`
+and `arg_overlay_response_{write,navigate,visible}` timers. These six
+steps are **nested** within their respective original
+`arg_overlay_verify_{target,response}` totals: their durations explain,
+not supplement, those parent totals. Missing or failing subphases invalidate
+the manual profiler report. No real-browser assertion or test operation was
+removed.
+
+Generic infrastructure and async wait telemetry may overlap all these
+diagnostics; do not double-count them. Use the dominant measured inner step
+to motivate a *separate* same-runner baseline/candidate experiment before
+altering production logic. Never infer speedup from profiled-vs-normal CI
+times alone.
 
 ### Opt-in infrastructure profiling
 
