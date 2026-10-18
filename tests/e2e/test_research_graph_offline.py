@@ -336,9 +336,18 @@ class ResearchGraphOfflineTests(unittest.TestCase):
                         self.selected(page, kind + ':' + rid)
                         o._wait_offline_banner(page)
                     with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_return'):
-                        page.locator('#prks-graph-open').click()
-                        page.wait_for_function('h => location.hash === h', arg='#/' + route + '/' + rid)
-                        o._wait_offline_banner(page)
+                        # The Person return still takes ~0.9s after its
+                        # confirmed-offline detail cache optimization. Attribute
+                        # click (which may itself await a route transition),
+                        # hash observation and rendered offline banner separately
+                        # before making a production optimization. Keep all
+                        # original real-browser actions and assertions.
+                        with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_return_click'):
+                            page.locator('#prks-graph-open').click()
+                        with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_return_hash'):
+                            page.wait_for_function('h => location.hash === h', arg='#/' + route + '/' + rid)
+                        with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_return_banner'):
+                            o._wait_offline_banner(page)
         # Uncached destination belongs to Concept detail, never a Graph guard.
         with profile_e2e_phase('graph_nav_uncached_destination'):
             self.graph(page, 'concept:' + ids['concept_unvisited'])

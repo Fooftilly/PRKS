@@ -398,6 +398,45 @@ instrumentation before further optimization. Nested phases are not
 additive. The temporary one-off A/B workflow was deleted after
 recording these results; no regular CI coverage was reduced.
 
+### Graph detail return attribution (#767)
+
+[Manual real-Chromium Graph profile #39165518995](https://github.com/Fooftilly/PRKS/actions/runs/39165518995)
+ran against exact PR head `3fadc95` on one runner (one excluded
+warm-up and **three passing** measured trials). The added opt-in
+`graph_nav_stage_*_return_{click,hash,banner}` phases were present
+for all five record visits in every measured trial. All Graph navigation
+and offline-unavailable assertions were unchanged. Stage medians in seconds:
+
+| Graph return stage | Concept | Position | Argument | Stance | Person |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Click | 0.047 | 0.046 | 0.048 | 0.044 | 0.046 |
+| Hash confirmation | 0.002 | 0.002 | 0.002 | 0.002 | 0.002 |
+| Offline banner DOM wait | 0.020 | 0.021 | 0.025 | 0.022 | **1.041** |
+| Entire return | 0.069 | 0.070 | 0.070 | 0.068 | **1.081** |
+
+The three individual **Person banner waits** were **1.041, 1.132,
+0.026s**, while Person return totals were 1.081, 1.182, 0.074s.
+The test wall median was **16.065s**. For context, a separate manual
+[master profile #39165176532](https://github.com/Fooftilly/PRKS/actions/runs/39165176532)
+on `059e56e` passed all three trials and found Person return timings
+0.062, 0.086, 0.895s (median 0.086s). Those independent runs are
+**not** a controlled cross-commit A/B; do not infer a regression or
+suite-wide speedup from their median difference.
+
+The measured intermittent delay is **after hash change and before the
+focused Person route's offline-provenance banner exists in the DOM**,
+not in the click or hash confirmation. The banner is appended *after*
+the route resolves durable lifecycle, cached Person detail, effective
+profile/group overlays, and pending Work/relationship/name metadata
+hydration. These possible contributing operations have **not**
+been individually timed yet; this measurement does not prove which
+one is slow. The banner wait checks DOM attachment, **not browser paint**.
+Next instrument those awaited Person route stages independently with
+strict route ownership and opt-in profiling before proposing production
+optimizations; keep all revision/cache coherence and pending-overlay
+safeguards. The split timers are nested into the existing inclusive
+return timers and must not be summed with their parents.
+
 ### Opt-in infrastructure profiling
 
 `--profile` records per-test infrastructure phases without making ordinary runs
