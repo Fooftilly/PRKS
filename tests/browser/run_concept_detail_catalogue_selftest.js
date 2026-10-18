@@ -25,7 +25,11 @@ const conceptOp = (operation, status = 'pending') => ({
 
 async function check(operations, catalogueExpected, options = {}) {
     const { offline = true, staleAfter = null } = options;
-    const readExpected = !offline || catalogueExpected;
+    // null simulates a missing hook, while other strings exercise unknown
+    // states. Both must fail closed, retaining the normal catalogue read.
+    const runtimeState = Object.hasOwn(options, 'runtimeState')
+        ? options.runtimeState : (offline ? 'offline' : 'online');
+    const readExpected = runtimeState !== 'offline' || catalogueExpected;
     const calls = [];
     const catalogue = [{ id: 'C-parent', name: 'Live Parent' }];
     const namedDetail = {
@@ -34,7 +38,6 @@ async function check(operations, catalogueExpected, options = {}) {
         children: [{ id: 'C-old-child', name: 'Original child' }],
     };
     const sandbox = {
-        prksOfflineRuntimeState: () => offline ? 'offline' : 'online',
         prksHydratePendingWorkMetadata: async () => { calls.push('hydrate'); },
         prksEffectiveConceptCatalogue: async ops => {
             assert.strictEqual(ops, operations);
@@ -54,6 +57,9 @@ async function check(operations, catalogueExpected, options = {}) {
             return detail;
         },
     };
+    if (runtimeState !== null) {
+        sandbox.prksOfflineRuntimeState = () => runtimeState;
+    }
     vm.createContext(sandbox);
     vm.runInContext(helpers, sandbox, { filename: 'app.js:ConceptDetailHelpers' });
     assert.equal(sandbox.prksConceptDetailNeedsCatalogue(operations), catalogueExpected);
@@ -107,10 +113,20 @@ async function check(operations, catalogueExpected, options = {}) {
     await check([conceptOp('SET_CONCEPT_PARENTS', 'acknowledged')], false,
                 { offline: false });
     await check([conceptOp('SET_CONCEPT_FIELD')], false, { offline: false });
+    // Unavailable, transitional, and unexpected runtime states fail closed.
+    // They must refresh the catalogue even without pending parent changes.
+    await check([], false, { runtimeState: null }); // hook not installed
+    await check([], false, { runtimeState: 'unavailable' });
+    await check([], false, { runtimeState: 'connecting' });
+    await check([], false, { runtimeState: 'online' });
+    await check([conceptOp('SET_CONCEPT_FIELD')], false,
+                { runtimeState: null });
     // A stale owner must not continue work after either await.
     await check([], false, { staleAfter: 1 });
     await check([conceptOp('SET_CONCEPT_PARENTS')], true, { staleAfter: 2 });
     await check([], false, { offline: false, staleAfter: 2 });
+    await check([], false, { runtimeState: null, staleAfter: 2 });
+    await check([], false, { runtimeState: 'unavailable', staleAfter: 1 });
     console.log('concept detail catalogue fast-path checks passed');
 })().catch(err => {
     console.error(err);
