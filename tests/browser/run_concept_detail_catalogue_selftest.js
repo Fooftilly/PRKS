@@ -164,7 +164,7 @@ async function check(operations, catalogueExpected, options = {}) {
     assert.equal(observed[1][3].preferCacheWhenOffline, false,
         'default Concept reads must remain server-first');
 
-    console.log('concept detail catalogue and offline read-through checks passed');
+    console.log('concept detail catalogue fast-path checks passed');
 })().catch(err => {
     console.error(err);
     process.exitCode = 1;
