@@ -420,16 +420,7 @@ function initPrksConceptDetailReturnRefresh() {
     window.addEventListener('focus', schedule);
 }
 
-/**
- * A Concept detail with every pending intent applied, or null once `stale()`
- * says its reader no longer owns the route. Backlink rows name a
- * Work's Title, so a pending rename has to reach them. The overlay is applied
- * here, so the Vue surface stays ignorant of durable operations and the cached
- * Concept is never rewritten. The Concept's own pending intent too -- its
- * definition, its name and aliases, and both ends of its hierarchy. The
- * vocabulary supplies the NAME of a parent or child created on this device,
- * which no cache holds.
- */
+/** Whether unsettled Concept parent edits require names from the catalogue. */
 function prksConceptDetailNeedsCatalogue(ops) {
     // The catalogue supplies names only when pending parent-set operations
     // add/relink Concept parents or children. With no such operation, the
@@ -440,6 +431,16 @@ function prksConceptDetailNeedsCatalogue(ops) {
         op.status !== 'acknowledged');
 }
 
+/**
+ * A Concept detail with every pending intent applied, or null once `stale()`
+ * says its reader no longer owns the route. Backlink rows name a
+ * Work's Title, so a pending rename has to reach them. The overlay is applied
+ * here, so the Vue surface stays ignorant of durable operations and the cached
+ * Concept is never rewritten. The Concept's own pending intent too -- its
+ * definition, its name and aliases, and both ends of its hierarchy. The
+ * vocabulary supplies the NAME of a parent or child created on this device,
+ * which no cache holds.
+ */
 async function prksEffectiveConceptDetailView(item, conceptOps, stale) {
     await prksHydratePendingWorkMetadata();
     if (stale()) return null;
