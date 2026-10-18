@@ -6,10 +6,92 @@ import unittest
 
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import seed_arguments_library
-from tests.e2e.harness import AppServer, open_app_page, profile_e2e_phase, require_chromium, wait_for_async
+from tests.e2e.harness import AppServer, open_app_page, profile_e2e_phase, record_e2e_phase_seconds, require_chromium, wait_for_async
 
 CORE = 'research-graph-core'
 PEOPLE = 'research-graph-people'
+
+
+# Install only in the opt-in browser profiler; the ordinary E2E contract
+# and production route never gain instrumentation or alternate code paths.
+# Wrap public, classic-script function bindings rather than changing the
+# production Person route. The wrappers preserve `this`, returned values,
+# and rejections; measurements use browser monotonic time, not IPC latency.
+PERSON_RETURN_PROBE_INSTALL = r"""() => {
+    if (window.__prksGraphPersonReturnProbe) {
+        throw new Error('Graph Person return probe was not restored');
+    }
+    const required = [
+        ['durable_operations', 'prksDurableOperationsOrNone'],
+        ['detail_fetch', 'prksOfflineDetailFetch'],
+        ['effective_person', 'prksEffectivePersonRecord'],
+        ['pending_metadata', 'prksHydratePendingWorkMetadata'],
+        ['person_render', 'renderPersonDetails'],
+        ['banner_insertion', 'prksOfflinePrependBanner'],
+    ];
+    const optionalMetadata = [
+        ['metadata_work', 'prksRefreshPendingWorkMetadata'],
+        ['metadata_roles', 'prksRefreshPendingWorkRoles'],
+        ['metadata_person_names', 'prksRefreshPendingPersonNames'],
+        ['metadata_folders', 'prksRefreshPendingWorkFolders'],
+        ['metadata_playlists', 'prksRefreshPendingWorkPlaylists'],
+        ['metadata_concepts', 'prksRefreshPendingConceptNames'],
+        ['metadata_positions', 'prksRefreshPendingPositionNames'],
+        ['metadata_arguments', 'prksRefreshPendingArgumentNames'],
+    ];
+    const missing = required.filter(([, name]) => typeof window[name] !== 'function');
+    if (missing.length) {
+        throw new Error('Missing Person route instrumentation targets: ' +
+            missing.map(([, name]) => name).join(', '));
+    }
+    const originals = [];
+    const samples = [];
+    for (const [phase, name] of [...required, ...optionalMetadata]) {
+        const original = window[name];
+        if (typeof original !== 'function') continue;
+        const wrapper = function (...args) {
+            const started = performance.now();
+            const record = failed => {
+                samples.push({
+                    phase, ms: performance.now() - started, failed: !!failed,
+                });
+            };
+            try {
+                const value = original.apply(this, args);
+                if (value && typeof value.then === 'function') {
+                    return value.then(
+                        result => { record(false); return result; },
+                        error => { record(true); throw error; },
+                    );
+                }
+                record(false);
+                return value;
+            } catch (error) {
+                record(true);
+                throw error;
+            }
+        };
+        originals.push({ name, original, wrapper });
+        window[name] = wrapper;
+    }
+    window.__prksGraphPersonReturnProbe = { originals, samples };
+}"""
+
+PERSON_RETURN_PROBE_COLLECT = r"""() => {
+    const probe = window.__prksGraphPersonReturnProbe;
+    if (!probe) throw new Error('Missing Graph Person return probe');
+    let displaced = false;
+    for (const { name, original, wrapper } of probe.originals) {
+        if (window[name] !== wrapper) {
+            displaced = true;
+            continue;
+        }
+        window[name] = original;
+    }
+    delete window.__prksGraphPersonReturnProbe;
+    if (displaced) throw new Error('Graph Person return probe was replaced');
+    return probe.samples;
+}"""
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -335,19 +417,37 @@ class ResearchGraphOfflineTests(unittest.TestCase):
                         self.mounted(page)
                         self.selected(page, kind + ':' + rid)
                         o._wait_offline_banner(page)
+                    # Browser-side timestamps avoid attributing Playwright
+                    # protocol latency to individual Person route awaits.
+                    # Only profile-mode runs wrap these functions; normal
+                    # E2E runs retain the exact old action/assertion path.
+                    profile_person = kind == 'person' and os.environ.get('PRKS_E2E_PROFILE') == '1'
+                    if profile_person:
+                        page.evaluate(PERSON_RETURN_PROBE_INSTALL)
                     with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_return'):
-                        # The Person return still takes ~0.9s after its
-                        # confirmed-offline detail cache optimization. Attribute
-                        # click (which may itself await a route transition),
-                        # hash observation and rendered offline banner separately
-                        # before making a production optimization. Keep all
-                        # original real-browser actions and assertions.
                         with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_return_click'):
                             page.locator('#prks-graph-open').click()
                         with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_return_hash'):
                             page.wait_for_function('h => location.hash === h', arg='#/' + route + '/' + rid)
                         with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_return_banner'):
                             o._wait_offline_banner(page)
+                    if profile_person:
+                        samples = page.evaluate(PERSON_RETURN_PROBE_COLLECT)
+                        required = {
+                            'durable_operations', 'detail_fetch', 'effective_person',
+                            'pending_metadata', 'person_render', 'banner_insertion',
+                        }
+                        observed = {sample['phase'] for sample in samples}
+                        self.assertFalse(required - observed, 'incomplete Person route profile')
+                        self.assertFalse(any(sample['failed'] for sample in samples),
+                                         'Person route profile recorded a rejected stage')
+                        for phase in sorted(observed):
+                            # More than one durable read can be nested in
+                            # effective_person. These are inclusive timings:
+                            # never add parent and child stage durations.
+                            seconds = sum(sample['ms'] for sample in samples
+                                          if sample['phase'] == phase) / 1000.0
+                            record_e2e_phase_seconds('graph_nav_person_route_' + phase, seconds)
         # Uncached destination belongs to Concept detail, never a Graph guard.
         with profile_e2e_phase('graph_nav_uncached_destination'):
             self.graph(page, 'concept:' + ids['concept_unvisited'])
