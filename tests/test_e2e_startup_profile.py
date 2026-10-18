@@ -54,6 +54,22 @@ class GraphNavigationPhaseProfileTests(unittest.TestCase):
         )
 
 
+class ArgumentOverlayPhaseProfileTests(unittest.TestCase):
+    def test_argument_interactions_do_not_inflate_infrastructure_ranking(self):
+        from tests.e2e import run as runner
+
+        self.assertEqual(
+            runner._profile_infrastructure_total({
+                "server_start": 2.0,
+                "async_wait": 3.0,
+                "arg_overlay_setup": 4.0,
+                "arg_overlay_verify_graph": 1.5,
+                "arg_overlay_verify_graph_failed": 0.5,
+            }),
+            5.0,
+        )
+
+
 class StartupReadinessProfileTests(unittest.TestCase):
     def test_server_subphases_keep_http_readiness_and_inclusive_total(self):
         with mock.patch.dict(os.environ, {"PRKS_E2E_PROFILE": "1"}):
