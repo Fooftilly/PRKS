@@ -312,6 +312,31 @@
             const domain = options2.domain ? String(options2.domain) : '';
             const coherenceToken = currentEntityGeneration(kind, id);
             const domainToken = currentDomainGeneration(domain);
+
+            // An explicitly opted-in revision-base caller may use a known,
+            // already-cached server snapshot when PRKS is CONFIRMED offline.
+            // Ordinary reads remain server-first. Never serve a row invalidated
+            // by a mutation/domain sweep, or a row read across a reconnect or
+            // coherence-generation change while awaiting IndexedDB.
+            if (options2.preferCacheWhenOffline === true &&
+                state === STATE_OFFLINE && store &&
+                typeof store.getEntity === 'function' &&
+                !(options2.signal && options2.signal.aborted) &&
+                !ineligibleEntities.has(entityKey(kind, id)) &&
+                !isDomainBlocked(domain)) {
+                let cached = null;
+                try { cached = await store.getEntity(kind, id); }
+                catch (_e) { /* a cache failure keeps the normal read-through path */ }
+                if (cached && state === STATE_OFFLINE &&
+                    currentEntityGeneration(kind, id) === coherenceToken &&
+                    currentDomainGeneration(domain) === domainToken &&
+                    !ineligibleEntities.has(entityKey(kind, id)) &&
+                    !isDomainBlocked(domain) &&
+                    !(options2.signal && options2.signal.aborted)) {
+                    return { value: cached.value, source: 'cache', cachedAt: cached.cachedAt };
+                }
+            }
+
             let raw;
             try {
                 raw = await fetchJsonStrict(path, options2);
