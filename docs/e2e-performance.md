@@ -358,6 +358,46 @@ Nested stage durations overlap their parents and cannot be summed; no
 assertions or browser isolation were relaxed. The temporary experiment
 workflow was deleted after recording its results.
 
+### Graph Person detail: coherent confirmed-offline cached read A/B (#764)
+
+[Same-runner Chromium run #39161854813](https://github.com/Fooftilly/PRKS/actions/runs/39161854813)
+compared exact merged master `6f9564a` with candidate `293ef4e`,
+using one excluded warm-up for each version followed by three alternating
+measured real-Chromium trials per version on one runner. All eight
+executions passed the unchanged Graph navigation and unavailable-case
+assertions. Results are medians of **three measured executions**, in seconds:
+
+| Profiled phase | Baseline | Candidate | Difference |
+| --- | ---: | ---: | ---: |
+| Whole Graph test | 16.592 | 15.168 | **-1.424 (-8.6%)** |
+| Person roundtrip | 3.158 | 2.048 | **-1.110** |
+| Person detail entry | 1.050 | 0.031 | -1.019 |
+| Person Graph navigation | 1.082 | 1.245 | +0.163 |
+| Person detail return | 1.043 | 0.922 | -0.121 |
+| Concept control | 1.352 | 1.160 | -0.192 |
+| Position control | 1.150 | 1.366 | +0.217 |
+| Argument control | 1.233 | 1.100 | -0.133 |
+| Stance control | 1.200 | 1.150 | -0.050 |
+| Uncached Concept | 2.148 | 2.013 | -0.135 |
+| Uncached Graph | 1.048 | 1.133 | +0.085 |
+
+Only the **Person detail route** opts into the already-merged
+`preferCacheWhenOffline` reader. The shared runtime remains responsible
+for entity and People-domain coherence, blocked/ineligible entries,
+abort signals, and reconnect-generation fencing. Online/transitioning and
+missing-cache reads stay server-first, as do People index reads so a device
+continues warming its offline catalogue. The route retains
+`prksIsPersonShape`, pending Person create/delete intent, editable
+profile overlays and cache provenance; cached profiles still suppress
+offline portrait/thumbnail requests.
+
+This is a measured **single profiled Graph test** gain, not a whole-suite
+claim. The 0.9-second Person return after the candidate is a remaining
+measured cost, but its causes are unproven and require separate
+instrumentation before further optimization. Nested phases are not
+additive. The temporary one-off A/B workflow was deleted after
+recording these results; no regular CI coverage was reduced.
+
 ### Opt-in infrastructure profiling
 
 `--profile` records per-test infrastructure phases without making ordinary runs
