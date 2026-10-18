@@ -183,13 +183,26 @@ warming **1.896s**, and initial setup **1.690s**. This does not prove
 whether time within the target/response stages was spent writing the
 offline operation, starting navigation or waiting for the visible names.
 
-The follow-up profiler adds `arg_overlay_target_{write,navigate,visible}`
-and `arg_overlay_response_{write,navigate,visible}` timers. These six
-steps are **nested** within their respective original
-`arg_overlay_verify_{target,response}` totals: their durations explain,
-not supplement, those parent totals. Missing or failing subphases invalidate
-the manual profiler report. No real-browser assertion or test operation was
-removed.
+A [temporary same-branch real-Chromium probe](https://github.com/Fooftilly/PRKS/actions/runs/39103351420)
+passed its excluded warm-up plus three measured trials. Median whole-test
+wall time was **16.353s**. Nested subphase medians (seconds) were:
+
+| Verification | Full phase | Offline write | Awaited route + detail render | Residual visible-text wait |
+| --- | ---: | ---: | ---: | ---: |
+| Target rename | 3.438 | 2.221 | 1.179 | 0.002 |
+| Response rename | 3.040 | 1.960 | 1.031 | 0.004 |
+
+The writer calls (≈2 seconds each) account for the largest component of
+these stages. The `render` step also includes route navigation: `prksNavigate`
+returns a promise that is only fulfilled after the current detail render
+completes. It must **not** be interpreted as just URL/history routing cost.
+The residual DOM checks are negligible because the awaited navigation already
+renders the visible content. The nested timers
+`arg_overlay_target_{write,render,visible}` and
+`arg_overlay_response_{write,render,visible}` are contained inside their
+respective `arg_overlay_verify_{target,response}` totals; they explain, not
+supplement, those parents. Missing or failing subphases invalidate the manual
+profiler report. No real-browser assertion or test operation was removed.
 
 Generic infrastructure and async wait telemetry may overlap all these
 diagnostics; do not double-count them. Use the dominant measured inner step
