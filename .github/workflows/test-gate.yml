@@ -8,10 +8,10 @@ on:
     branches:
       - master
   workflow_dispatch:
-  # Off-peak weekday testing for Mergify flaky-test detection.
+  # Off-peak daily testing for Mergify flaky-test detection.
   # Time zone observes CET/CEST automatically; 03:17 avoids the DST switch hour.
   schedule:
-    - cron: "17 3 * * 1-5"
+    - cron: "17 3 * * *"
       timezone: Europe/Podgorica
 
 concurrency:
