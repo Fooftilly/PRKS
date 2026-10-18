@@ -224,11 +224,28 @@ Within base acquisition, target/response revision-state reads took
 
 A reviewer identified a measurement-validity limitation in that first run:
 the original global cache-read wrappers classified by kind alone. Follow-up
-instrumentation additionally matches the edited Argument id, measures cached
-reads only during the specific acknowledged-base call, and requires **exactly
-one** completed call for every expected stage; an unexpected extra/missing
-call invalidates the sample. The follow-up probe is required before treating
-the above figures as reliable causal evidence.
+instrumentation matches the edited Argument id, measures cached reads only
+while acquiring that acknowledged base, and requires **exactly one** completed
+call for every expected stage; unexpected extra/missing calls or an impossible
+parent/child relationship invalidate the profile.
+
+[The corrected one-off run #39136910046](https://github.com/Fooftilly/PRKS/actions/runs/39136910046)
+passed one excluded warm-up and all three independent Chromium trials.
+Median whole-test wall time was **15.839s**. Per-rename medians (seconds):
+
+| Inner step | Target | Response |
+| --- | ---: | ---: |
+| Complete offline write | 1.767 | 1.986 |
+| Acknowledged base (inclusive) | 1.762 | 1.981 |
+| Revision-state read | 0.876 | 0.988 |
+| Argument record read | 0.888 | 0.957 |
+| Durable field enqueue/refresh | 0.002 | 0.002 |
+
+The corrected evidence points to two **sequential offline read-through
+attempts** during acknowledged-base acquisition, not to IndexedDB enqueue.
+The next optimization must separately test a safe offline-cache fast path
+while maintaining stale/domain-invalid cache fences and revision/conflict
+safety. This PR does **not** change the application's read semantics.
 
 The `write_base` parent **includes** its `write_revision_read` and
 `write_record_read` children. The profile fails when the child timings
