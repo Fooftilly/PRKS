@@ -1403,6 +1403,7 @@ async function prksOfflineDetailFetch(kind, id, path, signal, options) {
         signal: signal,
         domain: opts.domain,
         validate: opts.validate,
+        preferCacheWhenOffline: opts.preferCacheWhenOffline === true,
     });
 }
 
@@ -4891,6 +4892,13 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                         routeSignal,
                         {
                             domain: PRKS_CONCEPTS_DOMAIN,
+                            // This is a route read, not a canonical write. When
+                            // confirmed offline, an eligible cached Concept
+                            // can render without a known-failing network fetch.
+                            // The underlying reader still fences domain/entity
+                            // invalidations and reconnect races; online remains
+                            // server-first and the resolver validates shape.
+                            preferCacheWhenOffline: true,
                             validate: function (value) {
                                 return prksIsConceptShape(value, conceptId);
                             },
