@@ -5315,6 +5315,12 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                         routeSignal,
                         {
                             domain: PRKS_PEOPLE_DOMAIN,
+                            // A warmed Person profile can render directly from
+                            // a coherent snapshot only when confirmed offline.
+                            // The shared reader rejects invalidated/blocked
+                            // People domains and reconnect races; online and
+                            // cache-missing detail reads still use the server.
+                            preferCacheWhenOffline: true,
                             validate: function (value) {
                                 return prksIsPersonShape(value, personId);
                             },
