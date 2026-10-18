@@ -328,16 +328,25 @@ class DurableArgumentTests(unittest.TestCase):
             self.assertEqual(graph_name, "Pending Argument Name")
 
         # Another Argument's target and response rows use same hydrated map.
+        # Keep the inclusive phase totals comparable with the first profile,
+        # and add nested timers to separate offline writer, route and DOM wait.
+        # These are diagnostics, not additional work or assertions.
         with profile_e2e_phase("arg_overlay_verify_target"):
             target = server.ids["argument_target"]
-            page.evaluate("id => updateArgument(id,{name:'Pending Target Name'})", target)
-            self.detail(page, server.ids["argument_a"])
-            o._wait_content_contains(page, "Pending Target Name")
+            with profile_e2e_phase("arg_overlay_target_write"):
+                page.evaluate("id => updateArgument(id,{name:'Pending Target Name'})", target)
+            with profile_e2e_phase("arg_overlay_target_navigate"):
+                self.detail(page, server.ids["argument_a"])
+            with profile_e2e_phase("arg_overlay_target_visible"):
+                o._wait_content_contains(page, "Pending Target Name")
         with profile_e2e_phase("arg_overlay_verify_response"):
             response = server.ids["argument_response"]
-            page.evaluate("id => updateArgument(id,{name:'Pending Response Name'})", response)
-            self.detail(page, server.ids["argument_a"])
-            o._wait_content_contains(page, "Pending Response Name")
+            with profile_e2e_phase("arg_overlay_response_write"):
+                page.evaluate("id => updateArgument(id,{name:'Pending Response Name'})", response)
+            with profile_e2e_phase("arg_overlay_response_navigate"):
+                self.detail(page, server.ids["argument_a"])
+            with profile_e2e_phase("arg_overlay_response_visible"):
+                o._wait_content_contains(page, "Pending Response Name")
 
 
 if __name__ == "__main__":
