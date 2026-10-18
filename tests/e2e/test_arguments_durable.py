@@ -18,11 +18,83 @@ from tests.e2e.fixtures import (
     POSITION_ARGUMENT_NAME,
     seed_arguments_library,
 )
-from tests.e2e.harness import AppServer, open_app_page, profile_e2e_phase, require_chromium, wait_for_async
+from tests.e2e.harness import (AppServer, open_app_page, profile_e2e_phase,
+                               record_e2e_phase_seconds, require_chromium, wait_for_async)
 
 
 def load_tests(loader, standard_tests, pattern):
     return standard_tests if os.environ.get("PRKS_E2E") == "1" else unittest.TestSuite()
+
+
+
+# Profiling-only wrapper around the EXISTING updateArgument API. The global
+# wrappers are installed only while that one awaited write runs, and restored
+# in finally even if the original write raises. They time real async calls;
+# no revision checks, offline fallbacks or durable queue semantics are bypassed.
+_ARGUMENT_WRITE_INNER_PROFILE_JS = """async ({id, name}) => {
+    const elapsed = Object.create(null);
+    const counts = Object.create(null);
+    const restores = [];
+    function intercept(symbol, classify) {
+        const original = window[symbol];
+        if (typeof original !== 'function') {
+            throw new Error('Missing Argument write profile hook: ' + symbol);
+        }
+        const timed = async function (...args) {
+            const label = classify(...args);
+            if (!label) return original.apply(this, args);
+            const started = performance.now();
+            try {
+                return await original.apply(this, args);
+            } finally {
+                elapsed[label] = (elapsed[label] || 0) +
+                    (performance.now() - started) / 1000;
+                counts[label] = (counts[label] || 0) + 1;
+            }
+        };
+        window[symbol] = timed;
+        restores.push(() => { window[symbol] = original; });
+        if (window[symbol] !== timed) throw new Error('Hook not writable: ' + symbol);
+    }
+    try {
+        intercept('prksDurableOperationsOrNone', () => 'ops');
+        intercept('prksAcknowledgedArgumentBase', () => 'base');
+        intercept('prksSaveArgumentFieldsDurably', () => 'enqueue');
+        intercept('prksOfflineReadEntity', kind =>
+            kind === 'argument-state' ? 'revision_read' :
+            kind === 'argument' ? 'record_read' : null);
+        const result = await updateArgument(id, {name});
+        if (!result || result.id !== id) {
+            throw new Error('Instrumented Argument write returned wrong identity');
+        }
+    } finally {
+        for (const restore of restores.reverse()) restore();
+    }
+    return {elapsed, counts};
+}"""
+
+_ARGUMENT_WRITE_PROFILE_STAGES = (
+    "ops", "base", "revision_read", "record_read", "enqueue",
+)
+
+
+def profiled_argument_rename(page, argument_id, name, owner):
+    # The ordinary E2E path is unchanged; instrument only explicit --profile.
+    if os.environ.get("PRKS_E2E_PROFILE") != "1":
+        page.evaluate("args => updateArgument(args.id, {name: args.name})",
+                      {"id": argument_id, "name": name})
+        return
+
+    result = page.evaluate(_ARGUMENT_WRITE_INNER_PROFILE_JS,
+                           {"id": argument_id, "name": name})
+    elapsed = result.get("elapsed", {})
+    counts = result.get("counts", {})
+    for stage in _ARGUMENT_WRITE_PROFILE_STAGES:
+        if counts.get(stage, 0) < 1 or stage not in elapsed:
+            raise AssertionError("Missing real Argument write stage: " + stage)
+        record_e2e_phase_seconds(
+            "arg_overlay_" + owner + "_write_" + stage, elapsed[stage]
+        )
 
 
 def setUpModule():
@@ -336,7 +408,7 @@ class DurableArgumentTests(unittest.TestCase):
         with profile_e2e_phase("arg_overlay_verify_target"):
             target = server.ids["argument_target"]
             with profile_e2e_phase("arg_overlay_target_write"):
-                page.evaluate("id => updateArgument(id,{name:'Pending Target Name'})", target)
+                profiled_argument_rename(page, target, "Pending Target Name", "target")
             with profile_e2e_phase("arg_overlay_target_render"):
                 self.detail(page, server.ids["argument_a"])
             with profile_e2e_phase("arg_overlay_target_visible"):
@@ -344,7 +416,7 @@ class DurableArgumentTests(unittest.TestCase):
         with profile_e2e_phase("arg_overlay_verify_response"):
             response = server.ids["argument_response"]
             with profile_e2e_phase("arg_overlay_response_write"):
-                page.evaluate("id => updateArgument(id,{name:'Pending Response Name'})", response)
+                profiled_argument_rename(page, response, "Pending Response Name", "response")
             with profile_e2e_phase("arg_overlay_response_render"):
                 self.detail(page, server.ids["argument_a"])
             with profile_e2e_phase("arg_overlay_response_visible"):
