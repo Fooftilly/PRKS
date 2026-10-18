@@ -845,6 +845,67 @@ async function run() {
         assertEq('reconnected read restores server provenance', result.source, 'server');
     }
 
+    /* ---- a full offline -> online -> offline cycle must invalidate a pending fast path ---- */
+    {
+        let resumeCache;
+        let reads = 0;
+        const store = makeFakeStore({
+            getEntity: function () {
+                reads += 1;
+                if (reads === 1) return new Promise(resolve => { resumeCache = resolve; });
+                return Promise.resolve(null);
+            },
+        });
+        let requests = 0;
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: () => {
+                requests += 1;
+                return Promise.resolve(okJsonResponse({ id: 'A-cycle', name: 'fresh' }));
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        runtime.noteRequestFailure();
+        const pending = runtime.readThroughEntity(
+            'argument', 'A-cycle', '/api/arguments/A-cycle',
+            { preferCacheWhenOffline: true });
+        runtime.noteRequestSuccess();
+        runtime.noteRequestFailure();
+        resumeCache({ value: { id: 'A-cycle', name: 'stale' }, cachedAt: 1 });
+        const result = await pending;
+        assertEq('offline/online/offline cycle discards old pending cache', result.value.name, 'fresh');
+        assertEq('offline/online/offline cycle rechecks the server', requests, 1);
+        assertEq('cycle read keeps truthful server provenance', result.source, 'server');
+    }
+
+    /* ---- coherence invalidation while a fast cache read is pending is fail-closed ---- */
+    {
+        let resumeCache;
+        const store = makeFakeStore({
+            getEntity: function () {
+                return new Promise(resolve => { resumeCache = resolve; });
+            },
+            deleteEntity: async function () { return false; },
+        });
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: () => Promise.reject(new Error('offline')),
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        runtime.noteRequestFailure();
+        const pending = runtime.readThroughEntity(
+            'argument', 'A-invalidate', '/api/arguments/A-invalidate',
+            { preferCacheWhenOffline: true });
+        runtime.markEntityChanged('argument', 'A-invalidate');
+        resumeCache({ value: { id: 'A-invalidate', name: 'stale' }, cachedAt: 1 });
+        const result = await pending;
+        assertEq('invalidation during cache read refuses stale return', result.source, 'unavailable');
+    }
+
     /* ---- explicit cache coherence: complete authoritative Work replaces cache; partial success invalidates it ---- */
     {
         const store = makeFakeStore();
