@@ -204,6 +204,24 @@ respective `arg_overlay_verify_{target,response}` totals; they explain, not
 supplement, those parents. Missing or failing subphases invalidate the manual
 profiler report. No real-browser assertion or test operation was removed.
 
+The next opt-in probe measures the real offline `updateArgument` writer
+*inside* each existing `arg_overlay_{target,response}_write` phase. Browser
+`performance.now()` wrappers time its operations snapshot, acknowledged
+revision/base acquisition, cached revision/entity reads, and durable field
+enqueue/after-hook. Wrappers are installed only around the existing awaited
+write, then restored in `finally`; ordinary E2E is not instrumented.
+The browser timings are returned to the Python runner and rejected if missing,
+non-finite, or negative. No acknowledged revision is guessed, no new network
+mutations are permitted, and no offline queue ordering is changed.
+
+The `write_base` parent **includes** its `write_revision_read` and
+`write_record_read` children. `write_enqueue` is the existing durable
+writer including its pending-name refresh. Treat the original `write` Python
+timer as inclusive; browser timings can differ slightly because of IPC and
+diagnostic overhead. Collect measurements on one runner before deciding
+whether the dominant cost is safe to optimize. This is **not** authorization
+to bypass revision validation, cache invalidation, or durable persistence.
+
 Generic infrastructure and async wait telemetry may overlap all these
 diagnostics; do not double-count them. Use the dominant measured inner step
 to motivate a *separate* same-runner baseline/candidate experiment before
