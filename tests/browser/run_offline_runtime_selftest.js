@@ -2606,6 +2606,75 @@ async function run() {
                 error && error.name, 'AbortError');
         }
 
+        // A list fallback has the same async IndexedDB race as an entity.
+        // A completed People sweep must fence an already-started list read,
+        // even when that snapshot resolves after the domain unblocks.
+        async function pausedListFallback(extraReadOptions) {
+            const store = makeFakeStore();
+            await store.putList('people:index', [oldPerson], '');
+            const originalGet = store.getList.bind(store);
+            let resume = null;
+            store.getList = function (key) {
+                const snapshot = originalGet(key);
+                return new Promise(function (resolve) {
+                    resume = function () { void snapshot.then(resolve); };
+                });
+            };
+            const c = await fixture(function () {
+                return Promise.reject(new TypeError('network unreachable'));
+            }, store);
+            const pending = c.runtime.readThroughList(
+                'people:index', '/api/persons',
+                Object.assign({
+                    domain: 'people',
+                    requestPolicy: { retry: false },
+                }, extraReadOptions || {}));
+            for (let i = 0; i < 12 && !resume; i++) {
+                await new Promise(function (resolve) { setImmediate(resolve); });
+            }
+            if (!resume) throw new Error('People list fallback never began its deferred cache read');
+            return { c, pending, resume };
+        }
+
+        {
+            const f = await pausedListFallback();
+            f.resume();
+            const r = await f.pending;
+            assertEq('unchanged People list still permits valid cached fallback', r.source, 'cache');
+            assertEq('unchanged People list preserves its cached contents', r.value, [oldPerson]);
+        }
+
+        {
+            const f = await pausedListFallback();
+            f.c.runtime.markDomainChanged('people', { listKeys: ['people:index'] });
+            await f.c.runtime._domainCleanup('people');
+            assert('successful People list sweep unblocks domain', !f.c.runtime.isDomainBlocked('people'));
+            assert('swept People list row removed from store', !f.c.store._lists.has('people:index'));
+            f.resume();
+            const r = await f.pending;
+            assertEq('stale People list cannot return after sweep unblocks', r.source, 'unavailable');
+            assertEq('invalidation during list fallback returns no old snapshot', r.value, null);
+        }
+
+        {
+            const f = await pausedListFallback();
+            f.c.runtime.noteRequestSuccess();
+            f.resume();
+            const r = await f.pending;
+            assertEq('reconnect during cached People list read fails closed', r.source, 'unavailable');
+        }
+
+        {
+            const controller = new AbortController();
+            const f = await pausedListFallback({ signal: controller.signal });
+            controller.abort();
+            f.resume();
+            let error = null;
+            try { await f.pending; } catch (err) { error = err; }
+            assertEq('abort during cached People list read rejects AbortError',
+                error && error.name, 'AbortError');
+        }
+
         // An aborted route remains aborted, not a cached read. In particular,
         // a per-request retry policy must not weaken AbortSignal handling.
         {
