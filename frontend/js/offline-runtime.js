@@ -108,6 +108,10 @@
         // Monotonic transition token guards cache reads that outlive an
         // offline -> reconnect -> offline sequence (same final state).
         let connectivityGeneration = 0;
+        // Only increments on CONFIRMED server reachability; unlike the
+        // general transition token, a failed reconnect probe does not
+        // invalidate a perfectly good offline fallback snapshot.
+        let onlineGeneration = 0;
         const listeners = [];
         let probeTimer = null;
         let probeAttempt = 0;
@@ -157,6 +161,7 @@
             if (state === next) return;
             state = next;
             connectivityGeneration += 1;
+            if (next === STATE_ONLINE) onlineGeneration += 1;
             listeners.slice().forEach(function (fn) {
                 try {
                     fn(state);
@@ -367,10 +372,10 @@
                 if (ineligibleEntities.has(entityKey(kind, id)) || isDomainBlocked(domain)) {
                     return { value: null, source: 'unavailable', cachedAt: null };
                 }
-                // Network failure may move ONLINE -> OFFLINE. Fence fallback
-                // against changes *after* that transition while IndexedDB is
-                // pending, not the entry token captured before the failure.
-                const fallbackConnectionToken = connectivityGeneration;
+                // Failure may move ONLINE -> OFFLINE; capture after that
+                // transition. Only a later CONFIRMED online state can stale
+                // fallback. Failed probes/offline hints must not.
+                const fallbackOnlineToken = onlineGeneration;
                 if (store) {
                     const cached = await store.getEntity(kind, id).catch(function () {
                         return null;
@@ -380,7 +385,7 @@
                     // resurrect that stale row, even after a sweep unblocks.
                     throwIfSignalAborted(options2.signal);
                     if (cached &&
-                        connectivityGeneration === fallbackConnectionToken &&
+                        onlineGeneration === fallbackOnlineToken &&
                         currentEntityGeneration(kind, id) === coherenceToken &&
                         currentDomainGeneration(domain) === domainToken &&
                         !ineligibleEntities.has(entityKey(kind, id)) &&
@@ -2990,7 +2995,7 @@
                 if (isDomainBlocked(domain)) {
                     return { value: null, source: 'unavailable', cachedAt: null };
                 }
-                const fallbackConnectionToken = connectivityGeneration;
+                const fallbackOnlineToken = onlineGeneration;
                 if (store) {
                     const cached = await store.getList(listKey).catch(function () {
                         return null;
@@ -3000,7 +3005,7 @@
                     // the generation and reachability after the await.
                     throwIfSignalAborted(options2.signal);
                     if (cached &&
-                        connectivityGeneration === fallbackConnectionToken &&
+                        onlineGeneration === fallbackOnlineToken &&
                         currentDomainGeneration(domain) === domainToken &&
                         !isDomainBlocked(domain)) {
                         return { value: cached.value, source: 'cache', cachedAt: cached.cachedAt };
