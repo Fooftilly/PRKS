@@ -59,6 +59,20 @@ class WorksMixin(FacadeMixin):
             self._database, current_context(), Capability.EDIT_LIBRARY, fn, isolation=isolation
         )
 
+    def _authorize_edit(self) -> None:
+        """Refuse a caller who may not edit before any shared file is touched.
+
+        One data root serves every Library, so a managed PDF is inspected and
+        hashed only for an actor who holds ``EDIT_LIBRARY`` now: otherwise the
+        refusal would say whether a key exists, after reading its bytes. The
+        command re-authorizes and checks the epoch in its own transaction.
+        """
+        from backend.domain.identity.authorization import Capability
+        from backend.domain.identity.library_scope import library_query
+
+        library_query(self._database, current_context(), lambda scope: None,
+                      capability=Capability.EDIT_LIBRARY)
+
     def _pdfs_dir(self) -> str:
         if self._storage is None:
             raise RuntimeError("this PostgreSQL library has no data root")
@@ -142,6 +156,7 @@ class WorksMixin(FacadeMixin):
         from backend.db_manager import _canonical_new_source, normalize_doc_type
         from backend.domain.works import commands
 
+        self._authorize_edit()
         kind, url, provider, provider_id = _canonical_new_source(
             source_kind, source_url, provider, provider_id, file_path)
         asset = self._new_asset(kind, file_path, url, provider, provider_id, source_mime,

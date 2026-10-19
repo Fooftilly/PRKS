@@ -16,6 +16,7 @@ import tempfile
 import threading
 import unittest
 from typing import Any
+from unittest import mock
 
 from backend.db.config import DatabaseConfig
 from backend.db.database import Database
@@ -110,23 +111,49 @@ class ActorTests(WorksFacadeTestCase):
         self.assertEqual(len(seen), 1)
         self.assertIsInstance(seen[0], facade_context.NoRequestContext)
 
-    def test_a_reader_reads_but_cannot_create(self) -> None:
-        work_id = self.library.add_work("Shared")
+    def reader_context(self) -> RequestContext:
+        from backend.domain.identity import sessions
+
         reader = provision_actor(self.db, role="reader")
         self.sql("INSERT INTO prks.library_memberships (library_id, user_id, role) VALUES (%s, %s, 'reader')",
                  (self.actor.library_id, reader.user_id))
-        from backend.domain.identity import sessions
-
         new = self.db.command(lambda tx: sessions.create_session(
             tx, user_id=reader.user_id, library_id=self.actor.library_id))
         valid = sessions.resolve_session(self.db, new.token.reveal())
         assert valid is not None
-        with facade_context.acting_as(RequestContext.for_session(valid, epoch=1)):
+        return RequestContext.for_session(valid, epoch=1)
+
+    def test_a_reader_reads_but_cannot_create(self) -> None:
+        work_id = self.library.add_work("Shared")
+        with facade_context.acting_as(self.reader_context()):
             self.assertEqual(self.library.get_work(work_id)["title"], "Shared")
             with self.assertRaises(AccessRefused) as caught:
                 self.library.add_work("Refused")
         self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
         self.assertEqual(self.count("works"), 1)
+
+    def test_a_refused_create_never_touches_a_managed_pdf(self) -> None:
+        # Existing and missing keys are refused alike, before the file is looked at.
+        existing = self.store_pdf("kept.pdf", b"%PDF-1.4 kept")
+        missing = "/api/pdfs/never-stored.pdf"
+        reader = self.reader_context()
+        unbound = contextvars.Context()
+
+        def as_reader(call: Any) -> Any:
+            with facade_context.acting_as(reader):
+                return call()
+
+        with mock.patch.object(PostgresLibrary, "_managed_file",
+                               side_effect=AssertionError("file touched")) as touched:
+            for path in (existing, missing):
+                with self.assertRaises(facade_context.NoRequestContext):
+                    unbound.run(lambda p=path: self.library.add_work("Unbound", file_path=p))
+                with self.assertRaises(AccessRefused) as caught:
+                    as_reader(lambda p=path: self.library.add_work("Reader", file_path=p))
+                self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
+        touched.assert_not_called()
+        self.assertEqual(self.count("works"), 0)
+        self.assertEqual(self.count("assets"), 0)
 
     def test_a_create_prepared_before_a_restore_is_refused(self) -> None:
         self.sql("UPDATE prks.libraries SET epoch = epoch + 1 WHERE id = %s", (self.actor.library_id,))
