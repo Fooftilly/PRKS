@@ -1,0 +1,135 @@
+name: E2E Person Reconnecting Retry A/B
+
+# Diagnostic only. No PR/master trigger or automatic runner-minute cost.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-person-retry-ab-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  profile:
+    name: Compare Person cached-detail retry policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        with:
+          path: .playwright-browsers
+          key: >-
+            playwright-${{ runner.os }}-${{ hashFiles('requirements-dev.txt',
+            'tests/e2e/install_browser.py') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install runtime and E2E dependencies
+        run: >-
+          python -m pip install --isolated --disable-pip-version-check
+          "--only-binary=:all:" "PyMuPDF==1.28.2" "Pillow==12.3.0" "pydantic==2.13.5"
+          "playwright==1.63.0"
+
+      - name: Ensure Chromium in repo cache
+        run: python tests/e2e/install_browser.py
+
+      - name: Compare Person retry policies in real offline Chromium
+        shell: bash
+        env:
+          TARGET: tests.e2e.profile_person_retry_ab.PersonReconnectRetryExperiment.test_cached_person_reader_retry_policy_ab
+        run: |
+          set -euo pipefail
+          # Do not include first-import/browser runner effects in comparisons.
+          PRKS_E2E_BENCHMARK_RESULT="" \
+            python tests/e2e/run.py --jobs 1 --no-pointer-capture --profile "$TARGET"
+
+          for trial in 1 2 3; do
+            echo "::group::Retry A/B trial $trial"
+            result_file="$RUNNER_TEMP/person-retry-ab-$trial.json"
+            rm -f "$result_file"
+            PRKS_E2E_BENCHMARK_RESULT="$result_file" \
+              python tests/e2e/run.py --jobs 1 --no-pointer-capture --profile "$TARGET"
+            echo "::endgroup::"
+          done
+
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from statistics import median
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          results = [
+              json.loads((root / f"person-retry-ab-{i}.json").read_text())
+              for i in (1, 2, 3)
+          ]
+          expected = {
+              "person_reconnect_retry_default",
+              "person_reconnect_retry_single",
+          }
+          for i, r in enumerate(results, start=1):
+              if r["tests"] != 1 or r["failures"] or r["errors"] or r["skipped"]:
+                  raise SystemExit(f"Person retry A/B trial {i} not a passing single test")
+              phases = r["phase_seconds"]
+              if not expected <= phases.keys() or any(float(phases[n]) <= 0 for n in expected):
+                  raise SystemExit(f"Person retry A/B trial {i} missing positive phase values")
+          default = [float(r["phase_seconds"]["person_reconnect_retry_default"])
+                     for r in results]
+          single = [float(r["phase_seconds"]["person_reconnect_retry_single"])
+                    for r in results]
+          message = [
+              "## Manual Person retry-policy A/B (offline cached detail)",
+              "",
+              "Real Chromium + PRKS source, one excluded warm-up, three serial runs.",
+              "Each run compares two default reads and two single-attempt reads",
+              "in A-B-B-A order, after verified offline cache warming.",
+              "Both modes start while the runtime is reconnecting, issue a",
+              "real Person GET and return cached fallback; request attempts",
+              "are asserted as 3 vs 1, respectively.",
+              "",
+              "| Policy | Median of trial medians (s) | Trial medians (s) |",
+              "| --- | ---: | --- |",
+              f"| Standard retries | {median(default):.3f} | " +
+                  ", ".join(f"{x:.3f}" for x in default) + " |",
+              f"| One attempt | {median(single):.3f} | " +
+                  ", ".join(f"{x:.3f}" for x in single) + " |",
+              "",
+              "Diagnostic only: no production retry-policy changes.",
+              "One-attempt behavior is less resilient to transient failures;",
+              "these offline-only timings do not establish reconnect correctness.",
+          ]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as out:
+              out.write("\n".join(message) + "\n")
+          print("\n".join(message))
+          PY
+
+      - name: Upload failure diagnosis only
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: person-retry-ab-failure
+          path: |
+            .tests/e2e-failure-diagnostics.json
+            .tests/e2e-last-failed.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
