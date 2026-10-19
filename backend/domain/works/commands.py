@@ -117,7 +117,13 @@ BIBLIOGRAPHIC_FIELDS: tuple[str, ...] = (
 )
 
 
-_INSERT_WORK_IF_ABSENT: LiteralString = _INSERT_WORK + " ON CONFLICT (id) DO NOTHING RETURNING id"
+_INSERT_WORK_IF_ABSENT: LiteralString = """
+INSERT INTO prks.works (library_id, id, title, abstract, status, author_text, primary_manifestation_id)
+VALUES (%(library_id)s, %(work_id)s, %(title)s, %(abstract)s, %(status)s, %(author_text)s,
+        %(manifestation_id)s)
+ON CONFLICT (id) DO NOTHING
+RETURNING id
+"""
 
 
 def create_work(scope: LibraryScope, new: NewWork, *, if_absent: bool = False) -> Optional[str]:

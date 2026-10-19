@@ -6,7 +6,9 @@ on SQLite. These tests cover what only PostgreSQL has (§7.3, §7.6): one
 ledger row of another account or Library, the device check, a claim rolled
 back with its exception, concurrent writers through the protocol, and
 ``CREATE_WORK`` with a stand-in for the folder filing the Organization lane
-will provide.
+will provide; then operations queued before a delete, another Library, a
+worker without a person, a changed epoch, a failure after the write, and
+concurrent note writers.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ import shutil
 import tempfile
 import uuid
 from typing import Any, Optional
+from unittest import mock
 
 from backend import sync_protocol
 from backend.db_manager import PRKSDatabase
@@ -26,7 +29,8 @@ from backend.pg_facade import NotPortedError
 from backend.pg_facade import context as facade_context
 from backend.storage.config import StorageConfig
 from backend.sync import protocol
-from backend.sync.families import Environment, Result
+from backend.sync.families import Environment, FamilyHandler, Result
+from backend.sync.handlers import work_lifecycle, work_metadata
 from tests.pg.test_works_mutations import MutationTestCase
 from tests.works_parity_helpers import _Side
 
@@ -186,18 +190,6 @@ class LedgerTests(SyncTestCase):
                                    "entity_type": "work", "entity_id": work_id,
                                    "digest": sync_protocol.request_hash(normalized)}])
 
-    def reader_context(self) -> RequestContext:
-        from backend.domain.identity import sessions
-
-        reader = self.other_actor(role="reader")
-        self.sql("INSERT INTO prks.library_memberships (library_id, user_id, role) VALUES (%s, %s, 'reader')",
-                 (self.actor.library_id, reader.user_id))
-        new = self.db.command(lambda tx: sessions.create_session(
-            tx, user_id=reader.user_id, library_id=self.actor.library_id))
-        valid = sessions.resolve_session(self.db, new.token.reveal())
-        assert valid is not None
-        return RequestContext.for_session(valid, epoch=1, device_id=reader.context.device_id)
-
 
 class ConcurrentOperationTests(SyncTestCase):
     def test_writers_of_one_field_on_one_base(self) -> None:
@@ -322,3 +314,179 @@ class CreateWorkTests(SyncTestCase):
         self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
         self.assertEqual(len(self.ledger()), 1)
         self.assertEqual(self.count("works"), 1)
+
+
+def every_edit(case: SyncTestCase, work_id: str, base: int) -> list[dict[str, Any]]:
+    """One operation of each Works family that edits an existing Work."""
+    return [
+        case.title_op(work_id, "Late", base),
+        case.envelope("SET_WORK_RESEARCH_NOTE", work_id, {"text": "late"}, base),
+        case.envelope("SET_WORK_PRIVATE_NOTE", work_id, {"text": "late"}, base),
+        case.envelope("SET_WORK_SOURCE", work_id, {"source": {"kind": "video", "url": _OTHER_VIDEO}}, base),
+        case.envelope("MARK_WORK_OPENED", work_id, {}),
+    ]
+
+
+class DeleteAgainstPendingTests(SyncTestCase):
+    def test_operations_queued_before_a_delete_find_nothing(self) -> None:
+        work_id = self.library.add_work("Work", source_url=_VIDEO)
+        self.assertEqual(self.send(self.title_op(work_id, "Seen", 0))[0], 200)
+        self.assertEqual(self.send(self.envelope("DELETE_WORK", work_id, {}))[1]["changed"], True)
+        tombstoned = self.revisions_of(work_id)
+        for data in every_edit(self, work_id, 1):
+            with self.subTest(operation=data["operation"]):
+                status, result = self.send(data)
+                self.assertEqual((status, result["code"]), (404, "ENTITY_NOT_FOUND"))
+        # Nothing came back: no Work, no note, no live revision scope.
+        self.assertEqual((self.count("works"), self.count("manifestations"), self.count("assets"),
+                          self.count("work_notes")), (0, 0, 0, 0))
+        self.assertEqual(self.revisions_of(work_id), tombstoned)
+
+    def test_a_delete_racing_each_kind_of_edit(self) -> None:
+        for index in range(5):
+            work_id = self.library.add_work("Work", source_url=_VIDEO)
+            edit = every_edit(self, work_id, 0)[index]
+            results = self.concurrently([
+                lambda work_id=work_id: self.send(self.envelope("DELETE_WORK", work_id, {})),
+                lambda edit=edit: self.send(edit),
+            ])
+            with self.subTest(operation=edit["operation"]):
+                self.assertEqual(results[0][1]["changed"], True)
+                self.assertIn(results[1][1]["code"], ("ACKNOWLEDGED", "ENTITY_NOT_FOUND"))
+                self.assertEqual(self.count("works"), 0)
+                self.assertEqual(self.count("work_notes"), 0)
+
+    def test_a_base_from_before_a_delete_never_lands_on_a_recreated_work(self) -> None:
+        # Client-minted ids let CREATE_WORK bring a deleted id back. The
+        # tombstones outlive the Work (section 5.2), so an edit queued against
+        # the first Work conflicts with the second instead of overwriting it.
+        # SQLite keeps no tombstone and applies it: a deliberate difference.
+        work_id = "W-" + uuid.uuid4().hex.upper()
+        self.send(self.envelope("CREATE_WORK", work_id, create_payload()))
+        self.assertEqual(self.send(self.title_op(work_id, "First", 0))[1]["server_revision"], 1)
+        self.send(self.envelope("DELETE_WORK", work_id, {}))
+        self.assertEqual(self.send(self.envelope("CREATE_WORK", work_id, create_payload(title="Again")))[1]
+                         ["changed"], True)
+        status, result = self.send(self.title_op(work_id, "Queued before the delete", 1))
+        self.assertEqual((status, result["code"], result["current_revision"]), (409, "REVISION_CONFLICT", 2))
+        self.assertEqual(self.library.get_work(work_id)["title"], "Again")
+        self.assertEqual(self.send(self.title_op(work_id, "Seen after", 2))[1]["server_revision"], 3)
+
+
+class IsolationTests(SyncTestCase):
+    def test_another_library_cannot_change_a_work_by_sync(self) -> None:
+        work_id = self.library.add_work("Mine", source_url=_VIDEO, private_notes="kept")
+        other = self.other_actor()
+        device = str(other.context.device_id)
+        for data in every_edit(self, work_id, 0):
+            with self.subTest(operation=data["operation"]):
+                status, result = self.send(dict(data, device_id=device), other.context)
+                self.assertEqual((status, result["code"]), (404, "ENTITY_NOT_FOUND"))
+        deleted = self.send(self.envelope("DELETE_WORK", work_id, {}, device_id=device), other.context)
+        self.assertEqual(deleted, (200, {"code": "ACKNOWLEDGED", "work_id": work_id, "changed": False}))
+        work = self.library.get_work(work_id)
+        self.assertEqual((work["title"], work["private_notes"], work["last_opened_at"]), ("Mine", "kept", None))
+        self.assertEqual(self.revisions_of(work_id), {})
+        # The other Library's answers are its own ledger rows, never this one's.
+        self.assertEqual({row["library_id"] for row in self.ledger()}, {other.library_id})
+
+    def test_a_worker_without_a_person_cannot_send_operations(self) -> None:
+        work_id = self.library.add_work("Work")
+        lease_id = uuid.uuid4()
+        (job,) = self.sql(
+            "INSERT INTO prks.jobs (library_id, library_epoch, kind, state, lease_id, locked_until)"
+            " VALUES (%s, 1, 'test.edit', 'running', %s, now() + interval '5 minutes') RETURNING id",
+            (self.actor.library_id, lease_id))
+        worker = RequestContext.for_job(self.db, job["id"], lease_id)
+        assert worker is not None
+        with self.assertRaises(AccessRefused) as caught:
+            self.send(self.title_op(work_id, "Job", 0), worker)
+        self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
+        self.assertEqual((self.ledger(), self.library.get_work(work_id)["title"]), ([], "Work"))
+
+
+class EpochTests(SyncTestCase):
+    def context_at(self, epoch: int) -> RequestContext:
+        from backend.domain.identity import sessions
+
+        new = self.db.command(lambda tx: sessions.create_session(
+            tx, user_id=self.actor.user_id, library_id=self.actor.library_id))
+        valid = sessions.resolve_session(self.db, new.token.reveal())
+        assert valid is not None
+        return RequestContext.for_session(valid, epoch=epoch, device_id=self.actor.device_id)
+
+    def test_an_operation_of_the_old_epoch_applies_once_resent_for_the_new_one(self) -> None:
+        work_id = self.library.add_work("Work")
+        self.sql("UPDATE prks.libraries SET epoch = epoch + 1 WHERE id = %s", (self.actor.library_id,))
+        for data in every_edit(self, work_id, 0) + [self.envelope("DELETE_WORK", work_id, {})]:
+            with self.subTest(operation=data["operation"]):
+                with self.assertRaises(AccessRefused) as caught:
+                    self.send(data)
+                self.assertIs(caught.exception.refusal, Refusal.LIBRARY_EPOCH_CHANGED)
+        self.assertEqual((self.ledger(), self.library.get_work(work_id)["title"]), ([], "Work"))
+        self.assertEqual(self.revisions_of(work_id), {})
+        # The op_id was not burnt: the client resends it for the new epoch.
+        data = self.title_op(work_id, "Resent", 0)
+        with self.assertRaises(AccessRefused):
+            self.send(data)
+        self.assertEqual(self.send(data, self.context_at(2))[1]["server_revision"], 1)
+
+    def test_a_newer_epoch_than_the_librarys_is_refused(self) -> None:
+        work_id = self.library.add_work("Work")
+        with self.assertRaises(AccessRefused) as caught:
+            self.send(self.title_op(work_id, "Ahead", 0), self.context_at(2))
+        self.assertIs(caught.exception.refusal, Refusal.LIBRARY_EPOCH_CHANGED)
+        self.assertEqual(self.ledger(), [])
+
+
+class FailureTests(SyncTestCase):
+    def failing_after(self, operation: str, handler: FamilyHandler) -> Any:
+        def apply(scope: LibraryScope, op: dict[str, Any], received_at: Any, env: Environment) -> Result:
+            handler.apply(scope, op, received_at, env)
+            raise RuntimeError("fails after the write")
+
+        broken = FamilyHandler(handler.validate_fn, apply, handler.isolation, handler.ledger_fn)
+        return mock.patch.dict(protocol._HANDLERS, {operation: broken})
+
+    def test_an_edit_that_fails_after_writing_leaves_nothing_and_retries(self) -> None:
+        work_id = self.library.add_work("Work")
+        data = self.title_op(work_id, "Once", 0)
+        with self.failing_after("SET_WORK_METADATA_FIELD", work_metadata.HANDLER):
+            with self.assertRaises(RuntimeError):
+                self.send(data)
+        self.assertEqual((self.ledger(), self.library.get_work(work_id)["title"]), ([], "Work"))
+        self.assertEqual(self.revisions_of(work_id), {})
+        self.assertEqual(self.send(data)[1]["server_revision"], 1)
+        self.assertEqual(self.send(data)[1]["server_revision"], 1)  # and then replays
+
+    def test_a_delete_that_fails_after_deleting_leaves_the_work(self) -> None:
+        work_id = self.library.add_work("Work", source_url=_VIDEO, private_notes="kept")
+        data = self.envelope("DELETE_WORK", work_id, {})
+        with self.failing_after("DELETE_WORK", work_lifecycle.DELETE_HANDLER):
+            with self.assertRaises(RuntimeError):
+                self.send(data)
+        self.assertEqual(self.library.get_work(work_id)["private_notes"], "kept")
+        self.assertEqual((self.ledger(), self.revisions_of(work_id)), ([], {}))
+        self.assertEqual(self.send(data)[1]["changed"], True)
+        self.assertIsNone(self.library.get_work(work_id))
+
+
+class NoteConflictTests(SyncTestCase):
+    def test_writers_of_one_note_on_one_base(self) -> None:
+        for operation in ("SET_WORK_RESEARCH_NOTE", "SET_WORK_PRIVATE_NOTE"):
+            work_id = self.library.add_work("Work")
+            results = self.concurrently([
+                (lambda text=text, operation=operation, work_id=work_id:
+                 self.send(self.envelope(operation, work_id, {"text": text}, 0)))
+                for text in ("a", "b", "c", "d")
+            ])
+            with self.subTest(operation=operation):
+                self.assertEqual(sorted(result[1]["code"] for result in results),
+                                 ["ACKNOWLEDGED"] + ["REVISION_CONFLICT"] * 3)
+                winner = next(result[1] for result in results if result[1]["code"] == "ACKNOWLEDGED")
+                losers = [result[1] for result in results if result[1]["code"] != "ACKNOWLEDGED"]
+                # Every loser is told the winner's revision, and nothing overwrote the winner.
+                self.assertTrue(all(loser["current_revision"] == winner["server_revision"] for loser in losers))
+                state = self.library.get_work_notes_state(work_id)
+                key = "research_note_revision" if operation == "SET_WORK_RESEARCH_NOTE" else "private_note_revision"
+                self.assertEqual(state[key], 1)

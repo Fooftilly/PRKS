@@ -15,7 +15,8 @@ through :class:`~backend.sync.families.WorkFiling`, which those lanes
 implement. The checks and the result fields are SQLite's: a missing folder,
 playlist or person refuses the create before the Work exists.
 
-Deletion carries no base, cascades and converges on absence, through
+Deletion carries no base, removes the Work level by level and converges on
+absence, through
 :func:`backend.domain.works.commands.delete_work`, the command behind
 ``delete_work_record``. As on SQLite, the first acknowledgement carries the
 managed file's path for the caller's cleanup and the ledger keeps only
