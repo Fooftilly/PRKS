@@ -79,6 +79,7 @@ PERSON_RETURN_PROBE_INSTALL = r"""() => {
                     sample.reader = {
                         ...readContext,
                         stateAtEnd: window.prksOfflineRuntimeState(),
+                        outcome, errorName: error && error.name || '',
                         // These are the runtime's public, non-sensitive
                         // provenance values, never the cached record itself.
                         source: result && ['server', 'cache', 'unavailable']
@@ -497,15 +498,27 @@ class ResearchGraphOfflineTests(unittest.TestCase):
                             context.remove_listener('request', observe_person_request)
                             samples = page.evaluate(PERSON_RETURN_PROBE_COLLECT)
                     if profile_person:
+                        # Samples are appended on completion, so use one
+                        # start-time order for provenance and stage traces.
+                        # Associate every reader outcome with its own timing;
+                        # concurrent aborted reads must not be mistaken for a
+                        # successful cache result with missing provenance.
+                        trace = sorted(samples, key=lambda row: row['startedMs'])
+                        origin_ms = trace[0]['startedMs'] if trace else 0.0
                         reader_calls = [
-                            row['reader'] for row in samples
+                            {
+                                **row['reader'],
+                                'start_ms': round(row['startedMs'] - origin_ms, 3),
+                                'duration_ms': round(row['ms'], 3),
+                            }
+                            for row in trace
                             if row['phase'] == 'offline_reader' and 'reader' in row
                         ]
                         self.assertTrue(reader_calls, 'no Person offline reader samples')
                         self.assertTrue(
                             all(r['source'] in ('server', 'cache', 'unavailable')
-                                for r in reader_calls if r['stateAtEnd'] == 'offline'),
-                            'offline reader did not report a provenance source',
+                                for r in reader_calls if r['outcome'] == 'ok'),
+                            'successful offline reader did not report provenance',
                         )
                         print('GRAPH_PERSON_READ_PATH ' + json.dumps({
                             'reader_calls': reader_calls,
@@ -530,11 +543,10 @@ class ResearchGraphOfflineTests(unittest.TestCase):
                         # A chronological trace identifies overlapping calls,
                         # stale/superseded renders and per-stage call counts.
                         # It contains only phase names and timing, no user data.
-                        trace = sorted(samples, key=lambda item: item['startedMs'])
                         print('GRAPH_PERSON_ROUTE_TRACE ' + json.dumps([
                             {
                                 'phase': sample['phase'],
-                                'start_ms': round(sample['startedMs'] - trace[0]['startedMs'], 3),
+                                'start_ms': round(sample['startedMs'] - origin_ms, 3),
                                 'duration_ms': round(sample['ms'], 3),
                                 'outcome': sample['outcome'],
                             }
