@@ -7,6 +7,7 @@ import unittest
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import seed_arguments_library
 from tests.e2e.harness import AppServer, open_app_page, profile_e2e_phase, record_e2e_phase_seconds, require_chromium, wait_for_async
+from tests.e2e.policy import PROFILE_ENV, env_flag_enabled
 
 CORE = 'research-graph-core'
 PEOPLE = 'research-graph-people'
@@ -14,14 +15,18 @@ PEOPLE = 'research-graph-people'
 
 # Install only in the opt-in browser profiler; the ordinary E2E contract
 # and production route never gain instrumentation or alternate code paths.
-# Wrap public, classic-script function bindings rather than changing the
+# Wrap classic-script global function bindings rather than changing the
 # production Person route. The wrappers preserve `this`, returned values,
 # and rejections; measurements use browser monotonic time, not IPC latency.
+# Include full route envelopes to identify unmeasured work outside the detail
+# stages. Samples retain overlap, call counts and AbortError outcomes.
 PERSON_RETURN_PROBE_INSTALL = r"""() => {
     if (window.__prksGraphPersonReturnProbe) {
         throw new Error('Graph Person return probe was not restored');
     }
     const required = [
+        ['route_total', 'prksRenderTabRoute'],
+        ['route_commit', 'prksCommitTabRouteRender'],
         ['durable_operations', 'prksDurableOperationsOrNone'],
         ['detail_fetch', 'prksOfflineDetailFetch'],
         ['effective_person', 'prksEffectivePersonRecord'],
@@ -51,24 +56,29 @@ PERSON_RETURN_PROBE_INSTALL = r"""() => {
         if (typeof original !== 'function') continue;
         const wrapper = function (...args) {
             const started = performance.now();
-            const record = failed => {
+            const record = (outcome, error) => {
                 samples.push({
-                    phase, ms: performance.now() - started, failed: !!failed,
+                    phase, startedMs: started,
+                    ms: Math.max(0, performance.now() - started),
+                    outcome, errorName: error && error.name || '',
                 });
+            };
+            const failed = error => {
+                record(error && error.name === 'AbortError' ? 'abort' : 'error', error);
+                throw error;
             };
             try {
                 const value = original.apply(this, args);
                 if (value && typeof value.then === 'function') {
                     return value.then(
-                        result => { record(false); return result; },
-                        error => { record(true); throw error; },
+                        result => { record('ok'); return result; },
+                        failed,
                     );
                 }
-                record(false);
+                record('ok');
                 return value;
             } catch (error) {
-                record(true);
-                throw error;
+                failed(error);
             }
         };
         originals.push({ name, original, wrapper });
@@ -421,33 +431,74 @@ class ResearchGraphOfflineTests(unittest.TestCase):
                     # protocol latency to individual Person route awaits.
                     # Only profile-mode runs wrap these functions; normal
                     # E2E runs retain the exact old action/assertion path.
-                    profile_person = kind == 'person' and os.environ.get('PRKS_E2E_PROFILE') == '1'
+                    profile_person = kind == 'person' and env_flag_enabled(PROFILE_ENV)
                     if profile_person:
                         page.evaluate(PERSON_RETURN_PROBE_INSTALL)
-                    with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_return'):
-                        with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_return_click'):
-                            page.locator('#prks-graph-open').click()
-                        with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_return_hash'):
-                            page.wait_for_function('h => location.hash === h', arg='#/' + route + '/' + rid)
-                        with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_return_banner'):
-                            o._wait_offline_banner(page)
+                    try:
+                        with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_return'):
+                            with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_return_click'):
+                                page.locator('#prks-graph-open').click()
+                            with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_return_hash'):
+                                page.wait_for_function('h => location.hash === h', arg='#/' + route + '/' + rid)
+                            with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_return_banner'):
+                                o._wait_offline_banner(page)
+                    finally:
+                        # Never leave a wrapped application function installed
+                        # after a failed browser assertion or route transition.
+                        if profile_person:
+                            samples = page.evaluate(PERSON_RETURN_PROBE_COLLECT)
                     if profile_person:
-                        samples = page.evaluate(PERSON_RETURN_PROBE_COLLECT)
                         required = {
-                            'durable_operations', 'detail_fetch', 'effective_person',
-                            'pending_metadata', 'person_render', 'banner_insertion',
+                            'route_total', 'route_commit', 'durable_operations',
+                            'detail_fetch', 'effective_person', 'pending_metadata',
+                            'person_render', 'banner_insertion',
                         }
                         observed = {sample['phase'] for sample in samples}
                         self.assertFalse(required - observed, 'incomplete Person route profile')
-                        self.assertFalse(any(sample['failed'] for sample in samples),
-                                         'Person route profile recorded a rejected stage')
+                        # A superseded route is allowed to abort. The original
+                        # assertions must still pass; preserve aborted samples
+                        # to expose overlapping navigation rather than hiding it.
+                        self.assertFalse(
+                            any(sample['outcome'] == 'error' for sample in samples),
+                            'Person route profile recorded a non-abort rejection',
+                        )
+                        # A chronological trace identifies overlapping calls,
+                        # stale/superseded renders and per-stage call counts.
+                        # It contains only phase names and timing, no user data.
+                        trace = sorted(samples, key=lambda item: item['startedMs'])
+                        print('GRAPH_PERSON_ROUTE_TRACE ' + json.dumps([
+                            {
+                                'phase': sample['phase'],
+                                'start_ms': round(sample['startedMs'] - trace[0]['startedMs'], 3),
+                                'duration_ms': round(sample['ms'], 3),
+                                'outcome': sample['outcome'],
+                            }
+                            for sample in trace
+                        ]), flush=True)
                         for phase in sorted(observed):
-                            # More than one durable read can be nested in
-                            # effective_person. These are inclusive timings:
-                            # never add parent and child stage durations.
-                            seconds = sum(sample['ms'] for sample in samples
-                                          if sample['phase'] == phase) / 1000.0
-                            record_e2e_phase_seconds('graph_nav_person_route_' + phase, seconds)
+                            rows = [sample for sample in samples if sample['phase'] == phase]
+                            # Inclusive nested phases and concurrent calls
+                            # overlap; report each stage's sum, max and count,
+                            # not a fictitious sequential total.
+                            durations = [sample['ms'] / 1000.0 for sample in rows]
+                            summary = {
+                                'phase': phase, 'calls': len(rows),
+                                'aborts': sum(sample['outcome'] == 'abort' for sample in rows),
+                                'sum_ms': round(sum(sample['ms'] for sample in rows), 3),
+                                'max_ms': round(max(sample['ms'] for sample in rows), 3),
+                            }
+                            print('GRAPH_PERSON_ROUTE_SUMMARY ' + json.dumps(summary), flush=True)
+                            # finish_test_profile drops zero-valued samples;
+                            # use a one-microsecond recording floor for a
+                            # completed fast stage, never a missing-stage zero.
+                            record_e2e_phase_seconds(
+                                'graph_nav_person_route_' + phase + '_sum',
+                                max(sum(durations), 0.000001),
+                            )
+                            record_e2e_phase_seconds(
+                                'graph_nav_person_route_' + phase + '_max',
+                                max(max(durations), 0.000001),
+                            )
         # Uncached destination belongs to Concept detail, never a Graph guard.
         with profile_e2e_phase('graph_nav_uncached_destination'):
             self.graph(page, 'concept:' + ids['concept_unvisited'])
