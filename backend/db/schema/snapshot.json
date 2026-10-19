@@ -194,7 +194,7 @@
         "assets_ingest_sha256_check": "CHECK (ingest_sha256 ~ '^[0-9a-f]{64}$'::text)",
         "assets_kind_check": "CHECK (kind = ANY (ARRAY['managed_file'::text, 'external_stream'::text]))",
         "assets_kind_not_null": "NOT NULL kind",
-        "assets_kind_storage_check": "CHECK (\nCASE kind\n    WHEN 'managed_file'::text THEN storage_locator IS NOT NULL AND content_sha256 IS NOT NULL AND origin IS NOT NULL\n    ELSE storage_locator IS NULL AND source_locator IS NULL AND origin IS NULL AND byte_size IS NULL AND ingest_sha256 IS NULL AND content_sha256 IS NULL AND origin_url IS NULL AND origin_ref IS NULL AND COALESCE(length(provider) > 0 AND length(provider_id) > 0 AND length(url) > 0, false)\nEND)",
+        "assets_kind_storage_check": "CHECK (\nCASE kind\n    WHEN 'managed_file'::text THEN storage_locator IS NOT NULL AND content_sha256 IS NOT NULL AND origin IS NOT NULL AND provider IS NULL AND provider_id IS NULL AND url IS NULL\n    ELSE storage_locator IS NULL AND source_locator IS NULL AND origin IS NULL AND byte_size IS NULL AND ingest_sha256 IS NULL AND content_sha256 IS NULL AND origin_url IS NULL AND origin_ref IS NULL AND COALESCE(length(provider) > 0 AND length(provider_id) > 0 AND length(url) > 0, false)\nEND)",
         "assets_library_id_id_key": "UNIQUE (library_id, id)",
         "assets_library_id_id_manifestation_id_key": "UNIQUE (library_id, id, manifestation_id)",
         "assets_library_id_id_work_id_key": "UNIQUE (library_id, id, work_id)",

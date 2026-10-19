@@ -141,6 +141,8 @@ CREATE TABLE prks.assets (
     CASE kind
       WHEN 'managed_file' THEN storage_locator IS NOT NULL AND content_sha256 IS NOT NULL
                                AND origin IS NOT NULL
+                               -- the stream identity; a file's provenance is origin_url
+                               AND provider IS NULL AND provider_id IS NULL AND url IS NULL
       ELSE storage_locator IS NULL AND source_locator IS NULL AND origin IS NULL
                AND byte_size IS NULL AND ingest_sha256 IS NULL AND content_sha256 IS NULL
                AND origin_url IS NULL AND origin_ref IS NULL

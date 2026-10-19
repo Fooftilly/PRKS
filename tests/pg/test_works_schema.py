@@ -392,6 +392,14 @@ class AssetPointerTests(WorksSchemaTestCase):
                     "INSERT INTO prks.assets (library_id, id, manifestation_id, work_id, kind, provider,"
                     " provider_id, url) VALUES (%s, %s, %s, %s, 'external_stream', %s, %s, %s)",
                     (self.lib, new_id("AS"), manifestation, work_id, provider, provider_id, url)))
+        # A managed file carries no stream identity; where it came from is origin_url.
+        for column, value in (("provider", "youtube"), ("provider_id", "abc"), ("url", "https://x")):
+            with self.subTest(file_column=column):
+                self.refused(psycopg.errors.CheckViolation, (
+                    "INSERT INTO prks.assets (library_id, id, manifestation_id, work_id, kind, storage_locator,"
+                    " content_sha256, origin, " + column + ") VALUES (%s, %s, %s, %s, 'managed_file', 'a.pdf',"
+                    " %s, 'upload', %s)",
+                    (self.lib, new_id("AS"), manifestation, work_id, SHA, value)))
         self.sql(
             "INSERT INTO prks.assets (library_id, id, manifestation_id, work_id, kind, provider, provider_id, "
             "url) VALUES (%s, %s, %s, %s, 'external_stream', 'youtube', 'abc', 'https://x')",
