@@ -2397,6 +2397,159 @@ async function run() {
     assert('offline-runtime.js does not create its own IndexedDB connection', src.indexOf('indexedDB.open') === -1);
     assert('offline-runtime.js delegates persistence to createPrksOfflineStore', src.indexOf('createPrksOfflineStore') !== -1);
 
+    /* ---- real coordinator + offline runtime: reconnecting Person retry correctness ----
+     * The browser A/B in #776 measured fully-offline latency only. This test
+     * exercises the ACTUAL request coordinator and offline runtime together
+     * with deterministic failed-then-successful transports. No retry contract
+     * or production state machine is patched or replaced. */
+    {
+        const requestModule = require(path.join(rootDir, 'frontend/js/request-coordinator.js'));
+        const personPath = '/api/persons/P-1';
+        const oldPerson = { id: 'P-1', name: 'cached-before-reconnect' };
+        const livePerson = { id: 'P-1', name: 'recovered-server-value' };
+
+        function httpJson(value, status) {
+            return new Response(JSON.stringify(value), {
+                status: status || 200,
+                headers: { 'Content-Type': 'application/json' },
+            });
+        }
+
+        async function fixture(transport, customStore) {
+            const store = customStore || makeFakeStore();
+            await store.putEntity('person', 'P-1', oldPerson, '');
+            const attempts = [];
+            const coordinator = requestModule.createPrksRequestCoordinator({
+                origin: 'http://127.0.0.1',
+                random: function () { return 0.5; },
+                sleep: async function () {},
+                fetchImpl: function (url, opts) {
+                    attempts.push({ url: url, signal: opts.signal });
+                    return transport(attempts.length, url, opts);
+                },
+            });
+            const runtime = mod.createPrksOfflineRuntime({
+                store: store,
+                // A real reachability probe begins at init(). Hold its response
+                // open so the Person read is provably in 'reconnecting'.
+                prksRequest: function (url, opts, policy) {
+                    if (url === '/api/settings') return new Promise(function () {});
+                    return coordinator.prksRequest(url, opts, policy);
+                },
+                setTimeout: noopSetTimeout, clearTimeout: noopClearTimeout,
+                window: null, caches: null, navigator: null,
+            });
+            runtime.noteRequestFailure();
+            runtime.init();
+            assertEq('Person test starts with a real pending probe', runtime.getState(), 'reconnecting');
+            return { store: store, runtime: runtime, coordinator: coordinator, attempts: attempts };
+        }
+
+        function readPerson(c, options) {
+            return c.runtime.readThroughEntity('person', 'P-1', personPath,
+                Object.assign({
+                    domain: 'people',
+                    preferCacheWhenOffline: true,
+                    validate: function (value) { return !!value && value.id === 'P-1'; },
+                }, options || {}));
+        }
+
+        // A brief transport failure is NOT equivalent to the server being
+        // offline. With retries the live answer supersedes the cached value.
+        {
+            const c = await fixture(function (n) {
+                return n === 1 ? Promise.reject(new TypeError('temporary network error'))
+                    : Promise.resolve(httpJson(livePerson));
+            });
+            const r = await readPerson(c);
+            assertEq('Person default policy recovered live value on second GET', r.value, livePerson);
+            assertEq('Person default policy attributes recovered data to server', r.source, 'server');
+            assertEq('Person default policy made two GET attempts', c.attempts.length, 2);
+            assertEq('Person successful recovery transitions online', c.runtime.getState(), 'online');
+        }
+
+        // The existing no-retry policy is faster when disconnected, but can
+        // show an older cached record after a transient first-attempt failure.
+        {
+            const c = await fixture(function (n) {
+                return n === 1 ? Promise.reject(new TypeError('temporary network error'))
+                    : Promise.resolve(httpJson(livePerson));
+            });
+            const r = await readPerson(c, { requestPolicy: { retry: false } });
+            assertEq('Person single attempt returned cached value after transient error', r.value, oldPerson);
+            assertEq('Person single attempt truthfully labels the cached fallback', r.source, 'cache');
+            assertEq('Person single attempt does not retry', c.attempts.length, 1);
+            assertEq('Person single attempt does not assert server reachability', c.runtime.getState(), 'reconnecting');
+        }
+
+        // A reachable 503 is a domain response, never an offline cache
+        // fallback. The coordinator retries 503 by default; disabling it
+        // leaves the runtime's domain-error path intact (no stale masking).
+        {
+            const transport = function (n) {
+                return Promise.resolve(n === 1 ? httpJson({}, 503) : httpJson(livePerson));
+            };
+            const c = await fixture(transport);
+            const r = await readPerson(c);
+            assertEq('Person default retry recovers from a transient 503', r.source, 'server');
+            assertEq('Person default retry recovered fresh 503-followup value', r.value, livePerson);
+            assertEq('Person default retry performs second GET after 503', c.attempts.length, 2);
+        }
+        {
+            const c = await fixture(function (n) {
+                return Promise.resolve(n === 1 ? httpJson({}, 503) : httpJson(livePerson));
+            });
+            let error = null;
+            try {
+                await readPerson(c, { requestPolicy: { retry: false } });
+            } catch (err) { error = err; }
+            assert('Person single-attempt 503 fails as domain error, not cache fallback',
+                !!error && error.isPrksDomainError && error.status === 503);
+            assertEq('Person single-attempt 503 sends one GET', c.attempts.length, 1);
+            assertEq('Person 503 does not discard cached entity', (await c.store.getEntity('person','P-1')).value, oldPerson);
+        }
+
+        // A mutation/domain sweep that fails to delete a stale cached row
+        // MUST keep People blocked. A pending no-retry transport failure
+        // cannot surface that row as a seemingly valid offline fallback.
+        {
+            let rejectPending = null;
+            const stuckStore = makeFakeStore({
+                deleteEntitiesByKind: async function () { return false; },
+            });
+            const c = await fixture(function () {
+                return new Promise(function (_resolve, reject) { rejectPending = reject; });
+            }, stuckStore);
+            const pending = readPerson(c, { requestPolicy: { retry: false } });
+            for (let i = 0; i < 12 && !rejectPending; i++) {
+                await new Promise(function (resolve) { setImmediate(resolve); });
+            }
+            if (!rejectPending) throw new Error('Person test transport never started');
+            c.runtime.markDomainChanged('people', { entityKinds: ['person'] });
+            await c.runtime._domainCleanup('people');
+            assert('failed People sweep remains blocked', c.runtime.isDomainBlocked('people'));
+            rejectPending(new TypeError('network unavailable'));
+            const r = await pending;
+            assertEq('pending failed read cannot return blocked stale Person', r.source, 'unavailable');
+            assertEq('blocked Person result has no cached payload', r.value, null);
+            assertEq('failed sweep deliberately retained stale cache row', (await stuckStore.getEntity('person', 'P-1')).value, oldPerson);
+        }
+
+        // An aborted route remains aborted, not a cached read. In particular,
+        // a per-request retry policy must not weaken AbortSignal handling.
+        {
+            const c = await fixture(function () { throw new Error('should not fetch'); });
+            const controller = new AbortController();
+            controller.abort();
+            let error = null;
+            try {
+                await readPerson(c, { signal: controller.signal, requestPolicy: { retry: false } });
+            } catch (err) { error = err; }
+            assertEq('pre-aborted reconnecting Person read rejects AbortError', error && error.name, 'AbortError');
+            assertEq('pre-aborted Person request causes zero fetches', c.attempts.length, 0);
+        }
+    }
+
     if (failed) {
         console.log(failed + ' failed, ' + passed + ' passed');
         process.exit(1);
