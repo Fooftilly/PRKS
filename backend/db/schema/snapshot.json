@@ -112,7 +112,7 @@
         },
         {
           "name": "origin",
-          "not_null": true,
+          "not_null": false,
           "type": "text"
         },
         {
@@ -194,7 +194,7 @@
         "assets_ingest_sha256_check": "CHECK (ingest_sha256 ~ '^[0-9a-f]{64}$'::text)",
         "assets_kind_check": "CHECK (kind = ANY (ARRAY['managed_file'::text, 'external_stream'::text]))",
         "assets_kind_not_null": "NOT NULL kind",
-        "assets_kind_storage_check": "CHECK (\nCASE kind\n    WHEN 'managed_file'::text THEN storage_locator IS NOT NULL AND content_sha256 IS NOT NULL\n    ELSE storage_locator IS NULL AND source_locator IS NULL\nEND)",
+        "assets_kind_storage_check": "CHECK (\nCASE kind\n    WHEN 'managed_file'::text THEN storage_locator IS NOT NULL AND content_sha256 IS NOT NULL AND origin IS NOT NULL\n    ELSE storage_locator IS NULL AND source_locator IS NULL AND origin IS NULL\nEND)",
         "assets_library_id_id_key": "UNIQUE (library_id, id)",
         "assets_library_id_id_manifestation_id_key": "UNIQUE (library_id, id, manifestation_id)",
         "assets_library_id_id_work_id_key": "UNIQUE (library_id, id, work_id)",
@@ -204,7 +204,6 @@
         "assets_materialized_pdf_annotation_revision_check": "CHECK (materialized_pdf_annotation_revision >= 0)",
         "assets_materialized_pdf_annotation_revision_not_null": "NOT NULL materialized_pdf_annotation_revision",
         "assets_origin_check": "CHECK (origin = ANY (ARRAY['upload'::text, 'processing_import'::text, 'adopted'::text, 'web_capture'::text]))",
-        "assets_origin_not_null": "NOT NULL origin",
         "assets_pkey": "PRIMARY KEY (id)",
         "assets_role_check": "CHECK (role = ANY (ARRAY['document'::text, 'snapshot'::text, 'readable_text'::text, 'attachment'::text, 'other'::text]))",
         "assets_role_not_null": "NOT NULL role",

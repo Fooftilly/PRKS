@@ -116,8 +116,8 @@ CREATE TABLE prks.assets (
   byte_size        bigint CHECK (byte_size >= 0),
   ingest_sha256    text CHECK (ingest_sha256 ~ '^[0-9a-f]{64}$'),
   content_sha256   text CHECK (content_sha256 ~ '^[0-9a-f]{64}$'),
-  origin           text NOT NULL
-                   CHECK (origin IN ('upload', 'processing_import', 'adopted', 'web_capture')),
+  -- where the bytes came from; a stream has none, so it has no origin
+  origin           text CHECK (origin IN ('upload', 'processing_import', 'adopted', 'web_capture')),
   origin_url       text,
   origin_ref       text,
   derived_from_asset_id text,
@@ -135,7 +135,8 @@ CREATE TABLE prks.assets (
   CONSTRAINT assets_kind_storage_check CHECK (
     CASE kind
       WHEN 'managed_file' THEN storage_locator IS NOT NULL AND content_sha256 IS NOT NULL
-      ELSE storage_locator IS NULL AND source_locator IS NULL
+                               AND origin IS NOT NULL
+      ELSE storage_locator IS NULL AND source_locator IS NULL AND origin IS NULL
     END),
   CONSTRAINT assets_derived_from_check CHECK (derived_from_asset_id <> id),
   CONSTRAINT assets_supersedes_check CHECK (supersedes_asset_id <> id),

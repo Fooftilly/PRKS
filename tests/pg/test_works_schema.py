@@ -357,23 +357,26 @@ class AssetPointerTests(WorksSchemaTestCase):
     def test_kind_decides_which_storage_fields_are_allowed(self) -> None:
         work_id, manifestation = self.work()
         insert = ("INSERT INTO prks.assets (library_id, id, manifestation_id, work_id, kind, storage_locator, "
-                  "source_locator, content_sha256, origin) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'upload')")
-        for kind, locator, source, digest in (
-            ("managed_file", None, None, SHA),           # no storage key
-            ("managed_file", "a.pdf", None, None),       # no hash of the key's bytes
-            ("managed_file", "a.pdf", None, "ABC"),      # not a lower-case SHA-256
-            ("managed_file", "", None, SHA),             # empty key
-            ("external_stream", "a.pdf", None, None),    # a stream stores no bytes
-            ("external_stream", None, "a.pdf", None),
-            ("external_link", None, None, None),         # no such kind (#60 D8)
+                  "source_locator, content_sha256, origin) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)")
+        for kind, locator, source, digest, origin in (
+            ("managed_file", None, None, SHA, "upload"),           # no storage key
+            ("managed_file", "a.pdf", None, None, "upload"),       # no hash of the key's bytes
+            ("managed_file", "a.pdf", None, "ABC", "upload"),      # not a lower-case SHA-256
+            ("managed_file", "", None, SHA, "upload"),             # empty key
+            ("managed_file", "a.pdf", None, SHA, None),            # bytes of no stated origin
+            ("managed_file", "a.pdf", None, SHA, "legacy"),        # no legacy rows in PostgreSQL
+            ("external_stream", "a.pdf", None, None, None),        # a stream stores no bytes
+            ("external_stream", None, "a.pdf", None, None),
+            ("external_stream", None, None, None, "upload"),       # ... so its bytes have no origin
+            ("external_link", None, None, None, None),             # no such kind (#60 D8)
         ):
-            with self.subTest(kind=kind, locator=locator, source=source, digest=digest):
+            with self.subTest(kind=kind, locator=locator, source=source, digest=digest, origin=origin):
                 self.refused(psycopg.errors.CheckViolation,
                              (insert, (self.lib, new_id("AS"), manifestation, work_id, kind, locator, source,
-                                       digest)))
+                                       digest, origin)))
         self.sql(
             "INSERT INTO prks.assets (library_id, id, manifestation_id, work_id, kind, provider, provider_id, "
-            "url, origin) VALUES (%s, %s, %s, %s, 'external_stream', 'youtube', 'abc', 'https://x', 'upload')",
+            "url) VALUES (%s, %s, %s, %s, 'external_stream', 'youtube', 'abc', 'https://x')",
             (self.lib, new_id("AS"), manifestation, work_id),
         )
 
