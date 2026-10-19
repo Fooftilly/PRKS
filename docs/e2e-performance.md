@@ -515,9 +515,22 @@ Consequently, the measured `reconnecting → offline` state transitions,
 three observed Person GET request events per trial and cached fallback
 outcomes are **consistent with the slow network-error/fallback branch**.
 The fast cache-first branch cannot run at entry while state is
-`reconnecting`. The profiling did not itself time every transport retry,
-and the browser-context event count is a window-wide observation, not a
-one-to-one mapping to network attempts.
+`reconnecting`. There is a second, independently inspectable contributor:
+`frontend/js/request-coordinator.js` defaults ordinary foreground GETs
+to **one initial request plus two transport retries**, with jittered
+base-backoff delays of **250 ms and 750 ms**. Its `performReadNetwork`
+retries non-abort transport failures before reporting unreachability.
+Thus three browser-observed Person GET events and about one second per
+offline-reader call strongly match the default retry path. The exact
+attempt sequence is **not independently timed within the coordinator** by
+this profile, and the request count is a window-wide observation rather
+than a per-reader transport log. A future limited experiment could use
+the existing `requestPolicy.retry = false` contract for a carefully
+scoped opt-in Person detail read under `reconnecting`, retaining its
+server-first attempt and cached fallback; however a one-attempt policy
+would be **less tolerant of transient failures** and must not be
+presented as a proven-safe production optimization without separate
+tests and a same-runner performance comparison.
 
 **Safety:** Do not turn `reconnecting` into `offline` or enable cache-first
 reads in that state without a separate correctness design and test.
