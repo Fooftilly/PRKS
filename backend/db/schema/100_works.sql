@@ -67,9 +67,9 @@ CREATE TABLE prks.manifestations (
   kind       text NOT NULL DEFAULT 'unspecified'
              CHECK (kind IN ('unspecified', 'preprint', 'accepted_manuscript', 'published', 'edition',
                              'translation', 'reprint', 'web_page', 'video', 'other')),
-  title      text CHECK (title <> ''),
+  title      text CHECK (length(title) > 0),
   subtitle   text,
-  abstract   text CHECK (abstract <> ''),
+  abstract   text CHECK (length(abstract) > 0),
   language   text,                         -- BCP 47
   doc_type   text,                         -- BibTeX entry type
   year       text,                         -- bibliographic dates stay text (§6.1)
@@ -107,8 +107,8 @@ CREATE TABLE prks.assets (
   kind             text NOT NULL CHECK (kind IN ('managed_file', 'external_stream')),
   role             text NOT NULL DEFAULT 'document'
                    CHECK (role IN ('document', 'snapshot', 'readable_text', 'attachment', 'other')),
-  storage_locator  text CHECK (storage_locator <> ''),  -- working bytes; a key, never a path
-  source_locator   text CHECK (source_locator <> ''),   -- pristine bytes, when kept
+  storage_locator  text CHECK (length(storage_locator) > 0),  -- working bytes; a key, never a path
+  source_locator   text CHECK (length(source_locator) > 0),   -- pristine bytes, when kept
   provider         text,
   provider_id      text,
   url              text,
@@ -209,9 +209,9 @@ CREATE INDEX manifestation_relations_to ON prks.manifestation_relations (library
 CREATE TABLE prks.manifestation_identifiers (
   library_id       text NOT NULL,
   manifestation_id text NOT NULL,
-  scheme           text NOT NULL CHECK (scheme <> ''),
+  scheme           text NOT NULL CHECK (length(scheme) > 0),
   value            text NOT NULL,
-  normalized       text NOT NULL CHECK (normalized <> ''),
+  normalized       text NOT NULL CHECK (length(normalized) > 0),
   created_at       timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (manifestation_id, scheme, normalized),
   CONSTRAINT manifestation_identifiers_manifestation_fkey FOREIGN KEY (library_id, manifestation_id)

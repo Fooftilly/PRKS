@@ -208,10 +208,10 @@
         "assets_pkey": "PRIMARY KEY (id)",
         "assets_role_check": "CHECK (role = ANY (ARRAY['document'::text, 'snapshot'::text, 'readable_text'::text, 'attachment'::text, 'other'::text]))",
         "assets_role_not_null": "NOT NULL role",
-        "assets_source_locator_check": "CHECK (source_locator <> ''::text)",
+        "assets_source_locator_check": "CHECK (length(source_locator) > 0)",
         "assets_state_check": "CHECK (state = ANY (ARRAY['active'::text, 'trashed'::text]))",
         "assets_state_not_null": "NOT NULL state",
-        "assets_storage_locator_check": "CHECK (storage_locator <> ''::text)",
+        "assets_storage_locator_check": "CHECK (length(storage_locator) > 0)",
         "assets_supersedes_check": "CHECK (supersedes_asset_id <> id)",
         "assets_supersedes_fkey": "FOREIGN KEY (library_id, supersedes_asset_id, manifestation_id) REFERENCES prks.assets(library_id, id, manifestation_id) ON DELETE SET NULL (supersedes_asset_id)",
         "assets_thumb_page_check": "CHECK (thumb_page >= 1)",
@@ -812,10 +812,10 @@
         "manifestation_identifiers_library_id_not_null": "NOT NULL library_id",
         "manifestation_identifiers_manifestation_fkey": "FOREIGN KEY (library_id, manifestation_id) REFERENCES prks.manifestations(library_id, id) ON DELETE CASCADE",
         "manifestation_identifiers_manifestation_id_not_null": "NOT NULL manifestation_id",
-        "manifestation_identifiers_normalized_check": "CHECK (normalized <> ''::text)",
+        "manifestation_identifiers_normalized_check": "CHECK (length(normalized) > 0)",
         "manifestation_identifiers_normalized_not_null": "NOT NULL normalized",
         "manifestation_identifiers_pkey": "PRIMARY KEY (manifestation_id, scheme, normalized)",
-        "manifestation_identifiers_scheme_check": "CHECK (scheme <> ''::text)",
+        "manifestation_identifiers_scheme_check": "CHECK (length(scheme) > 0)",
         "manifestation_identifiers_scheme_not_null": "NOT NULL scheme",
         "manifestation_identifiers_value_not_null": "NOT NULL value"
       },
@@ -1009,7 +1009,7 @@
         }
       ],
       "constraints": {
-        "manifestations_abstract_check": "CHECK (abstract <> ''::text)",
+        "manifestations_abstract_check": "CHECK (length(abstract) > 0)",
         "manifestations_created_at_not_null": "NOT NULL created_at",
         "manifestations_id_check": "CHECK (id ~ '^MF-[0-9A-F]{32}$'::text)",
         "manifestations_id_not_null": "NOT NULL id",
@@ -1020,7 +1020,7 @@
         "manifestations_library_id_not_null": "NOT NULL library_id",
         "manifestations_pkey": "PRIMARY KEY (id)",
         "manifestations_primary_asset_fkey": "FOREIGN KEY (library_id, primary_asset_id, id) REFERENCES prks.assets(library_id, id, manifestation_id) DEFERRABLE INITIALLY DEFERRED",
-        "manifestations_title_check": "CHECK (title <> ''::text)",
+        "manifestations_title_check": "CHECK (length(title) > 0)",
         "manifestations_updated_at_not_null": "NOT NULL updated_at",
         "manifestations_work_fkey": "FOREIGN KEY (library_id, work_id) REFERENCES prks.works(library_id, id) ON DELETE CASCADE",
         "manifestations_work_id_not_null": "NOT NULL work_id"
