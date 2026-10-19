@@ -1354,6 +1354,9 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/api/session.py",
                 "backend/domain/works/__init__.py",
                 "backend/domain/works/integrity.py",
+                "backend/jobs/queue.py",
+                "backend/jobs/handlers.py",
+                "backend/jobs/runner.py",
             ),
         )
 
