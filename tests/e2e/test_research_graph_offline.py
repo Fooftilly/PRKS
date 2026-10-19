@@ -442,6 +442,20 @@ class ResearchGraphOfflineTests(unittest.TestCase):
                                 page.wait_for_function('h => location.hash === h', arg='#/' + route + '/' + rid)
                             with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_return_banner'):
                                 o._wait_offline_banner(page)
+                        if profile_person:
+                            # The banner may be inserted just before the
+                            # enclosing async route promises settle. Preserve
+                            # both envelope samples instead of collecting too
+                            # early and misreporting a missing whole-route phase.
+                            page.wait_for_function(
+                                """() => {
+                                    const p = window.__prksGraphPersonReturnProbe;
+                                    return !!p && ['route_total', 'route_commit'].every(
+                                        name => p.samples.some(x => x.phase === name)
+                                    );
+                                }""",
+                                timeout=10000,
+                            )
                     finally:
                         # Never leave a wrapped application function installed
                         # after a failed browser assertion or route transition.
