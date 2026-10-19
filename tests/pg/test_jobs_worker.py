@@ -301,23 +301,25 @@ class GracefulStopTests(WorkerTestCase):
             self.assertFalse(self.worker_thread.is_alive())
         self.assertLess(time.monotonic() - began, 3)
 
-    def test_a_second_signal_during_stop_does_not_deadlock(self) -> None:
+    def test_a_signal_while_the_main_thread_holds_the_stop_events_locks_cannot_deadlock(self) -> None:
+        # A handler interrupts the main thread between bytecodes, possibly
+        # inside an Event's own wait() or set(): it must take none of their
+        # locks. Here this (main) thread holds them all when both signals land.
         worker = Worker(self.db, name="worker", registry=self.registry, settings=WorkerSettings(lease=LEASE))
-        real_set = worker._stop.set
-        calls: list[int] = []
-
-        def set_and_signal_again() -> None:
-            calls.append(1)
-            if len(calls) == 1:
-                worker.stop()  # as a second SIGTERM's handler would, on the same thread
-            real_set()
-
-        worker._stop.set = set_and_signal_again  # type: ignore[method-assign]
-        stopper = threading.Thread(target=worker.stop)
-        stopper.start()
-        stopper.join(WAIT)
-        self.assertFalse(stopper.is_alive())
-        self.assertTrue(worker.stopping)
+        signals = worker_module._SignalStop()
+        signals.install()
+        self.addCleanup(signals.restore)
+        events = (worker._stop, worker._wake, worker._job_done)
+        for event in events:
+            event._cond.acquire()  # type: ignore[attr-defined]
+        try:
+            os.kill(os.getpid(), signal.SIGTERM)
+            os.kill(os.getpid(), signal.SIGINT)  # a second signal, mid-shutdown
+        finally:
+            for event in events:
+                event._cond.release()  # type: ignore[attr-defined]
+        self.assertEqual(signals.requested, [signal.SIGTERM, signal.SIGINT])
+        self.assertFalse(worker.stopping)  # stop() runs later, as ordinary code
 
     def test_the_listener_connect_has_a_timeout(self) -> None:
         listener = worker_module._Listener("dbname=x", threading.Event(), retry=1)
@@ -453,9 +455,10 @@ class WorkerStartTests(RootPairingTestCase):
         state: dict[str, Any] = {"stderr": io.StringIO(), "exit": []}
         made = threading.Event()
 
-        def on_worker(worker: Worker) -> None:
+        def run_worker(worker: Worker) -> None:
             state["worker"] = worker
             made.set()
+            worker.run()
 
         def open_database(_env: Any) -> Database:
             return Database(DatabaseConfig(conninfo=self.harness.conninfo(name), role="worker", pool_min=0))
@@ -469,7 +472,7 @@ class WorkerStartTests(RootPairingTestCase):
                     open_database=open_database,
                     settings=WorkerSettings(lease=LEASE, poll=timedelta(milliseconds=50)),
                     registry=registry,
-                    on_worker=on_worker,
+                    run_worker=run_worker,
                     schema_dir=schema_dir,
                 )
             )

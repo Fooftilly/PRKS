@@ -203,9 +203,8 @@ class Worker:
         self._job_done = threading.Event()
         # Shared by stop() and the job thread's decision to begin, so a job
         # either begins before the stop (and gets the grace period) or never.
-        # Reentrant: stop() runs in signal handlers, and a second signal can
-        # interrupt the first handler while it holds the lock.
-        self._begin_lock = threading.RLock()
+        # Never taken in a signal handler (see _SignalStop).
+        self._begin_lock = threading.Lock()
         self._last_prune: Optional[float] = None
         self.started = threading.Event()  # the start check passed; the worker claims
         self.idle = threading.Event()  # set while it waits for a NOTIFY or the poll
@@ -423,12 +422,63 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _install_signals(worker: Worker) -> None:
-    def handle(_signum: int, _frame: Optional[FrameType]) -> None:
-        worker.stop()
+class _SignalStop:
+    """SIGTERM/SIGINT handlers that only record the request.
 
-    signal.signal(signal.SIGTERM, handle)
-    signal.signal(signal.SIGINT, handle)
+    A handler runs on the main thread between bytecodes, and every Event
+    :meth:`Worker.stop` sets takes a plain internal lock that the
+    interrupted main thread may hold (inside its own ``wait`` or ``set``),
+    so a handler that called ``stop()`` could block forever on its own
+    thread's lock. :func:`run_with_signals` turns the request into
+    ``stop()`` as ordinary code.
+    """
+
+    SIGNALS = (signal.SIGTERM, signal.SIGINT)
+
+    def __init__(self) -> None:
+        self.requested: list[int] = []  # list.append takes no Python-level lock
+        self._previous: dict[int, Any] = {}
+
+    def install(self) -> None:
+        for sig in self.SIGNALS:
+            self._previous[sig] = signal.signal(sig, self._handle)
+
+    def restore(self) -> None:
+        for sig, previous in self._previous.items():
+            signal.signal(sig, previous)
+        self._previous.clear()
+
+    def _handle(self, signum: int, _frame: Optional[FrameType]) -> None:
+        self.requested.append(signum)
+
+
+def run_with_signals(worker: Worker, *, check_every: float = 0.1) -> None:
+    """Run ``worker`` on its own thread until it stops; must be called on the main thread.
+
+    SIGTERM or SIGINT stops it gracefully. Raises what ``worker.run()``
+    raised (a :class:`StartRefused`).
+    """
+    signals = _SignalStop()
+    errors: list[BaseException] = []
+
+    def body() -> None:
+        try:
+            worker.run()
+        except BaseException as exc:  # handed to the main thread below
+            errors.append(exc)
+
+    thread = threading.Thread(target=body, name="prks-worker")
+    signals.install()
+    try:
+        thread.start()
+        while thread.is_alive():
+            if signals.requested and not worker.stopping:
+                worker.stop()
+            thread.join(check_every)
+    finally:
+        signals.restore()
+    if errors:
+        raise errors[0]
 
 
 _ROOT_WAIT = {"root_missing", "root_unbound"}
@@ -487,7 +537,7 @@ def main(
     open_database: DatabaseFactory = _open_database,
     settings: WorkerSettings = WorkerSettings(),
     registry: HandlerRegistry = REGISTRY,
-    on_worker: Callable[[Worker], Any] = _install_signals,
+    run_worker: Callable[[Worker], None] = run_with_signals,
     schema_dir: str = SCHEMA_DIR,
 ) -> int:
     """``prks worker --root ROOT [--testing]``; returns the exit code.
@@ -517,9 +567,8 @@ def main(
                 settings=settings,
                 start_check=root_start_check(db, root=root, testing=bool(args.testing), schema_dir=schema_dir),
             )
-            on_worker(worker)
             LOGGER.info("worker_starting name=%s", worker.name)
-            worker.run()
+            run_worker(worker)
     except StartRefused as exc:
         print(f"prks worker: {exc.message}", file=err)
         return EXIT_REFUSED

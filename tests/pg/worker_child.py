@@ -19,7 +19,7 @@ from backend.db.config import DatabaseConfig
 from backend.db.database import Database
 from backend.jobs.handlers import HandlerRegistry
 from backend.jobs.runner import JobRun
-from backend.jobs.worker import Worker, WorkerSettings, _install_signals
+from backend.jobs.worker import Worker, WorkerSettings, run_with_signals
 
 
 def child_job(run: JobRun) -> None:
@@ -41,8 +41,7 @@ def main(argv: list[str]) -> int:
             db, registry=registry,
             settings=WorkerSettings(poll=timedelta(milliseconds=50), stop_grace=timedelta(seconds=30)),
         )
-        _install_signals(worker)
-        worker.run()
+        run_with_signals(worker)
     return 0
 
 
