@@ -25,12 +25,14 @@ from __future__ import annotations
 import hashlib
 import os
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, List, Optional, TypeVar
 
 from backend.pg_facade.context import current_context
 from backend.pg_facade.registry import FacadeMixin, ported
 
 if TYPE_CHECKING:
+    from backend.db_manager import DeletedWorkRecord
     from backend.domain.identity.library_scope import LibraryScope
     from backend.domain.works.commands import ManagedFile, NewAsset
 
@@ -40,7 +42,7 @@ _HASH_CHUNK = 1024 * 1024
 
 
 class WorksMixin(FacadeMixin):
-    """Work create and reads (L-W-1 PR 2)."""
+    """Work create, reads and mutations (L-W-1)."""
 
     # -- plumbing ---------------------------------------------------------------
 
@@ -306,6 +308,136 @@ class WorksMixin(FacadeMixin):
             return []
         by_id = self._read(lambda scope: queries.works_by_ids(scope, ordered_ids))
         return self._finish([projection.work_summary(by_id[i]) for i in ordered_ids if i in by_id])
+
+
+    # -- mutations (L-W-1 PR 3) -------------------------------------------------
+
+    @ported
+    def mark_work_opened(self, work_id: str) -> bool:
+        """Record an open now (server time), through the max-register."""
+        from backend.domain.works import commands
+
+        wid = (work_id or "").strip()
+        if not wid:
+            raise ValueError("work_id is required")
+        moment = datetime.now(timezone.utc)
+        existed, _changed, _effective = self._command(
+            lambda scope: commands.mark_opened(scope, wid, moment))
+        return existed
+
+    @ported
+    def update_work_metadata(self, work_id: str, fields: dict):
+        """``PRKSDatabase.update_work_metadata`` on PostgreSQL.
+
+        The same allowed fields, refusals and messages, the same canonical
+        values and the same rule that a synchronized field advances its
+        revision only when it changes. Differences: ``file_path`` (adopting
+        or replacing a managed file) belongs to the objects lane and is
+        refused with ``NotPortedError``; ``text_content`` is written as the
+        Research Note with its revision (SQLite writes the column without
+        one; the HTTP adapter routes notes elsewhere); an Asset field
+        (``thumb_page``, ``source_mime``) on a Work with no file or stream is
+        refused. Returns ``()``: no file is released here.
+        """
+        from backend import work_metadata_sync as rules
+        from backend import work_source_sync
+        from backend.db_manager import normalize_doc_type
+        from backend.pg_facade.registry import NotPortedError
+
+        allowed = {'title', 'status', 'abstract', 'published_date',
+                   'author_text', 'year', 'publisher', 'location', 'edition', 'journal',
+                   'volume', 'issue', 'pages', 'isbn', 'doi', 'text_content', 'doc_type',
+                   'private_notes', 'thumb_page',
+                   'source_kind', 'source_url', 'source_mime', 'thumb_url', 'provider', 'provider_id', 'urldate',
+                   'file_path', 'hide_pdf_link_annotations'}
+        updates = {k: v for k, v in fields.items() if k in allowed}
+        identity_writes = sorted(set(updates) & work_source_sync.SOURCE_AGGREGATE_COLUMNS)
+        if identity_writes:
+            raise ValueError(
+                "%s cannot be set directly: a Work's source identity changes as one "
+                "aggregate. Use the SET_WORK_SOURCE operation."
+                % ", ".join(identity_writes))
+        if 'file_path' in updates:
+            raise NotPortedError("update_work_metadata(file_path)")
+        if 'hide_pdf_link_annotations' in updates:
+            raw = updates['hide_pdf_link_annotations']
+            updates['hide_pdf_link_annotations'] = (
+                raw is True or raw == 1
+                or (isinstance(raw, str) and raw.strip().lower() in ('1', 'true', 'yes')))
+        if 'doc_type' in updates:
+            updates['doc_type'] = normalize_doc_type(updates['doc_type'])
+        if not updates:
+            return ()
+        synced = {k: v for k, v in updates.items() if k in rules.SYNCED_FIELDS}
+        notes = {k: updates[k] for k in ("private_notes", "text_content") if k in updates}
+        plain = {k: v for k, v in updates.items() if k not in synced and k not in notes}
+        for field, value in synced.items():
+            if not rules.is_valid_field_value(field, value):
+                raise ValueError("%s is not a valid value for %s" % (value, field)
+                                 if field in rules.FIELD_ALLOWLISTS
+                                    or field in rules.FIELD_CODECS
+                                 else "%s exceeds the maximum supported length" % field)
+        synced = {k: rules.canonical_wire(k, v) for k, v in synced.items()}
+        self._command(lambda scope: _patch_work(scope, work_id, synced, notes, plain))
+        return ()
+
+    @ported
+    def get_work_metadata_state(self, work_id: str) -> Optional[dict]:
+        from backend.domain.works import metadata
+
+        return self._read(lambda scope: metadata.field_state(scope, work_id))
+
+    @ported
+    def get_work_notes_state(self, work_id: str) -> Optional[dict]:
+        from backend.domain.works import notes
+
+        return self._read(lambda scope: notes.notes_state(scope, work_id))
+
+    @ported
+    def delete_work_record(self, work_id: str, *, claim_pdf: bool = True) -> Optional[DeletedWorkRecord]:
+        """Delete the Work and what it owns; the managed file is left in place.
+
+        ``claim_pdf`` is accepted for the signature: no PostgreSQL path claims
+        or removes managed bytes before the objects lane (L-A-1), so the
+        record only reports the path and whether another Asset still names it.
+        """
+        from backend.db_manager import DeletedWorkRecord
+        from backend.domain.works import commands
+
+        del claim_pdf
+        deleted = self._command(lambda scope: commands.delete_work(scope, work_id))
+        if deleted is None:
+            return None
+        return DeletedWorkRecord(work_id=deleted.work_id, file_path=deleted.file_path,
+                                 managed_pdf_still_referenced=deleted.managed_pdf_still_referenced)
+
+
+def _patch_work(scope: LibraryScope, work_id: str, synced: dict[str, str],
+                notes_in: dict[str, Any], plain: dict[str, Any]) -> None:
+    """One PATCH, in one transaction, in SQLite's order: guards, plain, notes, fields."""
+    from backend import work_metadata_sync as rules
+    from backend.domain.works import metadata, notes
+    from backend.research_network import ResearchError
+
+    row = metadata.target(scope, work_id, for_update=True)
+    if row is None:
+        if notes_in:
+            raise ResearchError("not_found", "Work not found.", 404)
+        return
+    for field, wire in synced.items():
+        refused = metadata.refusal(row, field, rules.wire_to_database(field, wire))
+        if refused is not None:
+            raise ValueError(str(refused))
+    for field, value in plain.items():
+        refused = metadata.refusal(row, field, value)
+        if refused is not None:
+            raise ValueError(str(refused))
+        metadata.write(scope, row, field, value)
+    for field, value in notes_in.items():
+        kind = notes.PRIVATE if field == "private_notes" else notes.RESEARCH
+        notes.set_note(scope, work_id, kind, "" if value is None else value)
+    for field, wire in synced.items():
+        metadata.set_synced_field(scope, row, field, wire)
 
 
 def _thumb_page(value: Any) -> Optional[int]:
