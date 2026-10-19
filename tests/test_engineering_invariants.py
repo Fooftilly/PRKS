@@ -1363,6 +1363,7 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/jobs/diagnostics.py",
                 "backend/jobs/prune.py",
                 "backend/jobs/worker.py",
+                "backend/jobs/embedded.py",
             ),
         )
 

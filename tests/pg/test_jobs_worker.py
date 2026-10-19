@@ -306,7 +306,7 @@ class GracefulStopTests(WorkerTestCase):
         # inside an Event's own wait() or set(): it must take none of their
         # locks. Here this (main) thread holds them all when both signals land.
         worker = Worker(self.db, name="worker", registry=self.registry, settings=WorkerSettings(lease=LEASE))
-        signals = worker_module._SignalStop()
+        signals = worker_module.SignalStop()
         signals.install()
         self.addCleanup(signals.restore)
         events = (worker._stop, worker._wake, worker._job_done)

@@ -73,6 +73,7 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/jobs/diagnostics.py",
     "backend/jobs/prune.py",
     "backend/jobs/worker.py",
+    "backend/jobs/embedded.py",
 )
 PYRIGHT_TYPED_SLICE_INCLUDE = PYRIGHT_TYPED_SLICE_SCOPES
 PYRIGHT_TYPED_SLICE_MODES = frozenset({"basic", "standard", "strict"})

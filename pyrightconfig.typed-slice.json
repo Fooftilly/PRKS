@@ -37,7 +37,8 @@
     "backend/jobs/runner.py",
     "backend/jobs/diagnostics.py",
     "backend/jobs/prune.py",
-    "backend/jobs/worker.py"
+    "backend/jobs/worker.py",
+    "backend/jobs/embedded.py"
   ],
   "exclude": [
     "**/__pycache__"

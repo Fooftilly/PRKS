@@ -32,8 +32,8 @@ prune enqueue is logged as a code and retried on the next poll; it never
 stops the worker.
 
 Until the PostgreSQL cutover the SQLite web process holds ``root.lock``
-exclusively, so ``prks worker`` cannot run beside it; the web process will
-run its own embedded worker instead (PR 3/3).
+exclusively, so ``prks worker`` cannot run beside it; the web process runs
+its own embedded worker instead (:mod:`backend.jobs.embedded`).
 """
 
 from __future__ import annotations
@@ -203,11 +203,13 @@ class Worker:
         self._job_done = threading.Event()
         # Shared by stop() and the job thread's decision to begin, so a job
         # either begins before the stop (and gets the grace period) or never.
-        # Never taken in a signal handler (see _SignalStop).
+        # Never taken in a signal handler (see SignalStop).
         self._begin_lock = threading.Lock()
         self._last_prune: Optional[float] = None
         self.started = threading.Event()  # the start check passed; the worker claims
         self.idle = threading.Event()  # set while it waits for a NOTIFY or the poll
+        # Why the start check is still waiting (a stable reason code), for diagnostics.
+        self.waiting_for: Optional[str] = None
 
     def stop(self) -> None:
         """Claim nothing more; the running job may finish within ``stop_grace``."""
@@ -255,6 +257,7 @@ class Worker:
                 return True
             try:
                 if self._start_check():
+                    self.waiting_for = None
                     return True
                 reason = "setup_pending"
             except StartRefused as exc:
@@ -264,6 +267,7 @@ class Worker:
             if reason != waiting_for:  # once per reason, not on every poll
                 LOGGER.warning("worker_waiting reason=%s", reason)
                 waiting_for = reason
+                self.waiting_for = reason
             self._stop.wait(poll)
         return False
 
@@ -382,8 +386,30 @@ EXIT_USAGE = 2
 DatabaseFactory = Callable[[Mapping[str, str]], Database]
 
 
-def _open_database(environ: Mapping[str, str]) -> Database:
+def open_worker_database(environ: Mapping[str, str]) -> Database:
     return Database(load_database_config(environ, role="worker"))
+
+
+def _check_schema(db: Database, schema_dir: str) -> None:
+    try:
+        verify_schema(db.config.conninfo, directory=schema_dir)
+    except MigrationError as exc:
+        raise StartRefused(exc.reason, exc.message, retryable=exc.reason in _SCHEMA_WAIT) from None
+
+
+def schema_start_check(db: Database, *, schema_dir: str = SCHEMA_DIR) -> StartCheck:
+    """§4.4 alone, for the worker embedded in ``web``.
+
+    The web process ran the §11.1 pairing check and bump itself before it
+    opened the root (it holds that root for its lifetime), so its worker
+    only waits for the schema this code expects, and never bumps again.
+    """
+
+    def check() -> bool:
+        _check_schema(db, schema_dir)
+        return True
+
+    return check
 
 
 def root_start_check(
@@ -401,10 +427,7 @@ def root_start_check(
     """
 
     def check() -> bool:
-        try:
-            verify_schema(db.config.conninfo, directory=schema_dir)
-        except MigrationError as exc:
-            raise StartRefused(exc.reason, exc.message, retryable=exc.reason in _SCHEMA_WAIT) from None
+        _check_schema(db, schema_dir)
         lease = root.lease()
         try:
             started = root_pairing.start_process(db, root=root.path, lease=lease, testing=testing, bump=True)
@@ -422,7 +445,7 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-class _SignalStop:
+class SignalStop:
     """SIGTERM/SIGINT handlers that only record the request.
 
     A handler runs on the main thread between bytecodes, and every Event
@@ -458,7 +481,7 @@ def run_with_signals(worker: Worker, *, check_every: float = 0.1) -> None:
     SIGTERM or SIGINT stops it gracefully. Raises what ``worker.run()``
     raised (a :class:`StartRefused`).
     """
-    signals = _SignalStop()
+    signals = SignalStop()
     errors: list[BaseException] = []
 
     def body() -> None:
@@ -534,7 +557,7 @@ def main(
     *,
     environ: Optional[Mapping[str, str]] = None,
     stderr: Optional[TextIO] = None,
-    open_database: DatabaseFactory = _open_database,
+    open_database: DatabaseFactory = open_worker_database,
     settings: WorkerSettings = WorkerSettings(),
     registry: HandlerRegistry = REGISTRY,
     run_worker: Callable[[Worker], None] = run_with_signals,

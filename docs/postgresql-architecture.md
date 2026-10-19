@@ -2740,6 +2740,11 @@ process role. New aggregate counters: pool wait time and exhaustion count,
 job queue depth and age by kind, failed jobs, migration version. No SQL
 parameters, search terms or library metadata are recorded, as today.
 
+The job counters and queue depth are served to the Library owner at
+`GET /api/diagnostics/jobs` (L-J-1 #627; contract
+`docs/api/openapi-job-diagnostics.json`, operator notes in
+`docs/job-worker.md`).
+
 ---
 
 ## 13. Tests, gates and what is retired
