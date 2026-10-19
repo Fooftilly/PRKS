@@ -70,7 +70,10 @@ ABSTRACT_EXCERPT_LEN = 100
 
 # One row per Work: the Work, its primary Manifestation (always present: the
 # pointer is a deferred NOT NULL key), the Manifestation's primary Asset and
-# the Work's notes. Every join and count is filtered by the Library.
+# the Work's notes. Every join and count is filtered by the Library. The
+# counts are aggregated once per Work and joined, never counted per row
+# (scripts/check_correlated_catalog_counts.py); a Work always has at least
+# its primary Manifestation, so that join is inner.
 WORK_ROWS_SQL: LiteralString = """
 SELECT
   w.id,
@@ -99,10 +102,8 @@ SELECT
   a.thumb_url,
   a.canonical_annotation_set_revision,
   a.materialized_pdf_annotation_revision,
-  (SELECT count(*) FROM prks.manifestations mc
-    WHERE mc.library_id = w.library_id AND mc.work_id = w.id) AS manifestation_count,
-  (SELECT count(*) FROM prks.assets ac
-    WHERE ac.library_id = w.library_id AND ac.work_id = w.id AND ac.state = 'active') AS asset_count,
+  mc.n AS manifestation_count,
+  COALESCE(ac.n, 0) AS asset_count,
   rn.body AS research_note,
   pn.body AS private_note
 FROM prks.works w
@@ -110,6 +111,12 @@ JOIN prks.manifestations m
   ON m.library_id = w.library_id AND m.id = w.primary_manifestation_id AND m.work_id = w.id
 LEFT JOIN prks.assets a
   ON a.library_id = m.library_id AND a.id = m.primary_asset_id AND a.manifestation_id = m.id
+JOIN (SELECT work_id, count(*) AS n FROM prks.manifestations
+      WHERE library_id = %(library_id)s GROUP BY work_id) mc
+  ON mc.work_id = w.id
+LEFT JOIN (SELECT work_id, count(*) AS n FROM prks.assets
+           WHERE library_id = %(library_id)s AND state = 'active' GROUP BY work_id) ac
+  ON ac.work_id = w.id
 LEFT JOIN prks.work_notes rn
   ON rn.library_id = w.library_id AND rn.work_id = w.id AND rn.kind = 'research'
 LEFT JOIN prks.work_notes pn
