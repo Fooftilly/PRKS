@@ -76,6 +76,12 @@ LOGGER = logging.getLogger("prks.jobs")
 
 LISTEN_APPLICATION_NAME = "prks-worker-listen"
 
+# A listener connect gives up after this many seconds, and a stop waits at
+# most _LISTEN_CLOSE_WAIT for the listener thread: a hung connect never holds
+# a stop (the thread is a daemon and exits once its connect returns).
+LISTEN_CONNECT_TIMEOUT = 10
+_LISTEN_CLOSE_WAIT = 2.0
+
 # The start check: True once the process may claim, False while setup is
 # pending; raises StartRefused when the process must not run yet (retryable)
 # or at all.
@@ -145,14 +151,20 @@ class _Listener:
 
     def close(self) -> None:
         self._closing.set()
-        self._thread.join()
+        self._thread.join(_LISTEN_CLOSE_WAIT)
+
+    def _connect(self) -> psycopg.Connection[Any]:
+        return psycopg.connect(
+            self._conninfo,
+            autocommit=True,
+            application_name=LISTEN_APPLICATION_NAME,
+            connect_timeout=LISTEN_CONNECT_TIMEOUT,
+        )
 
     def _loop(self) -> None:
         while not self._closing.is_set():
             try:
-                with psycopg.connect(
-                    self._conninfo, autocommit=True, application_name=LISTEN_APPLICATION_NAME
-                ) as conn:
+                with self._connect() as conn:
                     conn.execute(sql.SQL("LISTEN {}").format(sql.Identifier(queue.NOTIFY_CHANNEL)))
                     self.listening.set()
                     # A notification sent while the worker was not listening
@@ -189,13 +201,17 @@ class Worker:
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._job_done = threading.Event()
+        # Shared by stop() and the job thread's decision to begin, so a job
+        # either begins before the stop (and gets the grace period) or never.
+        self._begin_lock = threading.Lock()
         self._last_prune: Optional[float] = None
         self.started = threading.Event()  # the start check passed; the worker claims
         self.idle = threading.Event()  # set while it waits for a NOTIFY or the poll
 
     def stop(self) -> None:
         """Claim nothing more; the running job may finish within ``stop_grace``."""
-        self._stop.set()
+        with self._begin_lock:
+            self._stop.set()
         self._wake.set()
         self._job_done.set()
 
@@ -262,14 +278,10 @@ class Worker:
 
     def _run(self, job: ClaimedJob) -> None:
         """Run ``job`` on its own thread so a stop can give it a deadline."""
-        self._job_done.clear()  # before the check, so a stop from here on is seen below
-        if self._stop.is_set():
-            # Stopped while the claim was in flight: the job never started,
-            # so it goes back at once rather than running in the grace period.
-            self._release(job)
-            return
+        self._job_done.clear()
         finished = threading.Event()
         started = threading.Event()
+        skipped = threading.Event()
         runs: list[JobRun] = []
 
         def begin(run: JobRun) -> None:
@@ -278,6 +290,12 @@ class Worker:
 
         def body() -> None:
             try:
+                with self._begin_lock:
+                    if self._stop.is_set():
+                        # Stopped before the job began (while it was being
+                        # claimed or started): it is given back unstarted.
+                        skipped.set()
+                        return
                 outcome = run_job(
                     self.db, job, registry=self.registry, lease=self.settings.lease,
                     backoff=self.settings.backoff, on_start=begin,
@@ -293,12 +311,12 @@ class Worker:
         thread = threading.Thread(target=body, name="prks-job", daemon=True)
         thread.start()
         self._job_done.wait()
-        if finished.is_set():
-            thread.join()
-            return
-        # Stopping: give the job its grace period, then give it back.
+        # Stopping (or done): a job that began gets its grace period. One that
+        # never began finishes at once and is given back unstarted.
         if finished.wait(self.settings.stop_grace.total_seconds()):
             thread.join()
+            if skipped.is_set():
+                self._release(job)
             return
         started.wait()  # set before the handler runs, so promptly
         # Abandoned whether or not the release is recorded: its heartbeat

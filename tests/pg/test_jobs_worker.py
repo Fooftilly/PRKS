@@ -15,6 +15,8 @@ from datetime import timedelta
 from typing import Any, Optional
 from unittest.mock import patch
 
+import psycopg
+
 from backend.db.config import DatabaseConfig
 from backend.db.database import Database
 from backend.db.errors import DatabaseUnavailableError
@@ -256,6 +258,49 @@ class GracefulStopTests(WorkerTestCase):
         row = self.row(job_id)  # type: ignore[arg-type]
         self.assertEqual((row["state"], row["attempts"], row["lease_id"]), ("queued", 0, None))
         self.assertEqual(worker.stats.snapshot()["released"], 1)
+
+    def test_a_stop_while_the_job_thread_starts_gives_the_job_back_unstarted(self) -> None:
+        # The stop lands after the claim returned, just before the job thread
+        # runs: the job has not begun, so it gets no grace period.
+        ran = threading.Event()
+        self.registry.register("test.instance", lambda _run: ran.set())
+        holder: dict[str, Worker] = {}
+        real_start = threading.Thread.start
+
+        def start(thread: threading.Thread) -> None:
+            if thread.name == "prks-job":
+                holder["worker"].stop()
+            real_start(thread)
+
+        with patch.object(threading.Thread, "start", start):
+            holder["worker"] = worker = self.start_worker()
+            job_id = self.enqueue_instance()
+            self.worker_thread.join(WAIT)
+        self.assertFalse(self.worker_thread.is_alive())
+        self.assertFalse(ran.is_set())
+        row = self.row(job_id)  # type: ignore[arg-type]
+        self.assertEqual((row["state"], row["attempts"], row["lease_id"]), ("queued", 0, None))
+        self.assertEqual(worker.stats.snapshot()["released"], 1)
+
+    def test_a_stop_is_not_held_by_a_listener_stuck_connecting(self) -> None:
+        unblock = threading.Event()
+        self.addCleanup(unblock.set)
+
+        def hung_connect(_listener: Any) -> Any:
+            unblock.wait(WAIT)
+            raise psycopg.OperationalError("gave up")
+
+        with patch.object(worker_module._Listener, "_connect", hung_connect):
+            worker = self.start_worker()
+            began = time.monotonic()
+            self.stop_worker(worker)
+        self.assertLess(time.monotonic() - began, worker_module._LISTEN_CLOSE_WAIT + 1)
+
+    def test_the_listener_connect_has_a_timeout(self) -> None:
+        listener = worker_module._Listener("dbname=x", threading.Event(), retry=1)
+        with patch.object(worker_module.psycopg, "connect") as connect:
+            listener._connect()
+        self.assertEqual(connect.call_args.kwargs["connect_timeout"], worker_module.LISTEN_CONNECT_TIMEOUT)
 
     def test_a_job_past_the_deadline_is_released_and_reclaimed_once(self) -> None:
         inside, go = self.blocking_handler()
