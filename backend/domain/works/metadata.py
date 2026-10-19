@@ -89,7 +89,14 @@ LEFT JOIN prks.assets a
   ON a.library_id = m.library_id AND a.id = m.primary_asset_id AND a.manifestation_id = m.id
 WHERE w.library_id = %(library_id)s AND w.id = %(work_id)s
 """
-_LOCK_TARGET_SQL: LiteralString = _TARGET_SQL + " FOR NO KEY UPDATE OF w"
+# The lock is its own statement. Under READ COMMITTED a statement that waits
+# for a row lock returns the newest version of the locked row only, so a
+# joined Manifestation or Asset would come from before the previous holder's
+# commit. Reading the target after the lock, in a new statement, sees it.
+_LOCK_WORK_SQL: LiteralString = (
+    "SELECT id FROM prks.works WHERE library_id = %(library_id)s AND id = %(work_id)s"
+    " FOR NO KEY UPDATE"
+)
 
 WRONG_OPERATION_FOR_SOURCE = "WRONG_OPERATION_FOR_SOURCE"
 
@@ -104,9 +111,15 @@ class FieldRefused(ValueError):
 
 
 def target(scope: LibraryScope, work_id: str, *, for_update: bool) -> Optional[dict[str, Any]]:
-    """The Work with its primary Manifestation and Asset; locked when writing."""
-    query = _LOCK_TARGET_SQL if for_update else _TARGET_SQL
-    row = scope.execute(query, {"work_id": work_id}).fetchone()
+    """The Work with its primary Manifestation and Asset; locked when writing.
+
+    ``for_update`` locks the Work row first and then reads, so the values are
+    the ones the previous lock holder committed.
+    """
+    params = {"work_id": work_id}
+    if for_update and scope.execute(_LOCK_WORK_SQL, params).fetchone() is None:
+        return None
+    row = scope.execute(_TARGET_SQL, params).fetchone()
     return None if row is None else dict(row)
 
 

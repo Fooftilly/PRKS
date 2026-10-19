@@ -210,6 +210,55 @@ class FieldDecisionTests(MutationTestCase):
         self.assertEqual({name: state[name]["value"] for name in names}, {name: name for name in names})
 
 
+class WaitedForLockTests(MutationTestCase):
+    """A command that waited for the Work lock decides on what the holder committed.
+
+    The fields and the source live on the Manifestation and the Asset, not on
+    the locked Work row, so these pin that the read after the lock is fresh.
+    """
+
+    def test_the_same_value_on_one_base_converges(self) -> None:
+        work_id = self.library.add_work("Paper")
+        first, second = self.hold_work_then(
+            lambda scope: metadata.apply_field_operation(scope, work_id, "doi", "10.1/x", 0),
+            lambda scope: metadata.apply_field_operation(scope, work_id, "doi", "10.1/x", 0))
+        self.assertEqual((first[1]["code"], first[1]["server_revision"]), ("ACKNOWLEDGED", 1))
+        self.assertEqual((second[1]["code"], second[1]["server_revision"], second[1]["changed"]),
+                         ("ACKNOWLEDGED", 1, False))
+
+    def test_a_stale_base_holding_the_old_value_conflicts(self) -> None:
+        work_id = self.library.add_work("Paper", doi="10.1/old")
+        first, second = self.hold_work_then(
+            lambda scope: metadata.apply_field_operation(scope, work_id, "doi", "10.1/new", 0),
+            lambda scope: metadata.apply_field_operation(scope, work_id, "doi", "10.1/old", 0))
+        self.assertEqual(first[1]["server_revision"], 1)
+        self.assertEqual((second[0], second[1]["code"], second[1]["current_revision"]),
+                         (409, "REVISION_CONFLICT", 1))
+        self.assertEqual(self.library.get_work(work_id)["doi"], "10.1/new")
+
+    def test_the_same_video_on_one_base_converges(self) -> None:
+        work_id = self.library.add_work("Video", source_url=_VIDEO)
+        first, second = self.hold_work_then(
+            lambda scope: source.apply_source_operation(
+                scope, work_id, {"kind": "video", "url": _OTHER_VIDEO}, 0),
+            lambda scope: source.apply_source_operation(
+                scope, work_id, {"kind": "video", "url": _OTHER_VIDEO}, 0))
+        self.assertEqual((first[1]["changed"], first[1]["server_revision"]), (True, 1))
+        self.assertEqual((second[1]["code"], second[1]["changed"], second[1]["server_revision"],
+                          second[1]["provider_id"]), ("ACKNOWLEDGED", False, 1, "9bZkp7q19f0"))
+
+    def test_the_old_video_on_a_stale_base_conflicts(self) -> None:
+        work_id = self.library.add_work("Video", source_url=_VIDEO)
+        _first, second = self.hold_work_then(
+            lambda scope: source.apply_source_operation(
+                scope, work_id, {"kind": "video", "url": _OTHER_VIDEO}, 0),
+            lambda scope: source.apply_source_operation(
+                scope, work_id, {"kind": "video", "url": _VIDEO}, 0))
+        self.assertEqual((second[0], second[1]["code"], second[1]["current_revision"]),
+                         (409, "SOURCE_REVISION_CONFLICT", 1))
+        self.assertEqual(self.library.get_work(work_id)["source_url"], _OTHER_VIDEO)
+
+
 class NoteDecisionTests(MutationTestCase):
     def test_each_row_of_the_decision_table(self) -> None:
         work_id = self.library.add_work("Work", private_notes="secret")

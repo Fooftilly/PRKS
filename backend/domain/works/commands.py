@@ -199,15 +199,19 @@ def mark_opened(scope: LibraryScope, work_id: str,
 
 # -- delete ---------------------------------------------------------------------
 
-_LOCK_FOR_DELETE: LiteralString = """
-SELECT w.id, a.kind AS asset_kind, a.storage_locator
+_LOCK_FOR_DELETE: LiteralString = (
+    "SELECT id FROM prks.works WHERE library_id = %(library_id)s AND id = %(work_id)s FOR UPDATE"
+)
+# Read after the lock, in its own statement, so the Asset is the committed one
+# (see ``metadata.target``).
+_PRIMARY_ASSET: LiteralString = """
+SELECT a.kind AS asset_kind, a.storage_locator
 FROM prks.works w
 JOIN prks.manifestations m
   ON m.library_id = w.library_id AND m.id = w.primary_manifestation_id AND m.work_id = w.id
 LEFT JOIN prks.assets a
   ON a.library_id = m.library_id AND a.id = m.primary_asset_id AND a.manifestation_id = m.id
 WHERE w.library_id = %(library_id)s AND w.id = %(work_id)s
-FOR UPDATE OF w
 """
 # Rows that own revision scopes never cascade (§5.2), so the delete removes
 # each level itself, children first; relations and identifiers go with their
@@ -247,7 +251,9 @@ def delete_work(scope: LibraryScope, work_id: str) -> Optional[DeletedWork]:
     ``/api/pdfs/`` path and whether another Asset of the Library still
     names the same storage key.
     """
-    row = scope.execute(_LOCK_FOR_DELETE, {"work_id": work_id}).fetchone()
+    if scope.execute(_LOCK_FOR_DELETE, {"work_id": work_id}).fetchone() is None:
+        return None
+    row = scope.execute(_PRIMARY_ASSET, {"work_id": work_id}).fetchone()
     if row is None:
         return None
     locator = row["storage_locator"] if row["asset_kind"] == "managed_file" else None
