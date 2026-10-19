@@ -203,7 +203,9 @@ class Worker:
         self._job_done = threading.Event()
         # Shared by stop() and the job thread's decision to begin, so a job
         # either begins before the stop (and gets the grace period) or never.
-        self._begin_lock = threading.Lock()
+        # Reentrant: stop() runs in signal handlers, and a second signal can
+        # interrupt the first handler while it holds the lock.
+        self._begin_lock = threading.RLock()
         self._last_prune: Optional[float] = None
         self.started = threading.Event()  # the start check passed; the worker claims
         self.idle = threading.Event()  # set while it waits for a NOTIFY or the poll

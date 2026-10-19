@@ -285,16 +285,39 @@ class GracefulStopTests(WorkerTestCase):
     def test_a_stop_is_not_held_by_a_listener_stuck_connecting(self) -> None:
         unblock = threading.Event()
         self.addCleanup(unblock.set)
+        real_connect = psycopg.connect
 
-        def hung_connect(_listener: Any) -> Any:
-            unblock.wait(WAIT)
-            raise psycopg.OperationalError("gave up")
+        def connect(*args: Any, **kwargs: Any) -> Any:
+            if kwargs.get("application_name") == worker_module.LISTEN_APPLICATION_NAME:
+                unblock.wait(WAIT)  # a connect the network never answers
+                raise psycopg.OperationalError("gave up")
+            return real_connect(*args, **kwargs)
 
-        with patch.object(worker_module._Listener, "_connect", hung_connect):
+        with patch.object(psycopg, "connect", connect):
             worker = self.start_worker()
             began = time.monotonic()
-            self.stop_worker(worker)
-        self.assertLess(time.monotonic() - began, worker_module._LISTEN_CLOSE_WAIT + 1)
+            worker.stop()
+            self.worker_thread.join(3)  # the listener close waits at most 2 s
+            self.assertFalse(self.worker_thread.is_alive())
+        self.assertLess(time.monotonic() - began, 3)
+
+    def test_a_second_signal_during_stop_does_not_deadlock(self) -> None:
+        worker = Worker(self.db, name="worker", registry=self.registry, settings=WorkerSettings(lease=LEASE))
+        real_set = worker._stop.set
+        calls: list[int] = []
+
+        def set_and_signal_again() -> None:
+            calls.append(1)
+            if len(calls) == 1:
+                worker.stop()  # as a second SIGTERM's handler would, on the same thread
+            real_set()
+
+        worker._stop.set = set_and_signal_again  # type: ignore[method-assign]
+        stopper = threading.Thread(target=worker.stop)
+        stopper.start()
+        stopper.join(WAIT)
+        self.assertFalse(stopper.is_alive())
+        self.assertTrue(worker.stopping)
 
     def test_the_listener_connect_has_a_timeout(self) -> None:
         listener = worker_module._Listener("dbname=x", threading.Event(), retry=1)
