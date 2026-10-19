@@ -355,11 +355,21 @@ def complete(db: Database, job: ClaimedJob) -> bool:
     return db.command(lambda tx: tx.execute(_COMPLETE_SQL, params).fetchone()) is not None
 
 
+# A Library job whose epoch moved on (a restore) can never be claimed again,
+# so it is never put back: it ends ``cancelled`` and frees its dedupe and
+# singleton keys for the new epoch's work. A Library in maintenance is not
+# stale; its epoch is checked again once maintenance ends.
+_STALE_EPOCH: LiteralString = """
+(j.library_id IS NOT NULL AND NOT EXISTS
+   (SELECT 1 FROM prks.libraries l WHERE l.id = j.library_id AND l.epoch = j.library_epoch))
+"""
+
 # The twin test is the same in fail() and release(): another queued row with
 # this job's (kind, dedupe_key). A NULL dedupe_key has no twin.
 _FAIL_SQL: LiteralString = """
 WITH cur AS (
   SELECT j.id,
+         """ + _STALE_EPOCH + """ AS stale,
          j.attempts >= j.max_attempts AS exhausted,
          EXISTS (SELECT 1 FROM prks.jobs t
                   WHERE t.kind = j.kind AND t.dedupe_key = j.dedupe_key
@@ -369,12 +379,13 @@ WITH cur AS (
    WHERE j.id = %(id)s AND j.lease_id = %(lease_id)s AND j.state = 'running'
 )
 UPDATE prks.jobs j
-   SET state = CASE WHEN cur.exhausted THEN 'failed'
+   SET state = CASE WHEN cur.stale THEN 'cancelled'
+                    WHEN cur.exhausted THEN 'failed'
                     WHEN cur.twin THEN 'cancelled'
                     ELSE 'queued' END,
-       run_after = CASE WHEN cur.exhausted OR cur.twin THEN j.run_after
+       run_after = CASE WHEN cur.stale OR cur.exhausted OR cur.twin THEN j.run_after
                         ELSE now() + make_interval(secs => cur.backoff) END,
-       finished_at = CASE WHEN cur.exhausted OR cur.twin THEN now() ELSE NULL END,
+       finished_at = CASE WHEN cur.stale OR cur.exhausted OR cur.twin THEN now() ELSE NULL END,
        last_error = %(error)s,
        lease_id = NULL, locked_by = NULL, locked_until = NULL
   FROM cur
@@ -392,8 +403,9 @@ def fail(
 ) -> Optional[JobState]:
     """Record a handled failure; the new state, or ``None`` when the lease is lost.
 
-    ``failed`` once attempts are exhausted, else ``cancelled`` when a twin is
-    queued, else ``queued`` again after the backoff. ``error`` is a code
+    ``cancelled`` when the Library's epoch moved on, else ``failed`` once
+    attempts are exhausted, else ``cancelled`` when a twin is queued, else
+    ``queued`` again after the backoff. ``error`` is a code
     (see :func:`error_code`), never a message.
     """
     params = {
@@ -409,6 +421,7 @@ def fail(
 _RELEASE_SQL: LiteralString = """
 WITH cur AS (
   SELECT j.id,
+         """ + _STALE_EPOCH + """ AS stale,
          EXISTS (SELECT 1 FROM prks.jobs t
                   WHERE t.kind = j.kind AND t.dedupe_key = j.dedupe_key
                     AND t.state = 'queued' AND t.id <> j.id) AS twin
@@ -416,11 +429,13 @@ WITH cur AS (
    WHERE j.id = %(id)s AND j.lease_id = %(lease_id)s AND j.state = 'running'
 )
 UPDATE prks.jobs j
-   SET state = CASE WHEN cur.twin THEN 'cancelled' ELSE 'queued' END,
-       attempts = CASE WHEN cur.twin THEN j.attempts ELSE GREATEST(j.attempts - 1, 0) END,
-       run_after = CASE WHEN cur.twin THEN j.run_after ELSE now() END,
-       finished_at = CASE WHEN cur.twin THEN now() ELSE NULL END,
-       last_error = CASE WHEN cur.twin THEN 'worker_stopped' ELSE j.last_error END,
+   SET state = CASE WHEN cur.stale OR cur.twin THEN 'cancelled' ELSE 'queued' END,
+       attempts = CASE WHEN cur.stale OR cur.twin THEN j.attempts ELSE GREATEST(j.attempts - 1, 0) END,
+       run_after = CASE WHEN cur.stale OR cur.twin THEN j.run_after ELSE now() END,
+       finished_at = CASE WHEN cur.stale OR cur.twin THEN now() ELSE NULL END,
+       last_error = CASE WHEN cur.stale THEN 'library_epoch_changed'
+                         WHEN cur.twin THEN 'worker_stopped'
+                         ELSE j.last_error END,
        lease_id = NULL, locked_by = NULL, locked_until = NULL
   FROM cur
  WHERE j.id = cur.id AND j.lease_id = %(lease_id)s AND j.state = 'running'
@@ -432,8 +447,8 @@ def release(db: Database, job: ClaimedJob) -> Optional[JobState]:
     """Give the job back on a graceful stop; the new state, or ``None`` when the lease is lost.
 
     The job returns to ``queued`` at once without spending the attempt this
-    claim counted (a stop is not a failure), or is ``cancelled`` when a twin
-    is queued.
+    claim counted (a stop is not a failure), or is ``cancelled`` when the
+    Library's epoch moved on or a twin is queued.
     """
     return _settle(db, _RELEASE_SQL, {"id": job.id, "lease_id": job.lease_id})
 
@@ -454,19 +469,23 @@ def _settle(db: Database, statement: LiteralString, params: Mapping[str, Any]) -
 
 
 _REAP_SQL: LiteralString = """
-UPDATE prks.jobs
-   SET state = 'failed', last_error = 'lease_expired', finished_at = now(),
-       lease_id = NULL, locked_by = NULL, locked_until = NULL
- WHERE state = 'running' AND locked_until < now() AND attempts >= max_attempts
-RETURNING id
+UPDATE prks.jobs j
+   SET state = CASE WHEN """ + _STALE_EPOCH + """ THEN 'cancelled' ELSE 'failed' END,
+       last_error = CASE WHEN """ + _STALE_EPOCH + """ THEN 'library_epoch_changed'
+                         ELSE 'lease_expired' END,
+       finished_at = now(), lease_id = NULL, locked_by = NULL, locked_until = NULL
+ WHERE j.state = 'running' AND j.locked_until < now()
+   AND (j.attempts >= j.max_attempts OR """ + _STALE_EPOCH + """)
+RETURNING j.id
 """
 
 
 def reap(db: Database) -> int:
-    """Fail every running job whose lease expired with no attempt left; the number failed.
+    """Settle every running job whose lease expired and that no claim can take; the number settled.
 
-    This frees their singleton keys, and a worker that resumes afterwards
-    matches no row (its lease is gone).
+    A job with no attempt left ends ``failed``; one whose Library's epoch
+    moved on ends ``cancelled``. This frees their singleton keys, and a
+    worker that resumes afterwards matches no row (its lease is gone).
     """
     return len(db.command(lambda tx: tx.execute(_REAP_SQL).fetchall()))
 

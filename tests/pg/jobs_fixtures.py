@@ -36,7 +36,7 @@ def set_revision(run: JobRun) -> None:
     def edit(scope: LibraryScope) -> None:
         scope.execute(SET_SQL, {"value": payload["value"], "scope_id": payload["scope_id"]})
 
-    library_command(run.db, run.context(), Capability.EDIT_LIBRARY, edit)
+    run.library_command(Capability.EDIT_LIBRARY, edit)
 
 
 class JobsTestCase(ScopeTestCase):

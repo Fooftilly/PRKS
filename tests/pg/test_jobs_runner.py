@@ -7,6 +7,7 @@ import time
 from datetime import timedelta
 from typing import Any
 
+from backend.domain.identity.authorization import Capability
 from backend.jobs.queue import LeaseLost
 from backend.jobs.runner import JobRun, Outcome, run_job
 from tests.pg.jobs_fixtures import LEASE, NO_BACKOFF, JobsTestCase, set_revision
@@ -199,9 +200,10 @@ class FencingTests(RunnerTestCase):
         self.assertEqual((row["state"], row["last_error"]), ("cancelled", "restore_superseded"))
 
     def test_a_restore_alone_fences_a_job_of_the_old_epoch(self) -> None:
-        # Even if a job of the old epoch was not cancelled, its commands are refused.
+        # Even if a job of the old epoch was not cancelled, its commands are
+        # refused, and it ends cancelled rather than queued forever.
         inside, go = self.pause_in("test.lib", set_revision)
-        self.enqueue_library(kind="test.lib", payload={"scope_id": "a1", "value": 42})
+        self.enqueue_library(kind="test.lib", dedupe_key="d", payload={"scope_id": "a1", "value": 42})
         job = self.claim()
         assert job is not None
         thread, result, _error = self.in_thread(
@@ -211,10 +213,16 @@ class FencingTests(RunnerTestCase):
         self.restore()
         go.set()
         thread.join(30)
-        self.assertEqual(result, [Outcome.RETRYING])
-        self.assertEqual(self.row(job.id)["last_error"], "LIBRARY_EPOCH_CHANGED")
+        self.assertEqual(result, [Outcome.CANCELLED])
+        row = self.row(job.id)
+        self.assertEqual((row["state"], row["last_error"]), ("cancelled", "LIBRARY_EPOCH_CHANGED"))
         self.assertEqual(self.revisions()[(self.lib_a, "a1")], 1)
-        self.assertIsNone(self.claim())  # and it is never claimed again
+        # The same work enqueued in the new epoch is not coalesced into the old row.
+        fresh = self.enqueue_library(kind="test.lib", dedupe_key="d", payload={"scope_id": "a1", "value": 43})
+        self.assertIsNotNone(fresh)
+        again = self.claim()
+        assert again is not None
+        self.assertEqual(again.id, fresh)
 
 
 class HeartbeatTests(RunnerTestCase):
@@ -239,6 +247,34 @@ class HeartbeatTests(RunnerTestCase):
         assert job is not None
         self.assertIs(self.run_one(job, heartbeat_every=timedelta(milliseconds=20)), Outcome.SUCCEEDED)
         self.assertTrue(extended.is_set())
+
+    def test_progress_is_reported_between_transactions_and_refused_inside_one(self) -> None:
+        refused: list[str] = []
+
+        def batched(run: JobRun) -> None:
+            def inside(_tx_or_scope: object) -> None:
+                try:
+                    run.heartbeat({"done": 0})
+                except RuntimeError:
+                    refused.append("refused")
+
+            if run.job.library_id is None:
+                run.command(inside)
+            else:
+                run.library_command(Capability.EDIT_LIBRARY, inside)
+            run.heartbeat({"done": 1})  # between transactions: no wait on its own lock
+
+        self.registry.register("test.instance", batched)
+        self.registry.register("test.lib", batched)
+        instance_id = self.enqueue_instance()
+        library_id = self.enqueue_library(kind="test.lib")
+        started = time.monotonic()
+        while (job := self.claim()) is not None:
+            self.assertIs(self.run_one(job, heartbeat_every=timedelta(hours=1)), Outcome.SUCCEEDED)
+        self.assertLess(time.monotonic() - started, 5)  # never waited out lock_timeout
+        self.assertEqual(refused, ["refused", "refused"])
+        for job_id in (instance_id, library_id):
+            self.assertEqual(self.row(job_id)["progress"], {"done": 1})  # type: ignore[arg-type]
 
     def test_the_heartbeat_tells_the_handler_its_lease_is_gone(self) -> None:
         stolen = threading.Event()

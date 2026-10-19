@@ -11,7 +11,7 @@ case the result is discarded.
 **Every transaction a handler opens is fenced** by the job's lease, and a
 Library job's also by its epoch:
 
-- a Library job writes through
+- a Library job writes through :meth:`JobRun.library_command`, which is
   :func:`~backend.domain.identity.library_scope.library_command` with
   :meth:`JobRun.context`, a ``RequestContext.for_job`` whose Library and
   epoch come from the job row. ``authorize()`` locks the job row with its
@@ -26,6 +26,13 @@ or a restore's cancellation wait for that transaction, so a handler
 transaction either commits while the lease is still this worker's or does
 not commit at all. Work a lost worker already committed is covered by the
 idempotency rule: handlers are idempotent (§12.1).
+
+**Progress is reported between transactions.** :meth:`JobRun.heartbeat`
+updates the job row on another connection, and that update waits for the
+``FOR SHARE`` lock the handler's own open transaction holds, so a heartbeat
+from inside :meth:`JobRun.command` or :meth:`JobRun.library_command` would
+wait on itself; it is refused instead. A batched handler commits a batch,
+then calls ``heartbeat(progress=…)``.
 """
 
 from __future__ import annotations
@@ -38,6 +45,8 @@ from datetime import timedelta
 from typing import Any, Optional, TypeVar
 
 from backend.db.database import Database, Isolation, Transaction
+from backend.domain.identity.authorization import Capability
+from backend.domain.identity.library_scope import LibraryScope, library_command
 from backend.domain.identity.request_context import RequestContext
 from backend.jobs import queue
 from backend.jobs.handlers import REGISTRY, HandlerRegistry
@@ -78,6 +87,8 @@ class JobRun:
         self.job = job
         self._lease = lease
         self._lost = threading.Event()
+        # Set while this thread is inside one of the run's fenced transactions.
+        self._fenced = threading.local()
 
     @property
     def payload(self) -> Mapping[str, Any]:
@@ -97,7 +108,7 @@ class JobRun:
             raise LeaseLost()
 
     def context(self) -> RequestContext:
-        """The context of a Library job, for ``library_command``/``library_query``.
+        """The context of a Library job, for ``library_query`` (writes use :meth:`library_command`).
 
         Raises :class:`LeaseLost` when the lease is no longer this worker's.
         """
@@ -117,11 +128,11 @@ class JobRun:
 
         The job row is locked with its lease ``FOR SHARE`` before ``fn``
         runs; raises :class:`LeaseLost` with nothing written when the lease is
-        gone or expired. A Library job uses ``library_command`` with
-        :meth:`context` instead, which also checks the epoch.
+        gone or expired. A Library job uses :meth:`library_command` instead,
+        which also checks the epoch.
         """
         if self.job.library_id is not None:
-            raise ValueError("a Library job writes through library_command(run.context(), …)")
+            raise ValueError("a Library job writes through JobRun.library_command")
         self.check()
 
         def run(tx: Transaction) -> T:
@@ -131,13 +142,44 @@ class JobRun:
             return fn(tx)
 
         try:
-            return self.db.command(run, isolation=isolation)
+            return self._in_fenced(lambda: self.db.command(run, isolation=isolation))
         except LeaseLost:
             self.mark_lost()
             raise
 
+    def library_command(
+        self,
+        capability: Capability,
+        fn: Callable[[LibraryScope], T],
+        *,
+        isolation: Isolation = Isolation.READ_COMMITTED,
+    ) -> T:
+        """Run ``fn`` as ``library_command`` for this Library job, fenced by its lease and epoch.
+
+        Raises :class:`LeaseLost` when the lease is gone, and ``AccessRefused``
+        (``LIBRARY_EPOCH_CHANGED``) with nothing written after a restore.
+        """
+        ctx = self.context()
+        return self._in_fenced(
+            lambda: library_command(self.db, ctx, capability, fn, isolation=isolation)
+        )
+
+    def _in_fenced(self, fn: Callable[[], T]) -> T:
+        self._fenced.depth = getattr(self._fenced, "depth", 0) + 1
+        try:
+            return fn()
+        finally:
+            self._fenced.depth -= 1
+
     def heartbeat(self, progress: Optional[Mapping[str, Any]] = None) -> None:
-        """Extend the lease now (and record ``progress``); raises :class:`LeaseLost` when it is gone."""
+        """Extend the lease now (and record ``progress``); raises :class:`LeaseLost` when it is gone.
+
+        Call it between transactions, never inside :meth:`command` or
+        :meth:`library_command`: the update would wait on the job row lock
+        that transaction holds.
+        """
+        if getattr(self._fenced, "depth", 0):
+            raise RuntimeError("report progress between transactions, not inside a fenced one")
         self.check()
         if not queue.heartbeat(self.db, self.job, lease=self._lease, progress=progress):
             self.mark_lost()

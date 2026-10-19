@@ -378,6 +378,53 @@ class RetryTests(JobsTestCase):
         self.assertIs(queue.release(self.db, again), JobState.CANCELLED)
         self.assertEqual((self.state(a), self.state(twin)), ("cancelled", "queued"))  # type: ignore[arg-type]
 
+    def test_a_job_of_an_older_epoch_is_cancelled_not_requeued_and_frees_its_keys(self) -> None:
+        # A restore advanced the epoch but left the jobs (R4 would cancel them):
+        # fail, release and the reaper end them, so none stays queued unclaimable.
+        failing = self.enqueue_library(dedupe_key="f", payload={"scope_id": "a1", "value": 1})
+        releasing = self.enqueue_library(dedupe_key="r", payload={"scope_id": "a1", "value": 2})
+        expiring = self.enqueue_library(singleton_key="s", payload={"scope_id": "a1", "value": 3})
+        jobs = {}
+        while (job := self.claim()) is not None:
+            jobs[job.id] = job
+        self.assertEqual(set(jobs), {failing, releasing, expiring})
+        self.restore()
+        self.assertIs(
+            queue.fail(self.db, jobs[failing], "LIBRARY_EPOCH_CHANGED", backoff=NO_BACKOFF),  # type: ignore[index]
+            JobState.CANCELLED,
+        )
+        self.assertIs(queue.release(self.db, jobs[releasing]), JobState.CANCELLED)  # type: ignore[index]
+        self.expire(expiring)  # type: ignore[arg-type]
+        self.assertEqual(queue.reap(self.db), 1)
+        settled = {job_id: self.row(job_id) for job_id in (failing, releasing, expiring)}  # type: ignore[misc]
+        self.assertEqual(
+            [(row["state"], row["last_error"], row["lease_id"]) for row in settled.values()],
+            [
+                ("cancelled", "LIBRARY_EPOCH_CHANGED", None),
+                ("cancelled", "library_epoch_changed", None),
+                ("cancelled", "library_epoch_changed", None),
+            ],
+        )
+        self.assertTrue(all(row["finished_at"] is not None for row in settled.values()))
+        # The new epoch's work is not coalesced into a dead row or held behind one.
+        fresh = [
+            self.enqueue_library(dedupe_key="f"),
+            self.enqueue_library(dedupe_key="r"),
+            self.enqueue_library(singleton_key="s"),
+        ]
+        self.assertNotIn(None, fresh)
+        claimed = set()
+        while (job := self.claim()) is not None:
+            claimed.add(job.id)
+        self.assertEqual(claimed, set(fresh))
+
+    def test_a_library_in_maintenance_is_not_stale(self) -> None:
+        job_id = self.enqueue_library(dedupe_key="m")
+        job = self.claim()
+        assert job is not None and job_id is not None
+        self.run_sql("UPDATE prks.libraries SET maintenance = 'restore' WHERE id = %s", (self.lib_a,))
+        self.assertIs(queue.fail(self.db, job, "MAINTENANCE", backoff=NO_BACKOFF), JobState.QUEUED)
+
     def test_last_error_is_a_code_never_a_message(self) -> None:
         self.enqueue_instance()
         job = self.claim()
