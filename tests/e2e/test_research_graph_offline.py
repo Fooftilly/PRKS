@@ -3,6 +3,7 @@ import copy
 import json
 import os
 import unittest
+from urllib.parse import urlsplit
 
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import seed_arguments_library
@@ -29,6 +30,7 @@ PERSON_RETURN_PROBE_INSTALL = r"""() => {
         ['route_commit', 'prksCommitTabRouteRender'],
         ['durable_operations', 'prksDurableOperationsOrNone'],
         ['detail_fetch', 'prksOfflineDetailFetch'],
+        ['offline_reader', 'prksOfflineReadEntity'],
         ['effective_person', 'prksEffectivePersonRecord'],
         ['pending_metadata', 'prksHydratePendingWorkMetadata'],
         ['person_render', 'renderPersonDetails'],
@@ -56,12 +58,34 @@ PERSON_RETURN_PROBE_INSTALL = r"""() => {
         if (typeof original !== 'function') continue;
         const wrapper = function (...args) {
             const started = performance.now();
-            const record = (outcome, error) => {
-                samples.push({
+            // Observe only: do not initiate cache reads, state transitions,
+            // or network requests from the profiler. The offline runtime
+            // itself retains full authority for all eligibility decisions.
+            const targetPerson = phase === 'offline_reader' && args[0] === 'person';
+            const opts = targetPerson && args[3] || {};
+            const readContext = targetPerson ? {
+                stateAtStart: window.prksOfflineRuntimeState(),
+                preferCache: opts.preferCacheWhenOffline === true,
+                domainBlocked: window.prksOfflineIsDomainBlocked(opts.domain),
+                signalAborted: !!(opts.signal && opts.signal.aborted),
+            } : null;
+            const record = (outcome, error, result) => {
+                const sample = {
                     phase, startedMs: started,
                     ms: Math.max(0, performance.now() - started),
                     outcome, errorName: error && error.name || '',
-                });
+                };
+                if (readContext) {
+                    sample.reader = {
+                        ...readContext,
+                        stateAtEnd: window.prksOfflineRuntimeState(),
+                        // These are the runtime's public, non-sensitive
+                        // provenance values, never the cached record itself.
+                        source: result && ['server', 'cache', 'unavailable']
+                            .includes(result.source) ? result.source : null,
+                    };
+                }
+                samples.push(sample);
             };
             const failed = error => {
                 record(error && error.name === 'AbortError' ? 'abort' : 'error', error);
@@ -71,11 +95,11 @@ PERSON_RETURN_PROBE_INSTALL = r"""() => {
                 const value = original.apply(this, args);
                 if (value && typeof value.then === 'function') {
                     return value.then(
-                        result => { record('ok'); return result; },
+                        result => { record('ok', null, result); return result; },
                         failed,
                     );
                 }
-                record('ok');
+                record('ok', null, value);
                 return value;
             } catch (error) {
                 failed(error);
@@ -434,6 +458,17 @@ class ResearchGraphOfflineTests(unittest.TestCase):
                     profile_person = kind == 'person' and env_flag_enabled(PROFILE_ENV)
                     if profile_person:
                         page.evaluate(PERSON_RETURN_PROBE_INSTALL)
+                        # Count requests actually observed by the browser
+                        # context, including service-worker-initiated traffic.
+                        # Store only the HTTP method, not URLs/record IDs.
+                        person_detail_methods = []
+                        detail_path = '/api/persons/' + str(rid)
+
+                        def observe_person_request(request):
+                            if urlsplit(request.url).path == detail_path:
+                                person_detail_methods.append(request.method)
+
+                        context.on('request', observe_person_request)
                     try:
                         with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_return'):
                             with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_return_click'):
@@ -459,11 +494,28 @@ class ResearchGraphOfflineTests(unittest.TestCase):
                         # Never leave a wrapped application function installed
                         # after a failed browser assertion or route transition.
                         if profile_person:
+                            context.remove_listener('request', observe_person_request)
                             samples = page.evaluate(PERSON_RETURN_PROBE_COLLECT)
                     if profile_person:
+                        reader_calls = [
+                            row['reader'] for row in samples
+                            if row['phase'] == 'offline_reader' and 'reader' in row
+                        ]
+                        self.assertTrue(reader_calls, 'no Person offline reader samples')
+                        self.assertTrue(
+                            all(r['source'] in ('server', 'cache', 'unavailable')
+                                for r in reader_calls if r['stateAtEnd'] == 'offline'),
+                            'offline reader did not report a provenance source',
+                        )
+                        print('GRAPH_PERSON_READ_PATH ' + json.dumps({
+                            'reader_calls': reader_calls,
+                            'observed_person_detail_request_count': len(person_detail_methods),
+                            'observed_person_detail_methods': person_detail_methods,
+                            'request_observer': 'Playwright browser context',
+                        }), flush=True)
                         required = {
                             'route_total', 'route_commit', 'durable_operations',
-                            'detail_fetch', 'effective_person', 'pending_metadata',
+                            'detail_fetch', 'offline_reader', 'effective_person', 'pending_metadata',
                             'person_render', 'banner_insertion',
                         }
                         observed = {sample['phase'] for sample in samples}
