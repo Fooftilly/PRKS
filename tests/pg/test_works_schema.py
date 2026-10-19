@@ -374,6 +374,14 @@ class AssetPointerTests(WorksSchemaTestCase):
                 self.refused(psycopg.errors.CheckViolation,
                              (insert, (self.lib, new_id("AS"), manifestation, work_id, kind, locator, source,
                                        digest, origin)))
+        # Nor any other fact about stored bytes.
+        for column, value in (("byte_size", 10), ("ingest_sha256", SHA), ("content_sha256", SHA),
+                              ("origin_url", "https://x/a.pdf"), ("origin_ref", "ref")):
+            with self.subTest(stream_column=column):
+                self.refused(psycopg.errors.CheckViolation, (
+                    "INSERT INTO prks.assets (library_id, id, manifestation_id, work_id, kind, url, " + column
+                    + ") VALUES (%s, %s, %s, %s, 'external_stream', 'https://x', %s)",
+                    (self.lib, new_id("AS"), manifestation, work_id, value)))
         self.sql(
             "INSERT INTO prks.assets (library_id, id, manifestation_id, work_id, kind, provider, provider_id, "
             "url) VALUES (%s, %s, %s, %s, 'external_stream', 'youtube', 'abc', 'https://x')",

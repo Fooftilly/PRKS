@@ -137,6 +137,8 @@ CREATE TABLE prks.assets (
       WHEN 'managed_file' THEN storage_locator IS NOT NULL AND content_sha256 IS NOT NULL
                                AND origin IS NOT NULL
       ELSE storage_locator IS NULL AND source_locator IS NULL AND origin IS NULL
+               AND byte_size IS NULL AND ingest_sha256 IS NULL AND content_sha256 IS NULL
+               AND origin_url IS NULL AND origin_ref IS NULL
     END),
   CONSTRAINT assets_derived_from_check CHECK (derived_from_asset_id <> id),
   CONSTRAINT assets_supersedes_check CHECK (supersedes_asset_id <> id),
