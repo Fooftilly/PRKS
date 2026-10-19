@@ -101,7 +101,7 @@ class JobRun:
 
     @property
     def lost(self) -> bool:
-        """The lease is known to be lost; the handler should stop."""
+        """The lease is known to be lost; the handler should stop (its result is discarded)."""
         return self._lost.is_set()
 
     def mark_lost(self) -> None:
@@ -256,8 +256,11 @@ def run_job(
     except LeaseLost:
         return _log(job, Outcome.LOST)
     except Exception as exc:
+        if run.lost:
+            # Abandoned (a worker stop): its lease may still match, but the run was handed back.
+            return _log(job, Outcome.LOST)
         return _failed(db, job, queue.error_code(exc), backoff)
-    if not queue.complete(db, job):
+    if run.lost or not queue.complete(db, job):
         return _log(job, Outcome.LOST)
     return _log(job, Outcome.SUCCEEDED)
 

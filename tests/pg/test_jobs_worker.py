@@ -256,6 +256,38 @@ class GracefulStopTests(WorkerTestCase):
         row = self.row(job_id)  # type: ignore[arg-type]
         self.assertEqual(row["state"], "running")  # left for its lease to expire
 
+    def test_an_abandoned_run_that_stops_on_lost_is_neither_completed_nor_failed(self) -> None:
+        # Its lease still matches until it expires: stopping as ``lost`` asks
+        # must not record the unfinished run succeeded, or spend an attempt.
+        for ending in ("return", "raise"):
+            with self.subTest(ending=ending):
+                inside, go = threading.Event(), threading.Event()
+
+                def handler(
+                    run: JobRun, ending: str = ending,
+                    inside: threading.Event = inside, go: threading.Event = go,
+                ) -> None:
+                    inside.set()
+                    go.wait(WAIT)
+                    if run.lost:
+                        if ending == "raise":
+                            raise RuntimeError("stopped")
+                        return
+                    run.command(lambda tx: tx.execute(INSERT_EFFECT, ("done",)))
+
+                self.registry.register(f"test.{ending}", handler)
+                job_id = self.enqueue_instance(kind=f"test.{ending}")
+                worker = self.start_worker(stop_grace=timedelta(0))
+                self.assertTrue(inside.wait(WAIT))
+                with patch.object(queue, "release", side_effect=DatabaseUnavailableError()):
+                    self.stop_worker(worker)
+                go.set()
+                wait_until(lambda w=worker: w.stats.snapshot()["lost"] == 1, "the abandoned handler to finish")
+                row = self.row(job_id)  # type: ignore[arg-type]
+                self.assertEqual((row["state"], row["attempts"], row["last_error"]), ("running", 1, None))
+                self.assertEqual(self.effects(), [])
+                self.run_sql("UPDATE prks.jobs SET state = 'cancelled', finished_at = now() WHERE state = 'running'")
+
     def test_sigterm_lets_the_running_job_finish_then_the_process_exits(self) -> None:
         go_file = os.path.join(self.tmp_dir(), "go")
         job_id = self.enqueue_instance(kind="test.child", payload={"go": go_file})
