@@ -414,19 +414,32 @@ class WorkerStartTests(RootPairingTestCase):
         self.assertTrue(made.wait(WAIT))
         return state
 
-    def test_a_root_without_a_marker_is_refused_before_anything_is_created_in_it(self) -> None:
+    def test_a_worker_waits_for_web_to_bind_the_root_and_creates_nothing_meanwhile(self) -> None:
+        # A first run: the worker may start before web has created and bound the root.
         name = self.database()
         registry, ran = self.counting_registry()
-        unbound = os.path.join(self.tmp, "typo")
-        os.mkdir(unbound)
-        for root, reason in ((unbound, "root_unbound"), (os.path.join(self.tmp, "missing"), "root_missing")):
-            with self.subTest(reason=reason):
-                state = self.worker_main(name, root, registry)
-                self.assertEqual(self.finish(state), EXIT_REFUSED)
-                self.assertIn(f"({reason})", state["stderr"].getvalue())
-        self.assertEqual(os.listdir(unbound), [])
-        self.assertFalse(os.path.exists(os.path.join(self.tmp, "missing")))
-        self.assertFalse(ran.is_set())
+        root = os.path.join(self.tmp, "first-run")
+        with self.assertLogs("prks.jobs", "WARNING") as logs:
+            state = self.worker_main(name, root, registry)
+            worker = state["worker"]
+
+            def waiting(reason: str) -> bool:
+                return any(f"worker_waiting reason={reason}" in line for line in logs.output)
+
+            wait_until(lambda: waiting("root_missing"), "the worker to wait for the root")
+            os.mkdir(root)  # there, but not bound yet (an empty mount, or a mistyped path)
+            wait_until(lambda: waiting("root_unbound"), "the worker to wait for the marker")
+            self.assertEqual(os.listdir(root), [])  # no .prks-maintenance/ in it
+            os.rmdir(root)
+            self.new_root("first-run")  # web binds the root
+            wait_until(lambda: waiting("setup_pending"), "the worker to wait for setup")
+        self.assertFalse(worker.started.is_set())
+        job_id = self.enqueue(name)
+        self.bootstrap(name, root)
+        self.assertTrue(worker.started.wait(WAIT))
+        self.assertTrue(ran.wait(WAIT))
+        wait_until(lambda: self.job_state(name, job_id) == "succeeded", "the job to finish")
+        self.assertEqual(self.finish(state), EXIT_OK)
 
     def stop_main(self, state: dict[str, Any]) -> None:
         worker = state.get("worker")

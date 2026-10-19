@@ -7,12 +7,14 @@ poll as the fallback, and on each idle tick it runs the reaper and, at most
 once per interval, enqueues the deduplicated ``jobs.prune``.
 
 **Start.** The worker claims nothing until its start check says so. The
-``prks worker`` command (:func:`main`) takes the root's **shared**
-``root.lock`` for the whole run. Under it, the check first verifies the
-schema (§4.4: the database applied exactly this code's schema files): while
-the database is not migrated or a file is pending it waits, and a schema
-newer than the code (or a changed, removed or out-of-order file) stops it.
-Only then does it run ``root_pairing.start_process(…, bump=True)``: while setup is ``unconfigured`` or ``bootstrapping``
+check first verifies the schema (§4.4: the database applied exactly this
+code's schema files): while the database is not migrated or a file is
+pending it waits, and a schema newer than the code (or a changed, removed or
+out-of-order file) stops it. The ``prks worker`` command (:func:`main`) then
+joins the root: while it is missing or has no ``prks-root.json`` (``web``
+has not bound it yet) the worker waits and creates nothing there; once it
+is bound, the worker takes its **shared** ``root.lock`` for the rest of the
+run. Only then does it run ``root_pairing.start_process(…, bump=True)``: while setup is ``unconfigured`` or ``bootstrapping``
 it reports :attr:`~backend.domain.identity.root_pairing.StartStatus.SETUP_PENDING`,
 and the worker checks again on its poll; once setup is ready the check
 reconciles and bumps once, and the worker starts claiming. A refusal that is
@@ -368,16 +370,15 @@ def _open_database(environ: Mapping[str, str]) -> Database:
 def root_start_check(
     db: Database,
     *,
-    root: str,
-    lease: SharedFileLock,
+    root: JoinedRoot,
     testing: bool,
     schema_dir: str = SCHEMA_DIR,
 ) -> StartCheck:
     """§4.4 and §11.1 for a worker: the schema check, then the pairing check and bump.
 
-    Waits while the schema is not migrated yet or setup is pending; the
-    pairing is never checked or bumped against a schema this code does not
-    match.
+    Waits while the schema is not migrated yet, the root is not bound yet or
+    setup is pending; the pairing is never checked or bumped against a
+    schema this code does not match.
     """
 
     def check() -> bool:
@@ -385,8 +386,9 @@ def root_start_check(
             verify_schema(db.config.conninfo, directory=schema_dir)
         except MigrationError as exc:
             raise StartRefused(exc.reason, exc.message, retryable=exc.reason in _SCHEMA_WAIT) from None
+        lease = root.lease()
         try:
-            started = root_pairing.start_process(db, root=root, lease=lease, testing=testing, bump=True)
+            started = root_pairing.start_process(db, root=root.path, lease=lease, testing=testing, bump=True)
         except RootPairingRefused as exc:
             raise StartRefused(exc.reason, exc.message, retryable=exc.retryable) from None
         return started.status is root_pairing.StartStatus.READY
@@ -409,21 +411,52 @@ def _install_signals(worker: Worker) -> None:
     signal.signal(signal.SIGINT, handle)
 
 
-def _unbound_root_reason(root: str) -> Optional[str]:
-    """Why ``root`` is not a PRKS storage root, read-only; ``None`` when it carries a marker.
+_ROOT_WAIT = {"root_missing", "root_unbound"}
 
-    A worker only ever joins a root the web process already bound, so a
-    missing directory or one without ``prks-root.json`` (a typo) is refused
-    before anything is created in it. The start check re-reads the marker
+
+class JoinedRoot:
+    """The data root a worker joins, and its shared lease once the root is bound.
+
+    The web process binds a new root (it creates ``prks-root.json``); a
+    worker only joins one. Until the marker is there, :meth:`lease` refuses
+    retryably and creates nothing in the directory, so a worker started
+    before ``web`` waits, and one given a mistyped root waits with a
+    visible reason without touching it. The start check re-reads the marker
     under the lease.
     """
-    if not os.path.isdir(root):
-        return "root_missing"
-    try:
-        marker = read_marker(root)
-    except StorageRootError as exc:
-        return exc.reason
-    return "root_unbound" if marker is None else None
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self._lease: Optional[SharedFileLock] = None
+
+    def lease(self) -> SharedFileLock:
+        if self._lease is None:
+            reason = self._unbound_reason()
+            if reason is not None:
+                raise StartRefused(
+                    reason, f"The data root cannot be used ({reason}).", retryable=reason in _ROOT_WAIT
+                )
+            try:
+                self._lease = acquire_shared_root_lease(self.path)
+            except StorageRootError as exc:
+                raise StartRefused(
+                    exc.reason, f"The data root cannot be used ({exc.reason}).", retryable=False
+                ) from None
+        return self._lease
+
+    def release(self) -> None:
+        if self._lease is not None:
+            self._lease.release()
+            self._lease = None
+
+    def _unbound_reason(self) -> Optional[str]:
+        if not os.path.isdir(self.path):
+            return "root_missing"
+        try:
+            marker = read_marker(self.path)
+        except StorageRootError as exc:
+            return exc.reason
+        return "root_unbound" if marker is None else None
 
 
 def main(
@@ -447,11 +480,7 @@ def main(
         args = _parser().parse_args(list(sys.argv[1:] if argv is None else argv))
     except SystemExit as exc:
         return EXIT_USAGE if exc.code else EXIT_OK
-    root = os.path.realpath(os.path.abspath(args.root))
-    unusable = _unbound_root_reason(root)
-    if unusable is not None:  # before the lease, which would create .prks-maintenance/ there
-        print(f"prks worker: the data root cannot be used ({unusable}).", file=err)
-        return EXIT_REFUSED
+    root = JoinedRoot(os.path.realpath(os.path.abspath(args.root)))
     try:
         db = open_database(env)
     except DatabaseConfigError as exc:
@@ -461,20 +490,12 @@ def main(
         print("prks worker: the database cannot be reached.", file=err)
         return EXIT_REFUSED
     try:
-        lease = acquire_shared_root_lease(root)
-    except StorageRootError as exc:
-        db.close()
-        print(f"prks worker: the data root cannot be used ({exc.reason}).", file=err)
-        return EXIT_REFUSED
-    try:
         with db:
             worker = Worker(
                 db,
                 registry=registry,
                 settings=settings,
-                start_check=root_start_check(
-                    db, root=root, lease=lease, testing=bool(args.testing), schema_dir=schema_dir
-                ),
+                start_check=root_start_check(db, root=root, testing=bool(args.testing), schema_dir=schema_dir),
             )
             on_worker(worker)
             LOGGER.info("worker_starting name=%s", worker.name)
@@ -483,7 +504,7 @@ def main(
         print(f"prks worker: {exc.message}", file=err)
         return EXIT_REFUSED
     finally:
-        lease.release()
+        root.release()
     LOGGER.info("worker_stopped")
     return EXIT_OK
 
