@@ -238,6 +238,22 @@ class GracefulStopTests(WorkerTestCase):
         wait_until(lambda: worker.stats.snapshot()["lost"] == 1, "the abandoned handler to finish")
         self.assertEqual(self.effects(), [])
 
+    def test_a_release_that_fails_still_abandons_the_run(self) -> None:
+        # The handler's own transaction or an outage can make the release fail:
+        # the run is marked lost anyway, so its heartbeat stops and it writes nothing.
+        inside, go = self.blocking_handler()
+        job_id = self.enqueue_instance()
+        worker = self.start_worker(stop_grace=timedelta(0))
+        self.assertTrue(inside.wait(WAIT))
+        with patch.object(queue, "release", side_effect=DatabaseUnavailableError()):
+            self.stop_worker(worker)
+        self.assertEqual(worker.stats.snapshot()["errors"], 1)
+        go.set()
+        wait_until(lambda: worker.stats.snapshot()["lost"] == 1, "the abandoned handler to finish")
+        self.assertEqual(self.effects(), [])
+        row = self.row(job_id)  # type: ignore[arg-type]
+        self.assertEqual(row["state"], "running")  # left for its lease to expire
+
     def test_sigterm_lets_the_running_job_finish_then_the_process_exits(self) -> None:
         go_file = os.path.join(self.tmp_dir(), "go")
         job_id = self.enqueue_instance(kind="test.child", payload={"go": go_file})

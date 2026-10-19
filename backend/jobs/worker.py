@@ -59,7 +59,7 @@ from backend.jobs.diagnostics import WorkerStats
 from backend.jobs.handlers import REGISTRY, HandlerRegistry
 from backend.jobs.prune import PRUNE_KIND  # importing it registers jobs.prune
 from backend.jobs.queue import DEFAULT_BACKOFF, DEFAULT_LEASE, Backoff, ClaimedJob
-from backend.jobs.runner import Outcome, run_job
+from backend.jobs.runner import JobRun, Outcome, run_job
 from backend.storage.errors import StorageRootError
 from backend.storage.file_lock import SharedFileLock
 from backend.storage.root_binding import acquire_shared_root_lease
@@ -242,17 +242,24 @@ class Worker:
         if self._stop.is_set():  # stopped between the claim and here
             self._job_done.set()
         finished = threading.Event()
+        started = threading.Event()
+        runs: list[JobRun] = []
+
+        def begin(run: JobRun) -> None:
+            runs.append(run)
+            started.set()
 
         def body() -> None:
             try:
                 outcome = run_job(
                     self.db, job, registry=self.registry, lease=self.settings.lease,
-                    backoff=self.settings.backoff,
+                    backoff=self.settings.backoff, on_start=begin,
                 )
                 self.stats.add(_COUNTER[outcome])
             except DatabaseError as exc:  # the outcome could not be recorded; the lease expires
                 self._error("record", exc)
             finally:
+                started.set()
                 finished.set()
                 self._job_done.set()
 
@@ -266,6 +273,12 @@ class Worker:
         if finished.wait(self.settings.stop_grace.total_seconds()):
             thread.join()
             return
+        started.wait()  # set before the handler runs, so promptly
+        # Abandoned whether or not the release is recorded: its heartbeat
+        # stops and its fenced transactions are refused from now on, so a
+        # lease the release could not clear simply expires.
+        for run in runs:
+            run.mark_lost()
         self._release(job)
 
     def _release(self, job: ClaimedJob) -> None:

@@ -231,17 +231,22 @@ def run_job(
     lease: timedelta = DEFAULT_LEASE,
     heartbeat_every: Optional[timedelta] = None,
     backoff: Backoff = DEFAULT_BACKOFF,
+    on_start: Optional[Callable[[JobRun], None]] = None,
 ) -> Outcome:
     """Run ``job``'s handler and record its outcome; never raises for a handler error.
 
     ``lease`` must be the lease the job was claimed with. The heartbeat runs
-    every third of it unless ``heartbeat_every`` says otherwise.
+    every third of it unless ``heartbeat_every`` says otherwise. ``on_start``
+    receives the :class:`JobRun` before the handler runs, so a worker can
+    :meth:`~JobRun.mark_lost` it on a stop (which also ends its heartbeat).
     """
     interval = heartbeat_every if heartbeat_every is not None else lease / 3
     if lease <= timedelta(0) or interval <= timedelta(0):
         # A zero wait would make the heartbeat thread spin on the database.
         raise ValueError("the lease and the heartbeat interval must be positive")
     run = JobRun(db, job, lease=lease)
+    if on_start is not None:
+        on_start(run)
     fn = registry.get(job.kind)
     if fn is None:
         return _failed(db, job, "unknown_kind", backoff)
