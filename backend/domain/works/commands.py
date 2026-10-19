@@ -44,6 +44,16 @@ VALUES (%(library_id)s, %(asset_id)s, %(manifestation_id)s, %(work_id)s, %(kind)
         %(provider)s, %(provider_id)s, %(url)s, %(media_type)s, %(byte_size)s, %(sha256)s, %(sha256)s,
         %(origin)s, %(thumb_page)s, %(thumb_url)s)
 """
+# One data root serves every Library of the instance (§6.2), so a storage key
+# is not private to a Library by its name alone. Until L-A-1's rule that a
+# transaction adopts only keys it wrote (§11.2), create refuses a key another
+# Library's Asset already names. The read takes SERIALIZABLE predicate locks,
+# so two Libraries racing to claim one key cannot both commit.
+_LOCATOR_OF_ANOTHER_LIBRARY: LiteralString = """
+SELECT 1 FROM prks.assets
+WHERE storage_locator = %(locator)s AND library_id <> %(library_id)s
+LIMIT 1
+"""
 _INSERT_NOTE: LiteralString = """
 INSERT INTO prks.work_notes (library_id, work_id, kind, body)
 VALUES (%(library_id)s, %(work_id)s, %(kind)s, %(body)s)
@@ -133,6 +143,9 @@ def _insert_asset(scope: LibraryScope, ids: dict[str, Optional[str]], asset: New
         "thumb_url": asset.thumb_url,
     }
     if isinstance(source, ManagedFile):
+        if scope.execute(_LOCATOR_OF_ANOTHER_LIBRARY, {"locator": source.storage_locator}).fetchone():
+            # Worded like a missing file: the name of another Library's file is not confirmed.
+            raise ValueError("the managed PDF does not exist")
         values.update(kind="managed_file", storage_locator=source.storage_locator, provider=None,
                       provider_id=None, url=None, byte_size=source.byte_size, sha256=source.sha256,
                       origin=source.origin)

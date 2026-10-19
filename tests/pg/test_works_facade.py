@@ -158,6 +158,50 @@ class LibraryIsolationTests(WorksFacadeTestCase):
         with facade_context.acting_as(other.context):
             self.assertEqual(len(self.library.get_all_works()), 2)
 
+    def test_a_managed_pdf_of_another_library_cannot_be_adopted(self) -> None:
+        path = self.store_pdf("p.pdf", b"%PDF-1.4\nmine\n%%EOF\n")
+        mine = self.library.add_work("Mine", file_path=path)
+        other = self.other_actor()
+        works_before = self.count("works")
+        with facade_context.acting_as(other.context):
+            with self.assertRaisesRegex(ValueError, "does not exist"):
+                self.library.add_work("Theirs", file_path=path)
+            self.assertEqual(self.library.get_all_works(), [])
+        self.assertEqual(self.count("works"), works_before)
+        self.assertEqual(self.sql("SELECT work_id FROM prks.assets WHERE storage_locator = 'p.pdf'"),
+                         [{"work_id": mine}])
+        # Within one Library two Works may still share a file, as on SQLite.
+        self.library.add_work("Mine again", file_path=path)
+
+    def test_two_libraries_racing_for_one_pdf_leave_it_with_one(self) -> None:
+        # Whatever the interleaving (one after the other, or both checks before
+        # either insert, where SERIALIZABLE retries the loser), one Library wins.
+        path = self.store_pdf("race.pdf", b"%PDF-1.4\nrace\n%%EOF\n")
+        contexts = [self.actor.context, self.other_actor().context]
+        start = threading.Barrier(2)
+        outcomes: list[str] = []
+        lock = threading.Lock()
+
+        def run(context: Any) -> None:
+            with facade_context.acting_as(context):
+                start.wait()
+                try:
+                    self.library.add_work("Race", file_path=path)
+                    outcome = "created"
+                except ValueError:
+                    outcome = "refused"
+            with lock:
+                outcomes.append(outcome)
+
+        threads = [threading.Thread(target=run, args=(context,)) for context in contexts]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(sorted(outcomes), ["created", "refused"])
+        rows = self.sql("SELECT DISTINCT library_id FROM prks.assets WHERE storage_locator = 'race.pdf'")
+        self.assertEqual(len(rows), 1)
+
 
 class CreateTests(WorksFacadeTestCase):
     def test_a_managed_pdf_is_catalogued_with_its_hash(self) -> None:
