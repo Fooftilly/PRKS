@@ -99,12 +99,12 @@ jobs:
               "graph_nav_uncached_graph",
           }
           # This diagnostic exists to attribute the Person return delay.
-          # Treat all eight core/envelope functions as required, including
+          # Treat all nine core/envelope/reader functions as required, including
           # zero-duration synchronous steps (emitted with a tiny recording
           # floor by the test). Never publish a "passing" partial profile.
           person_stages = {
               "route_total", "route_commit", "durable_operations",
-              "detail_fetch", "effective_person", "pending_metadata",
+              "detail_fetch", "offline_reader", "effective_person", "pending_metadata",
               "person_render", "banner_insertion",
           }
           expected.update(
