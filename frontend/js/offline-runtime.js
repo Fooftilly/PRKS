@@ -360,11 +360,28 @@
                 if (ineligibleEntities.has(entityKey(kind, id)) || isDomainBlocked(domain)) {
                     return { value: null, source: 'unavailable', cachedAt: null };
                 }
+                // Network failure may move ONLINE -> OFFLINE. Fence fallback
+                // against changes *after* that transition while IndexedDB is
+                // pending, not the entry token captured before the failure.
+                const fallbackConnectionToken = connectivityGeneration;
                 if (store) {
                     const cached = await store.getEntity(kind, id).catch(function () {
                         return null;
                     });
-                    if (cached) {
+                    // A route can be aborted, a mutation acknowledged or a
+                    // domain swept while this async read is pending. Never
+                    // resurrect that stale row, even after a sweep unblocks.
+                    if (options2.signal && options2.signal.aborted) {
+                        const aborted = new Error('The operation was aborted.');
+                        aborted.name = 'AbortError';
+                        throw aborted;
+                    }
+                    if (cached &&
+                        connectivityGeneration === fallbackConnectionToken &&
+                        currentEntityGeneration(kind, id) === coherenceToken &&
+                        currentDomainGeneration(domain) === domainToken &&
+                        !ineligibleEntities.has(entityKey(kind, id)) &&
+                        !isDomainBlocked(domain)) {
                         return { value: cached.value, source: 'cache', cachedAt: cached.cachedAt };
                     }
                 }
