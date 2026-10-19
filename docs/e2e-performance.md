@@ -543,6 +543,41 @@ same-runner A/B plus genuine offline/reconnect race tests before proposing
 a production change. This is diagnostic attribution, **not** an achieved
 application speedup.
 
+### Cached Person reconnect retry A/B (#776)
+
+The manual [source-Chromium workflow run #39270914591](https://github.com/Fooftilly/PRKS/actions/runs/39270914591)
+on commit `e0fd8c9` **passed**, including one excluded warm-up and
+three passing serial measured trials. Each trial used a newly isolated
+browser context and test server, warmed the Person detail in the normal
+online route, established actual Playwright offline transport, then made
+four direct runtime Person detail reads in A-B-B-A order. Each arm began
+with the runtime in `reconnecting` after an actual offline event,
+attempted the server, and returned the correct cached Person record.
+
+| Request policy | GET attempts per read | Trial median 1 | Trial median 2 | Trial median 3 | Median of trial medians |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Default coordinator retries | 3 | 0.962s | 1.011s | 1.030s | **1.011s** |
+| Existing `requestPolicy.retry=false` | 1 | 0.004s | 0.005s | 0.005s | **0.005s** |
+
+The test observes and asserts the network GET count and cached
+provenance of *each* read: **3 vs 1 GET events** in all four A/B arms.
+No production read-path or retry policy was changed. The one-attempt
+case avoided approximately 1.006 seconds per read in these controlled
+fully disconnected conditions. Because this is a tiny, source-runner,
+opt-in study, do not describe the difference as a statistically
+generalizable production speedup, a UX improvement in all network states,
+or a reason to treat `reconnecting` as `offline`.
+
+**Correctness trade-off:** `retry=false` is an existing coordinator
+contract but will abandon an initially failing server request instead
+of retrying through transient trouble. Before adopting it for a
+production Person route, test a server that fails once and succeeds
+on retry, as well as offline/online/offline races, response provenance,
+abort propagation, and People domain/record invalidation across pending
+reads. Preserve server-first behavior while reachability is uncertain
+and never bypass offline cache-coherence fences. This is **A/B evidence
+for a candidate policy**, not a proposed or deployed production fix.
+
 ### Opt-in infrastructure profiling
 
 `--profile` records per-test infrastructure phases without making ordinary runs
