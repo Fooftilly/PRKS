@@ -1357,6 +1357,9 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/domain/works/projection.py",
                 "backend/domain/works/queries.py",
                 "backend/domain/works/commands.py",
+                "backend/jobs/queue.py",
+                "backend/jobs/handlers.py",
+                "backend/jobs/runner.py",
             ),
         )
 

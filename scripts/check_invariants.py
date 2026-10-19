@@ -67,6 +67,9 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/domain/works/projection.py",
     "backend/domain/works/queries.py",
     "backend/domain/works/commands.py",
+    "backend/jobs/queue.py",
+    "backend/jobs/handlers.py",
+    "backend/jobs/runner.py",
 )
 PYRIGHT_TYPED_SLICE_INCLUDE = PYRIGHT_TYPED_SLICE_SCOPES
 PYRIGHT_TYPED_SLICE_MODES = frozenset({"basic", "standard", "strict"})

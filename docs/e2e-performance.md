@@ -483,6 +483,101 @@ This is **attribution**, not a measured production speedup; the child
 durable read and metadata timings are inclusive and must not be summed
 with their enclosing parent intervals.
 
+### Person offline read branch diagnosis (#774)
+
+[Manual real-Chromium run #39239438391](https://github.com/Fooftilly/PRKS/actions/runs/39239438391)
+on PR #774 implementation commit `ed2cbc6` completed successfully, with
+one unmeasured warm-up and three passing serial measured trials. The opt-in
+probe observed the offline reader's entry/exit state, result provenance and
+browser-context Person GET events during the Graph → Person return:
+
+| Diagnostic | Trial 1 | Trial 2 | Trial 3 |
+| --- | ---: | ---: | ---: |
+| `prksOfflineReadEntity('person', …)` inclusive ms | 1159.9 | 1047.8 | 1045.1 |
+| Total route commit ms | 1185.4 | 1073.1 | 1071.5 |
+| Reader entry state | reconnecting | reconnecting | reconnecting |
+| Reader exit state | offline | offline | offline |
+| Returned source | cache | cache | cache |
+| Browser-observed Person-detail GET events | 3 | 3 | 3 |
+
+Reader median was **1047.8 ms** and total route-commit median **1073.1 ms**.
+Every measured call opted in to cache-first reads, began with an unblocked
+People domain and an un-aborted signal, and returned `source: 'cache'`.
+The profile did not record concurrent readers or aborted route commits.
+
+**Branch attribution:** `frontend/js/offline-runtime.js` permits the
+cache-first fast path only when its state is `STATE_OFFLINE`. When the
+runtime is `STATE_RECONNECTING`, that condition fails before IndexedDB is
+queried, and `readThroughEntity` attempts the ordinary network request;
+on a network failure it can return a cached row. A reconnect probe calls
+`setState(STATE_RECONNECTING)` while checking server reachability.
+Consequently, the measured `reconnecting → offline` state transitions,
+three observed Person GET request events per trial and cached fallback
+outcomes are **consistent with the slow network-error/fallback branch**.
+The fast cache-first branch cannot run at entry while state is
+`reconnecting`. There is a second, independently inspectable contributor:
+`frontend/js/request-coordinator.js` defaults ordinary foreground GETs
+to **one initial request plus two transport retries**, with jittered
+base-backoff delays of **250 ms and 750 ms**. Its `performReadNetwork`
+retries non-abort transport failures before reporting unreachability.
+Thus three browser-observed Person GET events and about one second per
+offline-reader call strongly match the default retry path. The exact
+attempt sequence is **not independently timed within the coordinator** by
+this profile, and the request count is a window-wide observation rather
+than a per-reader transport log. A future limited experiment could use
+the existing `requestPolicy.retry = false` contract for a carefully
+scoped opt-in Person detail read under `reconnecting`, retaining its
+server-first attempt and cached fallback; however a one-attempt policy
+would be **less tolerant of transient failures** and must not be
+presented as a proven-safe production optimization without separate
+tests and a same-runner performance comparison.
+
+**Safety:** Do not turn `reconnecting` into `offline` or enable cache-first
+reads in that state without a separate correctness design and test.
+A reconnect in progress may succeed, so returning an older cached snapshot
+could defeat the existing reconnect, entity-generation or domain-fencing
+semantics; `navigator.onLine` is not authoritative. Follow-up work should
+investigate source-specific request policy or an opt-in/controlled experiment
+that preserves server-first behavior during uncertain reachability, and use
+same-runner A/B plus genuine offline/reconnect race tests before proposing
+a production change. This is diagnostic attribution, **not** an achieved
+application speedup.
+
+### Cached Person reconnect retry A/B (#776)
+
+The manual [source-Chromium workflow run #39270914591](https://github.com/Fooftilly/PRKS/actions/runs/39270914591)
+on commit `e0fd8c9` **passed**, including one excluded warm-up and
+three passing serial measured trials. Each trial used a newly isolated
+browser context and test server, warmed the Person detail in the normal
+online route, established actual Playwright offline transport, then made
+four direct runtime Person detail reads in A-B-B-A order. Each arm began
+with the runtime in `reconnecting` after an actual offline event,
+attempted the server, and returned the correct cached Person record.
+
+| Request policy | GET attempts per read | Trial median 1 | Trial median 2 | Trial median 3 | Median of trial medians |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Default coordinator retries | 3 | 0.962s | 1.011s | 1.030s | **1.011s** |
+| Existing `requestPolicy.retry=false` | 1 | 0.004s | 0.005s | 0.005s | **0.005s** |
+
+The test observes and asserts the network GET count and cached
+provenance of *each* read: **3 vs 1 GET events** in all four A/B arms.
+No production read-path or retry policy was changed. The one-attempt
+case avoided approximately 1.006 seconds per read in these controlled
+fully disconnected conditions. Because this is a tiny, source-runner,
+opt-in study, do not describe the difference as a statistically
+generalizable production speedup, a UX improvement in all network states,
+or a reason to treat `reconnecting` as `offline`.
+
+**Correctness trade-off:** `retry=false` is an existing coordinator
+contract but will abandon an initially failing server request instead
+of retrying through transient trouble. Before adopting it for a
+production Person route, test a server that fails once and succeeds
+on retry, as well as offline/online/offline races, response provenance,
+abort propagation, and People domain/record invalidation across pending
+reads. Preserve server-first behavior while reachability is uncertain
+and never bypass offline cache-coherence fences. This is **A/B evidence
+for a candidate policy**, not a proposed or deployed production fix.
+
 ### Opt-in infrastructure profiling
 
 `--profile` records per-test infrastructure phases without making ordinary runs
