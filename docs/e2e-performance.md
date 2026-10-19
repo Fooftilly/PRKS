@@ -437,6 +437,52 @@ optimizations; keep all revision/cache coherence and pending-overlay
 safeguards. The split timers are nested into the existing inclusive
 return timers and must not be summed with their parents.
 
+### Graph Person return: awaited-route diagnosis (#768)
+
+[Manual source-Chromium profile #39199744078](https://github.com/Fooftilly/PRKS/actions/runs/39199744078)
+on PR #768 head `fdf071c` passed one excluded warm-up and three
+serial measured runs. Every run produced the eight required nested
+Person-route phases, both inclusive sum/max metrics, and the chronological
+per-call trace. All normal Graph/offline and unavailable-state assertions
+passed. Results below are **browser-side `performance.now()`** timings from
+the same runner, in **milliseconds**, not Playwright IPC durations:
+
+| Awaited Person return stage | Trial 1 | Trial 2 | Trial 3 | Median |
+| --- | ---: | ---: | ---: | ---: |
+| Full route commit (inclusive) | 958.0 | 881.0 | 1085.9 | **958.0** |
+| `prksOfflineDetailFetch` (inclusive) | 928.1 | 851.7 | 1054.3 | **928.1** |
+| Durable queue reads (sum; **two calls**) | 9.6 | 10.8 | 11.8 | 10.8 |
+| Pending metadata hydration | 2.3 | 2.4 | 2.5 | 2.4 |
+| Person renderer | 6.6 | 5.5 | 5.8 | 5.8 |
+| Banner insertion (DOM operation) | 2.1 | 2.1 | 2.3 | 2.1 |
+
+The raw trace also shows one route commit, one detail fetch, one Person
+effective-profile projection and one metadata hydration per measured trial,
+with **no recorded aborts or non-abort exceptions**. No overlapping
+Person route commits were observed in these samples. Person Graph return
+wait medians were 1.009s for the inclusive return and 0.951s for the
+offline banner wait; the single-test wall median was 16.443s.
+
+**Finding:** On these three measured returns, the awaited
+`prksOfflineDetailFetch` **accounts for nearly all of the delay**.
+The legacy helper delegates to `prksOfflineReadEntity`, which can use
+an explicitly opted-in coherent IndexedDB snapshot when confirmed offline,
+or can fall back to its usual network/error-classification read-through
+path when its safety guards disallow that snapshot. **This run does not
+distinguish those internal branches or establish why one took 0.85–1.05s.**
+The next diagnostic should capture the reader's initial connectivity
+state, returned source (`cache`/`server`/`unavailable`), guarded
+cache eligibility versus read-through fallback, and relevant actual
+network attempts. Instrument only opt-in tests or the runtime's existing
+optional diagnostics, without changing connectivity/coherence/abort
+fences, cache publication, or ordinary E2E coverage. Only consider
+a production change after branch attribution and controlled same-runner
+A/B correctness evidence.
+
+This is **attribution**, not a measured production speedup; the child
+durable read and metadata timings are inclusive and must not be summed
+with their enclosing parent intervals.
+
 ### Opt-in infrastructure profiling
 
 `--profile` records per-test infrastructure phases without making ordinary runs
