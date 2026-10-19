@@ -117,18 +117,31 @@ BIBLIOGRAPHIC_FIELDS: tuple[str, ...] = (
 )
 
 
-def create_work(scope: LibraryScope, new: NewWork) -> str:
-    """Insert ``new``; returns its id. Safe to run again on a SERIALIZABLE retry."""
+_INSERT_WORK_IF_ABSENT: LiteralString = _INSERT_WORK + " ON CONFLICT (id) DO NOTHING RETURNING id"
+
+
+def create_work(scope: LibraryScope, new: NewWork, *, if_absent: bool = False) -> Optional[str]:
+    """Insert ``new``; returns its id. Safe to run again on a SERIALIZABLE retry.
+
+    ``if_absent`` is for a client-minted id (``CREATE_WORK``): when a Work
+    with that id already exists nothing is inserted and None is returned.
+    A Work a concurrent transaction committed is not visible to this
+    SERIALIZABLE one, so PostgreSQL refuses the insert as a serialization
+    failure, and the retry sees the Work.
+    """
     if (new.asset is None) != (new.asset_id is None):
         raise ValueError("an Asset needs an id, and an id needs an Asset")
     unknown = set(new.bibliographic) - set(BIBLIOGRAPHIC_FIELDS)
     if unknown:
         raise ValueError("not bibliographic fields: " + ", ".join(sorted(unknown)))
     ids = {"work_id": new.work_id, "manifestation_id": new.manifestation_id, "asset_id": new.asset_id}
-    scope.execute(_INSERT_WORK, {
-        **ids, "title": new.title, "abstract": new.abstract, "status": new.status,
-        "author_text": new.author_text,
-    })
+    work_row = {**ids, "title": new.title, "abstract": new.abstract, "status": new.status,
+                "author_text": new.author_text}
+    if if_absent:
+        if scope.execute(_INSERT_WORK_IF_ABSENT, work_row).fetchone() is None:
+            return None
+    else:
+        scope.execute(_INSERT_WORK, work_row)
     scope.execute(_INSERT_MANIFESTATION, {
         **ids, **{name: new.bibliographic.get(name) for name in BIBLIOGRAPHIC_FIELDS},
         "url": new.citation_url,
