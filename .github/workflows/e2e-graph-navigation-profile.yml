@@ -62,7 +62,7 @@ jobs:
         run: python tests/e2e/install_browser.py
 
       - name: Profile isolated Graph navigation with one unmeasured warm-up
-        if: ${{ inputs.mode != 'person_retry_ab' && github.ref != 'refs/heads/test/person-reconnect-retry-ab-740' }}
+        if: ${{ inputs.mode != 'person_retry_ab' }}
         shell: bash
         env:
           PRKS_E2E_PROFILE: "1"
@@ -172,7 +172,7 @@ jobs:
           PY
 
       - name: Compare Person retry policies in real offline Chromium
-        if: ${{ inputs.mode == 'person_retry_ab' || github.ref == 'refs/heads/test/person-reconnect-retry-ab-740' }}
+        if: ${{ inputs.mode == 'person_retry_ab' }}
         shell: bash
         env:
           TARGET: tests.e2e.profile_person_retry_ab.PersonReconnectRetryExperiment.test_cached_person_reader_retry_policy_ab
