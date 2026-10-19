@@ -2428,12 +2428,16 @@ async function run() {
                     return transport(attempts.length, url, opts);
                 },
             });
+            let rejectProbe = null;
             const runtime = mod.createPrksOfflineRuntime({
                 store: store,
-                // A real reachability probe begins at init(). Hold its response
-                // open so the Person read is provably in 'reconnecting'.
+                // A real reachability probe begins at init(). Its response
+                // is held open by default, but tests can reject it to simulate
+                // an unsuccessful reconnecting -> offline transition.
                 prksRequest: function (url, opts, policy) {
-                    if (url === '/api/settings') return new Promise(function () {});
+                    if (url === '/api/settings') {
+                        return new Promise(function (_resolve, reject) { rejectProbe = reject; });
+                    }
                     return coordinator.prksRequest(url, opts, policy);
                 },
                 setTimeout: noopSetTimeout, clearTimeout: noopClearTimeout,
@@ -2442,7 +2446,11 @@ async function run() {
             runtime.noteRequestFailure();
             runtime.init();
             assertEq('Person test starts with a real pending probe', runtime.getState(), 'reconnecting');
-            return { store: store, runtime: runtime, coordinator: coordinator, attempts: attempts };
+            return {
+                store: store, runtime: runtime, coordinator: coordinator,
+                attempts: attempts,
+                failProbe: function () { rejectProbe(new TypeError('probe unreachable')); },
+            };
         }
 
         function readPerson(c, options) {
@@ -2561,6 +2569,23 @@ async function run() {
             return { c, pending, resume };
         }
 
+        // A failed connectivity probe is not a successful reconnect.
+        // A pending fallback must still return a valid cached row through
+        // reconnecting -> offline, and even an offline -> reconnecting hint.
+        {
+            const f = await pausedCacheFallback();
+            f.c.failProbe();
+            await new Promise(function (resolve) { setImmediate(resolve); });
+            assertEq('failed probe settles offline during Person cache read',
+                f.c.runtime.getState(), 'offline');
+            f.c.runtime.init();
+            assertEq('fresh offline hint starts another pending probe', f.c.runtime.getState(), 'reconnecting');
+            f.resume();
+            const r = await f.pending;
+            assertEq('unsuccessful reconnect probe does not hide valid cached Person', r.source, 'cache');
+            assertEq('failed probe retains cached Person content', r.value, oldPerson);
+        }
+
         {
             const f = await pausedCacheFallback();
             f.c.runtime.markEntityChanged('person', 'P-1');
@@ -2593,6 +2618,15 @@ async function run() {
             const r = await f.pending;
             assertEq('reconnect while fallback cache pending fails closed', r.source, 'unavailable');
             assertEq('reconnected Person fallback cannot show stale record', r.value, null);
+        }
+
+        {
+            const f = await pausedCacheFallback();
+            f.c.runtime.noteRequestSuccess();
+            f.c.runtime.noteRequestFailure();
+            f.resume();
+            const r = await f.pending;
+            assertEq('online-offline cycle fences pending stale Person', r.source, 'unavailable');
         }
 
         {
@@ -2642,6 +2676,18 @@ async function run() {
             const r = await f.pending;
             assertEq('unchanged People list still permits valid cached fallback', r.source, 'cache');
             assertEq('unchanged People list preserves its cached contents', r.value, [oldPerson]);
+        }
+
+        {
+            const f = await pausedListFallback();
+            f.c.failProbe();
+            await new Promise(function (resolve) { setImmediate(resolve); });
+            assertEq('failed probe settles offline during People list read',
+                f.c.runtime.getState(), 'offline');
+            f.resume();
+            const r = await f.pending;
+            assertEq('offline transition still serves valid cached People list', r.source, 'cache');
+            assertEq('failed probe retains People list contents', r.value, [oldPerson]);
         }
 
         {
