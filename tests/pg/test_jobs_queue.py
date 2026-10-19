@@ -437,6 +437,7 @@ class SingletonTests(JobsTestCase):
         errors: list[BaseException] = []
         overlaps: list[int] = []
         done: list[uuid.UUID] = []
+        completed: list[bool] = []
         lock = threading.Lock()
 
         def work(db: object, name: str) -> None:
@@ -449,8 +450,9 @@ class SingletonTests(JobsTestCase):
                         "SELECT count(*) AS n FROM prks.jobs WHERE state = 'running' AND singleton_key = 'k'"
                     )
                     overlaps.append(int(rows[0]["n"]))
-                    self.assertTrue(queue.complete(db, job))  # type: ignore[arg-type]
+                    # Recorded, not asserted here: the thread's errors are checked below.
                     with lock:
+                        completed.append(queue.complete(db, job))  # type: ignore[arg-type]
                         done.append(job.id)
             except BaseException as exc:  # noqa: BLE001 - asserted below
                 errors.append(exc)
@@ -465,6 +467,7 @@ class SingletonTests(JobsTestCase):
         for thread in threads:
             thread.join(60)
         self.assertEqual(errors, [])
+        self.assertTrue(all(completed))
         self.assertLessEqual(max(overlaps), 1)
         # A worker that finds only a held key stops; whatever is left still runs, one at a time.
         while (job := self.claim("C")) is not None:
