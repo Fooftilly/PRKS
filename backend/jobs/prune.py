@@ -46,6 +46,6 @@ def prune_jobs(run: JobRun) -> None:
     while True:
         n = run.command(batch)
         deleted += n
+        run.heartbeat({"deleted": deleted})
         if n < BATCH:
             return
-        run.heartbeat({"deleted": deleted})

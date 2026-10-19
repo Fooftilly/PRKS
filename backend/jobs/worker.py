@@ -8,8 +8,11 @@ once per interval, enqueues the deduplicated ``jobs.prune``.
 
 **Start.** The worker claims nothing until its start check says so. The
 ``prks worker`` command (:func:`main`) takes the root's **shared**
-``root.lock`` for the whole run and runs ``root_pairing.start_process(…,
-bump=True)`` under it: while setup is ``unconfigured`` or ``bootstrapping``
+``root.lock`` for the whole run. Under it, the check first verifies the
+schema (§4.4: the database applied exactly this code's schema files): while
+the database is not migrated or a file is pending it waits, and a schema
+newer than the code (or a changed, removed or out-of-order file) stops it.
+Only then does it run ``root_pairing.start_process(…, bump=True)``: while setup is ``unconfigured`` or ``bootstrapping``
 it reports :attr:`~backend.domain.identity.root_pairing.StartStatus.SETUP_PENDING`,
 and the worker checks again on its poll; once setup is ready the check
 reconciles and bumps once, and the worker starts claiming. A refusal that is
@@ -52,6 +55,7 @@ import psycopg
 from backend.db.config import load_database_config
 from backend.db.database import Database
 from backend.db.errors import DatabaseConfigError, DatabaseError
+from backend.db.migrate import SCHEMA_DIR, MigrationError, verify_schema
 from backend.domain.identity import root_pairing
 from backend.domain.identity.errors import RootPairingRefused
 from backend.jobs import queue
@@ -69,8 +73,22 @@ LOGGER = logging.getLogger("prks.jobs")
 LISTEN_APPLICATION_NAME = "prks-worker-listen"
 
 # The start check: True once the process may claim, False while setup is
-# pending; raises RootPairingRefused when the process must not run.
+# pending; raises StartRefused when the process must not run yet (retryable)
+# or at all.
 StartCheck = Callable[[], bool]
+
+# Schema states a later ``migrate`` resolves: the worker waits for them.
+_SCHEMA_WAIT = frozenset({"not_migrated", "pending", "database_unavailable"})
+
+
+class StartRefused(Exception):
+    """The start check refused; ``reason`` is stable, ``message`` fixed text."""
+
+    def __init__(self, reason: str, message: str, *, retryable: bool) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.message = message
+        self.retryable = retryable
 
 _COUNTER = {
     Outcome.SUCCEEDED: "succeeded",
@@ -182,7 +200,7 @@ class Worker:
         return self._stop.is_set()
 
     def run(self) -> None:
-        """Run until :meth:`stop`; raises ``RootPairingRefused`` when the start check refuses."""
+        """Run until :meth:`stop`; raises :class:`StartRefused` when the start check refuses."""
         poll = self.settings.poll.total_seconds()
         listener = _Listener(self.db.config.conninfo, self._wake, retry=poll)
         listener.start()
@@ -216,7 +234,7 @@ class Worker:
                 if self._start_check():
                     return True
                 reason = "setup_pending"
-            except RootPairingRefused as exc:
+            except StartRefused as exc:
                 if not exc.retryable:
                     raise
                 reason = exc.reason
@@ -341,12 +359,29 @@ def _open_database(environ: Mapping[str, str]) -> Database:
 
 
 def root_start_check(
-    db: Database, *, root: str, lease: SharedFileLock, testing: bool
+    db: Database,
+    *,
+    root: str,
+    lease: SharedFileLock,
+    testing: bool,
+    schema_dir: str = SCHEMA_DIR,
 ) -> StartCheck:
-    """§11.1 for a worker: check and bump once setup is ready; pending until then."""
+    """§4.4 and §11.1 for a worker: the schema check, then the pairing check and bump.
+
+    Waits while the schema is not migrated yet or setup is pending; the
+    pairing is never checked or bumped against a schema this code does not
+    match.
+    """
 
     def check() -> bool:
-        started = root_pairing.start_process(db, root=root, lease=lease, testing=testing, bump=True)
+        try:
+            verify_schema(db.config.conninfo, directory=schema_dir)
+        except MigrationError as exc:
+            raise StartRefused(exc.reason, exc.message, retryable=exc.reason in _SCHEMA_WAIT) from None
+        try:
+            started = root_pairing.start_process(db, root=root, lease=lease, testing=testing, bump=True)
+        except RootPairingRefused as exc:
+            raise StartRefused(exc.reason, exc.message, retryable=exc.retryable) from None
         return started.status is root_pairing.StartStatus.READY
 
     return check
@@ -376,6 +411,7 @@ def main(
     settings: WorkerSettings = WorkerSettings(),
     registry: HandlerRegistry = REGISTRY,
     on_worker: Callable[[Worker], Any] = _install_signals,
+    schema_dir: str = SCHEMA_DIR,
 ) -> int:
     """``prks worker --root ROOT [--testing]``; returns the exit code.
 
@@ -408,12 +444,14 @@ def main(
                 db,
                 registry=registry,
                 settings=settings,
-                start_check=root_start_check(db, root=root, lease=lease, testing=bool(args.testing)),
+                start_check=root_start_check(
+                    db, root=root, lease=lease, testing=bool(args.testing), schema_dir=schema_dir
+                ),
             )
             on_worker(worker)
             LOGGER.info("worker_starting name=%s", worker.name)
             worker.run()
-    except RootPairingRefused as exc:
+    except StartRefused as exc:
         print(f"prks worker: {exc.message}", file=err)
         return EXIT_REFUSED
     finally:

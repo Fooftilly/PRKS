@@ -23,6 +23,8 @@ from backend.jobs import diagnostics, prune, queue
 from backend.jobs.handlers import HandlerRegistry
 from backend.jobs.queue import LeaseLost
 from backend.jobs.runner import JobRun, run_job
+from backend.db.migrate import SCHEMA_DIR, migrate
+from backend.jobs import worker as worker_module
 from backend.jobs.worker import EXIT_OK, EXIT_REFUSED, Worker, WorkerSettings, main
 from backend.storage import root_binding, root_marker
 from backend.storage.config import StorageConfig
@@ -309,7 +311,9 @@ class SettingsTests(WorkerTestCase):
 
 
 class WorkerStartTests(RootPairingTestCase):
-    def worker_main(self, name: str, root: str, registry: HandlerRegistry, *extra: str) -> dict[str, Any]:
+    def worker_main(
+        self, name: str, root: str, registry: HandlerRegistry, *extra: str, schema_dir: str = SCHEMA_DIR
+    ) -> dict[str, Any]:
         """Run ``prks worker`` on a thread; returns its worker, thread, exit code and stderr."""
         state: dict[str, Any] = {"stderr": io.StringIO(), "exit": []}
         made = threading.Event()
@@ -331,6 +335,7 @@ class WorkerStartTests(RootPairingTestCase):
                     settings=WorkerSettings(lease=LEASE, poll=timedelta(milliseconds=50)),
                     registry=registry,
                     on_worker=on_worker,
+                    schema_dir=schema_dir,
                 )
             )
             made.set()
@@ -446,6 +451,53 @@ class WorkerStartTests(RootPairingTestCase):
         self.assertTrue(state["worker"].started.wait(WAIT))
         self.assertTrue(ran.wait(WAIT))
         self.assertEqual(self.finish(state), EXIT_OK)
+
+    def schema_with_pending_file(self) -> str:
+        directory = tempfile.mkdtemp(prefix="prks-schema-")
+        self.addCleanup(shutil.rmtree, directory, True)
+        for entry in os.listdir(SCHEMA_DIR):
+            if entry.endswith(".sql"):
+                shutil.copy(os.path.join(SCHEMA_DIR, entry), directory)
+        with open(os.path.join(directory, "990_later.sql"), "w", encoding="utf-8") as handle:
+            handle.write("CREATE TABLE prks.later (id int);\n")
+        return directory
+
+    def test_a_worker_newer_than_the_schema_waits_for_migrate_without_bumping(self) -> None:
+        name, root = self.bootstrapped()
+        before = self.db_state(name)
+        job_id = self.enqueue(name)
+        registry, ran = self.counting_registry()
+        directory = self.schema_with_pending_file()
+        with patch.object(worker_module, "verify_schema", wraps=worker_module.verify_schema) as checks:
+            state = self.worker_main(name, root, registry, schema_dir=directory)
+            wait_until(lambda: checks.call_count >= 3, "several schema checks")
+            self.assertFalse(state["worker"].started.is_set())
+            self.assertEqual(self.job_state(name, job_id), "queued")
+            self.assertEqual(self.db_state(name), before)  # no bump against the old schema
+            migrate(self.harness.conninfo(name), directory=directory)
+            self.assertTrue(state["worker"].started.wait(WAIT))
+        self.assertTrue(ran.wait(WAIT))
+        self.assert_paired(name, root, before.generation + 1)
+        self.assertEqual(self.finish(state), EXIT_OK)
+
+    def test_a_worker_older_than_the_schema_is_refused_and_claims_nothing(self) -> None:
+        name, root = self.bootstrapped()
+        before = self.db_state(name)
+        job_id = self.enqueue(name)
+        self.db(name).command(
+            lambda tx: tx.execute(
+                "INSERT INTO prks.schema_migrations (version, name, sha256) VALUES (999, 'future', %s)",
+                ("0" * 64,),
+            )
+        )
+        registry, ran = self.counting_registry()
+        state = self.worker_main(name, root, registry)
+        state["thread"].join(WAIT)
+        self.assertEqual(state["exit"], [EXIT_REFUSED])
+        self.assertIn("newer than this PRKS", state["stderr"].getvalue())
+        self.assertFalse(ran.is_set())
+        self.assertEqual(self.job_state(name, job_id), "queued")
+        self.assertEqual(self.db_state(name), before)
 
     def test_a_root_held_exclusively_is_refused(self) -> None:
         name, root = self.bootstrapped()
