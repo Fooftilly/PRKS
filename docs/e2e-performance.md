@@ -483,6 +483,53 @@ This is **attribution**, not a measured production speedup; the child
 durable read and metadata timings are inclusive and must not be summed
 with their enclosing parent intervals.
 
+### Person offline read branch diagnosis (#774)
+
+[Manual real-Chromium run #39239438391](https://github.com/Fooftilly/PRKS/actions/runs/39239438391)
+on PR #774 implementation commit `ed2cbc6` completed successfully, with
+one unmeasured warm-up and three passing serial measured trials. The opt-in
+probe observed the offline reader's entry/exit state, result provenance and
+browser-context Person GET events during the Graph → Person return:
+
+| Diagnostic | Trial 1 | Trial 2 | Trial 3 |
+| --- | ---: | ---: | ---: |
+| `prksOfflineReadEntity('person', …)` inclusive ms | 1159.9 | 1047.8 | 1045.1 |
+| Total route commit ms | 1185.4 | 1073.1 | 1071.5 |
+| Reader entry state | reconnecting | reconnecting | reconnecting |
+| Reader exit state | offline | offline | offline |
+| Returned source | cache | cache | cache |
+| Browser-observed Person-detail GET events | 3 | 3 | 3 |
+
+Reader median was **1047.8 ms** and total route-commit median **1073.1 ms**.
+Every measured call opted in to cache-first reads, began with an unblocked
+People domain and an un-aborted signal, and returned `source: 'cache'`.
+The profile did not record concurrent readers or aborted route commits.
+
+**Branch attribution:** `frontend/js/offline-runtime.js` permits the
+cache-first fast path only when its state is `STATE_OFFLINE`. When the
+runtime is `STATE_RECONNECTING`, that condition fails before IndexedDB is
+queried, and `readThroughEntity` attempts the ordinary network request;
+on a network failure it can return a cached row. A reconnect probe calls
+`setState(STATE_RECONNECTING)` while checking server reachability.
+Consequently, the measured `reconnecting → offline` state transitions,
+three observed Person GET request events per trial and cached fallback
+outcomes are **consistent with the slow network-error/fallback branch**.
+The fast cache-first branch cannot run at entry while state is
+`reconnecting`. The profiling did not itself time every transport retry,
+and the browser-context event count is a window-wide observation, not a
+one-to-one mapping to network attempts.
+
+**Safety:** Do not turn `reconnecting` into `offline` or enable cache-first
+reads in that state without a separate correctness design and test.
+A reconnect in progress may succeed, so returning an older cached snapshot
+could defeat the existing reconnect, entity-generation or domain-fencing
+semantics; `navigator.onLine` is not authoritative. Follow-up work should
+investigate source-specific request policy or an opt-in/controlled experiment
+that preserves server-first behavior during uncertain reachability, and use
+same-runner A/B plus genuine offline/reconnect race tests before proposing
+a production change. This is diagnostic attribution, **not** an achieved
+application speedup.
+
 ### Opt-in infrastructure profiling
 
 `--profile` records per-test infrastructure phases without making ordinary runs
