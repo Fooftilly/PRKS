@@ -221,6 +221,16 @@ class GracefulStopTests(WorkerTestCase):
         self.assertEqual(self.effects(), ["done"])
         self.assertEqual((self.state(first), self.state(second)), ("succeeded", "queued"))  # type: ignore[arg-type]
 
+    def test_a_stop_while_the_listener_cannot_connect_does_not_wait_out_the_poll(self) -> None:
+        def never_listens(listener: Any) -> None:
+            listener._closing.wait()
+
+        with patch.object(worker_module._Listener, "_loop", never_listens):
+            worker = self.start_worker(poll=timedelta(hours=1))
+            began = time.monotonic()
+            self.stop_worker(worker)
+        self.assertLess(time.monotonic() - began, WAIT)
+
     def test_a_job_claimed_after_the_stop_is_released_without_starting(self) -> None:
         ran = threading.Event()
         self.registry.register("test.instance", lambda _run: ran.set())
@@ -403,6 +413,20 @@ class WorkerStartTests(RootPairingTestCase):
         self.addCleanup(self.stop_main, state)
         self.assertTrue(made.wait(WAIT))
         return state
+
+    def test_a_root_without_a_marker_is_refused_before_anything_is_created_in_it(self) -> None:
+        name = self.database()
+        registry, ran = self.counting_registry()
+        unbound = os.path.join(self.tmp, "typo")
+        os.mkdir(unbound)
+        for root, reason in ((unbound, "root_unbound"), (os.path.join(self.tmp, "missing"), "root_missing")):
+            with self.subTest(reason=reason):
+                state = self.worker_main(name, root, registry)
+                self.assertEqual(self.finish(state), EXIT_REFUSED)
+                self.assertIn(f"({reason})", state["stderr"].getvalue())
+        self.assertEqual(os.listdir(unbound), [])
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "missing")))
+        self.assertFalse(ran.is_set())
 
     def stop_main(self, state: dict[str, Any]) -> None:
         worker = state.get("worker")

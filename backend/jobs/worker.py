@@ -68,6 +68,7 @@ from backend.jobs.runner import JobRun, Outcome, run_job
 from backend.storage.errors import StorageRootError
 from backend.storage.file_lock import SharedFileLock
 from backend.storage.root_binding import acquire_shared_root_lease
+from backend.storage.root_marker import read_marker
 
 LOGGER = logging.getLogger("prks.jobs")
 
@@ -209,7 +210,9 @@ class Worker:
             if not self._wait_until_started():
                 return
             self.started.set()
-            listener.listening.wait(poll)  # a NOTIFY after this point is not missed
+            # The listener sets wake once it listens (a NOTIFY after that is not
+            # missed); a stop sets it too, so an unreachable listener can't hold it.
+            self._wake.wait(poll)
             while not self._stop.is_set():
                 self._wake.clear()
                 job = self._claim()
@@ -406,6 +409,23 @@ def _install_signals(worker: Worker) -> None:
     signal.signal(signal.SIGINT, handle)
 
 
+def _unbound_root_reason(root: str) -> Optional[str]:
+    """Why ``root`` is not a PRKS storage root, read-only; ``None`` when it carries a marker.
+
+    A worker only ever joins a root the web process already bound, so a
+    missing directory or one without ``prks-root.json`` (a typo) is refused
+    before anything is created in it. The start check re-reads the marker
+    under the lease.
+    """
+    if not os.path.isdir(root):
+        return "root_missing"
+    try:
+        marker = read_marker(root)
+    except StorageRootError as exc:
+        return exc.reason
+    return "root_unbound" if marker is None else None
+
+
 def main(
     argv: Optional[Sequence[str]] = None,
     *,
@@ -428,6 +448,10 @@ def main(
     except SystemExit as exc:
         return EXIT_USAGE if exc.code else EXIT_OK
     root = os.path.realpath(os.path.abspath(args.root))
+    unusable = _unbound_root_reason(root)
+    if unusable is not None:  # before the lease, which would create .prks-maintenance/ there
+        print(f"prks worker: the data root cannot be used ({unusable}).", file=err)
+        return EXIT_REFUSED
     try:
         db = open_database(env)
     except DatabaseConfigError as exc:
