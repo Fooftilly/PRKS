@@ -56,10 +56,15 @@ LOGGER = logging.getLogger("prks.jobs")
 
 T = TypeVar("T")
 
-_LEASE_CHECK_SQL = (
-    "SELECT locked_until > clock_timestamp() AS live FROM prks.jobs "
-    "WHERE id = %s AND lease_id = %s AND state = 'running' FOR SHARE"
+# Two statements: lock the job row first, then read the clock. A single
+# SELECT computes its output before LockRows waits for the row lock, and
+# re-evaluates it after the wait only when the holder changed the row, so a
+# lease that ran out while a holder that changed nothing kept the lock would
+# still read as live.
+_LEASE_LOCK_SQL = (
+    "SELECT locked_until FROM prks.jobs WHERE id = %s AND lease_id = %s AND state = 'running' FOR SHARE"
 )
+_LEASE_LIVE_SQL = "SELECT %s::timestamptz > clock_timestamp() AS live"
 
 
 class Outcome(enum.Enum):
@@ -136,8 +141,11 @@ class JobRun:
         self.check()
 
         def run(tx: Transaction) -> T:
-            row = tx.execute(_LEASE_CHECK_SQL, (self.job.id, self.job.lease_id)).fetchone()
-            if row is None or not row["live"]:
+            row = tx.execute(_LEASE_LOCK_SQL, (self.job.id, self.job.lease_id)).fetchone()
+            if row is None:
+                raise LeaseLost()
+            live = tx.execute(_LEASE_LIVE_SQL, (row["locked_until"],)).fetchone()
+            if live is None or not live["live"]:
                 raise LeaseLost()
             return fn(tx)
 

@@ -7,7 +7,8 @@ import time
 from datetime import timedelta
 from typing import Any
 
-from backend.domain.identity.authorization import Capability
+from backend.domain.identity.authorization import AccessRefused, Capability
+from backend.jobs import queue
 from backend.jobs.queue import LeaseLost
 from backend.jobs.runner import JobRun, Outcome, run_job
 from tests.pg.jobs_fixtures import LEASE, NO_BACKOFF, JobsTestCase, set_revision
@@ -177,6 +178,77 @@ class FencingTests(RunnerTestCase):
         go.set()
         thread.join(30)
         self.assertEqual((result, lost), ([Outcome.LOST], [True]))
+        self.assertEqual(self.effects(), [])
+
+    def blocked_command(self, job: Any) -> tuple[threading.Thread, list[object], list[BaseException]]:
+        """Start the job's fenced write; it waits on a row lock someone else holds."""
+        run = JobRun(self.db, job, lease=LEASE)
+        if job.library_id is None:
+            write: Any = lambda: run.command(lambda tx: tx.execute(INSERT_EFFECT, ("stale",)))
+        else:
+            write = lambda: set_revision(run)
+        thread, result, error = self.in_thread(write)
+        deadline = time.monotonic() + 30
+        while self.lock_waiters() == 0:
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(0.01)
+        return thread, result, error
+
+    def test_a_lease_that_expires_while_the_command_waits_for_the_row_lock_writes_nothing(self) -> None:
+        # The lease is checked only once the row lock is granted, by the clock
+        # at that moment. The holder does not modify the row, so PostgreSQL
+        # does not re-evaluate the statement on a newer row version.
+        for library in (False, True):
+            with self.subTest(library_job=library):
+                self.expire_while_blocked(library)
+            # Settle it either way, so the next case does not reclaim it.
+            self.run_sql(
+                "UPDATE prks.jobs SET state = 'cancelled', lease_id = NULL, finished_at = now() "
+                "WHERE state = 'running'"
+            )
+
+    def expire_while_blocked(self, library: bool) -> None:
+        if library:
+            self.enqueue_library(payload={"scope_id": "a1", "value": 99})
+        else:
+            self.enqueue_instance()
+        job = queue.claim(self.db, "w1", lease=timedelta(seconds=2))
+        assert job is not None
+        holder = self.open_tx()
+        holder.execute("SELECT 1 FROM prks.jobs WHERE id = %s FOR UPDATE", (job.id,))
+        thread, result, error = self.blocked_command(job)
+        # The command started while the lease was valid; let it run out during the wait.
+        live = self.run_sql("SELECT locked_until > clock_timestamp() AS live FROM prks.jobs WHERE id = %s", (job.id,))
+        self.assertTrue(live[0]["live"])
+        deadline = time.monotonic() + 30
+        while self.run_sql(
+            "SELECT locked_until > clock_timestamp() AS live FROM prks.jobs WHERE id = %s", (job.id,)
+        )[0]["live"]:
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(0.05)
+        holder.rollback()
+        thread.join(30)
+        self.assertEqual(result, [])
+        self.assertEqual(len(error), 1)
+        self.assertIsInstance(error[0], AccessRefused if library else LeaseLost)
+        if library:
+            self.assertEqual(self.revisions()[(self.lib_a, "a1")], 1)
+        else:
+            self.assertEqual(self.effects(), [])
+
+    def test_a_lease_expired_by_the_lock_holder_writes_nothing(self) -> None:
+        # The holder moves locked_until into the past and commits while the command waits.
+        self.enqueue_instance()
+        job = self.claim()
+        assert job is not None
+        holder = self.open_tx()
+        holder.execute(
+            "UPDATE prks.jobs SET locked_until = now() - interval '1 second' WHERE id = %s", (job.id,)
+        )
+        thread, result, error = self.blocked_command(job)
+        holder.commit()
+        thread.join(30)
+        self.assertEqual((result, [type(e) for e in error]), ([], [LeaseLost]))
         self.assertEqual(self.effects(), [])
 
     def test_a_restore_during_a_job_fences_its_later_commands_and_completion(self) -> None:
