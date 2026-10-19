@@ -194,12 +194,12 @@
         "assets_ingest_sha256_check": "CHECK (ingest_sha256 ~ '^[0-9a-f]{64}$'::text)",
         "assets_kind_check": "CHECK (kind = ANY (ARRAY['managed_file'::text, 'external_stream'::text]))",
         "assets_kind_not_null": "NOT NULL kind",
-        "assets_kind_storage_check": "CHECK (\nCASE kind\n    WHEN 'managed_file'::text THEN storage_locator IS NOT NULL AND content_sha256 IS NOT NULL AND origin IS NOT NULL\n    ELSE storage_locator IS NULL AND source_locator IS NULL AND origin IS NULL AND byte_size IS NULL AND ingest_sha256 IS NULL AND content_sha256 IS NULL AND origin_url IS NULL AND origin_ref IS NULL\nEND)",
+        "assets_kind_storage_check": "CHECK (\nCASE kind\n    WHEN 'managed_file'::text THEN storage_locator IS NOT NULL AND content_sha256 IS NOT NULL AND origin IS NOT NULL\n    ELSE storage_locator IS NULL AND source_locator IS NULL AND origin IS NULL AND byte_size IS NULL AND ingest_sha256 IS NULL AND content_sha256 IS NULL AND origin_url IS NULL AND origin_ref IS NULL AND COALESCE(length(provider) > 0 AND length(provider_id) > 0 AND length(url) > 0, false)\nEND)",
         "assets_library_id_id_key": "UNIQUE (library_id, id)",
         "assets_library_id_id_manifestation_id_key": "UNIQUE (library_id, id, manifestation_id)",
         "assets_library_id_id_work_id_key": "UNIQUE (library_id, id, work_id)",
         "assets_library_id_not_null": "NOT NULL library_id",
-        "assets_manifestation_fkey": "FOREIGN KEY (library_id, manifestation_id, work_id) REFERENCES prks.manifestations(library_id, id, work_id) ON UPDATE CASCADE ON DELETE CASCADE",
+        "assets_manifestation_fkey": "FOREIGN KEY (library_id, manifestation_id, work_id) REFERENCES prks.manifestations(library_id, id, work_id) ON UPDATE CASCADE",
         "assets_manifestation_id_not_null": "NOT NULL manifestation_id",
         "assets_materialized_pdf_annotation_revision_check": "CHECK (materialized_pdf_annotation_revision >= 0)",
         "assets_materialized_pdf_annotation_revision_not_null": "NOT NULL materialized_pdf_annotation_revision",
@@ -212,7 +212,7 @@
         "assets_state_not_null": "NOT NULL state",
         "assets_storage_locator_check": "CHECK (length(storage_locator) > 0)",
         "assets_supersedes_check": "CHECK (supersedes_asset_id <> id)",
-        "assets_supersedes_fkey": "FOREIGN KEY (library_id, supersedes_asset_id, manifestation_id) REFERENCES prks.assets(library_id, id, manifestation_id) ON DELETE SET NULL (supersedes_asset_id)",
+        "assets_supersedes_fkey": "FOREIGN KEY (library_id, supersedes_asset_id, manifestation_id) REFERENCES prks.assets(library_id, id, manifestation_id) ON DELETE SET NULL (supersedes_asset_id) DEFERRABLE INITIALLY DEFERRED",
         "assets_thumb_page_check": "CHECK (thumb_page >= 1)",
         "assets_updated_at_not_null": "NOT NULL updated_at",
         "assets_work_id_not_null": "NOT NULL work_id"
@@ -1021,7 +1021,7 @@
         "manifestations_primary_asset_fkey": "FOREIGN KEY (library_id, primary_asset_id, id) REFERENCES prks.assets(library_id, id, manifestation_id) DEFERRABLE INITIALLY DEFERRED",
         "manifestations_title_check": "CHECK (length(title) > 0)",
         "manifestations_updated_at_not_null": "NOT NULL updated_at",
-        "manifestations_work_fkey": "FOREIGN KEY (library_id, work_id) REFERENCES prks.works(library_id, id) ON DELETE CASCADE",
+        "manifestations_work_fkey": "FOREIGN KEY (library_id, work_id) REFERENCES prks.works(library_id, id)",
         "manifestations_work_id_not_null": "NOT NULL work_id"
       },
       "indexes": {
@@ -1360,7 +1360,7 @@
         "work_notes_library_id_not_null": "NOT NULL library_id",
         "work_notes_pkey": "PRIMARY KEY (work_id, kind)",
         "work_notes_updated_at_not_null": "NOT NULL updated_at",
-        "work_notes_work_fkey": "FOREIGN KEY (library_id, work_id) REFERENCES prks.works(library_id, id) ON DELETE CASCADE",
+        "work_notes_work_fkey": "FOREIGN KEY (library_id, work_id) REFERENCES prks.works(library_id, id)",
         "work_notes_work_id_not_null": "NOT NULL work_id"
       },
       "indexes": {

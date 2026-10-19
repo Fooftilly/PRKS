@@ -30,9 +30,13 @@
 -- no `content_generation` (bytes are immutable per storage key, item 4).
 -- `manifestation_credit_overrides` arrives with #60 Slice K, after 0.8.
 --
--- Deleting a Work cascades to every row in this file that it owns. The
--- delete command tombstones the revision scopes of what the cascade removes
--- (§5.2); later lanes decide their own tables' actions.
+-- Rows that own revision scopes (Works, Manifestations, Assets and notes)
+-- are never removed by a cascade (§5.2, the §13.2 revision-ownership gate):
+-- their keys are NO ACTION, so the command that deletes them deletes each
+-- level explicitly and tombstones its scopes, and a delete that forgets a
+-- child fails at the statement. Rows without a scope (relations and
+-- identifiers) cascade from their Manifestation. Later lanes decide their
+-- own tables' actions.
 --
 -- Parent keys for later lanes: `roles` and `argument_sources` reference
 -- `manifestations (library_id, id, work_id)`; `annotations` references
@@ -91,14 +95,15 @@ CREATE TABLE prks.manifestations (
   CONSTRAINT manifestations_library_id_id_key UNIQUE (library_id, id),
   CONSTRAINT manifestations_library_id_id_work_id_key UNIQUE (library_id, id, work_id),
   CONSTRAINT manifestations_work_fkey FOREIGN KEY (library_id, work_id)
-    REFERENCES prks.works (library_id, id) ON DELETE CASCADE
+    REFERENCES prks.works (library_id, id)
 );
 CREATE INDEX manifestations_work ON prks.manifestations (library_id, work_id);
 
 -- One file or source lineage of one Manifestation (UI "File" or "Source").
 -- Catalogue only in L-W-1: bytes, cleanup claims and materialization belong
 -- to the objects lane (L-A-1, §11.2). A managed file names its immutable
--- storage key and that key's hash; a stream names no stored bytes.
+-- storage key and that key's hash; a stream names its provider's video and no
+-- stored bytes.
 CREATE TABLE prks.assets (
   library_id       text NOT NULL,
   id               text PRIMARY KEY CHECK (id ~ '^AS-[0-9A-F]{32}$'),
@@ -139,6 +144,9 @@ CREATE TABLE prks.assets (
       ELSE storage_locator IS NULL AND source_locator IS NULL AND origin IS NULL
                AND byte_size IS NULL AND ingest_sha256 IS NULL AND content_sha256 IS NULL
                AND origin_url IS NULL AND origin_ref IS NULL
+               -- a stream is its provider's video: it is named, and it can be opened
+               AND coalesce(length(provider) > 0 AND length(provider_id) > 0 AND length(url) > 0,
+                            false)
     END),
   CONSTRAINT assets_derived_from_check CHECK (derived_from_asset_id <> id),
   CONSTRAINT assets_supersedes_check CHECK (supersedes_asset_id <> id),
@@ -146,13 +154,17 @@ CREATE TABLE prks.assets (
   CONSTRAINT assets_library_id_id_manifestation_id_key UNIQUE (library_id, id, manifestation_id),
   CONSTRAINT assets_library_id_id_work_id_key UNIQUE (library_id, id, work_id),
   CONSTRAINT assets_manifestation_fkey FOREIGN KEY (library_id, manifestation_id, work_id)
-    REFERENCES prks.manifestations (library_id, id, work_id) ON UPDATE CASCADE ON DELETE CASCADE,
+    REFERENCES prks.manifestations (library_id, id, work_id) ON UPDATE CASCADE,
   -- a separate Asset this one was made from (any Manifestation of the Library)
   CONSTRAINT assets_derived_from_fkey FOREIGN KEY (library_id, derived_from_asset_id)
     REFERENCES prks.assets (library_id, id) ON DELETE SET NULL (derived_from_asset_id),
-  -- "this file replaces that one" within one Manifestation
+  -- "this file replaces that one" within one Manifestation. Deferred like
+  -- the pointers: moving both Assets of a pair, or clearing the link and
+  -- moving one, commits in either order; moving one end alone fails at
+  -- COMMIT. The delete action still fires at once.
   CONSTRAINT assets_supersedes_fkey FOREIGN KEY (library_id, supersedes_asset_id, manifestation_id)
     REFERENCES prks.assets (library_id, id, manifestation_id) ON DELETE SET NULL (supersedes_asset_id)
+    DEFERRABLE INITIALLY DEFERRED
 );
 CREATE INDEX assets_manifestation ON prks.assets (library_id, manifestation_id, work_id);
 CREATE INDEX assets_work ON prks.assets (library_id, work_id);
@@ -232,7 +244,7 @@ CREATE TABLE prks.work_notes (
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (work_id, kind),
   CONSTRAINT work_notes_work_fkey FOREIGN KEY (library_id, work_id)
-    REFERENCES prks.works (library_id, id) ON DELETE CASCADE
+    REFERENCES prks.works (library_id, id)
 );
 
 -- Lifecycle and merge redirects of Works. Like `sync_tag_lifecycle` it

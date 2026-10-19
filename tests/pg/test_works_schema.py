@@ -379,9 +379,19 @@ class AssetPointerTests(WorksSchemaTestCase):
                               ("origin_url", "https://x/a.pdf"), ("origin_ref", "ref")):
             with self.subTest(stream_column=column):
                 self.refused(psycopg.errors.CheckViolation, (
-                    "INSERT INTO prks.assets (library_id, id, manifestation_id, work_id, kind, url, " + column
-                    + ") VALUES (%s, %s, %s, %s, 'external_stream', 'https://x', %s)",
+                    "INSERT INTO prks.assets (library_id, id, manifestation_id, work_id, kind, provider, provider_id,"
+                    " url, " + column + ") VALUES (%s, %s, %s, %s, 'external_stream', 'youtube', 'abc',"
+                    " 'https://x', %s)",
                     (self.lib, new_id("AS"), manifestation, work_id, value)))
+        # A stream names its video: the provider, the provider's id and the URL.
+        for provider, provider_id, url in ((None, "abc", "https://x"), ("youtube", None, "https://x"),
+                                           ("youtube", "abc", None), ("", "abc", "https://x"),
+                                           ("youtube", "", "https://x"), ("youtube", "abc", "")):
+            with self.subTest(provider=provider, provider_id=provider_id, url=url):
+                self.refused(psycopg.errors.CheckViolation, (
+                    "INSERT INTO prks.assets (library_id, id, manifestation_id, work_id, kind, provider,"
+                    " provider_id, url) VALUES (%s, %s, %s, %s, 'external_stream', %s, %s, %s)",
+                    (self.lib, new_id("AS"), manifestation, work_id, provider, provider_id, url)))
         self.sql(
             "INSERT INTO prks.assets (library_id, id, manifestation_id, work_id, kind, provider, provider_id, "
             "url) VALUES (%s, %s, %s, %s, 'external_stream', 'youtube', 'abc', 'https://x')",
@@ -415,6 +425,41 @@ class AssetPointerTests(WorksSchemaTestCase):
             "SELECT supersedes_asset_id, derived_from_asset_id, manifestation_id FROM prks.assets WHERE id = %s",
             (new,)))
         self.assertEqual(tuple(row), (None, None, first))
+
+
+    def supersedes_pair(self) -> tuple[str, str, str, str]:
+        """Two Manifestations of one Work; ``new`` supersedes ``old``, both on the first."""
+        work_id, first = self.work()
+        with self.tx():
+            second = self.manifestation(work_id)
+        old = self.primary_asset(first, work_id)
+        new = new_id("AS")
+        self.insert_asset(new, first, work_id)
+        self.sql("UPDATE prks.assets SET supersedes_asset_id = %s WHERE id = %s", (old, new))
+        return first, second, old, new
+
+    def test_moving_one_end_of_a_supersedes_pair_fails_at_commit(self) -> None:
+        first, second, old, new = self.supersedes_pair()
+        self.sql("UPDATE prks.manifestations SET primary_asset_id = NULL WHERE id = %s", (first,))
+        for moving in (old, new):
+            with self.subTest(moving="old" if moving == old else "new"):
+                self.refused_at_commit(
+                    psycopg.errors.ForeignKeyViolation,
+                    ("UPDATE prks.assets SET manifestation_id = %s WHERE id = %s", (second, moving)),
+                )
+        self.assertEqual(self.value("SELECT supersedes_asset_id FROM prks.assets WHERE id = %s", (new,)), old)
+
+    def test_a_supersedes_pair_moves_together_or_after_the_link_clears_in_either_order(self) -> None:
+        first, second, old, new = self.supersedes_pair()
+        self.sql("UPDATE prks.manifestations SET primary_asset_id = NULL WHERE id = %s", (first,))
+        with self.tx():
+            self.sql("UPDATE prks.assets SET manifestation_id = %s WHERE id = %s", (second, old))
+            self.sql("UPDATE prks.assets SET manifestation_id = %s WHERE id = %s", (second, new))
+        self.assertEqual(self.value("SELECT supersedes_asset_id FROM prks.assets WHERE id = %s", (new,)), old)
+        with self.tx():  # the move first, the link cleared after it
+            self.sql("UPDATE prks.assets SET manifestation_id = %s WHERE id = %s", (first, new))
+            self.sql("UPDATE prks.assets SET supersedes_asset_id = NULL WHERE id = %s", (new,))
+        self.assertEqual(self.value("SELECT manifestation_id FROM prks.assets WHERE id = %s", (new,)), first)
 
 
 class RelationTests(WorksSchemaTestCase):
@@ -468,7 +513,19 @@ class RelationTests(WorksSchemaTestCase):
 
 
 class WorkDeleteTests(WorksSchemaTestCase):
-    def test_deleting_a_work_removes_everything_it_owns_and_keeps_its_lifecycle(self) -> None:
+    """Rows that own revision scopes are deleted level by level, never by cascade (§5.2)."""
+
+    # The Works tables whose rows own revision scopes (§13.2 revision-ownership gate).
+    SCOPE_OWNERS = ("works", "manifestations", "assets", "work_notes")
+
+    def test_no_key_of_a_scope_owning_row_cascades_its_delete(self) -> None:
+        rows = self.sql(
+            "SELECT conrelid::regclass::text, conname FROM pg_constraint "
+            "WHERE contype = 'f' AND confdeltype = 'c' AND conrelid = ANY(%s::regclass[])",
+            ([f"prks.{table}" for table in self.SCOPE_OWNERS],)).fetchall()
+        self.assertEqual(rows, [])
+
+    def owned_work(self) -> tuple[str, str, str]:
         work_id, primary = self.work()
         with self.tx():
             sibling = self.manifestation(work_id)
@@ -481,9 +538,26 @@ class WorkDeleteTests(WorksSchemaTestCase):
         for kind in ("research", "private"):
             self.sql("INSERT INTO prks.work_notes (library_id, work_id, kind, body) VALUES (%s, %s, %s, 'n')",
                      (self.lib, work_id, kind))
+        return work_id, primary, sibling
+
+    def test_a_delete_that_skips_a_level_is_refused(self) -> None:
+        work_id, primary, _ = self.owned_work()
+        self.refused(psycopg.errors.ForeignKeyViolation,
+                     ("DELETE FROM prks.work_notes WHERE work_id = %s", (work_id,)),
+                     ("DELETE FROM prks.works WHERE id = %s", (work_id,)))
+        self.refused(psycopg.errors.ForeignKeyViolation,
+                     ("DELETE FROM prks.manifestations WHERE id = %s", (primary,)))
+        for table in ("manifestations", "assets", "work_notes"):
+            with self.subTest(table=table):
+                self.assertGreater(self.count(table, "work_id", work_id), 0)
+
+    def test_deleting_each_level_removes_the_work_and_keeps_its_lifecycle(self) -> None:
+        work_id, primary, _ = self.owned_work()
         with self.tx():
             self.sql("INSERT INTO prks.sync_work_lifecycle (library_id, work_id, state) VALUES (%s, %s, 'deleted')",
                      (self.lib, work_id))
+            for table in ("work_notes", "assets", "manifestations"):
+                self.sql(f"DELETE FROM prks.{table} WHERE work_id = %s", (work_id,))
             self.sql("DELETE FROM prks.works WHERE id = %s", (work_id,))
         for table in ("manifestations", "assets", "manifestation_relations", "work_notes"):
             with self.subTest(table=table):
