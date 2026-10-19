@@ -51,6 +51,7 @@ from types import FrameType
 from typing import Any, Optional, TextIO
 
 import psycopg
+from psycopg import sql
 
 from backend.db.config import load_database_config
 from backend.db.database import Database
@@ -149,7 +150,7 @@ class _Listener:
                 with psycopg.connect(
                     self._conninfo, autocommit=True, application_name=LISTEN_APPLICATION_NAME
                 ) as conn:
-                    conn.execute("LISTEN " + queue.NOTIFY_CHANNEL)
+                    conn.execute(sql.SQL("LISTEN {}").format(sql.Identifier(queue.NOTIFY_CHANNEL)))
                     self.listening.set()
                     # A notification sent while the worker was not listening
                     # is covered by the claim that follows any wake.

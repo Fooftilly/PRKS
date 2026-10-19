@@ -18,13 +18,12 @@ from unittest.mock import patch
 from backend.db.config import DatabaseConfig
 from backend.db.database import Database
 from backend.db.errors import DatabaseUnavailableError
+from backend.db.migrate import SCHEMA_DIR, migrate
 from backend.domain.identity import root_pairing
 from backend.jobs import diagnostics, prune, queue
-from backend.jobs.handlers import HandlerRegistry
-from backend.jobs.queue import LeaseLost
-from backend.jobs.runner import JobRun, run_job
-from backend.db.migrate import SCHEMA_DIR, migrate
 from backend.jobs import worker as worker_module
+from backend.jobs.handlers import HandlerRegistry
+from backend.jobs.runner import JobRun, run_job
 from backend.jobs.worker import EXIT_OK, EXIT_REFUSED, Worker, WorkerSettings, main
 from backend.storage import root_binding, root_marker
 from backend.storage.config import StorageConfig
