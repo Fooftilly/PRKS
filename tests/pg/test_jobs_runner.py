@@ -109,6 +109,24 @@ class OutcomeTests(RunnerTestCase):
         self.assertEqual(sorted(seen), ["no context", "no instance command"])
 
 
+    def test_a_non_positive_lease_or_heartbeat_interval_is_refused_before_running(self) -> None:
+        ran: list[bool] = []
+        self.registry.register("test.instance", lambda _run: ran.append(True))
+        self.enqueue_instance()
+        job = self.claim()
+        assert job is not None
+        for kwargs in (
+            {"heartbeat_every": timedelta(0)},
+            {"heartbeat_every": timedelta(seconds=-1)},
+            {"lease": timedelta(0)},
+            {"lease": timedelta(microseconds=1)},  # a third of it rounds to zero
+        ):
+            with self.subTest(**{k: str(v) for k, v in kwargs.items()}), self.assertRaises(ValueError):
+                self.run_one(job, **kwargs)
+        self.assertEqual(ran, [])
+        self.assertEqual(self.state(job.id), "running")
+
+
 class FencingTests(RunnerTestCase):
     def pause_in(self, kind: str, body: Any) -> tuple[threading.Event, threading.Event]:
         inside, go = threading.Event(), threading.Event()

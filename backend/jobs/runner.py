@@ -187,11 +187,14 @@ def run_job(
     ``lease`` must be the lease the job was claimed with. The heartbeat runs
     every third of it unless ``heartbeat_every`` says otherwise.
     """
+    interval = heartbeat_every if heartbeat_every is not None else lease / 3
+    if lease <= timedelta(0) or interval <= timedelta(0):
+        # A zero wait would make the heartbeat thread spin on the database.
+        raise ValueError("the lease and the heartbeat interval must be positive")
     run = JobRun(db, job, lease=lease)
     fn = registry.get(job.kind)
     if fn is None:
         return _failed(db, job, "unknown_kind", backoff)
-    interval = heartbeat_every if heartbeat_every is not None else lease / 3
     try:
         with _Heartbeat(run, interval):
             fn(run)
