@@ -221,6 +221,32 @@ class GracefulStopTests(WorkerTestCase):
         self.assertEqual(self.effects(), ["done"])
         self.assertEqual((self.state(first), self.state(second)), ("succeeded", "queued"))  # type: ignore[arg-type]
 
+    def test_a_job_claimed_after_the_stop_is_released_without_starting(self) -> None:
+        ran = threading.Event()
+        self.registry.register("test.instance", lambda _run: ran.set())
+        in_claim, resume = threading.Event(), threading.Event()
+        real_claim = queue.claim
+
+        def paused_claim(*args: Any, **kwargs: Any) -> Any:
+            job = real_claim(*args, **kwargs)
+            if job is not None:
+                in_claim.set()
+                resume.wait(WAIT)
+            return job
+
+        job_id = self.enqueue_instance()
+        with patch.object(queue, "claim", side_effect=paused_claim):
+            worker = self.start_worker()
+            self.assertTrue(in_claim.wait(WAIT))
+            worker.stop()  # the claim has the job but has not returned it
+            resume.set()
+            self.worker_thread.join(WAIT)
+        self.assertFalse(self.worker_thread.is_alive())
+        self.assertFalse(ran.is_set())
+        row = self.row(job_id)  # type: ignore[arg-type]
+        self.assertEqual((row["state"], row["attempts"], row["lease_id"]), ("queued", 0, None))
+        self.assertEqual(worker.stats.snapshot()["released"], 1)
+
     def test_a_job_past_the_deadline_is_released_and_reclaimed_once(self) -> None:
         inside, go = self.blocking_handler()
         job_id = self.enqueue_instance()

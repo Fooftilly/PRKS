@@ -257,9 +257,12 @@ class Worker:
 
     def _run(self, job: ClaimedJob) -> None:
         """Run ``job`` on its own thread so a stop can give it a deadline."""
-        self._job_done.clear()
-        if self._stop.is_set():  # stopped between the claim and here
-            self._job_done.set()
+        self._job_done.clear()  # before the check, so a stop from here on is seen below
+        if self._stop.is_set():
+            # Stopped while the claim was in flight: the job never started,
+            # so it goes back at once rather than running in the grace period.
+            self._release(job)
+            return
         finished = threading.Event()
         started = threading.Event()
         runs: list[JobRun] = []
