@@ -6,6 +6,7 @@ import io
 import os
 import shutil
 import signal
+import socket
 import socketserver
 import subprocess
 import sys
@@ -84,10 +85,15 @@ class LifecycleTests(EmbeddedWorkerTestCase):
         server, thread, error = self.serve(jobs)
         self.assertTrue(inside.wait(WAIT))  # claimed and running while the server serves
         self.assertEqual(worker.status()["state"], "running")
+        address = server.server_address
         server.shutdown()  # serve_forever returns; the running job gets its grace period
         wait_until(lambda: worker.worker.stopping, "the worker to be told to stop")
         self.assertTrue(thread.is_alive())
         self.assertEqual(worker.status()["state"], "stopping")
+        # The listening socket is already closed: a new connection is refused at
+        # once instead of waiting in the backlog for the grace period.
+        with self.assertRaises(ConnectionRefusedError):
+            socket.create_connection(address, timeout=WAIT).close()
         go.set()
         thread.join(WAIT)
         self.assertFalse(thread.is_alive())

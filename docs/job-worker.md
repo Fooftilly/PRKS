@@ -25,8 +25,9 @@ thread beside the HTTP server:
   start-generation bump, which run once per process); it never bumps again.
 - It uses its own small connection pool (`application_name` `prks-worker`,
   4 connections) plus one `LISTEN` connection, beside the web pool.
-- On shutdown (SIGTERM, SIGINT or Ctrl-C) the server stops accepting
-  requests and the worker stops gracefully: it claims nothing more, the
+- On shutdown (SIGTERM, SIGINT or Ctrl-C) the server closes its listening
+  socket at once (new connections are refused; requests already being
+  handled keep running) and the worker stops gracefully: it claims nothing more, the
   running job may finish within 30 seconds, then the job is given back to
   the queue without spending an attempt. A second signal during that wait
   ends the process at once; the job's lease then expires and it is

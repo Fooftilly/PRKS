@@ -12,8 +12,10 @@ web process, on its own ``worker`` connection pool:
   check only waits until the database applied exactly this code's schema
   files (§4.4).
 - **Stop.** When the server stops (``shutdown()``, or SIGTERM/SIGINT when it
-  serves on the main thread) the worker stops gracefully: no new claim, the
-  running job may finish within ``stop_grace``, then its lease is released.
+  serves on the main thread) its listening socket is closed at once, so new
+  connections are refused, then the worker stops gracefully: no new claim,
+  the running job may finish within ``stop_grace``, then its lease is
+  released.
   The signal handlers only record the request (see
   :class:`~backend.jobs.worker.SignalStop`); a watcher thread turns it into
   ``shutdown()``.
@@ -151,6 +153,8 @@ class Serving(Protocol):
 
     def shutdown(self) -> None: ...
 
+    def server_close(self) -> None: ...
+
 
 class WebJobs:
     """The jobs side of one web process: its embedded worker (if any) and the queue diagnostics."""
@@ -162,8 +166,11 @@ class WebJobs:
     def serve(self, server: Serving, *, check_every: float = 0.1) -> None:
         """Run ``server.serve_forever()`` with the worker running; stop the worker after it returns.
 
-        On the main thread SIGTERM and SIGINT shut the server down (and so
-        stop the worker gracefully); elsewhere only ``server.shutdown()`` does.
+        The listening socket is closed as soon as serving ends, before the
+        worker's grace period, so new connections are refused at once rather
+        than left in the backlog. On the main thread SIGTERM and SIGINT shut
+        the server down (and so stop the worker gracefully); elsewhere only
+        ``server.shutdown()`` does.
         """
         signals: Optional[SignalStop] = None
         if threading.current_thread() is threading.main_thread():
@@ -186,6 +193,9 @@ class WebJobs:
             server.serve_forever()
         finally:
             done.set()
+            # Requests already being handled keep their threads; a second
+            # close from run_server's ``with`` is harmless.
+            server.server_close()
             if watcher.ident is not None:
                 watcher.join()
             if signals is not None:
