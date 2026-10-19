@@ -2535,6 +2535,77 @@ async function run() {
             assertEq('failed sweep deliberately retained stale cache row', (await stuckStore.getEntity('person', 'P-1')).value, oldPerson);
         }
 
+        // The network can fail, then IndexedDB may pause BEFORE the cached
+        // value is returned. Keep a snapshot of the original row while its
+        // read is unresolved, just as an IDB transaction can finish after
+        // another route invalidates the record.
+        async function pausedCacheFallback(extraReadOptions) {
+            const store = makeFakeStore();
+            const originalGet = store.getEntity.bind(store);
+            let resume = null;
+            store.getEntity = function (kind, id) {
+                const snapshot = originalGet(kind, id);
+                return new Promise(function (resolve) {
+                    resume = function () { void snapshot.then(resolve); };
+                });
+            };
+            const c = await fixture(function () {
+                return Promise.reject(new TypeError('network unreachable'));
+            }, store);
+            const pending = readPerson(c, Object.assign(
+                { requestPolicy: { retry: false } }, extraReadOptions || {}));
+            for (let i = 0; i < 12 && !resume; i++) {
+                await new Promise(function (resolve) { setImmediate(resolve); });
+            }
+            if (!resume) throw new Error('Person fallback never began its deferred cache read');
+            return { c, pending, resume };
+        }
+
+        {
+            const f = await pausedCacheFallback();
+            f.c.runtime.markEntityChanged('person', 'P-1');
+            f.resume();
+            const r = await f.pending;
+            assertEq('entity mutation during pending fallback fails closed', r.source, 'unavailable');
+            assertEq('mutated Person fallback contains no stale data', r.value, null);
+        }
+
+        {
+            const f = await pausedCacheFallback();
+            f.c.runtime.markDomainChanged('people', { entityKinds: ['person'] });
+            await f.c.runtime._domainCleanup('people');
+            assert('successful domain sweep unblocks People', !f.c.runtime.isDomainBlocked('people'));
+            // The row was removed from the store, but its older asynchronous
+            // getEntity had already captured it. The generation still fences.
+            assert('swept Person row is absent from store',
+                !f.c.store._entities.has('person:P-1'));
+            f.resume();
+            const r = await f.pending;
+            assertEq('domain change during pending fallback fails closed after unblock', r.source, 'unavailable');
+            assertEq('unblocked Person does not resurrect old IDB snapshot', r.value, null);
+        }
+
+        {
+            const f = await pausedCacheFallback();
+            f.c.runtime.noteRequestSuccess();
+            assertEq('separate successful request restores online state', f.c.runtime.getState(), 'online');
+            f.resume();
+            const r = await f.pending;
+            assertEq('reconnect while fallback cache pending fails closed', r.source, 'unavailable');
+            assertEq('reconnected Person fallback cannot show stale record', r.value, null);
+        }
+
+        {
+            const controller = new AbortController();
+            const f = await pausedCacheFallback({ signal: controller.signal });
+            controller.abort();
+            f.resume();
+            let error = null;
+            try { await f.pending; } catch (err) { error = err; }
+            assertEq('route abort while fallback cache pending rejects AbortError',
+                error && error.name, 'AbortError');
+        }
+
         // An aborted route remains aborted, not a cached read. In particular,
         // a per-request retry policy must not weaken AbortSignal handling.
         {
