@@ -454,7 +454,6 @@ class ResearchGraphOfflineTests(unittest.TestCase):
                                         name => p.samples.some(x => x.phase === name)
                                     );
                                 }""",
-                                timeout=10000,
                             )
                     finally:
                         # Never leave a wrapped application function installed
