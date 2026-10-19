@@ -98,6 +98,19 @@ jobs:
               "graph_nav_uncached_destination",
               "graph_nav_uncached_graph",
           }
+          # This diagnostic exists to attribute the Person return delay.
+          # Treat all eight core/envelope functions as required, including
+          # zero-duration synchronous steps (emitted with a tiny recording
+          # floor by the test). Never publish a "passing" partial profile.
+          person_stages = {
+              "route_total", "route_commit", "durable_operations",
+              "detail_fetch", "effective_person", "pending_metadata",
+              "person_render", "banner_insertion",
+          }
+          expected.update(
+              f"graph_nav_person_route_{stage}_{aggregate}"
+              for stage in person_stages for aggregate in ("sum", "max")
+          )
           # A missing phase or a merged Argument pair invalidates the profile;
           # never interpret a partial report's zero as a successful fast phase.
           for i, result in enumerate(results, start=1):
