@@ -65,6 +65,13 @@
         return !!(err && err.name === 'AbortError');
     }
 
+    function throwIfSignalAborted(signal) {
+        if (!signal || !signal.aborted) return;
+        const error = new Error('The operation was aborted.');
+        error.name = 'AbortError';
+        throw error;
+    }
+
     function createPrksOfflineRuntime(deps) {
         const options = deps && typeof deps === 'object' ? deps : {};
         const now = options.now || defaultNow;
@@ -371,11 +378,7 @@
                     // A route can be aborted, a mutation acknowledged or a
                     // domain swept while this async read is pending. Never
                     // resurrect that stale row, even after a sweep unblocks.
-                    if (options2.signal && options2.signal.aborted) {
-                        const aborted = new Error('The operation was aborted.');
-                        aborted.name = 'AbortError';
-                        throw aborted;
-                    }
+                    throwIfSignalAborted(options2.signal);
                     if (cached &&
                         connectivityGeneration === fallbackConnectionToken &&
                         currentEntityGeneration(kind, id) === coherenceToken &&
@@ -2987,11 +2990,19 @@
                 if (isDomainBlocked(domain)) {
                     return { value: null, source: 'unavailable', cachedAt: null };
                 }
+                const fallbackConnectionToken = connectivityGeneration;
                 if (store) {
                     const cached = await store.getList(listKey).catch(function () {
                         return null;
                     });
-                    if (cached) {
+                    // A completed sweep may unblock this domain while an
+                    // older IndexedDB snapshot is still resolving. Recheck
+                    // the generation and reachability after the await.
+                    throwIfSignalAborted(options2.signal);
+                    if (cached &&
+                        connectivityGeneration === fallbackConnectionToken &&
+                        currentDomainGeneration(domain) === domainToken &&
+                        !isDomainBlocked(domain)) {
                         return { value: cached.value, source: 'cache', cachedAt: cached.cachedAt };
                     }
                 }
