@@ -9,10 +9,15 @@
 -- Persons (`person-field`), Person Groups (`person-group-field`), group
 -- members (`person-group-member`) and roles (`work-person-role`) own
 -- revision scopes, so no key deletes them by cascade, with one listed
--- exception: a role goes with its Work (or with a Manifestation it credits),
--- because every role scope is `[work_id, person_id, role_type]` and the
--- Work delete (`backend/domain/works/commands.py`) tombstones every scope
--- whose id starts with the Work's id. Everything else is NO ACTION: a
+-- exception: a Work-scoped role goes with its Work, because its scope is
+-- `work-person-role/[work_id, person_id, role_type]` and the Work delete
+-- (`backend/domain/works/commands.py`) tombstones every scope whose id
+-- starts with the Work's id. A Manifestation-scoped role's scope is
+-- `manifestation-person-role/[manifestation_id, person_id, role_type]`
+-- (docs/work-identity-model.md §12.3), which that prefix does not reach, so
+-- its Manifestation key is NO ACTION: the command that deletes a
+-- Manifestation deletes its roles and tombstones their scopes first
+-- (L-P-1 PR 3 extends the Work delete). Everything else is NO ACTION: a
 -- Person with roles cannot be deleted (today's PERSON_HAS_LINKS), a Person
 -- or group delete removes its memberships explicitly and tombstones them,
 -- and a group delete reparents its children (advancing their `parent_id`
@@ -67,11 +72,14 @@ CREATE TABLE prks.person_aliases (
 );
 CREATE INDEX person_aliases_library_key ON prks.person_aliases (library_id, alias_key);
 
--- Work-Person roles. One row per (Work, Person, role), as today's unique
--- index makes it. `order_index` replaces the `rowid` tiebreak: it is unique
--- within the Work, so `ORDER BY order_index` alone is a total order, and it
--- is deferrable so a renumbering (a merge, or construction from a list with
--- ties) commits once the whole Work is consistent. `credit_name` is the
+-- Work-Person roles. One row per (Work, Person, role, scope): NULL
+-- `manifestation_id` is Work scope, and one Person may hold one role on
+-- several Manifestations of a Work, such as translating two translations
+-- (I9, docs/work-identity-model.md §7.2). `order_index` replaces the
+-- `rowid` tiebreak: it is unique within the Work, so `ORDER BY order_index`
+-- alone is a total order, and it is deferrable so a renumbering (a merge, or
+-- construction from a list with ties) commits once the whole Work is
+-- consistent. `credit_name` is the
 -- printed name on this Work; NULL is "no override", so "" is not a second
 -- spelling of it.
 CREATE TABLE prks.roles (
@@ -85,15 +93,16 @@ CREATE TABLE prks.roles (
   credit_name text CHECK (length(credit_name) > 0 AND octet_length(credit_name) <= 500),
   manifestation_id text,                   -- NULL = the credit holds for the whole Work
   created_at  timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (work_id, person_id, role_type),
+  CONSTRAINT roles_work_id_person_id_role_type_manifestation_id_key
+    UNIQUE NULLS NOT DISTINCT (work_id, person_id, role_type, manifestation_id),
   CONSTRAINT roles_work_id_order_index_key UNIQUE (work_id, order_index) DEFERRABLE INITIALLY DEFERRED,
-  -- Listed cascade: the Work delete tombstones every role scope of the Work.
+  -- Listed cascade: the Work delete tombstones every Work-scoped role scope.
   CONSTRAINT roles_work_fkey FOREIGN KEY (library_id, work_id)
     REFERENCES prks.works (library_id, id) ON DELETE CASCADE,
   -- A role scoped to one Manifestation follows it to another Work (a merge
-  -- moves it) and goes with it under the same listed Work delete.
+  -- moves it); deleting the Manifestation needs its roles deleted first.
   CONSTRAINT roles_manifestation_fkey FOREIGN KEY (library_id, manifestation_id, work_id)
-    REFERENCES prks.manifestations (library_id, id, work_id) ON UPDATE CASCADE ON DELETE CASCADE,
+    REFERENCES prks.manifestations (library_id, id, work_id) ON UPDATE CASCADE,
   CONSTRAINT roles_person_fkey FOREIGN KEY (library_id, person_id)
     REFERENCES prks.persons (library_id, id)
 );

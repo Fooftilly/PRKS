@@ -1505,24 +1505,24 @@
         "roles_created_at_not_null": "NOT NULL created_at",
         "roles_credit_name_check": "CHECK (length(credit_name) > 0 AND octet_length(credit_name) <= 500)",
         "roles_library_id_not_null": "NOT NULL library_id",
-        "roles_manifestation_fkey": "FOREIGN KEY (library_id, manifestation_id, work_id) REFERENCES prks.manifestations(library_id, id, work_id) ON UPDATE CASCADE ON DELETE CASCADE",
+        "roles_manifestation_fkey": "FOREIGN KEY (library_id, manifestation_id, work_id) REFERENCES prks.manifestations(library_id, id, work_id) ON UPDATE CASCADE",
         "roles_order_index_check": "CHECK (order_index >= 0)",
         "roles_order_index_not_null": "NOT NULL order_index",
         "roles_person_fkey": "FOREIGN KEY (library_id, person_id) REFERENCES prks.persons(library_id, id)",
         "roles_person_id_not_null": "NOT NULL person_id",
-        "roles_pkey": "PRIMARY KEY (work_id, person_id, role_type)",
         "roles_role_type_check": "CHECK (role_type = ANY (ARRAY['Author'::text, 'Editor'::text, 'Reviewer'::text, 'Mentioned'::text, 'Translator'::text, 'Introduction'::text, 'Foreword'::text, 'Afterword'::text]))",
         "roles_role_type_not_null": "NOT NULL role_type",
         "roles_work_fkey": "FOREIGN KEY (library_id, work_id) REFERENCES prks.works(library_id, id) ON DELETE CASCADE",
         "roles_work_id_not_null": "NOT NULL work_id",
-        "roles_work_id_order_index_key": "UNIQUE (work_id, order_index) DEFERRABLE INITIALLY DEFERRED"
+        "roles_work_id_order_index_key": "UNIQUE (work_id, order_index) DEFERRABLE INITIALLY DEFERRED",
+        "roles_work_id_person_id_role_type_manifestation_id_key": "UNIQUE NULLS NOT DISTINCT (work_id, person_id, role_type, manifestation_id)"
       },
       "indexes": {
         "roles_manifestation": "CREATE INDEX roles_manifestation ON prks.roles USING btree (library_id, manifestation_id, work_id) WHERE (manifestation_id IS NOT NULL)",
         "roles_person": "CREATE INDEX roles_person ON prks.roles USING btree (library_id, person_id)",
-        "roles_pkey": "CREATE UNIQUE INDEX roles_pkey ON prks.roles USING btree (work_id, person_id, role_type)",
         "roles_work": "CREATE INDEX roles_work ON prks.roles USING btree (library_id, work_id, order_index)",
-        "roles_work_id_order_index_key": "CREATE UNIQUE INDEX roles_work_id_order_index_key ON prks.roles USING btree (work_id, order_index)"
+        "roles_work_id_order_index_key": "CREATE UNIQUE INDEX roles_work_id_order_index_key ON prks.roles USING btree (work_id, order_index)",
+        "roles_work_id_person_id_role_type_manifestation_id_key": "CREATE UNIQUE INDEX roles_work_id_person_id_role_type_manifestation_id_key ON prks.roles USING btree (work_id, person_id, role_type, manifestation_id) NULLS NOT DISTINCT"
       }
     },
     "prks.schema_migrations": {

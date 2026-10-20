@@ -4,8 +4,8 @@ Each rule the schema owns is shown refused and its legal path shown to
 commit: Persons and their alias rows, roles ordered without ``rowid``,
 Person Groups unique by identity key, and the one name-and-alias namespace
 of publishers (``publisher_keys``), including under concurrency. Keys of
-rows that own revision scopes never cascade a delete, except the listed role
-cascade, which the Work delete tombstones.
+rows that own revision scopes never cascade a delete, except the listed
+Work-scoped role cascade, which the Work delete tombstones.
 """
 
 from __future__ import annotations
@@ -180,13 +180,24 @@ class RoleTests(PeopleSchemaTestCase):
             "SELECT person_id, role_type FROM prks.roles WHERE work_id = %s ORDER BY order_index",
             (work_id,)).fetchall()]
 
-    def test_one_row_per_work_person_and_role(self) -> None:
-        work_id, _ = self.work()
+    def test_one_row_per_work_person_role_and_scope(self) -> None:
+        work_id, primary = self.work()
+        translation = new_id("MF")
+        self.sql("INSERT INTO prks.manifestations (library_id, id, work_id) VALUES (%s, %s, %s)",
+                 (self.lib, translation, work_id))
         person_id = self.person()
         self.sql(*self.role(work_id, person_id, 0))
         self.refused(psycopg.errors.UniqueViolation, self.role(work_id, person_id, 1))
         self.sql(*self.role(work_id, person_id, 1, role_type="Editor"))
-        self.assertEqual(self.ordered(work_id), [(person_id, "Author"), (person_id, "Editor")])
+        # One Person translates two translations of one Work, beside a Work-scoped role (I9).
+        self.sql(*self.role(work_id, person_id, 2, role_type="Translator", manifestation_id=primary))
+        self.sql(*self.role(work_id, person_id, 3, role_type="Translator", manifestation_id=translation))
+        self.sql(*self.role(work_id, person_id, 4, role_type="Editor", manifestation_id=translation))
+        self.refused(psycopg.errors.UniqueViolation,
+                     self.role(work_id, person_id, 5, role_type="Translator", manifestation_id=translation))
+        self.assertEqual(self.ordered(work_id), [(person_id, "Author"), (person_id, "Editor"),
+                                                 (person_id, "Translator"), (person_id, "Translator"),
+                                                 (person_id, "Editor")])
 
     def test_role_vocabulary_and_credit_contract(self) -> None:
         work_id, _ = self.work()
@@ -246,17 +257,24 @@ class RoleTests(PeopleSchemaTestCase):
         self.sql("UPDATE prks.manifestations SET work_id = %s WHERE id = %s", (target, sibling))
         self.assertEqual(self.value("SELECT work_id FROM prks.roles WHERE person_id = %s", (person_id,)), target)
 
-    def test_roles_go_with_their_work(self) -> None:
+    def test_work_scoped_roles_go_with_their_work(self) -> None:
         work_id, primary = self.work()
         sibling = new_id("MF")
         self.sql("INSERT INTO prks.manifestations (library_id, id, work_id) VALUES (%s, %s, %s)",
                  (self.lib, sibling, work_id))
         whole, scoped = self.person(), self.person()
         self.sql(*self.role(work_id, whole, 0))
-        self.sql(*self.role(work_id, scoped, 1, manifestation_id=sibling))
-        with self.tx():  # the Work delete's levels (backend/domain/works/commands.py)
-            self.sql("DELETE FROM prks.manifestations WHERE work_id = %s", (work_id,))
-            self.sql("DELETE FROM prks.works WHERE id = %s", (work_id,))
+        self.sql(*self.role(work_id, scoped, 1, role_type="Translator", manifestation_id=sibling))
+        levels = (("DELETE FROM prks.manifestations WHERE work_id = %s", (work_id,)),
+                  ("DELETE FROM prks.works WHERE id = %s", (work_id,)))
+        # A Manifestation-scoped role owns a manifestation-person-role scope the Work
+        # prefix does not tombstone, so its Manifestation cannot take it by cascade.
+        self.refused(psycopg.errors.ForeignKeyViolation, *levels)
+        self.assertEqual(self.count("roles", "work_id", work_id), 2)
+        with self.tx():
+            self.sql("DELETE FROM prks.roles WHERE manifestation_id = %s", (sibling,))
+            for statement, params in levels:
+                self.sql(statement, params)
         self.assertEqual(self.count("roles", "work_id", work_id), 0)
         self.assertEqual(self.count("persons", "id", whole) + self.count("persons", "id", scoped), 2)
         self.assertEqual(self.count("manifestations", "id", primary), 0)
@@ -335,12 +353,12 @@ class PersonGroupTests(PeopleSchemaTestCase):
 
 
 class RevisionOwnershipTests(PeopleSchemaTestCase):
-    """§13.2: no key of a scope-owning People row cascades a delete, except the listed role keys."""
+    """§13.2: no key of a scope-owning People row cascades a delete, except the listed role key."""
 
     SCOPE_OWNERS = ("persons", "roles", "person_groups", "person_group_members")
-    # Listed with the command that tombstones them: the Work delete advances every scope
-    # whose id starts with the Work's id, and a role scope is [work_id, person_id, role_type].
-    LISTED = {("prks.roles", "roles_manifestation_fkey"), ("prks.roles", "roles_work_fkey")}
+    # Listed with the command that tombstones it: the Work delete advances every scope
+    # whose id starts with the Work's id, and a Work-scoped role's is [work_id, person_id, role_type].
+    LISTED = {("prks.roles", "roles_work_fkey")}
 
     def test_only_the_listed_role_keys_cascade(self) -> None:
         rows = self.sql(
