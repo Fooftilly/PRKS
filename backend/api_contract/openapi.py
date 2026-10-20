@@ -9,6 +9,12 @@ from __future__ import annotations
 from typing import Any
 
 from backend.api_contract.errors import ApiErrorEnvelope
+from backend.api_contract.jobs import (
+    EmbeddedJobWorker,
+    JobDiagnostics,
+    JobQueueDepth,
+    JobWorkerCounters,
+)
 from backend.api_contract.performance import (
     PerformanceCounters,
     PerformanceDiagnosticsReset,
@@ -384,6 +390,71 @@ def performance_diagnostics_openapi_document() -> dict[str, Any]:
                 "(#45 / #232). Schemas are generated from the same Pydantic "
                 "boundary as the rest of backend/api_contract. The snapshot "
                 "is disposable process metadata, not canonical library data."
+            ),
+        },
+        "paths": paths,
+        "components": {
+            "schemas": schemas,
+        },
+    }
+
+
+JOB_DIAGNOSTICS_CONTRACT_VERSION = "0.1.0"
+
+
+def job_diagnostics_openapi_document() -> dict[str, Any]:
+    """OpenAPI 3.1 for the job-diagnostics HTTP family (L-J-1 #627, §12.4).
+
+    Served only by the PostgreSQL (``PRKS_AUTH``) runtime, to the Library
+    owner. Same Pydantic-generated contract style as the other slices.
+    """
+    schemas: dict[str, Any] = {}
+    for model in (ApiErrorEnvelope, JobWorkerCounters, EmbeddedJobWorker, JobQueueDepth, JobDiagnostics):
+        _merge_defs(schemas, _schema(model))
+
+    paths: dict[str, Any] = {
+        "/api/diagnostics/jobs": {
+            "get": {
+                "operationId": "getJobDiagnostics",
+                "summary": "Job worker and queue diagnostics",
+                "tags": ["diagnostics"],
+                "responses": {
+                    "200": {
+                        "description": (
+                            "The embedded worker's state and process-local counters, and the "
+                            "queue's depth and oldest age by job kind and state."
+                        ),
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/JobDiagnostics"}
+                            }
+                        },
+                    },
+                    "401": {"description": "No live session (not_authenticated)."},
+                    "403": {"description": "The session's role is not the Library owner."},
+                    "404": {"description": "The SQLite runtime (no PRKS_AUTH) has no jobs."},
+                    "503": {
+                        "description": "The database cannot be read (unavailable).",
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/ApiErrorEnvelope"}
+                            }
+                        },
+                    },
+                },
+            },
+        },
+    }
+
+    return {
+        "openapi": "3.1.0",
+        "info": {
+            "title": "PRKS API — Job diagnostics slice",
+            "version": JOB_DIAGNOSTICS_CONTRACT_VERSION,
+            "description": (
+                "Vertical-slice OpenAPI for job diagnostics (L-J-1 #627). "
+                "Counts, ages, job kinds and reason codes only; the counters "
+                "are disposable process metadata, not canonical library data."
             ),
         },
         "paths": paths,
