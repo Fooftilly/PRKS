@@ -56,7 +56,9 @@ from backend.research_network import ResearchError
 import backend.research_network as research_network
 from backend.api_contract.boundary import dump_response, parse_request
 from backend.api_contract.errors import research_error_envelope
+from backend.api_contract.jobs import JobDiagnostics
 from backend.api_contract.openapi import (
+    job_diagnostics_openapi_document,
     performance_diagnostics_openapi_document,
     positions_openapi_document,
     processing_files_openapi_document,
@@ -1950,6 +1952,22 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             prepared.body, prepared.subtype, max_age=3600
         )
 
+    def _handle_job_diagnostics(self):
+        """Owner-only job diagnostics (§12.4); the route exists only with ``PRKS_AUTH``.
+
+        ``backend.api.session`` admitted the request for ADMIN_LIBRARY. The
+        SQLite runtime has no jobs, so it answers like any unknown route.
+        """
+        jobs = getattr(self.server, "prks_jobs", None)
+        if jobs is None:
+            self.send_error(404, "API endpoint not found")
+            return
+        body = jobs.diagnostics()
+        if body is None:
+            self.send_json(503, {"error": "unavailable", "code": "unavailable"})
+            return
+        self.send_json(200, dump_response(JobDiagnostics, body))
+
     def handle_api_get(self, parsed_path):
         query = parse_qs(parsed_path.query)
         path = parsed_path.path
@@ -1957,6 +1975,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         try:
             if path == '/api/diagnostics/performance':
                 self.send_json(200, dump_response(PerformanceSnapshot, performance_snapshot()))
+            elif path == '/api/diagnostics/jobs':
+                self._handle_job_diagnostics()
             elif path == '/api/works':
                 # `?projection=browse` is an explicit, additive contract: the
                 # compact catalog the browse routes cache. The default response
@@ -2399,6 +2419,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(200, positions_openapi_document())
             elif path == '/api/openapi/performance-diagnostics.json':
                 self.send_json(200, performance_diagnostics_openapi_document())
+            elif path == '/api/openapi/job-diagnostics.json':
+                self.send_json(200, job_diagnostics_openapi_document())
             elif path == '/api/openapi/publishers.json':
                 self.send_json(200, publishers_openapi_document())
             elif path == '/api/openapi/saved-views.json':
@@ -3765,7 +3787,7 @@ class PRKSThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer
     allow_reuse_address = True
 
 
-def run_server(port=PORT, host=DEFAULT_HOST, auth=None):
+def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None):
     if _bound_storage is None:
         raise RuntimeError("storage is not bound; call bind_storage() before run_server()")
     host = normalize_listen_host(host)
@@ -3804,6 +3826,9 @@ def run_server(port=PORT, host=DEFAULT_HOST, auth=None):
         # Authentication (PRKS_AUTH, backend.domain.identity.web_start); None
         # keeps the SQLite runtime's behavior.
         httpd.prks_auth = auth
+        # The PRKS_AUTH runtime's jobs (backend.jobs.embedded.WebJobs): the
+        # embedded worker and the job diagnostics. None for the SQLite runtime.
+        httpd.prks_jobs = jobs
         if auth is not None and auth.settings.public_origin is not None:
             httpd.prks_trusted_hosts = trusted_hosts | {auth.settings.public_origin[1]}
         LOGGER.info(
@@ -3811,6 +3836,11 @@ def run_server(port=PORT, host=DEFAULT_HOST, auth=None):
             safe_bind_scope(host),
             port,
         )
+        if jobs is not None:
+            # Runs the embedded worker while serving and stops it gracefully
+            # when the server stops (SIGTERM or SIGINT included).
+            jobs.serve(httpd)
+            return
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:

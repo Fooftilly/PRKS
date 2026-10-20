@@ -135,6 +135,33 @@ def start_identity(args, config, environ=None):
         raise SystemExit(2) from None
 
 
+def start_jobs(auth, environ=None):
+    """The web process's jobs runtime (``backend.jobs.embedded``), or ``None`` for the SQLite runtime.
+
+    Only with ``PRKS_AUTH`` (``auth`` from :func:`start_identity`, whose start
+    check already ran): unless ``PRKS_EMBEDDED_WORKER`` is ``0`` it prepares
+    one embedded worker, which ``run_server`` starts with the server and
+    stops on shutdown. Any refusal exits with status 2.
+    """
+    if auth is None:
+        return None
+    env = os.environ if environ is None else environ
+    # Imported only when used, so the SQLite runtime never loads psycopg.
+    from backend.db.errors import DatabaseConfigError, DatabaseError
+    from backend.jobs.embedded import EmbeddedWorkerConfigError, web_jobs
+
+    try:
+        return web_jobs(auth.db, env)
+    except EmbeddedWorkerConfigError as exc:
+        print(f"PRKS cannot start its job worker: {exc}", file=sys.stderr)
+    except DatabaseConfigError as exc:
+        print(f"PRKS cannot start its job worker: {exc.message}", file=sys.stderr)
+    except DatabaseError:
+        print("PRKS cannot start its job worker: the database cannot be reached.", file=sys.stderr)
+    auth.db.close()
+    raise SystemExit(2)
+
+
 if __name__ == "__main__":
     args = build_parser().parse_args()
     if args.testing:
@@ -153,6 +180,7 @@ if __name__ == "__main__":
     # Before the root is opened: the PostgreSQL start check takes the root's
     # shared lease, which the single-process lease below excludes.
     auth = start_identity(args, config)
+    jobs = start_jobs(auth)
     # Held until this process exits: the single-process lease (root.lock).
     bound_root = open_storage(config)
     # Every later open stays beneath the root that was validated and leased,
@@ -164,4 +192,4 @@ if __name__ == "__main__":
     bound_root.log_binding()
 
     port = args.port if args.port is not None else (8070 if args.testing else PORT)
-    run_server(port=port, host=args.host, auth=auth)
+    run_server(port=port, host=args.host, auth=auth, jobs=jobs)

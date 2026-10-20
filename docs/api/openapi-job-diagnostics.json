@@ -1,0 +1,249 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "PRKS API \u2014 Job diagnostics slice",
+    "version": "0.1.0",
+    "description": "Vertical-slice OpenAPI for job diagnostics (L-J-1 #627). Counts, ages, job kinds and reason codes only; the counters are disposable process metadata, not canonical library data."
+  },
+  "paths": {
+    "/api/diagnostics/jobs": {
+      "get": {
+        "operationId": "getJobDiagnostics",
+        "summary": "Job worker and queue diagnostics",
+        "tags": [
+          "diagnostics"
+        ],
+        "responses": {
+          "200": {
+            "description": "The embedded worker's state and process-local counters, and the queue's depth and oldest age by job kind and state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobDiagnostics"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live session (not_authenticated)."
+          },
+          "403": {
+            "description": "The session's role is not the Library owner."
+          },
+          "404": {
+            "description": "The SQLite runtime (no PRKS_AUTH) has no jobs."
+          },
+          "503": {
+            "description": "The database cannot be read (unavailable).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ApiErrorEnvelope": {
+        "additionalProperties": false,
+        "description": "Standard JSON error body at the HTTP adapter boundary.",
+        "properties": {
+          "error": {
+            "description": "Human-readable error message.",
+            "minLength": 1,
+            "title": "Error",
+            "type": "string"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Stable machine-readable code when the domain provides one.",
+            "title": "Code"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "JobWorkerCounters": {
+        "additionalProperties": false,
+        "description": "The counters ``backend.jobs.diagnostics.WorkerStats`` always emits (zeros included).",
+        "properties": {
+          "claimed": {
+            "minimum": 0,
+            "title": "Claimed",
+            "type": "integer"
+          },
+          "succeeded": {
+            "minimum": 0,
+            "title": "Succeeded",
+            "type": "integer"
+          },
+          "retried": {
+            "minimum": 0,
+            "title": "Retried",
+            "type": "integer"
+          },
+          "cancelled": {
+            "minimum": 0,
+            "title": "Cancelled",
+            "type": "integer"
+          },
+          "failed": {
+            "minimum": 0,
+            "title": "Failed",
+            "type": "integer"
+          },
+          "lost": {
+            "minimum": 0,
+            "title": "Lost",
+            "type": "integer"
+          },
+          "released": {
+            "minimum": 0,
+            "title": "Released",
+            "type": "integer"
+          },
+          "reaped": {
+            "minimum": 0,
+            "title": "Reaped",
+            "type": "integer"
+          },
+          "errors": {
+            "minimum": 0,
+            "title": "Errors",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "claimed",
+          "succeeded",
+          "retried",
+          "cancelled",
+          "failed",
+          "lost",
+          "released",
+          "reaped",
+          "errors"
+        ],
+        "type": "object"
+      },
+      "EmbeddedJobWorker": {
+        "additionalProperties": false,
+        "description": "The worker thread this web process runs (``PRKS_EMBEDDED_WORKER``).",
+        "properties": {
+          "state": {
+            "enum": [
+              "starting",
+              "waiting",
+              "running",
+              "stopping",
+              "stopped",
+              "refused"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Stable reason code while waiting or refused.",
+            "title": "Reason"
+          },
+          "counters": {
+            "$ref": "#/components/schemas/JobWorkerCounters"
+          }
+        },
+        "required": [
+          "state",
+          "counters"
+        ],
+        "type": "object"
+      },
+      "JobQueueDepth": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "queued",
+              "running",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "count": {
+            "minimum": 0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "oldest_age_seconds": {
+            "minimum": 0,
+            "title": "Oldest Age Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "kind",
+          "state",
+          "count",
+          "oldest_age_seconds"
+        ],
+        "type": "object"
+      },
+      "JobDiagnostics": {
+        "additionalProperties": false,
+        "description": "GET /api/diagnostics/jobs body (owner only; ``PRKS_AUTH`` runtime only).",
+        "properties": {
+          "embedded_worker": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EmbeddedJobWorker"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "null when PRKS_EMBEDDED_WORKER=0 (a separate prks worker runs the jobs)."
+          },
+          "queue": {
+            "items": {
+              "$ref": "#/components/schemas/JobQueueDepth"
+            },
+            "title": "Queue",
+            "type": "array"
+          }
+        },
+        "required": [
+          "embedded_worker",
+          "queue"
+        ],
+        "type": "object"
+      }
+    }
+  }
+}
