@@ -88,7 +88,7 @@ class WorksFacadeTestCase(unittest.TestCase):
             tx, user_id=reader.user_id, library_id=self.actor.library_id))
         valid = sessions.resolve_session(self.db, new.token.reveal())
         assert valid is not None
-        return RequestContext.for_session(valid, epoch=1)
+        return RequestContext.for_session(valid, epoch=1, device_id=reader.context.device_id)
 
     def core(self, work_id: str) -> dict[str, Any]:
         found = library_query(self.db, self.actor.context, lambda scope: queries.work(scope, work_id))

@@ -1368,6 +1368,15 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/jobs/prune.py",
                 "backend/jobs/worker.py",
                 "backend/jobs/embedded.py",
+                "backend/sync/__init__.py",
+                "backend/sync/families.py",
+                "backend/sync/protocol.py",
+                "backend/sync/handlers/__init__.py",
+                "backend/sync/handlers/work_lifecycle.py",
+                "backend/sync/handlers/work_metadata.py",
+                "backend/sync/handlers/work_notes.py",
+                "backend/sync/handlers/work_open.py",
+                "backend/sync/handlers/work_source.py",
             ),
         )
 
