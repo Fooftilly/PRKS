@@ -77,6 +77,19 @@ class WorksFacadeTestCase(unittest.TestCase):
     def other_actor(self, role: str = "owner") -> Actor:
         return provision_actor(self.db, name="Other", role=role)
 
+    def reader_context(self) -> RequestContext:
+        """A reader of this test's Library, signed in."""
+        from backend.domain.identity import sessions
+
+        reader = provision_actor(self.db, role="reader")
+        self.sql("INSERT INTO prks.library_memberships (library_id, user_id, role) VALUES (%s, %s, 'reader')",
+                 (self.actor.library_id, reader.user_id))
+        new = self.db.command(lambda tx: sessions.create_session(
+            tx, user_id=reader.user_id, library_id=self.actor.library_id))
+        valid = sessions.resolve_session(self.db, new.token.reveal())
+        assert valid is not None
+        return RequestContext.for_session(valid, epoch=1)
+
     def core(self, work_id: str) -> dict[str, Any]:
         found = library_query(self.db, self.actor.context, lambda scope: queries.work(scope, work_id))
         assert found is not None
@@ -110,18 +123,6 @@ class ActorTests(WorksFacadeTestCase):
         thread.join()
         self.assertEqual(len(seen), 1)
         self.assertIsInstance(seen[0], facade_context.NoRequestContext)
-
-    def reader_context(self) -> RequestContext:
-        from backend.domain.identity import sessions
-
-        reader = provision_actor(self.db, role="reader")
-        self.sql("INSERT INTO prks.library_memberships (library_id, user_id, role) VALUES (%s, %s, 'reader')",
-                 (self.actor.library_id, reader.user_id))
-        new = self.db.command(lambda tx: sessions.create_session(
-            tx, user_id=reader.user_id, library_id=self.actor.library_id))
-        valid = sessions.resolve_session(self.db, new.token.reveal())
-        assert valid is not None
-        return RequestContext.for_session(valid, epoch=1)
 
     def test_a_reader_reads_but_cannot_create(self) -> None:
         work_id = self.library.add_work("Shared")

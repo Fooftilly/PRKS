@@ -1,4 +1,7 @@
-"""Work commands on PostgreSQL (L-W-1 #628).
+"""Work create, open and delete on PostgreSQL (L-W-1 #628).
+
+Fields, notes and the source have their own modules (``metadata``,
+``notes``, ``source``).
 
 Each command runs inside one
 :func:`~backend.domain.identity.library_scope.library_command` transaction (the
@@ -19,9 +22,11 @@ so create writes no revision rows (as on SQLite).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import LiteralString, Optional
 
 from backend.domain.identity.library_scope import LibraryScope
+from backend.domain.works import revisions
 
 _INSERT_WORK: LiteralString = """
 INSERT INTO prks.works (library_id, id, title, abstract, status, author_text, primary_manifestation_id)
@@ -154,3 +159,109 @@ def _insert_asset(scope: LibraryScope, ids: dict[str, Optional[str]], asset: New
                       provider_id=source.provider_id, url=source.url, byte_size=None, sha256=None,
                       origin=None)
     scope.execute(_INSERT_ASSET, values)
+
+
+# -- open events ----------------------------------------------------------------
+
+_LOCK_OPENED: LiteralString = """
+SELECT to_char(last_opened_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.MS') AS opened,
+       date_trunc('milliseconds', last_opened_at) AS opened_at
+FROM prks.works WHERE library_id = %(library_id)s AND id = %(work_id)s
+FOR NO KEY UPDATE
+"""
+_SET_OPENED: LiteralString = """
+UPDATE prks.works SET last_opened_at = %(moment)s
+WHERE library_id = %(library_id)s AND id = %(work_id)s
+RETURNING to_char(last_opened_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.MS') AS opened
+"""
+
+
+def mark_opened(scope: LibraryScope, work_id: str,
+                moment: datetime) -> tuple[bool, bool, Optional[str]]:
+    """``work_open_sync.set_opened_at``: a max-register at millisecond precision.
+
+    Returns ``(work_exists, changed, effective_value)``, the value in
+    SQLite's text form. An event at or before the recorded one changes
+    nothing; the open is not a revisioned scope, so nothing else advances.
+    """
+    if moment.tzinfo is None:
+        raise ValueError("an open moment needs a time zone")
+    moment = moment.astimezone(timezone.utc).replace(
+        microsecond=moment.microsecond // 1000 * 1000)
+    row = scope.execute(_LOCK_OPENED, {"work_id": work_id}).fetchone()
+    if row is None:
+        return False, False, None
+    if row["opened_at"] is not None and row["opened_at"] >= moment:
+        return True, False, row["opened"]
+    after = scope.execute(_SET_OPENED, {"work_id": work_id, "moment": moment}).fetchone()
+    return True, True, None if after is None else after["opened"]
+
+
+# -- delete ---------------------------------------------------------------------
+
+_LOCK_FOR_DELETE: LiteralString = (
+    "SELECT id FROM prks.works WHERE library_id = %(library_id)s AND id = %(work_id)s FOR UPDATE"
+)
+# Read after the lock, in its own statement, so the Asset is the committed one
+# (see ``metadata.target``).
+_PRIMARY_ASSET: LiteralString = """
+SELECT a.kind AS asset_kind, a.storage_locator
+FROM prks.works w
+JOIN prks.manifestations m
+  ON m.library_id = w.library_id AND m.id = w.primary_manifestation_id AND m.work_id = w.id
+LEFT JOIN prks.assets a
+  ON a.library_id = m.library_id AND a.id = m.primary_asset_id AND a.manifestation_id = m.id
+WHERE w.library_id = %(library_id)s AND w.id = %(work_id)s
+"""
+# Rows that own revision scopes never cascade (§5.2), so the delete removes
+# each level itself, children first; relations and identifiers go with their
+# Manifestation. The pointer keys are deferred, so the order within the
+# Work's rows does not matter to them.
+_DELETE_WORK_LEVELS: tuple[LiteralString, ...] = (
+    "DELETE FROM prks.work_notes WHERE library_id = %(library_id)s AND work_id = %(work_id)s",
+    "DELETE FROM prks.assets WHERE library_id = %(library_id)s AND work_id = %(work_id)s",
+    "DELETE FROM prks.manifestations WHERE library_id = %(library_id)s AND work_id = %(work_id)s",
+    "DELETE FROM prks.works WHERE library_id = %(library_id)s AND id = %(work_id)s",
+)
+_LOCATOR_STILL_USED: LiteralString = """
+SELECT 1 FROM prks.assets
+WHERE library_id = %(library_id)s AND storage_locator = %(locator)s
+LIMIT 1
+"""
+
+
+@dataclass(frozen=True)
+class DeletedWork:
+    """What a delete removed, as ``DeletedWorkRecord`` reports it."""
+
+    work_id: str
+    file_path: str
+    managed_pdf_still_referenced: bool
+
+
+def delete_work(scope: LibraryScope, work_id: str) -> Optional[DeletedWork]:
+    """Delete a Work and everything it owns; None when there is no such Work.
+
+    The Work row is locked first (the order every Works command uses), its
+    notes, Assets, Manifestations and the Work are deleted level by level
+    (relations and identifiers go with their Manifestation), and every
+    revision scope of the Work is tombstoned (§5.2).
+    The managed file stays where it is: claiming and removing bytes is the
+    objects lane's (L-A-1, §11.2), so this only reports the Work's
+    ``/api/pdfs/`` path and whether another Asset of the Library still
+    names the same storage key.
+    """
+    if scope.execute(_LOCK_FOR_DELETE, {"work_id": work_id}).fetchone() is None:
+        return None
+    row = scope.execute(_PRIMARY_ASSET, {"work_id": work_id}).fetchone()
+    if row is None:
+        return None
+    locator = row["storage_locator"] if row["asset_kind"] == "managed_file" else None
+    for statement in _DELETE_WORK_LEVELS:
+        scope.execute(statement, {"work_id": work_id})
+    revisions.tombstone_work_scopes(scope, work_id)
+    still_used = locator is not None and scope.execute(
+        _LOCATOR_STILL_USED, {"locator": locator}).fetchone() is not None
+    return DeletedWork(work_id=work_id,
+                       file_path="/api/pdfs/" + str(locator) if locator else "",
+                       managed_pdf_still_referenced=still_used)
