@@ -316,6 +316,17 @@ class CreateWorkFilingTests(FolderSyncTestCase):
         self.assertEqual(contender, (404, {"code": "FOLDER_NOT_FOUND", "work_id": data["entity_id"]}))
         self.assertEqual(self.count("works"), 0)
 
+    def test_a_create_with_no_folder_waits_for_an_uncategorized_delete(self) -> None:
+        doomed = self.library.ensure_default_uncategorized_folder_id()
+        data = self.create_work()
+        holder, contender = self.race(
+            self.applying(folder_handlers.DELETE_HANDLER, self.envelope("DELETE_FOLDER", doomed, {})),
+            lambda: self.send(data))
+        self.assertEqual(holder[1]["changed"], True)
+        self.assertEqual(contender[0], 200)
+        self.assertNotEqual(contender[1]["folder_id"], doomed)
+        self.assertEqual((self.count("folders"), len(self.filed())), (1, 1))
+
     def test_two_creates_with_no_folder_make_one_uncategorized(self) -> None:
         first, second = self.create_work(), self.create_work()
         holder, contender = self.race(self.applying(work_lifecycle.CREATE_HANDLER, first),

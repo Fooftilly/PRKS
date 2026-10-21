@@ -202,9 +202,11 @@ _WORK_EXISTS_SQL: LiteralString = "SELECT 1 FROM prks.works WHERE library_id = %
 _IN_PLAYLIST_SQL: LiteralString = """
 SELECT 1 FROM prks.playlist_items WHERE library_id = %(library_id)s AND work_id = %(work_id)s
 """
+# Held like any filing target (``share``), so its delete waits for the filing.
 _UNCATEGORIZED_SQL: LiteralString = """
 SELECT id FROM prks.folders
 WHERE library_id = %(library_id)s AND parent_id IS NULL AND title_key = prks.identity_key(%(title)s)
+FOR KEY SHARE
 """
 _RELATED_SQL: LiteralString = (
     "SELECT DISTINCT " + _COLUMNS + " FROM prks.folders f"
