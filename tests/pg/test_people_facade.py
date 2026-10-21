@@ -22,7 +22,6 @@ from backend.domain.identity.library_scope import LibraryScope, library_command
 from backend import person_group_sync as group_rules
 from backend import person_metadata_sync as person_rules
 from backend.domain.people import groups, persons, publishers
-from backend.pg_facade import NotPortedError
 from backend.pg_facade import context as facade_context
 from backend.person_group_sync import GroupRuleError
 from tests.pg.test_works_facade import WorksFacadeTestCase
@@ -326,23 +325,32 @@ class PhantomScopeTests(PeopleFacadeTestCase):
 class DeletionTests(PeopleFacadeTestCase):
     def link_role(self, person_id: str) -> str:
         work_id = self.library.add_work("Linked")
-        self.sql("INSERT INTO prks.roles (library_id, work_id, person_id, role_type, order_index)"
-                 " VALUES (%s, %s, %s, 'Author', 0)", (self.actor.library_id, work_id, person_id))
+        self.library.add_role(person_id, work_id, "Author")
         return work_id
 
     def test_a_person_with_roles_is_kept(self) -> None:
         person = self.library.add_person("Ann", "Lee")
         group = self.library.add_person_group_with_parent_options("G")
         self.library.add_person_to_group(person, group)
-        self.link_role(person)
+        work = self.link_role(person)
         with self.assertRaisesRegex(ValueError, "Cannot delete person with linked works"):
             self.library.delete_person_if_unlinked(person)
         self.assertEqual(self.count("persons"), 1)
         self.assertEqual(self.count("person_group_members"), 1)
         self.assertEqual(self.library.get_all_persons()[0]["assigned_roles"], ["Author"])
-        # A Person's Works are the roles projection, which is not ported yet.
-        with self.assertRaises(NotPortedError):
-            self.library.get_person(person)
+        self.assertEqual([(w["id"], w["role_type"]) for w in self.library.get_person(person)["works"]],
+                         [(work, "Author")])
+
+    def test_a_person_without_works_reads_without_a_data_root(self) -> None:
+        from backend.pg_facade import PostgresLibrary
+
+        person = self.library.add_person("Ann", "Lee")
+        bare = PostgresLibrary(self.db)
+        self.assertEqual(bare.get_person(person)["works"], [])
+        self.link_role(person)
+        # Finishing a Work summary needs the PDF directory.
+        with self.assertRaisesRegex(RuntimeError, "no data root"):
+            bare.get_person(person)
 
     def test_a_deleted_person_leaves_tombstones(self) -> None:
         person = self.library.add_person("Ann", "Lee", aliases="A")

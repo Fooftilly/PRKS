@@ -23,9 +23,14 @@ same rules:
 - Timestamps in SQLite's text form, UTC: ``YYYY-MM-DD HH:MM:SS``, and
   millisecond precision for ``last_opened_at`` (``work_open_sync``).
 
-Fields owned by lanes that have not landed (roles and credits, tags, folders,
-playlists, annotations, Research references) are rendered as the empty value
-SQLite gives a Work that has none; those lanes add them to this projection.
+- People fields (``roles``, ``primary_author``, ``primary_editor``,
+  ``linked_authors``, ``linked_people``): ``credits(primary M)``, the roles
+  :func:`backend.domain.people.roles.attach_credits` puts on the core, with
+  SQLite's display rule (the trimmed credit name, else the Person's name).
+
+Fields owned by lanes that have not landed (tags, folders, playlists,
+annotations, Research references) are rendered as the empty value SQLite
+gives a Work that has none; those lanes add them to this projection.
 The facade adds ``file_size_bytes`` and ``html_content``, which come from the
 file system and the wiki-link resolver rather than from these tables.
 """
@@ -197,16 +202,54 @@ def _pick(core: Mapping[str, Any], columns: tuple[str, ...]) -> dict[str, Any]:
     return {column: core[column] for column in columns}
 
 
-def _person_extras() -> dict[str, Any]:
-    # Credits come from roles (People lane). A Work without roles has none.
-    return {"primary_author": None, "primary_editor": None, "linked_authors": None,
-            "linked_people": []}
+def _trim(text: Any) -> str:
+    # SQLite's TRIM: spaces only.
+    return str(text or "").strip(" ")
+
+
+def canonical_name(person: Mapping[str, Any]) -> str:
+    return _trim(str(person["first_name"] or "") + " " + str(person["last_name"] or ""))
+
+
+def display_name(credit: Mapping[str, Any]) -> str:
+    """The name a role shows: its trimmed credit name, else the Person's name."""
+    return _trim(credit["credit_name"]) or canonical_name(credit["person"])
+
+
+def _credits(core: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    return list(core.get("credits") or [])
+
+
+def _person_extras(core: Mapping[str, Any]) -> dict[str, Any]:
+    """The summary's people columns, from ``credits(primary M)`` in role order."""
+    credits = _credits(core)
+    authors = [display_name(c) for c in credits if c["role_type"] == "Author"]
+    editors = [display_name(c) for c in credits if c["role_type"] == "Editor"]
+    return {
+        "primary_author": authors[0] if authors else None,
+        "primary_editor": editors[0] if editors else None,
+        "linked_authors": ", ".join(authors) if authors else None,
+        "linked_people": [{
+            "person_id": c["person_id"],
+            "role_type": c["role_type"],
+            "order_index": c["order_index"],
+            "canonical_name": canonical_name(c["person"]),
+            "credit_name": _trim(c["credit_name"]),
+            "display_name": display_name(c),
+        } for c in credits],
+    }
 
 
 def _with_extras(out: dict[str, Any], core: Mapping[str, Any]) -> dict[str, Any]:
     out.update(_pick(core, PROJECTION_EXTRAS))
-    out.update(_person_extras())
+    out.update(_person_extras(core))
     return out
+
+
+def role_row(credit: Mapping[str, Any]) -> dict[str, Any]:
+    """SQLite's ``SELECT p.*, r.role_type, r.order_index, r.credit_name, r.manifestation_id``."""
+    return {**credit["person"], "role_type": credit["role_type"], "order_index": credit["order_index"],
+            "credit_name": credit["credit_name"], "manifestation_id": credit["manifestation_id"]}
 
 
 def work_detail(core: Mapping[str, Any]) -> dict[str, Any]:
@@ -214,7 +257,7 @@ def work_detail(core: Mapping[str, Any]) -> dict[str, Any]:
     out = _pick(core, WORK_DETAIL_COLUMNS)
     out.update(_pick(core, PROJECTION_EXTRAS))
     out.update({
-        "roles": [],
+        "roles": [role_row(credit) for credit in _credits(core)],
         "arguments": [],
         "research_refs": {"concepts": [], "arguments": []},
         "annotations": "[]",
@@ -244,6 +287,15 @@ def work_browse(core: Mapping[str, Any], *, excerpt: bool = True,
     for column in extra:
         out[column] = None if column == "folder_id" else core[column]
     return _with_extras(out, core)
+
+
+def person_work(core: Mapping[str, Any], credit: Mapping[str, Any]) -> dict[str, Any]:
+    """One entry of ``get_person``'s ``works``: the Work row, its people columns and the role."""
+    out = _pick(core, WORK_DETAIL_COLUMNS)
+    _with_extras(out, core)
+    out.update({"role_type": credit["role_type"], "order_index": credit["order_index"],
+                "credit_name": credit["credit_name"]})
+    return out
 
 
 def thumbnail_fields(core: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]]:

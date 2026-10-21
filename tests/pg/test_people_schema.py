@@ -177,7 +177,7 @@ class RoleTests(PeopleSchemaTestCase):
 
     def ordered(self, work_id: str) -> list[tuple[str, str]]:
         return [(row[0], row[1]) for row in self.sql(
-            "SELECT person_id, role_type FROM prks.roles WHERE work_id = %s ORDER BY order_index",
+            "SELECT person_id, role_type FROM prks.roles WHERE work_id = %s ORDER BY order_index, seq",
             (work_id,)).fetchall()]
 
     def test_one_row_per_work_person_role_and_scope(self) -> None:
@@ -214,14 +214,16 @@ class RoleTests(PeopleSchemaTestCase):
 
     def test_order_is_total_without_rowid(self) -> None:
         work_id, _ = self.work()
-        first, second = self.person(), self.person()
+        first, second, third = self.person(), self.person(), self.person()
+        # Ties are allowed, as on SQLite; `seq` breaks them in insertion order like `rowid`.
         self.sql(*self.role(work_id, first, 0))
-        # A tie within the Work fails at COMMIT, so a renumbering can pass through one.
-        self.refused_at_commit(psycopg.errors.UniqueViolation, self.role(work_id, second, 0, role_type="Editor"))
         self.sql(*self.role(work_id, second, 1, role_type="Editor"))
-        with self.tx():
-            self.sql("UPDATE prks.roles SET order_index = 1 - order_index WHERE work_id = %s", (work_id,))
-        self.assertEqual(self.ordered(work_id), [(second, "Editor"), (first, "Author")])
+        self.sql(*self.role(work_id, third, 0))
+        self.assertEqual(self.ordered(work_id), [(first, "Author"), (third, "Author"), (second, "Editor")])
+        # `seq` is assigned, never caller-chosen in practice, and unique across the table.
+        seqs = [row[0] for row in self.sql(
+            "SELECT seq FROM prks.roles WHERE work_id = %s ORDER BY seq", (work_id,)).fetchall()]
+        self.assertEqual(len(set(seqs)), 3)
         # The same index on another Work is a different order.
         other, _ = self.work()
         self.sql(*self.role(other, first, 0))

@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any, LiteralString, Optional
 
 from backend.domain.identity.library_scope import LibraryScope
+from backend.domain.people import roles
 from backend.domain.works import projection
 
 _RECENT_ETAG_SQL: LiteralString = """
@@ -28,7 +29,10 @@ FROM prks.works WHERE library_id = %(library_id)s
 
 def _cores(scope: LibraryScope, query: LiteralString,
            params: Optional[dict[str, Any]] = None) -> list[dict[str, Any]]:
-    return [projection.work_core(row) for row in scope.execute(query, params).fetchall()]
+    cores = [projection.work_core(row) for row in scope.execute(query, params).fetchall()]
+    # The People lane's part of the projection, read in the same snapshot.
+    roles.attach_credits(scope, cores)
+    return cores
 
 
 def work(scope: LibraryScope, work_id: str) -> Optional[dict[str, Any]]:

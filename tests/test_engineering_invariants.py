@@ -1366,6 +1366,7 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/domain/people/groups.py",
                 "backend/domain/people/publishers.py",
                 "backend/domain/people/queries.py",
+                "backend/domain/people/roles.py",
                 "backend/jobs/queue.py",
                 "backend/jobs/handlers.py",
                 "backend/jobs/runner.py",
