@@ -87,10 +87,12 @@ def read(scope: LibraryScope, scope_type: str, scope_ids: list[str]) -> dict[str
 
 
 def tombstone_work_scopes(scope: LibraryScope, work_id: str) -> None:
-    """Advance every existing scope of a deleted Work (§5.2).
+    """Advance every existing scope of a deleted Work by one (§5.2).
 
     The rows stay, one revision on: a device holding a base observed before
     the delete is stale against every one of them, whatever it sends later.
+    Only rows that exist advance, so the caller ensures (``lock_many``) any
+    scope that must be tombstoned even if it was never edited.
     """
     array_prefix = '["' + work_id + '",'
     scope.execute(_ADVANCE_WORK_SCOPES, {

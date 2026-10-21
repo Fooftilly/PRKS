@@ -25,9 +25,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import LiteralString, Optional
 
+from backend import work_metadata_sync, work_note_sync, work_source_sync
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.people import roles
-from backend.domain.works import revisions
+from backend.domain.works import metadata, revisions
 
 _INSERT_WORK: LiteralString = """
 INSERT INTO prks.works (library_id, id, title, abstract, status, author_text, primary_manifestation_id)
@@ -259,6 +260,21 @@ class DeletedWork:
     managed_pdf_still_referenced: bool
 
 
+def work_scopes(work_id: str) -> list[tuple[str, str]]:
+    """Every fixed revision scope of a Work: each synchronized field, the source, both notes.
+
+    Pair scopes (a Work's roles) are open-ended, so a delete tombstones the
+    ones the Work ever held (``tombstone_work_scopes``), as a Person delete
+    does for its pairs.
+    """
+    fields = [(metadata.SCOPE_TYPE, metadata.scope_id(work_id, field))
+              for field in sorted(work_metadata_sync.SYNCED_FIELDS)]
+    return [*fields,
+            (work_source_sync.SCOPE_TYPE, work_source_sync.scope_key(work_id)),
+            (work_note_sync.RESEARCH_SCOPE_TYPE, work_id),
+            (work_note_sync.PRIVATE_SCOPE_TYPE, work_id)]
+
+
 def delete_work(scope: LibraryScope, work_id: str) -> Optional[DeletedWork]:
     """Delete a Work and everything it owns; None when there is no such Work.
 
@@ -266,7 +282,9 @@ def delete_work(scope: LibraryScope, work_id: str) -> Optional[DeletedWork]:
     roles (``roles.drop_work_roles``, which tombstones their Manifestation
     scopes), notes, Assets, Manifestations and the Work are deleted level by
     level (relations and identifiers go with their Manifestation), and every
-    revision scope of the Work is tombstoned (§5.2).
+    revision scope of the Work is tombstoned (§5.2): each one this Work ever
+    advanced, and every fixed scope (``work_scopes``) even if never edited, so
+    a base taken before the delete is stale on a Work recreated under the id.
     The managed file stays where it is: claiming and removing bytes is the
     objects lane's (L-A-1, §11.2), so this only reports the Work's
     ``/api/pdfs/`` path and whether another Asset of the Library still
@@ -282,6 +300,10 @@ def delete_work(scope: LibraryScope, work_id: str) -> Optional[DeletedWork]:
     roles.drop_work_roles(scope, work_id)
     for statement in _DELETE_WORK_LEVELS:
         scope.execute(statement, {"work_id": work_id})
+    # A scope no edit ever touched has no row and reads as revision 0, the
+    # same base a recreated Work starts from; ensuring the rows first makes
+    # the tombstone advance it too, exactly once with the rest (#790).
+    revisions.lock_many(scope, work_scopes(work_id))
     revisions.tombstone_work_scopes(scope, work_id)
     still_used = locator is not None and scope.execute(
         _LOCATOR_STILL_USED, {"locator": locator}).fetchone() is not None

@@ -20,11 +20,13 @@ import uuid
 from typing import Any, Optional
 from unittest import mock
 
-from backend import sync_protocol
+from backend import sync_protocol, work_metadata_sync
 from backend.db_manager import PRKSDatabase
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.identity.request_context import RequestContext
+from backend.domain.works import commands, notes
+from backend.entity_ids import generate
 from backend.pg_facade import NotPortedError
 from backend.pg_facade import context as facade_context
 from backend.storage.config import StorageConfig
@@ -222,10 +224,10 @@ class ConcurrentOperationTests(SyncTestCase):
             self.assertEqual(results[0][1]["changed"], True)
             edit = results[1][1]["code"]
             self.assertIn(edit, ("ACKNOWLEDGED", "ENTITY_NOT_FOUND"))
-            # Whichever came first, the field scope ends tombstoned or absent, never live.
+            # Whichever came first, the field scope ends tombstoned, never live.
             revisions = self.revisions_of(work_id)
-            self.assertEqual(revisions, {} if edit == "ENTITY_NOT_FOUND" else
-                             {("work-field", '["%s","title"]' % work_id): 2})
+            self.assertEqual(revisions, self.tombstoned(work_id) if edit == "ENTITY_NOT_FOUND" else
+                             self.tombstoned(work_id, {("work-field", '["%s","title"]' % work_id): 2}))
 
 
 class CreateWorkTests(SyncTestCase):
@@ -371,6 +373,156 @@ class DeleteAgainstPendingTests(SyncTestCase):
         self.assertEqual((status, result["code"], result["current_revision"]), (409, "REVISION_CONFLICT", 2))
         self.assertEqual(self.library.get_work(work_id)["title"], "Again")
         self.assertEqual(self.send(self.title_op(work_id, "Seen after", 2))[1]["server_revision"], 3)
+
+
+# A value for each synchronized field that differs from what
+# `RecreatedWorkTests.recreate` stores, so a stale write is a real conflict.
+_STALE_VALUES = {
+    "status": "Paused", "doc_type": "book", "thumb_page": "7", "year": "1999",
+    "published_date": "1999-01", "source_url": "https://example.org/stale",
+}
+
+
+class RecreatedWorkTests(SyncTestCase):
+    """#790: a delete tombstones every Work scope, edited or not (section 5.2).
+
+    A never-edited scope had no row and read as revision 0, the base a Work
+    recreated under the same client-minted id starts from, so a base-0
+    operation queued against the deleted Work used to land on the new one.
+    """
+
+    maxDiff = None
+
+    def recreate(self, work_id: str) -> None:
+        """A PDF Work under ``work_id``: every field, both notes and an Asset to hold thumb_page."""
+        self.run_command(lambda scope: commands.create_work(scope, commands.NewWork(
+            work_id=work_id, manifestation_id=generate("MF"), title="Again",
+            bibliographic={"doc_type": "article"}, asset_id=generate("AS"),
+            asset=commands.NewAsset(source=commands.ManagedFile(
+                storage_locator="again-%s.pdf" % uuid.uuid4().hex, sha256="0" * 64, byte_size=9)))))
+
+    def deleted_and_recreated(self) -> str:
+        work_id = "W-" + uuid.uuid4().hex.upper()
+        self.recreate(work_id)
+        self.assertIsNotNone(self.library.delete_work_record(work_id))
+        self.recreate(work_id)
+        return work_id
+
+    def test_a_stale_base_0_edit_of_any_field_conflicts_with_the_recreated_work(self) -> None:
+        work_id = self.deleted_and_recreated()
+        before = self.library.get_work(work_id)
+        for field in sorted(work_metadata_sync.SYNCED_FIELDS):
+            with self.subTest(field=field):
+                status, result = self.field(work_id, field, _STALE_VALUES.get(field, "Stale"), 0)
+                self.assertEqual((status, result["code"], result["current_revision"]),
+                                 (409, "REVISION_CONFLICT", 1))
+        self.assertEqual(self.library.get_work(work_id), before)
+        # A base observed after the recreation is current and applies.
+        for field in sorted(work_metadata_sync.SYNCED_FIELDS):
+            with self.subTest(field=field):
+                status, result = self.field(work_id, field, _STALE_VALUES.get(field, "Stale"), 1)
+                self.assertEqual((status, result["code"], result["server_revision"]), (200, "ACKNOWLEDGED", 2))
+
+    def test_a_stale_base_0_note_conflicts_with_the_recreated_work(self) -> None:
+        work_id = self.deleted_and_recreated()
+        for kind in ("research", "private"):
+            with self.subTest(note=kind):
+                status, result = self.note(work_id, kind, "Queued before the delete", 0)
+                self.assertEqual((status, result["code"], result["current_revision"]),
+                                 (409, "REVISION_CONFLICT", 1))
+                status, result = self.note(work_id, kind, "Seen after", 1)
+                self.assertEqual((status, result["code"], result["server_revision"]), (200, "ACKNOWLEDGED", 2))
+        self.assertEqual(self.count("work_notes"), 2)
+
+    def test_stale_base_0_operations_by_sync_never_land_on_a_recreated_work(self) -> None:
+        work_id = "W-" + uuid.uuid4().hex.upper()
+        self.send(self.envelope("CREATE_WORK", work_id, create_payload()))
+        self.send(self.envelope("DELETE_WORK", work_id, {}))
+        self.assertEqual(self.send(self.envelope("CREATE_WORK", work_id, create_payload(title="Again")))[1]
+                         ["changed"], True)
+        before = self.library.get_work(work_id)
+        expected = {"SET_WORK_METADATA_FIELD": "REVISION_CONFLICT", "SET_WORK_RESEARCH_NOTE": "REVISION_CONFLICT",
+                    "SET_WORK_PRIVATE_NOTE": "REVISION_CONFLICT", "SET_WORK_SOURCE": "SOURCE_REVISION_CONFLICT"}
+        stale = [data for data in every_edit(self, work_id, 0) if data["operation"] in expected]
+        for data in stale:
+            with self.subTest(operation=data["operation"]):
+                status, result = self.send(data)
+                self.assertEqual((status, result["code"], result["current_revision"]),
+                                 (409, expected[data["operation"]], 1))
+        self.assertEqual(self.library.get_work(work_id), before)
+        for data in every_edit(self, work_id, 1):
+            if data["operation"] in expected:
+                with self.subTest(operation=data["operation"]):
+                    status, result = self.send(data)
+                    self.assertEqual((status, result["code"], result["server_revision"]),
+                                     (200, "ACKNOWLEDGED", 2))
+
+    def test_edited_scopes_keep_advancing_across_deletes(self) -> None:
+        work_id = "W-" + uuid.uuid4().hex.upper()
+        title = ("work-field", '["%s","title"]' % work_id)
+        self.recreate(work_id)
+        self.assertEqual(self.field(work_id, "title", "One", 0)[1]["server_revision"], 1)
+        self.assertEqual(self.field(work_id, "title", "Two", 1)[1]["server_revision"], 2)
+        self.library.delete_work_record(work_id)
+        self.assertEqual(self.revisions_of(work_id), self.tombstoned(work_id, {title: 3}))
+        self.recreate(work_id)
+        self.assertEqual(self.field(work_id, "title", "Three", 2)[1]["code"], "REVISION_CONFLICT")
+        self.assertEqual(self.field(work_id, "title", "Three", 3)[1]["server_revision"], 4)
+        self.library.delete_work_record(work_id)
+        # Each delete moves every scope on by exactly one: never back, never twice.
+        self.assertEqual(self.revisions_of(work_id),
+                         {**{key: 2 for key in commands.work_scopes(work_id)}, title: 5})
+
+    def test_deleting_an_absent_work_changes_no_revision(self) -> None:
+        work_id = self.deleted_and_recreated()
+        self.library.delete_work_record(work_id)
+        tombstoned = self.revisions_of(work_id)
+        total = self.count("entity_revisions")
+        self.assertIsNone(self.library.delete_work_record(work_id))
+        self.assertEqual(self.send(self.envelope("DELETE_WORK", work_id, {}))[1]["changed"], False)
+        self.assertEqual(self.revisions_of(work_id), tombstoned)
+        never = "W-" + uuid.uuid4().hex.upper()
+        self.assertIsNone(self.library.delete_work_record(never))
+        self.assertEqual(self.revisions_of(never), {})
+        self.assertEqual(self.count("entity_revisions"), total)
+
+    def test_a_delete_tombstones_only_its_own_work_in_its_own_library(self) -> None:
+        work_id = self.library.add_work("Deleted")
+        neighbour = self.library.add_work("Neighbour")
+        self.field(neighbour, "title", "Kept", 0)
+        other = self.other_actor()
+        with facade_context.acting_as(other.context):
+            theirs = self.library.add_work("Theirs")
+        self.run_command(lambda scope: commands.delete_work(scope, theirs) and None, other.context)
+        their_rows = self.sql("SELECT scope_type, scope_id, revision FROM prks.entity_revisions"
+                              " WHERE library_id = %s ORDER BY 1, 2", (other.library_id,))
+        self.library.delete_work_record(work_id)
+        self.assertEqual(self.revisions_of(work_id), self.tombstoned(work_id))
+        self.assertEqual(self.revisions_of(neighbour), {("work-field", '["%s","title"]' % neighbour): 1})
+        self.assertEqual(self.sql("SELECT scope_type, scope_id, revision FROM prks.entity_revisions"
+                                  " WHERE library_id = %s ORDER BY 1, 2", (other.library_id,)), their_rows)
+        self.assertEqual({row["library_id"] for row in self.sql(
+            "SELECT DISTINCT library_id FROM prks.entity_revisions WHERE scope_id = %s OR scope_id LIKE %s",
+            (work_id, '["' + work_id + '"%'))}, {self.actor.library_id})
+
+    def test_concurrent_deletes_tombstone_each_scope_once(self) -> None:
+        work_id = self.library.add_work("Work", source_url=_VIDEO)
+        self.field(work_id, "title", "Edited", 0)
+        results = self.concurrently([
+            (lambda: self.send(self.envelope("DELETE_WORK", work_id, {}))) for _ in range(4)
+        ])
+        self.assertEqual(sorted(result[1]["changed"] for result in results), [False, False, False, True])
+        self.assertEqual(self.revisions_of(work_id),
+                         self.tombstoned(work_id, {("work-field", '["%s","title"]' % work_id): 2}))
+
+    def test_an_edit_of_a_never_edited_scope_waits_for_the_delete(self) -> None:
+        work_id = self.library.add_work("Work", source_url=_VIDEO)
+        deleted, edit = self.hold_work_then(
+            lambda scope: commands.delete_work(scope, work_id),
+            lambda scope: notes.apply_note_operation(scope, notes.rules.RESEARCH_OPERATION, work_id, "late", 0))
+        self.assertIsNotNone(deleted)
+        self.assertEqual(edit[1]["code"], "ENTITY_NOT_FOUND")
+        self.assertEqual(self.revisions_of(work_id), self.tombstoned(work_id))
 
 
 class IsolationTests(SyncTestCase):
