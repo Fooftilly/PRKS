@@ -52,6 +52,11 @@ class MutationTestCase(WorksFacadeTestCase):
                         (work_id, '["' + work_id + '"%'))
         return {(row["scope_type"], row["scope_id"]): row["revision"] for row in rows}
 
+    def tombstoned(self, work_id: str,
+                   edited: dict[tuple[str, str], int] | None = None) -> dict[tuple[str, str], int]:
+        """The scopes a delete leaves: every fixed scope at 1, ``edited`` ones as given."""
+        return {**{key: 1 for key in commands.work_scopes(work_id)}, **(edited or {})}
+
     def wait_for_lock_waiter(self) -> None:
         with psycopg.connect(self.db_conninfo, autocommit=True) as conn:
             for _ in range(500):
@@ -358,7 +363,9 @@ class DeleteTests(MutationTestCase):
         deleted = self.library.delete_work_record(work_id)
         assert deleted is not None
         self.assertEqual((deleted.file_path, deleted.managed_pdf_still_referenced), ("", False))
-        self.assertEqual(self.revisions_of(work_id), {key: value + 1 for key, value in before.items()})
+        # Edited scopes advance once past their last edit; never-edited ones from 0 to 1.
+        self.assertEqual(self.revisions_of(work_id),
+                         self.tombstoned(work_id, {key: value + 1 for key, value in before.items()}))
         self.assertEqual(self.revisions_of(survivor), {("work-field", metadata.scope_id(survivor, "title")): 1})
         for table in ("manifestations", "assets", "work_notes"):
             self.assertEqual(int(self.sql(f"SELECT count(*) AS n FROM prks.{table} WHERE work_id = %s",
@@ -375,7 +382,8 @@ class DeleteTests(MutationTestCase):
         self.assertEqual(edit[1]["server_revision"], 1)
         self.assertIsNotNone(deleted)
         # The delete saw the edit's committed revision and tombstoned past it.
-        self.assertEqual(self.revisions_of(work_id), {("work-field", metadata.scope_id(work_id, "title")): 2})
+        self.assertEqual(self.revisions_of(work_id),
+                         self.tombstoned(work_id, {("work-field", metadata.scope_id(work_id, "title")): 2}))
 
     def test_a_delete_holding_the_work_makes_the_edit_find_nothing(self) -> None:
         work_id = self.library.add_work("Work")
@@ -384,8 +392,8 @@ class DeleteTests(MutationTestCase):
             lambda scope: metadata.apply_field_operation(scope, work_id, "title", "Edited", 0))
         self.assertIsNotNone(deleted)
         self.assertEqual(edit, (404, {"work_id": work_id, "field": "title", "code": "ENTITY_NOT_FOUND"}))
-        # No revision row was created for a Work that no longer exists.
-        self.assertEqual(self.revisions_of(work_id), {})
+        # The edit advanced nothing on a Work that no longer exists: only the tombstone is there.
+        self.assertEqual(self.revisions_of(work_id), self.tombstoned(work_id))
 
     def test_a_shared_file_stays_referenced_only_within_the_library(self) -> None:
         path = self.store_pdf("shared.pdf", b"%PDF-1.4\n")
