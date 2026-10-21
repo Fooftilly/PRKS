@@ -17,8 +17,9 @@ What moves:
   hierarchy lock. Two concurrent reparents can then never each pass the
   cycle check against the tree the other is changing.
 - **A deleted group** leaves its scopes one revision on (§5.2): its field
-  scopes, and each member's pair scope as that membership is removed (SQLite
-  removes the members without advancing them). Its children move to its
+  scopes and every pair scope it ever had, present or removed earlier
+  (SQLite removes the members without advancing them). A deleted Person's
+  pair scopes advance the same way. Its children move to its
   parent, advancing their ``parent_id`` scopes, as on SQLite.
 
 Locks follow the package order (``backend.domain.people``): hierarchy, then
@@ -147,6 +148,28 @@ _PERSON_EXISTS_SQL: LiteralString = (
 _TOMBSTONE_SQL: LiteralString = """
 UPDATE prks.entity_revisions SET revision = revision + 1, updated_at = now()
 WHERE library_id = %(library_id)s AND scope_type = %(scope_type)s AND scope_id = ANY(%(scope_ids)s)
+"""
+_REMOVE_GROUP_MEMBERS_SQL: LiteralString = """
+DELETE FROM prks.person_group_members WHERE library_id = %(library_id)s AND group_id = %(group_id)s
+"""
+_REMOVE_PERSON_MEMBERSHIPS_SQL: LiteralString = """
+DELETE FROM prks.person_group_members WHERE library_id = %(library_id)s AND person_id = %(person_id)s
+"""
+_TOUCH_PERSONS_SQL: LiteralString = """
+UPDATE prks.persons SET updated_at = now() WHERE library_id = %(library_id)s AND id = ANY(%(ids)s)
+"""
+_TOUCH_GROUPS_SQL: LiteralString = """
+UPDATE prks.person_groups SET updated_at = now() WHERE library_id = %(library_id)s AND id = ANY(%(ids)s)
+"""
+_TOMBSTONE_GROUP_PAIRS_SQL: LiteralString = """
+UPDATE prks.entity_revisions SET revision = revision + 1, updated_at = now()
+WHERE library_id = %(library_id)s AND scope_type = %(scope_type)s
+  AND left(scope_id, %(length)s) = %(affix)s
+"""
+_TOMBSTONE_PERSON_PAIRS_SQL: LiteralString = """
+UPDATE prks.entity_revisions SET revision = revision + 1, updated_at = now()
+WHERE library_id = %(library_id)s AND scope_type = %(scope_type)s
+  AND right(scope_id, %(length)s) = %(affix)s
 """
 # Pair scopes are `["PG-…","P-…"]` and ids never hold a quote, so a prefix
 # or suffix match names exactly one side's pairs.
@@ -438,6 +461,46 @@ def replace_memberships(scope: LibraryScope, person_id: str, group_ids: list[str
         set_member(scope, group_id, person_id, True)
 
 
+def _group_affix(group_id: str) -> str:
+    return '["' + group_id + '",'
+
+
+def _person_affix(person_id: str) -> str:
+    return ',"' + person_id + '"]'
+
+
+def drop_memberships(scope: LibraryScope, *, group_id: Optional[str] = None,
+                     person_id: Optional[str] = None) -> None:
+    """Remove every membership of a group or a Person being deleted, and tombstone its pairs.
+
+    Exactly one of ``group_id`` and ``person_id``. Every pair scope of that
+    identity advances once, the pairs removed now and the ones removed
+    earlier alike (§5.2): a client-minted id can be created again, and a base
+    observed before the delete must then be stale. The caller holds the
+    identity's row lock, which every writer of its pairs takes first.
+    """
+    if (group_id is None) == (person_id is None):
+        raise ValueError("drop_memberships takes a group or a Person")
+    if group_id is not None:
+        others = _members(scope, group_id)
+        pairs = [(MEMBER_SCOPE_TYPE, member_scope(group_id, other)) for other in others]
+        tombstone, affix = _TOMBSTONE_GROUP_PAIRS_SQL, _group_affix(group_id)
+        remove, touch = _REMOVE_GROUP_MEMBERS_SQL, _TOUCH_PERSONS_SQL
+    else:
+        assert person_id is not None
+        others = groups_of_person(scope, person_id)
+        pairs = [(MEMBER_SCOPE_TYPE, member_scope(other, person_id)) for other in others]
+        tombstone, affix = _TOMBSTONE_PERSON_PAIRS_SQL, _person_affix(person_id)
+        remove, touch = _REMOVE_PERSON_MEMBERSHIPS_SQL, _TOUCH_GROUPS_SQL
+    # A present pair always has a scope row (its add advanced it); ensuring
+    # one anyway keeps "every pair advances" true for any row.
+    revisions.lock_many(scope, pairs)
+    scope.execute(remove, {"group_id": group_id, "person_id": person_id})
+    if others:
+        scope.execute(touch, {"ids": others})
+    scope.execute(tombstone, {"scope_type": MEMBER_SCOPE_TYPE, "affix": affix, "length": len(affix)})
+
+
 # -- delete ---------------------------------------------------------------------
 
 
@@ -451,9 +514,7 @@ def delete_group(scope: LibraryScope, group_id: str) -> bool:
     children = [str(child["id"]) for child in scope.execute(_CHILDREN_SQL, {"group_id": group_id})]
     scope.execute(_LOCK_FOR_DELETE_SQL, {"group_ids": sorted([group_id, *children])})
     _lock_persons(scope, _members(scope, group_id))
-    members = _members(scope, group_id)
-    for person_id in members:
-        set_member(scope, group_id, person_id, False)
+    drop_memberships(scope, group_id=group_id)
     child_scopes = [(FIELD_SCOPE_TYPE, field_scope(child, "parent_id")) for child in children]
     revisions.lock_many(scope, child_scopes)
     scope.execute(_REPARENT_SQL, {"group_id": group_id, "parent_id": inherited})
@@ -493,7 +554,7 @@ def group_state(scope: LibraryScope, group_id: str) -> Optional[dict[str, Any]]:
     present = set(_members(scope, group_id))
     members: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for (scoped_group, person_id), revision in _pairs(scope, _GROUP_PAIRS_SQL, '["' + group_id + '",'):
+    for (scoped_group, person_id), revision in _pairs(scope, _GROUP_PAIRS_SQL, _group_affix(group_id)):
         if scoped_group != group_id:
             continue
         seen.add(person_id)
@@ -513,7 +574,7 @@ def person_group_state(scope: LibraryScope, person_id: str) -> Optional[dict[str
     present = set(groups_of_person(scope, person_id))
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for (group_id, scoped_person), revision in _pairs(scope, _PERSON_PAIRS_SQL, ',"' + person_id + '"]'):
+    for (group_id, scoped_person), revision in _pairs(scope, _PERSON_PAIRS_SQL, _person_affix(person_id)):
         if scoped_person != person_id:
             continue
         seen.add(group_id)

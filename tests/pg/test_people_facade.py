@@ -340,6 +340,46 @@ class DeletionTests(PeopleFacadeTestCase):
         self.assertEqual(self.library.get_person_groups_state(person)["groups"],
                          [{"group_id": middle, "revision": 2, "present": False}])
 
+    def stale_add(self, group_id: str, person_id: str, base: int) -> tuple[int, dict[str, Any]]:
+        return self.run_command(lambda scope: groups.apply_member_operation(
+            scope, group_id, person_id, True, base), serializable=True)
+
+    def test_a_recreated_person_refuses_a_membership_base_from_before_the_delete(self) -> None:
+        person = self.library.add_person("Ann", "Lee")
+        kept, removed = (self.library.add_person_group_with_parent_options(name) for name in ("Kept", "Gone"))
+        self.library.add_person_to_group(person, kept)
+        self.library.add_person_to_group(person, removed)
+        self.library.remove_person_from_group(person, removed)
+        before = {g["group_id"]: g["revision"] for g in self.library.get_person_groups_state(person)["groups"]}
+        self.assertEqual(before, {kept: 1, removed: 2})
+        self.library.delete_person_if_unlinked(person)
+        # Every pair advanced once: the present one and the one removed earlier.
+        self.assertEqual(self.revisions("person-group-member"),
+                         {groups.member_scope(kept, person): 2, groups.member_scope(removed, person): 3})
+        self.assertEqual(self.library.add_person("Ann", "Lee", person_id=person), person)
+        for group_id, base in before.items():
+            status, result = self.stale_add(group_id, person, base)
+            self.assertEqual((status, result["code"]), (409, "REVISION_CONFLICT"), group_id)
+        self.assertEqual(self.count("person_group_members"), 0)
+
+    def test_a_recreated_group_refuses_a_membership_base_from_before_the_delete(self) -> None:
+        group = self.library.add_person_group_with_parent_options("Readers")
+        present, removed = self.library.add_person("A", "One"), self.library.add_person("B", "Two")
+        self.library.add_person_to_group(present, group)
+        self.library.add_person_to_group(removed, group)
+        self.library.remove_person_from_group(removed, group)
+        before = {m["person_id"]: m["revision"] for m in self.library.get_person_group_sync_state(group)["members"]}
+        self.assertEqual(before, {present: 1, removed: 2})
+        self.library.delete_person_group(group)
+        self.assertEqual(self.revisions("person-group-member"),
+                         {groups.member_scope(group, present): 2, groups.member_scope(group, removed): 3})
+        self.run_command(lambda scope: groups.insert_group(scope, group, "Readers"))
+        for person_id, base in before.items():
+            status, result = self.stale_add(group, person_id, base)
+            self.assertEqual((status, result["code"]), (409, "REVISION_CONFLICT"), person_id)
+        status, result = self.stale_add(group, present, 2)  # a base that saw the delete
+        self.assertEqual((status, result["code"], result["server_revision"]), (200, "ACKNOWLEDGED", 3))
+
     def test_a_deleted_publisher_takes_its_aliases_and_keys(self) -> None:
         publisher = self.library.add_publisher("Press")["id"]
         self.library.add_publisher_alias(publisher, "The Press")

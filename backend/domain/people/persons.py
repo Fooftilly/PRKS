@@ -315,9 +315,10 @@ def update_profile(scope: LibraryScope, person_id: str, fields: Mapping[str, str
 def delete_person(scope: LibraryScope, person_id: str) -> tuple[bool, int]:
     """``delete_person_on_conn``: ``(deleted, linked_role_count)``.
 
-    A Person with roles is not removed. Otherwise every membership goes
-    through the membership boundary (its scope advances), the field scopes
-    are tombstoned, and the aliases go with the row. Run SERIALIZABLE.
+    A Person with roles is not removed. Otherwise the memberships go and
+    every pair scope of the Person advances once, present or removed earlier
+    (``groups.drop_memberships``), the field scopes are tombstoned, and the
+    aliases go with the row. Run SERIALIZABLE.
     """
     member_of = groups.groups_of_person(scope, person_id)
     groups.lock_groups(scope, member_of)
@@ -326,8 +327,7 @@ def delete_person(scope: LibraryScope, person_id: str) -> tuple[bool, int]:
     linked = role_count(scope, person_id)
     if linked:
         return False, linked
-    for group_id in sorted(groups.groups_of_person(scope, person_id)):
-        groups.set_member(scope, group_id, person_id, False)
+    groups.drop_memberships(scope, person_id=person_id)
     scope.execute(_TOMBSTONE_FIELDS_SQL, {
         "scope_type": SCOPE_TYPE,
         "scope_ids": [scope_id(person_id, field) for field in sorted(rules.SYNCED_FIELDS)],
