@@ -79,7 +79,10 @@ CREATE INDEX person_aliases_library_key ON prks.person_aliases (library_id, alia
 -- `ORDER BY order_index, seq`: `order_index` is the caller's placement and
 -- may tie (construction keeps the index it is given, as SQLite does), and
 -- `seq`, an explicit identity in insertion order, replaces SQLite's `rowid`
--- tiebreak, so the order is total and equal to SQLite's. `credit_name` is
+-- tiebreak, so the order is total and equal to SQLite's. Commands never
+-- write `seq`; a restore or copy that loads rows with their `seq` (L-B-1)
+-- must then `setval(pg_get_serial_sequence('prks.roles', 'seq'), max(seq))`,
+-- or the next insert collides on `roles_seq_key`. `credit_name` is
 -- the printed name on this Work; NULL is "no override", so "" is not a
 -- second spelling of it.
 CREATE TABLE prks.roles (
