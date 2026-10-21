@@ -105,15 +105,13 @@ ORDER BY t.name COLLATE "C", t.id COLLATE "C"
 _IN_USE_SQL: LiteralString = """
 SELECT t.id, t.name, t.color,
        to_char(t.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at,
-       (SELECT count(*) FROM prks.work_tags wt
-        WHERE wt.library_id = t.library_id AND wt.tag_id = t.id) AS work_count,
-       (SELECT count(*) FROM prks.folder_tags ft
-        WHERE ft.library_id = t.library_id AND ft.tag_id = t.id) AS folder_count
+       COALESCE(w.n, 0) AS work_count, COALESCE(f.n, 0) AS folder_count
 FROM prks.tags t
-WHERE t.library_id = %(library_id)s
-  AND (EXISTS (SELECT 1 FROM prks.work_tags wt WHERE wt.library_id = t.library_id AND wt.tag_id = t.id)
-       OR EXISTS (SELECT 1 FROM prks.folder_tags ft
-                  WHERE ft.library_id = t.library_id AND ft.tag_id = t.id))
+LEFT JOIN (SELECT tag_id, count(*) AS n FROM prks.work_tags WHERE library_id = %(library_id)s
+           GROUP BY tag_id) w ON w.tag_id = t.id
+LEFT JOIN (SELECT tag_id, count(*) AS n FROM prks.folder_tags WHERE library_id = %(library_id)s
+           GROUP BY tag_id) f ON f.tag_id = t.id
+WHERE t.library_id = %(library_id)s AND (w.n IS NOT NULL OR f.n IS NOT NULL)
 ORDER BY t.name COLLATE "C", t.id COLLATE "C"
 """
 # SQLite orders by LOWER(), which folds ASCII letters only.
