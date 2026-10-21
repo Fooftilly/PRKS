@@ -180,13 +180,13 @@ class RevisionTests(RoleTestCase):
         self.assertEqual((status, result["code"]), (404, "ENTITY_NOT_FOUND"))
         self.assertEqual(self.revisions("work-person-role"), {self.work_scope(self.ann, "Author"): 2})
 
-    def test_a_constructed_role_at_a_taken_index_goes_after_it(self) -> None:
+    def test_constructed_roles_at_a_taken_index_keep_insertion_order(self) -> None:
         for person, role_type, index in ((self.ann, "Author", 0), (self.bo, "Editor", 1),
                                          (self.bo, "Author", 0)):
             self.library.insert_initial_role(self.work, person, role_type, index)
         self.assertEqual([(r["id"], r["role_type"], r["order_index"])
                           for r in self.library.get_work_roles(self.work)],
-                         [(self.ann, "Author", 0), (self.bo, "Author", 1), (self.bo, "Editor", 2)])
+                         [(self.ann, "Author", 0), (self.bo, "Author", 0), (self.bo, "Editor", 1)])
 
 
 class TombstoneTests(RoleTestCase):

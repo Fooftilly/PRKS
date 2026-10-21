@@ -1485,6 +1485,12 @@
           "type": "integer"
         },
         {
+          "identity": "d",
+          "name": "seq",
+          "not_null": true,
+          "type": "bigint"
+        },
+        {
           "name": "credit_name",
           "not_null": false,
           "type": "text"
@@ -1512,18 +1518,30 @@
         "roles_person_id_not_null": "NOT NULL person_id",
         "roles_role_type_check": "CHECK (role_type = ANY (ARRAY['Author'::text, 'Editor'::text, 'Reviewer'::text, 'Mentioned'::text, 'Translator'::text, 'Introduction'::text, 'Foreword'::text, 'Afterword'::text]))",
         "roles_role_type_not_null": "NOT NULL role_type",
+        "roles_seq_key": "UNIQUE (seq)",
+        "roles_seq_not_null": "NOT NULL seq",
         "roles_work_fkey": "FOREIGN KEY (library_id, work_id) REFERENCES prks.works(library_id, id) ON DELETE CASCADE",
         "roles_work_id_not_null": "NOT NULL work_id",
-        "roles_work_id_order_index_key": "UNIQUE (work_id, order_index) DEFERRABLE INITIALLY DEFERRED",
         "roles_work_id_person_id_role_type_manifestation_id_key": "UNIQUE NULLS NOT DISTINCT (work_id, person_id, role_type, manifestation_id)"
       },
       "indexes": {
         "roles_manifestation": "CREATE INDEX roles_manifestation ON prks.roles USING btree (library_id, manifestation_id, work_id) WHERE (manifestation_id IS NOT NULL)",
         "roles_person": "CREATE INDEX roles_person ON prks.roles USING btree (library_id, person_id)",
-        "roles_work": "CREATE INDEX roles_work ON prks.roles USING btree (library_id, work_id, order_index)",
-        "roles_work_id_order_index_key": "CREATE UNIQUE INDEX roles_work_id_order_index_key ON prks.roles USING btree (work_id, order_index)",
+        "roles_seq_key": "CREATE UNIQUE INDEX roles_seq_key ON prks.roles USING btree (seq)",
+        "roles_work": "CREATE INDEX roles_work ON prks.roles USING btree (library_id, work_id, order_index, seq)",
         "roles_work_id_person_id_role_type_manifestation_id_key": "CREATE UNIQUE INDEX roles_work_id_person_id_role_type_manifestation_id_key ON prks.roles USING btree (work_id, person_id, role_type, manifestation_id) NULLS NOT DISTINCT"
       }
+    },
+    "prks.roles_seq_seq": {
+      "cache": 1,
+      "cycle": false,
+      "increment": 1,
+      "kind": "sequence",
+      "max": 9223372036854775807,
+      "min": 1,
+      "owned_by": "prks.roles.seq",
+      "start": 1,
+      "type": "bigint"
     },
     "prks.schema_migrations": {
       "columns": [

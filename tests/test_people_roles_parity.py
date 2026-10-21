@@ -6,15 +6,15 @@ after replacing generated ids, timestamps and ETag digests
 (``tests/people_parity_helpers.py``). On the ``postgres`` leg
 (``scripts/test-postgres --parity``) the left side is
 :class:`backend.pg_facade.PostgresLibrary`. Inputs avoid the documented
-differences (``backend/pg_facade/people.py``): constructed roles never share
-an ``order_index``, and a Person's roles on several Works are created in
-separate commands.
+differences (``backend/pg_facade/people.py``), and a Person's roles on
+several Works are created in separate commands.
 """
 
 from __future__ import annotations
 
 import os
 import sys
+import sqlite3
 from typing import Any
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -181,6 +181,32 @@ class RoleParityTests(PeopleParityTestCase):
         roles = self.same_each("get_work_roles", self.essay)
         self.assertEqual([(r["role_type"], r["order_index"]) for r in roles], [("Editor", 0), ("Author", 2)])
         self.assertEqual(self.same_each("next_role_order_index", self.essay), 3)
+
+    def test_constructed_ties_keep_insertion_order(self) -> None:
+        cy = self.person_both("Oh", first_name="Cy")
+        notes = self.work_both("notes", title="Notes")
+        for work, indexes in ((self.essay, (0, 0, 0)), (notes, (0, 1, 0))):
+            for person, index in zip((self.ann, self.bo, cy), indexes):
+                self.same_each("insert_initial_role", work, person, ("Author", "Author"), (index, index))
+        self.assertEqual([(r["first_name"], r["order_index"]) for r in self.same_each("get_work_roles", self.essay)],
+                         [("Ann", 0), ("Bo", 0), ("Cy", 0)])
+        self.assertEqual([(r["first_name"], r["order_index"]) for r in self.same_each("get_work_roles", notes)],
+                         [("Ann", 0), ("Cy", 0), ("Bo", 1)])
+        mine, theirs = (sorted(rows, key=lambda row: row["title"]) for rows in self.both("get_all_works"))
+        self.assertEqual(self.leg.normal(mine), self.ref.normal(theirs))
+        self.assertEqual([row["linked_authors"] for row in mine], ["Ann Lee, Bo Ng, Cy Oh", "Ann Lee, Cy Oh, Bo Ng"])
+        self.same_each("get_work", self.essay)
+        self.same_each("get_work", notes)
+        for person in (self.ann, self.bo, cy):
+            self.same_each("get_person", person)
+
+    def test_a_constructed_duplicate_is_refused(self) -> None:
+        self.same_each("insert_initial_role", self.essay, self.ann, ("Author", "Author"))
+        for side, work, person in zip(self.sides(), self.essay, self.ann):
+            with self.assertRaises((ValueError, sqlite3.IntegrityError)):
+                side.db.insert_initial_role(work, person, "Author", 3)
+        self.assertEqual([(r["role_type"], r["order_index"]) for r in self.same_each("get_work_roles", self.essay)],
+                         [("Author", 0)])
 
     def test_a_persons_works(self) -> None:
         notes = self.work_both("notes", title="Notes", publisher="Verso", year="1951")

@@ -27,15 +27,12 @@ deliberate:
   scope, never-edited ones included, and every membership pair it ever had.
 - A role names an existing Work and Person: ``add_role`` and
   ``insert_initial_role`` refuse a missing one with ``ValueError`` (SQLite's
-  foreign key raises ``IntegrityError``), and ``add_role`` reports a
-  duplicate role inside the transaction that would insert it.
-- ``order_index`` is unique per Work. A constructed role whose index is
-  taken goes right after the role holding it, and the later roles move up
-  one; SQLite keeps the tie and orders it by ``rowid``, the same order.
+  foreign key raises ``IntegrityError``). ``add_role`` reports a duplicate
+  role inside the transaction that would insert it, and
+  ``insert_initial_role`` refuses one with ``ValueError`` (SQLite's unique
+  key raises ``IntegrityError``).
 - A credit is promoted into the Person's aliases unless it already is the
   Person's name or an alias by identity key (SQLite compares ``lower()``).
-- A Person's ``works`` with equal ``order_index`` are ordered by when each
-  role was created, then by Work id (SQLite: ``rowid``).
 - The methods write Work-scoped roles, as SQLite does; the domain commands
   (``backend.domain.people.roles``) also take a Manifestation, and the
   credits read are ``credits(primary M)`` (``docs/work-identity-model.md``

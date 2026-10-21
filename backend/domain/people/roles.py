@@ -20,11 +20,10 @@ facade writes Work-scoped roles only, as SQLite does until the role-scope
 migration (§7.3); the commands here take a ``manifestation_id`` for the
 slices that will.
 
-**Order.** ``order_index`` is unique per Work (deferrable), so it alone is a
-total order. A mutation appends after every role of the Work. Construction
-keeps the caller's index; when it is taken, the new role goes right after
-the role holding it and the later roles move up one, which is the order
-SQLite's ``rowid`` tiebreak gives.
+**Order** is ``ORDER BY order_index, seq``, SQLite's ``order_index, rowid``:
+``seq`` is the row's identity in insertion order. A mutation appends after
+every role of the Work. Construction keeps the caller's index, ties
+included, so a tie lists in insertion order as on SQLite.
 
 **Locks** (``docs/postgresql-architecture.md`` §8.3, fan-out inputs). A role
 command locks the Work row (``FOR NO KEY UPDATE``: it touches
@@ -91,15 +90,6 @@ _NEXT_ORDER_SQL: LiteralString = """
 SELECT COALESCE(max(order_index), -1) + 1 AS n FROM prks.roles
 WHERE library_id = %(library_id)s AND work_id = %(work_id)s
 """
-_ORDER_TAKEN_SQL: LiteralString = """
-SELECT 1 FROM prks.roles
-WHERE library_id = %(library_id)s AND work_id = %(work_id)s AND order_index = %(order_index)s
-"""
-# The unique key is deferred, so one statement may pass through equal indexes.
-_SHIFT_AFTER_SQL: LiteralString = """
-UPDATE prks.roles SET order_index = order_index + 1
-WHERE library_id = %(library_id)s AND work_id = %(work_id)s AND order_index > %(order_index)s
-"""
 _INSERT_SQL: LiteralString = """
 INSERT INTO prks.roles (library_id, work_id, person_id, role_type, order_index, credit_name,
                         manifestation_id)
@@ -129,17 +119,16 @@ FROM prks.roles r
 JOIN prks.works w ON w.library_id = r.library_id AND w.id = r.work_id
 WHERE r.library_id = %(library_id)s AND r.work_id = ANY(%(work_ids)s)
   AND (r.manifestation_id IS NULL OR r.manifestation_id = w.primary_manifestation_id)
-ORDER BY r.work_id COLLATE "C", r.order_index
+ORDER BY r.work_id COLLATE "C", r.order_index, r.seq
 """
-# One Person's credited roles, in SQLite's ``ORDER BY order_index, rowid``:
-# the role's creation stands in for the rowid.
+# One Person's credited roles, in SQLite's ``ORDER BY order_index, rowid``.
 _PERSON_ROLES_SQL: LiteralString = """
 SELECT r.work_id, r.person_id, r.role_type, r.order_index, r.credit_name, r.manifestation_id
 FROM prks.roles r
 JOIN prks.works w ON w.library_id = r.library_id AND w.id = r.work_id
 WHERE r.library_id = %(library_id)s AND r.person_id = %(person_id)s
   AND (r.manifestation_id IS NULL OR r.manifestation_id = w.primary_manifestation_id)
-ORDER BY r.order_index, r.created_at, r.work_id COLLATE "C", r.role_type COLLATE "C"
+ORDER BY r.order_index, r.seq
 """
 _WORK_ROLE_KEYS_SQL: LiteralString = """
 SELECT person_id, role_type, manifestation_id FROM prks.roles
@@ -492,15 +481,6 @@ class InitialRole:
     credit_name: str = ""
 
 
-def _place(scope: LibraryScope, work_id: str, order_index: int) -> int:
-    """The index a constructed role takes: its own, or right after the role holding it."""
-    params = {"work_id": work_id, "order_index": order_index}
-    if scope.execute(_ORDER_TAKEN_SQL, params).fetchone() is None:
-        return order_index
-    scope.execute(_SHIFT_AFTER_SQL, params)
-    return order_index + 1
-
-
 def insert_initial_roles(scope: LibraryScope, work_id: str, wanted: list[InitialRole], *,
                          skip_invalid: bool) -> int:
     """CONSTRUCTION: roles a new Work is born with. Creates no role revision.
@@ -509,9 +489,9 @@ def insert_initial_roles(scope: LibraryScope, work_id: str, wanted: list[Initial
     UPDATE`` when a credit may become an alias), in id order, after the
     Work; if any is missing nothing is written and
     :class:`~backend.db_manager.MissingPersonError` is raised. A role the
-    Work already has is skipped. An invalid role or credit is skipped when
-    ``skip_invalid`` (``insert_initial_roles``) and raises otherwise
-    (``insert_initial_role``). Returns how many roles were inserted.
+    Work already has, and an invalid role or credit, are skipped when
+    ``skip_invalid`` (``insert_initial_roles``) and raise ``ValueError``
+    otherwise (``insert_initial_role``). Returns how many roles were inserted.
     """
     from backend.db_manager import MissingPersonError
 
@@ -538,11 +518,14 @@ def insert_initial_roles(scope: LibraryScope, work_id: str, wanted: list[Initial
         except ValueError:
             continue
         if has_role(scope, work_id, item.person_id, item.role_type):
+            if not skip_invalid:
+                # The singular constructor reports it, as SQLite's unique key does.
+                raise ValueError(f"This person is already linked to this file as {item.role_type}.")
             continue
         credit = rules.canonical_credit_name(item.credit_name)
         scope.execute(_INSERT_SQL, {"work_id": work_id, "person_id": item.person_id,
                                     "role_type": item.role_type, "manifestation_id": None,
-                                    "order_index": _place(scope, work_id, int(item.order_index)),
+                                    "order_index": int(item.order_index),
                                     "credit_name": credit or None})
         if credit:
             _promote(scope, item.person_id, promoted_aliases(scope, item.person_id, credit))
