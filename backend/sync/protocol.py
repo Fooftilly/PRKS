@@ -7,7 +7,9 @@ same bytes on both backends; a malformed envelope or payload is refused
 before the ledger and never burns an ``op_id``; an exception is never
 ledgered; an ``op_id`` seen before replays its stored status and body, or is
 ``OP_ID_REUSE`` when the request differs; dependencies must be acknowledged
-operations of the same device.
+operations of the same device. One refusal is new: a NUL anywhere in the
+envelope is ``INVALID_ENVELOPE``, because PostgreSQL text and ``jsonb``
+cannot hold it (SQLite stores it).
 
 What changes is how one operation is made exactly-once without SQLite's
 single writer:
@@ -27,6 +29,11 @@ single writer:
 3. The claimant checks dependencies, applies the family's handler and
    writes the terminal result into its claim before COMMIT. A refusal that
    is not ledgered (an unsatisfied dependency) rolls the claim back.
+4. When a constraint the family names (``retry_constraints``) refuses the
+   transaction, a concurrent writer won a race the index or key arbitrates
+   (§7.1). The whole operation runs once more: its claim was rolled back,
+   and its reads now see the winner, so it ledgers the domain refusal or
+   convergence instead of failing.
 
 A ledger row records the Library and the user. An ``op_id`` stored for
 another Library or account is ``OP_ID_REUSE`` and never discloses its
@@ -45,6 +52,7 @@ from psycopg.types.json import Jsonb
 
 from backend import sync_protocol as rules
 from backend.db.database import Database
+from backend.db.errors import ConstraintViolationError
 from backend.domain.identity.authorization import AccessRefused, Capability, Refusal
 from backend.domain.identity.library_scope import LibraryScope, library_command, library_query
 from backend.domain.identity.request_context import RequestContext
@@ -111,6 +119,8 @@ def process_operation(database: Database, ctx: RequestContext, data: object,
         op = rules.normalize_envelope(data)
     except ValueError as exc:
         return 400, {"code": exc.args[0]}
+    if _holds_nul(op):
+        return 400, {"code": "INVALID_ENVELOPE"}  # PostgreSQL text and jsonb cannot hold it
     handler = _HANDLERS.get(op["operation"])
     if handler is None:
         raise NotPortedError("sync operation " + op["operation"])
@@ -129,11 +139,28 @@ def process_operation(database: Database, ctx: RequestContext, data: object,
     def run(scope: LibraryScope) -> Result:
         return _claim_and_apply(scope, ctx, op, digest, handler, received_at, env)
 
-    try:
-        return library_command(database, ctx, Capability.EDIT_LIBRARY, run,
-                               isolation=handler.isolation)
-    except _NotLedgered as refusal:
-        return refusal.status, refusal.result
+    for attempt in (1, 2):
+        try:
+            return library_command(database, ctx, Capability.EDIT_LIBRARY, run,
+                                   isolation=handler.isolation)
+        except _NotLedgered as refusal:
+            return refusal.status, refusal.result
+        except ConstraintViolationError as violation:
+            # The arbiter of a race refused this transaction (§7.1); decide
+            # again with the winner visible, once.
+            if attempt == 2 or violation.constraint not in handler.retry_constraints:
+                raise
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def _holds_nul(value: object) -> bool:
+    if isinstance(value, str):
+        return "\x00" in value
+    if isinstance(value, dict):
+        return any(_holds_nul(key) or _holds_nul(item) for key, item in value.items())
+    if isinstance(value, list):
+        return any(_holds_nul(item) for item in value)
+    return False
 
 
 def _stored(scope: LibraryScope, ctx: RequestContext, op: dict[str, Any]) -> Optional[dict[str, Any]]:
@@ -187,7 +214,8 @@ def _dependencies_satisfied(scope: LibraryScope, op: dict[str, Any]) -> bool:
 # Registration is explicit, as in the SQLite protocol: the families PostgreSQL
 # accepts are readable in one place. Later lanes add theirs here.
 from backend.sync.handlers import (  # noqa: E402
-    work_lifecycle, work_metadata, work_notes, work_open, work_source,
+    person, person_group, work_lifecycle, work_metadata, work_notes, work_open, work_role,
+    work_source,
 )
 
 register("MARK_WORK_OPENED", work_open.HANDLER)
@@ -197,3 +225,14 @@ register("CREATE_WORK", work_lifecycle.CREATE_HANDLER)
 register("DELETE_WORK", work_lifecycle.DELETE_HANDLER)
 register("SET_WORK_RESEARCH_NOTE", work_notes.HANDLER)
 register("SET_WORK_PRIVATE_NOTE", work_notes.HANDLER)
+register("ADD_WORK_PERSON_ROLE", work_role.ADD_HANDLER)
+register("REMOVE_WORK_PERSON_ROLE", work_role.HANDLER)
+register("SET_WORK_PERSON_ROLE_CREDIT", work_role.HANDLER)
+register("CREATE_PERSON", person.CREATE_HANDLER)
+register("DELETE_PERSON", person.DELETE_HANDLER)
+register("SET_PERSON_METADATA_FIELD", person.FIELD_HANDLER)
+register("CREATE_PERSON_GROUP", person_group.CREATE_HANDLER)
+register("SET_PERSON_GROUP_FIELD", person_group.FIELD_HANDLER)
+register("ADD_PERSON_GROUP_MEMBER", person_group.ADD_MEMBER_HANDLER)
+register("REMOVE_PERSON_GROUP_MEMBER", person_group.REMOVE_MEMBER_HANDLER)
+register("DELETE_PERSON_GROUP", person_group.DELETE_HANDLER)

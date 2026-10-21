@@ -4803,6 +4803,10 @@ class PRKSDatabase:
                 conn, work_id, row["primary_manifestation_id"]
             )
 
+    def get_work_roles_state(self, work_id: str) -> Optional[dict]:
+        """The Work-scoped role revisions, tombstones included (``work_role_sync.get_roles_state``)."""
+        return work_role_sync.get_roles_state(self, work_id)
+
     def update_role_credit_name(
         self,
         work_id: str,

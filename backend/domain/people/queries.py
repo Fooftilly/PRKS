@@ -68,6 +68,17 @@ LEFT JOIN (SELECT group_id, count(*) AS n FROM prks.person_group_members
 WHERE g.library_id = %(library_id)s AND g.parent_id = %(group_id)s
 ORDER BY """ + _NOCASE_NAME + """, g.id COLLATE "C"
 """
+_CHILD_COUNT_SQL: LiteralString = """
+SELECT count(*) AS n FROM prks.person_groups
+WHERE library_id = %(library_id)s AND parent_id = %(group_id)s
+"""
+# ``person_sync.catalog_row_on_conn`` lists a new Person's groups by id.
+_GROUP_CHIPS_BY_ID_SQL: LiteralString = """
+SELECT g.id, g.name FROM prks.person_groups g
+JOIN prks.person_group_members m ON m.library_id = g.library_id AND m.group_id = g.id
+WHERE g.library_id = %(library_id)s AND m.person_id = %(person_id)s
+ORDER BY g.id COLLATE "C"
+"""
 _MEMBER_IDS_SQL: LiteralString = """
 SELECT p.id FROM prks.persons p
 JOIN prks.person_group_members m ON m.library_id = p.library_id AND m.person_id = p.id
@@ -126,6 +137,35 @@ def person_detail(scope: LibraryScope, person_id: str) -> Optional[dict[str, Any
     row["groups"] = [dict(group) for group in
                      scope.execute(_GROUPS_FOR_PERSON_SQL, {"person_id": person_id}).fetchall()]
     return row
+
+
+def person_catalog_row(scope: LibraryScope, person_id: str) -> Optional[dict[str, Any]]:
+    """``person_sync.catalog_row_on_conn``: what ``CREATE_PERSON`` acknowledges with.
+
+    The profile row with ``assigned_roles``, ``works`` (always empty: the
+    client reads them separately) and ``groups`` by id.
+    """
+    row = persons.person(scope, person_id)
+    if row is None:
+        return None
+    row["assigned_roles"] = persons.role_types(scope, [person_id]).get(person_id, [])
+    row["works"] = []
+    row["groups"] = [{"id": chip["id"], "name": chip["name"]} for chip in
+                     scope.execute(_GROUP_CHIPS_BY_ID_SQL, {"person_id": person_id}).fetchall()]
+    return row
+
+
+def group_counts_row(scope: LibraryScope, group_id: str) -> Optional[dict[str, Any]]:
+    """The group row with ``member_count`` and ``child_count``: what ``CREATE_PERSON_GROUP`` acknowledges with."""
+    out = groups.group(scope, group_id)
+    if out is None:
+        return None
+    params = {"group_id": group_id}
+    members = scope.execute(_MEMBER_COUNT_SQL, params).fetchone()
+    children = scope.execute(_CHILD_COUNT_SQL, params).fetchone()
+    out["member_count"] = 0 if members is None else int(members["n"])
+    out["child_count"] = 0 if children is None else int(children["n"])
+    return out
 
 
 def group_catalog(scope: LibraryScope) -> list[dict[str, Any]]:
