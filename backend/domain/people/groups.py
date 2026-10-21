@@ -62,6 +62,9 @@ SELECT id FROM prks.person_groups
 WHERE library_id = %(library_id)s AND id = ANY(%(group_ids)s)
 ORDER BY id COLLATE "C" FOR NO KEY UPDATE
 """
+_SHARE_GROUP_SQL: LiteralString = """
+SELECT id FROM prks.person_groups WHERE library_id = %(library_id)s AND id = %(group_id)s FOR SHARE
+"""
 _LOCK_FOR_DELETE_SQL: LiteralString = """
 SELECT id FROM prks.person_groups
 WHERE library_id = %(library_id)s AND id = ANY(%(group_ids)s)
@@ -211,6 +214,15 @@ def lock_groups(scope: LibraryScope, group_ids: list[str]) -> set[str]:
         return set()
     rows = scope.execute(_LOCK_GROUPS_SQL, {"group_ids": sorted(set(group_ids))}).fetchall()
     return {str(row["id"]) for row in rows}
+
+
+def share_group(scope: LibraryScope, group_id: str) -> bool:
+    """Hold the group row against a delete, an edit or a membership change; False when absent.
+
+    The caller takes the hierarchy lock first (:func:`lock_hierarchy`) when
+    it reads the group's children, so their count holds too.
+    """
+    return scope.execute(_SHARE_GROUP_SQL, {"group_id": group_id}).fetchone() is not None
 
 
 def _lock_persons(scope: LibraryScope, person_ids: list[str]) -> set[str]:

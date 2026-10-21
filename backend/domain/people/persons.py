@@ -110,6 +110,9 @@ _LOCK_SQL: LiteralString = (
 _LOCK_FOR_DELETE_SQL: LiteralString = (
     "SELECT id FROM prks.persons WHERE library_id = %(library_id)s AND id = %(person_id)s FOR UPDATE"
 )
+_SHARE_SQL: LiteralString = (
+    "SELECT id FROM prks.persons WHERE library_id = %(library_id)s AND id = %(person_id)s FOR SHARE"
+)
 _ROLE_COUNT_SQL: LiteralString = """
 SELECT count(*) AS n FROM prks.roles WHERE library_id = %(library_id)s AND person_id = %(person_id)s
 """
@@ -236,6 +239,11 @@ def create_person(scope: LibraryScope, person_id: str, fields: Mapping[str, str]
 def lock(scope: LibraryScope, person_id: str) -> bool:
     """Lock the Person row for a change; False when there is none."""
     return scope.execute(_LOCK_SQL, {"person_id": person_id}).fetchone() is not None
+
+
+def share(scope: LibraryScope, person_id: str) -> bool:
+    """Hold the Person row against a delete or an edit until the transaction ends; False when absent."""
+    return scope.execute(_SHARE_SQL, {"person_id": person_id}).fetchone() is not None
 
 
 def stored_value(scope: LibraryScope, person_id: str, field: str) -> Optional[str]:

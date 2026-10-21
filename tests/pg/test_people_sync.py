@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import unittest
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Optional
 from unittest import mock
 
+from backend import sync_protocol
 from backend.db.database import Isolation
 from backend.db.errors import ConstraintViolationError
 from backend.domain.identity.authorization import AccessRefused, Refusal
@@ -25,6 +27,8 @@ from backend.domain.people import groups, persons, roles
 from backend.pg_facade import context as facade_context
 from backend.sync import protocol
 from backend.sync.families import Environment, FamilyHandler, Result
+from backend.sync.handlers import person as person_handlers
+from backend.sync.handlers import person_group as group_handlers
 from backend.sync.handlers.work_role import RoleFiling
 from tests.pg.test_people_facade import PeopleFacadeTestCase
 from tests.pg.test_works_sync import StandInFiling, SyncTestCase, create_payload
@@ -102,6 +106,11 @@ class PeopleSyncTestCase(SyncTestCase, PeopleFacadeTestCase):
         if credit is not None:
             payload["credit_name"] = credit
         return self.envelope(operation, work_id, payload, base)
+
+    def applying(self, handler: FamilyHandler, data: dict[str, Any]) -> Any:
+        """A holder that applies ``data`` with ``handler`` in the race's open transaction."""
+        op = sync_protocol.normalize_envelope(data)
+        return lambda scope: handler.apply(scope, op, datetime.now(timezone.utc), self.env)
 
     def every_operation(self, person_id: str, group_id: str, work_id: str) -> list[dict[str, Any]]:
         """One operation of each People family that changes an existing entity."""
@@ -266,6 +275,25 @@ class PersonRaceTests(PeopleSyncTestCase):
                          (200, 2, "Leigh"))
         self.assertEqual(self.library.get_person(self.person_id)["aliases"], "A. Lee")
 
+    def test_a_repeated_create_waiting_for_a_delete_creates_the_person_again(self) -> None:
+        holder, contender = self.race(
+            lambda scope: persons.delete_person(scope, self.person_id),
+            lambda: self.send(self.envelope("CREATE_PERSON", self.person_id, person_payload(last_name="Again"))))
+        self.assertEqual(holder, (True, 0))
+        self.assertEqual((contender[0], contender[1]["changed"], contender[1]["person"]["last_name"]),
+                         (200, True, "Again"))
+        self.assertEqual(self.library.get_person(self.person_id)["last_name"], "Again")
+
+    def test_a_delete_waiting_for_a_repeated_create_follows_its_acknowledgement(self) -> None:
+        holder, contender = self.race(
+            self.applying(person_handlers.CREATE_HANDLER,
+                          self.envelope("CREATE_PERSON", self.person_id, person_payload(last_name="Other"))),
+            lambda: self.send(self.envelope("DELETE_PERSON", self.person_id, {})))
+        self.assertEqual((holder[0], holder[1]["changed"], holder[1]["person"]["last_name"]), (200, False, "Lee"))
+        self.assertEqual(contender, (200, {"code": "ACKNOWLEDGED", "person_id": self.person_id,
+                                           "changed": True}))
+        self.assertIsNone(self.library.get_person(self.person_id))
+
     def test_creates_of_one_id_queue_and_the_second_converges(self) -> None:
         person_id = "P-" + uuid.uuid4().hex.upper()
         holder, contender = self.race(
@@ -311,6 +339,30 @@ class GroupRaceTests(PeopleSyncTestCase):
                 self.assertEqual((contender[0], contender[1]["changed"], contender[1]["group"]["name"]),
                                  (200, False, "Circle"))
                 self.library.delete_person_group(group_id)
+
+    def test_a_repeated_create_waiting_for_a_delete_creates_the_group_again(self) -> None:
+        group_id = self.create_group("Readers")
+        holder, contender = self.race(
+            lambda scope: groups.delete_group(scope, group_id),
+            lambda: self.send(self.envelope("CREATE_PERSON_GROUP", group_id, group_payload("Again"))))
+        self.assertTrue(holder)
+        self.assertEqual((contender[0], contender[1]["changed"], contender[1]["group"]["name"]),
+                         (200, True, "Again"))
+
+    def test_a_delete_waiting_for_a_repeated_create_follows_its_acknowledgement(self) -> None:
+        group_id = self.create_group("Readers")
+        self.create_group("Child", parent_id=group_id)
+        person_id = self.create_person()
+        self.send(self.member("ADD_PERSON_GROUP_MEMBER", group_id, person_id, 0))
+        holder, contender = self.race(
+            self.applying(group_handlers.CREATE_HANDLER,
+                          self.envelope("CREATE_PERSON_GROUP", group_id, group_payload("Other"))),
+            lambda: self.send(self.envelope("DELETE_PERSON_GROUP", group_id, {})))
+        group = holder[1]["group"]
+        self.assertEqual((holder[1]["changed"], group["name"], group["member_count"], group["child_count"]),
+                         (False, "Readers", 1, 1))
+        self.assertEqual(contender, (200, {"code": "ACKNOWLEDGED", "group_id": group_id, "changed": True}))
+        self.assertIsNone(self.library.get_person_group(group_id))
 
     def test_a_membership_waiting_for_a_group_delete_finds_no_group(self) -> None:
         group_id = self.create_group("Readers")
