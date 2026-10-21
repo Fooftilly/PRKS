@@ -116,6 +116,8 @@ class ActorAndIsolationTests(PeopleFacadeTestCase):
         person = self.library.add_person("Ann", "Lee")
         group = self.library.add_person_group_with_parent_options("Shared name")
         publisher = self.library.add_publisher("Shared Press")["id"]
+        self.library.add_publisher_alias(publisher, "Shared alias")
+        self.library.add_person_to_group(person, group)
         other = self.other_actor()
         with facade_context.acting_as(other.context):
             self.assertEqual(self.library.get_all_persons(), [])
@@ -143,12 +145,26 @@ class ActorAndIsolationTests(PeopleFacadeTestCase):
                 self.library.add_person_to_group(their_person, group)
             with self.assertRaisesRegex(ValueError, "Unknown group id"):
                 self.library.update_person_profile(their_person, {}, [group])
+            self.library.remove_person_from_group(person, group)
+            self.assertFalse(self.library.delete_publisher_alias(publisher, "Shared alias"))
+            self.assertIsNone(self.library.get_person_groups_state(person))
+            with self.assertRaisesRegex(ValueError, "Parent group not found"):
+                self.library.add_person_group_with_parent_options("Child", parent_id=group)
+            with self.assertRaisesRegex(ValueError, "Parent group not found"):
+                self.library.update_person_group(theirs, {"parent_id": group})
         self.assertEqual(self.library.get_person(person)["about"], "")
         self.assertEqual(self.library.get_person_group(group)["name"], "Shared name")
-        self.assertEqual([p["id"] for p in self.library.get_publishers_in_use()], [publisher])
+        self.assertEqual([(p["id"], p["aliases"]) for p in self.library.get_publishers_in_use()],
+                         [(publisher, ["Shared alias"])])
         with self.assertRaisesRegex(ValueError, "Person or group not found"):
             self.library.add_person_to_group(person, theirs)
-        self.assertEqual(self.count("person_group_members"), 0)
+        # Only this Library's own add left a membership and a revision.
+        self.assertEqual(self.sql("SELECT library_id, group_id, person_id FROM prks.person_group_members"),
+                         [{"library_id": self.actor.library_id, "group_id": group, "person_id": person}])
+        self.assertEqual(self.sql("SELECT library_id, scope_id, revision FROM prks.entity_revisions"),
+                         [{"library_id": self.actor.library_id, "scope_id": groups.member_scope(group, person),
+                           "revision": 1}])
+        self.assertEqual(self.library.get_person_group(group)["member_count"], 1)
 
     def test_a_call_without_a_bound_actor_is_refused(self) -> None:
         import contextvars
@@ -290,6 +306,19 @@ class RevisionDecisionTests(PeopleFacadeTestCase):
         status, result = self.run_command(lambda scope: groups.apply_member_operation(
             scope, _MISSING_GROUP, person, True, 0), serializable=True)
         self.assertEqual((status, result["code"]), (404, "ENTITY_NOT_FOUND"))
+
+
+class PhantomScopeTests(PeopleFacadeTestCase):
+    def test_a_no_op_membership_change_leaves_no_revision_row(self) -> None:
+        group = self.library.add_person_group_with_parent_options("G")
+        person = self.library.add_person("Ann", "Lee")
+        self.library.remove_person_from_group(person, group)
+        status, result = self.run_command(lambda scope: groups.apply_member_operation(
+            scope, group, person, False, 0), serializable=True)
+        self.assertEqual((status, result["code"], result["changed"]), (200, "ACKNOWLEDGED", False))
+        self.assertEqual(self.revisions("person-group-member"), {})
+        self.assertEqual(self.library.get_person_group_sync_state(group)["members"], [])
+        self.assertEqual(self.library.get_person_groups_state(person)["groups"], [])
 
 
 class DeletionTests(PeopleFacadeTestCase):

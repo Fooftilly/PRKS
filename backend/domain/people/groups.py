@@ -407,10 +407,13 @@ def set_member(scope: LibraryScope, group_id: str, person_id: str, present: bool
     advances on every change and outlives the relationship. Run an add
     SERIALIZABLE (§7.1: a peer-table write of the protected Person delete).
     """
+    # Every membership writer holds both rows first, so the membership cannot
+    # change under this check, and a no-op leaves no revision row behind
+    # (the state readers would list one as a removed pair).
     lock_pair(scope, group_id, person_id)
-    revisions.lock(scope, MEMBER_SCOPE_TYPE, member_scope(group_id, person_id))
     if is_member(scope, group_id, person_id) == present:
         return False
+    revisions.lock(scope, MEMBER_SCOPE_TYPE, member_scope(group_id, person_id))
     params = {"group_id": group_id, "person_id": person_id}
     scope.execute(_ADD_MEMBER_SQL if present else _REMOVE_MEMBER_SQL, params)
     revisions.advance(scope, MEMBER_SCOPE_TYPE, member_scope(group_id, person_id))
@@ -431,7 +434,10 @@ def apply_member_operation(scope: LibraryScope, group_id: str, person_id: str, d
     if not person_found:
         result["code"] = "PERSON_NOT_FOUND"
         return 404, result
-    revision = revisions.lock(scope, MEMBER_SCOPE_TYPE, member_scope(group_id, person_id))
+    # Read, not ensured: the row locks above serialize every writer of this
+    # pair, and a refused or converged operation must not create its scope.
+    pair = member_scope(group_id, person_id)
+    revision = revisions.read(scope, MEMBER_SCOPE_TYPE, [pair])[pair]
     existing = is_member(scope, group_id, person_id)
     if base_revision > revision:
         result.update(code="FUTURE_REVISION", current_revision=revision,
