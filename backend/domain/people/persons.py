@@ -70,7 +70,15 @@ VALUES (%(library_id)s, %(person_id)s, %(first_name)s, %(last_name)s, %(about)s,
 """
 # Ids are unique across Libraries, so "already there" may be another
 # Library's Person; the caller tells the two apart (``create_person``).
-_INSERT_IF_ABSENT_SQL: LiteralString = _INSERT_SQL + " ON CONFLICT (id) DO NOTHING RETURNING id"
+_INSERT_IF_ABSENT_SQL: LiteralString = """
+INSERT INTO prks.persons (library_id, id, first_name, last_name, about, image_url, link_wikipedia,
+                          link_stanford_encyclopedia, link_iep, links_other, birth_date, death_date)
+VALUES (%(library_id)s, %(person_id)s, %(first_name)s, %(last_name)s, %(about)s, %(image_url)s,
+        %(link_wikipedia)s, %(link_stanford_encyclopedia)s, %(link_iep)s, %(links_other)s,
+        %(birth_date)s, %(death_date)s)
+ON CONFLICT (id) DO NOTHING
+RETURNING id
+"""
 # The first spelling of each identity key, in input order. A pure
 # expression: it reads no table, so it has no Library to filter by.
 _CANONICAL_ALIASES_SQL: LiteralString = """
