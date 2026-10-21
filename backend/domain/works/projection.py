@@ -28,9 +28,11 @@ same rules:
   :func:`backend.domain.people.roles.attach_credits` puts on the core, with
   SQLite's display rule (the trimmed credit name, else the Person's name).
 
-Fields owned by lanes that have not landed (tags, folders, playlists,
+Fields owned by lanes that have not landed (folders, playlists,
 annotations, Research references) are rendered as the empty value SQLite
-gives a Work that has none; those lanes add them to this projection.
+gives a Work that has none; those lanes add them to this projection. The
+detail's ``tags`` are the Organization lane's: ``get_work`` reads them in the
+same snapshot (``backend.domain.organization.links``).
 The facade adds ``file_size_bytes`` and ``html_content``, which come from the
 file system and the wiki-link resolver rather than from these tables.
 """
