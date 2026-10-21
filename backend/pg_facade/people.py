@@ -157,7 +157,9 @@ class PeopleMixin(FacadeMixin):
         person = _read(self, lambda scope: queries.person_detail(scope, person_id))
         if person is None:
             return None
-        finish_work_summary_rows(person["works"], _pdfs_dir(self))
+        # A Person with no Works needs no data root.
+        if person["works"]:
+            finish_work_summary_rows(person["works"], _pdfs_dir(self))
         return person
 
     @ported

@@ -341,6 +341,17 @@ class DeletionTests(PeopleFacadeTestCase):
         self.assertEqual([(w["id"], w["role_type"]) for w in self.library.get_person(person)["works"]],
                          [(work, "Author")])
 
+    def test_a_person_without_works_reads_without_a_data_root(self) -> None:
+        from backend.pg_facade import PostgresLibrary
+
+        person = self.library.add_person("Ann", "Lee")
+        bare = PostgresLibrary(self.db)
+        self.assertEqual(bare.get_person(person)["works"], [])
+        self.link_role(person)
+        # Finishing a Work summary needs the PDF directory.
+        with self.assertRaisesRegex(RuntimeError, "no data root"):
+            bare.get_person(person)
+
     def test_a_deleted_person_leaves_tombstones(self) -> None:
         person = self.library.add_person("Ann", "Lee", aliases="A")
         group = self.library.add_person_group_with_parent_options("G")
