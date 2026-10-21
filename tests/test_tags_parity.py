@@ -28,6 +28,7 @@ from tests.backend_parity import POSTGRES, SQLITE, parametrize_backends
 from tests.people_parity_helpers import PeopleParityTestCase, PeopleSide
 
 _ID = re.compile(r"\b(T|L|F|W|MF|AS)-[0-9A-F]{32}\b")
+_ETAG = re.compile(r'(W/"prks-tags-\d+-)[0-9a-f]+(")')
 _MOMENT = re.compile(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(\.\d{3})?")
 _TAG_OPERATIONS = frozenset({"CREATE_TAG", "DELETE_TAG", "MERGE_TAG"})
 _FOLDER_OPERATIONS = frozenset({"ADD_FOLDER_TAG", "REMOVE_FOLDER_TAG"})
@@ -122,9 +123,14 @@ class TagFacadeParityTests(TagParityTestCase):
         self.same("resolve_tag_id_by_label", "MORALS")
         self.same("resolve_tag_id_by_label", "nothing")
         self.same("get_all_tags")
+        # The catalog ETag hashes the rows, ids and times included: its shape
+        # matches, and it moves with the catalog on both sides.
+        before = self.both("etag_tags_all")
+        self.assertEqual([_ETAG.sub(r"\1x\2", tag) for tag in before], ['W/"prks-tags-2-x"'] * 2)
         self.same_pair("delete_tag_alias", ethics, both("MORALS"))
         self.same_pair("delete_tag_alias", ethics, both("Morals"))
         self.same("get_all_tags")
+        self.assertTrue(all(new != old for new, old in zip(self.both("etag_tags_all"), before)))
         self.refused_pair("add_tag", both("  "))
 
     def test_work_and_folder_tags_and_their_options(self) -> None:
@@ -134,6 +140,8 @@ class TagFacadeParityTests(TagParityTestCase):
         self.same_pair("add_tag_to_work", work, logic)
         self.same_pair("remove_tag_from_work", work, logic)
         self.same_pair("add_tag_to_folder", folder, ethics)
+        self.same_pair("add_tag_to_folder", folder, logic)
+        self.same_pair("remove_tag_from_folder", folder, logic)
         self.same_pair("remove_tag_from_work", work, logic)
         self.same_pair("get_work_tag_options", work)
         self.same_pair("get_folder_tag_options", folder)
