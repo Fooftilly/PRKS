@@ -40,11 +40,7 @@ class OrganizationTestCase(PeopleFacadeTestCase):
             self.hold_serializable = False
 
     def folder(self, title: str = "Folder") -> str:
-        """A Folder row; the Folder commands are a later slice."""
-        folder_id = generate("F")
-        self.sql("INSERT INTO prks.folders (library_id, id, title) VALUES (%s, %s, %s)",
-                 (self.actor.library_id, folder_id, title))
-        return folder_id
+        return self.library.add_folder(title)
 
     def tag(self, name: str) -> str:
         return self.library.add_tag(name)["id"]
