@@ -232,12 +232,19 @@ class WorksMixin(FacadeMixin):
 
     @ported
     def get_work(self, work_id: str) -> Optional[dict]:
+        from backend.domain.organization import links
         from backend.domain.works import projection, queries
 
-        core = self._read(lambda scope: queries.work(scope, work_id))
-        if core is None:
+        def read(scope: LibraryScope) -> Optional[tuple[dict, List[dict]]]:
+            found = queries.work(scope, work_id)
+            return None if found is None else (found, links.tags_of(scope, links.WORK, work_id))
+
+        detail = self._read(read)
+        if detail is None:
             return None
+        core, tags = detail
         work = projection.work_detail(core)
+        work["tags"] = tags  # the Organization lane's (L-O-1), in the same snapshot
         if work.get("text_content"):
             # Not ported yet: reached through the facade's NotPortedError refusal.
             resolve_wiki_links = getattr(self, "resolve_wiki_links")
