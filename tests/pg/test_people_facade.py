@@ -19,6 +19,8 @@ from typing import Any
 from backend.db.database import Isolation
 from backend.domain.identity.authorization import AccessRefused, Capability, Refusal
 from backend.domain.identity.library_scope import LibraryScope, library_command
+from backend import person_group_sync as group_rules
+from backend import person_metadata_sync as person_rules
 from backend.domain.people import groups, persons, publishers
 from backend.pg_facade import NotPortedError
 from backend.pg_facade import context as facade_context
@@ -347,8 +349,10 @@ class DeletionTests(PeopleFacadeTestCase):
         group = self.library.add_person_group_with_parent_options("G")
         self.library.update_person_profile(person, {"about": "x"}, [group])
         self.library.delete_person_if_unlinked(person)
-        fields = self.revisions("person-field")
-        self.assertEqual(fields, {persons.scope_id(person, "about"): 2})
+        # Every field scope advanced once, the never-edited ones included.
+        expected = {persons.scope_id(person, field): 1 for field in person_rules.SYNCED_FIELDS}
+        expected[persons.scope_id(person, "about")] = 2
+        self.assertEqual(self.revisions("person-field"), expected)
         self.assertEqual(self.revisions("person-group-member"), {groups.member_scope(group, person): 2})
         self.assertEqual((self.count("persons"), self.count("person_aliases")), (0, 0))
 
@@ -361,10 +365,10 @@ class DeletionTests(PeopleFacadeTestCase):
         self.library.update_person_group(middle, {"description": "d"})
         self.library.delete_person_group(middle)
         self.assertEqual(self.library.get_person_group(bottom)["parent_id"], top)
-        self.assertEqual(self.revisions("person-group-field"), {
-            groups.field_scope(middle, "description"): 2,
-            groups.field_scope(bottom, "parent_id"): 1,
-        })
+        expected = {groups.field_scope(middle, field): 1 for field in group_rules.FIELDS}
+        expected[groups.field_scope(middle, "description")] = 2
+        expected[groups.field_scope(bottom, "parent_id")] = 1
+        self.assertEqual(self.revisions("person-group-field"), expected)
         self.assertEqual(self.revisions("person-group-member"), {groups.member_scope(middle, person): 2})
         self.assertEqual(self.library.get_person_groups_state(person)["groups"],
                          [{"group_id": middle, "revision": 2, "present": False}])
@@ -408,6 +412,41 @@ class DeletionTests(PeopleFacadeTestCase):
             self.assertEqual((status, result["code"]), (409, "REVISION_CONFLICT"), person_id)
         status, result = self.stale_add(group, present, 2)  # a base that saw the delete
         self.assertEqual((status, result["code"], result["server_revision"]), (200, "ACKNOWLEDGED", 3))
+
+    def test_a_recreated_person_refuses_a_field_base_0_from_before_the_delete(self) -> None:
+        person = self.library.add_person("Ann", "Lee")
+        before = self.library.get_person_metadata_state(person)["fields"]
+        self.assertEqual({field: state["revision"] for field, state in before.items()},
+                         dict.fromkeys(person_rules.SYNCED_FIELDS, 0))
+        self.library.delete_person_if_unlinked(person)
+        self.assertEqual(self.library.add_person("Ann", "Lee", person_id=person), person)
+        for field in sorted(person_rules.SYNCED_FIELDS):
+            value = "https://example.org/a.png" if field == "image_url" else "stale " + field
+            status, result = self.run_command(lambda scope, field=field, value=value: persons.apply_field_operation(
+                scope, person, field, persons.canonical_field(field, value), 0))
+            self.assertEqual((status, result["code"], result["current_revision"]),
+                             (409, "REVISION_CONFLICT", 1), field)
+        self.assertEqual(self.library.get_person(person)["about"], "")
+        status, result = self.run_command(lambda scope: persons.apply_field_operation(
+            scope, person, "about", "seen the delete", 1))
+        self.assertEqual((status, result["code"], result["server_revision"]), (200, "ACKNOWLEDGED", 2))
+
+    def test_a_recreated_group_refuses_a_field_base_0_from_before_the_delete(self) -> None:
+        group = self.library.add_person_group_with_parent_options("Readers")
+        other = self.library.add_person_group_with_parent_options("Other")
+        before = self.library.get_person_group_sync_state(group)["fields"]
+        self.assertEqual({field: state["revision"] for field, state in before.items()},
+                         dict.fromkeys(group_rules.FIELDS, 0))
+        self.library.delete_person_group(group)
+        self.run_command(lambda scope: groups.insert_group(scope, group, "Readers"))
+        stale = {"name": "Renamed", "description": "stale", "parent_id": other}
+        for field, value in sorted(stale.items()):
+            status, result = self.run_command(lambda scope, field=field, value=value: groups.apply_field_operation(
+                scope, group, field, value, 0))
+            self.assertEqual((status, result["code"]), (409, "REVISION_CONFLICT"), field)
+        recreated = self.library.get_person_group(group)
+        self.assertEqual((recreated["name"], recreated["description"], recreated["parent_id"]),
+                         ("Readers", "", None))
 
     def test_a_deleted_publisher_takes_its_aliases_and_keys(self) -> None:
         publisher = self.library.add_publisher("Press")["id"]

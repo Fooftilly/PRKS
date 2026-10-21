@@ -16,8 +16,8 @@ What moves:
   (create under a parent, change a parent, delete) first takes the Library's
   hierarchy lock. Two concurrent reparents can then never each pass the
   cycle check against the tree the other is changing.
-- **A deleted group** leaves its scopes one revision on (§5.2): its field
-  scopes and every pair scope it ever had, present or removed earlier
+- **A deleted group** leaves its scopes one revision on (§5.2): every field
+  scope, edited or not (a revision-0 scope gets its row), and every pair scope it ever had, present or removed earlier
   (SQLite removes the members without advancing them). A deleted Person's
   pair scopes advance the same way. Its children move to its
   parent, advancing their ``parent_id`` scopes, as on SQLite.
@@ -145,10 +145,6 @@ _TOUCH_PERSON_SQL: LiteralString = (
 _PERSON_EXISTS_SQL: LiteralString = (
     "SELECT 1 FROM prks.persons WHERE library_id = %(library_id)s AND id = %(person_id)s"
 )
-_TOMBSTONE_SQL: LiteralString = """
-UPDATE prks.entity_revisions SET revision = revision + 1, updated_at = now()
-WHERE library_id = %(library_id)s AND scope_type = %(scope_type)s AND scope_id = ANY(%(scope_ids)s)
-"""
 _REMOVE_GROUP_MEMBERS_SQL: LiteralString = """
 DELETE FROM prks.person_group_members WHERE library_id = %(library_id)s AND group_id = %(group_id)s
 """
@@ -526,10 +522,9 @@ def delete_group(scope: LibraryScope, group_id: str) -> bool:
     scope.execute(_REPARENT_SQL, {"group_id": group_id, "parent_id": inherited})
     for scope_type, scope_id in sorted(child_scopes):
         revisions.advance(scope, scope_type, scope_id)
-    scope.execute(_TOMBSTONE_SQL, {
-        "scope_type": FIELD_SCOPE_TYPE,
-        "scope_ids": [field_scope(group_id, field) for field in rules.FIELDS],
-    })
+    # Every field scope advances, a never-edited one (revision 0, no row) too.
+    for key in revisions.lock_many(scope, [(FIELD_SCOPE_TYPE, field_scope(group_id, f)) for f in rules.FIELDS]):
+        revisions.advance(scope, *key)
     scope.execute(_DELETE_SQL, {"group_id": group_id})
     return True
 

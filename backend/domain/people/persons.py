@@ -110,12 +110,6 @@ GROUP BY person_id
 _DELETE_SQL: LiteralString = (
     "DELETE FROM prks.persons WHERE library_id = %(library_id)s AND id = %(person_id)s"
 )
-# A deleted Person's field scopes stay, one revision on (§5.2), like a
-# deleted Work's: a device holding a base from before the delete is stale.
-_TOMBSTONE_FIELDS_SQL: LiteralString = """
-UPDATE prks.entity_revisions SET revision = revision + 1, updated_at = now()
-WHERE library_id = %(library_id)s AND scope_type = %(scope_type)s AND scope_id = ANY(%(scope_ids)s)
-"""
 
 
 def scope_id(person_id: str, field: str) -> str:
@@ -317,8 +311,8 @@ def delete_person(scope: LibraryScope, person_id: str) -> tuple[bool, int]:
 
     A Person with roles is not removed. Otherwise the memberships go and
     every pair scope of the Person advances once, present or removed earlier
-    (``groups.drop_memberships``), the field scopes are tombstoned, and the
-    aliases go with the row. Run SERIALIZABLE.
+    (``groups.drop_memberships``), every field scope advances once, edited or
+    not, and the aliases go with the row. Run SERIALIZABLE.
     """
     member_of = groups.groups_of_person(scope, person_id)
     groups.lock_groups(scope, member_of)
@@ -328,9 +322,11 @@ def delete_person(scope: LibraryScope, person_id: str) -> tuple[bool, int]:
     if linked:
         return False, linked
     groups.drop_memberships(scope, person_id=person_id)
-    scope.execute(_TOMBSTONE_FIELDS_SQL, {
-        "scope_type": SCOPE_TYPE,
-        "scope_ids": [scope_id(person_id, field) for field in sorted(rules.SYNCED_FIELDS)],
-    })
+    # Every field scope stays one revision on (§5.2), a never-edited one too:
+    # a base 0 read before the delete must be stale against a Person
+    # recreated under the same id.
+    field_scopes = [(SCOPE_TYPE, scope_id(person_id, field)) for field in rules.SYNCED_FIELDS]
+    for key in revisions.lock_many(scope, field_scopes):
+        revisions.advance(scope, *key)
     scope.execute(_DELETE_SQL, {"person_id": person_id})
     return True, 0

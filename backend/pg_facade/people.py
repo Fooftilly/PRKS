@@ -24,8 +24,8 @@ without their Works. Differences from SQLite, each deliberate:
   spelling per identity key; profile fields and descriptions are ``""``,
   never NULL; a portrait URL is normalized on create too.
 - A new publisher may not be named like another publisher's alias.
-- A deleted group's member scopes advance (tombstones), and a deleted
-  Person's field scopes advance.
+- A deleted group's or Person's scopes advance (tombstones): every field
+  scope, never-edited ones included, and every membership pair it ever had.
 - ``delete_person_if_unlinked`` leaves the cached portrait file in place:
   stored bytes belong to the objects lane (L-A-1), and a post-commit side
   effect is a job, never inline (§5.2).
