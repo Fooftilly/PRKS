@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from typing import LiteralString, Optional
 
 from backend.domain.identity.library_scope import LibraryScope
+from backend.domain.people import roles
 from backend.domain.works import revisions
 
 _INSERT_WORK: LiteralString = """
@@ -262,8 +263,9 @@ def delete_work(scope: LibraryScope, work_id: str) -> Optional[DeletedWork]:
     """Delete a Work and everything it owns; None when there is no such Work.
 
     The Work row is locked first (the order every Works command uses), its
-    notes, Assets, Manifestations and the Work are deleted level by level
-    (relations and identifiers go with their Manifestation), and every
+    roles (``roles.drop_work_roles``, which tombstones their Manifestation
+    scopes), notes, Assets, Manifestations and the Work are deleted level by
+    level (relations and identifiers go with their Manifestation), and every
     revision scope of the Work is tombstoned (§5.2).
     The managed file stays where it is: claiming and removing bytes is the
     objects lane's (L-A-1, §11.2), so this only reports the Work's
@@ -276,6 +278,8 @@ def delete_work(scope: LibraryScope, work_id: str) -> Optional[DeletedWork]:
     if row is None:
         return None
     locator = row["storage_locator"] if row["asset_kind"] == "managed_file" else None
+    # Roles first: a Manifestation-scoped role holds its Manifestation (§5.2).
+    roles.drop_work_roles(scope, work_id)
     for statement in _DELETE_WORK_LEVELS:
         scope.execute(statement, {"work_id": work_id})
     revisions.tombstone_work_scopes(scope, work_id)

@@ -14,7 +14,7 @@ from collections import defaultdict
 from typing import Any, LiteralString, Optional
 
 from backend.domain.identity.library_scope import LibraryScope
-from backend.domain.people import groups, persons
+from backend.domain.people import groups, persons, roles
 
 _NOCASE_NAME: LiteralString = groups.NAME_ORDER
 
@@ -107,18 +107,25 @@ def person_catalog(scope: LibraryScope) -> list[dict[str, Any]]:
     return _decorate(scope, persons.persons(scope), every_person=True)
 
 
-def person_detail(scope: LibraryScope, person_id: str) -> Optional[tuple[dict[str, Any], int]]:
-    """``get_person`` less ``works``, and the Person's role count (None when absent).
+def person_detail(scope: LibraryScope, person_id: str) -> Optional[dict[str, Any]]:
+    """``get_person`` less each Work's ``file_size_bytes`` (None when absent).
 
-    ``works`` is the roles projection (L-P-1's roles slice); the caller
-    refuses a Person who has roles rather than answer without them.
+    ``works`` has one row per credited role, the Work with its people
+    columns and the role, in SQLite's role order.
     """
+    from backend.domain.works import projection
+    from backend.domain.works import queries as works
+
     row = persons.person(scope, person_id)
     if row is None:
         return None
+    credits = roles.person_credits(scope, person_id)
+    cores = works.works_by_ids(scope, sorted({str(c["work_id"]) for c in credits}))
+    row["works"] = [projection.person_work(cores[str(c["work_id"])], c)
+                    for c in credits if str(c["work_id"]) in cores]
     row["groups"] = [dict(group) for group in
                      scope.execute(_GROUPS_FOR_PERSON_SQL, {"person_id": person_id}).fetchall()]
-    return row, persons.role_count(scope, person_id)
+    return row
 
 
 def group_catalog(scope: LibraryScope) -> list[dict[str, Any]]:

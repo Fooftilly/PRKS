@@ -11,12 +11,11 @@ A method acts for the bound
 snapshot, commands in one ``library_command`` transaction. The domain
 modules (and so psycopg) are imported inside the methods.
 
-Ported here (L-P-1 PR 2): Persons and their profile fields, Person Groups
-with their hierarchy and members, and publishers. Roles (``add_role`` and
-the rest of the ``work-person-role`` family, Person ``works`` and the Work
-projection's people fields) are the next slice: until then ``get_person``
-refuses a Person who has roles with ``NotPortedError`` rather than answer
-without their Works. Differences from SQLite, each deliberate:
+Ported here: Persons and their profile fields, Person Groups with their
+hierarchy and members, and publishers (L-P-1 PR 2); Work-Person roles, a
+Person's ``works`` and, through ``backend.domain.works.queries``, the Work
+projection's people fields (PR 3). Differences from SQLite, each
+deliberate:
 
 - Names (groups, publishers, the parent-name lookup) compare by
   ``prks.identity_key`` (§8.1), not ASCII-only ``LOWER``.
@@ -26,6 +25,23 @@ without their Works. Differences from SQLite, each deliberate:
 - A new publisher may not be named like another publisher's alias.
 - A deleted group's or Person's scopes advance (tombstones): every field
   scope, never-edited ones included, and every membership pair it ever had.
+- A role names an existing Work and Person: ``add_role`` and
+  ``insert_initial_role`` refuse a missing one with ``ValueError`` (SQLite's
+  foreign key raises ``IntegrityError``), and ``add_role`` reports a
+  duplicate role inside the transaction that would insert it.
+- ``order_index`` is unique per Work. A constructed role whose index is
+  taken goes right after the role holding it, and the later roles move up
+  one; SQLite keeps the tie and orders it by ``rowid``, the same order.
+- A credit is promoted into the Person's aliases unless it already is the
+  Person's name or an alias by identity key (SQLite compares ``lower()``).
+- A Person's ``works`` with equal ``order_index`` are ordered by when each
+  role was created, then by Work id (SQLite: ``rowid``).
+- The methods write Work-scoped roles, as SQLite does; the domain commands
+  (``backend.domain.people.roles``) also take a Manifestation, and the
+  credits read are ``credits(primary M)`` (``docs/work-identity-model.md``
+  §7.5).
+- A Work delete tombstones every role scope of the Work and its
+  Manifestations, and a Person delete every role scope naming the Person.
 - ``delete_person_if_unlinked`` leaves the cached portrait file in place:
   stored bytes belong to the objects lane (L-A-1), and a post-commit side
   effect is a job, never inline (§5.2).
@@ -80,6 +96,12 @@ def _new_id(prefix: str) -> str:
     return generate(prefix)
 
 
+def _pdfs_dir(library: FacadeMixin) -> str:
+    if library._storage is None:
+        raise RuntimeError("this PostgreSQL library has no data root")
+    return library._storage.pdfs_dir
+
+
 def _etag(label: str, rows: List[dict]) -> str:
     from backend.db_manager import PRKSDatabase
 
@@ -132,16 +154,13 @@ class PeopleMixin(FacadeMixin):
 
     @ported
     def get_person(self, person_id: str) -> Optional[dict]:
+        from backend.db_manager import finish_work_summary_rows
         from backend.domain.people import queries
-        from backend.pg_facade.registry import NotPortedError
 
-        found = _read(self, lambda scope: queries.person_detail(scope, person_id))
-        if found is None:
+        person = _read(self, lambda scope: queries.person_detail(scope, person_id))
+        if person is None:
             return None
-        person, role_count = found
-        if role_count:
-            raise NotPortedError("get_person(works)")
-        person["works"] = []
+        finish_work_summary_rows(person["works"], _pdfs_dir(self))
         return person
 
     @ported
@@ -186,8 +205,15 @@ class PeopleMixin(FacadeMixin):
         pid = (person_id or "").strip()
         if not pid:
             raise ValueError("Person not found.")
-        deleted, linked = _command(self, lambda scope: persons.delete_person(scope, pid),
-                                   serializable=True)
+        from backend.db.errors import ConstraintViolationError
+
+        try:
+            deleted, linked = _command(self, lambda scope: persons.delete_person(scope, pid),
+                                       serializable=True)
+        except ConstraintViolationError as error:
+            if error.constraint != "roles_person_fkey":
+                raise
+            deleted, linked = False, 1
         if linked:
             raise ValueError("Cannot delete person with linked works.")
         if not deleted:
@@ -297,6 +323,132 @@ class PeopleMixin(FacadeMixin):
         from backend.domain.people import groups
 
         return _read(self, lambda scope: groups.person_group_state(scope, person_id))
+
+    # -- Roles ------------------------------------------------------------------
+
+    @ported
+    def has_work_role(self, person_id: str, work_id: str, role_type: str) -> bool:
+        from backend.domain.people import roles
+
+        return _read(self, lambda scope: roles.has_role(scope, work_id, person_id, role_type))
+
+    @ported
+    def add_role(
+        self,
+        person_id: str,
+        work_id: str,
+        role_type: str,
+        order_index: int = 0,
+        credit_name: str = "",
+    ):
+        """A link on an existing Work: appended, with its revision (``order_index`` is ignored)."""
+        from backend import work_role_sync
+        from backend.domain.people import roles
+
+        del order_index
+        work_role_sync.validate_role_type(role_type)
+
+        def run(scope: LibraryScope) -> None:
+            role = roles.Role(work_id, person_id, role_type)
+            # The mode set_role takes again: a share lock is never upgraded.
+            roles.lock_targets(scope, role,
+                               writes_person=work_role_sync.credit_promotable_as_alias(credit_name))
+            if roles.has_role(scope, work_id, person_id, role_type):
+                raise ValueError(f"This person is already linked to this file as {role_type}.")
+            roles.set_role(scope, role, True, credit_name)
+
+        _command(self, run, serializable=True)
+
+    @ported
+    def insert_initial_role(self, work_id: str, person_id: str, role_type: str,
+                            order_index: int = 0, credit_name: str = "") -> None:
+        """A relationship a new Work is born with. Creates no revision."""
+        from backend.domain.people import roles
+
+        wanted = [roles.InitialRole(person_id, role_type, int(order_index), credit_name or "")]
+        _command(self, lambda scope: roles.insert_initial_roles(scope, work_id, wanted,
+                                                                skip_invalid=False),
+                 serializable=True)
+
+    @ported
+    def missing_person_ids(self, person_ids) -> List[str]:
+        from backend.domain.people import roles
+
+        wanted = [str(p).strip() for p in (person_ids or []) if str(p or "").strip()]
+        if not wanted:
+            return []
+        return _read(self, lambda scope: roles.missing_persons(scope, wanted))
+
+    @ported
+    def missing_initial_role_person_ids(self, roles) -> List[str]:
+        from backend.db_manager import PRKSDatabase
+
+        eligible = PRKSDatabase._eligible_initial_roles(roles)
+        return self.missing_person_ids(p for _i, p, _t, _c in eligible)
+
+    @ported
+    def insert_initial_roles(self, work_id: str, roles) -> int:
+        """All the relationships a new Work is born with, in one transaction."""
+        from backend.db_manager import PRKSDatabase
+        from backend.domain.people import roles as role_domain
+
+        wanted = [role_domain.InitialRole(p, t, i, c)
+                  for i, p, t, c in PRKSDatabase._eligible_initial_roles(roles)]
+        if not wanted:
+            return 0
+        return _command(self, lambda scope: role_domain.insert_initial_roles(
+            scope, work_id, wanted, skip_invalid=True), serializable=True)
+
+    @ported
+    def next_role_order_index(self, work_id: str) -> int:
+        from backend.domain.people import roles
+
+        return _read(self, lambda scope: roles.next_order_index(scope, work_id))
+
+    @ported
+    def get_work_roles(self, work_id: str) -> List[dict]:
+        from backend.domain.people import roles
+
+        return _read(self, lambda scope: roles.work_roles(scope, work_id))
+
+    @ported
+    def update_role_credit_name(
+        self,
+        work_id: str,
+        person_id: str,
+        role_type: str,
+        order_index: int,
+        credit_name: str,
+    ) -> bool:
+        """The credit of an existing role; False when there is no such role."""
+        from backend import work_role_sync
+        from backend.domain.people import roles
+
+        del order_index
+        role = roles.Role(work_id, person_id, role_type)
+
+        def run(scope: LibraryScope) -> bool:
+            try:
+                roles.lock_targets(scope, role, writes_person=work_role_sync.credit_promotable_as_alias(
+                    credit_name))
+            except roles.RoleTargetMissing:
+                return False
+            if roles.state(scope, role) is None:
+                return False
+            roles.set_role(scope, role, True, credit_name)
+            return True
+
+        return _command(self, run)
+
+    @ported
+    def delete_work_role(self, work_id: str, person_id: str, role_type: str,
+                         order_index: int = 0) -> bool:
+        """Remove one role; True when a row was deleted (``order_index`` is ignored)."""
+        from backend.domain.people import roles
+
+        del order_index
+        return _command(self, lambda scope: roles.set_role(
+            scope, roles.Role(work_id, person_id, role_type), False))
 
     # -- Publishers -------------------------------------------------------------
 

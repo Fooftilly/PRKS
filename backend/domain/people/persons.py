@@ -311,8 +311,10 @@ def delete_person(scope: LibraryScope, person_id: str) -> tuple[bool, int]:
 
     A Person with roles is not removed. Otherwise the memberships go and
     every pair scope of the Person advances once, present or removed earlier
-    (``groups.drop_memberships``), every field scope advances once, edited or
-    not, and the aliases go with the row. Run SERIALIZABLE.
+    (``groups.drop_memberships``), every role scope that names the Person
+    advances once (``roles.tombstone_person_scopes``), every field scope
+    advances once, edited or not, and the aliases go with the row. Run
+    SERIALIZABLE.
     """
     member_of = groups.groups_of_person(scope, person_id)
     groups.lock_groups(scope, member_of)
@@ -322,6 +324,9 @@ def delete_person(scope: LibraryScope, person_id: str) -> tuple[bool, int]:
     if linked:
         return False, linked
     groups.drop_memberships(scope, person_id=person_id)
+    from backend.domain.people import roles
+
+    roles.tombstone_person_scopes(scope, person_id)
     # Every field scope stays one revision on (§5.2), a never-edited one too:
     # a base 0 read before the delete must be stale against a Person
     # recreated under the same id.
