@@ -361,13 +361,21 @@ def ensure_uncategorized(scope: LibraryScope, new_id: str) -> str:
     SQLite looks for the exact title "Uncategorized" and fails to create one
     when a root Folder holds the title in another case; here that Folder is
     the one (one root Folder holds a title key). A concurrent create of it
-    is waited for (or, SERIALIZABLE, retried) and then found.
+    is waited for and then found: under READ COMMITTED the insert loses on
+    the title and the next read sees the winner; SERIALIZABLE retries.
     """
     found = scope.execute(_UNCATEGORIZED_SQL, {"title": UNCATEGORIZED_TITLE}).fetchone()
     if found is not None:
         return str(found["id"])
-    if insert(scope, new_id, UNCATEGORIZED_TITLE):
-        return new_id
+    try:
+        if insert(scope, new_id, UNCATEGORIZED_TITLE):
+            return new_id
+    except FolderRuleError as error:
+        if error.code != "TITLE_TAKEN":
+            raise
+    found = scope.execute(_UNCATEGORIZED_SQL, {"title": UNCATEGORIZED_TITLE}).fetchone()
+    if found is not None:
+        return str(found["id"])
     raise RuntimeError("a fresh folder id was taken")  # pragma: no cover - ids are random
 
 

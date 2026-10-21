@@ -292,6 +292,13 @@ class RaceTests(FolderTestCase):
         self.assertIsInstance(contender, FolderRuleError)
         self.assertEqual((str(contender), self.count("folders")), (_TAKEN, 1))
 
+    def test_two_first_uncategorized_lookups_make_one_folder(self) -> None:
+        # READ COMMITTED, as the facade runs it: the loser finds the winner.
+        holder, contender = self.race(lambda scope: folders.ensure_uncategorized(scope, generate("F")),
+                                      self.library.ensure_default_uncategorized_folder_id)
+        self.assertIsInstance(holder, str)
+        self.assertEqual((contender, self.count("folders")), (holder, 1))
+
     def test_a_rename_that_loses_a_title_race_decides_again(self) -> None:
         other = self.add("Other")
         holder, contender = self.race(lambda scope: folders.insert(scope, generate("F"), "Same"),
