@@ -165,6 +165,17 @@ class FolderFacadeParityTests(FolderParityTestCase):
 class FolderSyncParityTests(SyncParityTestCase):
     """The Folder operations and ``CREATE_WORK``'s filing."""
 
+    def same_catalog(self) -> None:
+        """``get_all_folders`` on both sides, as sets of rows.
+
+        Sync creates land in one second, and two Folders of one title under
+        different parents then tie: SQLite breaks the tie by rowid and
+        PostgreSQL by id, so only the rows are compared here; the order is
+        :class:`FolderFacadeParityTests`'.
+        """
+        mine, theirs = (sorted(map(repr, side.normal(side.db.get_all_folders()))) for side in self.sides())
+        self.assertEqual(mine, theirs, "get_all_folders")
+
     def new_id(self, prefix: str, label: str) -> str:
         entity_id = prefix + "-" + uuid.uuid4().hex.upper()
         for side in self.sides():
@@ -191,7 +202,7 @@ class FolderSyncParityTests(SyncParityTestCase):
         self.send_both("CREATE_FOLDER", self.new_id("F", "Base"), payload, base=0)
         self.send_both("CREATE_FOLDER", "F-1", payload)
         self.send_both("CREATE_FOLDER", self.new_id("F", "Short"), {"title": "x"})
-        self.same("get_all_folders")
+        self.same_catalog()
 
     def test_folder_fields(self) -> None:
         a = self.create_folder("A")
@@ -217,7 +228,7 @@ class FolderSyncParityTests(SyncParityTestCase):
         self.send_both("SET_FOLDER_FIELD", a, {"field": "title", "value": 5}, 0)
         for folder in (a, b, twin):
             self.same_pair("get_folder_sync_state", both(folder))
-        self.same("get_all_folders")
+        self.same_catalog()
 
     def test_work_folder_and_delete(self) -> None:
         a, b = self.create_folder("A"), self.create_folder("B")
@@ -240,7 +251,7 @@ class FolderSyncParityTests(SyncParityTestCase):
         self.send_both("DELETE_FOLDER", b, {"x": 1})
         self.send_both("DELETE_FOLDER", b, {}, base=0)
         self.same_pair("get_work_folder_state", work)
-        self.same("get_all_folders")
+        self.same_catalog()
 
     def test_create_work_files_the_work(self) -> None:
         folder_id = self.create_folder("Talks")
@@ -258,4 +269,4 @@ class FolderSyncParityTests(SyncParityTestCase):
         self.send_both("CREATE_WORK", self.new_id("W", "Lost"), dict(payload, folder_id=_MISSING_FOLDER))
         self.same_pair("get_work_folder_state", both(first))
         self.same_pair("get_work_folder_state", both(explicit))
-        self.same("get_all_folders")
+        self.same_catalog()

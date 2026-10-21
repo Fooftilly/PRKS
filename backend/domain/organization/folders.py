@@ -85,7 +85,8 @@ TITLE_ORDER: LiteralString = (
 )
 # Counts are aggregated once and joined, never counted per row
 # (scripts/check_correlated_catalog_counts.py).
-_COUNTS: LiteralString = """
+_FROM_WITH_COUNTS: LiteralString = """
+FROM prks.folders f
 LEFT JOIN (SELECT folder_id, count(*) AS n FROM prks.folder_files
            WHERE library_id = %(library_id)s GROUP BY folder_id) wc ON wc.folder_id = f.id
 LEFT JOIN (SELECT parent_id, count(*) AS n FROM prks.folders
@@ -96,7 +97,7 @@ LEFT JOIN (SELECT parent_id, count(*) AS n FROM prks.folders
 # SQLite hides until it holds something.
 _CATALOG_SQL: LiteralString = (
     "SELECT " + _COLUMNS + ", COALESCE(wc.n, 0) AS work_count, COALESCE(cc.n, 0) AS child_count"
-    " FROM prks.folders f" + _COUNTS
+    + _FROM_WITH_COUNTS
     + " WHERE f.library_id = %(library_id)s"
     " AND NOT (f.parent_id IS NULL AND btrim(f.title, ' ') = %(uncategorized)s"
     "          AND wc.n IS NULL AND cc.n IS NULL)"
@@ -105,7 +106,7 @@ _CATALOG_SQL: LiteralString = (
 _CHILDREN_SQL: LiteralString = (
     "SELECT f.id, f.title, f.parent_id, f.description,"
     " COALESCE(wc.n, 0) AS work_count, COALESCE(cc.n, 0) AS child_count"
-    " FROM prks.folders f" + _COUNTS
+    + _FROM_WITH_COUNTS
     + " WHERE f.library_id = %(library_id)s AND f.parent_id = %(folder_id)s"
     " ORDER BY " + TITLE_ORDER + ", f.id COLLATE \"C\""
 )
