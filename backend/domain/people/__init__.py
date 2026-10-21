@@ -2,8 +2,8 @@
 
 Persons and their aliases, Person Groups and their members, publishers, and
 Work-Person roles on PostgreSQL. The schema is
-``backend/db/schema/110_people.sql``. The sync handlers are the lane's last
-slice.
+``backend/db/schema/110_people.sql``. The sync handlers are
+``backend/sync/handlers/person.py``, ``person_group.py`` and ``work_role.py``.
 
 Nothing in the running application imports this package yet: SQLite stays
 the only backend until the cutover slices (§15.3).
@@ -30,8 +30,9 @@ row's newest version only.
 from backend.db import register_constraint
 
 # A rename that races another rename or create of the same name: both pass
-# the read check, and the unique index refuses the second (§7.1). Creates
-# use ON CONFLICT and never reach these.
+# the read check, and the unique index refuses the second (§7.1); a sync
+# operation then reruns once (``retry_constraints``). Creates use ON
+# CONFLICT and never reach these.
 register_constraint("person_groups_library_id_name_key_key", "NAME_TAKEN")
 register_constraint("publisher_keys_pkey", "NAME_TAKEN")
 # A role committed after a Person delete read the Person's roles: the key

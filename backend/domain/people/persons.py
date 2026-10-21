@@ -68,6 +68,9 @@ VALUES (%(library_id)s, %(person_id)s, %(first_name)s, %(last_name)s, %(about)s,
         %(link_wikipedia)s, %(link_stanford_encyclopedia)s, %(link_iep)s, %(links_other)s,
         %(birth_date)s, %(death_date)s)
 """
+# Ids are unique across Libraries, so "already there" may be another
+# Library's Person; the caller tells the two apart (``create_person``).
+_INSERT_IF_ABSENT_SQL: LiteralString = _INSERT_SQL + " ON CONFLICT (id) DO NOTHING RETURNING id"
 # The first spelling of each identity key, in input order. A pure
 # expression: it reads no table, so it has no Library to filter by.
 _CANONICAL_ALIASES_SQL: LiteralString = """
@@ -204,10 +207,22 @@ def field_state(scope: LibraryScope, person_id: str) -> Optional[dict[str, Any]]
 # -- commands -------------------------------------------------------------------
 
 
-def create_person(scope: LibraryScope, person_id: str, fields: Mapping[str, str]) -> None:
-    """Insert a Person from :func:`canonical_fields`. Construction: no revision moves."""
-    scope.execute(_INSERT_SQL, {"person_id": person_id, **{name: fields[name] for name in _COLUMNS}})
+def create_person(scope: LibraryScope, person_id: str, fields: Mapping[str, str], *,
+                  if_absent: bool = False) -> bool:
+    """Insert a Person from :func:`canonical_fields`. Construction: no revision moves.
+
+    With ``if_absent`` an id that already exists, in any Library, inserts
+    nothing and returns False (a concurrent insert of the id is waited for
+    first); otherwise it fails on the primary key. True when inserted.
+    """
+    params = {"person_id": person_id, **{name: fields[name] for name in _COLUMNS}}
+    if if_absent:
+        if scope.execute(_INSERT_IF_ABSENT_SQL, params).fetchone() is None:
+            return False
+    else:
+        scope.execute(_INSERT_SQL, params)
     _write_aliases(scope, person_id, canonical_aliases(scope, fields["aliases"]))
+    return True
 
 
 def lock(scope: LibraryScope, person_id: str) -> bool:

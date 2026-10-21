@@ -916,7 +916,11 @@ command's aggregates (a Manifestation moved onto the source Work). So each
 multi-aggregate command declares its **peer tables**, the link and child
 tables it reads as a set. Every command that can add a row to a peer table
 runs SERIALIZABLE, with the same retry (the unique index stays the
-arbiter for names, and `23505` still maps to the domain refusal).
+arbiter for names, and `23505` still maps to the domain refusal). A
+semantic operation (§7.3) that loses such a race on an index or key its
+family names (`retry_constraints` in `backend/sync/families.py`) runs once
+more instead: its first transaction aborted, so only the rerun, which sees
+the winner, can ledger the refusal or the convergence.
 
 | Command | Peer tables (sets it reads) | Commands that add rows to them, and so run SERIALIZABLE |
 | --- | --- | --- |

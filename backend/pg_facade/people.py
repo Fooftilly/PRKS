@@ -411,6 +411,12 @@ class PeopleMixin(FacadeMixin):
         return _read(self, lambda scope: roles.work_roles(scope, work_id))
 
     @ported
+    def get_work_roles_state(self, work_id: str) -> Optional[dict]:
+        from backend.domain.people import roles
+
+        return _read(self, lambda scope: roles.roles_state(scope, work_id))
+
+    @ported
     def update_role_credit_name(
         self,
         work_id: str,

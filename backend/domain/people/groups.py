@@ -93,6 +93,14 @@ VALUES (%(library_id)s, %(group_id)s, %(name)s, %(parent_id)s, %(description)s)
 ON CONFLICT (library_id, name_key) DO NOTHING
 RETURNING id
 """
+# Any unique key: the name of this Library or an id of any Library. The
+# caller reads which one refused it (``insert_group_if_absent``).
+_INSERT_IF_ABSENT_SQL: LiteralString = """
+INSERT INTO prks.person_groups (library_id, id, name, parent_id, description)
+VALUES (%(library_id)s, %(group_id)s, %(name)s, %(parent_id)s, %(description)s)
+ON CONFLICT DO NOTHING
+RETURNING id
+"""
 _DESCENDANTS_SQL: LiteralString = """
 WITH RECURSIVE sub(id) AS (
   SELECT id FROM prks.person_groups WHERE library_id = %(library_id)s AND parent_id = %(group_id)s
@@ -273,8 +281,27 @@ def insert_group(scope: LibraryScope, group_id: str, name: str, parent_id: str =
     """``insert_group_on_conn``: construction, every field at revision 0.
 
     Raises ``GroupRuleError`` (``INVALID_ENVELOPE``, ``NAME_TAKEN``,
-    ``PARENT_NOT_FOUND``) with nothing inserted.
+    ``PARENT_NOT_FOUND``) with nothing inserted. An id that already exists
+    fails on the primary key.
     """
+    _insert(scope, group_id, name, parent_id, description, if_absent=False)
+    return group_id
+
+
+def insert_group_if_absent(scope: LibraryScope, group_id: str, name: str, parent_id: str = "",
+                           description: str = "") -> bool:
+    """:func:`insert_group`, for ``CREATE_PERSON_GROUP``; False when the id exists.
+
+    The id may exist here or in a Library the caller cannot see (ids are
+    unique across Libraries); the caller tells the two apart. A concurrent
+    insert of the id or the name is waited for first, and the name refuses
+    (``NAME_TAKEN``) only when this Library has it under another id.
+    """
+    return _insert(scope, group_id, name, parent_id, description, if_absent=True)
+
+
+def _insert(scope: LibraryScope, group_id: str, name: str, parent_id: str, description: str, *,
+            if_absent: bool) -> bool:
     clean_name = _validate("name", name)
     clean_parent = _validate("parent_id", parent_id)
     clean_description = _validate("description", description)
@@ -285,12 +312,14 @@ def insert_group(scope: LibraryScope, group_id: str, name: str, parent_id: str =
     if clean_parent and group(scope, clean_parent) is None:
         raise GroupRuleError("PARENT_NOT_FOUND", "Parent group not found.")
     # The read above is a fast refusal; the unique index decides a race.
-    row = scope.execute(_INSERT_SQL, {"group_id": group_id, "name": clean_name,
-                                      "parent_id": clean_parent or None,
-                                      "description": clean_description}).fetchone()
-    if row is None:
+    params = {"group_id": group_id, "name": clean_name, "parent_id": clean_parent or None,
+              "description": clean_description}
+    row = scope.execute(_INSERT_IF_ABSENT_SQL if if_absent else _INSERT_SQL, params).fetchone()
+    if row is not None:
+        return True
+    if not if_absent or (group(scope, group_id) is None and id_for_name(scope, clean_name) is not None):
         raise GroupRuleError("NAME_TAKEN", "A group with this name already exists.")
-    return group_id
+    return False
 
 
 def resolve_parent(scope: LibraryScope, name: str, new_id: str) -> str:
@@ -350,7 +379,8 @@ def _assert_parent_usable(scope: LibraryScope, group_id: str, parent_id: str) ->
         raise GroupRuleError("PARENT_CYCLE", "Cannot set parent to a subgroup (cycle).")
 
 
-def _rule_status(code: str) -> int:
+def rule_status(code: str) -> int:
+    """The HTTP status of a ``GroupRuleError`` code in a terminal result."""
     return 404 if code in ("ENTITY_NOT_FOUND", "PARENT_NOT_FOUND", "PERSON_NOT_FOUND") else 409
 
 
@@ -378,7 +408,7 @@ def apply_field_operation(scope: LibraryScope, group_id: str, field: str, value:
         changed, after = set_field(scope, group_id, field, desired)
     except GroupRuleError as error:
         result.update(code=error.code, current_revision=revision, message=str(error))
-        return _rule_status(error.code), result
+        return rule_status(error.code), result
     result.update(code="ACKNOWLEDGED", server_revision=after, changed=changed, value_omitted=True)
     return 200, result
 

@@ -20,8 +20,10 @@ Result = tuple[int, dict[str, Any]]
 class WorkFiling(Protocol):
     """Where ``CREATE_WORK`` files a new Work: its folder, playlist and roles.
 
-    Those rows belong to the Organization and People lanes (L-O-1, L-P-1),
-    which provide the implementation; until they land the default refuses
+    Those rows belong to the Organization and People lanes (L-O-1, L-P-1).
+    The People half is :class:`backend.sync.handlers.work_role.RoleFiling`;
+    the Organization lane's filing checks and files the folder and playlist
+    and delegates the roles to it. Until that lands the default refuses
     with ``NotPortedError``.
     """
 
@@ -81,6 +83,18 @@ class Handler(Protocol):
         """The part of ``result`` the ledger keeps for replay."""
         ...
 
+    @property
+    def retry_constraints(self) -> frozenset[str]:
+        """Constraints whose violation reruns the operation once (§7.1).
+
+        A unique index or foreign key that is the arbiter of a race refuses
+        the loser with ``23505``/``23503``, which aborts its transaction, so
+        the domain refusal cannot be ledgered there. The rerun decides again
+        with the winner committed and visible, and ledgers the refusal (or
+        the convergence) that its own reads now find.
+        """
+        ...
+
 
 @dataclass(frozen=True)
 class FamilyHandler:
@@ -90,6 +104,7 @@ class FamilyHandler:
     apply_fn: Callable[[LibraryScope, dict[str, Any], datetime, Environment], Result]
     isolation: Isolation = Isolation.READ_COMMITTED
     ledger_fn: Optional[Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]] = None
+    retry_constraints: frozenset[str] = frozenset()
 
     def validate(self, op: dict[str, Any]) -> None:
         self.validate_fn(op)
