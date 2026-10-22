@@ -317,12 +317,17 @@ def insert(scope: LibraryScope, folder_id: str, title: Any, description: Any = "
     clean_parent = _validate("parent_id", parent_id)
     clean_description = _validate("description", description)
     clean_notes = _validate("private_notes", private_notes)
-    if clean_parent and not share(scope, clean_parent):
-        raise FolderRuleError("PARENT_NOT_FOUND", "Parent folder not found.")
-    # A fast refusal; the unique index decides a race. A same-id create that
-    # committed since this command looked holds the title as this id: it is
-    # converged on below, not refused.
-    _assert_title_free(scope, clean_title, clean_parent or None, folder_id)
+    try:
+        if clean_parent and not share(scope, clean_parent):
+            raise FolderRuleError("PARENT_NOT_FOUND", "Parent folder not found.")
+        # A fast refusal; the unique index decides a race.
+        _assert_title_free(scope, clean_title, clean_parent or None, folder_id)
+    except FolderRuleError:
+        # A same-id create that committed since this command looked is
+        # converged on, whatever this payload asked for.
+        if share(scope, folder_id):
+            return False
+        raise
     values = {
         "folder_id": folder_id, "title": clean_title, "description": clean_description,
         "parent_id": clean_parent or None, "private_notes": clean_notes,

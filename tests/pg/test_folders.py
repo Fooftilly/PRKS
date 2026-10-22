@@ -313,20 +313,24 @@ class RaceTests(FolderTestCase):
         thread.start()
         return thread
 
-    def test_a_create_of_an_id_that_commits_before_the_title_check_converges(self) -> None:
-        # The second create finds no Folder, then the first commits before the
-        # second checks the title both asked for: the title is that id's.
+    def commit_while_paused(self, payload: dict[str, Any], pause_in: str, pause_at_call: int) -> Any:
+        """A create of id X ("Shared", a root) held open; a second create of X
+        with ``payload`` finds no X, pauses at call ``pause_at_call`` of
+        ``folders.<pause_in>``, and resumes once the first has committed.
+        Returns the second create's result."""
         folder_id = generate("F")
-        payload = {"title": "Shared", "description": "", "parent_id": "", "private_notes": ""}
         inserted, release, paused, resume = (threading.Event() for _ in range(4))
         outcomes: dict[str, Any] = {}
-        original = folders._assert_title_free
+        original = getattr(folders, pause_in)
+        calls = {"n": 0}
 
-        def pausing(*args: Any) -> None:
-            if threading.current_thread().name == "second" and not paused.is_set():
-                paused.set()
-                resume.wait(10)
-            original(*args)
+        def pausing(*args: Any) -> Any:
+            if threading.current_thread().name == "second":
+                calls["n"] += 1
+                if calls["n"] == pause_at_call:
+                    paused.set()
+                    resume.wait(10)
+            return original(*args)
 
         def first(scope: Any) -> bool:
             created = folders.insert(scope, folder_id, "Shared")
@@ -334,7 +338,7 @@ class RaceTests(FolderTestCase):
             release.wait(10)
             return created
 
-        with mock.patch.object(folders, "_assert_title_free", pausing):
+        with mock.patch.object(folders, pause_in, pausing):
             threads = [self.start_command(outcomes, "first", first)]
             inserted.wait(10)
             threads.append(self.start_command(
@@ -346,9 +350,37 @@ class RaceTests(FolderTestCase):
             threads[1].join(10)
         self.assertIs(outcomes["first"], True)
         self.assertNotIsInstance(outcomes["second"], BaseException)
-        status, result = outcomes["second"]
-        self.assertEqual((status, result["changed"]), (200, False))
+        return outcomes["second"]
+
+    def assert_converged_on_shared(self, outcome: Any) -> None:
+        status, result = outcome
+        self.assertEqual((status, result["changed"], result["folder"]["title"]), (200, False, "Shared"))
+
+    def test_a_create_of_an_id_that_commits_before_the_title_check_converges(self) -> None:
+        payload = {"title": "Shared", "description": "", "parent_id": "", "private_notes": ""}
+        self.assert_converged_on_shared(self.commit_while_paused(payload, "_assert_title_free", 1))
         self.assertEqual(self.count("folders"), 1)
+
+    def test_a_create_of_an_id_that_commits_first_wins_over_a_title_another_folder_holds(self) -> None:
+        self.add("Taken")
+        payload = {"title": "Taken", "description": "", "parent_id": "", "private_notes": ""}
+        self.assert_converged_on_shared(self.commit_while_paused(payload, "_assert_title_free", 1))
+        self.assertEqual(self.count("folders"), 2)
+
+    def test_a_create_of_an_id_that_commits_first_wins_over_a_missing_parent(self) -> None:
+        # The second ``share``: the first looked for the id itself.
+        payload = {"title": "Child", "description": "", "parent_id": generate("F"), "private_notes": ""}
+        self.assert_converged_on_shared(self.commit_while_paused(payload, "share", 2))
+        self.assertEqual(self.count("folders"), 1)
+
+    def test_a_fresh_id_still_gets_its_refusals(self) -> None:
+        self.add("Taken")
+        refusals = [self.run_command(lambda scope, p=payload: folders.apply_create(scope, generate("F"), p))
+                    for payload in ({"title": "Taken", "description": "", "parent_id": "", "private_notes": ""},
+                                    {"title": "Child", "description": "", "parent_id": generate("F"),
+                                     "private_notes": ""})]
+        self.assertEqual([(status, body["code"]) for status, body in refusals],
+                         [(409, "TITLE_TAKEN"), (404, "PARENT_NOT_FOUND")])
 
     def create_create_delete(self, pause_in: str, pause_at_call: int) -> dict[str, Any]:
         """Three transactions on one new Folder id: a create; a create of the
