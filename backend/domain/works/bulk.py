@@ -14,8 +14,8 @@ writer its single-Work command uses:
 
 So only a Work whose state changes advances its scope (and its
 ``updated_at``), and adding a Tag a Work has (or removing one it lacks)
-changes nothing, exactly as the single-Work command would. One failure aborts the transaction, and with it every
-change made to an earlier Work.
+changes nothing, exactly as the single-Work command would. One failure
+aborts the transaction, and with it every change made to an earlier Work.
 
 **Isolation.** A bulk action spans many aggregates, so it runs SERIALIZABLE
 with the database's bounded retry (§7.1, PG12). It also adds rows to
