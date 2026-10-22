@@ -124,7 +124,7 @@ _INSERT_WORK_IF_ABSENT: LiteralString = """
 INSERT INTO prks.works (library_id, id, title, abstract, status, author_text, primary_manifestation_id)
 VALUES (%(library_id)s, %(work_id)s, %(title)s, %(abstract)s, %(status)s, %(author_text)s,
         %(manifestation_id)s)
-ON CONFLICT (id) DO NOTHING
+ON CONFLICT DO NOTHING
 RETURNING id
 """
 
@@ -136,7 +136,9 @@ def create_work(scope: LibraryScope, new: NewWork, *, if_absent: bool = False) -
     with that id already exists nothing is inserted and None is returned.
     A Work a concurrent transaction committed is not visible to this
     SERIALIZABLE one, so PostgreSQL refuses the insert as a serialization
-    failure, and the retry sees the Work.
+    failure, and the retry sees the Work. Every unique index arbitrates
+    (no conflict target): with ``(id)`` alone, a race lost on
+    ``works_library_id_id_key`` raised a unique violation instead.
     """
     if (new.asset is None) != (new.asset_id is None):
         raise ValueError("an Asset needs an id, and an id needs an Asset")
