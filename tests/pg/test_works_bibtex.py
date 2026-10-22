@@ -89,7 +89,7 @@ class IsolationTests(BibtexTestCase):
 
         found = library_query(self.db, other.context, lambda scope: (
             citation.citation_target(scope, mine), citation.citation_record(scope, mine),
-            citation.credits(scope, mine, target), citation.bibtex_inputs(scope, mine)))
+            citation.target_credits(scope, mine, target), citation.bibtex_inputs(scope, mine)))
         self.assertEqual(found, (None, None, [], None))
 
 

@@ -15,7 +15,7 @@ and ``citation_record``, ``_roles_for_manifestation_on_conn``,
   Work's, ``source_url`` is a stream's URL or else the Manifestation's
   citation URL, ``source_kind`` and ``file_path`` come from its primary
   Asset, and ``author_text`` and ``updated_at`` are the Work's;
-- **the credits**: ``credits(target)``, the Work-scoped roles and the roles
+- **the credits**: ``target_credits``, i.e. ``credits(target)``, the Work-scoped roles and the roles
   scoped to the target, ``ORDER BY order_index, seq`` (SQLite's ``rowid``),
   each as its Person's row with ``role_type``, ``order_index``,
   ``credit_name`` and ``manifestation_id``;
@@ -68,7 +68,7 @@ def citation_record(scope: LibraryScope, work_id: str) -> Optional[dict[str, Any
     return None if row is None else projection.work_core(row)
 
 
-def credits(scope: LibraryScope, work_id: str, manifestation_id: str) -> list[dict[str, Any]]:
+def target_credits(scope: LibraryScope, work_id: str, manifestation_id: str) -> list[dict[str, Any]]:
     """``credits(M)``: Work-scoped roles and those scoped to M, as Person rows plus the role."""
     rows = [dict(row) for row in scope.execute(
         _CREDITS_SQL, {"work_id": work_id, "manifestation_id": manifestation_id}).fetchall()]
@@ -92,4 +92,4 @@ def bibtex_inputs(scope: LibraryScope, work_id: str
     if record is None:  # pragma: no cover - the target is the Work's own Manifestation
         return None
     profile = app_settings.settings_response(scope)[app_settings.BIBTEX_EXPORT_FIELDS]
-    return record, credits(scope, work_id, target), dict(profile)
+    return record, target_credits(scope, work_id, target), dict(profile)
