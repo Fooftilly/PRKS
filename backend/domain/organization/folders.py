@@ -306,10 +306,12 @@ def insert(scope: LibraryScope, folder_id: str, title: Any, description: Any = "
     """``insert_folder_on_conn``: construction, every field at revision 0.
 
     Returns False when the id is already a Folder of this Library (a
-    concurrent create of it committed first). Raises ``FolderRuleError``
-    (``INVALID_ENVELOPE``, ``PARENT_NOT_FOUND``, ``TITLE_TAKEN``) with
-    nothing inserted, and :class:`ForeignFolderId` for an id of another
-    Library. The parent is held against its delete until COMMIT.
+    concurrent create of it committed first); that Folder is then held
+    ``FOR KEY SHARE`` until COMMIT, like one found before inserting. Raises
+    ``FolderRuleError`` (``INVALID_ENVELOPE``, ``PARENT_NOT_FOUND``,
+    ``TITLE_TAKEN``) with nothing inserted, and :class:`ForeignFolderId`
+    for an id of another Library. The parent is held against its delete
+    until COMMIT.
     """
     clean_title = _validate("title", title)
     clean_parent = _validate("parent_id", parent_id)
@@ -317,17 +319,22 @@ def insert(scope: LibraryScope, folder_id: str, title: Any, description: Any = "
     clean_notes = _validate("private_notes", private_notes)
     if clean_parent and not share(scope, clean_parent):
         raise FolderRuleError("PARENT_NOT_FOUND", "Parent folder not found.")
-    # A fast refusal; the unique index decides a race.
-    _assert_title_free(scope, clean_title, clean_parent or None)
-    row = scope.execute(_INSERT_SQL, {
+    # A fast refusal; the unique index decides a race. A same-id create that
+    # committed since this command looked holds the title as this id: it is
+    # converged on below, not refused.
+    _assert_title_free(scope, clean_title, clean_parent or None, folder_id)
+    values = {
         "folder_id": folder_id, "title": clean_title, "description": clean_description,
         "parent_id": clean_parent or None, "private_notes": clean_notes,
-    }).fetchone()
-    if row is not None:
-        return True
-    if exists(scope, folder_id):
-        return False
-    _assert_title_free(scope, clean_title, clean_parent or None)
+    }
+    # Twice: the winner of a same-id race can be deleted between its COMMIT
+    # and this hold, and then the id is free again.
+    for _ in range(2):
+        if scope.execute(_INSERT_SQL, values).fetchone() is not None:
+            return True
+        if share(scope, folder_id):
+            return False
+        _assert_title_free(scope, clean_title, clean_parent or None)
     # Neither this Library's id nor its title: the id is another Library's.
     raise ForeignFolderId(folder_id)
 
@@ -346,7 +353,8 @@ def apply_create(scope: LibraryScope, folder_id: str, payload: dict[str, Any]) -
                              payload["parent_id"], payload["private_notes"])
         except FolderRuleError as error:
             return rule_status(error.code), {"code": error.code, "folder_id": folder_id}
-        # A create of the same id committed while this one waited: convergence.
+        # A create of the same id committed while this one waited, now held:
+        # convergence.
         existing = not created
     row = folder_row(scope, folder_id)
     if row is None:  # pragma: no cover - held or inserted above, in this transaction

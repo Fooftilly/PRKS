@@ -10,8 +10,11 @@ holds one transaction open until the other is waiting on it).
 
 from __future__ import annotations
 
+import threading
+import time
 import unicodedata
-from typing import Any, Optional
+from typing import Any, Callable, Optional
+from unittest import mock
 
 from backend.domain.identity.authorization import AccessRefused
 from backend.domain.organization import folders, links, tags
@@ -298,6 +301,120 @@ class RaceTests(FolderTestCase):
                                       self.library.ensure_default_uncategorized_folder_id)
         self.assertIsInstance(holder, str)
         self.assertEqual((contender, self.count("folders")), (holder, 1))
+
+    def start_command(self, outcomes: dict[str, Any], name: str, fn: Callable[[Any], Any]) -> threading.Thread:
+        """``fn`` as a command on a thread named ``name``; its result or exception lands in ``outcomes``."""
+        def run() -> None:
+            try:
+                outcomes[name] = self.run_command(fn)
+            except BaseException as exc:  # noqa: BLE001 - reported to the test thread
+                outcomes[name] = exc
+        thread = threading.Thread(target=run, name=name)
+        thread.start()
+        return thread
+
+    def test_a_create_of_an_id_that_commits_before_the_title_check_converges(self) -> None:
+        # The second create finds no Folder, then the first commits before the
+        # second checks the title both asked for: the title is that id's.
+        folder_id = generate("F")
+        payload = {"title": "Shared", "description": "", "parent_id": "", "private_notes": ""}
+        inserted, release, paused, resume = (threading.Event() for _ in range(4))
+        outcomes: dict[str, Any] = {}
+        original = folders._assert_title_free
+
+        def pausing(*args: Any) -> None:
+            if threading.current_thread().name == "second" and not paused.is_set():
+                paused.set()
+                resume.wait(10)
+            original(*args)
+
+        def first(scope: Any) -> bool:
+            created = folders.insert(scope, folder_id, "Shared")
+            inserted.set()
+            release.wait(10)
+            return created
+
+        with mock.patch.object(folders, "_assert_title_free", pausing):
+            threads = [self.start_command(outcomes, "first", first)]
+            inserted.wait(10)
+            threads.append(self.start_command(
+                outcomes, "second", lambda scope: folders.apply_create(scope, folder_id, payload)))
+            self.assertTrue(paused.wait(10))
+            release.set()
+            threads[0].join(10)
+            resume.set()
+            threads[1].join(10)
+        self.assertIs(outcomes["first"], True)
+        self.assertNotIsInstance(outcomes["second"], BaseException)
+        status, result = outcomes["second"]
+        self.assertEqual((status, result["changed"]), (200, False))
+        self.assertEqual(self.count("folders"), 1)
+
+    def create_create_delete(self, pause_in: str, pause_at_call: int) -> dict[str, Any]:
+        """Three transactions on one new Folder id: a create; a create of the
+        id that waits on it; and, once the first commits, a delete of the
+        still-empty Folder while the second is paused at call ``pause_at_call``
+        of ``folders.<pause_in>``. The delete runs until it is done or waits."""
+        folder_id = generate("F")
+        payload = {"title": "Shared", "description": "", "parent_id": "", "private_notes": ""}
+        inserted, release, paused, resume = (threading.Event() for _ in range(4))
+        outcomes: dict[str, Any] = {}
+        original = getattr(folders, pause_in)
+        calls = {"n": 0}
+
+        def pausing(*args: Any) -> Any:
+            if threading.current_thread().name == "second":
+                calls["n"] += 1
+                if calls["n"] == pause_at_call:
+                    paused.set()
+                    resume.wait(10)
+            return original(*args)
+
+        def first(scope: Any) -> bool:
+            created = folders.insert(scope, folder_id, "Shared")
+            inserted.set()
+            release.wait(10)
+            return created
+
+        def start(name: str, fn: Callable[[Any], Any]) -> threading.Thread:
+            return self.start_command(outcomes, name, fn)
+
+        with mock.patch.object(folders, pause_in, pausing):
+            threads = [start("first", first)]
+            inserted.wait(10)
+            threads.append(start("second", lambda scope: folders.apply_create(scope, folder_id, payload)))
+            self.wait_for_lock_waiter()
+            release.set()
+            threads[0].join(10)
+            self.assertTrue(paused.wait(10))
+            threads.append(start("third", lambda scope: folders.delete(scope, folder_id)))
+            deadline = time.monotonic() + 10
+            while threads[2].is_alive() and time.monotonic() < deadline:
+                if self.sql("SELECT count(*) AS n FROM pg_stat_activity WHERE datname = current_database()"
+                            " AND wait_event_type = 'Lock'")[0]["n"]:
+                    break
+                time.sleep(0.02)
+            resume.set()
+            for thread in threads:
+                thread.join(10)
+        self.assertIs(outcomes["first"], True)
+        self.assertNotIsInstance(outcomes["second"], BaseException)
+        return outcomes
+
+    def test_a_create_of_an_id_another_create_won_holds_that_folder_against_a_delete(self) -> None:
+        # Paused before reading what it acknowledges: the delete waits for it.
+        outcomes = self.create_create_delete("folder_row", 1)
+        status, result = outcomes["second"]
+        self.assertEqual((status, result["changed"], result["folder"]["title"]), (200, False, "Shared"))
+        self.assertEqual((outcomes["third"], self.count("folders")), ((True, None), 0))
+
+    def test_a_create_of_an_id_whose_winner_is_deleted_first_creates_it_again(self) -> None:
+        # Paused before holding the winner (the second ``share``; the first
+        # found nothing): the delete commits, and the id is free again.
+        outcomes = self.create_create_delete("share", 2)
+        status, result = outcomes["second"]
+        self.assertEqual((status, result["changed"]), (200, True))
+        self.assertEqual((outcomes["third"], self.count("folders")), ((True, None), 1))
 
     def test_a_rename_that_loses_a_title_race_decides_again(self) -> None:
         other = self.add("Other")
