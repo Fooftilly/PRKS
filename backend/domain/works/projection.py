@@ -30,10 +30,11 @@ same rules:
 
 - Folder fields (``folder_id``, and the detail's ``folder_title``): the
   Work's ``folder_files`` row and its Folder (the Organization lane's), in
-  the same row.
+  the same row; the detail's ``playlist_id`` and ``playlist_title`` likewise
+  from its ``playlist_items`` row and Playlist.
 
-Fields owned by lanes that have not landed (playlists, annotations,
-Research references) are rendered as the empty value SQLite gives a Work
+Fields owned by lanes that have not landed (annotations, Research
+references) are rendered as the empty value SQLite gives a Work
 that has none; those lanes add them to this projection. The detail's
 ``tags`` are the Organization lane's: ``get_work`` reads them in the same
 snapshot (``backend.domain.organization.links``).
@@ -118,7 +119,10 @@ SELECT
   rn.body AS research_note,
   pn.body AS private_note,
   ff.folder_id,
-  fo.title AS folder_title
+  fo.title AS folder_title,
+  pi.playlist_id,
+  pi.position AS playlist_position,
+  pl.title AS playlist_title
 FROM prks.works w
 JOIN prks.manifestations m
   ON m.library_id = w.library_id AND m.id = w.primary_manifestation_id AND m.work_id = w.id
@@ -138,6 +142,10 @@ LEFT JOIN prks.folder_files ff
   ON ff.library_id = w.library_id AND ff.work_id = w.id
 LEFT JOIN prks.folders fo
   ON fo.library_id = ff.library_id AND fo.id = ff.folder_id
+LEFT JOIN prks.playlist_items pi
+  ON pi.library_id = w.library_id AND pi.work_id = w.id
+LEFT JOIN prks.playlists pl
+  ON pl.library_id = pi.library_id AND pl.id = pi.playlist_id
 WHERE w.library_id = %(library_id)s
 """
 
@@ -160,6 +168,12 @@ BY_TITLE_SQL: LiteralString = (
 BY_ID_SQL: LiteralString = " AND w.id = %(work_id)s"
 BY_IDS_SQL: LiteralString = " AND w.id = ANY(%(work_ids)s)"
 IN_FOLDER_SQL: LiteralString = " AND ff.folder_id = %(folder_id)s"
+# A Playlist's items in its order; SQLite breaks a tie of positions by
+# creation time, and an equal rendered time falls back to the id.
+IN_PLAYLIST_SQL: LiteralString = (
+    " AND pi.playlist_id = %(playlist_id)s"
+    " ORDER BY pi.position, date_trunc('second', w.created_at), w.id COLLATE \"C\""
+)
 LIMIT_SQL: LiteralString = " LIMIT %(limit)s"
 
 
@@ -207,6 +221,9 @@ def work_core(row: Mapping[str, Any]) -> dict[str, Any]:
         "asset_count": int(row["asset_count"]),
         "folder_id": row["folder_id"],
         "folder_title": row["folder_title"],
+        "playlist_id": row["playlist_id"],
+        "playlist_title": row["playlist_title"],
+        "playlist_position": row["playlist_position"],
     }
     for field in MANIFESTATION_FIELDS:
         core[field] = row[field]
@@ -277,8 +294,8 @@ def work_detail(core: Mapping[str, Any]) -> dict[str, Any]:
         "research_refs": {"concepts": [], "arguments": []},
         "annotations": "[]",
         "tags": [],
-        "playlist_id": None,
-        "playlist_title": None,
+        "playlist_id": core["playlist_id"],
+        "playlist_title": core["playlist_title"],
         "folder_id": core["folder_id"],
         "folder_title": core["folder_title"],
     })

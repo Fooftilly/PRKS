@@ -20,7 +20,6 @@ from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.organization import folders
 from backend.entity_ids import generate
 from backend.folder_sync import scope_key
-from backend.pg_facade import NotPortedError
 from backend.pg_facade import context as facade_context
 from backend.sync.families import Environment, FamilyHandler
 from backend.sync.handlers import folder as folder_handlers
@@ -301,10 +300,11 @@ class CreateWorkFilingTests(FolderSyncTestCase):
         self.assertEqual([row["id"] for row in self.library.get_work_roles(data["entity_id"])], [person])
         self.assertEqual(self.library.get_related_folders_for_work(data["entity_id"]), [])
 
-    def test_a_playlist_is_not_ported_and_nothing_is_written(self) -> None:
-        with self.assertRaises(NotPortedError):
-            self.send(self.create_work(playlist_id="PL-" + "0" * 32))
-        self.assertEqual((self.ledger(), self.count("works"), self.count("folders")), ([], 0, 0))
+    def test_a_missing_playlist_refuses_the_create_before_the_work_exists(self) -> None:
+        data = self.create_work(playlist_id="PL-" + "0" * 32)
+        self.assertEqual(self.send(data), (404, {"code": "PLAYLIST_NOT_FOUND", "work_id": data["entity_id"]}))
+        # As on SQLite, the root "Uncategorized" it resolved first stays.
+        self.assertEqual((self.count("works"), self.count("folders"), self.count("playlist_items")), (0, 1, 0))
 
     def test_a_create_into_a_folder_being_deleted_is_refused(self) -> None:
         doomed = self.create_folder("Doomed")

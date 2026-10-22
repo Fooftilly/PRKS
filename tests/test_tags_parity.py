@@ -27,7 +27,7 @@ apply_isolated_test_env(_PROJECT_DIR)
 from tests.backend_parity import POSTGRES, SQLITE, parametrize_backends
 from tests.people_parity_helpers import PeopleParityTestCase, PeopleSide
 
-_ID = re.compile(r"\b(T|L|F|W|MF|AS)-[0-9A-F]{32}\b")
+_ID = re.compile(r"\b(T|L|F|W|PL|MF|AS)-[0-9A-F]{32}\b")
 _ETAG = re.compile(r'(W/"prks-tags-\d+-)[0-9a-f]+(")')
 _MOMENT = re.compile(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(\.\d{3})?")
 _TAG_OPERATIONS = frozenset({"CREATE_TAG", "DELETE_TAG", "MERGE_TAG"})
