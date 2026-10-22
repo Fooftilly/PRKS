@@ -1716,6 +1716,26 @@ class TestDBManager(unittest.TestCase):
         self.assertEqual(self._folder_ids_for_work(b), [])
         self.assertEqual(self._folder_ids_for_work(c), [fx])
 
+    def test_bulk_move_folder_advances_work_folder_revision_only_on_change(self):
+        """A bulk move is SET_WORK_FOLDER's boundary: a stale base must conflict after it."""
+        fx = self.db.add_folder(title="X", description="")
+        fy = self.db.add_folder(title="Y", description="")
+        a = self.db.add_work(title="A")
+        b = self.db.add_work(title="B")
+        self.db.move_work_to_folder(a, fx)
+        self.db.move_work_to_folder(b, fy)
+        self.db.bulk_update_works(
+            {"work_ids": [a, b], "action": "move_folder", "folder_id": fy}
+        )
+        self.assertEqual(self.db.get_work_folder_state(a)["revision"], 2)
+        self.assertEqual(self.db.get_work_folder_state(b)["revision"], 1)
+        self.db.bulk_update_works(
+            {"work_ids": [a, b], "action": "move_folder", "folder_id": None}
+        )
+        self.assertEqual(
+            [self.db.get_work_folder_state(w)["revision"] for w in (a, b)], [3, 2]
+        )
+
     def test_bulk_tags_add_remove_idempotent(self):
         a = self.db.add_work(title="A")
         b = self.db.add_work(title="B")
