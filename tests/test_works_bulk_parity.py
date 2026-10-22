@@ -163,6 +163,22 @@ class BulkWorkParityTests(BulkParityTestCase):
                     self.bulk_refused_both(action, [a, b], tags=[tag, missing])
         self.same_states(a, b)
 
+    def test_ids_holding_nul_are_missing_alike(self) -> None:
+        a, folder, tag = self.work_both("A", "Paused"), self.folder_both("F"), self.tag_both("T")
+        nul = both("W-\x00")
+        for action, targets in (("set_status", {"status": "Completed"}), ("move_folder", {"folder": folder}),
+                                ("add_tags", {"tags": [tag]}), ("remove_tags", {"tags": [tag]})):
+            with self.subTest(action=action):
+                self.assertEqual(self.bulk_refused_both(action, [a, nul], **targets),
+                                 (404, "One or more selected files no longer exist."))
+        self.assertEqual(self.bulk_refused_both("move_folder", [a], folder=(folder[0] + "\x00", folder[1] + "\x00")),
+                         (404, "Folder not found."))
+        for action in ("add_tags", "remove_tags"):
+            with self.subTest(action=action):
+                self.assertEqual(self.bulk_refused_both(action, [a], tags=[tag, both("T-\x00")]),
+                                 (404, "One or more selected tags no longer exist."))
+        self.same_states(a)
+
     def test_operations_from_before_a_bulk_action_are_decided_alike(self) -> None:
         work = self.work_both("W", "Paused")
         x, y = self.folder_both("X"), self.folder_both("Y")

@@ -197,6 +197,24 @@ class RefusalTests(BulkTestCase):
                                       tag_ids=[tag, missing])
         self.assertEqual(self.snapshot(), before)
 
+    def test_an_id_holding_nul_is_missing_and_never_reaches_a_query(self) -> None:
+        a = self.library.add_work("A", status="Paused")
+        folder, tag = self.folder("F"), self.tag("T")
+        before = self.snapshot()
+        works = "One or more selected files no longer exist."
+        for action, body in (("set_status", {"status": "Completed"}), ("move_folder", {"folder_id": folder}),
+                             ("add_tags", {"tag_ids": [tag]}), ("remove_tags", {"tag_ids": [tag]})):
+            with self.subTest(action=action):
+                self.refused_bulk(404, works, action, [a, a + "\x00"], **body)
+                self.refused_bulk(404, works, action, ["W-\x00"], **body)
+        self.refused_bulk(404, "Folder not found.", "move_folder", [a], folder_id=folder + "\x00")
+        self.refused_bulk(404, "Folder not found.", "move_folder", [a], folder_id="\x00")
+        for action in ("add_tags", "remove_tags"):
+            with self.subTest(action=action):
+                self.refused_bulk(404, "One or more selected tags no longer exist.", action, [a],
+                                  tag_ids=[tag, "T-\x00"])
+        self.assertEqual(self.snapshot(), before)
+
     def test_a_failure_on_a_later_work_rolls_back_every_earlier_one(self) -> None:
         works = sorted(self.library.add_work(t, status="Paused") for t in "ABC")
         x, y = self.folder("X"), self.folder("Y")

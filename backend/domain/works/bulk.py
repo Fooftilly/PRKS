@@ -81,8 +81,19 @@ class Missing(Exception):
         self.what = what
 
 
+def _storable(*ids: str) -> bool:
+    """False when an id holds NUL: PostgreSQL text cannot, so no such row exists."""
+    return not any("\x00" in value for value in ids)
+
+
 def _locked(scope: LibraryScope, sql: LiteralString, ids: list[str]) -> bool:
-    """Lock the rows of ``ids`` in id order; True when every one exists here."""
+    """Lock the rows of ``ids`` in id order; True when every one exists here.
+
+    An id PostgreSQL text cannot hold (NUL) names no row, as on SQLite; it
+    never reaches the query, which would fail on it.
+    """
+    if not _storable(*ids):
+        return False
     rows = scope.execute(sql, {"ids": ids}).fetchall()
     return len(rows) == len(ids)
 
@@ -100,7 +111,7 @@ def apply(scope: LibraryScope, action: str, work_ids: Sequence[str], *,
     if not _locked(scope, _LOCK_WORKS_SQL, works):
         raise Missing(Missing.WORKS)
     target = (folder_id or "").strip()
-    if action == MOVE_FOLDER and target and not folders.share(scope, target):
+    if action == MOVE_FOLDER and target and not (_storable(target) and folders.share(scope, target)):
         raise Missing(Missing.FOLDER)
     tags = sorted(set(tag_ids))
     if action in (ADD_TAGS, REMOVE_TAGS) and not _locked(scope, _SHARE_TAGS_SQL, tags):
