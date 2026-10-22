@@ -10,7 +10,10 @@ other is waiting on it).
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import sys
 import unicodedata
 from typing import Any, Callable
 from unittest import mock
@@ -161,6 +164,13 @@ class NameTests(SavedViewTestCase):
         self.refused(views.NAME_TAKEN, 409, self.library.update_saved_view, other["id"], name="straße",
                      search=_ADVANCED)
         self.assertEqual(self.library.get_saved_view(other["id"]), other)
+
+    def test_the_backstop_is_registered_on_the_saved_view_import_path(self) -> None:
+        code = ("import backend.domain.saved_views.views as views; from backend.db.errors import DEFAULT_REGISTRY;"
+                " import sys; m = DEFAULT_REGISTRY.lookup(views.NAME_KEY);"
+                " sys.exit(0 if m is not None and m.code == 'NAME_TAKEN' and m.http_status == 409 else 1)")
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        self.assertEqual(subprocess.run([sys.executable, "-c", code], cwd=root, check=False).returncode, 0)
 
     def test_the_unique_index_is_the_backstop_and_answers_409(self) -> None:
         self.create("Ethics")

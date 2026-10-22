@@ -62,7 +62,3 @@ register_constraint("folders_library_id_parent_id_title_key_key", "TITLE_TAKEN")
 # (``playlists.release_work``), and every other writer of the item waits for
 # the Work's lock; the item's key is the backstop.
 register_constraint("playlist_items_work_fkey", "WORK_IN_PLAYLIST")
-# A Saved View name is unique by identity key per Library; every writer of a
-# name holds the Library's Saved View lock, so the index is the backstop
-# (``backend.domain.saved_views.views.NAME_KEY``).
-register_constraint("saved_views_library_id_name_key_key", "NAME_TAKEN")
