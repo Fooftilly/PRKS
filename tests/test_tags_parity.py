@@ -31,7 +31,8 @@ _ID = re.compile(r"\b(T|L|F|W|MF|AS)-[0-9A-F]{32}\b")
 _ETAG = re.compile(r'(W/"prks-tags-\d+-)[0-9a-f]+(")')
 _MOMENT = re.compile(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(\.\d{3})?")
 _TAG_OPERATIONS = frozenset({"CREATE_TAG", "DELETE_TAG", "MERGE_TAG"})
-_FOLDER_OPERATIONS = frozenset({"ADD_FOLDER_TAG", "REMOVE_FOLDER_TAG"})
+_FOLDER_OPERATIONS = frozenset({"ADD_FOLDER_TAG", "REMOVE_FOLDER_TAG", "CREATE_FOLDER", "SET_FOLDER_FIELD",
+                                "DELETE_FOLDER"})
 _SET_KEYS = frozenset({"assigned", "affected_work_ids", "affected_folder_ids",
                        "affected_tag_options_work_ids", "affected_tag_options_folder_ids"})
 
@@ -42,18 +43,8 @@ class TagSide(PeopleSide):
     def tag(self, label: str, name: Optional[str] = None) -> str:
         return self.label(self.db.add_tag(name or label)["id"], f"<T {label}>")
 
-    def folder(self, label: str, postgres: bool) -> str:
-        if not postgres:
-            return self.label(self.db.add_folder(label), f"<F {label}>")
-        from backend.entity_ids import generate
-        from backend.pg_facade.context import current_context
-
-        folder_id = generate("F")
-        library_id = current_context().library_id
-        self.db.parity_library._database.command(lambda tx: tx.execute(
-            "INSERT INTO prks.folders (library_id, id, title) VALUES (%s, %s, %s)",
-            (library_id, folder_id, label)))
-        return self.label(folder_id, f"<F {label}>")
+    def folder(self, label: str) -> str:
+        return self.label(self.db.add_folder(label), f"<F {label}>")
 
     def normal(self, value: Any) -> Any:
         if isinstance(value, dict):
@@ -83,7 +74,7 @@ class TagParityTestCase(PeopleParityTestCase):
         return self.leg.work(label, title=label), self.ref.work(label, title=label)
 
     def folder_both(self, label: str) -> tuple[str, str]:
-        return self.leg.folder(label, self.parity_backend == POSTGRES), self.ref.folder(label, False)
+        return self.leg.folder(label), self.ref.folder(label)
 
     def same_pair(self, call: str, *pairs: tuple[Any, Any]) -> Any:
         """``call(*ids_of_this_side)`` on each side; asserts equal results."""
@@ -190,8 +181,9 @@ class TagFacadeParityTests(TagParityTestCase):
                 self.refused_pair("merge_tags_into", *pair)
 
 
-@parametrize_backends
-class TagSyncParityTests(TagParityTestCase):
+class SyncParityTestCase(TagParityTestCase):
+    """Sends one semantic operation to this leg's protocol and to SQLite's (``send_both``)."""
+
     def setUp(self) -> None:
         super().setUp()
         self.devices = {id(self.leg): self._leg_device(), id(self.ref): str(uuid.uuid4())}
@@ -213,12 +205,14 @@ class TagSyncParityTests(TagParityTestCase):
 
     def envelope(self, side: TagSide, operation: str, entity_id: str, payload: dict[str, Any],
                  base: Optional[int], op_id: str) -> dict[str, Any]:
-        entity_type = ("tag" if operation in _TAG_OPERATIONS
-                       else "folder" if operation in _FOLDER_OPERATIONS else "work")
         return {"op_id": op_id, "device_id": self.devices[id(side)], "operation": operation,
-                "entity_type": entity_type, "entity_id": entity_id, "payload": payload,
+                "entity_type": self.entity_type(operation), "entity_id": entity_id, "payload": payload,
                 "base_revision": base, "occurred_at": "2026-10-21T10:00:00Z",
                 "created_at": "2026-10-21T10:00:00Z", "depends_on": []}
+
+    def entity_type(self, operation: str) -> str:
+        return ("tag" if operation in _TAG_OPERATIONS
+                else "folder" if operation in _FOLDER_OPERATIONS else "work")
 
     def send(self, side: TagSide, data: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         if side is self.ref or self.parity_backend == SQLITE:
@@ -249,6 +243,10 @@ class TagSyncParityTests(TagParityTestCase):
         self.assertEqual(self.leg.normal(mine), self.ref.normal(theirs), operation)
         return mine
 
+
+
+@parametrize_backends
+class TagSyncParityTests(SyncParityTestCase):
     def create(self, label: str, name: Optional[str] = None) -> str:
         tag_id = self.new_tag_id(label)
         status, _ = self.send_both("CREATE_TAG", tag_id, {"name": name or label, "color": "#6d6cf7"})

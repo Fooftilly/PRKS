@@ -6,13 +6,12 @@ so a handler module can import these without importing the registry.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Optional, Protocol
 
 from backend.db.database import Isolation
 from backend.domain.identity.library_scope import LibraryScope
-from backend.pg_facade.registry import NotPortedError
 
 Result = tuple[int, dict[str, Any]]
 
@@ -21,10 +20,11 @@ class WorkFiling(Protocol):
     """Where ``CREATE_WORK`` files a new Work: its folder, playlist and roles.
 
     Those rows belong to the Organization and People lanes (L-O-1, L-P-1).
-    The People half is :class:`backend.sync.handlers.work_role.RoleFiling`;
-    the Organization lane's filing checks and files the folder and playlist
-    and delegates the roles to it. Until that lands the default refuses
-    with ``NotPortedError``.
+    The default is the Organization lane's
+    :class:`backend.sync.handlers.folder.FolderFiling`, which checks and
+    files the folder and delegates the roles to the People half,
+    :class:`backend.sync.handlers.work_role.RoleFiling`. A playlist refuses
+    with ``NotPortedError`` until the Playlist slice.
     """
 
     def prepare(self, scope: LibraryScope, work_id: str,
@@ -42,16 +42,11 @@ class WorkFiling(Protocol):
         ...
 
 
-class UnportedFiling:
-    """The filing until Organization and People are ported."""
+def default_filing() -> WorkFiling:
+    # Imported here: the handler modules import this one.
+    from backend.sync.handlers.folder import FolderFiling
 
-    def prepare(self, scope: LibraryScope, work_id: str,
-                fields: dict[str, Any]) -> dict[str, Any] | Result:
-        raise NotPortedError("CREATE_WORK filing (folders, playlists, roles)")
-
-    def file(self, scope: LibraryScope, work_id: str, fields: dict[str, Any],
-             prepared: dict[str, Any]) -> dict[str, Any]:
-        raise NotPortedError("CREATE_WORK filing (folders, playlists, roles)")
+    return FolderFiling()
 
 
 @dataclass(frozen=True)
@@ -59,7 +54,7 @@ class Environment:
     """What a handler takes from outside the database."""
 
     pdfs_dir: str  # the managed PDFs, for the projected rows' file sizes
-    filing: WorkFiling = UnportedFiling()
+    filing: WorkFiling = field(default_factory=default_filing)
 
 
 class Handler(Protocol):

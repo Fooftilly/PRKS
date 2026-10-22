@@ -160,18 +160,21 @@ class LedgerTests(SyncTestCase):
         self.assertEqual(self.ledger(), [])
 
     def test_an_exception_rolls_the_claim_back(self) -> None:
-        unported = Environment(pdfs_dir=self.storage.pdfs_dir)  # the default filing refuses
-        data = self.envelope("CREATE_WORK", "W-" + uuid.uuid4().hex.upper(), create_payload())
+        # The default filing refuses a playlist (the Playlist slice), after
+        # it created the root "Uncategorized" folder in the same transaction.
+        default = Environment(pdfs_dir=self.storage.pdfs_dir)
+        data = self.envelope("CREATE_WORK", "W-" + uuid.uuid4().hex.upper(),
+                             create_payload(playlist_id="PL-" + "0" * 32))
         with self.assertRaises(NotPortedError):
-            protocol.process_operation(self.db, self.actor.context, data, unported)
-        self.assertEqual((self.ledger(), self.count("works")), ([], 0))
+            protocol.process_operation(self.db, self.actor.context, data, default)
+        self.assertEqual((self.ledger(), self.count("works"), self.count("folders")), ([], 0, 0))
         # The op_id was not burnt.
         self.assertEqual(self.send(data)[1]["changed"], True)
 
     def test_families_without_a_handler_are_not_ported(self) -> None:
         work_id = self.library.add_work("Work")
         with self.assertRaises(NotPortedError):
-            self.send(self.envelope("SET_WORK_FOLDER", work_id, {"folder_id": None}, 0))
+            self.send(self.envelope("SET_WORK_PLAYLIST", work_id, {"playlist_id": ""}, 0))
         self.assertEqual(self.send(self.envelope("NO_SUCH_OPERATION", work_id, {})),
                          (400, {"code": "INVALID_ENVELOPE"}))
         self.assertEqual(self.ledger(), [])

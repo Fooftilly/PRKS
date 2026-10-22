@@ -67,6 +67,12 @@ def works_by_ids(scope: LibraryScope, work_ids: list[str]) -> dict[str, dict[str
     return {row["id"]: row for row in rows}
 
 
+def works_in_folder(scope: LibraryScope, folder_id: str) -> list[dict[str, Any]]:
+    """The Works filed in a Folder, newest first (``get_folder``'s ``works``)."""
+    return _cores(scope, projection.WORK_ROWS_SQL + projection.IN_FOLDER_SQL + projection.BY_CREATED_SQL,
+                  {"folder_id": folder_id})
+
+
 def recent_etag_parts(scope: LibraryScope) -> tuple[int, str]:
     return _etag_parts(scope, _RECENT_ETAG_SQL)
 
