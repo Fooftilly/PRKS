@@ -110,19 +110,21 @@ class SnapshotTests(BibtexTestCase):
     def test_the_record_credits_and_profile_are_one_snapshot(self) -> None:
         work_id = self.book()
         person_id = self.library.add_person("Charles", "Babbage")
-        original = citation.credits
+        original = citation.citation_target
         changed: list[bool] = []
 
-        def credits_after_a_concurrent_edit(scope: LibraryScope, *args: Any) -> list[dict[str, Any]]:
+        def target_then_a_concurrent_edit(scope: LibraryScope, *args: Any) -> Any:
+            found = original(scope, *args)
             if not changed:
-                # Committed by another transaction after this read began.
+                # Committed by another transaction after this read's first
+                # statement, before the record, profile and credits are read.
                 self.library.add_role(person_id, work_id, "Editor")
                 self.library.update_work_metadata(work_id, {"title": "Renamed"})
                 self.library.patch_app_settings({"bibtex_export_fields": {"publisher": False}})
                 changed.append(True)
-            return original(scope, *args)
+            return found
 
-        with mock.patch.object(citation, "credits", side_effect=credits_after_a_concurrent_edit):
+        with mock.patch.object(citation, "citation_target", side_effect=target_then_a_concurrent_edit):
             self.assertEqual(self.library.generate_bibtex(work_id), _ENTRY)
         self.assertEqual(changed, [True])
         self.assertEqual(self.library.generate_bibtex(work_id), (
