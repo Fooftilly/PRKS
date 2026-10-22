@@ -52,6 +52,9 @@ VALUES (:work_id, :person_id, :role_type, :order_index, :credit_name, :manifesta
 _PG_CITE = ("UPDATE prks.works SET citation_manifestation_id = %(manifestation_id)s"
             " WHERE library_id = %(library_id)s AND id = %(work_id)s")
 _SQLITE_CITE = "UPDATE works SET citation_manifestation_id = :manifestation_id WHERE id = :work_id"
+_PG_EDITED = ("UPDATE prks.works SET updated_at = %(at)s::timestamptz"
+              " WHERE library_id = %(library_id)s AND id = %(work_id)s")
+_SQLITE_EDITED = "UPDATE works SET updated_at = :at WHERE id = :work_id"
 
 
 @parametrize_backends
@@ -110,11 +113,17 @@ class BibtexParityTests(PeopleParityTestCase):
         self.assertEqual(mine.encode("utf-8"), theirs.encode("utf-8"))
         return mine
 
-    def accessed(self, work: Pair) -> str:
-        """The urldate both sides write: the day the Work was last edited."""
-        days = {side.db.get_work(work[index])["updated_at"][:10] for index, side in enumerate(self.sides())}
-        self.assertEqual(len(days), 1)
-        return days.pop()
+    def edited_on(self, work: Pair, day: str) -> str:
+        """Set the Work's last edit to the end of ``day`` (UTC) on both sides; returns ``day``.
+
+        The urldate is that day, never today's: a fixed past date catches a
+        formatter that writes the current date, and the last second of the
+        day one that converts to a local time zone.
+        """
+        for index, side in enumerate(self.sides()):
+            zone = "+00" if side is self.leg and self.parity_backend == POSTGRES else ""
+            self._row(side, _PG_EDITED, _SQLITE_EDITED, {"work_id": work[index], "at": f"{day} 23:59:59{zone}"})
+        return day
 
     def patch_both(self, fields: dict[str, bool]) -> None:
         self.same("patch_app_settings", {"bibtex_export_fields": fields})
@@ -172,25 +181,28 @@ class BibtexParityTests(PeopleParityTestCase):
     def test_online_and_other_entries_with_a_url_carry_the_access_date(self) -> None:
         online = self.work_both("Online", title="A Page", doc_type="online", year="2024",
                                 source_kind="pdf", source_url="https://example.org/a%20b?q={x}")
+        self.edited_on(online, "2001-02-03")
         self.assertEqual(self.bibtex(online), (
             "@online{Unknown2024,\n"
             "  title = {A Page},\n"
             "  year = {2024},\n"
             "  url = {https://example.org/a\\%20b?q=\\{x\\}},\n"
-            f"  urldate = {{{self.accessed(online)}}},\n"
+            "  urldate = {2001-02-03},\n"
             "}"))
         bare = self.work_both("Bare online", doc_type="online")
+        self.edited_on(bare, "2002-03-04")
         self.assertEqual(self.bibtex(bare), (
             "@online{UnknownUnknownYear,\n"
             "  title = {Bare online},\n"
-            f"  urldate = {{{self.accessed(bare)}}},\n"
+            "  urldate = {2002-03-04},\n"
             "}"))
         saved = self.work_both("Saved", doc_type="misc", source_kind="pdf", source_url="https://example.org/saved")
+        self.edited_on(saved, "2003-04-05")
         self.assertEqual(self.bibtex(saved), (
             "@misc{UnknownUnknownYear,\n"
             "  title = {Saved},\n"
             "  url = {https://example.org/saved},\n"
-            f"  urldate = {{{self.accessed(saved)}}},\n"
+            "  urldate = {2003-04-05},\n"
             "}"))
         video = self.work_both("Video", doc_type="online", source_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ")
         self.assertIn("  url = {https://www.youtube.com/watch?v=dQw4w9WgXcQ},\n", self.bibtex(video))
@@ -288,6 +300,7 @@ class BibtexParityTests(PeopleParityTestCase):
         self.assertIn("  journal = {Primary Journal},\n", primary_entry)
 
         self.cite_both(work, cited)
+        self.edited_on(work, "2004-05-06")
         self.assertEqual(self.bibtex(work), (
             "@book{Lovelace2026,\n"
             "  title = {Cited Edition},\n"
@@ -296,7 +309,7 @@ class BibtexParityTests(PeopleParityTestCase):
             "  year = {2026},\n"
             "  publisher = {Citation Press},\n"
             "  url = {https://example.org/cited},\n"
-            f"  urldate = {{{self.accessed(work)}}},\n"
+            "  urldate = {2004-05-06},\n"
             "}"))
         self.cite_both(work, other)
         entry = self.bibtex(work)
