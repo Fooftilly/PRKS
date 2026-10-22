@@ -26,7 +26,7 @@ import hashlib
 import os
 from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, List, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypeVar
 
 from backend.pg_facade.context import current_context
 from backend.pg_facade.registry import FacadeMixin, ported
@@ -42,7 +42,7 @@ _HASH_CHUNK = 1024 * 1024
 
 
 class WorksMixin(FacadeMixin):
-    """Work create, reads and mutations (L-W-1)."""
+    """Work create, reads and mutations (L-W-1), and bulk actions (L-W-2)."""
 
     # -- plumbing ---------------------------------------------------------------
 
@@ -417,6 +417,40 @@ class WorksMixin(FacadeMixin):
             return None
         return DeletedWorkRecord(work_id=deleted.work_id, file_path=deleted.file_path,
                                  managed_pdf_still_referenced=deleted.managed_pdf_still_referenced)
+
+
+    # -- bulk actions (L-W-2) ----------------------------------------------------
+
+    @ported
+    def bulk_update_works(self, data: dict) -> Dict[str, Any]:
+        """``PRKSDatabase.bulk_update_works`` on PostgreSQL: one SERIALIZABLE transaction.
+
+        The body is validated by the same ``parse_bulk_work_request`` (limits,
+        messages, deduplication), and a missing Work, Folder or Tag is the
+        same ``BulkWorkError`` 404 with nothing written. A Work, Folder or Tag
+        of another Library is missing here. The Works change through their
+        single-Work writers (``backend.domain.works.bulk``), so revisions
+        advance only for Works whose state changes.
+        """
+        from backend.db_manager import (
+            BULK_FOLDER_MISSING,
+            BULK_TAGS_MISSING,
+            BULK_WORKS_MISSING,
+            BulkWorkError,
+            parse_bulk_work_request,
+        )
+        from backend.domain.works import bulk
+
+        request = parse_bulk_work_request(data)
+        try:
+            self._command(lambda scope: bulk.apply(
+                scope, request.action, request.work_ids, status=request.status,
+                folder_id=request.folder_id, tag_ids=request.tag_ids), serializable=True)
+        except bulk.Missing as missing:
+            message = {bulk.Missing.WORKS: BULK_WORKS_MISSING, bulk.Missing.FOLDER: BULK_FOLDER_MISSING,
+                       bulk.Missing.TAGS: BULK_TAGS_MISSING}[missing.what]
+            raise BulkWorkError(message, 404) from None
+        return request.result()
 
 
 def _patch_work(scope: LibraryScope, work_id: str, synced: dict[str, str],

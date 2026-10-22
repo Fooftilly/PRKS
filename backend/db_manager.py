@@ -92,6 +92,91 @@ class BulkWorkError(ValueError):
         self.http_status = http_status
 
 
+BULK_WORKS_MISSING = "One or more selected files no longer exist."
+BULK_FOLDER_MISSING = "Folder not found."
+BULK_TAGS_MISSING = "One or more selected tags no longer exist."
+
+
+@dataclass(frozen=True)
+class BulkWorkRequest:
+    """A validated ``POST /api/works/bulk`` body: ids stripped, deduplicated, in request order."""
+
+    action: str
+    work_ids: List[str]
+    status: Optional[str] = None
+    folder_id: Optional[str] = None  # None or "" clears the Folder (move_folder only)
+    tag_ids: Tuple[str, ...] = ()
+
+    def result(self) -> Dict[str, Any]:
+        return {
+            "status": "updated",
+            "action": self.action,
+            "requested": len(self.work_ids),
+            "updated": len(self.work_ids),
+            "target_count": len(self.tag_ids) if self.tag_ids else 1,
+        }
+
+
+def _normalize_bulk_ids(raw, *, kind: str) -> List[str]:
+    if not isinstance(raw, list):
+        raise BulkWorkError(f"{kind}_ids must be a JSON array.")
+    if not raw:
+        raise BulkWorkError("No files selected." if kind == "work" else "No tags selected.")
+    if len(raw) > PRKS_BULK_WORK_MAX:
+        raise BulkWorkError(
+            "Too many files selected." if kind == "work" else "Too many tags selected."
+        )
+    out: List[str] = []
+    seen = set()
+    for item in raw:
+        if not isinstance(item, str):
+            raise BulkWorkError(f"{kind} IDs must be strings.")
+        nid = item.strip()
+        if not nid:
+            raise BulkWorkError(f"{kind} IDs must be non-empty.")
+        if nid in seen:
+            continue
+        seen.add(nid)
+        out.append(nid)
+    if not out:
+        raise BulkWorkError("No files selected." if kind == "work" else "No tags selected.")
+    return out
+
+
+def parse_bulk_work_request(data: Any) -> BulkWorkRequest:
+    """Validate a bulk body before any database is touched (both backends).
+
+    Raises ``BulkWorkError`` (400) with the message the API returns.
+    """
+    if not isinstance(data, dict):
+        raise BulkWorkError("JSON object body required")
+    action = data.get("action")
+    if not isinstance(action, str) or action not in PRKS_BULK_WORK_ACTIONS:
+        raise BulkWorkError("Unknown bulk action.")
+    work_ids = _normalize_bulk_ids(data.get("work_ids"), kind="work")
+
+    if action == "set_status":
+        raw_status = data.get("status")
+        if not isinstance(raw_status, str) or \
+                not work_metadata_sync.is_valid_field_value("status", raw_status):
+            raise BulkWorkError("Invalid status.")
+        return BulkWorkRequest(action, work_ids, status=raw_status)
+    if action == "move_folder":
+        if "folder_id" not in data:
+            raise BulkWorkError("folder_id is required.")
+        raw_folder = data.get("folder_id")
+        if raw_folder is None:
+            return BulkWorkRequest(action, work_ids, folder_id=None)
+        if not isinstance(raw_folder, str):
+            raise BulkWorkError("folder_id must be a string or null.")
+        stripped = raw_folder.strip()
+        if not stripped:
+            raise BulkWorkError("folder_id is invalid.")
+        return BulkWorkRequest(action, work_ids, folder_id=stripped)
+    tag_ids = _normalize_bulk_ids(data.get("tag_ids"), kind="tag")
+    return BulkWorkRequest(action, work_ids, tag_ids=tuple(tag_ids))
+
+
 class SavedViewError(ValueError):
     """Controlled Saved View failure. http_status is 400, 404, or 409."""
 
@@ -3953,31 +4038,6 @@ class PRKSDatabase:
             folder_sync.set_work_folder_on_conn(
                 conn, wid, "" if folder_id is None else str(folder_id))
 
-    def _normalize_bulk_ids(self, raw, *, kind: str) -> List[str]:
-        if not isinstance(raw, list):
-            raise BulkWorkError(f"{kind}_ids must be a JSON array.")
-        if not raw:
-            raise BulkWorkError("No files selected." if kind == "work" else "No tags selected.")
-        if len(raw) > PRKS_BULK_WORK_MAX:
-            raise BulkWorkError(
-                "Too many files selected." if kind == "work" else "Too many tags selected."
-            )
-        out: List[str] = []
-        seen = set()
-        for item in raw:
-            if not isinstance(item, str):
-                raise BulkWorkError(f"{kind} IDs must be strings.")
-            nid = item.strip()
-            if not nid:
-                raise BulkWorkError(f"{kind} IDs must be non-empty.")
-            if nid in seen:
-                continue
-            seen.add(nid)
-            out.append(nid)
-        if not out:
-            raise BulkWorkError("No files selected." if kind == "work" else "No tags selected.")
-        return out
-
     def _bulk_ids_exist(self, conn, table: str, ids: List[str]) -> bool:
         placeholders = ",".join("?" for _ in ids)
         rows = conn.execute(
@@ -3993,80 +4053,44 @@ class PRKSDatabase:
         ``updated`` is the number of selected works processed, not relationship
         rows inserted or deleted. Tag add/remove are idempotent.
         """
-        if not isinstance(data, dict):
-            raise BulkWorkError("JSON object body required")
-        action = data.get("action")
-        if not isinstance(action, str) or action not in PRKS_BULK_WORK_ACTIONS:
-            raise BulkWorkError("Unknown bulk action.")
-        work_ids = self._normalize_bulk_ids(data.get("work_ids"), kind="work")
-
-        status: Optional[str] = None
-        folder_id: Optional[str] = None
-        tag_ids: List[str] = []
-        target_count = 1
-
-        if action == "set_status":
-            raw_status = data.get("status")
-            if not isinstance(raw_status, str) or \
-                    not work_metadata_sync.is_valid_field_value("status", raw_status):
-                raise BulkWorkError("Invalid status.")
-            status = raw_status
-        elif action == "move_folder":
-            if "folder_id" not in data:
-                raise BulkWorkError("folder_id is required.")
-            raw_folder = data.get("folder_id")
-            if raw_folder is None:
-                folder_id = None
-            elif isinstance(raw_folder, str):
-                stripped = raw_folder.strip()
-                if not stripped:
-                    raise BulkWorkError("folder_id is invalid.")
-                folder_id = stripped
-            else:
-                raise BulkWorkError("folder_id must be a string or null.")
-        else:
-            tag_ids = self._normalize_bulk_ids(data.get("tag_ids"), kind="tag")
-            target_count = len(tag_ids)
+        request = parse_bulk_work_request(data)
+        action, work_ids = request.action, request.work_ids
 
         conn = self.get_connection()
         try:
             conn.isolation_level = None
             conn.execute("BEGIN IMMEDIATE")
             if not self._bulk_ids_exist(conn, "works", work_ids):
-                raise BulkWorkError("One or more selected files no longer exist.", 404)
-            if action == "move_folder" and folder_id:
-                row = conn.execute("SELECT id FROM folders WHERE id = ?", (folder_id,)).fetchone()
+                raise BulkWorkError(BULK_WORKS_MISSING, 404)
+            if action == "move_folder" and request.folder_id:
+                row = conn.execute("SELECT id FROM folders WHERE id = ?", (request.folder_id,)).fetchone()
                 if not row:
-                    raise BulkWorkError("Folder not found.", 404)
+                    raise BulkWorkError(BULK_FOLDER_MISSING, 404)
             if action in ("add_tags", "remove_tags"):
-                if not self._bulk_ids_exist(conn, "tags", tag_ids):
-                    raise BulkWorkError("One or more selected tags no longer exist.", 404)
+                if not self._bulk_ids_exist(conn, "tags", request.tag_ids):
+                    raise BulkWorkError(BULK_TAGS_MISSING, 404)
 
             if action == "set_status":
                 # The SAME revision-aware boundary PATCH and the sync handler
-                # use, inside this transaction -- exactly like the Tag branch
-                # below. A bulk action that wrote the column directly would
-                # change the value while leaving the revision where it was, so
-                # a device holding the pre-bulk Status would reconnect,
-                # compare equal revisions, believe itself current and
-                # overwrite the newer value. Revisions record CANONICAL
+                # use, inside this transaction -- exactly like the Folder and
+                # Tag branches below. A bulk action that wrote the column
+                # directly would change the value while leaving the revision
+                # where it was, so a device holding the pre-bulk Status would
+                # reconnect, compare equal revisions, believe itself current
+                # and overwrite the newer value. Revisions record CANONICAL
                 # history; there is no such thing as a mutation path exempt
                 # from it. Only Works whose Status actually changes advance.
                 for wid in work_ids:
-                    work_metadata_sync.set_field_on_conn(conn, wid, "status", status)
+                    work_metadata_sync.set_field_on_conn(conn, wid, "status", request.status)
             elif action == "move_folder":
-                conn.executemany(
-                    "DELETE FROM folder_files WHERE work_id = ?",
-                    [(wid,) for wid in work_ids],
-                )
-                if folder_id:
-                    conn.executemany(
-                        "INSERT INTO folder_files (folder_id, work_id) VALUES (?, ?)",
-                        [(folder_id, wid) for wid in work_ids],
-                    )
+                # SET_WORK_FOLDER's boundary: a Work that moves advances its
+                # `work-folder` revision and its updated_at; one already there
+                # changes nothing.
+                for wid in work_ids:
+                    folder_sync.set_work_folder_on_conn(conn, wid, request.folder_id or "")
             else:
                 for wid in work_ids:
-                    for tid in tag_ids:
+                    for tid in request.tag_ids:
                         work_tag_sync.set_state(conn, wid, tid, action == "add_tags")
 
             conn.commit()
@@ -4079,13 +4103,7 @@ class PRKSDatabase:
         finally:
             conn.close()
 
-        return {
-            "status": "updated",
-            "action": action,
-            "requested": len(work_ids),
-            "updated": len(work_ids),
-            "target_count": target_count,
-        }
+        return request.result()
 
     def get_related_folders_for_work(self, work_id: str) -> List[dict]:
         # Find folders containing ANY work that shares an Author/Reviewer/etc. with THIS work
