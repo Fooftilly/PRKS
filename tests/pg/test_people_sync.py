@@ -135,7 +135,7 @@ class IsolationDeclarationTests(unittest.TestCase):
         # Work merge's (a Work filed in a Folder).
         self.assertEqual(serializable, {"DELETE_PERSON", "ADD_WORK_PERSON_ROLE", "ADD_PERSON_GROUP_MEMBER",
                                         "CREATE_WORK", "CREATE_TAG", "MERGE_TAG", "ADD_WORK_TAG",
-                                        "ADD_FOLDER_TAG", "SET_WORK_FOLDER"})
+                                        "ADD_FOLDER_TAG", "SET_WORK_FOLDER", "SET_WORK_PLAYLIST"})
 
 
 class LedgerTests(PeopleSyncTestCase):

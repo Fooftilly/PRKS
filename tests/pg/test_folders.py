@@ -21,7 +21,6 @@ from backend.domain.organization import folders, links, tags
 from backend.domain.works import commands
 from backend.entity_ids import generate
 from backend.folder_sync import FolderRuleError, scope_key
-from backend.pg_facade import NotPortedError
 from backend.pg_facade import context as facade_context
 from tests.pg.test_tags import OrganizationTestCase
 
@@ -237,19 +236,6 @@ class WorkDeleteTests(FolderTestCase):
         self.assertEqual(self.revisions("work-folder"), {filed: 2, never: 1})
         self.assertEqual(self.library.get_all_folders()[0]["work_count"], 0)
         self.library.delete_empty_folder(folder_id)
-
-    def test_a_work_in_a_playlist_is_not_deleted_until_the_playlist_slice(self) -> None:
-        folder_id, work_id = self.add("A"), self.library.add_work("Listed")
-        self.library.move_work_to_folder(work_id, folder_id)
-        playlist_id = "PL-" + generate("F")[2:]
-        self.sql("INSERT INTO prks.playlists (library_id, id, title) VALUES (%s, %s, 'List')",
-                 (self.actor.library_id, playlist_id))
-        self.sql("INSERT INTO prks.playlist_items (library_id, work_id, playlist_id, position) "
-                 "VALUES (%s, %s, %s, 0)", (self.actor.library_id, work_id, playlist_id))
-        with self.assertRaises(NotPortedError):
-            self.library.delete_work_record(work_id)
-        self.assertEqual((self.count("works"), self.filed(), self.revisions("work-folder")),
-                         (1, [(work_id, folder_id)], {work_id: 1}))
 
 
 class IsolationTests(FolderTestCase):

@@ -22,9 +22,8 @@ class WorkFiling(Protocol):
     Those rows belong to the Organization and People lanes (L-O-1, L-P-1).
     The default is the Organization lane's
     :class:`backend.sync.handlers.folder.FolderFiling`, which checks and
-    files the folder and delegates the roles to the People half,
-    :class:`backend.sync.handlers.work_role.RoleFiling`. A playlist refuses
-    with ``NotPortedError`` until the Playlist slice.
+    files the folder and the playlist and delegates the roles to the People
+    half, :class:`backend.sync.handlers.work_role.RoleFiling`.
     """
 
     def prepare(self, scope: LibraryScope, work_id: str,

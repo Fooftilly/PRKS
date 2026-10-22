@@ -20,10 +20,10 @@ delete Folder rows behind their row locks and run READ COMMITTED.
 :class:`FolderFiling` is ``CREATE_WORK``'s filing
 (:class:`~backend.sync.families.WorkFiling`): the Folder the new Work goes
 into, checked before the Work exists (``FOLDER_NOT_FOUND``) and by default
-the root "Uncategorized", then the roles through the People lane's
+the root "Uncategorized", then the Playlist it is appended to, if any
+(``PLAYLIST_NOT_FOUND``), then the roles through the People lane's
 :class:`~backend.sync.handlers.work_role.RoleFiling`. Filing is construction:
-no ``work-folder`` revision moves. A playlist in the payload is the Playlist
-slice's and refuses with ``NotPortedError``.
+no ``work-folder``, ``work-playlist`` or ``playlist-order`` revision moves.
 """
 
 from __future__ import annotations
@@ -35,9 +35,8 @@ from backend import folder_sync as rules
 from backend.db.database import Isolation
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import LibraryScope
-from backend.domain.organization import folders
+from backend.domain.organization import folders, playlists
 from backend.entity_ids import generate
-from backend.pg_facade.registry import NotPortedError
 from backend.sync.families import Environment, FamilyHandler, Result
 from backend.sync.handlers.work_role import RoleFiling
 
@@ -100,8 +99,8 @@ class FolderFiling:
         elif not folders.share(scope, folder_id):
             return 404, {"code": "FOLDER_NOT_FOUND", "work_id": work_id}
         playlist_id = (fields["playlist_id"] or "").strip()
-        if playlist_id:
-            raise NotPortedError("CREATE_WORK filing in a playlist")
+        if playlist_id and not playlists.lock(scope, playlist_id):
+            return 404, {"code": "PLAYLIST_NOT_FOUND", "work_id": work_id}
         people = self.roles.prepare(scope, work_id, fields)
         if isinstance(people, tuple):
             return people
@@ -110,6 +109,8 @@ class FolderFiling:
     def file(self, scope: LibraryScope, work_id: str, fields: dict[str, Any],
              prepared: dict[str, Any]) -> dict[str, Any]:
         folders.file_new_work(scope, work_id, prepared["folder_id"])
+        if prepared["playlist_id"]:
+            playlists.file_new_work(scope, work_id, prepared["playlist_id"])
         return self.roles.file(scope, work_id, fields, prepared)
 
 

@@ -12,14 +12,15 @@ A method acts for the bound
 snapshot, commands in one ``library_command`` transaction, SERIALIZABLE
 where §7.1 lists the command (a Tag merge, and every add to its peer
 tables: a Tag, an alias, a Work or Folder tag; and filing a Work in a
-Folder, a peer table of the Work merge). The domain modules (and so
+Folder or a Playlist, peer tables of the Work merge). The domain modules (and so
 psycopg) are imported inside the methods.
 
 Ported here: Tags, their aliases, delete and merge, Work and Folder tags,
 and their tag-option revision states (L-O-1 PR 2); Folders, their
 hierarchy and fields, the Folder a Work is in, and their revision states
-(PR 3). Playlists, Saved Views and settings are later slices. Differences
-from SQLite, each deliberate:
+(PR 3); Playlists, their fields, membership and order, and their revision
+states (PR 4). Saved Views and settings are later slices. Differences from
+SQLite, each deliberate:
 
 - Names, aliases and Folder titles compare by ``prks.identity_key`` (§8.1),
   not ASCII-only ``LOWER``: "Straße" and "STRASSE", or "Λόγος" and "ΛΌΓΟΣ",
@@ -41,6 +42,11 @@ from SQLite, each deliberate:
   Folder-Tag scope one revision on (SQLite cascades the links and leaves
   the scopes), so a base observed before the delete is stale on a Folder
   recreated under the id.
+- A Playlist delete leaves every field scope one revision on, and a Work
+  delete advances its Playlist's order revision (SQLite advances neither),
+  so a base observed before the delete is stale. A Playlist's empty
+  ``original_url`` is stored as ``''`` and read back as ``None``, as SQLite
+  stores it.
 - ``get_work_tags``, ``get_folder_tags``, ``get_related_folders_for_work``
   and the affected-id lists of a delete or merge are ordered by id (SQLite
   gives storage order); equal Folder titles, and Works of one Folder created
@@ -102,7 +108,7 @@ def _new_id(prefix: str) -> str:
 
 
 class OrganizationMixin(FacadeMixin):
-    """Tags, Work and Folder tags (L-O-1 PR 2), Folders and Work filing (PR 3)."""
+    """Tags, Work and Folder tags (L-O-1 PR 2), Folders and Work filing (PR 3), Playlists (PR 4)."""
 
     # -- Tags -------------------------------------------------------------------
 
@@ -415,3 +421,144 @@ class OrganizationMixin(FacadeMixin):
         from backend.domain.organization import folders
 
         return _read(self, lambda scope: folders.work_folder_state(scope, work_id))
+
+    # -- Playlists --------------------------------------------------------------
+
+    @ported
+    def add_playlist(self, title: str, description: str = "", original_url: str = "") -> str:
+        from backend.domain.organization import playlists
+
+        playlist_id = _new_id("PL")
+        _command(self, lambda scope: playlists.insert(scope, playlist_id, title, description, original_url))
+        return playlist_id
+
+    @ported
+    def update_playlist(self, playlist_id: str, fields: dict) -> None:
+        """Edit a Playlist through the revision-aware boundary."""
+        from backend import playlist_sync
+        from backend.domain.organization import playlists
+
+        updates = {k: v for k, v in fields.items() if k in playlist_sync.FIELD_SET}
+        if not updates:
+            return
+
+        def run(scope: LibraryScope) -> None:
+            if not playlists.lock(scope, playlist_id):
+                raise ValueError("Playlist not found.")
+            for field in playlist_sync.FIELDS:
+                if field in updates:
+                    value = updates[field]
+                    playlists.set_field(scope, playlist_id, field, "" if value in (None, False) else str(value))
+
+        _command(self, run)
+
+    @ported
+    def delete_playlist(self, playlist_id: str) -> None:
+        """Destruction: the Playlist's Works are released and its scopes advance."""
+        from backend.domain.organization import playlists
+
+        _command(self, lambda scope: playlists.delete(scope, playlist_id))
+
+    @ported
+    def get_all_playlists(self) -> List[dict]:
+        """Complete playlist catalog: the Playlist columns plus ``item_count``."""
+        from backend.domain.organization import playlists
+
+        return _read(self, playlists.catalog)
+
+    @ported
+    def etag_playlists_catalog(self, rows: List[dict]) -> str:
+        from backend.db_manager import PRKSDatabase
+
+        return PRKSDatabase.etag_for_representation("playlists", rows)
+
+    @ported
+    def get_playlist(self, playlist_id: str) -> Optional[dict]:
+        from backend.domain.organization import playlists
+        from backend.domain.works import projection, queries
+
+        def read(scope: LibraryScope) -> Optional[Dict[str, Any]]:
+            playlist = playlists.playlist_row(scope, playlist_id)
+            if playlist is None:
+                return None
+            playlist["items"] = [{**projection.work_summary(core, with_folder=False),
+                                  "position": core["playlist_position"]}
+                                 for core in queries.works_in_playlist(scope, playlist_id)]
+            return playlist
+
+        found = _read(self, read)
+        if found is not None:
+            # The Works lane's file sizes (``WorksMixin._finish``) on the composed library.
+            getattr(self, "_finish")(found["items"])
+        return found
+
+    @ported
+    def add_work_to_playlist(self, playlist_id: str, work_id: str, position: Optional[int] = None) -> None:
+        """Put a Work in a Playlist (membership, then the order when ``position`` is given)."""
+        from backend import playlist_sync
+        from backend.domain.organization import playlists
+
+        pid = (playlist_id or "").strip()
+        wid = (work_id or "").strip()
+        if not pid or not wid:
+            raise ValueError("Playlist or work not found.")
+
+        def run(scope: LibraryScope) -> None:
+            if not playlists.lock_work(scope, wid):
+                raise ValueError("Playlist or work not found.")
+            try:
+                playlists.set_work_playlist(scope, wid, pid)
+            except playlist_sync.PlaylistRuleError as error:
+                raise ValueError("Playlist or work not found.") from error
+            if position is None:
+                return
+            order = [w for w in playlists.order(scope, pid) if w != wid]
+            order.insert(max(0, min(int(position), len(order))), wid)
+            playlists.set_order(scope, pid, order)
+
+        _command(self, run, serializable=True)
+
+    @ported
+    def remove_work_from_playlist(self, playlist_id: str, work_id: str) -> None:
+        """Take a Work out of the named Playlist; nothing changes when it is not in it."""
+        from backend.domain.organization import playlists
+
+        wid = (work_id or "").strip()
+        pid = (playlist_id or "").strip()
+
+        def run(scope: LibraryScope) -> None:
+            if playlists.lock_work(scope, wid) and playlists.work_playlist(scope, wid) == pid:
+                playlists.set_work_playlist(scope, wid, "")
+
+        _command(self, run)
+
+    @ported
+    def reorder_playlist(self, playlist_id: str, work_ids: List[str]) -> None:
+        """Rewrite the whole order, through the boundary the aggregate owns."""
+        from backend import playlist_sync
+        from backend.domain.organization import playlists
+
+        if not work_ids:
+            return
+
+        def run(scope: LibraryScope) -> None:
+            try:
+                playlists.set_order(scope, playlist_id, list(work_ids))
+            except playlist_sync.PlaylistRuleError as error:
+                raise ValueError("Playlist not found.") from error
+
+        _command(self, run)
+
+    @ported
+    def get_playlist_sync_state(self, playlist_id: str) -> Optional[dict]:
+        """Field revisions and the order revision for one Playlist."""
+        from backend.domain.organization import playlists
+
+        return _read(self, lambda scope: playlists.playlist_state(scope, playlist_id))
+
+    @ported
+    def get_work_playlist_state(self, work_id: str) -> Optional[dict]:
+        """Which playlist a Work is in, and the revision that says so."""
+        from backend.domain.organization import playlists
+
+        return _read(self, lambda scope: playlists.work_playlist_state(scope, work_id))

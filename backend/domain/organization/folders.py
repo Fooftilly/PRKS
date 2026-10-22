@@ -57,7 +57,6 @@ from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.organization import links
 from backend.domain.works import revisions
 from backend.folder_sync import FolderRuleError
-from backend.pg_facade.registry import NotPortedError
 
 FIELD_SCOPE_TYPE = rules.FIELD_SCOPE_TYPE
 WORK_SCOPE_TYPE = rules.WORK_SCOPE_TYPE
@@ -199,9 +198,6 @@ _TOUCH_WORK_SQL: LiteralString = """
 UPDATE prks.works SET updated_at = now() WHERE library_id = %(library_id)s AND id = %(work_id)s
 """
 _WORK_EXISTS_SQL: LiteralString = "SELECT 1 FROM prks.works WHERE library_id = %(library_id)s AND id = %(work_id)s"
-_IN_PLAYLIST_SQL: LiteralString = """
-SELECT 1 FROM prks.playlist_items WHERE library_id = %(library_id)s AND work_id = %(work_id)s
-"""
 # Held like any filing target (``share``), so its delete waits for the filing.
 _UNCATEGORIZED_SQL: LiteralString = """
 SELECT id FROM prks.folders
@@ -589,17 +585,12 @@ def file_new_work(scope: LibraryScope, work_id: str, folder_id: str) -> None:
 
 
 def release_work(scope: LibraryScope, work_id: str) -> None:
-    """Take a Work being deleted out of its Folder (the Work delete's Organization part).
+    """Take a Work being deleted out of its Folder (the Work delete's Folder part).
 
     The caller holds the Work ``FOR UPDATE``, which every filing writer
     waits for, and tombstones ``work-folder`` with the Work's other scopes
-    (``commands.work_scopes``). A Work in a Playlist is not deleted yet:
-    the Playlist slice removes its item and advances ``playlist-order`` and
-    ``work-playlist``, and until then the delete refuses before anything is
-    written (the item's key would refuse it too).
+    (``commands.work_scopes``). Its Playlist is ``playlists.release_work``'s.
     """
-    if scope.execute(_IN_PLAYLIST_SQL, {"work_id": work_id}).fetchone() is not None:
-        raise NotPortedError("delete_work_record of a Work in a playlist")
     scope.execute(_UNFILE_SQL, {"work_id": work_id})
 
 
