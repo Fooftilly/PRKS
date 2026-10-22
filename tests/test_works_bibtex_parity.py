@@ -245,6 +245,16 @@ class BibtexParityTests(PeopleParityTestCase):
         # rule for Author (text), whatever #719 makes it; a linked Author wins.
         text_only = self.work_both("Text only", year="1999", author_text="Doe, Jane; Roe, R.")
         self.bibtex(text_only)
+        # #719 reads the source kind to tell a channel name from Person names.
+        channel = self.work_both("Channel", doc_type="online", author_text="Some Channel; Inc",
+                                 source_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        self.bibtex(channel)
+        # A fileless PDF Work keeps its URL as provenance, but PostgreSQL reads
+        # its kind back as no source (L-W-1), so a rule that infers the kind
+        # from the URL alone would export this entry differently.
+        saved = self.work_both("Saved page", doc_type="online", author_text="Given Family",
+                               source_kind="pdf", source_url="https://example.org/p")
+        self.bibtex(saved)
         both_kinds = self.work_both("Both", year="1999", author_text="Doe, Jane")
         self.credit(both_kinds, self.person_both("Linked", first_name="Lin", last_name="Ked"), "Author")
         entry = self.bibtex(both_kinds)
