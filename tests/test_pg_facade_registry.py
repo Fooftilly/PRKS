@@ -43,15 +43,15 @@ LANE_MIXINS = {
 }
 
 
-class _SettingsPort(FacadeMixin):
+class _ProcessingPort(FacadeMixin):
     @ported
-    def get_app_settings_response(self):
+    def scan_processing_files(self):
         return ["from-postgres"]
 
 
 class _OtherPort(FacadeMixin):
     @ported
-    def get_app_settings_response(self):
+    def scan_processing_files(self):
         return []
 
 
@@ -79,8 +79,8 @@ class FacadeSkeletonTests(unittest.TestCase):
     def test_unported_method_is_a_typed_refusal_not_a_fallback(self):
         library = PostgresLibrary(object())  # type: ignore[arg-type]
         with self.assertRaises(NotPortedError) as ctx:
-            library.get_app_settings_response()
-        self.assertEqual(ctx.exception.method, "get_app_settings_response")
+            library.scan_processing_files()
+        self.assertEqual(ctx.exception.method, "scan_processing_files")
         # Not an AttributeError: hasattr()/getattr(default) must not hide it.
         self.assertNotIsInstance(ctx.exception, AttributeError)
         with self.assertRaises(AttributeError):
@@ -104,18 +104,18 @@ class FacadeSkeletonTests(unittest.TestCase):
 
 class RegistryDiscoveryTests(unittest.TestCase):
     def test_one_decorator_in_a_mixin_registers_the_method(self):
-        class Library(_SettingsPort, _BareLibrary):
+        class Library(_ProcessingPort, _BareLibrary):
             pass
 
-        self.assertEqual(ported_methods(Library), {"get_app_settings_response": "_SettingsPort"})
+        self.assertEqual(ported_methods(Library), {"scan_processing_files": "_ProcessingPort"})
         self.assertEqual(validate_registry(Library), [])
         library = Library(object())  # type: ignore[arg-type]
-        self.assertEqual(library.get_app_settings_response(), ["from-postgres"])
+        self.assertEqual(library.scan_processing_files(), ["from-postgres"])
         # The real facade is untouched by a subclass's registrations.
-        self.assertNotIn("get_app_settings_response", ported_methods(PostgresLibrary))
+        self.assertNotIn("scan_processing_files", ported_methods(PostgresLibrary))
 
     def test_two_mixins_registering_one_method_are_refused(self):
-        class Library(_SettingsPort, _OtherPort, PostgresLibrary):
+        class Library(_ProcessingPort, _OtherPort, PostgresLibrary):
             pass
 
         with self.assertRaises(RegistryError):
@@ -125,7 +125,7 @@ class RegistryDiscoveryTests(unittest.TestCase):
     def test_a_registration_with_another_signature_is_refused(self):
         class Drifted(FacadeMixin):
             @ported
-            def get_app_settings_response(self, limit=10):
+            def scan_processing_files(self, limit=10):
                 return []
 
         class Library(Drifted, PostgresLibrary):
@@ -150,7 +150,7 @@ class RegistryDiscoveryTests(unittest.TestCase):
 
     def test_an_unregistered_override_is_refused(self):
         class Forgot(FacadeMixin):
-            def get_app_settings_response(self):
+            def scan_processing_files(self):
                 return []
 
             def _private_helper(self):
@@ -242,12 +242,12 @@ class SurfaceTests(unittest.TestCase):
             )
 
     def test_coverage_counts_ported_and_unported(self):
-        class Library(_SettingsPort, _BareLibrary):
+        class Library(_ProcessingPort, _BareLibrary):
             pass
 
         report = coverage(Library)
-        self.assertIn("get_app_settings_response", report.ported_in_surface)
-        self.assertNotIn("get_app_settings_response", report.unported)
+        self.assertIn("scan_processing_files", report.ported_in_surface)
+        self.assertNotIn("scan_processing_files", report.unported)
         self.assertEqual(len(report.unported), len(report.surface) - 1)
         real = coverage()
         self.assertEqual(real.ported_in_surface, real.surface & frozenset(real.ported))
