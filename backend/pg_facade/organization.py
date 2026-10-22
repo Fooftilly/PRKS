@@ -19,7 +19,7 @@ Ported here: Tags, their aliases, delete and merge, Work and Folder tags,
 and their tag-option revision states (L-O-1 PR 2); Folders, their
 hierarchy and fields, the Folder a Work is in, and their revision states
 (PR 3); Playlists, their fields, membership and order, and their revision
-states (PR 4); Saved Views (PR 5). Settings are a later slice. Differences from
+states (PR 4); Saved Views (PR 5); the application settings (PR 6). Differences from
 SQLite, each deliberate:
 
 - Names, aliases, Folder titles and Saved View names compare by
@@ -51,6 +51,12 @@ SQLite, each deliberate:
   and the affected-id lists of a delete or merge are ordered by id (SQLite
   gives storage order); equal Folder titles, and Works of one Folder created
   in the same second, are ordered by id.
+- ``patch_app_settings`` needs ``ADMIN_LIBRARY`` (SQLite has no roles; the
+  ``/api/settings`` route already admits only that) and is atomic: a refused
+  key leaves the patch's other keys unwritten (SQLite commits
+  ``annotation_author`` before it checks ``bibtex_export_fields``). Settings
+  are the Library's (``prks.library_settings``); an ``annotation_author``
+  holding NUL is refused with ``ValueError``.
 """
 
 from __future__ import annotations
@@ -81,6 +87,14 @@ def _command(library: FacadeMixin, fn: Callable[[LibraryScope], T], *, serializa
     isolation = Isolation.SERIALIZABLE if serializable else Isolation.READ_COMMITTED
     return library_command(library._database, current_context(), Capability.EDIT_LIBRARY, fn,
                            isolation=isolation)
+
+
+def _admin_command(library: FacadeMixin, fn: Callable[[LibraryScope], T]) -> T:
+    """:func:`_command` for Library administration (``ADMIN_LIBRARY``, §9.4)."""
+    from backend.domain.identity.authorization import Capability
+    from backend.domain.identity.library_scope import library_command
+
+    return library_command(library._database, current_context(), Capability.ADMIN_LIBRARY, fn)
 
 
 def _command_deciding_titles(library: FacadeMixin, fn: Callable[[LibraryScope], T], *,
@@ -127,7 +141,7 @@ def _new_id(prefix: str) -> str:
 
 
 class OrganizationMixin(FacadeMixin):
-    """Tags, Work and Folder tags (L-O-1 PR 2), Folders and Work filing (PR 3), Playlists (PR 4), Saved Views (PR 5)."""
+    """Tags, Work and Folder tags (L-O-1 PR 2), Folders and Work filing (PR 3), Playlists (PR 4), Saved Views (PR 5), settings (PR 6)."""
 
     # -- Tags -------------------------------------------------------------------
 
@@ -625,3 +639,23 @@ class OrganizationMixin(FacadeMixin):
         if not vid:
             raise SavedViewError(views.NOT_FOUND, 404)
         _command(self, lambda scope: views.delete(scope, vid))
+
+    # -- Application settings -----------------------------------------------------
+
+    @ported
+    def get_app_settings_map(self) -> Dict[str, str]:
+        from backend.domain.settings import app_settings
+
+        return _read(self, app_settings.settings_map)
+
+    @ported
+    def get_app_settings_response(self) -> Dict[str, Any]:
+        from backend.domain.settings import app_settings
+
+        return _read(self, app_settings.settings_response)
+
+    @ported
+    def patch_app_settings(self, data: Dict[str, Any]) -> None:
+        from backend.domain.settings import app_settings
+
+        _admin_command(self, lambda scope: app_settings.patch(scope, data))

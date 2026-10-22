@@ -46,9 +46,9 @@ def _probe(backend: str) -> BackendParityTestCase:
     return Probe()
 
 
-class _SettingsFromPostgres(FacadeMixin):
+class _ProcessingFromPostgres(FacadeMixin):
     @ported
-    def get_app_settings_response(self) -> list[dict[str, Any]]:
+    def scan_processing_files(self) -> list[dict[str, Any]]:
         def read(tx: Transaction) -> list[dict[str, Any]]:
             row = tx.execute(
                 "SELECT current_database() AS db, current_setting('transaction_read_only') AS ro"
@@ -59,21 +59,21 @@ class _SettingsFromPostgres(FacadeMixin):
         return self._database.query(read)
 
 
-class _Library(_SettingsFromPostgres, PostgresLibrary):
+class _Library(_ProcessingFromPostgres, PostgresLibrary):
     pass
 
 
-class _SettingsCallingUnported(FacadeMixin):
+class _ProcessingCallingUnported(FacadeMixin):
     @ported
-    def get_app_settings_response(self) -> list[dict[str, Any]]:
+    def scan_processing_files(self) -> list[dict[str, Any]]:
         try:
-            self.patch_app_settings({})
+            self.get_processing_files()
         except NotPortedError:
             pass
         return []
 
 
-class _NestingLibrary(_SettingsCallingUnported, PostgresLibrary):
+class _NestingLibrary(_ProcessingCallingUnported, PostgresLibrary):
     pass
 
 
@@ -135,10 +135,10 @@ class PostgresLegTests(unittest.TestCase):
         self.addCleanup(database.close)
         log = ParityLog()
         recorder = ParityRecorder(
-            _Library(database, storage=self.storage), frozenset({"get_app_settings_response"}), log
+            _Library(database, storage=self.storage), frozenset({"scan_processing_files"}), log
         )
-        self.assertEqual(recorder.get_app_settings_response(), [{"db": name, "ro": "on"}])
-        self.assertEqual(log.ported, {"get_app_settings_response"})
+        self.assertEqual(recorder.scan_processing_files(), [{"db": name, "ro": "on"}])
+        self.assertEqual(log.ported, {"scan_processing_files"})
         self.assertEqual(log.unported, set())
 
     def test_the_fixture_records_a_refusal_inside_a_ported_method(self) -> None:
@@ -148,9 +148,9 @@ class PostgresLegTests(unittest.TestCase):
         log = ParityLog()
         facade = with_refusal_log(_NestingLibrary, log)(object(), storage=self.storage)  # type: ignore[arg-type]
         self.assertEqual(validate_registry(_NestingLibrary), [])
-        recorder = ParityRecorder(facade, frozenset({"get_app_settings_response"}), log)
-        self.assertEqual(recorder.get_app_settings_response(), [])
-        self.assertEqual(log.unported, {"patch_app_settings"})
+        recorder = ParityRecorder(facade, frozenset({"scan_processing_files"}), log)
+        self.assertEqual(recorder.scan_processing_files(), [])
+        self.assertEqual(log.unported, {"get_processing_files"})
         self.assertEqual(log.refusals, 1)
 
 
