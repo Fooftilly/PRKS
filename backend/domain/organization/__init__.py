@@ -3,8 +3,8 @@
 Tags, their aliases and lifecycle, Work and Folder tags (``tags``,
 ``lifecycle``, ``links``), Folders, their hierarchy and fields and the
 Folder a Work is in (``folders``), and Playlists, their fields, order and
-the Playlist a Work is in (``playlists``) on PostgreSQL; Saved Views and
-settings come in later slices. The schema is
+the Playlist a Work is in (``playlists``) on PostgreSQL; Saved Views are
+``backend.domain.saved_views`` and settings come in a later slice. The schema is
 ``backend/db/schema/120_organization.sql``. The sync handlers are
 ``backend/sync/handlers/tag.py``, ``tag_link.py``, ``folder.py`` and
 ``playlist.py``.

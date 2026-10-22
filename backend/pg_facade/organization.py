@@ -19,12 +19,12 @@ Ported here: Tags, their aliases, delete and merge, Work and Folder tags,
 and their tag-option revision states (L-O-1 PR 2); Folders, their
 hierarchy and fields, the Folder a Work is in, and their revision states
 (PR 3); Playlists, their fields, membership and order, and their revision
-states (PR 4). Saved Views and settings are later slices. Differences from
+states (PR 4); Saved Views (PR 5). Settings are a later slice. Differences from
 SQLite, each deliberate:
 
-- Names, aliases and Folder titles compare by ``prks.identity_key`` (§8.1),
-  not ASCII-only ``LOWER``: "Straße" and "STRASSE", or "Λόγος" and "ΛΌΓΟΣ",
-  are one name.
+- Names, aliases, Folder titles and Saved View names compare by
+  ``prks.identity_key`` (§8.1), not ASCII-only ``LOWER``: "Straße" and
+  "STRASSE", or "Λόγος" and "ΛΌΓΟΣ", are one name.
 - A name or alias over 200 UTF-8 bytes, or a name, alias or Folder field
   holding NUL, is refused with ``ValueError`` (SQLite stores it); a blank
   colour stores the default.
@@ -101,6 +101,25 @@ def _command_deciding_titles(library: FacadeMixin, fn: Callable[[LibraryScope], 
         return _command(library, fn, serializable=serializable)
 
 
+def _saved_view_command(library: FacadeMixin, fn: Callable[[LibraryScope], T]) -> T:
+    """:func:`_command` for a writer of a Saved View name.
+
+    Every such writer holds the Library's Saved View lock, so the unique
+    index never decides; should another writer reach it, its refusal is
+    SQLite's 409.
+    """
+    from backend.db.errors import ConstraintViolationError
+    from backend.db_manager import SavedViewError
+    from backend.domain.saved_views import views
+
+    try:
+        return _command(library, fn)
+    except ConstraintViolationError as error:
+        if error.constraint != views.NAME_KEY:
+            raise
+        raise SavedViewError(views.NAME_TAKEN, 409) from None
+
+
 def _new_id(prefix: str) -> str:
     from backend.entity_ids import generate
 
@@ -108,7 +127,7 @@ def _new_id(prefix: str) -> str:
 
 
 class OrganizationMixin(FacadeMixin):
-    """Tags, Work and Folder tags (L-O-1 PR 2), Folders and Work filing (PR 3), Playlists (PR 4)."""
+    """Tags, Work and Folder tags (L-O-1 PR 2), Folders and Work filing (PR 3), Playlists (PR 4), Saved Views (PR 5)."""
 
     # -- Tags -------------------------------------------------------------------
 
@@ -562,3 +581,47 @@ class OrganizationMixin(FacadeMixin):
         from backend.domain.organization import playlists
 
         return _read(self, lambda scope: playlists.work_playlist_state(scope, work_id))
+
+    # -- Saved Views --------------------------------------------------------------
+
+    @ported
+    def get_saved_views(self) -> List[dict]:
+        from backend.domain.saved_views import views
+
+        return _read(self, views.all_views)
+
+    @ported
+    def get_saved_view(self, view_id: str) -> Optional[dict]:
+        from backend.domain.saved_views import views
+
+        vid = (view_id or "").strip()
+        if not vid:
+            return None
+        return _read(self, lambda scope: views.view(scope, vid))
+
+    @ported
+    def create_saved_view(self, name, search) -> dict:
+        from backend.domain.saved_views import views
+
+        view_id = _new_id("SV")
+        return _saved_view_command(self, lambda scope: views.create(scope, view_id, name, search))
+
+    @ported
+    def update_saved_view(self, view_id: str, *, name=None, search=None) -> dict:
+        from backend.db_manager import SavedViewError
+        from backend.domain.saved_views import views
+
+        vid = (view_id or "").strip()
+        if not vid:
+            raise SavedViewError(views.NOT_FOUND, 404)
+        return _saved_view_command(self, lambda scope: views.update(scope, vid, name, search))
+
+    @ported
+    def delete_saved_view(self, view_id: str) -> None:
+        from backend.db_manager import SavedViewError
+        from backend.domain.saved_views import views
+
+        vid = (view_id or "").strip()
+        if not vid:
+            raise SavedViewError(views.NOT_FOUND, 404)
+        _command(self, lambda scope: views.delete(scope, vid))
