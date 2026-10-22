@@ -71,6 +71,7 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/domain/works/metadata.py",
     "backend/domain/works/notes.py",
     "backend/domain/works/source.py",
+    "backend/domain/works/bulk.py",
     "backend/domain/people/__init__.py",
     "backend/domain/people/persons.py",
     "backend/domain/people/groups.py",
