@@ -299,6 +299,29 @@ async function testStalledReadHeaderDeadline() {
         clearReachabilitySpies();
     }
 
+    // If the transport honors AbortSignal, the watchdog must surface a
+    // TimeoutError (not the transport's incidental AbortError).
+    {
+        const clock = makeReadDeadlineClock();
+        const box = makeDeferredFetch();
+        const coord = makeCoordinator({
+            fetchBundle: box, setTimeout: clock.setTimeout,
+            clearTimeout: clock.clearTimeout, readHeaderTimeoutMs: 1000,
+        });
+        const pending = coord.prksRequest('/api/abort-aware').then(
+            function () { return null; },
+            function (err) { return err; }
+        );
+        record('abort-aware read installs a header deadline',
+            clock.pendingCount() === 1 && box.calls.length === 1, 'timers=' + clock.pendingCount());
+        clock.fireOne(1000);
+        const err = await pending;
+        record('watchdog keeps TimeoutError even when abort-aware fetch rejects',
+            err && err.name === 'TimeoutError' && box.calls[0].aborted &&
+            coord.snapshot().current.activeReads === 0 && clock.pendingCount() === 0,
+            err && err.name);
+    }
+
     // Managed PDF byte requests retain the explicit no-short-header-deadline
     // exception; a long streamed response body also remains out of scope.
     {
