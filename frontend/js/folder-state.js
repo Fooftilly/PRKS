@@ -103,8 +103,11 @@
     function pendingWorkFolders(operations) {
         const values = new Map();
         (operations || [])
+            // Terminally refused filings cannot replace the acknowledged
+            // Work folder. Keep their rows in Diagnostics for resolution.
             .filter(op => op && op.operation === 'SET_WORK_FOLDER' &&
-                op.entity_type === 'work' && op.status !== 'acknowledged')
+                op.entity_type === 'work' && op.status !== 'acknowledged' &&
+                op.status !== 'conflict' && op.status !== 'discarded')
             .slice()
             .sort((a, b) => (a.sequence || 0) - (b.sequence || 0))
             .forEach(function (op) {
