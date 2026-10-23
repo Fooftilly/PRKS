@@ -25,6 +25,7 @@ from backend.domain.identity.authorization import AccessRefused, Capability, Ref
 from backend.domain.identity.library_scope import LibraryScope, library_command
 from backend.domain.identity.request_context import RequestContext
 from backend.domain.works import commands, lifecycle, merge
+from backend.entity_ids import generate
 from backend.pg_facade import PostgresLibrary
 from backend.pg_facade import context as facade_context
 from backend.sync import protocol
@@ -175,6 +176,40 @@ class SyncGateTests(MergeTestCase):
         self.assertEqual(self.send(waiting), (400, {"code": "UNSATISFIED_DEPENDENCY"}))
         self.assertEqual(len(self.ledger()), 1)
         self.assertEqual(self.library.get_work(live)["title"], "Live")
+
+    def test_playlist_reorder_with_a_merged_payload_work_is_terminal_and_ledgered(self) -> None:
+        # REORDER_PLAYLIST_ITEMS has entity_type=playlist and a Playlist id
+        # in the envelope; the Work ids only appear inside work_ids.
+        source, target, live = (self.library.add_work(t) for t in ("Source", "Target", "Live"))
+        self.merged(source, target)
+        playlist_id = generate("PL")
+        create = self.envelope("CREATE_PLAYLIST", playlist_id, {
+            "title": "Reorder", "description": "", "original_url": "",
+        }, entity_type="playlist")
+        self.assertEqual(self.send(create)[1]["code"], "ACKNOWLEDGED")
+        before = self.snapshot()
+        pending = str(uuid.uuid4())
+        expected = (409, {"code": "WORK_MERGED", "work_id": source, "target_work_id": target})
+        # A duplicate payload Work is guarded once and the merged refusal
+        # takes precedence over a pending dependency, before any reorder.
+        stale = self.envelope("REORDER_PLAYLIST_ITEMS", playlist_id,
+                              {"work_ids": [live, source, source]}, 0,
+                              entity_type="playlist", depends_on=[pending])
+        self.assertEqual(self.send(stale), expected)
+        self.assertEqual(self.send(stale), expected)  # exact terminal replay
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.sql("SELECT * FROM prks.playlist_items WHERE playlist_id = %s",
+                                  (playlist_id,)), [])
+        ledger = self.ledger()
+        matches = [row for row in ledger if row["op_id"] == stale["op_id"]]
+        self.assertEqual(len(matches), 1)
+        self.assertEqual((matches[0]["status"], matches[0]["http_status"]), ("WORK_MERGED", 409))
+        # A normal Playlist operation does not acquire a terminal refusal
+        # merely because its entity_type is Playlist.
+        normal = self.envelope("REORDER_PLAYLIST_ITEMS", playlist_id,
+                               {"work_ids": []}, 0, entity_type="playlist")
+        status, result = self.send(normal)
+        self.assertEqual((status, result["code"]), (200, "ACKNOWLEDGED"))
 
     def test_a_live_work_is_held_against_a_merge_while_an_operation_applies(self) -> None:
         work_id = self.library.add_work("Live")
