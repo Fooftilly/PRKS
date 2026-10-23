@@ -172,6 +172,50 @@ class DurableFolderTests(unittest.TestCase):
         )
         self.assertIn('Double-click Online', self.folders_in_db(server))
 
+    def test_folder_busy_state_is_owned_by_modal_opening(self):
+        _server, page, _context = self.start()
+        page.evaluate("() => prksOpenFolderModalFromLibrarySearch('Opening A')")
+        page.wait_for_selector('#folder-modal:not(.hidden)')
+        page.evaluate("""() => {
+            window.__folderPending = [];
+            window.__folderCreateCalls = 0;
+            window.createFolder = () => {
+                window.__folderCreateCalls++;
+                return new Promise(resolve => window.__folderPending.push(resolve));
+            };
+            document.getElementById('save-folder-btn').click();
+        }""")
+        self.assertEqual(page.evaluate("""() => {
+            const btn = document.getElementById('save-folder-btn');
+            return [btn.disabled, btn.getAttribute('aria-busy'), btn.textContent.trim()];
+        }"""), [True, 'true', 'Creating…'])
+        page.evaluate("""() => {
+            // Reopen the same DOM modal while old creation remains in-flight.
+            closeModals();
+            openModal('folder-modal');
+            document.getElementById('folder-title').value = 'Opening B';
+            document.getElementById('save-folder-btn').click();
+            // Complete the OLD create while the NEW one remains pending.
+            window.__folderPending[0]('F-OLD');
+        }""")
+        page.wait_for_function("() => window.__folderCreateCalls === 2")
+        page.wait_for_function("""() => {
+            const modal = document.getElementById('folder-modal');
+            const btn = document.getElementById('save-folder-btn');
+            return !modal.classList.contains('hidden') && btn.disabled &&
+                btn.getAttribute('aria-busy') === 'true';
+        }""")
+        page.evaluate("() => document.getElementById('save-folder-btn').click()")
+        self.assertEqual(page.evaluate("() => window.__folderCreateCalls"), 2,
+                         'old completion cannot release the newer save guard')
+        page.evaluate("() => window.__folderPending[1]('F-NEW')")
+        page.wait_for_function("() => document.getElementById('folder-modal').classList.contains('hidden')")
+        page.evaluate("() => openModal('folder-modal')")
+        self.assertEqual(page.evaluate("""() => {
+            const btn = document.getElementById('save-folder-btn');
+            return [btn.disabled, btn.hasAttribute('aria-busy')];
+        }"""), [False, False], 'new opening restores button state')
+
     def test_a_folder_created_offline_is_real_and_survives_reload(self):
         server, page, context = self.start()
         self.offline(page, context)
@@ -210,6 +254,30 @@ class DurableFolderTests(unittest.TestCase):
             "() => prksSync.store.listOperations().then(rows => (rows.find("
             "  o => o.operation === 'CREATE_FOLDER') || {}).server_result)")
         self.assertEqual(state['code'], 'TITLE_TAKEN')
+        effective = page.evaluate("""async () => {
+            const rows = await fetchFolders();
+            const pending = await prksSync.store.listOperations();
+            return prksEffectiveFolders(rows, pending).filter(f =>
+                f.title === 'Durable Folder').map(f => f.id);
+        }""")
+        self.assertEqual(len(effective), 1,
+                         'refused optimistic folder must not duplicate the real one')
+        page.evaluate("() => prksRefreshSyncQueueCue()")
+        page.wait_for_function("""() => {
+            const badge = document.getElementById('prks-sync-queue-cue');
+            return badge && badge.getAttribute('aria-label') ===
+                '1 change needs attention';
+        }""")
+        page.reload()
+        self.index(page)
+        o._wait_list_cached(page, 'folders:index')
+        effective_after_reload = page.evaluate("""async () =>
+            prksEffectiveFolders(await fetchFolders(),
+                await prksSync.store.listOperations()).filter(f =>
+                f.title === 'Durable Folder').length
+        """)
+        self.assertEqual(effective_after_reload, 1,
+                         'phantom folder must not return after reload')
 
     # ---- fields -------------------------------------------------------------
 
