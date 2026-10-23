@@ -762,6 +762,11 @@ function openModal(id) {
     document.querySelectorAll('.modal').forEach(m => m.classList.add('hidden'));
     const modalEl = document.getElementById(id);
     modalEl.classList.remove('hidden');
+    if (id === 'folder-modal' && typeof prksSetButtonBusy === 'function') {
+        // A dismissed save may still be awaiting its durable create. The new
+        // opening owns this same button, not the old opening's busy snapshot.
+        prksSetButtonBusy(document.getElementById('save-folder-btn'), false);
+    }
 
     let deferBaseline = false;
     // A close-and-reopen can settle an older init after the new one is visible.
