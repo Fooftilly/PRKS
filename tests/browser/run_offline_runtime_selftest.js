@@ -663,6 +663,94 @@ async function run() {
         }
     }
 
+    /* ---- live request coordinator: probe transport cannot signal offline
+     * before the runtime's generation fence settles the old request. ---- */
+    {
+        const requests = require(path.join(rootDir, 'frontend/js/request-coordinator.js'));
+        async function integratedProbeCase(laterForegroundFailure) {
+            const timers = makeFakeTimers();
+            let rejectOldProbe = null;
+            let probeAttempts = 0;
+            let failForeground = false;
+            const coordinator = requests.createPrksRequestCoordinator({
+                origin: 'http://127.0.0.1',
+                random: function () { return 0.5; },
+                sleep: async function () {},
+                fetchImpl: function (url) {
+                    if (url === '/api/settings') {
+                        probeAttempts += 1;
+                        if (probeAttempts === 1) {
+                            return new Promise(function (_resolve, reject) {
+                                rejectOldProbe = reject;
+                            });
+                        }
+                        return Promise.reject(new TypeError('old probe retry failed'));
+                    }
+                    if (url === '/api/works') {
+                        if (failForeground) return Promise.reject(new TypeError('foreground failed'));
+                        return Promise.resolve(new Response('[]', {
+                            status: 200, headers: { 'Content-Type': 'application/json' },
+                        }));
+                    }
+                    throw new Error('unexpected request ' + url);
+                },
+            });
+            const runtime = mod.createPrksOfflineRuntime({
+                prksRequest: function (url, init, policy) {
+                    return coordinator.prksRequest(url, init, policy);
+                },
+                store: makeFakeStore(),
+                setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout,
+                window: null, caches: null, navigator: null,
+            });
+            const originalSuccess = global.prksOfflineNoteRequestSuccess;
+            const originalFailure = global.prksOfflineNoteRequestFailure;
+            global.prksOfflineNoteRequestSuccess = runtime.noteRequestSuccess;
+            global.prksOfflineNoteRequestFailure = runtime.noteRequestFailure;
+            try {
+                runtime.noteRequestFailure();
+                timers.flushAll();
+                for (let i = 0; i < 12 && !rejectOldProbe; i++) {
+                    await new Promise(function (resolve) { setImmediate(resolve); });
+                }
+                if (!rejectOldProbe) throw Error('coordinator did not start deferred reachability GET');
+                assertEq('real coordinator starts runtime reachability probe', runtime.getState(), 'reconnecting');
+                await coordinator.prksRequest('/api/works');
+                assertEq('real foreground response marks online during old probe', runtime.getState(), 'online');
+                if (laterForegroundFailure) {
+                    failForeground = true;
+                    let err = null;
+                    try { await coordinator.prksRequest('/api/works'); } catch (e) { err = e; }
+                    assert('real later failed GET is an ordinary transport failure', err instanceof TypeError);
+                    assertEq('real later failed foreground request marks offline', runtime.getState(), 'offline');
+                    assertEq('real newer failure owns a probe timer', timers.pendingDelays(), [3000]);
+                    timers.flushAll(); // the old in-flight probe blocks this timer
+                    assertEq('real timer can expire while old probe remains pending', timers.pendingCount(), 0);
+                }
+                rejectOldProbe(new TypeError('stale reachability transport rejection'));
+                // Real coordinator runs two GET retries before the runtime
+                // sees the resulting rejection. Neither may report health.
+                for (let i = 0; i < 12; i++) {
+                    await new Promise(function (resolve) { setImmediate(resolve); });
+                }
+                assertEq('real coordinator probe used default retry policy', probeAttempts, 3);
+                assertEq('old coordinator failure cannot override newer reachability',
+                    runtime.getState(), laterForegroundFailure ? 'offline' : 'online');
+                assertEq('real probe settlement keeps required recovery timer state',
+                    timers.pendingDelays(), laterForegroundFailure ? [3000] : []);
+                assertEq('real runtime mutation gate reflects freshest foreground evidence',
+                    runtime.isMutationBlocked(), laterForegroundFailure);
+            } finally {
+                if (originalSuccess === undefined) delete global.prksOfflineNoteRequestSuccess;
+                else global.prksOfflineNoteRequestSuccess = originalSuccess;
+                if (originalFailure === undefined) delete global.prksOfflineNoteRequestFailure;
+                else global.prksOfflineNoteRequestFailure = originalFailure;
+            }
+        }
+        await integratedProbeCase(false);
+        await integratedProbeCase(true);
+    }
+
     /* ---- runProbe reachability: an HTTP response of ANY status (even 4xx/5xx) means the server is reachable ---- */
     {
         const timers = makeFakeTimers();
