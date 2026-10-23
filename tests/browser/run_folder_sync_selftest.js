@@ -97,6 +97,31 @@ async function aFolderIsAValidDestinationImmediately() {
     assert.equal((await store.listOperations()).length, 0, "and both retire");
 }
 
+async function refusedCreateStaysInDiagnosticsButNotTheFolderLibrary() {
+    const store = newStore();
+    const created = await store.createFolder({ title: "Already taken" });
+    const pending = await store.listOperations();
+    assert.deepEqual(globalThis.prksEffectiveFolders([], pending).map(row => row.id),
+        [created.entity_id], "an unsent offline create is immediately visible");
+    const runtime = runtimeFor(store, async () => ({
+        ok: false, status: 409, json: async () => ({ code: "TITLE_TAKEN" }),
+    }));
+    await runtime.wake();
+    await settle();
+    runtime.stop();
+    const rows = await store.listOperations();
+    assert.equal(rows.length, 1, "the conflict is retained for explicit Diagnostics resolution");
+    assert.equal(rows[0].status, "conflict");
+    assert.equal(rows[0].server_result.code, "TITLE_TAKEN");
+    assert.deepEqual(globalThis.prksEffectiveFolders([], rows), [],
+        "terminally refused creation cannot appear as a real folder");
+    assert.deepEqual(globalThis.prksEffectiveFolders([{ id: "F-real", title: "Already taken" }], rows)
+        .map(row => row.id), ["F-real"],
+        "the acknowledged server folder remains; no phantom duplicate");
+    assert.equal((await store.stats()).byStatus.conflict, 1,
+        "the operation is not silently discarded");
+}
+
 async function anEmptyTitleBecomesThePlaceholder() {
     const store = newStore();
     const created = await store.createFolder({ title: "   " });
@@ -307,6 +332,7 @@ async function theBaseIsAcknowledgedAndNeverGuessed() {
 
 async function main() {
     await aFolderIsAValidDestinationImmediately();
+    await refusedCreateStaysInDiagnosticsButNotTheFolderLibrary();
     await anEmptyTitleBecomesThePlaceholder();
     await aFolderInsideALocalFolderWaitsForIt();
     await fieldEditsCoalesceAndCancel();
