@@ -2397,6 +2397,345 @@ async function run() {
     assert('offline-runtime.js does not create its own IndexedDB connection', src.indexOf('indexedDB.open') === -1);
     assert('offline-runtime.js delegates persistence to createPrksOfflineStore', src.indexOf('createPrksOfflineStore') !== -1);
 
+    /* ---- real coordinator + offline runtime: reconnecting Person retry correctness ----
+     * The browser A/B in #776 measured fully-offline latency only. This test
+     * exercises the ACTUAL request coordinator and offline runtime together
+     * with deterministic failed-then-successful transports. No retry contract
+     * or production state machine is patched or replaced. */
+    {
+        const requestModule = require(path.join(rootDir, 'frontend/js/request-coordinator.js'));
+        const personPath = '/api/persons/P-1';
+        const oldPerson = { id: 'P-1', name: 'cached-before-reconnect' };
+        const livePerson = { id: 'P-1', name: 'recovered-server-value' };
+
+        function httpJson(value, status) {
+            return new Response(JSON.stringify(value), {
+                status: status || 200,
+                headers: { 'Content-Type': 'application/json' },
+            });
+        }
+
+        async function fixture(transport, customStore) {
+            const store = customStore || makeFakeStore();
+            await store.putEntity('person', 'P-1', oldPerson, '');
+            const attempts = [];
+            const coordinator = requestModule.createPrksRequestCoordinator({
+                origin: 'http://127.0.0.1',
+                random: function () { return 0.5; },
+                sleep: async function () {},
+                fetchImpl: function (url, opts) {
+                    attempts.push({ url: url, signal: opts.signal });
+                    return transport(attempts.length, url, opts);
+                },
+            });
+            let rejectProbe = null;
+            const runtime = mod.createPrksOfflineRuntime({
+                store: store,
+                // A real reachability probe begins at init(). Its response
+                // is held open by default, but tests can reject it to simulate
+                // an unsuccessful reconnecting -> offline transition.
+                prksRequest: function (url, opts, policy) {
+                    if (url === '/api/settings') {
+                        return new Promise(function (_resolve, reject) { rejectProbe = reject; });
+                    }
+                    return coordinator.prksRequest(url, opts, policy);
+                },
+                setTimeout: noopSetTimeout, clearTimeout: noopClearTimeout,
+                window: null, caches: null, navigator: null,
+            });
+            runtime.noteRequestFailure();
+            runtime.init();
+            assertEq('Person test starts with a real pending probe', runtime.getState(), 'reconnecting');
+            return {
+                store: store, runtime: runtime, coordinator: coordinator,
+                attempts: attempts,
+                failProbe: function () { rejectProbe(new TypeError('probe unreachable')); },
+            };
+        }
+
+        function readPerson(c, options) {
+            return c.runtime.readThroughEntity('person', 'P-1', personPath,
+                Object.assign({
+                    domain: 'people',
+                    preferCacheWhenOffline: true,
+                    validate: function (value) { return !!value && value.id === 'P-1'; },
+                }, options || {}));
+        }
+
+        // A brief transport failure is NOT equivalent to the server being
+        // offline. With retries the live answer supersedes the cached value.
+        {
+            const c = await fixture(function (n) {
+                return n === 1 ? Promise.reject(new TypeError('temporary network error'))
+                    : Promise.resolve(httpJson(livePerson));
+            });
+            const r = await readPerson(c);
+            assertEq('Person default policy recovered live value on second GET', r.value, livePerson);
+            assertEq('Person default policy attributes recovered data to server', r.source, 'server');
+            assertEq('Person default policy made two GET attempts', c.attempts.length, 2);
+            assertEq('Person successful recovery transitions online', c.runtime.getState(), 'online');
+        }
+
+        // The existing no-retry policy is faster when disconnected, but can
+        // show an older cached record after a transient first-attempt failure.
+        {
+            const c = await fixture(function (n) {
+                return n === 1 ? Promise.reject(new TypeError('temporary network error'))
+                    : Promise.resolve(httpJson(livePerson));
+            });
+            const r = await readPerson(c, { requestPolicy: { retry: false } });
+            assertEq('Person single attempt returned cached value after transient error', r.value, oldPerson);
+            assertEq('Person single attempt truthfully labels the cached fallback', r.source, 'cache');
+            assertEq('Person single attempt does not retry', c.attempts.length, 1);
+            assertEq('Person single attempt does not assert server reachability', c.runtime.getState(), 'reconnecting');
+        }
+
+        // A reachable 503 is a domain response, never an offline cache
+        // fallback. The coordinator retries 503 by default; disabling it
+        // leaves the runtime's domain-error path intact (no stale masking).
+        {
+            const transport = function (n) {
+                return Promise.resolve(n === 1 ? httpJson({}, 503) : httpJson(livePerson));
+            };
+            const c = await fixture(transport);
+            const r = await readPerson(c);
+            assertEq('Person default retry recovers from a transient 503', r.source, 'server');
+            assertEq('Person default retry recovered fresh 503-followup value', r.value, livePerson);
+            assertEq('Person default retry performs second GET after 503', c.attempts.length, 2);
+        }
+        {
+            const c = await fixture(function (n) {
+                return Promise.resolve(n === 1 ? httpJson({}, 503) : httpJson(livePerson));
+            });
+            let error = null;
+            try {
+                await readPerson(c, { requestPolicy: { retry: false } });
+            } catch (err) { error = err; }
+            assert('Person single-attempt 503 fails as domain error, not cache fallback',
+                !!error && error.isPrksDomainError && error.status === 503);
+            assertEq('Person single-attempt 503 sends one GET', c.attempts.length, 1);
+            assertEq('Person 503 does not discard cached entity', (await c.store.getEntity('person','P-1')).value, oldPerson);
+        }
+
+        // A mutation/domain sweep that fails to delete a stale cached row
+        // MUST keep People blocked. A pending no-retry transport failure
+        // cannot surface that row as a seemingly valid offline fallback.
+        {
+            let rejectPending = null;
+            const stuckStore = makeFakeStore({
+                deleteEntitiesByKind: async function () { return false; },
+            });
+            const c = await fixture(function () {
+                return new Promise(function (_resolve, reject) { rejectPending = reject; });
+            }, stuckStore);
+            const pending = readPerson(c, { requestPolicy: { retry: false } });
+            for (let i = 0; i < 12 && !rejectPending; i++) {
+                await new Promise(function (resolve) { setImmediate(resolve); });
+            }
+            if (!rejectPending) throw new Error('Person test transport never started');
+            c.runtime.markDomainChanged('people', { entityKinds: ['person'] });
+            await c.runtime._domainCleanup('people');
+            assert('failed People sweep remains blocked', c.runtime.isDomainBlocked('people'));
+            rejectPending(new TypeError('network unavailable'));
+            const r = await pending;
+            assertEq('pending failed read cannot return blocked stale Person', r.source, 'unavailable');
+            assertEq('blocked Person result has no cached payload', r.value, null);
+            assertEq('failed sweep deliberately retained stale cache row', (await stuckStore.getEntity('person', 'P-1')).value, oldPerson);
+        }
+
+        // The network can fail, then IndexedDB may pause BEFORE the cached
+        // value is returned. Keep a snapshot of the original row while its
+        // read is unresolved, just as an IDB transaction can finish after
+        // another route invalidates the record.
+        async function pausedCacheFallback(extraReadOptions) {
+            const store = makeFakeStore();
+            const originalGet = store.getEntity.bind(store);
+            let resume = null;
+            store.getEntity = function (kind, id) {
+                const snapshot = originalGet(kind, id);
+                return new Promise(function (resolve) {
+                    resume = function () { void snapshot.then(resolve); };
+                });
+            };
+            const c = await fixture(function () {
+                return Promise.reject(new TypeError('network unreachable'));
+            }, store);
+            const pending = readPerson(c, Object.assign(
+                { requestPolicy: { retry: false } }, extraReadOptions || {}));
+            for (let i = 0; i < 12 && !resume; i++) {
+                await new Promise(function (resolve) { setImmediate(resolve); });
+            }
+            if (!resume) throw new Error('Person fallback never began its deferred cache read');
+            return { c, pending, resume };
+        }
+
+        // A failed connectivity probe is not a successful reconnect.
+        // A pending fallback must still return a valid cached row through
+        // reconnecting -> offline, and even an offline -> reconnecting hint.
+        {
+            const f = await pausedCacheFallback();
+            f.c.failProbe();
+            await new Promise(function (resolve) { setImmediate(resolve); });
+            assertEq('failed probe settles offline during Person cache read',
+                f.c.runtime.getState(), 'offline');
+            f.c.runtime.init();
+            assertEq('fresh offline hint starts another pending probe', f.c.runtime.getState(), 'reconnecting');
+            f.resume();
+            const r = await f.pending;
+            assertEq('unsuccessful reconnect probe does not hide valid cached Person', r.source, 'cache');
+            assertEq('failed probe retains cached Person content', r.value, oldPerson);
+        }
+
+        {
+            const f = await pausedCacheFallback();
+            f.c.runtime.markEntityChanged('person', 'P-1');
+            f.resume();
+            const r = await f.pending;
+            assertEq('entity mutation during pending fallback fails closed', r.source, 'unavailable');
+            assertEq('mutated Person fallback contains no stale data', r.value, null);
+        }
+
+        {
+            const f = await pausedCacheFallback();
+            f.c.runtime.markDomainChanged('people', { entityKinds: ['person'] });
+            await f.c.runtime._domainCleanup('people');
+            assert('successful domain sweep unblocks People', !f.c.runtime.isDomainBlocked('people'));
+            // The row was removed from the store, but its older asynchronous
+            // getEntity had already captured it. The generation still fences.
+            assert('swept Person row is absent from store',
+                !f.c.store._entities.has('person:P-1'));
+            f.resume();
+            const r = await f.pending;
+            assertEq('domain change during pending fallback fails closed after unblock', r.source, 'unavailable');
+            assertEq('unblocked Person does not resurrect old IDB snapshot', r.value, null);
+        }
+
+        {
+            const f = await pausedCacheFallback();
+            f.c.runtime.noteRequestSuccess();
+            assertEq('separate successful request restores online state', f.c.runtime.getState(), 'online');
+            f.resume();
+            const r = await f.pending;
+            assertEq('reconnect while fallback cache pending fails closed', r.source, 'unavailable');
+            assertEq('reconnected Person fallback cannot show stale record', r.value, null);
+        }
+
+        {
+            const f = await pausedCacheFallback();
+            f.c.runtime.noteRequestSuccess();
+            f.c.runtime.noteRequestFailure();
+            f.resume();
+            const r = await f.pending;
+            assertEq('online-offline cycle fences pending stale Person', r.source, 'unavailable');
+        }
+
+        {
+            const controller = new AbortController();
+            const f = await pausedCacheFallback({ signal: controller.signal });
+            controller.abort();
+            f.resume();
+            let error = null;
+            try { await f.pending; } catch (err) { error = err; }
+            assertEq('route abort while fallback cache pending rejects AbortError',
+                error && error.name, 'AbortError');
+        }
+
+        // A list fallback has the same async IndexedDB race as an entity.
+        // A completed People sweep must fence an already-started list read,
+        // even when that snapshot resolves after the domain unblocks.
+        async function pausedListFallback(extraReadOptions) {
+            const store = makeFakeStore();
+            await store.putList('people:index', [oldPerson], '');
+            const originalGet = store.getList.bind(store);
+            let resume = null;
+            store.getList = function (key) {
+                const snapshot = originalGet(key);
+                return new Promise(function (resolve) {
+                    resume = function () { void snapshot.then(resolve); };
+                });
+            };
+            const c = await fixture(function () {
+                return Promise.reject(new TypeError('network unreachable'));
+            }, store);
+            const pending = c.runtime.readThroughList(
+                'people:index', '/api/persons',
+                Object.assign({
+                    domain: 'people',
+                    requestPolicy: { retry: false },
+                }, extraReadOptions || {}));
+            for (let i = 0; i < 12 && !resume; i++) {
+                await new Promise(function (resolve) { setImmediate(resolve); });
+            }
+            if (!resume) throw new Error('People list fallback never began its deferred cache read');
+            return { c, pending, resume };
+        }
+
+        {
+            const f = await pausedListFallback();
+            f.resume();
+            const r = await f.pending;
+            assertEq('unchanged People list still permits valid cached fallback', r.source, 'cache');
+            assertEq('unchanged People list preserves its cached contents', r.value, [oldPerson]);
+        }
+
+        {
+            const f = await pausedListFallback();
+            f.c.failProbe();
+            await new Promise(function (resolve) { setImmediate(resolve); });
+            assertEq('failed probe settles offline during People list read',
+                f.c.runtime.getState(), 'offline');
+            f.resume();
+            const r = await f.pending;
+            assertEq('offline transition still serves valid cached People list', r.source, 'cache');
+            assertEq('failed probe retains People list contents', r.value, [oldPerson]);
+        }
+
+        {
+            const f = await pausedListFallback();
+            f.c.runtime.markDomainChanged('people', { listKeys: ['people:index'] });
+            await f.c.runtime._domainCleanup('people');
+            assert('successful People list sweep unblocks domain', !f.c.runtime.isDomainBlocked('people'));
+            assert('swept People list row removed from store', !f.c.store._lists.has('people:index'));
+            f.resume();
+            const r = await f.pending;
+            assertEq('stale People list cannot return after sweep unblocks', r.source, 'unavailable');
+            assertEq('invalidation during list fallback returns no old snapshot', r.value, null);
+        }
+
+        {
+            const f = await pausedListFallback();
+            f.c.runtime.noteRequestSuccess();
+            f.resume();
+            const r = await f.pending;
+            assertEq('reconnect during cached People list read fails closed', r.source, 'unavailable');
+        }
+
+        {
+            const controller = new AbortController();
+            const f = await pausedListFallback({ signal: controller.signal });
+            controller.abort();
+            f.resume();
+            let error = null;
+            try { await f.pending; } catch (err) { error = err; }
+            assertEq('abort during cached People list read rejects AbortError',
+                error && error.name, 'AbortError');
+        }
+
+        // An aborted route remains aborted, not a cached read. In particular,
+        // a per-request retry policy must not weaken AbortSignal handling.
+        {
+            const c = await fixture(function () { throw new Error('should not fetch'); });
+            const controller = new AbortController();
+            controller.abort();
+            let error = null;
+            try {
+                await readPerson(c, { signal: controller.signal, requestPolicy: { retry: false } });
+            } catch (err) { error = err; }
+            assertEq('pre-aborted reconnecting Person read rejects AbortError', error && error.name, 'AbortError');
+            assertEq('pre-aborted Person request causes zero fetches', c.attempts.length, 0);
+        }
+    }
+
     if (failed) {
         console.log(failed + ' failed, ' + passed + ' passed');
         process.exit(1);

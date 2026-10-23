@@ -65,6 +65,13 @@
         return !!(err && err.name === 'AbortError');
     }
 
+    function throwIfSignalAborted(signal) {
+        if (!signal || !signal.aborted) return;
+        const error = new Error('The operation was aborted.');
+        error.name = 'AbortError';
+        throw error;
+    }
+
     function createPrksOfflineRuntime(deps) {
         const options = deps && typeof deps === 'object' ? deps : {};
         const now = options.now || defaultNow;
@@ -101,6 +108,10 @@
         // Monotonic transition token guards cache reads that outlive an
         // offline -> reconnect -> offline sequence (same final state).
         let connectivityGeneration = 0;
+        // Only increments on CONFIRMED server reachability; unlike the
+        // general transition token, a failed reconnect probe does not
+        // invalidate a perfectly good offline fallback snapshot.
+        let onlineGeneration = 0;
         const listeners = [];
         let probeTimer = null;
         let probeAttempt = 0;
@@ -150,6 +161,7 @@
             if (state === next) return;
             state = next;
             connectivityGeneration += 1;
+            if (next === STATE_ONLINE) onlineGeneration += 1;
             listeners.slice().forEach(function (fn) {
                 try {
                     fn(state);
@@ -360,11 +372,24 @@
                 if (ineligibleEntities.has(entityKey(kind, id)) || isDomainBlocked(domain)) {
                     return { value: null, source: 'unavailable', cachedAt: null };
                 }
+                // Failure may move ONLINE -> OFFLINE; capture after that
+                // transition. Only a later CONFIRMED online state can stale
+                // fallback. Failed probes/offline hints must not.
+                const fallbackOnlineToken = onlineGeneration;
                 if (store) {
                     const cached = await store.getEntity(kind, id).catch(function () {
                         return null;
                     });
-                    if (cached) {
+                    // A route can be aborted, a mutation acknowledged or a
+                    // domain swept while this async read is pending. Never
+                    // resurrect that stale row, even after a sweep unblocks.
+                    throwIfSignalAborted(options2.signal);
+                    if (cached &&
+                        onlineGeneration === fallbackOnlineToken &&
+                        currentEntityGeneration(kind, id) === coherenceToken &&
+                        currentDomainGeneration(domain) === domainToken &&
+                        !ineligibleEntities.has(entityKey(kind, id)) &&
+                        !isDomainBlocked(domain)) {
                         return { value: cached.value, source: 'cache', cachedAt: cached.cachedAt };
                     }
                 }
@@ -2970,11 +2995,19 @@
                 if (isDomainBlocked(domain)) {
                     return { value: null, source: 'unavailable', cachedAt: null };
                 }
+                const fallbackOnlineToken = onlineGeneration;
                 if (store) {
                     const cached = await store.getList(listKey).catch(function () {
                         return null;
                     });
-                    if (cached) {
+                    // A completed sweep may unblock this domain while an
+                    // older IndexedDB snapshot is still resolving. Recheck
+                    // the generation and reachability after the await.
+                    throwIfSignalAborted(options2.signal);
+                    if (cached &&
+                        onlineGeneration === fallbackOnlineToken &&
+                        currentDomainGeneration(domain) === domainToken &&
+                        !isDomainBlocked(domain)) {
                         return { value: cached.value, source: 'cache', cachedAt: cached.cachedAt };
                     }
                 }
