@@ -6178,12 +6178,8 @@ function initForms() {
                         }
                     }
                 }
-                if (!isCurrentOpening()) return;
-                /* New Folder save settled; a later Work attach has its own
-                 * liveness fence, and does not own the create guard. */
-                // Attachment work after creation must not hold the next
-                // modal opening's submit guard or inherit its busy state.
-                // The original opening may already have been dismissed.
+                // The durable create is complete; the later Work attachment
+                // owns a separate liveness fence and does not hold this guard.
                 if (!isCurrentOpening()) return;
                 const data = { id: newFolderId };
                 const pending = window.__prksPendingWorkFolderAttach;
