@@ -607,7 +607,7 @@
                     job.reportReachability
                 );
                 // One bounded lifecycle per active *read flight*. A stalled
-                // fetch (or retry sleep) may ignore AbortSignal, so cancelling
+                // stalled transports or retry sleeps may ignore AbortSignal, so cancelling
                 // its transport alone would not release the queue slot.
                 // Promise.race ensures the slot is released in finally, and
                 // continues observing late rejections without a stray rejection.
