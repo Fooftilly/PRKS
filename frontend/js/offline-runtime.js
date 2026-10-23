@@ -192,20 +192,47 @@
             probeTimer = setTimer(runProbe, delay);
         }
 
+        function recoverAfterStaleProbe() {
+            // A newer real request might have FAILED after restoring online.
+            // Its timer may have fired while this old probe was still busy,
+            // consuming the only scheduled recovery. Never downgrade state
+            // from the old result, but keep the newer failure recoverable.
+            if (state !== STATE_ONLINE && !probeTimer) scheduleProbe();
+        }
+
         function runProbe() {
             probeTimer = null;
             if (probeInFlight || !requestImpl) return;
+            // A later successful foreground request is stronger reachability
+            // evidence than this probe's older, in-flight transport failure.
+            // Reuse the confirmed-online token that also fences cache fallback.
+            const startedOnlineGeneration = onlineGeneration;
             probeInFlight = true;
             setState(STATE_RECONNECTING);
             let p;
             try {
-                p = requestImpl(PROBE_PATH, {}, { priority: 'background' });
+                // Probes have their own state-machine settlement. Request-
+                // coordinator callbacks would report a stale failure BEFORE
+                // this generation guard can discard it. Keep this flight
+                // separate from ordinary, reachability-reporting requests.
+                p = requestImpl(PROBE_PATH, {}, {
+                    priority: 'background',
+                    dedupe: false,
+                    reportReachability: false,
+                });
             } catch (_e) {
                 p = Promise.reject(_e);
             }
             Promise.resolve(p)
                 .then(function (res) {
                     probeInFlight = false;
+                    // A newer confirmed successful request already restored
+                    // online state. Do not let this older probe response (or
+                    // lack of response) overwrite it or schedule a retry.
+                    if (onlineGeneration !== startedOnlineGeneration) {
+                        recoverAfterStaleProbe();
+                        return;
+                    }
                     // Connectivity reflects PRKS server reachability, not
                     // application-level health: the request resolving with
                     // *any* real HTTP response (2xx, 4xx, or 5xx) means the
@@ -223,6 +250,10 @@
                 })
                 .catch(function () {
                     probeInFlight = false;
+                    if (onlineGeneration !== startedOnlineGeneration) {
+                        recoverAfterStaleProbe();
+                        return;
+                    }
                     probeAttempt += 1;
                     setState(STATE_OFFLINE);
                     scheduleProbe();

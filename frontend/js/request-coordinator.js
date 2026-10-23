@@ -357,7 +357,7 @@
 
         function canDedupe(method, fetchOptions, policy, mode) {
             if (mode !== 'read') return false;
-            if (policy && policy.dedupe === false) return false;
+            if (policy && (policy.dedupe === false || policy.reportReachability === false)) return false;
             if (method !== 'GET' && method !== 'HEAD') return false;
             if (hasRequestBody(fetchOptions)) return false;
             if (hasRangeHeader(fetchOptions && fetchOptions.headers)) return false;
@@ -496,7 +496,7 @@
             return !!PRKS_REQUEST_RETRY_STATUSES[status];
         }
 
-        async function performReadNetwork(href, fetchOptions, retryEnabled, controller) {
+        async function performReadNetwork(href, fetchOptions, retryEnabled, controller, reportReachability) {
             const signal = controller.signal;
             let attempt = 0;
             let lastError = null;
@@ -504,7 +504,7 @@
                 if (signal.aborted) throw makeAbortError();
                 try {
                     const response = await fetchImpl(href, networkInit(fetchOptions, signal));
-                    if (!isManagedPdfHref(href)) reportPrksReachable();
+                    if (reportReachability && !isManagedPdfHref(href)) reportPrksReachable();
                     if (retryEnabled && shouldRetryStatus(response.status) && attempt < PRKS_REQUEST_RETRY_MAX) {
                         counts.retries += 1;
                         attempt += 1;
@@ -523,12 +523,12 @@
                         await sleep(delay, signal);
                         continue;
                     }
-                    if (!isManagedPdfHref(href)) reportPrksUnreachable(err);
+                    if (reportReachability && !isManagedPdfHref(href)) reportPrksUnreachable(err);
                     throw err;
                 }
             }
             if (lastError) {
-                if (!isManagedPdfHref(href)) reportPrksUnreachable(lastError);
+                if (reportReachability && !isManagedPdfHref(href)) reportPrksUnreachable(lastError);
                 throw lastError;
             }
             throw new Error('prksRequest retry exhausted.');
@@ -587,7 +587,8 @@
                     job.href,
                     job.fetchOptions,
                     job.retryEnabled,
-                    flight.controller
+                    flight.controller,
+                    job.reportReachability
                 );
                 maybeCacheResponse(job.cacheKey, response, job.freshForMs, now());
                 settleFlightSuccess(flight, response);
@@ -689,6 +690,10 @@
 
             const dedupeEnabled = canDedupe(method, opts, pol, mode);
             const retryEnabled = canRetry(method, pol, mode);
+            // Offline-runtime owns the result of its dedicated background
+            // reachability probe. Disable coordinator health callbacks for
+            // that isolated request, never for ordinary foreground traffic.
+            const reportReachability = pol.reportReachability !== false;
             const cacheKey = readDedupeKey(method, parsed, opts);
 
             if (ttl > 0 && dedupeEnabled) {
@@ -726,6 +731,7 @@
                     href: href,
                     fetchOptions: opts,
                     retryEnabled: retryEnabled,
+                    reportReachability: reportReachability,
                     freshForMs: ttl,
                     cacheKey: cacheKey,
                     dedupeKey: dedupeEnabled ? cacheKey : '',
