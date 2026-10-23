@@ -50,6 +50,15 @@ function makeFakeTimers() {
                 e[1].fn();
             });
         },
+        flushDelay: function (delay) {
+            const entries = Array.from(pending.entries()).filter(function (e) {
+                return e[1].delay === delay;
+            });
+            entries.forEach(function (e) {
+                pending.delete(e[0]);
+                e[1].fn();
+            });
+        },
         pendingCount: function () {
             return pending.size;
         },
@@ -616,7 +625,8 @@ async function run() {
             c.runtime.noteRequestSuccess();
             c.runtime.noteRequestFailure();
             assertEq('newer transport failure still marks offline', c.runtime.getState(), 'offline');
-            assertEq('newer failure owns first retry backoff', c.timers.pendingDelays(), [3000]);
+            assertEq('newer failure owns first retry alongside older probe watchdog',
+                c.timers.pendingDelays(), [15000, 3000]);
             c.deferred[0].reject(new TypeError('obsolete probe rejection'));
             await Promise.resolve();
             await Promise.resolve();
@@ -631,10 +641,11 @@ async function run() {
             c.runtime.noteRequestSuccess();
             c.runtime.noteRequestFailure();
             assertEq('newer failure schedules retry before old probe ' + settle,
-                c.timers.pendingDelays(), [3000]);
-            c.timers.flushAll(); // blocked by probeInFlight; consumes timer
+                c.timers.pendingDelays(), [15000, 3000]);
+            c.timers.flushDelay(3000); // only retry; not the older probe deadline
             assertEq('older pending probe prevents overlap for ' + settle, c.deferred.length, 1);
-            assertEq('expired retry timer was consumed for ' + settle, c.timers.pendingCount(), 0);
+            assertEq('expired retry leaves only old probe watchdog ' + settle,
+                c.timers.pendingDelays(), [15000]);
             if (settle === 'reject') c.deferred[0].reject(new TypeError('old probe failed'));
             else c.deferred[0].resolve(settle === 'falsy' ? null : okJsonResponse({}));
             await Promise.resolve();
@@ -723,17 +734,19 @@ async function run() {
                     try { await coordinator.prksRequest('/api/works'); } catch (e) { err = e; }
                     assert('real later failed GET is an ordinary transport failure', err instanceof TypeError);
                     assertEq('real later failed foreground request marks offline', runtime.getState(), 'offline');
-                    assertEq('real newer failure owns a probe timer', timers.pendingDelays(), [3000]);
-                    timers.flushAll(); // the old in-flight probe blocks this timer
-                    assertEq('real timer can expire while old probe remains pending', timers.pendingCount(), 0);
+                    assertEq('real newer failure owns a probe timer', timers.pendingDelays(), [15000, 3000]);
+                    timers.flushDelay(3000); // older probe remains in flight
+                    assertEq('real timer can expire while old probe remains pending',
+                        timers.pendingDelays(), [15000]);
                 }
                 rejectOldProbe(new TypeError('stale reachability transport rejection'));
-                // Real coordinator runs two GET retries before the runtime
-                // sees the resulting rejection. Neither may report health.
+                // The isolated health probe is one-shot; ordinary GETs keep
+                // coordinator retry policy. The probe never emits global
+                // reachability reports before the runtime's generation fence.
                 for (let i = 0; i < 12; i++) {
                     await new Promise(function (resolve) { setImmediate(resolve); });
                 }
-                assertEq('real coordinator probe used default retry policy', probeAttempts, 3);
+                assertEq('real coordinator probe has one transport attempt', probeAttempts, 1);
                 assertEq('old coordinator failure cannot override newer reachability',
                     runtime.getState(), laterForegroundFailure ? 'offline' : 'online');
                 assertEq('real probe settlement keeps required recovery timer state',
@@ -749,6 +762,161 @@ async function run() {
         }
         await integratedProbeCase(false);
         await integratedProbeCase(true);
+    }
+
+    /* A real retryable 503 response proves reachability immediately. A
+     * second coordinator attempt that hangs must not cause a false timeout. */
+    {
+        const requests = require(path.join(rootDir, 'frontend/js/request-coordinator.js'));
+        const timers = makeFakeTimers();
+        let attempts = 0;
+        const coordinator = requests.createPrksRequestCoordinator({
+            origin: 'http://127.0.0.1',
+            fetchImpl: function (url) {
+                assertEq('HTTP probe uses settings path', url, '/api/settings');
+                attempts += 1;
+                if (attempts === 1) {
+                    return Promise.resolve(new Response('{}', {
+                        status: 503, headers: { 'Content-Type': 'application/json' },
+                    }));
+                }
+                return new Promise(function () {}); // should never be reached
+            },
+        });
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function (url, init, policy) {
+                assertEq('one-shot health probe has retries disabled', policy.retry, false);
+                return coordinator.prksRequest(url, init, policy);
+            },
+            store: makeFakeStore(),
+            setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        runtime.noteRequestFailure();
+        timers.flushDelay(3000);
+        for (let i = 0; i < 12 && runtime.getState() !== 'online'; i++) {
+            await new Promise(function (resolve) { setImmediate(resolve); });
+        }
+        assertEq('HTTP 503 proves reachability before any retry', runtime.getState(), 'online');
+        assertEq('retryable HTTP status never starts another health fetch', attempts, 1);
+        assertEq('successful HTTP 503 health result clears watchdog', timers.pendingCount(), 0);
+    }
+
+    /* ---- #819: a permanently stalled probe cannot monopolize recovery ---- */
+    {
+        const timers = makeFakeTimers();
+        let attempts = 0;
+        let firstResolve = null;
+        let firstSignal = null;
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function (_url, init, policy) {
+                attempts += 1;
+                assertEq('probe uses the isolated background policy', policy.reportReachability, false);
+                if (attempts === 1) {
+                    firstSignal = init.signal;
+                    // Deliberately ignore AbortSignal to prove even a
+                    // non-cooperative promise cannot publish a late answer.
+                    return new Promise(function (resolve) {
+                        firstResolve = resolve;
+                    });
+                }
+                return Promise.resolve(okJsonResponse({}));
+            },
+            store: makeFakeStore(),
+            setTimeout: timers.setTimeout,
+            clearTimeout: timers.clearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        runtime.noteRequestFailure();
+        timers.flushDelay(3000);
+        assertEq('stalled probe enters reconnecting', runtime.getState(), 'reconnecting');
+        assertEq('stalled probe sets a bounded deadline', timers.pendingDelays(), [15000]);
+        runtime._runProbe();
+        assertEq('hints cannot start a duplicate probe before deadline', attempts, 1);
+        timers.flushDelay(15000);
+        assertEq('deadline moves stalled probe offline', runtime.getState(), 'offline');
+        assert('deadline aborts first stalled probe transport', firstSignal && firstSignal.aborted);
+        assertEq('deadline schedules normal growing retry backoff', timers.pendingDelays(), [6000]);
+        timers.flushDelay(6000);
+        assertEq('deadline released in-flight guard so recovery can run', attempts, 2);
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq('replacement successful response restores online', runtime.getState(), 'online');
+        assertEq('replacement success cancels all timers', timers.pendingCount(), 0);
+        firstResolve(null);
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq('late null completion does not undo recovery', runtime.getState(), 'online');
+        assertEq('late completion does not add retry timer', timers.pendingCount(), 0);
+    }
+    {
+        const timers = makeFakeTimers();
+        let lateResolve = null;
+        let started = 0;
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                started += 1;
+                if (started === 1) {
+                    return new Promise(function (resolve) { lateResolve = resolve; });
+                }
+                return Promise.resolve(okJsonResponse({}));
+            },
+            store: makeFakeStore(),
+            setTimeout: timers.setTimeout,
+            clearTimeout: timers.clearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        runtime.noteRequestFailure();
+        timers.flushDelay(3000);
+        runtime.noteRequestSuccess();
+        assertEq('new foreground success restores online during stalled probe', runtime.getState(), 'online');
+        timers.flushDelay(15000);
+        assertEq('old timed-out probe cannot override newer success', runtime.getState(), 'online');
+        assertEq('superseded timeout schedules no retry', timers.pendingCount(), 0);
+        // The expired probe must release probeInFlight, even though a newer
+        // success superseded its deadline: a genuinely newer failure still
+        // needs to launch another reachability check.
+        runtime.noteRequestFailure();
+        assertEq('later genuine failure still schedules recovery after superseded timeout',
+            timers.pendingDelays(), [3000]);
+        timers.flushDelay(3000);
+        assertEq('new probe starts after superseded watchdog releases guard', started, 2);
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq('replacement probe restores online', runtime.getState(), 'online');
+        lateResolve(null);
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq('late superseded probe result still cannot mark offline', runtime.getState(), 'online');
+        assertEq('late result cannot add another timer', timers.pendingCount(), 0);
+    }
+    {
+        const timers = makeFakeTimers();
+        const deferred = [];
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                return new Promise(function (resolve, reject) { deferred.push({ resolve, reject }); });
+            },
+            store: makeFakeStore(),
+            setTimeout: timers.setTimeout,
+            clearTimeout: timers.clearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        runtime.noteRequestFailure();
+        timers.flushDelay(3000);
+        timers.flushDelay(15000);
+        timers.flushDelay(6000);
+        assertEq('second deferred probe started after timed-out first', deferred.length, 2);
+        deferred[0].reject(new TypeError('late timeout rejection'));
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq('late rejection cannot interrupt replacement reconnect', runtime.getState(), 'reconnecting');
+        assertEq('replacement owns exactly one watchdog', timers.pendingDelays(), [15000]);
+        deferred[1].resolve(domainErrorResponse(503));
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq('HTTP 503 response still proves server reachable', runtime.getState(), 'online');
+        assertEq('HTTP-success replacement clears deadline', timers.pendingCount(), 0);
     }
 
     /* ---- runProbe reachability: an HTTP response of ANY status (even 4xx/5xx) means the server is reachable ---- */

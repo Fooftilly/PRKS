@@ -54,6 +54,7 @@
     const DOMAIN_PLAYLISTS = 'playlists';
     const PLAYLISTS_LIST_KEY = 'playlists:index';
     const PROBE_BACKOFF_MS = [3000, 6000, 12000, 30000, 60000];
+    const PROBE_TIMEOUT_MS = 15000; // Dedicated health check only, not ordinary API requests.
     const PDF_CACHE_NAME = 'prks-pdf-v1';
 
     function defaultNow() {
@@ -203,53 +204,65 @@
         function runProbe() {
             probeTimer = null;
             if (probeInFlight || !requestImpl) return;
-            // A later successful foreground request is stronger reachability
-            // evidence than this probe's older, in-flight transport failure.
-            // Reuse the confirmed-online token that also fences cache fallback.
+            // A newer confirmed response must supersede this older probe,
+            // whether it settles normally or reaches its deadline.
             const startedOnlineGeneration = onlineGeneration;
+            const controller = typeof AbortController === 'function'
+                ? new AbortController()
+                : null;
+            let settled = false;
+            let deadlineTimer = null;
             probeInFlight = true;
             setState(STATE_RECONNECTING);
+
+            function releaseProbe() {
+                if (settled) return false;
+                settled = true;
+                if (deadlineTimer !== null && clearTimer) clearTimer(deadlineTimer);
+                deadlineTimer = null;
+                probeInFlight = false;
+                return true;
+            }
+
+            function completeProbe(res, failed) {
+                if (!releaseProbe()) return;
+                if (onlineGeneration !== startedOnlineGeneration) {
+                    recoverAfterStaleProbe();
+                    return;
+                }
+                // Any actual HTTP response (even an error status) proves
+                // reachability; only rejection/falsy completion is offline.
+                if (!failed && res) {
+                    probeAttempt = 0;
+                    setState(STATE_ONLINE);
+                } else {
+                    probeAttempt += 1;
+                    setState(STATE_OFFLINE);
+                    scheduleProbe();
+                }
+            }
+
             let p;
             try {
-                // Probes have their own state-machine settlement. Request-
-                // coordinator callbacks would report a stale failure BEFORE
-                // this generation guard can discard it. Keep this flight
-                // separate from ordinary, reachability-reporting requests.
-                p = requestImpl(PROBE_PATH, {}, {
+                // The dedicated probe owns its connectivity signal. The
+                // coordinator must not report an old failure ahead of this
+                // completion fence or join a foreground GET.
+                p = requestImpl(PROBE_PATH, controller ? { signal: controller.signal } : {}, {
                     priority: 'background',
                     dedupe: false,
+                    retry: false,
                     reportReachability: false,
                 });
-            } catch (_e) {
-                p = Promise.reject(_e);
+            } catch (err) {
+                p = Promise.reject(err);
             }
-            Promise.resolve(p)
-                .then(function (res) {
-                    probeInFlight = false;
-                    // A newer confirmed successful request already restored
-                    // online state. Do not let this older probe response (or
-                    // lack of response) overwrite it or schedule a retry.
-                    if (onlineGeneration !== startedOnlineGeneration) {
-                        recoverAfterStaleProbe();
-                        return;
-                    }
-                    // Connectivity reflects PRKS server reachability, not
-                    // application-level health: the request resolving with
-                    // *any* real HTTP response (2xx, 4xx, or 5xx) means the
-                    // PRKS process answered. Only a rejected request (no
-                    // transport response at all) means the server is
-                    // unreachable.
-                    if (res) {
-                        probeAttempt = 0;
-                        setState(STATE_ONLINE);
-                    } else {
-                        probeAttempt += 1;
-                        setState(STATE_OFFLINE);
-                        scheduleProbe();
-                    }
-                })
-                .catch(function () {
-                    probeInFlight = false;
+            // Bounded probe lifetime: a request that ignores AbortSignal can
+            // still settle later; releaseProbe() prevents any late result
+            // from changing state or double-scheduling backoff.
+            if (setTimer) {
+                deadlineTimer = setTimer(function () {
+                    if (!releaseProbe()) return;
+                    if (controller) controller.abort();
                     if (onlineGeneration !== startedOnlineGeneration) {
                         recoverAfterStaleProbe();
                         return;
@@ -257,7 +270,12 @@
                     probeAttempt += 1;
                     setState(STATE_OFFLINE);
                     scheduleProbe();
-                });
+                }, PROBE_TIMEOUT_MS);
+            }
+            Promise.resolve(p).then(
+                function (res) { completeProbe(res, false); },
+                function () { completeProbe(null, true); }
+            );
         }
 
         function noteRequestSuccess() {
