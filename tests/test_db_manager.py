@@ -787,12 +787,53 @@ class TestDBManager(unittest.TestCase):
             source_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
             year="2025", doc_type="online",
         )
-        # Older rows could infer video from URL even when the persisted kind
-        # was absent; copying their citations must use that effective kind.
-        self.db.execute_query("UPDATE works SET source_kind = NULL WHERE id = ?", (w_id,))
+        # Older rows keep a NULL or oddly cased kind; their stream Asset is
+        # what makes them a video, so the channel stays one corporate author.
+        for stored in (None, "Video"):
+            self.db.execute_query("UPDATE works SET source_kind = ? WHERE id = ?", (stored, w_id))
+            bibtex = self.db.generate_bibtex(w_id)
+            self.assertIn("@online{The2025,", bibtex)
+            self.assertIn("author = {{The Royal Institution}}", bibtex)
+
+    def test_bibtex_fileless_pdf_with_video_url_credits_persons(self):
+        w_id = self.db.add_work(
+            title="Saved Transcript", author_text="Ana Synthetic; Bo Testerson",
+            source_kind="pdf",
+            source_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            year="2024", doc_type="online",
+        )
+        # A PDF's URL is provenance: it never makes the Work a video.
         bibtex = self.db.generate_bibtex(w_id)
-        self.assertIn("@online{The2025,", bibtex)
-        self.assertIn("author = {{The Royal Institution}}", bibtex)
+        self.assertIn("@online{Synthetic2024,", bibtex)
+        self.assertIn("author = {Ana Synthetic and Bo Testerson}", bibtex)
+        # Nor does dropping the stored kind of a Work with no stream Asset.
+        self.db.execute_query("UPDATE works SET source_kind = NULL WHERE id = ?", (w_id,))
+        self.assertEqual(self.db.generate_bibtex(w_id), bibtex)
+
+    def test_bibtex_malformed_names_keep_one_valid_entry(self):
+        from tests.bibtex_entry import assert_one_bibtex_entry
+
+        linked = self.db.add_work(title="Linked } {", year="1999", doc_type="book")
+        p_id = self.db.add_person(first_name="A", last_name="{Evil},Name\\x y")
+        self.db.add_role(p_id, linked, "Author")
+        entry = self.db.generate_bibtex(linked)
+        self.assertEqual(assert_one_bibtex_entry(self, entry), "EvilNamex1999")
+        self.assertIn(r"author = {\{Evil\},Name\x y, A}", entry)
+
+        text = self.db.add_work(
+            title="Text", author_text="Doe}\\,{x, Ann; } Roe {", year="19 99}", doc_type="book",
+        )
+        entry = self.db.generate_bibtex(text)
+        self.assertEqual(assert_one_bibtex_entry(self, entry), "Doe1999")
+
+        channel = self.db.add_work(
+            title="Channel", author_text="{Odd}\\Chan,nel% } and {", year="2000",
+            source_url="https://youtu.be/dQw4w9WgXcQ", doc_type="online",
+        )
+        entry = self.db.generate_bibtex(channel)
+        self.assertEqual(assert_one_bibtex_entry(self, entry), "OddChannel2000")
+        self.assertIn(
+            r"author = {{\{Odd\}\Chan,nel\% {\textbraceright} and {\textbraceleft}}}", entry)
 
     def test_bibtex_linked_author_precedes_author_text(self):
         w_id = self.db.add_work(

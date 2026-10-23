@@ -26,6 +26,7 @@ apply_isolated_test_env(_PROJECT_DIR)
 from backend.db_manager import PRKS_BIBTEX_EXPORT_FIELD_IDS
 from backend.work_metadata_sync import DOC_TYPES
 from tests.backend_parity import POSTGRES, parametrize_backends
+from tests.bibtex_entry import assert_one_bibtex_entry
 from tests.people_parity_helpers import PeopleParityTestCase, PeopleSide
 
 Pair = tuple[str, str]
@@ -253,25 +254,132 @@ class BibtexParityTests(PeopleParityTestCase):
         self.assertTrue(self.bibtex(edited).startswith("@article{UnknownUnknownYear,\n"))
 
     def test_author_text_and_linked_authors(self) -> None:
-        # Without a linked Author the entry follows the shared formatter's
-        # rule for Author (text), whatever #719 makes it; a linked Author wins.
-        text_only = self.work_both("Text only", year="1999", author_text="Doe, Jane; Roe, R.")
-        self.bibtex(text_only)
-        # #719 reads the source kind to tell a channel name from Person names.
-        channel = self.work_both("Channel", doc_type="online", author_text="Some Channel; Inc",
-                                 source_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ")
-        self.bibtex(channel)
-        # A fileless PDF Work keeps its URL as provenance, but PostgreSQL reads
-        # its kind back as no source (L-W-1), so a rule that infers the kind
-        # from the URL alone would export this entry differently.
-        saved = self.work_both("Saved page", doc_type="online", author_text="Given Family",
-                               source_kind="pdf", source_url="https://example.org/p")
-        self.bibtex(saved)
+        # Without a linked Author, Author (text) is the credit: Person names
+        # split at semicolons, the cite key from the first one's family name.
+        text_only = self.work_both("Text only", year="1999", author_text=" Doe, Jane;; Roe, R. ; ")
+        self.assertEqual(self.bibtex(text_only), (
+            "@article{Doe1999,\n"
+            "  title = {Text only},\n"
+            "  author = {Doe, Jane and Roe, R.},\n"
+            "  year = {1999},\n"
+            "}"))
+        plain = self.work_both("Plain", year="1999", author_text="Ada Lovelace")
+        self.assertTrue(self.bibtex(plain).startswith("@article{Lovelace1999,\n"))
+        self.patch_both({"author": False})
+        self.assertEqual(self.bibtex(text_only), "@article{Doe1999,\n  title = {Text only},\n  year = {1999},\n}")
+        self.patch_both({"author": True})
         both_kinds = self.work_both("Both", year="1999", author_text="Doe, Jane")
         self.credit(both_kinds, self.person_both("Linked", first_name="Lin", last_name="Ked"), "Author")
         entry = self.bibtex(both_kinds)
+        self.assertTrue(entry.startswith("@article{Ked1999,\n"))
         self.assertIn("  author = {Ked, Lin},\n", entry)
         self.assertNotIn("Doe", entry)
+        # Only a linked Author takes precedence: an Editor leaves the fallback.
+        edited = self.work_both("Edited", year="1999", author_text="Doe, Jane")
+        self.credit(edited, self.person_both("Ed", first_name="Ed", last_name="Itor"), "Editor")
+        self.assertIn("  author = {Doe, Jane},\n", self.bibtex(edited))
+
+    def test_a_video_channel_is_one_corporate_author(self) -> None:
+        channel = self.work_both("Channel", doc_type="online", year="2025",
+                                 author_text="Some Channel; Inc & {Co} 100% and Friends",
+                                 source_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        self.edited_on(channel, "2005-06-07")
+        self.assertEqual(self.bibtex(channel), (
+            "@online{Some2025,\n"
+            "  title = {Channel},\n"
+            "  author = {{Some Channel; Inc & \\{Co\\} 100\\% and Friends}},\n"
+            "  year = {2025},\n"
+            "  url = {https://www.youtube.com/watch?v=dQw4w9WgXcQ},\n"
+            "  urldate = {2005-06-07},\n"
+            "}"))
+        explicit = self.work_both("Explicit", doc_type="online", author_text="The Royal Institution",
+                                  source_kind="video", source_url="https://youtu.be/dQw4w9WgXcQ")
+        self.assertIn("  author = {{The Royal Institution}},\n", self.bibtex(explicit))
+        self.assertTrue(self.bibtex(explicit).startswith("@online{TheUnknownYear,\n"))
+        # A linked Author still wins on a video.
+        self.credit(explicit, self.person_both("Faraday", first_name="Michael", last_name="Faraday"), "Author")
+        self.assertIn("  author = {Faraday, Michael},\n", self.bibtex(explicit))
+
+    def test_a_video_whose_stored_kind_is_missing_or_cased_stays_a_video(self) -> None:
+        # Legacy SQLite rows keep a NULL or oddly cased works.source_kind; their
+        # stream Asset is what makes them a video. PostgreSQL has no such
+        # column, only the Asset.
+        for stored in (None, "Video", " VIDEO "):
+            with self.subTest(stored=stored):
+                video = self.work_both(f"Legacy {stored!r}", doc_type="online", year="2010",
+                                       author_text="Numberphile; Brady Haran",
+                                       source_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+                for index, side in enumerate(self.sides()):
+                    if side is self.leg and self.parity_backend == POSTGRES:
+                        continue
+                    with side.db.connection() as conn:
+                        conn.execute("UPDATE works SET source_kind = ? WHERE id = ?", (stored, video[index]))
+                entry = self.bibtex(video)
+                self.assertTrue(entry.startswith("@online{Numberphile2010,\n"))
+                self.assertIn("  author = {{Numberphile; Brady Haran}},\n", entry)
+
+    def test_a_url_never_makes_a_pdf_a_video(self) -> None:
+        # A fileless PDF keeps its URL as provenance, even a YouTube one, and
+        # reads back on PostgreSQL with no source kind at all.
+        for url in ("https://example.org/p", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"):
+            with self.subTest(url=url):
+                saved = self.work_both(f"Saved {url}", doc_type="online", year="2024",
+                                       author_text="Given Family; Other Person", source_kind="pdf", source_url=url)
+                entry = self.bibtex(saved)
+                self.assertTrue(entry.startswith("@online{Family2024,\n"))
+                self.assertIn("  author = {Given Family and Other Person},\n", entry)
+        # A cited Manifestation with a video-shaped URL but no stream Asset is
+        # not a video either, though the Work's primary is.
+        video = self.work_both("Primary video", doc_type="online", year="2024", author_text="Chan Nel; Two",
+                               source_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        cited = self.manifestation_both(video, kind="web_page", title="Transcript", doc_type="misc",
+                                        year="2024", url="https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        self.assertIn("  author = {{Chan Nel; Two}},\n", self.bibtex(video))
+        self.cite_both(video, cited)
+        entry = self.bibtex(video)
+        self.assertTrue(entry.startswith("@misc{Nel2024,\n"))
+        self.assertIn("  author = {Chan Nel and Two},\n", entry)
+
+    def test_cite_keys_hold_no_entry_structure(self) -> None:
+        linked: list[tuple[str, dict[str, str], str]] = [
+            ("braced", {"first_name": "A", "last_name": "{Evil},Name\\x y"}, "EvilNamex2001"),
+            ("delimiters only", {"first_name": "Real", "last_name": "#%@ ='\"()~"}, "Real2001"),
+            ("nothing usable", {"first_name": ",,", "last_name": "{}"}, "Unknown2001"),
+            ("hyphen and Unicode", {"first_name": "Ana", "last_name": "Smith-Jönes"}, "Smith-Jönes2001"),
+            ("decomposed accent", {"first_name": "Jose", "last_name": "Nu\u0301n\u0303ez"}, "N\u00fa\u00f1ez2001"),
+            ("apostrophe", {"first_name": "Pat", "last_name": "O'Brien"}, "OBrien2001"),
+        ]
+        for label, person, key in linked:
+            with self.subTest(label=label):
+                work = self.work_both(f"Linked {label}", year="2001")
+                self.credit(work, self.person_both(label, **person), "Author")
+                self.assertEqual(assert_one_bibtex_entry(self, self.bibtex(work)), key)
+        texts: list[tuple[str, dict[str, str], str]] = [
+            ("text braces", {"author_text": "Doe}\\,{x, Ann; } Roe {"}, "Doe2001"),
+            ("text comma key", {"author_text": "A B,C"}, "A2001"),
+            ("text whitespace", {"author_text": "Ann\tvan\u00a0Der\nBerg"}, "Berg2001"),
+            ("text structure only", {"author_text": "{ } , @"}, "Unknown2001"),
+            ("channel", {"author_text": "{Odd}\\Chan,nel% } and {", "doc_type": "online",
+                         "source_url": "https://youtu.be/dQw4w9WgXcQ"}, "OddChannel2001"),
+            ("year", {"author_text": "Doe, A", "year": "20 0{1}, @x"}, "Doe2001x"),
+            ("year structure only", {"author_text": "Doe, A", "year": " {,} "}, "DoeUnknownYear"),
+        ]
+        for label, fields, key in texts:
+            with self.subTest(label=label):
+                fields = {"year": "2001", **fields}
+                work = self.work_both(f"Text {label}", **fields)
+                self.assertEqual(assert_one_bibtex_entry(self, self.bibtex(work)), key)
+
+    def test_unpaired_braces_never_break_the_entry(self) -> None:
+        work = self.work_both("Close} early {", doc_type="book", year="2002", publisher="P }{ Q",
+                              author_text="Doe, J}; Roe, {R", abstract="a } b { c")
+        self.credit(work, self.person_both("Ed", first_name="E{", last_name="Ditor"), "Editor",
+                    credit_name="} Credit {")
+        entry = self.bibtex(work)
+        assert_one_bibtex_entry(self, entry)
+        self.assertIn("  title = {Close{\\textbraceright} early {\\textbraceleft}},\n", entry)
+        self.assertIn("  author = {Doe, J{\\textbraceright} and Roe, {\\textbraceleft}R},\n", entry)
+        self.assertIn("  publisher = {P {\\textbraceright}{\\textbraceleft} Q},\n", entry)
 
     def test_roles_follow_order_index_then_insertion(self) -> None:
         work = self.work_both("Ordered", year="2010")

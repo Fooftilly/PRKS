@@ -245,6 +245,12 @@ key is **computed, never stored**: first linked Author family name + year,
 or a name derived from `author_text` when no Author is linked. Author credits
 prefer linked roles; without them BibTeX falls back to free-text `author_text`
 (semicolon-delimited persons, or one braced corporate channel for videos).
+A Work is a video here only when its citation Manifestation's primary Asset
+is an external stream; a PDF's `source_url` is provenance and never makes it
+one. Cite-key parts keep only Unicode word characters, `-`, `.` and `:`
+(`Unknown` / `UnknownYear` when nothing remains), and a brace without its
+partner is exported as `{\textbraceleft}` / `{\textbraceright}` so no field
+can end the entry early.
 Editors, translators, and introduction/foreword/afterword come from roles. The
 entry type is `doc_type`, or, when that is empty, guessed from journal or
 publisher. `url` is `source_url`. `urldate` is taken from **`updated_at`**, not
