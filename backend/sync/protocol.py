@@ -28,7 +28,10 @@ single writer:
    ``LIBRARY_EPOCH_CHANGED`` once; its retry replays it.)
 3. The claimant checks dependencies, applies the family's handler and
    writes the terminal result into its claim before COMMIT. A refusal that
-   is not ledgered (an unsatisfied dependency) rolls the claim back.
+   is not ledgered (an unsatisfied dependency) rolls the claim back. An
+   operation on a Work (``entity_type`` ``work``) whose id was merged away
+   is not applied: it is ledgered ``WORK_MERGED`` with the target
+   (:func:`backend.domain.works.lifecycle.guard`), whatever its family.
 4. When a constraint the family names (``retry_constraints``) refuses the
    transaction, a concurrent writer won a race the index or key arbitrates
    (§7.1). The whole operation runs once more: its claim was rolled back,
@@ -56,6 +59,7 @@ from backend.db.errors import ConstraintViolationError
 from backend.domain.identity.authorization import AccessRefused, Capability, Refusal
 from backend.domain.identity.library_scope import LibraryScope, library_command, library_query
 from backend.domain.identity.request_context import RequestContext
+from backend.domain.works import lifecycle
 from backend.pg_facade.registry import NotPortedError
 from backend.sync.families import Environment, Handler, Result
 
@@ -190,10 +194,17 @@ def _claim_and_apply(scope: LibraryScope, ctx: RequestContext, op: dict[str, Any
         return _replay(seen, digest)
     if not _dependencies_satisfied(scope, op):
         raise _NotLedgered(400, {"code": "UNSATISFIED_DEPENDENCY"})
-    status, result = handler.apply(scope, op, received_at, env)
+    merged = lifecycle.guard(scope, op["entity_id"]) if op["entity_type"] == "work" else None
+    if merged is not None:
+        # Never applied to the merge target (docs/work-identity-model.md §14.2).
+        status, result = merged
+        ledgered = result
+    else:
+        status, result = handler.apply(scope, op, received_at, env)
+        ledgered = handler.ledgered(op, result)
     scope.execute(_FINISH, {
         "op_id": op["op_id"], "status": result["code"], "http_status": status,
-        "result": Jsonb(handler.ledgered(op, result)),
+        "result": Jsonb(ledgered),
     })
     return status, result
 
