@@ -2,6 +2,7 @@ import sqlite3
 import os
 import posixpath
 import re
+import unicodedata
 import uuid
 import json
 import hashlib
@@ -521,6 +522,11 @@ def _prks_fts_prefix_clause(tokens: List[str]) -> str:
             continue
         parts.append(f'"{safe}"*')
     return " ".join(parts)
+
+
+# Characters a BibTeX entry key may keep: Unicode word characters, "-", "."
+# and ":". Everything else either ends the key or is read as entry structure.
+_CITE_KEY_UNSAFE_RE = re.compile(r"[^\w\-.:]")
 
 
 # The source kinds a Work may be created with. `source_kind` is not free text:
@@ -5355,15 +5361,44 @@ class PRKSDatabase:
         return None
 
     @staticmethod
-    def _biblatex_cite_key_part_from_person(p: dict) -> str:
-        """First segment for cite key: prefer family name, else given / mononym."""
-        ln = str(p.get("last_name") or "").strip()
-        fn = str(p.get("first_name") or "").strip()
-        if ln:
-            return ln.split()[0] if ln.split() else ln
-        if fn:
-            return fn.split()[0] if fn.split() else fn
-        return "Unknown"
+    def _bibtex_cite_key_part(text: Any) -> str:
+        """``text`` with every character an entry key cannot safely hold removed.
+
+        A key ends at whitespace or a comma, braces and quotes delimit the
+        entry, and ``\\ # % ' ( ) = @ ~`` are read as structure by BibTeX,
+        Biber or ``\\cite``. Unicode letters and digits (NFC, so a
+        decomposed accent is kept), ``_``, ``-``, ``.`` and ``:`` remain.
+        """
+        return _CITE_KEY_UNSAFE_RE.sub("", unicodedata.normalize("NFC", str(text or "")))
+
+    @classmethod
+    def _cite_key_part_from_credit(cls, credit: str) -> str:
+        """Key part of one free-text Person credit: the family name of
+        ``Family, Given``, else the last word of ``Given Family``; "" for none."""
+        if "," in credit:
+            words = credit.split(",", 1)[0].split()
+            return cls._bibtex_cite_key_part(words[0]) if words else ""
+        words = credit.split()
+        return cls._bibtex_cite_key_part(words[-1]) if words else ""
+
+    @classmethod
+    def _biblatex_cite_key_part_from_person(cls, p: dict) -> str:
+        """First segment for cite key: prefer family name, else given / mononym, else
+        the credit name the role exports under; "" when none is usable."""
+        for name in (p.get("last_name"), p.get("first_name")):
+            words = str(name or "").split()
+            part = cls._bibtex_cite_key_part(words[0]) if words else ""
+            if part:
+                return part
+        return cls._cite_key_part_from_credit(str(p.get("credit_name") or "").strip())
+
+    @classmethod
+    def _biblatex_role_name(cls, p: dict) -> str:
+        """The name a role row exports: its credit name, else the Person's; "" for none."""
+        credit = (p.get("credit_name") or "").strip()
+        if credit:
+            return credit
+        return cls._format_biblatex_person_name(p.get("last_name"), p.get("first_name")) or ""
 
     @classmethod
     def _biblatex_names_for_role(cls, roles: List[dict], role_type: str) -> List[str]:
@@ -5371,11 +5406,7 @@ class PRKSDatabase:
         for p in roles:
             if p.get("role_type") != role_type:
                 continue
-            credit = (p.get("credit_name") or "").strip()
-            if credit:
-                out.append(credit)
-                continue
-            nm = cls._format_biblatex_person_name(p.get("last_name"), p.get("first_name"))
+            nm = cls._biblatex_role_name(p)
             if nm:
                 out.append(nm)
         return out
@@ -5386,9 +5417,30 @@ class PRKSDatabase:
         s = str(value) if value is not None else ""
         # Percent signs introduce BibTeX comments inside fields; braces must be balanced.
         s = s.replace('%', r'\%')
-        s = s.replace('{', r'\{')
-        s = s.replace('}', r'\}')
-        return s
+        # BibTeX counts a brace whatever precedes it, so \{ and \} are only
+        # safe in pairs: a lone "}" would end the field and a lone "{" swallow
+        # the rest of the entry. A brace without its partner is written as the
+        # LaTeX symbol, whose own braces balance.
+        opened: List[int] = []
+        unpaired: set[int] = set()
+        for index, char in enumerate(s):
+            if char == "{":
+                opened.append(index)
+            elif char == "}":
+                if opened:
+                    opened.pop()
+                else:
+                    unpaired.add(index)
+        unpaired.update(opened)
+        out: List[str] = []
+        for index, char in enumerate(s):
+            if char not in "{}":
+                out.append(char)
+            elif index in unpaired:
+                out.append(r"{\textbraceleft}" if char == "{" else r"{\textbraceright}")
+            else:
+                out.append("\\" + char)
+        return "".join(out)
 
     def generate_bibtex(self, work_id: str) -> str:
         with self.connection() as conn:
@@ -5399,10 +5451,12 @@ class PRKSDatabase:
                 return ""
             # Credits follow the citation Manifestation, not every Work role.
             roles = self._roles_for_manifestation_on_conn(conn, work_id, target)
-        return self.format_bibtex(work, roles, self._get_bibtex_export_profile())
+            video = work_projection.citation_is_stream(conn, target)
+        return self.format_bibtex(work, roles, self._get_bibtex_export_profile(), video=video)
 
     @classmethod
-    def format_bibtex(cls, work: dict, roles: List[dict], export_fields: Dict[str, bool]) -> str:
+    def format_bibtex(cls, work: dict, roles: List[dict], export_fields: Dict[str, bool],
+                      *, video: bool) -> str:
         """One BibLaTeX entry from a citation record, its credits and the export profile.
 
         Database-independent, so both backends export byte-identical text:
@@ -5410,6 +5464,13 @@ class PRKSDatabase:
         ``roles`` the citation Manifestation's credits as Person rows with
         ``role_type`` and ``credit_name``, in role order, and
         ``export_fields`` the Library's ``bibtex_export_fields`` profile.
+
+        ``video`` is True when the citation Manifestation's primary Asset is
+        an external stream: the stored source identity, not an inference from
+        ``source_kind``, ``source_url`` or ``file_path``. A PDF's
+        ``source_url`` is provenance, and a fileless PDF reads back on
+        PostgreSQL with no ``source_kind`` at all, so neither may make a Work
+        a video here (#690).
         """
         # Roles sorted by order_index, then rowid (stable order when order_index ties).
         linked_authors = cls._biblatex_names_for_role(roles, "Author")
@@ -5419,21 +5480,36 @@ class PRKSDatabase:
         forewords = cls._biblatex_names_for_role(roles, "Foreword")
         afterwords = cls._biblatex_names_for_role(roles, "Afterword")
 
-        if linked_authors:
-            author_str = " and ".join(linked_authors)
-        else:
-            author_str = None
+        # The visible Work credit line falls back to Author (text) when no
+        # linked Author exists. Preserve that credit in copied citations too.
+        text_credit = str(work.get("author_text") or "").strip()
+        # On a video, Author (text) is a channel/organization name, not
+        # semicolon-delimited Person names. BibLaTeX needs it braced as one.
+        corporate_credit = bool(text_credit) and not linked_authors and video
+        text_authors = (
+            [text_credit] if corporate_credit
+            else [name.strip() for name in text_credit.split(";") if name.strip()]
+        )
+        author_names = linked_authors or text_authors
 
         # Year: prefer dedicated year field, fall back to published_date prefix
         year = work.get('year') or (work.get('published_date', '')[:4] if work.get('published_date') else None)
 
-        first_author_person = next((p for p in roles if p["role_type"] == "Author"), None)
-        first_author_last = (
-            cls._biblatex_cite_key_part_from_person(first_author_person)
-            if first_author_person
-            else "Unknown"
-        )
-        cite_key = f"{first_author_last}{year or 'UnknownYear'}"
+        # The key follows the first credit the author field shows: an Author
+        # row that renders no name is skipped there, so it is skipped here,
+        # and with none left both fall back to Author (text).
+        first_author_person = next(
+            (p for p in roles if p["role_type"] == "Author" and cls._biblatex_role_name(p)), None)
+        if first_author_person:
+            first_author_last = cls._biblatex_cite_key_part_from_person(first_author_person) or "Unknown"
+        elif text_authors:
+            first_author_last = (
+                cls._bibtex_cite_key_part(text_authors[0].split()[0]) if corporate_credit
+                else cls._cite_key_part_from_credit(text_authors[0])
+            ) or "Unknown"
+        else:
+            first_author_last = "Unknown"
+        cite_key = first_author_last + (cls._bibtex_cite_key_part(year) or "UnknownYear")
 
         raw_dt = work.get("doc_type")
         if raw_dt is not None and str(raw_dt).strip() != "":
@@ -5448,6 +5524,11 @@ class PRKSDatabase:
             )
 
         esc = cls._bibtex_escape_field
+
+        def names(people: List[str]) -> str:
+            # Each name on its own, so a brace in one cannot pair with a brace
+            # in the next and hide the "and" between them.
+            return " and ".join(esc(name) for name in people)
         bf = export_fields
 
         def _export(key: str) -> bool:
@@ -5455,18 +5536,21 @@ class PRKSDatabase:
 
         bibtex = f"@{entry_type}{{{cite_key},\n"
         bibtex += f"  title = {{{esc(work['title'])}}},\n"
-        if author_str and _export("author"):
-            bibtex += f"  author = {{{esc(author_str)}}},\n"
+        if author_names and _export("author"):
+            author_value = names(author_names)
+            if corporate_credit:
+                author_value = "{" + author_value + "}"  # BibLaTeX corporate name
+            bibtex += f"  author = {{{author_value}}},\n"
         if editors and _export("editor"):
-            bibtex += f"  editor = {{{esc(' and '.join(editors))}}},\n"
+            bibtex += f"  editor = {{{names(editors)}}},\n"
         if translators and _export("translator"):
-            bibtex += f"  translator = {{{esc(' and '.join(translators))}}},\n"
+            bibtex += f"  translator = {{{names(translators)}}},\n"
         if introductions and _export("introduction"):
-            bibtex += f"  introduction = {{{esc(' and '.join(introductions))}}},\n"
+            bibtex += f"  introduction = {{{names(introductions)}}},\n"
         if forewords and _export("foreword"):
-            bibtex += f"  foreword = {{{esc(' and '.join(forewords))}}},\n"
+            bibtex += f"  foreword = {{{names(forewords)}}},\n"
         if afterwords and _export("afterword"):
-            bibtex += f"  afterword = {{{esc(' and '.join(afterwords))}}},\n"
+            bibtex += f"  afterword = {{{names(afterwords)}}},\n"
         if year and _export("year"):
             bibtex += f"  year = {{{esc(year)}}},\n"
         if work.get('publisher') and _export("publisher"):
