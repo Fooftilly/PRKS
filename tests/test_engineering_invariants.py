@@ -1363,6 +1363,7 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/domain/works/source.py",
                 "backend/domain/works/bulk.py",
                 "backend/domain/works/citation.py",
+                "backend/domain/works/wiki_links.py",
                 "backend/domain/people/__init__.py",
                 "backend/domain/people/persons.py",
                 "backend/domain/people/groups.py",

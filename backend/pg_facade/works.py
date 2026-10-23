@@ -16,8 +16,8 @@ psycopg.
 
 What the SQLite methods take from outside the database is taken the same
 way here: ``file_size_bytes`` from the managed PDF on disk
-(``finish_work_summary_rows``) and ``html_content`` from the wiki-link
-resolver, which is not ported yet (a Work with a Research Note reaches it).
+(``finish_work_summary_rows``); ``html_content`` is the wiki-link resolver's,
+read in the Work detail's snapshot.
 """
 
 from __future__ import annotations
@@ -235,20 +235,25 @@ class WorksMixin(FacadeMixin):
         from backend.domain.organization import links
         from backend.domain.works import projection, queries
 
-        def read(scope: LibraryScope) -> Optional[tuple[dict, List[dict]]]:
+        from backend.domain.works import wiki_links
+
+        def read(scope: LibraryScope) -> Optional[tuple[dict, List[dict], Optional[str]]]:
             found = queries.work(scope, work_id)
-            return None if found is None else (found, links.tags_of(scope, links.WORK, work_id))
+            if found is None:
+                return None
+            text = found.get("text_content")
+            # The Research Note's links resolve in the snapshot the Work was read in.
+            html_content = wiki_links.render(scope, text) if text else None
+            return found, links.tags_of(scope, links.WORK, work_id), html_content
 
         detail = self._read(read)
         if detail is None:
             return None
-        core, tags = detail
+        core, tags, html_content = detail
         work = projection.work_detail(core)
         work["tags"] = tags  # the Organization lane's (L-O-1), in the same snapshot
-        if work.get("text_content"):
-            # Not ported yet: reached through the facade's NotPortedError refusal.
-            resolve_wiki_links = getattr(self, "resolve_wiki_links")
-            work["html_content"] = resolve_wiki_links(work["text_content"])
+        if html_content is not None:
+            work["html_content"] = html_content
         self._finish([work])
         return work
 
@@ -451,6 +456,19 @@ class WorksMixin(FacadeMixin):
                        bulk.Missing.TAGS: BULK_TAGS_MISSING}[missing.what]
             raise BulkWorkError(message, 404) from None
         return request.result()
+
+    # -- wiki links (L-W-2) -------------------------------------------------------
+
+    @ported
+    def resolve_wiki_links(self, text: str) -> str:
+        """``PRKSDatabase.resolve_wiki_links`` on PostgreSQL: the same renderer, read in one snapshot.
+
+        Targets resolve against this Library only (``backend.domain.works.wiki_links``),
+        so a Work or Person of another Library renders as unresolved.
+        """
+        from backend.domain.works import wiki_links
+
+        return self._read(lambda scope: wiki_links.render(scope, text))
 
     # -- BibTeX (L-W-2) -----------------------------------------------------------
 
