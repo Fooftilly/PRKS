@@ -616,10 +616,14 @@
                 if (setTimer && !isManagedPdfHref(job.href)) {
                     const deadline = new Promise(function (_resolve, reject) {
                         headerTimer = setTimer(function () {
-                            flight.controller.abort();
                             const err = new Error('PRKS request timed out before response headers.');
                             err.name = 'TimeoutError';
+                            // Settle the deadline before aborting the fetch:
+                            // an abort-aware transport can reject synchronously
+                            // on abort, but callers should receive TimeoutError
+                            // when the deadline (not their signal) fired.
                             reject(err);
+                            flight.controller.abort();
                         }, readHeaderTimeoutMs);
                     });
                     pending = Promise.race([network, deadline]);
