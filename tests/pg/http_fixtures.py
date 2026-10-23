@@ -114,8 +114,14 @@ class HttpAuthTestCase(IdentityTestCase):
         kwargs.setdefault("trusted_proxies", TrustedProxies())
         return WebAuthSettings(mode=mode, **kwargs)
 
-    def serve(self, settings: Optional[WebAuthSettings] = None, *, auth: Any = _SENTINEL) -> WebAuth:
-        """Start a server on a free loopback port; ``auth=None`` serves the SQLite runtime."""
+    def serve(
+        self, settings: Optional[WebAuthSettings] = None, *, auth: Any = _SENTINEL, jobs: Any = None
+    ) -> WebAuth:
+        """Start a server on a free loopback port; ``auth=None`` serves the SQLite runtime.
+
+        ``jobs`` is the PRKS_AUTH runtime's ``WebJobs`` (job diagnostics), as
+        ``run_server`` sets it; its worker is not started here.
+        """
         module = self.server_module
         if auth is _SENTINEL:
             auth = WebAuth(self.db, settings or self.settings(), self.instance_id, self.lib, hasher=self.hasher)
@@ -124,6 +130,7 @@ class HttpAuthTestCase(IdentityTestCase):
         httpd.prks_trusted_hosts = frozenset()
         httpd.prks_access_gate = module.LibraryAccessGate()
         httpd.prks_auth = auth
+        httpd.prks_jobs = jobs
         if auth is not None and auth.settings.public_origin is not None:
             httpd.prks_trusted_hosts = frozenset({auth.settings.public_origin[1]})
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)

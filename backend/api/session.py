@@ -92,6 +92,8 @@ _READ_METHODS = frozenset({"GET", "HEAD"})
 
 # Mutations that change Library administration rather than content.
 _ADMIN_MUTATIONS = frozenset({"/api/settings"})
+# Reads only the Library owner may make: instance-level job diagnostics.
+_ADMIN_READS = frozenset({"/api/diagnostics/jobs"})
 # Mutations that change no Library content: authorized, never epoch-fenced.
 _NON_LIBRARY_MUTATIONS = {
     "/api/client-errors": Capability.READ_LIBRARY,  # a browser error report, logged only
@@ -232,13 +234,15 @@ def _epoch_claim(request: HttpRequest) -> Optional[int]:
 
 
 def route_capability(method: str, path: str) -> Capability:
-    """What a route needs (§9.4): backups and settings are Library administration."""
+    """What a route needs (§9.4): backups, settings and job diagnostics are Library administration."""
     if path == "/api/backups" or path.startswith("/api/backups/"):
         return Capability.ADMIN_LIBRARY
     if method in _MUTATING_METHODS:
         if path in _ADMIN_MUTATIONS:
             return Capability.ADMIN_LIBRARY
         return _NON_LIBRARY_MUTATIONS.get(path, Capability.EDIT_LIBRARY)
+    if path in _ADMIN_READS:
+        return Capability.ADMIN_LIBRARY
     return Capability.READ_LIBRARY
 
 
