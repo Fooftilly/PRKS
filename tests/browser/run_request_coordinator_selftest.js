@@ -1042,7 +1042,7 @@ async function testReachabilitySignalling() {
         const box = makeDeferredFetch();
         const coord = makeCoordinator({ fetchBundle: box });
         const isolated = coord.prksRequest('/api/settings', {}, {
-            priority: 'background', reportReachability: false,
+            priority: 'background', reportReachability: false, retry: false,
         });
         const foreground = coord.prksRequest('/api/settings');
         await waitUntil(function () { return box.calls.length === 2; });
