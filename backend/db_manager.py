@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from urllib.parse import unquote, urlparse
 from datetime import datetime
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Any, Optional, Tuple
+from typing import Callable, Dict, Iterator, List, Any, Optional, Tuple
 from pathlib import Path
 from backend import (folder_sync, folder_tag_sync, person_group_sync, person_metadata_sync,
                      person_sync, playlist_sync, tag_sync, work_metadata_sync, work_open_sync,
@@ -529,7 +529,32 @@ def _prks_fts_prefix_clause(tokens: List[str]) -> str:
 _CITE_KEY_UNSAFE_RE = re.compile(r"[^\w\-.:]")
 
 
-WIKI_LINK_RE = re.compile(r'\[\[(.*?)\]\]')
+def wiki_link_spans(text: str) -> Iterator[Tuple[int, int, str]]:
+    r"""``(start, end, inner)`` of each ``[[inner]]``, left to right.
+
+    Exactly the matches of ``re.finditer(r'\[\[(.*?)\]\]', text)``: a marker
+    opens at the first ``[[``, closes at the first ``]]`` after it, and holds
+    no newline. That pattern retries from every ``[[`` it cannot close, so a
+    note of many unclosed ``[[`` took quadratic time on every Work detail
+    read; this scan finds the same spans in one pass.
+    """
+    pos = 0
+    close = -1
+    while True:
+        start = text.find("[[", pos)
+        if start < 0:
+            return
+        if close < start + 2:
+            close = text.find("]]", start + 2)
+            if close < 0:
+                return
+        newline = text.find("\n", start + 2, close)
+        if newline >= 0:
+            # No ``[[`` before this newline closes either.
+            pos = newline + 1
+            continue
+        yield start, close + 2, text[start + 2:close]
+        pos = close + 2
 
 
 def render_wiki_links(
@@ -546,13 +571,14 @@ def render_wiki_links(
     """
     if not text:
         return ""
-    targets = list(dict.fromkeys(m.group(1).strip() for m in WIKI_LINK_RE.finditer(text)))
+    spans = list(wiki_link_spans(text))
+    targets = list(dict.fromkeys(inner.strip() for _, _, inner in spans))
     if not targets:
         return text
     resolved = resolve(targets)
 
-    def replacer(match: "re.Match[str]") -> str:
-        raw = match.group(1).strip()
+    def replacement(inner: str) -> str:
+        raw = inner.strip()
         hit = resolved.get(raw)
         if hit:
             kind, target_id, name = hit
@@ -562,7 +588,14 @@ def render_wiki_links(
         safe_raw = html.escape(raw, quote=True)
         return f'<span class="wiki-link-unresolved" style="color:#ef4444;">[[{safe_raw}]]</span>'
 
-    return WIKI_LINK_RE.sub(replacer, text)
+    out: List[str] = []
+    last = 0
+    for start, end, inner in spans:
+        out.append(text[last:start])
+        out.append(replacement(inner))
+        last = end
+    out.append(text[last:])
+    return "".join(out)
 
 
 # The source kinds a Work may be created with. `source_kind` is not free text:

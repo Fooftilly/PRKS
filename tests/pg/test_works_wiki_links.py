@@ -183,6 +183,9 @@ class BatchingTests(WikiLinkTestCase):
     def test_lookups_probe_indexes_instead_of_scanning_the_library(self) -> None:
         for i in range(400):
             self.library.add_work(f"Work {i}")
+        with facade_context.acting_as(self.other_actor().context):
+            for _ in range(600):  # one title, common in another Library
+                self.library.add_work("Work 7")
         rows = ", ".join(
             f"('{self.actor.library_id}', 'P-{uuid.uuid4().hex.upper()}', '', 'Person {i}')" for i in range(4000))
         self.sql(f"INSERT INTO prks.persons (library_id, id, first_name, last_name) VALUES {rows}")
@@ -196,6 +199,7 @@ class BatchingTests(WikiLinkTestCase):
 
         works_plan, persons_plan = plan(wiki_links._WORKS_SQL), plan(wiki_links._PERSONS_SQL)
         self.assertNotIn("Seq Scan", works_plan)
-        self.assertIn("works_title", works_plan)
+        # Keyed by Library first: the other Library's "Work 7" rows are never probed.
+        self.assertIn("works_library_title_md5", works_plan)
         self.assertNotIn("Seq Scan", persons_plan)
         self.assertIn("persons_library_last_name", persons_plan)

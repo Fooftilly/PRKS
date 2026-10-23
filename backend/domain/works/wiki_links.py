@@ -13,10 +13,15 @@ snapshot:
   ``first_name || ' ' || last_name``;
 - when several rows match one target, the **first** wins: SQLite takes the
   lowest ``rowid`` (insertion order), PostgreSQL the earliest ``created_at``,
-  then ``id`` in byte order (``COLLATE "C"``). The two agree for rows
-  created by separate transactions in the order they committed; rows created
-  in one transaction share ``created_at`` and fall back to their ids, whose
-  order is not their insertion order.
+  then ``id`` in byte order (``COLLATE "C"``). ``created_at`` defaults to
+  ``now()``, the creating transaction's *start*, and PostgreSQL keeps no
+  insertion order of its own. So the two agree for rows created one
+  transaction after another; they can differ for rows whose creating
+  transactions overlapped (the later-starting one inserting first) and for
+  rows created in one transaction, which share ``created_at`` and fall back
+  to their ids, whose order is not their insertion order. Either way the
+  choice is deterministic for a given snapshot: the same text renders the
+  same links until the matching rows change.
 
 A target holding NUL, which PostgreSQL text cannot hold, matches nothing and
 is not sent.
@@ -25,9 +30,11 @@ Lookups go in batches of at most ``PRKSDatabase._WIKI_LINK_LOOKUP_CHUNK``
 targets, one statement per batch and table, as bound array parameters; the
 Person lookup only sees the targets no Work claimed. Each statement has one
 branch per way a row can match, so each probes an index (the Library's id
-keys, the ``works_title`` hash index, ``persons_library_last_name``) rather
-than scanning the Library, and ``DISTINCT ON`` keeps one row per target. Every statement filters by the scope's Library, so nothing of
-another Library is found or hinted at.
+keys, ``works_library_title_md5``, ``persons_library_last_name``) rather
+than scanning the Library or other Libraries' rows, and ``DISTINCT ON`` keeps
+one row per target. A title is probed by its digest, then compared in full.
+Every statement filters by the scope's Library, so nothing of another
+Library is found or hinted at.
 """
 
 from __future__ import annotations
@@ -43,8 +50,10 @@ SELECT DISTINCT ON (target) target, id, name FROM (
   SELECT id AS target, id, title AS name, created_at FROM prks.works
   WHERE library_id = %(library_id)s AND id = ANY(%(targets)s::text[])
   UNION ALL
-  SELECT title, id, title, created_at FROM prks.works
-  WHERE library_id = %(library_id)s AND title = ANY(%(targets)s::text[])
+  SELECT wanted.target, works.id, works.title, works.created_at
+  FROM unnest(%(targets)s::text[]) AS wanted(target)
+  JOIN prks.works ON works.library_id = %(library_id)s
+    AND md5(works.title) = md5(wanted.target) AND works.title = wanted.target
 ) AS matched
 ORDER BY target, created_at, id COLLATE "C"
 """
