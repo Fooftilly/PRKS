@@ -123,6 +123,58 @@ async function refusedCreateStaysInDiagnosticsButNotTheFolderLibrary() {
         "the operation is not silently discarded");
 }
 
+async function aRefusedFolderCreateDoesNotStrandTheWorksFolderProjection() {
+    const store = newStore();
+    const created = await store.createFolder({ title: "Already taken" });
+    const filing = await store.setWorkFolder("W-1", created.entity_id,
+        { folder_id: "F-old", revision: 2 });
+    assert.deepEqual(filing.depends_on, [created.op_id],
+        "a Work filing waits for the folder create it references");
+
+    const previous = { id: "W-1", folder_id: "F-old", folder_title: "Existing" };
+    const catalogue = [{ id: "F-old", title: "Existing" }];
+    const pending = await store.listOperations();
+    assert.equal(globalThis.prksEffectiveWorkFolder(previous, pending,
+        globalThis.prksEffectiveFolders(catalogue, pending)).folder_id, created.entity_id,
+    "the optimistic filing is visible before the server refuses its destination");
+
+    const runtime = runtimeFor(store, async (_path, options) => {
+        const body = JSON.parse(options.body);
+        assert.equal(body.operation, "CREATE_FOLDER",
+            "dependent filing must never be sent after refused creation");
+        return { ok: false, status: 409,
+            json: async () => ({ code: "TITLE_TAKEN", folder_id: created.entity_id }) };
+    });
+    await runtime.wake();
+    await settle();
+    runtime.stop();
+
+    const ops = await store.listOperations();
+    assert.equal(ops.length, 2, "both operations remain available in Diagnostics");
+    assert.equal(ops.find(op => op.op_id === created.op_id).status, "conflict");
+    const dependent = ops.find(op => op.op_id === filing.op_id);
+    assert.equal(dependent.status, "conflict");
+    assert.equal(dependent.server_result.code, "DEPENDENCY_FAILED");
+
+    assert.deepEqual(globalThis.prksEffectiveFolders(catalogue, ops), catalogue,
+        "the refused folder is absent from the catalogue");
+    assert.equal(globalThis.prksPendingWorkFolders(ops).size, 0,
+        "the refused dependent filing does not override the server state");
+    assert.deepEqual(globalThis.prksEffectiveWorkFolder(previous, ops, catalogue), previous,
+        "Work detail falls back to its acknowledged folder and name");
+    assert.deepEqual(globalThis.prksEffectiveWorkFolderRows([previous], ops, catalogue), [previous],
+        "Work lists use the same acknowledged fallback");
+    assert.equal(globalThis.prksSetPendingWorkFolders(ops, catalogue), 0);
+    assert.deepEqual(globalThis.prksApplyPendingWorkFolders([previous]), [previous],
+        "synchronous Work cards do not retain the ghost destination");
+    assert.deepEqual(globalThis.prksEffectiveFolderDetail({
+        id: "F-old", title: "Existing", works: [{ id: "W-1" }]
+    }, ops, []).works.map(row => row.id), ["W-1"],
+    "the Work remains visible in its acknowledged Folder detail");
+    assert.equal((await store.stats()).byStatus.conflict, 2,
+        "neither rejected operation is silently discarded");
+}
+
 async function anEmptyTitleBecomesThePlaceholder() {
     const store = newStore();
     const created = await store.createFolder({ title: "   " });
@@ -334,6 +386,7 @@ async function theBaseIsAcknowledgedAndNeverGuessed() {
 async function main() {
     await aFolderIsAValidDestinationImmediately();
     await refusedCreateStaysInDiagnosticsButNotTheFolderLibrary();
+    await aRefusedFolderCreateDoesNotStrandTheWorksFolderProjection();
     await anEmptyTitleBecomesThePlaceholder();
     await aFolderInsideALocalFolderWaitsForIt();
     await fieldEditsCoalesceAndCancel();
