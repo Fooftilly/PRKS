@@ -178,6 +178,60 @@ class SyncGateTests(MergeTestCase):
             thread.join(30)
         self.assertEqual(len(self.sql("SELECT id FROM prks.works WHERE id = %s FOR UPDATE NOWAIT", (work_id,))), 1)
 
+    def test_two_deletes_of_one_work_queue_at_the_gate_instead_of_deadlocking(self) -> None:
+        # Both holding FOR KEY SHARE and upgrading to delete_work's FOR UPDATE
+        # would deadlock (40P01), and a READ COMMITTED delete answers 503.
+        work_id = self.library.add_work("Deleted twice")
+        entered, release = threading.Event(), threading.Event()
+        delete_work = commands.delete_work
+
+        def first_waits(scope: LibraryScope, target: str) -> Any:
+            if not entered.is_set():
+                entered.set()
+                release.wait(30)
+            return delete_work(scope, target)
+
+        results: dict[str, tuple[int, dict[str, Any]]] = {}
+
+        def send(name: str) -> None:
+            results[name] = self.send(self.envelope("DELETE_WORK", work_id, {}))
+
+        with mock.patch.object(commands, "delete_work", first_waits):
+            first = threading.Thread(target=send, args=("first",))
+            first.start()
+            self.assertTrue(entered.wait(30))
+            second = threading.Thread(target=send, args=("second",))
+            second.start()
+            try:
+                self.wait_for_lock_waiter()  # the second waits for the first's lock
+            finally:
+                release.set()
+                first.join(30)
+                second.join(30)
+        self.assertEqual(results["first"][0], 200, results)
+        self.assertNotEqual(results["second"][0], 503, results)
+        self.assertEqual(self.sql("SELECT id FROM prks.works WHERE id = %s", (work_id,)), [])
+
+    def test_only_the_delete_takes_the_work_for_update_at_the_gate(self) -> None:
+        self.assertEqual(lifecycle.LOCKS_FOR_UPDATE, frozenset({"DELETE_WORK"}))
+        work_id = self.library.add_work("Live")
+        held, release = threading.Event(), threading.Event()
+
+        def hold(scope: LibraryScope) -> None:
+            self.assertIsNone(lifecycle.guard(scope, work_id, "DELETE_WORK"))
+            held.set()
+            release.wait(30)
+
+        thread = threading.Thread(target=lambda: self.command(hold, isolation=Isolation.READ_COMMITTED))
+        thread.start()
+        try:
+            self.assertTrue(held.wait(30))
+            with self.refused_by("55P03"):
+                self.sql("SELECT id FROM prks.works WHERE id = %s FOR KEY SHARE NOWAIT", (work_id,))
+        finally:
+            release.set()
+            thread.join(30)
+
 
 class PrepareRefusalTests(MergeTestCase):
     def test_a_self_merge_a_missing_work_and_another_librarys_work_are_refused(self) -> None:

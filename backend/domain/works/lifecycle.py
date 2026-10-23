@@ -21,7 +21,10 @@ cycle is a server failure, never a ledgered answer.
 :func:`guard` is what an operation runs before it applies: it takes ``FOR KEY
 SHARE`` on the Work row, so a merge (which deletes the row) either waits for
 the operation to commit or has committed before it, in which case the row is
-gone and the lifecycle row the merge wrote is read instead.
+gone and the lifecycle row the merge wrote is read instead. An operation
+whose handler locks the Work ``FOR UPDATE`` (:data:`LOCKS_FOR_UPDATE`) takes
+that lock here instead: two of them holding ``FOR KEY SHARE`` and each
+upgrading would deadlock.
 """
 
 from __future__ import annotations
@@ -40,6 +43,11 @@ MERGED_STATUS = 409
 _LOCK_LIVE: LiteralString = (
     "SELECT id FROM prks.works WHERE library_id = %(library_id)s AND id = %(work_id)s FOR KEY SHARE"
 )
+_LOCK_LIVE_FOR_UPDATE: LiteralString = (
+    "SELECT id FROM prks.works WHERE library_id = %(library_id)s AND id = %(work_id)s FOR UPDATE"
+)
+# The operations whose handler locks the Work FOR UPDATE (commands.delete_work).
+LOCKS_FOR_UPDATE = frozenset({"DELETE_WORK"})
 _LIVE: LiteralString = "SELECT id FROM prks.works WHERE library_id = %(library_id)s AND id = %(work_id)s"
 # One statement, so the chain is one snapshot.
 _RESOLVE: LiteralString = """
@@ -99,15 +107,18 @@ def refusal(work_id: str, target_work_id: str) -> tuple[int, dict[str, Any]]:
     return MERGED_STATUS, {"code": MERGED_CODE, "work_id": work_id, "target_work_id": target_work_id}
 
 
-def guard(scope: LibraryScope, work_id: str) -> Optional[tuple[int, dict[str, Any]]]:
-    """The ``WORK_MERGED`` refusal for an operation naming ``work_id``, or None to go on.
+def guard(scope: LibraryScope, work_id: str,
+          operation: Optional[str] = None) -> Optional[tuple[int, dict[str, Any]]]:
+    """The ``WORK_MERGED`` refusal for ``operation`` naming ``work_id``, or None to go on.
 
-    A live Work is locked ``FOR KEY SHARE`` for the rest of the transaction,
-    so it cannot be merged away while the operation applies. An id that is
+    A live Work is locked ``FOR KEY SHARE`` (``FOR UPDATE`` for
+    :data:`LOCKS_FOR_UPDATE`) for the rest of the transaction, so it cannot
+    be merged away while the operation applies. An id that is
     neither live nor merged goes on: the operation's own rule answers it
     (``CREATE_WORK`` creates it, the others report it missing).
     """
-    if scope.execute(_LOCK_LIVE, {"work_id": work_id}).fetchone() is not None:
+    lock = _LOCK_LIVE_FOR_UPDATE if operation in LOCKS_FOR_UPDATE else _LOCK_LIVE
+    if scope.execute(lock, {"work_id": work_id}).fetchone() is not None:
         return None
     state = _lifecycle(scope, work_id)
     if state["state"] == MERGED:

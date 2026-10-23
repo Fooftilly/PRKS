@@ -194,7 +194,7 @@ def _claim_and_apply(scope: LibraryScope, ctx: RequestContext, op: dict[str, Any
         return _replay(seen, digest)
     if not _dependencies_satisfied(scope, op):
         raise _NotLedgered(400, {"code": "UNSATISFIED_DEPENDENCY"})
-    merged = lifecycle.guard(scope, op["entity_id"]) if op["entity_type"] == "work" else None
+    merged = lifecycle.guard(scope, op["entity_id"], op["operation"]) if op["entity_type"] == "work" else None
     if merged is not None:
         # Never applied to the merge target (docs/work-identity-model.md §14.2).
         status, result = merged
