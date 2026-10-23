@@ -5475,7 +5475,7 @@ class PRKSDatabase:
             [text_credit] if corporate_credit
             else [name.strip() for name in text_credit.split(";") if name.strip()]
         )
-        author_str = " and ".join(linked_authors or text_authors) or None
+        author_names = linked_authors or text_authors
 
         # Year: prefer dedicated year field, fall back to published_date prefix
         year = work.get('year') or (work.get('published_date', '')[:4] if work.get('published_date') else None)
@@ -5510,6 +5510,11 @@ class PRKSDatabase:
             )
 
         esc = cls._bibtex_escape_field
+
+        def names(people: List[str]) -> str:
+            # Each name on its own, so a brace in one cannot pair with a brace
+            # in the next and hide the "and" between them.
+            return " and ".join(esc(name) for name in people)
         bf = export_fields
 
         def _export(key: str) -> bool:
@@ -5517,21 +5522,21 @@ class PRKSDatabase:
 
         bibtex = f"@{entry_type}{{{cite_key},\n"
         bibtex += f"  title = {{{esc(work['title'])}}},\n"
-        if author_str and _export("author"):
-            author_value = esc(author_str)
+        if author_names and _export("author"):
+            author_value = names(author_names)
             if corporate_credit:
                 author_value = "{" + author_value + "}"  # BibLaTeX corporate name
             bibtex += f"  author = {{{author_value}}},\n"
         if editors and _export("editor"):
-            bibtex += f"  editor = {{{esc(' and '.join(editors))}}},\n"
+            bibtex += f"  editor = {{{names(editors)}}},\n"
         if translators and _export("translator"):
-            bibtex += f"  translator = {{{esc(' and '.join(translators))}}},\n"
+            bibtex += f"  translator = {{{names(translators)}}},\n"
         if introductions and _export("introduction"):
-            bibtex += f"  introduction = {{{esc(' and '.join(introductions))}}},\n"
+            bibtex += f"  introduction = {{{names(introductions)}}},\n"
         if forewords and _export("foreword"):
-            bibtex += f"  foreword = {{{esc(' and '.join(forewords))}}},\n"
+            bibtex += f"  foreword = {{{names(forewords)}}},\n"
         if afterwords and _export("afterword"):
-            bibtex += f"  afterword = {{{esc(' and '.join(afterwords))}}},\n"
+            bibtex += f"  afterword = {{{names(afterwords)}}},\n"
         if year and _export("year"):
             bibtex += f"  year = {{{esc(year)}}},\n"
         if work.get('publisher') and _export("publisher"):

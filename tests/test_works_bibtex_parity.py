@@ -380,6 +380,17 @@ class BibtexParityTests(PeopleParityTestCase):
         self.assertIn("  title = {Close{\\textbraceright} early {\\textbraceleft}},\n", entry)
         self.assertIn("  author = {Doe, J{\\textbraceright} and Roe, {\\textbraceleft}R},\n", entry)
         self.assertIn("  publisher = {P {\\textbraceright}{\\textbraceleft} Q},\n", entry)
+        # Braces pair within one name only, so "and" still separates names.
+        split = self.work_both("Split names", year="2002", author_text="Doe, {J; Roe, R}")
+        for name in ("Lone {open", "Lone close}"):
+            self.credit(split, self.person_both(name, first_name="", last_name=name), "Editor")
+        entry = self.bibtex(split)
+        assert_one_bibtex_entry(self, entry)
+        self.assertIn("  author = {Doe, {\\textbraceleft}J and Roe, R{\\textbraceright}},\n", entry)
+        self.assertIn("  editor = {Lone {\\textbraceleft}open and Lone close{\\textbraceright}},\n", entry)
+        texts = self.work_both("Text braces", year="2001", author_text="Doe}\\,{x, Ann; } Roe {")
+        self.assertIn("  author = {Doe{\\textbraceright}\\,{\\textbraceleft}x, Ann and "
+                      "{\\textbraceright} Roe {\\textbraceleft}},\n", self.bibtex(texts))
 
     def test_roles_follow_order_index_then_insertion(self) -> None:
         work = self.work_both("Ordered", year="2010")
