@@ -134,7 +134,7 @@ class Deferred:
 
 
 DEFERRED: tuple[Deferred, ...] = (
-    Deferred("argument_sources", "L-R-1 (#629)",
+    Deferred("argument_sources", "L-R-1 (#634)",
              "re-points Work-level citations; pinned ones follow their Manifestation; only exactly "
              "identical citations collapse, and every changed Argument's argument-sources revision "
              "advances (§8.5)"),
