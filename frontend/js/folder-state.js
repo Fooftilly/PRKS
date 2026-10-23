@@ -51,7 +51,12 @@
     }
 
     function pendingCreates(operations) {
-        return unsettled(operations, 'CREATE_FOLDER', null);
+        // A terminally refused create remains in the durable queue for the
+        // user's Diagnostics decision, but it is not a real Folder. Showing
+        // its optimistic row after TITLE_TAKEN, PARENT_NOT_FOUND, etc. leaves
+        // a phantom folder in the Library and makes the queue look applied.
+        return unsettled(operations, 'CREATE_FOLDER', null)
+            .filter(op => op.status !== 'conflict' && op.status !== 'discarded');
     }
 
     /* A refused deletion stops hiding its entity: see
