@@ -47,6 +47,13 @@ class MergeTestCase(SyncTestCase):
 
         self.command(run)
 
+    def merged_as(self, ctx: RequestContext, source: str, target: str) -> None:
+        def run(scope: LibraryScope) -> None:
+            lifecycle.mark_merged(scope, source, target)
+            commands.delete_work(scope, source)
+
+        self.command(run, ctx)
+
     def command(self, fn: Callable[[LibraryScope], T], ctx: Optional[RequestContext] = None,
                 isolation: Isolation = Isolation.SERIALIZABLE) -> T:
         return library_command(self.db, ctx or self.actor.context, Capability.EDIT_LIBRARY, fn,
@@ -116,13 +123,6 @@ class LifecycleTests(MergeTestCase):
         self.merged_as(other.context, source, target)
         self.assertEqual(self.resolve(source), {"state": lifecycle.UNKNOWN})
 
-    def merged_as(self, ctx: RequestContext, source: str, target: str) -> None:
-        def run(scope: LibraryScope) -> None:
-            lifecycle.mark_merged(scope, source, target)
-            commands.delete_work(scope, source)
-
-        self.command(run, ctx)
-
     def test_a_work_is_merged_away_once_and_never_into_itself(self) -> None:
         source, target, other = (self.library.add_work(title) for title in ("S", "T", "O"))
         self.merged(source, target)
@@ -177,6 +177,20 @@ class SyncGateTests(MergeTestCase):
             release.set()
             thread.join(30)
         self.assertEqual(len(self.sql("SELECT id FROM prks.works WHERE id = %s FOR UPDATE NOWAIT", (work_id,))), 1)
+
+    def test_a_create_of_an_id_another_library_merged_away_is_refused(self) -> None:
+        other = self.other_actor()
+        with facade_context.acting_as(other.context):
+            source, target = self.library.add_work("Theirs"), self.library.add_work("Their target")
+        self.merged_as(other.context, source, target)
+        with self.assertRaises(AccessRefused) as caught:
+            self.send(self.envelope("CREATE_WORK", source, create_payload()))
+        self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
+        self.assertEqual(self.ledger(), [])
+        self.assertEqual(self.sql("SELECT id FROM prks.works WHERE id = %s", (source,)), [])
+        # Any other operation reads it as an id that exists nowhere.
+        self.assertEqual(self.send(self.envelope("MARK_WORK_OPENED", source, {}))[1]["code"],
+                         self.send(self.envelope("MARK_WORK_OPENED", new_work_id(), {}))[1]["code"])
 
     def test_two_deletes_of_one_work_queue_at_the_gate_instead_of_deadlocking(self) -> None:
         # Both holding FOR KEY SHARE and upgrading to delete_work's FOR UPDATE

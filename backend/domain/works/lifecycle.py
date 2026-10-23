@@ -31,6 +31,7 @@ from __future__ import annotations
 
 from typing import Any, LiteralString, Optional
 
+from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import LibraryScope
 
 ACTIVE = "ACTIVE"
@@ -49,6 +50,10 @@ _LOCK_LIVE_FOR_UPDATE: LiteralString = (
 # The operations whose handler locks the Work FOR UPDATE (commands.delete_work).
 LOCKS_FOR_UPDATE = frozenset({"DELETE_WORK"})
 _LIVE: LiteralString = "SELECT id FROM prks.works WHERE library_id = %(library_id)s AND id = %(work_id)s"
+# Unscoped on purpose: Work ids are unique across Libraries, and so is this
+# table's key. Only existence is read, and it is answered FORBIDDEN, as a
+# create of another Library's live Work is (work_lifecycle.apply_create).
+_RECORDED_ANYWHERE: LiteralString = "SELECT 1 FROM prks.sync_work_lifecycle WHERE work_id = %s"
 # One statement, so the chain is one snapshot.
 _RESOLVE: LiteralString = """
 WITH RECURSIVE chain (work_id, state, target_work_id, depth) AS (
@@ -115,7 +120,9 @@ def guard(scope: LibraryScope, work_id: str,
     :data:`LOCKS_FOR_UPDATE`) for the rest of the transaction, so it cannot
     be merged away while the operation applies. An id that is
     neither live nor merged goes on: the operation's own rule answers it
-    (``CREATE_WORK`` creates it, the others report it missing).
+    (``CREATE_WORK`` creates it, the others report it missing), except a
+    ``CREATE_WORK`` of an id another Library merged away, which is refused
+    (``AccessRefused(FORBIDDEN)``, not ledgered): the id is never reused.
     """
     lock = _LOCK_LIVE_FOR_UPDATE if operation in LOCKS_FOR_UPDATE else _LOCK_LIVE
     if scope.execute(lock, {"work_id": work_id}).fetchone() is not None:
@@ -123,6 +130,8 @@ def guard(scope: LibraryScope, work_id: str,
     state = _lifecycle(scope, work_id)
     if state["state"] == MERGED:
         return refusal(work_id, state["target_work_id"])
+    if operation == "CREATE_WORK" and scope.execute_unscoped(_RECORDED_ANYWHERE, (work_id,)).fetchone():
+        raise AccessRefused(Refusal.FORBIDDEN)
     return None
 
 
