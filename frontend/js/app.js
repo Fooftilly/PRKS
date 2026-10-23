@@ -203,6 +203,7 @@ async function prksRefreshSyncQueueCue() {
     const host = document.querySelector('[data-prks-role="sync-queue-badge"]');
     if (!cue) return;
     let n = null;
+    let conflicts = 0;
     try {
         if (
             typeof prksSync !== 'undefined' &&
@@ -216,6 +217,7 @@ async function prksRefreshSyncQueueCue() {
                 return st && st !== 'acknowledged' && st !== 'discarded';
             });
             n = active.length;
+            conflicts = active.filter(op => op.status === 'conflict').length;
         }
     } catch (_e) {
         n = null;
@@ -226,17 +228,19 @@ async function prksRefreshSyncQueueCue() {
         if (host) host.innerHTML = '';
         return;
     }
+    const queued = n - conflicts;
+    const labels = [];
+    if (queued) labels.push(queued + (queued === 1 ? ' change queued' : ' changes queued'));
+    if (conflicts) labels.push(conflicts + (conflicts === 1 ? ' change needs attention' : ' changes need attention'));
+    const ariaLabel = labels.join('; ');
     cue.hidden = false;
     cue.classList.remove('hidden');
-    cue.setAttribute(
-        'aria-label',
-        n + (n === 1 ? ' change queued' : ' changes queued')
-    );
+    cue.setAttribute('aria-label', ariaLabel);
     cue.title = 'Open Settings → Diagnostics';
     if (host && typeof prksNavAttentionBadgeHtml === 'function') {
         host.innerHTML = prksNavAttentionBadgeHtml({
             count: n,
-            ariaLabel: n + (n === 1 ? ' change queued' : ' changes queued'),
+            ariaLabel: ariaLabel,
         });
     }
 }
