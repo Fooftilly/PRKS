@@ -281,6 +281,11 @@ class BibtexParityTests(PeopleParityTestCase):
         entry = self.bibtex(nameless)
         self.assertTrue(entry.startswith("@article{Doe1999,\n"))
         self.assertIn("  author = {Doe, Jane},\n", entry)
+        # Nor does a nameless first Author decide the key for a named second.
+        self.credit(nameless, self.person_both("Named", first_name="Ada", last_name="Lovelace"), "Author")
+        entry = self.bibtex(nameless)
+        self.assertTrue(entry.startswith("@article{Lovelace1999,\n"))
+        self.assertIn("  author = {Lovelace, Ada},\n", entry)
         # Only a linked Author takes precedence: an Editor leaves the fallback.
         edited = self.work_both("Edited", year="1999", author_text="Doe, Jane")
         self.credit(edited, self.person_both("Ed", first_name="Ed", last_name="Itor"), "Editor")

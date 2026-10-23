@@ -5382,16 +5382,20 @@ class PRKSDatabase:
         return "Unknown"
 
     @classmethod
+    def _biblatex_role_name(cls, p: dict) -> str:
+        """The name a role row exports: its credit name, else the Person's; "" for none."""
+        credit = (p.get("credit_name") or "").strip()
+        if credit:
+            return credit
+        return cls._format_biblatex_person_name(p.get("last_name"), p.get("first_name")) or ""
+
+    @classmethod
     def _biblatex_names_for_role(cls, roles: List[dict], role_type: str) -> List[str]:
         out: List[str] = []
         for p in roles:
             if p.get("role_type") != role_type:
                 continue
-            credit = (p.get("credit_name") or "").strip()
-            if credit:
-                out.append(credit)
-                continue
-            nm = cls._format_biblatex_person_name(p.get("last_name"), p.get("first_name"))
+            nm = cls._biblatex_role_name(p)
             if nm:
                 out.append(nm)
         return out
@@ -5480,10 +5484,12 @@ class PRKSDatabase:
         # Year: prefer dedicated year field, fall back to published_date prefix
         year = work.get('year') or (work.get('published_date', '')[:4] if work.get('published_date') else None)
 
-        first_author_person = next((p for p in roles if p["role_type"] == "Author"), None)
-        # The key follows whichever credit the author field shows: a linked
-        # Author whose Person renders no name leaves both to Author (text).
-        if first_author_person and linked_authors:
+        # The key follows the first credit the author field shows: an Author
+        # row that renders no name is skipped there, so it is skipped here,
+        # and with none left both fall back to Author (text).
+        first_author_person = next(
+            (p for p in roles if p["role_type"] == "Author" and cls._biblatex_role_name(p)), None)
+        if first_author_person:
             first_author_last = cls._biblatex_cite_key_part_from_person(first_author_person)
         elif text_authors:
             first = text_authors[0]
