@@ -195,6 +195,15 @@ def _claim_and_apply(scope: LibraryScope, ctx: RequestContext, op: dict[str, Any
     # Before the dependencies: a merged-away Work's operation is terminal
     # whatever it waits for (docs/work-identity-model.md §14.2).
     merged = lifecycle.guard(scope, op["entity_id"], op["operation"]) if op["entity_type"] == "work" else None
+    if merged is None and op["operation"] == "REORDER_PLAYLIST_ITEMS":
+        # The envelope's entity is the Playlist, but its ordered payload
+        # also names Works. Guard each distinct Work *before* dependency
+        # checks, locking live ids in stable order so no stale merged id
+        # can slip through an otherwise valid Playlist operation.
+        for work_id in sorted(set(op["payload"]["work_ids"])):
+            merged = lifecycle.guard(scope, work_id, op["operation"])
+            if merged is not None:
+                break
     if merged is None and not _dependencies_satisfied(scope, op):
         raise _NotLedgered(400, {"code": "UNSATISFIED_DEPENDENCY"})
     if merged is not None:
