@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from urllib.parse import unquote, urlparse
 from datetime import datetime
 from dataclasses import dataclass
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Callable, Dict, Iterator, List, Any, Optional, Tuple
 from pathlib import Path
 from backend import (folder_sync, folder_tag_sync, person_group_sync, person_metadata_sync,
                      person_sync, playlist_sync, tag_sync, work_metadata_sync, work_open_sync,
@@ -527,6 +527,75 @@ def _prks_fts_prefix_clause(tokens: List[str]) -> str:
 # Characters a BibTeX entry key may keep: Unicode word characters, "-", "."
 # and ":". Everything else either ends the key or is read as entry structure.
 _CITE_KEY_UNSAFE_RE = re.compile(r"[^\w\-.:]")
+
+
+def wiki_link_spans(text: str) -> Iterator[Tuple[int, int, str]]:
+    r"""``(start, end, inner)`` of each ``[[inner]]``, left to right.
+
+    Exactly the matches of ``re.finditer(r'\[\[(.*?)\]\]', text)``: a marker
+    opens at the first ``[[``, closes at the first ``]]`` after it, and holds
+    no newline. That pattern retries from every ``[[`` it cannot close, so a
+    note of many unclosed ``[[`` took quadratic time on every Work detail
+    read; this scan finds the same spans in one pass.
+    """
+    pos = 0
+    close = -1
+    while True:
+        start = text.find("[[", pos)
+        if start < 0:
+            return
+        if close < start + 2:
+            close = text.find("]]", start + 2)
+            if close < 0:
+                return
+        newline = text.find("\n", start + 2, close)
+        if newline >= 0:
+            # No ``[[`` before this newline closes either.
+            pos = newline + 1
+            continue
+        yield start, close + 2, text[start + 2:close]
+        pos = close + 2
+
+
+def render_wiki_links(
+    text: str,
+    resolve: Callable[[List[str]], Dict[str, Tuple[str, Any, Any]]],
+) -> str:
+    """``text`` with each ``[[target]]`` rendered as a link or an unresolved marker.
+
+    Shared by both backends. ``resolve`` maps the distinct, trimmed targets
+    (in first-occurrence order) to ``(kind, id, name)`` for those it found,
+    ``kind`` being ``"works"`` or ``"people"``; it is not called when the
+    text has no marker. Each distinct target is looked up once, so the cost
+    follows the number of different targets, not of markers.
+    """
+    if not text:
+        return ""
+    spans = list(wiki_link_spans(text))
+    targets = list(dict.fromkeys(inner.strip() for _, _, inner in spans))
+    if not targets:
+        return text
+    resolved = resolve(targets)
+
+    def replacement(inner: str) -> str:
+        raw = inner.strip()
+        hit = resolved.get(raw)
+        if hit:
+            kind, target_id, name = hit
+            safe_name = html.escape(str(name or ""), quote=True)
+            safe_id = html.escape(str(target_id or ""), quote=True)
+            return f'<a href="#/{kind}/{safe_id}" class="wiki-link" style="color:var(--accent); text-decoration:none;">{safe_name}</a>'
+        safe_raw = html.escape(raw, quote=True)
+        return f'<span class="wiki-link-unresolved" style="color:#ef4444;">[[{safe_raw}]]</span>'
+
+    out: List[str] = []
+    last = 0
+    for start, end, inner in spans:
+        out.append(text[last:start])
+        out.append(replacement(inner))
+        last = end
+    out.append(text[last:])
+    return "".join(out)
 
 
 # The source kinds a Work may be created with. `source_kind` is not free text:
@@ -3754,26 +3823,11 @@ class PRKSDatabase:
         return resolved
 
     def resolve_wiki_links(self, text: str) -> str:
-        if not text: return ""
-        pattern = re.compile(r'\[\[(.*?)\]\]')
-        # Resolve each distinct target once, then replace from the map: the
-        # cost follows the number of different targets, not of markers.
-        targets = list(dict.fromkeys(m.group(1).strip() for m in pattern.finditer(text)))
-        if not targets:
-            return text
-        resolved = self._resolve_wiki_link_targets(targets)
+        def resolve(targets: List[str]) -> Dict[str, Tuple[str, Any, Any]]:
+            return {target: (kind, row["id"], row["name"])
+                    for target, (kind, row) in self._resolve_wiki_link_targets(targets).items()}
 
-        def replacer(match):
-            raw = match.group(1).strip()
-            hit = resolved.get(raw)
-            if hit:
-                kind, row = hit
-                safe_name = html.escape(str(row["name"] or ""), quote=True)
-                safe_id = html.escape(str(row["id"] or ""), quote=True)
-                return f'<a href="#/{kind}/{safe_id}" class="wiki-link" style="color:var(--accent); text-decoration:none;">{safe_name}</a>'
-            safe_raw = html.escape(raw, quote=True)
-            return f'<span class="wiki-link-unresolved" style="color:#ef4444;">[[{safe_raw}]]</span>'
-        return pattern.sub(replacer, text)
+        return render_wiki_links(text, resolve)
 
     # --- Folders ---
     def _folder_descendant_ids(self, folder_id: str) -> set:
