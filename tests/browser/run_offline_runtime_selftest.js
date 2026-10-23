@@ -740,12 +740,13 @@ async function run() {
                         timers.pendingDelays(), [15000]);
                 }
                 rejectOldProbe(new TypeError('stale reachability transport rejection'));
-                // Real coordinator runs two GET retries before the runtime
-                // sees the resulting rejection. Neither may report health.
+                // The isolated health probe is one-shot; ordinary GETs keep
+                // coordinator retry policy. The probe never emits global
+                // reachability reports before the runtime's generation fence.
                 for (let i = 0; i < 12; i++) {
                     await new Promise(function (resolve) { setImmediate(resolve); });
                 }
-                assertEq('real coordinator probe used default retry policy', probeAttempts, 3);
+                assertEq('real coordinator probe has one transport attempt', probeAttempts, 1);
                 assertEq('old coordinator failure cannot override newer reachability',
                     runtime.getState(), laterForegroundFailure ? 'offline' : 'online');
                 assertEq('real probe settlement keeps required recovery timer state',
@@ -763,12 +764,49 @@ async function run() {
         await integratedProbeCase(true);
     }
 
+    /* A real retryable 503 response proves reachability immediately. A
+     * second coordinator attempt that hangs must not cause a false timeout. */
+    {
+        const requests = require(path.join(rootDir, 'frontend/js/request-coordinator.js'));
+        const timers = makeFakeTimers();
+        let attempts = 0;
+        const coordinator = requests.createPrksRequestCoordinator({
+            origin: 'http://127.0.0.1',
+            fetchImpl: function (url) {
+                assertEq('HTTP probe uses settings path', url, '/api/settings');
+                attempts += 1;
+                if (attempts === 1) {
+                    return Promise.resolve(new Response('{}', {
+                        status: 503, headers: { 'Content-Type': 'application/json' },
+                    }));
+                }
+                return new Promise(function () {}); // should never be reached
+            },
+        });
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function (url, init, policy) {
+                assertEq('one-shot health probe has retries disabled', policy.retry, false);
+                return coordinator.prksRequest(url, init, policy);
+            },
+            store: makeFakeStore(),
+            setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        runtime.noteRequestFailure();
+        timers.flushDelay(3000);
+        for (let i = 0; i < 12 && runtime.getState() !== 'online'; i++) {
+            await new Promise(function (resolve) { setImmediate(resolve); });
+        }
+        assertEq('HTTP 503 proves reachability before any retry', runtime.getState(), 'online');
+        assertEq('retryable HTTP status never starts another health fetch', attempts, 1);
+        assertEq('successful HTTP 503 health result clears watchdog', timers.pendingCount(), 0);
+    }
+
     /* ---- #819: a permanently stalled probe cannot monopolize recovery ---- */
     {
         const timers = makeFakeTimers();
         let attempts = 0;
         let firstResolve = null;
-        let firstReject = null;
         let firstSignal = null;
         const runtime = mod.createPrksOfflineRuntime({
             prksRequest: function (_url, init, policy) {
@@ -778,9 +816,8 @@ async function run() {
                     firstSignal = init.signal;
                     // Deliberately ignore AbortSignal to prove even a
                     // non-cooperative promise cannot publish a late answer.
-                    return new Promise(function (resolve, reject) {
+                    return new Promise(function (resolve) {
                         firstResolve = resolve;
-                        firstReject = reject;
                     });
                 }
                 return Promise.resolve(okJsonResponse({}));
@@ -810,7 +847,6 @@ async function run() {
         await Promise.resolve();
         await Promise.resolve();
         assertEq('late null completion does not undo recovery', runtime.getState(), 'online');
-        firstReject(new Error('already settled'));
         assertEq('late completion does not add retry timer', timers.pendingCount(), 0);
     }
     {
@@ -837,10 +873,22 @@ async function run() {
         timers.flushDelay(15000);
         assertEq('old timed-out probe cannot override newer success', runtime.getState(), 'online');
         assertEq('superseded timeout schedules no retry', timers.pendingCount(), 0);
+        // The expired probe must release probeInFlight, even though a newer
+        // success superseded its deadline: a genuinely newer failure still
+        // needs to launch another reachability check.
+        runtime.noteRequestFailure();
+        assertEq('later genuine failure still schedules recovery after superseded timeout',
+            timers.pendingDelays(), [3000]);
+        timers.flushDelay(3000);
+        assertEq('new probe starts after superseded watchdog releases guard', started, 2);
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq('replacement probe restores online', runtime.getState(), 'online');
         lateResolve(null);
         await Promise.resolve();
         await Promise.resolve();
         assertEq('late superseded probe result still cannot mark offline', runtime.getState(), 'online');
+        assertEq('late result cannot add another timer', timers.pendingCount(), 0);
     }
     {
         const timers = makeFakeTimers();
