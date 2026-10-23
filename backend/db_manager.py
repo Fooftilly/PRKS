@@ -5372,14 +5372,25 @@ class PRKSDatabase:
         return _CITE_KEY_UNSAFE_RE.sub("", unicodedata.normalize("NFC", str(text or "")))
 
     @classmethod
+    def _cite_key_part_from_credit(cls, credit: str) -> str:
+        """Key part of one free-text Person credit: the family name of
+        ``Family, Given``, else the last word of ``Given Family``; "" for none."""
+        if "," in credit:
+            words = credit.split(",", 1)[0].split()
+            return cls._bibtex_cite_key_part(words[0]) if words else ""
+        words = credit.split()
+        return cls._bibtex_cite_key_part(words[-1]) if words else ""
+
+    @classmethod
     def _biblatex_cite_key_part_from_person(cls, p: dict) -> str:
-        """First segment for cite key: prefer family name, else given / mononym."""
+        """First segment for cite key: prefer family name, else given / mononym, else
+        the credit name the role exports under; "" when none is usable."""
         for name in (p.get("last_name"), p.get("first_name")):
             words = str(name or "").split()
             part = cls._bibtex_cite_key_part(words[0]) if words else ""
             if part:
                 return part
-        return "Unknown"
+        return cls._cite_key_part_from_credit(str(p.get("credit_name") or "").strip())
 
     @classmethod
     def _biblatex_role_name(cls, p: dict) -> str:
@@ -5490,17 +5501,12 @@ class PRKSDatabase:
         first_author_person = next(
             (p for p in roles if p["role_type"] == "Author" and cls._biblatex_role_name(p)), None)
         if first_author_person:
-            first_author_last = cls._biblatex_cite_key_part_from_person(first_author_person)
+            first_author_last = cls._biblatex_cite_key_part_from_person(first_author_person) or "Unknown"
         elif text_authors:
-            first = text_authors[0]
-            if corporate_credit:
-                key_part = first.split()[0]
-            elif "," in first:
-                family_words = first.split(",", 1)[0].split()
-                key_part = family_words[0] if family_words else ""
-            else:
-                key_part = first.split()[-1]
-            first_author_last = cls._bibtex_cite_key_part(key_part) or "Unknown"
+            first_author_last = (
+                cls._bibtex_cite_key_part(text_authors[0].split()[0]) if corporate_credit
+                else cls._cite_key_part_from_credit(text_authors[0])
+            ) or "Unknown"
         else:
             first_author_last = "Unknown"
         cite_key = first_author_last + (cls._bibtex_cite_key_part(year) or "UnknownYear")

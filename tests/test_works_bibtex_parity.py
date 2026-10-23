@@ -286,6 +286,17 @@ class BibtexParityTests(PeopleParityTestCase):
         entry = self.bibtex(nameless)
         self.assertTrue(entry.startswith("@article{Lovelace1999,\n"))
         self.assertIn("  author = {Lovelace, Ada},\n", entry)
+        # A Person with no usable name keys on the credit name it exports
+        # under, and still takes precedence over Author (text).
+        for credit, key in (("Lovelace, Ada", "Lovelace"), ("Ada Lovelace", "Lovelace"),
+                            ("{,}", "Unknown")):
+            with self.subTest(credit=credit):
+                credited = self.work_both(f"Credited {credit}", year="1999", author_text="Doe, Jane")
+                self.credit(credited, self.person_both(f"Blank {credit}", first_name="", last_name=""),
+                            "Author", credit_name=credit)
+                entry = self.bibtex(credited)
+                self.assertEqual(assert_one_bibtex_entry(self, entry), f"{key}1999")
+                self.assertNotIn("Doe", entry)
         # Only a linked Author takes precedence: an Editor leaves the fallback.
         edited = self.work_both("Edited", year="1999", author_text="Doe, Jane")
         self.credit(edited, self.person_both("Ed", first_name="Ed", last_name="Itor"), "Editor")
