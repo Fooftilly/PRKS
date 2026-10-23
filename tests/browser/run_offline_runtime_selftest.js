@@ -624,6 +624,33 @@ async function run() {
             assertEq('obsolete probe cannot change newer offline state', c.runtime.getState(), 'offline');
             assertEq('obsolete probe cannot extend newer retry timer', c.timers.pendingDelays(), [3000]);
         }
+        // Regression: the newer failure's retry timer can expire while the
+        // old probe is still in flight. That timer must not be lost forever.
+        for (const settle of ['reject', 'falsy', 'response']) {
+            const c = makeDeferredProbeFixture();
+            c.runtime.noteRequestSuccess();
+            c.runtime.noteRequestFailure();
+            assertEq('newer failure schedules retry before old probe ' + settle,
+                c.timers.pendingDelays(), [3000]);
+            c.timers.flushAll(); // blocked by probeInFlight; consumes timer
+            assertEq('older pending probe prevents overlap for ' + settle, c.deferred.length, 1);
+            assertEq('expired retry timer was consumed for ' + settle, c.timers.pendingCount(), 0);
+            if (settle === 'reject') c.deferred[0].reject(new TypeError('old probe failed'));
+            else c.deferred[0].resolve(settle === 'falsy' ? null : okJsonResponse({}));
+            await Promise.resolve();
+            await Promise.resolve();
+            await Promise.resolve();
+            assertEq('stale ' + settle + ' settles without overriding newer offline state',
+                c.runtime.getState(), 'offline');
+            assertEq('stale ' + settle + ' restores one recovery timer', c.timers.pendingDelays(), [3000]);
+            c.timers.flushAll();
+            assertEq('restored backoff actually starts replacement probe', c.deferred.length, 2);
+            c.deferred[1].resolve(okJsonResponse({}));
+            await Promise.resolve();
+            await Promise.resolve();
+            assertEq('replacement probe can restore connectivity', c.runtime.getState(), 'online');
+            assertEq('successful replacement leaves no retry timer', c.timers.pendingCount(), 0);
+        }
         // A real probe failure WITHOUT newer success must still mark offline.
         {
             const c = makeDeferredProbeFixture();
