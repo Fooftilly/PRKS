@@ -5365,7 +5365,8 @@ class PRKSDatabase:
             return fn.split()[0] if fn.split() else fn
         return "Unknown"
 
-    def _biblatex_names_for_role(self, roles: List[dict], role_type: str) -> List[str]:
+    @classmethod
+    def _biblatex_names_for_role(cls, roles: List[dict], role_type: str) -> List[str]:
         out: List[str] = []
         for p in roles:
             if p.get("role_type") != role_type:
@@ -5374,7 +5375,7 @@ class PRKSDatabase:
             if credit:
                 out.append(credit)
                 continue
-            nm = self._format_biblatex_person_name(p.get("last_name"), p.get("first_name"))
+            nm = cls._format_biblatex_person_name(p.get("last_name"), p.get("first_name"))
             if nm:
                 out.append(nm)
         return out
@@ -5398,13 +5399,25 @@ class PRKSDatabase:
                 return ""
             # Credits follow the citation Manifestation, not every Work role.
             roles = self._roles_for_manifestation_on_conn(conn, work_id, target)
+        return self.format_bibtex(work, roles, self._get_bibtex_export_profile())
+
+    @classmethod
+    def format_bibtex(cls, work: dict, roles: List[dict], export_fields: Dict[str, bool]) -> str:
+        """One BibLaTeX entry from a citation record, its credits and the export profile.
+
+        Database-independent, so both backends export byte-identical text:
+        ``work`` is the Work-shaped citation record (``citation_record``),
+        ``roles`` the citation Manifestation's credits as Person rows with
+        ``role_type`` and ``credit_name``, in role order, and
+        ``export_fields`` the Library's ``bibtex_export_fields`` profile.
+        """
         # Roles sorted by order_index, then rowid (stable order when order_index ties).
-        linked_authors = self._biblatex_names_for_role(roles, "Author")
-        editors = self._biblatex_names_for_role(roles, "Editor")
-        translators = self._biblatex_names_for_role(roles, "Translator")
-        introductions = self._biblatex_names_for_role(roles, "Introduction")
-        forewords = self._biblatex_names_for_role(roles, "Foreword")
-        afterwords = self._biblatex_names_for_role(roles, "Afterword")
+        linked_authors = cls._biblatex_names_for_role(roles, "Author")
+        editors = cls._biblatex_names_for_role(roles, "Editor")
+        translators = cls._biblatex_names_for_role(roles, "Translator")
+        introductions = cls._biblatex_names_for_role(roles, "Introduction")
+        forewords = cls._biblatex_names_for_role(roles, "Foreword")
+        afterwords = cls._biblatex_names_for_role(roles, "Afterword")
 
         if linked_authors:
             author_str = " and ".join(linked_authors)
@@ -5416,7 +5429,7 @@ class PRKSDatabase:
 
         first_author_person = next((p for p in roles if p["role_type"] == "Author"), None)
         first_author_last = (
-            self._biblatex_cite_key_part_from_person(first_author_person)
+            cls._biblatex_cite_key_part_from_person(first_author_person)
             if first_author_person
             else "Unknown"
         )
@@ -5434,8 +5447,8 @@ class PRKSDatabase:
                 else "misc"
             )
 
-        esc = self._bibtex_escape_field
-        bf = self._get_bibtex_export_profile()
+        esc = cls._bibtex_escape_field
+        bf = export_fields
 
         def _export(key: str) -> bool:
             return bool(bf.get(key, True))
@@ -5458,7 +5471,7 @@ class PRKSDatabase:
             bibtex += f"  year = {{{esc(year)}}},\n"
         if work.get('publisher') and _export("publisher"):
             bibtex += f"  publisher = {{{esc(work['publisher'])}}},\n"
-        loc_fmt = self._format_biblatex_location(work.get("location"))
+        loc_fmt = cls._format_biblatex_location(work.get("location"))
         if loc_fmt and _export("location"):
             bibtex += f"  location = {{{esc(loc_fmt)}}},\n"
         if work.get('edition') and _export("edition"):

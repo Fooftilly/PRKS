@@ -452,6 +452,29 @@ class WorksMixin(FacadeMixin):
             raise BulkWorkError(message, 404) from None
         return request.result()
 
+    # -- BibTeX (L-W-2) -----------------------------------------------------------
+
+    @ported
+    def generate_bibtex(self, work_id: str) -> str:
+        """``PRKSDatabase.generate_bibtex`` on PostgreSQL: the same formatter, read in one snapshot.
+
+        The citation record, the citation Manifestation's credits and the
+        Library's export profile come from ``backend.domain.works.citation``;
+        ``PRKSDatabase.format_bibtex`` turns them into the entry, so equal
+        data exports byte-identical text. A Work that is not in this
+        Library, or an id PostgreSQL text cannot hold (NUL), gives ``""``.
+        """
+        from backend.db_manager import PRKSDatabase
+        from backend.domain.works import citation
+
+        if "\x00" in work_id:
+            return ""
+        inputs = self._read(lambda scope: citation.bibtex_inputs(scope, work_id))
+        if inputs is None:
+            return ""
+        record, roles, profile = inputs
+        return PRKSDatabase.format_bibtex(record, roles, profile)
+
 
 def _patch_work(scope: LibraryScope, work_id: str, synced: dict[str, str],
                 notes_in: dict[str, Any], plain: dict[str, Any]) -> None:
