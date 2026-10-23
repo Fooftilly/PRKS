@@ -158,6 +158,24 @@ class SyncGateTests(MergeTestCase):
         self.assertEqual(len(ledger), len(operations))
         self.assertTrue(all(row["status"] == "WORK_MERGED" and row["http_status"] == 409 for row in ledger))
 
+    def test_a_merged_works_operation_is_refused_even_while_its_dependency_is_pending(self) -> None:
+        source, target, live = (self.library.add_work(t) for t in ("Source", "Target", "Live"))
+        self.merged(source, target)
+        pending = str(uuid.uuid4())  # a valid op_id the server has not acknowledged
+        data = self.envelope("SET_WORK_METADATA_FIELD", source, {"field": "title", "value": "Stale"}, 0,
+                             depends_on=[pending])
+        expected = (409, {"code": "WORK_MERGED", "work_id": source, "target_work_id": target})
+        self.assertEqual(self.send(data), expected)
+        self.assertEqual(self.send(data), expected)  # replayed from the ledger
+        (row,) = self.ledger()
+        self.assertEqual((row["op_id"], row["status"], row["http_status"]), (data["op_id"], "WORK_MERGED", 409))
+        # A live Work's operation still waits for its dependency, and is not ledgered.
+        waiting = self.envelope("SET_WORK_METADATA_FIELD", live, {"field": "title", "value": "Later"}, 0,
+                                depends_on=[pending])
+        self.assertEqual(self.send(waiting), (400, {"code": "UNSATISFIED_DEPENDENCY"}))
+        self.assertEqual(len(self.ledger()), 1)
+        self.assertEqual(self.library.get_work(live)["title"], "Live")
+
     def test_a_live_work_is_held_against_a_merge_while_an_operation_applies(self) -> None:
         work_id = self.library.add_work("Live")
         held, release = threading.Event(), threading.Event()

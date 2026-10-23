@@ -192,9 +192,11 @@ def _claim_and_apply(scope: LibraryScope, ctx: RequestContext, op: dict[str, Any
         if seen is None:  # pragma: no cover - the conflicting row is committed and never deleted
             raise RuntimeError("the ledger row that refused the claim is gone")
         return _replay(seen, digest)
-    if not _dependencies_satisfied(scope, op):
-        raise _NotLedgered(400, {"code": "UNSATISFIED_DEPENDENCY"})
+    # Before the dependencies: a merged-away Work's operation is terminal
+    # whatever it waits for (docs/work-identity-model.md §14.2).
     merged = lifecycle.guard(scope, op["entity_id"], op["operation"]) if op["entity_type"] == "work" else None
+    if merged is None and not _dependencies_satisfied(scope, op):
+        raise _NotLedgered(400, {"code": "UNSATISFIED_DEPENDENCY"})
     if merged is not None:
         # Never applied to the merge target (docs/work-identity-model.md §14.2).
         status, result = merged
