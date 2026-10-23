@@ -473,7 +473,9 @@ class WorksMixin(FacadeMixin):
         if inputs is None:
             return ""
         record, roles, profile = inputs
-        return PRKSDatabase.format_bibtex(record, roles, profile)
+        # The projection's "video" means the target's primary Asset is a stream.
+        return PRKSDatabase.format_bibtex(record, roles, profile,
+                                          video=record["source_kind"] == "video")
 
 
 def _patch_work(scope: LibraryScope, work_id: str, synced: dict[str, str],
