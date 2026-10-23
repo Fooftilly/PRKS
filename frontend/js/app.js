@@ -6132,16 +6132,25 @@ function initForms() {
     if (folderBtn) {
         // A second click must not mint a second durable CREATE_FOLDER id while
         // the first save is still queued or resolving (including offline).
-        let folderCreateInFlight = false;
+        let folderCreateInFlight = null;
         folderBtn.onclick = async () => {
-            if (folderCreateInFlight || folderBtn.disabled) return;
-            folderCreateInFlight = true;
+            const folderModal = document.getElementById('folder-modal');
+            const opening = folderModal ? folderModal.dataset.prksOpenGeneration : '';
+            const isCurrentOpening = () => !!folderModal &&
+                !folderModal.classList.contains('hidden') &&
+                folderModal.dataset.prksOpenGeneration === opening;
+            if (folderCreateInFlight && folderCreateInFlight.opening === opening) return;
+            if (folderBtn.disabled) return;
+            const saveToken = { opening };
+            folderCreateInFlight = saveToken;
+            if (typeof prksSetButtonBusy === 'function') {
+                prksSetButtonBusy(folderBtn, true, { busyLabel: 'Creating…' });
+            }
             try {
                 /* No offline guard: a folder is created durably, under an id this
                  * device mints, so it exists and is usable the moment it is saved. */
                 const ownerCtx =
                     typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
-                if (folderBtn.disabled) return;
                 const payload = {
                     title: document.getElementById('folder-title').value,
                     description: document.getElementById('folder-description').value,
@@ -6155,15 +6164,27 @@ function initForms() {
                     newFolderId = await createFolder(payload.title, payload.description, {
                         parent_id: payload.parent_id,
                     });
-                    // The create has settled; attachment work after closing the
-                    // modal must not block subsequent New Folder submissions.
-                    folderCreateInFlight = false;
                 } catch (e) {
+                    if (!isCurrentOpening()) return;
                     if (!prksOfflineWasGuardRefusal(e)) {
                         await prksAlertMessage((e && e.message) || 'Could not create folder', 'Could not save');
                     }
                     return;
+                } finally {
+                    if (folderCreateInFlight === saveToken) {
+                        folderCreateInFlight = null;
+                        if (isCurrentOpening() && typeof prksSetButtonBusy === 'function') {
+                            prksSetButtonBusy(folderBtn, false);
+                        }
+                    }
                 }
+                if (!isCurrentOpening()) return;
+                /* New Folder save settled; a later Work attach has its own
+                 * liveness fence, and does not own the create guard. */
+                // Attachment work after creation must not hold the next
+                // modal opening's submit guard or inherit its busy state.
+                // The original opening may already have been dismissed.
+                if (!isCurrentOpening()) return;
                 const data = { id: newFolderId };
                 const pending = window.__prksPendingWorkFolderAttach;
                 if (pending && pending.workId && typeof patchWorkFolder === 'function') {
@@ -6218,7 +6239,12 @@ function initForms() {
                  * where a new folder belongs, so go there. */
                 if (typeof prksNavigate === 'function') prksNavigate('#/folders');
             } finally {
-                folderCreateInFlight = false;
+                if (folderCreateInFlight === saveToken) {
+                    folderCreateInFlight = null;
+                    if (isCurrentOpening() && typeof prksSetButtonBusy === 'function') {
+                        prksSetButtonBusy(folderBtn, false);
+                    }
+                }
             }
         };
     }
