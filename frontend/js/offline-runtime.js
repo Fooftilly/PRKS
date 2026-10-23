@@ -250,6 +250,7 @@
                 p = requestImpl(PROBE_PATH, controller ? { signal: controller.signal } : {}, {
                     priority: 'background',
                     dedupe: false,
+                    retry: false,
                     reportReachability: false,
                 });
             } catch (err) {
