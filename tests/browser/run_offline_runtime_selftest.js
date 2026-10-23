@@ -553,6 +553,89 @@ async function run() {
         assertEq('pending probe cleared by noteRequestSuccess', timers.pendingCount(), 0);
     }
 
+    /* ---- stale in-flight probe cannot undo newer confirmed API reachability (#818) ---- */
+    {
+        function makeDeferredProbeFixture() {
+            const timers = makeFakeTimers();
+            const deferred = [];
+            const runtime = mod.createPrksOfflineRuntime({
+                prksRequest: function () {
+                    return new Promise(function (resolve, reject) {
+                        deferred.push({ resolve: resolve, reject: reject });
+                    });
+                },
+                store: makeFakeStore(),
+                setTimeout: timers.setTimeout,
+                clearTimeout: timers.clearTimeout,
+                window: null, caches: null, navigator: null,
+            });
+            runtime.noteRequestFailure();
+            timers.flushAll();
+            assertEq('probe race fixture starts reconnecting', runtime.getState(), 'reconnecting');
+            assertEq('probe race fixture dispatches one reachability request', deferred.length, 1);
+            return { timers: timers, deferred: deferred, runtime: runtime };
+        }
+        // Rejection of a probe started BEFORE a successful API request is
+        // stale evidence. It cannot downgrade online or schedule more probes.
+        {
+            const c = makeDeferredProbeFixture();
+            c.runtime.noteRequestSuccess();
+            assertEq('newer foreground response restores online', c.runtime.getState(), 'online');
+            c.deferred[0].reject(new TypeError('old reachability probe failed'));
+            await Promise.resolve();
+            await Promise.resolve();
+            await Promise.resolve();
+            assertEq('stale failed probe leaves newer online state intact', c.runtime.getState(), 'online');
+            assertEq('stale failed probe schedules no retry', c.timers.pendingCount(), 0);
+            assertEq('sync/mutation gate stays open after newer success', c.runtime.isMutationBlocked(), false);
+            // Clearing stale probeInFlight is essential: a subsequent real
+            // browser connectivity hint must be able to start a new probe.
+            c.runtime._runProbe();
+            assertEq('new hint may start a fresh probe', c.deferred.length, 2);
+            assertEq('fresh hint probes rather than trusting navigator', c.runtime.getState(), 'reconnecting');
+            c.deferred[1].resolve(okJsonResponse({}));
+            await Promise.resolve();
+            await Promise.resolve();
+            assertEq('fresh successful probe correctly restores online', c.runtime.getState(), 'online');
+        }
+        // A falsy/empty result is transport-unreachable evidence too; it is
+        // equally stale once a newer response confirmed server reachability.
+        {
+            const c = makeDeferredProbeFixture();
+            c.runtime.noteRequestSuccess();
+            c.deferred[0].resolve(null);
+            await Promise.resolve();
+            await Promise.resolve();
+            assertEq('stale falsy probe cannot override newer success', c.runtime.getState(), 'online');
+            assertEq('stale falsy probe schedules no backoff', c.timers.pendingCount(), 0);
+        }
+        // A genuinely LATER foreground failure must still put PRKS offline.
+        // The obsolete older probe must not reschedule or extend backoff.
+        {
+            const c = makeDeferredProbeFixture();
+            c.runtime.noteRequestSuccess();
+            c.runtime.noteRequestFailure();
+            assertEq('newer transport failure still marks offline', c.runtime.getState(), 'offline');
+            assertEq('newer failure owns first retry backoff', c.timers.pendingDelays(), [3000]);
+            c.deferred[0].reject(new TypeError('obsolete probe rejection'));
+            await Promise.resolve();
+            await Promise.resolve();
+            await Promise.resolve();
+            assertEq('obsolete probe cannot change newer offline state', c.runtime.getState(), 'offline');
+            assertEq('obsolete probe cannot extend newer retry timer', c.timers.pendingDelays(), [3000]);
+        }
+        // A real probe failure WITHOUT newer success must still mark offline.
+        {
+            const c = makeDeferredProbeFixture();
+            c.deferred[0].reject(new TypeError('server remains unavailable'));
+            await Promise.resolve();
+            await Promise.resolve();
+            await Promise.resolve();
+            assertEq('uncontested probe failure marks offline', c.runtime.getState(), 'offline');
+            assertEq('uncontested probe failure backs off', c.timers.pendingDelays(), [6000]);
+        }
+    }
+
     /* ---- runProbe reachability: an HTTP response of ANY status (even 4xx/5xx) means the server is reachable ---- */
     {
         const timers = makeFakeTimers();
