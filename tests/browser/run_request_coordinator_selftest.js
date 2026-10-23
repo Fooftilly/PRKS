@@ -144,6 +144,9 @@ function makeCoordinator(extra) {
             return 0.5;
         },
         origin: extra.origin || 'http://127.0.0.1',
+        setTimeout: extra.setTimeout,
+        clearTimeout: extra.clearTimeout,
+        readHeaderTimeoutMs: extra.readHeaderTimeoutMs,
     });
     coord.__now = function (v) {
         nowMs = v;
@@ -192,6 +195,148 @@ async function testReadBound() {
     await drain(box, pending);
     record('read bound never exceeds 4', okPeak && peak <= 4, 'peak=' + peak);
     record('read bound queues remainder', okQueued, 'queued=' + snap.current.queuedForegroundReads);
+}
+
+function makeReadDeadlineClock() {
+    let nextId = 1;
+    const pending = new Map();
+    return {
+        setTimeout: function (fn, ms) {
+            const id = nextId++;
+            pending.set(id, { fn: fn, ms: ms });
+            return id;
+        },
+        clearTimeout: function (id) { pending.delete(id); },
+        pendingCount: function () { return pending.size; },
+        fireOne: function (ms) {
+            const entry = Array.from(pending.entries()).find(function (x) {
+                return x[1].ms === ms;
+            });
+            if (!entry) throw Error('Missing timer at ' + ms + 'ms');
+            pending.delete(entry[0]);
+            entry[1].fn();
+        },
+    };
+}
+
+async function testStalledReadHeaderDeadline() {
+    const clock = makeReadDeadlineClock();
+    const calls = [];
+    const signals = installReachabilitySpies();
+    try {
+        const coord = makeCoordinator({
+            fetchImpl: function (url, init) {
+                return new Promise(function (resolve, reject) {
+                    // Deliberately ignore the abort signal to reproduce the
+                    // provider stall that can pin every coordinator slot.
+                    calls.push({ url: url, init: init, resolve: resolve, reject: reject });
+                });
+            },
+            setTimeout: clock.setTimeout,
+            clearTimeout: clock.clearTimeout,
+            readHeaderTimeoutMs: 1000,
+        });
+        const pending = [];
+        for (let i = 0; i < 5; i++) {
+            pending.push(coord.prksRequest('/api/stalled/' + i).then(
+                function (r) { return { response: r }; },
+                function (err) { return { error: err }; }
+            ));
+        }
+        record('read header timeout queues fifth request behind four stalled reads',
+            calls.length === 4 && coord.snapshot().current.queuedForegroundReads === 1,
+            'calls=' + calls.length);
+        clock.fireOne(1000);
+        const timedOut = await pending[0];
+        await waitUntil(function () { return calls.length === 5; });
+        record('header deadline fails first caller with a named TimeoutError',
+            timedOut.error && timedOut.error.name === 'TimeoutError' && calls[0].init.signal.aborted,
+            timedOut.error && timedOut.error.name);
+        record('deadline freed an occupied slot and launched fifth queued GET',
+            coord.snapshot().current.activeReads === 4 &&
+            coord.snapshot().current.queuedForegroundReads === 0,
+            'reads=' + coord.snapshot().current.activeReads);
+        const failedBeforeLate = coord.snapshot().counts.failed;
+        // Resolving the abandoned request must not publish a cache value,
+        // emit a connectivity signal, or release the same slot twice.
+        calls[0].resolve(jsonResponse([{ id: 'obsolete' }]));
+        await flush();
+        record('late response cannot publish stale server reachability',
+            signals.success === 0 && signals.failure === 0 &&
+            coord.snapshot().counts.failed === failedBeforeLate &&
+            coord.snapshot().current.activeReads === 4,
+            'health=' + signals.success + '/' + signals.failure);
+        for (let i = 1; i < 5; i++) calls[i].resolve(jsonResponse([{ id: i }]));
+        const settled = await Promise.all(pending);
+        record('healthy queued read completes without duplicating old failure',
+            settled.slice(1).every(function (x) { return x.response && x.response.ok; }) &&
+            coord.snapshot().current.activeReads === 0 &&
+            clock.pendingCount() === 0,
+            'reads=' + coord.snapshot().current.activeReads);
+        record('ordinary successful reads still signal reachability',
+            signals.success === 4 && signals.failure === 0,
+            'success=' + signals.success);
+
+        // Identity of the timed-out dedupe flight must not poison a new GET.
+        const abandoned = coord.prksRequest('/api/same').catch(function (e) { return e; });
+        clock.fireOne(1000);
+        const expired = await abandoned;
+        const renewed = coord.prksRequest('/api/same');
+        record('re-request after timeout does not join the expired dedupe flight',
+            expired.name === 'TimeoutError' &&
+            calls.filter(function (c) { return c.url === '/api/same'; }).length === 2,
+            'requests=' + calls.length);
+        calls[calls.length - 1].resolve(jsonResponse([{ id: 'fresh' }]));
+        await renewed;
+        const beforeLateReject = coord.snapshot().counts.failed;
+        calls[calls.length - 2].reject(new TypeError('late obsolete transport failure'));
+        await flush();
+        record('late rejection cannot poison newer flight or double-count error',
+            coord.snapshot().current.activeReads === 0 &&
+            coord.snapshot().counts.failed === beforeLateReject,
+            'failed=' + coord.snapshot().counts.failed);
+    } finally {
+        clearReachabilitySpies();
+    }
+
+    // If the transport honors AbortSignal, the watchdog must surface a
+    // TimeoutError (not the transport's incidental AbortError).
+    {
+        const clock = makeReadDeadlineClock();
+        const box = makeDeferredFetch();
+        const coord = makeCoordinator({
+            fetchBundle: box, setTimeout: clock.setTimeout,
+            clearTimeout: clock.clearTimeout, readHeaderTimeoutMs: 1000,
+        });
+        const pending = coord.prksRequest('/api/abort-aware').then(
+            function () { return null; },
+            function (err) { return err; }
+        );
+        record('abort-aware read installs a header deadline',
+            clock.pendingCount() === 1 && box.calls.length === 1, 'timers=' + clock.pendingCount());
+        clock.fireOne(1000);
+        const err = await pending;
+        record('watchdog keeps TimeoutError even when abort-aware fetch rejects',
+            err && err.name === 'TimeoutError' && box.calls[0].aborted &&
+            coord.snapshot().current.activeReads === 0 && clock.pendingCount() === 0,
+            err && err.name);
+    }
+
+    // Managed PDF byte requests retain the explicit no-short-header-deadline
+    // exception; a long streamed response body also remains out of scope.
+    {
+        const clock = makeReadDeadlineClock();
+        const box = makeDeferredFetch();
+        const coord = makeCoordinator({
+            fetchBundle: box, setTimeout: clock.setTimeout,
+            clearTimeout: clock.clearTimeout, readHeaderTimeoutMs: 1000,
+        });
+        const pdf = coord.prksRequest('/api/pdfs/managed');
+        record('managed PDF GET does not install ordinary metadata header watchdog',
+            clock.pendingCount() === 0, 'timers=' + clock.pendingCount());
+        box.calls[0].resolve(jsonResponse({ ok: true }));
+        await pdf;
+    }
 }
 
 async function testBackgroundBoundAndPreferFg() {
@@ -1203,6 +1348,7 @@ async function main() {
     record('exports createPrksRequestCoordinator', typeof createPrksRequestCoordinator === 'function', '');
     record('does not monkeypatch fetch', typeof fetch === 'function', '');
     await testReadBound();
+    await testStalledReadHeaderDeadline();
     await testBackgroundBoundAndPreferFg();
     await testReadMutationOverlap();
     await testMutationFifo();
