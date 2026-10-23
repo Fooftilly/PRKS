@@ -1034,6 +1034,47 @@ async function testReachabilitySignalling() {
         clearReachabilitySpies();
     }
 
+    /* The runtime's dedicated reachability probe owns its OWN settlement.
+     * Disabling coordinator callbacks for that request must not silence
+     * ordinary traffic or dedupe with its independently-signalled flight. */
+    try {
+        const signals = installReachabilitySpies();
+        const box = makeDeferredFetch();
+        const coord = makeCoordinator({ fetchBundle: box });
+        const isolated = coord.prksRequest('/api/settings', {}, {
+            priority: 'background', reportReachability: false,
+        });
+        const foreground = coord.prksRequest('/api/settings');
+        await waitUntil(function () { return box.calls.length === 2; });
+        record('dedicated probe cannot join normally signalled GET',
+            box.calls.length === 2 && coord.snapshot().counts.dedupeJoins === 0,
+            'calls=' + box.calls.length);
+        box.calls[0].reject(new TypeError('probe transport failed'));
+        box.calls[1].resolve(jsonResponse({ ok: true }));
+        let failedProbe = null;
+        try { await isolated; } catch (err) { failedProbe = err; }
+        const normal = await foreground;
+        record('isolated failed probe emits no health callback, normal GET still does',
+            !!failedProbe && normal.ok && signals.success === 1 && signals.failure === 0,
+            's=' + signals.success + ' f=' + signals.failure);
+    } finally {
+        clearReachabilitySpies();
+    }
+    try {
+        const signals = installReachabilitySpies();
+        const coord = makeCoordinator({
+            fetchImpl: function () { return Promise.resolve(jsonResponse({ ok: true })); },
+        });
+        const res = await coord.prksRequest('/api/settings', {}, {
+            priority: 'background', reportReachability: false,
+        });
+        record('isolated successful probe emits no health callback',
+            res.ok && signals.success === 0 && signals.failure === 0,
+            's=' + signals.success + ' f=' + signals.failure);
+    } finally {
+        clearReachabilitySpies();
+    }
+
     /* Memory-cache hit is not a fresh reachability signal. */
     try {
         const signals = installReachabilitySpies();
