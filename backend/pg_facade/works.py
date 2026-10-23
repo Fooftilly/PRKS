@@ -390,7 +390,9 @@ class WorksMixin(FacadeMixin):
                                     or field in rules.FIELD_CODECS
                                  else "%s exceeds the maximum supported length" % field)
         synced = {k: rules.canonical_wire(k, v) for k, v in synced.items()}
-        self._command(lambda scope: _patch_work(scope, work_id, synced, notes, plain))
+        # A note can add a work_notes row, a peer table of the Work merge (§7.1).
+        self._command(lambda scope: _patch_work(scope, work_id, synced, notes, plain),
+                      serializable=bool(notes))
         return ()
 
     @ported
