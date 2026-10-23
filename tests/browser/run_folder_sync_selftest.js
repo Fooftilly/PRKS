@@ -104,7 +104,8 @@ async function refusedCreateStaysInDiagnosticsButNotTheFolderLibrary() {
     assert.deepEqual(globalThis.prksEffectiveFolders([], pending).map(row => row.id),
         [created.entity_id], "an unsent offline create is immediately visible");
     const runtime = runtimeFor(store, async () => ({
-        ok: false, status: 409, json: async () => ({ code: "TITLE_TAKEN" }),
+        ok: false, status: 409,
+        json: async () => ({ code: "TITLE_TAKEN", folder_id: created.entity_id }),
     }));
     await runtime.wake();
     await settle();
