@@ -211,6 +211,10 @@ class MergePlan:
     playlist: Side
     notes: dict[str, Side]                          # "research" / "private" -> bodies ("" when absent)
     status: Side
+    # Work-owned free text (§5), and BibTeX's author when no Author is linked
+    # (citation.py), so it never disappears with the source: the source's
+    # value is kept when the target has none ("" when absent).
+    author_text: Side
     last_opened_at: Any                             # the max of the two
     source_scopes: tuple[tuple[str, str], ...]      # tombstoned with the source
     blocked: tuple[str, ...] = field(default=())
@@ -227,12 +231,16 @@ class MergePlan:
                      if side.differs and side.source and side.target)
         if self.status.differs:
             named.append("status")
+        if self.author_text.differs and self.author_text.source and self.author_text.target:
+            named.append("author_text")
         return tuple(named)
 
 
 _ISOLATION: LiteralString = "SELECT current_setting('transaction_isolation') AS level"
+# Every Work-owned column but hide_pdf_link_annotations, a viewer
+# preference on which the target wins without a choice (§10.4).
 _LOCK_PAIR: LiteralString = """
-SELECT id, title, abstract, status, last_opened_at FROM prks.works
+SELECT id, title, abstract, status, author_text, last_opened_at FROM prks.works
 WHERE library_id = %(library_id)s AND id = ANY(%(ids)s::text[])
 ORDER BY id COLLATE "C"
 FOR UPDATE
@@ -364,6 +372,7 @@ def prepare(scope: LibraryScope, source_id: str, target_id: str) -> MergePlan:
         notes={kind: Side(by_work.get(source_id, ""), by_work.get(target_id, ""))
                for kind, by_work in notes.items()},
         status=Side(source["status"], target["status"]),
+        author_text=Side(source["author_text"] or "", target["author_text"] or ""),
         last_opened_at=max(opened) if opened else None,
         source_scopes=tuple(source_scopes),
         blocked=blocked,

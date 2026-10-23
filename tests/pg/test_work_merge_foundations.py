@@ -226,8 +226,8 @@ class PlanTests(MergeTestCase):
         return str(self.sql("SELECT primary_manifestation_id AS m FROM prks.works WHERE id = %s", (work_id,))[0]["m"])
 
     def test_the_plan_reads_every_affected_row_and_writes_nothing(self) -> None:
-        source = self.library.add_work("Source title")
-        target = self.library.add_work("Target title", abstract="Target abstract")
+        source = self.library.add_work("Source title", author_text="Source, A.")
+        target = self.library.add_work("Target title", abstract="Target abstract", author_text="Target, B.")
         own_title = self.add_manifestation(source, title="Its own title")
         shared, only_source = self.library.add_tag("Shared")["id"], self.library.add_tag("Only")["id"]
         for work_id, tag in ((source, shared), (target, shared), (source, only_source)):
@@ -266,8 +266,9 @@ class PlanTests(MergeTestCase):
         self.assertEqual(plan.notes["research"], merge.Side("Source research", "Target research"))
         self.assertEqual(plan.notes["private"], merge.Side("mine", ""))
         self.assertEqual(plan.status, merge.Side("Completed", "Not Started"))
+        self.assertEqual(plan.author_text, merge.Side("Source, A.", "Target, B."))
         self.assertIsNotNone(plan.last_opened_at)
-        self.assertEqual(plan.choices, ("folder", "note:research", "status"))
+        self.assertEqual(plan.choices, ("folder", "note:research", "status", "author_text"))
         # Every fixed scope of the source, and the ones it advanced.
         self.assertTrue(set(commands.work_scopes(source)) <= set(plan.source_scopes))
         edited = {(row["scope_type"], row["scope_id"]) for row in self.sql(
@@ -281,6 +282,15 @@ class PlanTests(MergeTestCase):
         plan = self.prepare(source, target)
         self.assertEqual((plan.frozen, plan.shows_target, plan.choices, plan.blocked), ((), (), (), ()))
         self.assertEqual(plan.manifestation_ids, (self.primary(source),))
+
+    def test_a_free_text_author_on_one_side_is_kept_without_a_choice(self) -> None:
+        for source_text, target_text in (("Only, S.", ""), ("", "Only, T.")):
+            with self.subTest(source=source_text, target=target_text):
+                source = self.library.add_work("S", author_text=source_text)
+                target = self.library.add_work("T", author_text=target_text)
+                plan = self.prepare(source, target)
+                self.assertEqual(plan.author_text, merge.Side(source_text, target_text))
+                self.assertNotIn("author_text", plan.choices)
 
     def test_two_merges_of_one_pair_queue_on_the_works(self) -> None:
         source, target = self.library.add_work("S"), self.library.add_work("T")
