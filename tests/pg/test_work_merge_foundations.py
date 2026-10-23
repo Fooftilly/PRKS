@@ -346,6 +346,19 @@ class PlanTests(MergeTestCase):
                 self.assertEqual(plan.author_text, merge.Side(source_text, target_text))
                 self.assertNotIn("author_text", plan.choices)
 
+    def test_the_plan_lists_every_declined_work_pair_naming_the_source(self) -> None:
+        source, target, other, unrelated = (self.library.add_work(t) for t in ("S", "T", "O", "U"))
+        manifestations = sorted((self.primary(source), self.primary(target)))
+        rows = [("work", *sorted((source, target))), ("work", *sorted((source, other))),
+                ("work", *sorted((other, unrelated))), ("manifestation", *manifestations)]
+        for entity_type, low, high in rows:
+            self.sql("INSERT INTO prks.duplicate_decisions (library_id, entity_type, low_id, high_id, decision)"
+                     " VALUES (%s, %s, %s, %s, 'not_duplicate')", (self.actor.library_id, entity_type, low, high))
+        plan = self.prepare(source, target)
+        self.assertEqual(set(plan.duplicate_decisions),
+                         {tuple(sorted((source, target))), tuple(sorted((source, other)))})
+        self.assertEqual(self.prepare(unrelated, target).duplicate_decisions, (tuple(sorted((other, unrelated))),))
+
     def test_two_merges_of_one_pair_queue_on_the_works(self) -> None:
         source, target = self.library.add_work("S"), self.library.add_work("T")
         held, release = threading.Event(), threading.Event()
@@ -437,6 +450,17 @@ class RegistryTests(MergeTestCase):
             with self.subTest(table=deferred.table):
                 found = self.sql("SELECT to_regclass(%s) AS oid", ("prks." + deferred.table,))[0]["oid"]
                 self.assertIsNone(found)
+
+    def test_unkeyed_tables_exist_and_name_works_without_a_foreign_key(self) -> None:
+        # The foreign-key test cannot see these, so they are listed by hand.
+        for unkeyed in merge.UNKEYED:
+            with self.subTest(table=unkeyed.table):
+                self.assertIsNotNone(self.sql("SELECT to_regclass(%s) AS oid",
+                                              ("prks." + unkeyed.table,))[0]["oid"])
+                self.assertEqual(self.sql(
+                    "SELECT count(*) AS n FROM pg_constraint c JOIN pg_class src ON src.oid = c.conrelid"
+                    " JOIN pg_class ref ON ref.oid = c.confrelid WHERE c.contype = 'f' AND src.relname = %s"
+                    " AND ref.relname IN ('works', 'manifestations', 'assets')", (unkeyed.table,))[0]["n"], 0)
 
     def test_the_peer_tables_are_the_architectures(self) -> None:
         # docs/postgresql-architecture.md §7.1, less the tables still deferred.

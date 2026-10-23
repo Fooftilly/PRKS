@@ -10,6 +10,8 @@ merge:
   the source would cascade it away (so the merge must move it first) or
   refuse. A schema test compares it with the live foreign keys, so a lane
   that adds such a table fails until it says what a merge does with it.
+- :data:`UNKEYED`: the tables that name a Work by id without a foreign key,
+  so no schema test can find them, and what a merge does with each.
 - :data:`DEFERRED`: the tables the merge must handle that do not exist on
   PostgreSQL yet, with the slice that brings each. The same test fails when
   one appears, so the merge cannot become available while one is unhandled.
@@ -145,6 +147,20 @@ DEFERRED: tuple[Deferred, ...] = (
              "(§10.4 step 4)"),
 )
 
+@dataclass(frozen=True)
+class Unkeyed:
+    table: str
+    columns: str
+    owner: str
+    what_the_merge_does: str
+
+
+UNKEYED: tuple[Unkeyed, ...] = (
+    Unkeyed("duplicate_decisions", "low_id, high_id (entity_type 'work')", "Works (#60)",
+            "revisits every declined pair naming the source, which is merged away (§10.5); "
+            "Manifestation and Asset ids survive a Work merge, so only Work pairs are read"),
+)
+
 # Operations that add rows to a peer table of the Work merge, or move a row
 # onto a Work (§7.1). Each must be SERIALIZABLE.
 PEER_WRITERS: frozenset[str] = frozenset({
@@ -217,6 +233,8 @@ class MergePlan:
     author_text: Side
     last_opened_at: Any                             # the max of the two
     source_scopes: tuple[tuple[str, str], ...]      # tombstoned with the source
+    # (low_id, high_id): declined Work pairs naming the source (UNKEYED, §10.5).
+    duplicate_decisions: tuple[tuple[str, str], ...]
     blocked: tuple[str, ...] = field(default=())
 
     @property
@@ -277,6 +295,12 @@ WHERE library_id = %(library_id)s AND work_id = ANY(ARRAY[%(source)s, %(target)s
 _NOTES: LiteralString = """
 SELECT work_id, kind, body FROM prks.work_notes
 WHERE library_id = %(library_id)s AND work_id = ANY(ARRAY[%(source)s, %(target)s])
+"""
+_DECISIONS: LiteralString = """
+SELECT low_id, high_id FROM prks.duplicate_decisions
+WHERE library_id = %(library_id)s AND entity_type = 'work'
+  AND (low_id = %(work_id)s OR high_id = %(work_id)s)
+ORDER BY low_id COLLATE "C", high_id COLLATE "C"
 """
 # The tombstone_work_scopes predicate, read: every scope row the source owns.
 _SOURCE_SCOPES: LiteralString = """
@@ -375,5 +399,7 @@ def prepare(scope: LibraryScope, source_id: str, target_id: str) -> MergePlan:
         author_text=Side(source["author_text"] or "", target["author_text"] or ""),
         last_opened_at=max(opened) if opened else None,
         source_scopes=tuple(source_scopes),
+        duplicate_decisions=tuple((str(row["low_id"]), str(row["high_id"]))
+                                  for row in scope.execute(_DECISIONS, {"work_id": source_id})),
         blocked=blocked,
     )
