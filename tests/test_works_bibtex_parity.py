@@ -274,6 +274,13 @@ class BibtexParityTests(PeopleParityTestCase):
         self.assertTrue(entry.startswith("@article{Ked1999,\n"))
         self.assertIn("  author = {Ked, Lin},\n", entry)
         self.assertNotIn("Doe", entry)
+        # A linked Author whose Person renders no name leaves the author field
+        # and the cite key to Author (text) together.
+        nameless = self.work_both("Nameless", year="1999", author_text="Doe, Jane")
+        self.credit(nameless, self.person_both("Blank", first_name=" ", last_name=" "), "Author")
+        entry = self.bibtex(nameless)
+        self.assertTrue(entry.startswith("@article{Doe1999,\n"))
+        self.assertIn("  author = {Doe, Jane},\n", entry)
         # Only a linked Author takes precedence: an Editor leaves the fallback.
         edited = self.work_both("Edited", year="1999", author_text="Doe, Jane")
         self.credit(edited, self.person_both("Ed", first_name="Ed", last_name="Itor"), "Editor")

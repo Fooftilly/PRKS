@@ -5481,7 +5481,9 @@ class PRKSDatabase:
         year = work.get('year') or (work.get('published_date', '')[:4] if work.get('published_date') else None)
 
         first_author_person = next((p for p in roles if p["role_type"] == "Author"), None)
-        if first_author_person:
+        # The key follows whichever credit the author field shows: a linked
+        # Author whose Person renders no name leaves both to Author (text).
+        if first_author_person and linked_authors:
             first_author_last = cls._biblatex_cite_key_part_from_person(first_author_person)
         elif text_authors:
             first = text_authors[0]
