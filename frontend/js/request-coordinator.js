@@ -17,6 +17,9 @@
     const PRKS_REQUEST_CACHE_MAX_BYTES = 2 * 1024 * 1024;
     const PRKS_REQUEST_CACHE_MAX_ENTRIES = 32;
     const PRKS_REQUEST_RETRY_MAX = 2;
+    // Bounds ordinary GET/HEAD time-to-response-headers, not response bodies.
+    // Managed PDF byte reads are excluded from this header deadline.
+    const PRKS_REQUEST_READ_HEADER_TIMEOUT_MS = 60000;
     const PRKS_REQUEST_RETRY_DELAYS_MS = [250, 750];
     const PRKS_REQUEST_RETRY_STATUSES = { 502: true, 503: true, 504: true };
 
@@ -254,6 +257,14 @@
         const sleep = options.sleep || defaultSleep;
         const random = options.random || defaultRandom;
         const origin = options.origin || defaultOrigin();
+        const setTimer = options.setTimeout || (typeof setTimeout === 'function' ? setTimeout : null);
+        const clearTimer = options.clearTimeout || (typeof clearTimeout === 'function' ? clearTimeout : null);
+        const readHeaderTimeoutMs = options.readHeaderTimeoutMs == null
+            ? PRKS_REQUEST_READ_HEADER_TIMEOUT_MS
+            : Number(options.readHeaderTimeoutMs);
+        if (!Number.isFinite(readHeaderTimeoutMs) || readHeaderTimeoutMs <= 0) {
+            throw new TypeError('readHeaderTimeoutMs must be a positive finite number.');
+        }
 
         let mutationEpoch = 0;
         const inFlightReads = Object.create(null);
@@ -504,6 +515,10 @@
                 if (signal.aborted) throw makeAbortError();
                 try {
                     const response = await fetchImpl(href, networkInit(fetchOptions, signal));
+                    // A transport that ignores abort may resolve after a
+                    // flight's header deadline. Do not publish late responses
+                    // or let them incorrectly mark the server reachable.
+                    if (signal.aborted) throw makeAbortError();
                     if (reportReachability && !isManagedPdfHref(href)) reportPrksReachable();
                     if (retryEnabled && shouldRetryStatus(response.status) && attempt < PRKS_REQUEST_RETRY_MAX) {
                         counts.retries += 1;
@@ -578,23 +593,45 @@
             touchPeaks();
             recordReadWait(now() - job.enqueuedAt);
             const flight = job.flight;
+            let headerTimer = null;
             try {
                 if (flight.cancelled || flight.controller.signal.aborted || flight.subscribers.length === 0) {
                     settleFlightError(flight, makeAbortError());
                     return;
                 }
-                const response = await performReadNetwork(
+                const network = performReadNetwork(
                     job.href,
                     job.fetchOptions,
                     job.retryEnabled,
                     flight.controller,
                     job.reportReachability
                 );
+                // One bounded lifecycle per active *read flight*. A stalled
+                // fetch (or retry sleep) may ignore AbortSignal, so cancelling
+                // its transport alone would not release the queue slot.
+                // Promise.race ensures the slot is released in finally, and
+                // continues observing late rejections without a stray rejection.
+                // PDF byte transports retain their existing long-running path.
+                let pending = network;
+                if (setTimer && !isManagedPdfHref(job.href)) {
+                    const deadline = new Promise(function (_resolve, reject) {
+                        headerTimer = setTimer(function () {
+                            flight.controller.abort();
+                            const err = new Error('PRKS request timed out before response headers.');
+                            err.name = 'TimeoutError';
+                            reject(err);
+                        }, readHeaderTimeoutMs);
+                    });
+                    pending = Promise.race([network, deadline]);
+                }
+                const response = await pending;
+                if (flight.controller.signal.aborted) throw makeAbortError();
                 maybeCacheResponse(job.cacheKey, response, job.freshForMs, now());
                 settleFlightSuccess(flight, response);
             } catch (err) {
                 settleFlightError(flight, prksIsAbortError(err) ? makeAbortError() : err);
             } finally {
+                if (headerTimer !== null && clearTimer) clearTimer(headerTimer);
                 if (job.dedupeKey && inFlightReads[job.dedupeKey] === flight) {
                     delete inFlightReads[job.dedupeKey];
                 }
