@@ -1180,6 +1180,7 @@ class AffectedMappingTests(unittest.TestCase):
             "tests/e2e/harness.py",
             "tests/e2e/policy.py",
             ".github/workflows/e2e-gate.yml",
+            "scripts/ci/install_pinned_python.py",
             "requirements.txt",
             "requirements-dev.txt",
             "backend/db_schema.sql",
@@ -1391,6 +1392,11 @@ class AffectedMappingTests(unittest.TestCase):
                 # wait-async rides with the shared e2e-framework rule (#222).
                 self.assertEqual(feats, ("smoke", "wait-async"))
                 self.assertEqual(policy._affected_rule(rule).get("ci_mode"), "full")
+
+    def test_ci_dependency_installer_requires_full_e2e(self):
+        plan = policy.plan_ci_e2e(["scripts/ci/install_pinned_python.py"])
+        self.assertEqual(plan["mode"], "full")
+        self.assertTrue(plan["run"])
 
     def test_select_affected_broken_feature_selection_is_not_noop(self):
         # Features mapped, but none of the known IDs match → fail, not noop.
