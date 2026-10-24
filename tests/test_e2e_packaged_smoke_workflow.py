@@ -98,6 +98,32 @@ class PackagedSmokeWorkflowTests(unittest.TestCase):
                 ),
             },
         }
+        # Extract only the continuation lines of the actual targeted run.py
+        # command. Finding IDs in comments or the job summary is insufficient.
+        lines = smoke.splitlines()
+        targeted = [
+            i
+            for i, line in enumerate(lines)
+            if line.strip().startswith(
+                "python tests/e2e/run.py --jobs 1 --no-pointer-capture "
+            )
+        ]
+        self.assertEqual(len(targeted), 1)
+        self.assertTrue(lines[targeted[0]].rstrip().endswith(chr(92)))
+        executed_ids = []
+        for line in lines[targeted[0] + 1 :]:
+            entry = line.strip()
+            if not entry.startswith("tests.e2e."):
+                break
+            executed_ids.append(entry.rstrip(chr(92)).strip())
+        expected_ids = [
+            f"tests.e2e.{Path(path).stem}.{class_name}.{method_name}"
+            for path, classes in expected_cases.items()
+            for class_name, methods in classes.items()
+            for method_name in methods
+        ]
+        self.assertCountEqual(executed_ids, expected_ids)
+
         for path, classes in expected_cases.items():
             # Validate real unittest methods, not just matching strings in a
             # comment. The full suite is unchanged; smoke is a manual pilot.
@@ -114,10 +140,6 @@ class PackagedSmokeWorkflowTests(unittest.TestCase):
             for class_name, methods in classes.items():
                 for method_name in methods:
                     with self.subTest(class_name=class_name, method_name=method_name):
-                        self.assertIn(
-                            f"tests.e2e.{Path(path).stem}.{class_name}.{method_name}",
-                            smoke,
-                        )
                         self.assertIn(method_name, actual.get(class_name, set()))
         self.assertIn("9 curated + 5 explicit browser tests", smoke)
 
