@@ -15,6 +15,7 @@ on:
       - backend/storage/resolver.py
       - backend/storage/root_binding.py
       - prks_app.py
+      - scripts/ci/check_runtime_smoke.py
       - .github/workflows/docker-runtime-smoke.yml
   push:
     branches:
@@ -30,6 +31,7 @@ on:
       - backend/storage/resolver.py
       - backend/storage/root_binding.py
       - prks_app.py
+      - scripts/ci/check_runtime_smoke.py
       - .github/workflows/docker-runtime-smoke.yml
   workflow_dispatch:
 
@@ -92,7 +94,7 @@ jobs:
               --output "$response" http://127.0.0.1:18080/api/works 2>/dev/null; then
               # Fresh temporary production storage must expose an empty works
               # catalogue. A static page or error JSON is NOT sufficient.
-              python -c 'import json,sys; body=json.load(open(sys.argv[1],encoding="utf-8")); assert body == [], "fresh works catalog is not empty"' "$response"
+              python scripts/ci/check_runtime_smoke.py "$response"
               ready=1
               break
             fi
