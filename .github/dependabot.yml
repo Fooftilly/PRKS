@@ -6,6 +6,13 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "03:00"
+      timezone: "Europe/Podgorica"
+    open-pull-requests-limit: 4
+    # Routine versions only; security patches are not delayed.
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "build(deps)"
 
@@ -14,6 +21,13 @@ updates:
     directory: "/tools/pdf-viewer"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "03:15"
+      timezone: "Europe/Podgorica"
+    open-pull-requests-limit: 3
+    # Routine versions only; security patches are not delayed.
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "build(deps)"
     # React 19 needs a coordinated react + react-dom + types migration
@@ -43,6 +57,13 @@ updates:
     directory: "/tools/research-graph"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "03:30"
+      timezone: "Europe/Podgorica"
+    open-pull-requests-limit: 3
+    # Routine versions only; security patches are not delayed.
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "build(deps)"
 
@@ -51,6 +72,13 @@ updates:
     directory: "/tools/frontend-vendor"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "03:45"
+      timezone: "Europe/Podgorica"
+    open-pull-requests-limit: 3
+    # Routine versions only; security patches are not delayed.
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "build(deps)"
     # PRKS consumes CodeMirror 5 (lib/codemirror.js + hint addons / global
@@ -65,14 +93,42 @@ updates:
     directory: "/frontend-app"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "04:00"
+      timezone: "Europe/Podgorica"
+    open-pull-requests-limit: 3
+    # Routine versions only; security patches are not delayed.
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "build(deps)"
+    # Keep Storybook peer packages compatible in the same minor/patch update.
+    groups:
+      storybook-stack:
+        applies-to: version-updates
+        patterns:
+          - "storybook"
+          - "@storybook/*"
+        update-types: ["minor", "patch"]
+      vite-toolchain:
+        applies-to: version-updates
+        patterns:
+          - "vite"
+          - "@vitejs/plugin-vue"
+        update-types: ["minor", "patch"]
 
   # Keep the Python base image in the root Dockerfile visible to Dependabot.
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "04:15"
+      timezone: "Europe/Podgorica"
+    open-pull-requests-limit: 2
+    # Routine versions only; security patches are not delayed.
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "build(deps)"
 
@@ -81,6 +137,13 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "04:30"
+      timezone: "Europe/Podgorica"
+    open-pull-requests-limit: 4
+    # Routine versions only; security patches are not delayed.
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "build(deps)"
     groups:
