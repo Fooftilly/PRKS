@@ -3,7 +3,7 @@
 
 Modes:
   --runtime         Validate the Python environment needed to start PRKS.
-  --unit-contract   Runtime + openapi-core only (unit suite; no Playwright).
+  --unit-contract   Runtime + openapi-core + Hypothesis (unit suite; no Playwright).
   --test            Runtime + Playwright (and other requirements-dev pins).
   --repo            Manifests, locks, vendor hashes, SW revision (offline; no npm install required).
 
