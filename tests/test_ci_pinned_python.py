@@ -18,7 +18,7 @@ class CIPinsTests(unittest.TestCase):
             "PyMuPDF==1.28.2\nPillow==12.3.0\npydantic==2.13.5\n", encoding="utf-8"
         )
         (self.root / "requirements-dev.txt").write_text(
-            "playwright==1.63.0\nopenapi-core==0.23.1\n"
+            "playwright==1.63.0\nopenapi-core==0.23.1\nhypothesis==6.170.9\n"
             "psycopg==3.3.6\npsycopg-binary==3.3.6\n"
             "psycopg-pool==3.3.3\nargon2-cffi==25.1.0\n",
             encoding="utf-8",
@@ -56,6 +56,7 @@ class CIPinsTests(unittest.TestCase):
         self.assertIn("--isolated", cmd)
         self.assertIn("--only-binary=:all:", cmd)
         self.assertIn("openapi-core==0.23.1", cmd)
+        self.assertIn("hypothesis==6.170.9", cmd)
         self.assertEqual(run.call_args.kwargs["cwd"], self.root)
         self.assertTrue(run.call_args.kwargs["check"])
 
