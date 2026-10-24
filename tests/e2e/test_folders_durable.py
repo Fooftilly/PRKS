@@ -163,14 +163,12 @@ class DurableFolderTests(unittest.TestCase):
             button.click();
         }""")
         self.assertEqual(page.evaluate("() => window.__folderCreateCalls"), 1)
-        wait_for_async(
-            page,
-            "() => fetchFolders().then(rows => rows.some("
-            "  row => row.title === 'Double-click Online'))",
-            timeout=60000,
-            message='one created folder should reach the server',
+        self.settled(page)
+        rows = self.db_for(server).get_all_folders()
+        self.assertEqual(
+            sum(row['title'] == 'Double-click Online' for row in rows), 1,
+            'exactly one submitted Folder must persist after queue acknowledgement',
         )
-        self.assertIn('Double-click Online', self.folders_in_db(server))
 
     def test_folder_busy_state_is_owned_by_modal_opening(self):
         _server, page, _context = self.start()
