@@ -51,6 +51,10 @@ class E2ETimingArtifactWorkflowTests(unittest.TestCase):
             "name: e2e-timings-${{ matrix.shard }}-of-${{ matrix.total }}",
             step,
         )
+        self.assertIn(
+            "uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+            step,
+        )
         self.assertIn("path: .tests/e2e-timings.json", step)
         self.assertIn("if-no-files-found: error", step)
         self.assertEqual(shard.count("path: .tests/e2e-timings.json"), 1)
@@ -69,6 +73,10 @@ class E2ETimingArtifactWorkflowTests(unittest.TestCase):
             step,
         )
         self.assertIn("name: packaged-e2e-timings-${{ matrix.shard }}-of-6", step)
+        self.assertIn(
+            "uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+            step,
+        )
         self.assertIn("path: .tests/e2e-timings.json", step)
         self.assertIn("if-no-files-found: error", step)
         self.assertEqual(shard.count("path: .tests/e2e-timings.json"), 1)
