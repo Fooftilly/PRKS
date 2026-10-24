@@ -1307,7 +1307,9 @@ def ci_matrix_include(external_shards: int, local_jobs: int):
     ]
 
 
-def apply_manual_full_ci_shards(plan: dict, requested: str | None, *, force_full: bool) -> dict:
+def apply_manual_full_ci_shards(
+    plan: dict, requested: str | None, *, force_full: bool
+) -> dict:
     """Override only a manually forced complete CI plan for a 6/8-shard pilot.
 
     The workflow passes this input *only* on workflow_dispatch. Ordinary
@@ -1320,7 +1322,9 @@ def apply_manual_full_ci_shards(plan: dict, requested: str | None, *, force_full
     if requested not in ("6", "8"):
         raise ValueError("manual E2E shard count must be 6 or 8")
     if not force_full:
-        raise ValueError("manual E2E shard count requires an explicitly forced full CI plan")
+        raise ValueError(
+            "manual E2E shard count requires an explicitly forced full CI plan"
+        )
     if (
         plan.get("run") is not True
         or plan.get("mode") != "full"
@@ -1328,7 +1332,9 @@ def apply_manual_full_ci_shards(plan: dict, requested: str | None, *, force_full
         or plan.get("external_shards") != FULL_GATE_EXTERNAL_SHARDS
         or plan.get("local_jobs") != 1
     ):
-        raise ValueError("manual E2E shard count requires a valid full plan with pointer capture")
+        raise ValueError(
+            "manual E2E shard count requires a valid full plan with pointer capture"
+        )
     updated = dict(plan)
     updated["external_shards"] = int(requested)
     return updated
