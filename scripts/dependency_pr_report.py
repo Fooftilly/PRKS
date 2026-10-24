@@ -80,7 +80,7 @@ def changed_paths(root: Path = ROOT) -> set[str]:
         ["git", "diff", "--name-only", "-z", parents[1], "HEAD", "--"],
         cwd=root, capture_output=True, check=True,
     )
-    return {part.decode("utf-8") for part in result.stdout.split(b"\\0") if part}
+    return {part.decode("utf-8") for part in result.stdout.split(b"\0") if part}
 
 
 def render(paths: set[str]) -> str:
