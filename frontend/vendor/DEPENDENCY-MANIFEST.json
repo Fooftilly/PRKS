@@ -24,11 +24,11 @@
       "runtime_files": [
         {
           "path": "/vendor/cytoscape/cytoscape.min.js",
-          "sha256": "5f3b5b529546d5af1fc5628590af033b74511a5b6f789f5f4682845863228b91"
+          "sha256": "081591ab735b2b6a3b31a3c60f8f3a3e2fee8c92939e0c7820ad1208571b6cd8"
         }
       ],
       "source_category": "npm:tools/research-graph",
-      "version": "3.34.3"
+      "version": "3.34.4"
     },
     {
       "name": "dompurify",
