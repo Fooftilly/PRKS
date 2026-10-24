@@ -4,7 +4,7 @@ PRKS uses layered tests. Contributors should run the cheapest test that proves a
 
 ## Setup
 
-Install runtime pins **and** development/test tooling before the fast suite. `python run_tests.py` preflights `openapi-core` (from `requirements-dev.txt`) even when Chromium/Playwright is not needed:
+Install runtime pins **and** development/test tooling before the fast suite. `python run_tests.py` preflights `openapi-core` and `hypothesis` (from `requirements-dev.txt`) even when Chromium/Playwright is not needed:
 
 ```bash
 python3 -m venv .venv
@@ -38,6 +38,18 @@ There is also an opt-in UX interaction tour:
 ```bash
 python run_tests.py --ux-tour
 ```
+
+## Property-based sync tests (#854)
+
+The Python unit suite includes a bounded [Hypothesis](https://hypothesis.readthedocs.io/) pilot for Work–Tag relationship revisions and the semantic-operation ledger. Hypothesis is **test-only** and does not ship with the PRKS server.
+
+Run just the pilot (after installing `requirements.txt` and `requirements-dev.txt`):
+
+```bash
+python -m unittest tests.test_hypothesis_sync -v
+```
+
+Ordinary CI uses a small fixed maximum number of generated examples and state-machine steps; it is not a replacement for deterministic regression tests. A failure prints a minimized counterexample; replay by rerunning the same test. Hypothesis' local example database (when enabled) is an accelerator, not a CI prerequisite. The tests deliberately set `database=None` to keep results independent of a developer's cached examples. Avoid hiding flaky failures behind relaxed deadlines or retry loops. Test databases and records are disposable, with no connection to a real research library.
 
 ## E2E iteration
 
