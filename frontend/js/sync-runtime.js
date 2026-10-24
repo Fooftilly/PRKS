@@ -153,18 +153,36 @@
                 schedule(5000);
             }
         }
-        /* A crash or failed IDB transaction may interrupt propagation AFTER
-         * a terminal conflict was durably recorded. The recorded status and
-         * the operation family's policy are enough to resume, without sending
-         * the refused create again. The store walks the full dependent graph
-         * atomically, and repeating that walk after success is harmless.
-         * This runs on every wake (including offline) so same-session retries
-         * and fresh-runtime recovery both repair pending descendants. */
+        /* A crash or failed IDB transaction can interrupt the dependent walk
+         * after its parent is durably refused. Repair those pending descendants
+         * on each wake (even offline), including consumed/acknowledged refusals.
+         * A terminal DEPENDENCY_FAILED descendant is also a repair root.
+         *
+         * Only open a readwrite transaction when a direct dependent remains
+         * unsettled; settled conflicts otherwise cost nothing on every wake.
+         * Failure is isolated per root: one broken/quota-limited write must not
+         * starve unrelated operations or acknowledgements that free storage. */
         async function repairTerminalConflictDependents() {
-            for (const op of await store.listOperations()) {
-                if (op.status !== 'conflict' || !supported(op)) continue;
-                if (handlers[op.operation].failDependentsOnConflict === true) {
-                    await store.markDependentsFailed(op.op_id);
+            const all = await store.listOperations();
+            const waitingOn = new Set();
+            all.forEach(op => {
+                if (!op || (op.status !== 'pending' && op.status !== 'syncing')) return;
+                (op.depends_on || []).forEach(id => waitingOn.add(id));
+            });
+            for (const op of all) {
+                if (!op || !waitingOn.has(op.op_id)) continue;
+                const terminalConflict = op.status === 'conflict' && (
+                    (supported(op) && handlers[op.operation].failDependentsOnConflict === true) ||
+                    (op.server_result && op.server_result.code === 'DEPENDENCY_FAILED'));
+                const consumedRefusal = op.status === 'acknowledged' && !!op.server_result;
+                if (!terminalConflict && !consumedRefusal) continue;
+                try {
+                    const marked = await store.markDependentsFailed(op.op_id);
+                    if (marked.length) emit();
+                } catch (_) {
+                    // Keep trying after durable write failures without blocking
+                    // unrelated pending work in the send loop below.
+                    schedule(5000);
                 }
             }
         }
