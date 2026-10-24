@@ -21,8 +21,8 @@ Conservative list of the installed lockfile production graph (which includes som
 | `@floating-ui/utils` | `0.2.12` | `MIT` |
 | `@jridgewell/sourcemap-codec` | `1.6.0` | `MIT` |
 | `@tanstack/match-sorter-utils` | `9.1.2` | `MIT` |
-| `@tanstack/query-core` | `5.104.0` | `MIT` |
-| `@tanstack/vue-query` | `5.104.0` | `MIT` |
+| `@tanstack/query-core` | `5.104.3` | `MIT` |
+| `@tanstack/vue-query` | `5.104.3` | `MIT` |
 | `@types/web-bluetooth` | `0.0.21` | `MIT` |
 | `@vue/compiler-core` | `3.5.43` | `MIT` |
 | `@vue/compiler-dom` | `3.5.43` | `MIT` |

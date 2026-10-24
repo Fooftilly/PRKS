@@ -4093,6 +4093,15 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
                 return Promise.resolve(pdf._annotationDurableWriteChain).then(() => pdf.hasPendingSync());
             }""",
         )
+        # Pending sync settles before the Vue status label repaints.
+        page.wait_for_function(
+            """() => {
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const el = ctx && ctx.root && ctx.root.querySelector('.work-annotation-sync-status__label');
+                return !!el && el.textContent === 'Could not save locally';
+            }""",
+            timeout=15000,
+        )
         self.assertEqual(_sync_status_label(page), "Could not save locally")
         ann_id = _only_viewer_annotation_id(page)
 
@@ -4110,6 +4119,15 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
                 const pdf = window.prksGetFocusedTabContext().getResource('pdf');
                 return Promise.resolve(pdf._annotationDurableWriteChain).then(() => true);
             }""",
+        )
+        # Pending sync settles before the Vue status label repaints.
+        page.wait_for_function(
+            """() => {
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const el = ctx && ctx.root && ctx.root.querySelector('.work-annotation-sync-status__label');
+                return !!el && el.textContent === 'Could not save locally';
+            }""",
+            timeout=15000,
         )
         self.assertEqual(_sync_status_label(page), "Could not save locally")
         self.assertTrue(_pdf_has_pending_sync(page))
