@@ -4,8 +4,8 @@ on:
   pull_request:
     branches:
       - master
-    # Only trigger for manifest ecosystems GitHub Dependency Review can
-    # evaluate; Docker base images and uv.lock need separate coverage.
+    # Dependency Review handles supported manifests; the advisory impact job
+    # also covers Dockerfile. Image/OS vulnerability scanning is separate.
     # https://docs.github.com/en/code-security/reference/supply-chain-security/dependency-graph-supported-package-ecosystems
     paths:
       - ".github/workflows/**"
@@ -16,6 +16,7 @@ on:
       - "**/requirements*.txt"
       - "**/pyproject.toml"
       - "**/poetry.lock"
+      - "Dockerfile"
 
 permissions:
   contents: read
@@ -63,6 +64,4 @@ jobs:
           persist-credentials: false
 
       - name: Summarize affected dependency validation lanes
-        env:
-          PRKS_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: python scripts/dependency_pr_report.py --base "$PRKS_BASE_SHA"
+        run: python scripts/dependency_pr_report.py
