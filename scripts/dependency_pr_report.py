@@ -67,7 +67,7 @@ def changed_paths(base_sha: str, root: Path = ROOT) -> set[str]:
         ["git", "diff", "--name-only", "-z", base_sha, "HEAD", "--"],
         cwd=root, capture_output=True, check=True,
     )
-    return {part.decode("utf-8") for part in result.stdout.split(b"\\0") if part}
+    return {part.decode("utf-8") for part in result.stdout.split(b"\0") if part}
 
 
 def render(paths: set[str]) -> str:
@@ -99,7 +99,7 @@ def render(paths: set[str]) -> str:
         f"Changed files: {len(paths)}. Required checks, review findings and "
         "explicit maintainer merge approval remain authoritative.",
     ])
-    return "\\n".join(rows) + "\\n"
+    return "\n".join(rows) + "\n"
 
 
 def main(argv: list[str] | None = None) -> int:
