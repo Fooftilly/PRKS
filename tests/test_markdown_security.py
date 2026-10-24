@@ -32,14 +32,17 @@ def _frontend_js_files() -> list[str]:
 
 
 class MarkdownSecurityStructuralTests(unittest.TestCase):
-    def test_vendor_files_exist_and_pin_3_4_15(self):
+    def test_vendor_files_exist_and_match_pinned_version(self):
         self.assertTrue(os.path.isfile(_VENDOR_JS), "missing purify.min.js")
         self.assertTrue(os.path.isfile(_VENDOR_LICENSE), "missing DOMPurify LICENSE")
         self.assertTrue(os.path.isfile(_VENDOR_VERSION), "missing VERSION")
         purify = _read(_VENDOR_JS)
         version = _read(_VENDOR_VERSION)
-        self.assertIn("DOMPurify 3.4.15", purify)
-        self.assertIn("3.4.15", version)
+        pinned = version.splitlines()[0]
+        self.assertRegex(pinned, r"^\d+\.\d+\.\d+$")
+        self.assertGreaterEqual(tuple(map(int, pinned.split("."))), (3, 4, 17))
+        self.assertIn(f"DOMPurify {pinned}", purify)
+        self.assertIn(f"npm: dompurify@{pinned}", version)
         self.assertIn("github.com/cure53/DOMPurify", version)
         self.assertIn("MPL-2.0 OR Apache-2.0", version)
         self.assertGreater(len(purify), 1000)
