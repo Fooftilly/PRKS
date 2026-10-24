@@ -744,16 +744,135 @@ class TestDBManager(unittest.TestCase):
         self.assertIn("author = {Einstein, Albert}", bibtex)
         self.assertIn("edition = {2}", bibtex)
 
-    def test_bibtex_ignores_author_text_without_linked_author(self):
+    def test_bibtex_falls_back_to_author_text_without_linked_author(self):
         w_id = self.db.add_work(
-            title="Solo Text",
-            author_text="Someone, A.",
-            year="2015",
-            doc_type="book",
+            title="Solo Text", author_text="Synthetic, Ana; Testerson, Bo",
+            year="2015", doc_type="book",
         )
         bibtex = self.db.generate_bibtex(w_id)
-        self.assertNotIn("author = {Someone", bibtex)
-        self.assertIn("@book{Unknown2015", bibtex)
+        self.assertIn("@book{Synthetic2015,", bibtex)
+        self.assertIn("author = {Synthetic, Ana and Testerson, Bo}", bibtex)
+
+        self.db.patch_app_settings({"bibtex_export_fields": {"author": False}})
+        hidden = self.db.generate_bibtex(w_id)
+        self.assertNotIn("  author = {", hidden)
+        self.assertIn("@book{Synthetic2015,", hidden)
+
+    def test_bibtex_author_text_fallback_escapes_special_characters(self):
+        w_id = self.db.add_work(
+            title="Escaped Credit",
+            author_text="  Doe, A%na {X}; ; Testerson, B  ",
+            year="2026", doc_type="book",
+        )
+        bibtex = self.db.generate_bibtex(w_id)
+        self.assertIn("@book{Doe2026,", bibtex)
+        self.assertIn(r"author = {Doe, A\%na \{X\} and Testerson, B}", bibtex)
+
+    def test_bibtex_video_channel_credit_is_a_single_corporate_author(self):
+        w_id = self.db.add_work(
+            title="Research Video", author_text="Kurzgesagt – In a Nutshell; and Friends",
+            source_kind="video",
+            source_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            year="2025", doc_type="online",
+        )
+        bibtex = self.db.generate_bibtex(w_id)
+        self.assertIn("@online{Kurzgesagt2025,", bibtex)
+        self.assertIn("author = {{Kurzgesagt – In a Nutshell; and Friends}}", bibtex)
+        self.assertNotIn("author = {Kurzgesagt – In a Nutshell and", bibtex)
+
+    def test_bibtex_legacy_video_without_source_kind_is_corporate(self):
+        w_id = self.db.add_work(
+            title="Legacy Channel Credit", author_text="The Royal Institution",
+            source_kind="video",
+            source_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            year="2025", doc_type="online",
+        )
+        # Older rows keep a NULL or oddly cased kind; their stream Asset is
+        # what makes them a video, so the channel stays one corporate author.
+        for stored in (None, "Video"):
+            self.db.execute_query("UPDATE works SET source_kind = ? WHERE id = ?", (stored, w_id))
+            bibtex = self.db.generate_bibtex(w_id)
+            self.assertIn("@online{The2025,", bibtex)
+            self.assertIn("author = {{The Royal Institution}}", bibtex)
+
+    def test_bibtex_fileless_pdf_with_video_url_credits_persons(self):
+        w_id = self.db.add_work(
+            title="Saved Transcript", author_text="Ana Synthetic; Bo Testerson",
+            source_kind="pdf",
+            source_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            year="2024", doc_type="online",
+        )
+        # A PDF's URL is provenance: it never makes the Work a video.
+        bibtex = self.db.generate_bibtex(w_id)
+        self.assertIn("@online{Synthetic2024,", bibtex)
+        self.assertIn("author = {Ana Synthetic and Bo Testerson}", bibtex)
+        # Nor does dropping the stored kind of a Work with no stream Asset.
+        self.db.execute_query("UPDATE works SET source_kind = NULL WHERE id = ?", (w_id,))
+        self.assertEqual(self.db.generate_bibtex(w_id), bibtex)
+
+    def test_bibtex_malformed_names_keep_one_valid_entry(self):
+        from tests.bibtex_entry import assert_one_bibtex_entry
+
+        linked = self.db.add_work(title="Linked } {", year="1999", doc_type="book")
+        p_id = self.db.add_person(first_name="A", last_name="{Evil},Name\\x y")
+        self.db.add_role(p_id, linked, "Author")
+        entry = self.db.generate_bibtex(linked)
+        self.assertEqual(assert_one_bibtex_entry(self, entry), "EvilNamex1999")
+        self.assertIn(r"author = {\{Evil\},Name\x y, A}", entry)
+
+        text = self.db.add_work(
+            title="Text", author_text="Doe}\\,{x, Ann; } Roe {", year="19 99}", doc_type="book",
+        )
+        entry = self.db.generate_bibtex(text)
+        self.assertEqual(assert_one_bibtex_entry(self, entry), "Doe1999")
+
+        channel = self.db.add_work(
+            title="Channel", author_text="{Odd}\\Chan,nel% } and {", year="2000",
+            source_url="https://youtu.be/dQw4w9WgXcQ", doc_type="online",
+        )
+        entry = self.db.generate_bibtex(channel)
+        self.assertEqual(assert_one_bibtex_entry(self, entry), "OddChannel2000")
+        self.assertIn(
+            r"author = {{\{Odd\}\Chan,nel\% {\textbraceright} and {\textbraceleft}}}", entry)
+
+    def test_bibtex_linked_author_precedes_author_text(self):
+        w_id = self.db.add_work(
+            title="Linked Credit", author_text="Fallback, Author",
+            year="2020", doc_type="book",
+        )
+        p_id = self.db.add_person(first_name="Ada", last_name="Lovelace")
+        self.db.add_role(p_id, w_id, "Author")
+        bibtex = self.db.generate_bibtex(w_id)
+        self.assertIn("@book{Lovelace2020,", bibtex)
+        self.assertIn("author = {Lovelace, Ada}", bibtex)
+        self.assertNotIn("Fallback, Author", bibtex)
+
+    def test_bibtex_plain_author_text_uses_last_word_for_cite_key(self):
+        w_id = self.db.add_work(
+            title="Plain Byline", author_text="Ada Lovelace",
+            year="2020", doc_type="book",
+        )
+        bibtex = self.db.generate_bibtex(w_id)
+        self.assertIn("@book{Lovelace2020,", bibtex)
+        self.assertIn("author = {Ada Lovelace}", bibtex)
+
+    def test_bibtex_empty_family_in_text_credit_does_not_crash(self):
+        w_id = self.db.add_work(
+            title="Incomplete Byline", author_text=", Anna",
+            year="2018", doc_type="book",
+        )
+        bibtex = self.db.generate_bibtex(w_id)
+        self.assertIn("@book{Unknown2018,", bibtex)
+        self.assertIn("author = {, Anna}", bibtex)
+
+    def test_bibtex_blank_author_text_keeps_unknown_cite_key(self):
+        w_id = self.db.add_work(
+            title="Without Byline", author_text=" ;  ",
+            year="2021", doc_type="book",
+        )
+        bibtex = self.db.generate_bibtex(w_id)
+        self.assertIn("@book{Unknown2021,", bibtex)
+        self.assertNotIn("  author = {", bibtex)
 
     def test_bibtex_multiple_authors_follow_role_order(self):
         w_id = self.db.add_work(title="Coauthored", year="2021", doc_type="article")
@@ -1715,6 +1834,26 @@ class TestDBManager(unittest.TestCase):
         self.assertEqual(self._folder_ids_for_work(a), [])
         self.assertEqual(self._folder_ids_for_work(b), [])
         self.assertEqual(self._folder_ids_for_work(c), [fx])
+
+    def test_bulk_move_folder_advances_work_folder_revision_only_on_change(self):
+        """A bulk move is SET_WORK_FOLDER's boundary: a stale base must conflict after it."""
+        fx = self.db.add_folder(title="X", description="")
+        fy = self.db.add_folder(title="Y", description="")
+        a = self.db.add_work(title="A")
+        b = self.db.add_work(title="B")
+        self.db.move_work_to_folder(a, fx)
+        self.db.move_work_to_folder(b, fy)
+        self.db.bulk_update_works(
+            {"work_ids": [a, b], "action": "move_folder", "folder_id": fy}
+        )
+        self.assertEqual(self.db.get_work_folder_state(a)["revision"], 2)
+        self.assertEqual(self.db.get_work_folder_state(b)["revision"], 1)
+        self.db.bulk_update_works(
+            {"work_ids": [a, b], "action": "move_folder", "folder_id": None}
+        )
+        self.assertEqual(
+            [self.db.get_work_folder_state(w)["revision"] for w in (a, b)], [3, 2]
+        )
 
     def test_bulk_tags_add_remove_idempotent(self):
         a = self.db.add_work(title="A")

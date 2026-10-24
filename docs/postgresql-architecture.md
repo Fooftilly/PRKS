@@ -574,8 +574,9 @@ def add_work_tag(ctx: RequestContext, work_id: str, tag_id: str,
 ```
 
 - **A command is one transaction.** It takes the Library maintenance lock in
-  shared mode, checks that the Library's `epoch` equals the epoch the caller
-  acted on (§11.4), authorizes the actor for the Library,
+  shared mode and locks the Library row, authorizes the actor for the
+  Library, then checks that the Library is not under maintenance and that its
+  `epoch` equals the epoch the caller acted on (§11.4), and
   validates, decides against the current revision, writes, advances the
   revisions it touched, enqueues jobs and returns a result. The REST endpoint
   and the durable-operation handler for the same action call **the same
@@ -837,7 +838,7 @@ is not in the 0.8 schema, and Slice K adds it with its own migration.
 | Instance and identity | `instance`, `users`, `libraries`, `library_memberships`, `devices`, `sessions`, `bootstrap_tokens`, `login_attempts`, `login_device_tokens` | New |
 | Works | `works` L, `manifestations` L, `assets` L, `manifestation_relations` L, `manifestation_identifiers` L, `work_notes` L, `sync_work_lifecycle` L, `duplicate_decisions` L | §6.4; `manifestation_credit_overrides` arrives with #60 Slice K, after 0.8 |
 | Annotations | `annotations` L | `geometry jsonb`; primary key `(asset_id, id)` because the viewer mints the ID (global uniqueness of a client-minted viewer ID is not something PRKS controls) |
-| People | `persons` L, `person_aliases` L, `roles` L, `person_groups` L, `person_group_members` L, `publishers` L, `publisher_aliases` L | Aliases become rows with keys; `roles` drops the `rowid` tiebreak in favor of `order_index`; publisher names and aliases share one `UNIQUE (library_id, key)` namespace through a `publisher_keys` table (§8.1); group names unique by identity key |
+| People | `persons` L, `person_aliases` L, `roles` L, `person_groups` L, `person_group_members` L, `publishers` L, `publisher_aliases` L | Aliases become rows with keys; `roles` replaces the `rowid` tiebreak with an explicit identity `seq` (`ORDER BY order_index, seq`); publisher names and aliases share one `UNIQUE (library_id, key)` namespace through a `publisher_keys` table (§8.1); group names unique by identity key |
 | Organization | `tags` L, `tag_aliases` L, `work_tags` L, `folders` L, `folder_files` L, `folder_tags` L, `playlists` L, `playlist_items` L, `saved_views` L, `sync_tag_lifecycle` L | `folders` identity is `UNIQUE NULLS NOT DISTINCT (library_id, parent_id, title_key)`, so root folders (`parent_id IS NULL`) share one scope as today's `COALESCE(parent_id, '')` index makes them; `folder_files` stays the scalar Work-to-folder membership table (`work-folder` in `docs/work-identity-model.md`), now with `UNIQUE (library_id, work_id)` so the one-folder-per-Work rule (I8) that only code enforces today is a constraint; `playlist_items` keeps one playlist per Work; tag names and aliases share one `UNIQUE (library_id, key)` namespace through a `tag_keys` table (§8.1) |
 | Research | `concepts` L, `concept_aliases` L, `concept_parents` L, `positions` L, `arguments` L, `argument_verdicts` (global seed), `argument_target_positions` L, `argument_target_arguments` L, `argument_sources` L | Concept name and alias keys share one `UNIQUE (library_id, key)` namespace through a `concept_keys` table, replacing the full Python scan |
 | Processing | `processing_files` L, `processing_file_roles` L, `processing_file_tags` L | `abs_path` removed; `rel_path` relative to the inbox (#311 Phase B intent); nullable `restore_hold` and `restore_sha256` (§11.4); `imported` state between an import's commit and its source removal, with the source's `import_sha256` (§11.3) |
@@ -915,7 +916,11 @@ command's aggregates (a Manifestation moved onto the source Work). So each
 multi-aggregate command declares its **peer tables**, the link and child
 tables it reads as a set. Every command that can add a row to a peer table
 runs SERIALIZABLE, with the same retry (the unique index stays the
-arbiter for names, and `23505` still maps to the domain refusal).
+arbiter for names, and `23505` still maps to the domain refusal). A
+semantic operation (§7.3) that loses such a race on an index or key its
+family names (`retry_constraints` in `backend/sync/families.py`) runs once
+more instead: its first transaction aborted, so only the rerun, which sees
+the winner, can ledger the refusal or the convergence.
 
 | Command | Peer tables (sets it reads) | Commands that add rows to them, and so run SERIALIZABLE |
 | --- | --- | --- |
@@ -1545,6 +1550,12 @@ authenticated owner of a `ready` instance (§11.4).
 
 - Every command takes a `RequestContext(user_id, library_id, device_id,
   source)` and calls `authorize(tx, ctx, capability)` before any write.
+  Contexts come only from trust boundaries: an HTTP request's from a session
+  resolved server-side from its cookie, a job's from its `prks.jobs` row,
+  and the admin source only from the host admin CLI. `authorize()` re-reads
+  the session, membership and user rows (or the job row) itself, so a context
+  naming no live session has no authority; no module the web process imports
+  builds an admin context (a test traces the served import graph).
   Capabilities in 0.8: `READ_LIBRARY`, `EDIT_LIBRARY`, `ADMIN_LIBRARY`
   (backup, restore, settings), `ADMIN_INSTANCE`. Role → capability is a table
   in code.
@@ -2377,6 +2388,21 @@ So every Library has a monotonic `epoch` (§6.2), and R4 advances it.
 - **Commands.** Every command states the epoch it acts on, and after taking
   the maintenance lock shared it compares that with `libraries.epoch`. A
   mismatch refuses with 409 `LIBRARY_EPOCH_CHANGED` before any write.
+  Authorization comes first, so only an authorized actor learns that the
+  Library is under maintenance or was restored. The precedence in a command
+  is: a missing or malformed epoch 400 `LIBRARY_EPOCH_REQUIRED` (it needs no
+  database and reveals nothing; over HTTP the session is resolved first, so
+  a request without one gets 401); no live session, account, membership or
+  job lease 401;
+  a missing capability, or a device that is not the actor's, 403; then
+  maintenance 503 `MAINTENANCE`; then a stale or newer epoch 409
+  `LIBRARY_EPOCH_CHANGED`. Locks are taken in one order before any decision:
+  the maintenance key (shared, try-lock), the `libraries` row (`FOR SHARE`;
+  `FOR NO KEY UPDATE` for a command that changes the row itself, such as
+  Library settings, so two such commands queue instead of deadlocking on a
+  lock upgrade), then the session, membership, user and claimed device rows
+  (`FOR SHARE`). Credential expiry is checked against `clock_timestamp()`
+  after those waits, not `now()`.
 - **API requests.** The browser sends the epoch it loaded in a
   `PRKS-Library-Epoch` header on every authenticated, Library-scoped
   mutation and in every durable operation envelope. Such a mutation without
@@ -2717,6 +2743,11 @@ Performance diagnostics stay process-local and privacy-safe, now labelled by
 process role. New aggregate counters: pool wait time and exhaustion count,
 job queue depth and age by kind, failed jobs, migration version. No SQL
 parameters, search terms or library metadata are recorded, as today.
+
+The job counters and queue depth are served to the Library owner at
+`GET /api/diagnostics/jobs` (L-J-1 #627; contract
+`docs/api/openapi-job-diagnostics.json`, operator notes in
+`docs/job-worker.md`).
 
 ---
 

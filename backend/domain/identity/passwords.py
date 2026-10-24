@@ -15,12 +15,21 @@ or repeats one, and every refusal carries fixed text.
 from __future__ import annotations
 
 import re
-from typing import Optional
+from typing import Optional, TypeGuard
 
 from argon2 import PasswordHasher, Type, exceptions, extract_parameters, profiles
 
 from backend.domain.identity.errors import RootPairingRefused
 
+# SECURITY PREREQUISITE before changing PARAMETERS (#677 review, accepted
+# deferral): a stored hash keeps the parameters it was made with until its
+# next successful login, while a failed login for an unknown account costs
+# what the *current* parameters cost (login.dummy_hash). After a change, a
+# wrong password against a not-yet-rehashed account would therefore take a
+# different time than one against a missing account, revealing that the
+# account exists. Rehash-on-success alone does not close that gap. Changing
+# these values needs a separate security review and tests covering
+# failed-login timing for old and new hashes. See docs/login-security.md.
 PARAMETERS = profiles.RFC_9106_LOW_MEMORY
 
 # Bounds the work an attacker can make one request do; longer passwords add
@@ -54,12 +63,28 @@ class PasswordHashInvalid(RootPairingRefused):
 def _check_password(password: str) -> bytes:
     if not isinstance(password, str) or password == "":
         raise RootPairingRefused("password_empty", "A password is required.")
-    encoded = password.encode("utf-8")
+    if "\x00" in password:
+        raise RootPairingRefused("password_invalid", "A password cannot contain a NUL character.")
+    try:
+        encoded = password.encode("utf-8")
+    except UnicodeEncodeError:  # a lone surrogate (e.g. undecodable bytes in a password file)
+        raise RootPairingRefused("password_invalid", "A password must be valid Unicode text.") from None
     if len(encoded) > MAX_PASSWORD_BYTES:
         raise RootPairingRefused(
             "password_too_long", f"A password is at most {MAX_PASSWORD_BYTES} bytes."
         )
     return encoded
+
+
+def usable_password(password: object) -> TypeGuard[str]:
+    """True for a password :func:`hash_password` accepts; login refuses any other at once."""
+    if not isinstance(password, str):
+        return False
+    try:
+        _check_password(password)
+    except RootPairingRefused:
+        return False
+    return True
 
 
 def is_argon2id_hash(value: object) -> bool:

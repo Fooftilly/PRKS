@@ -82,6 +82,18 @@ class PasswordHashTests(unittest.TestCase):
         self.assertEqual(ctx.exception.reason, "password_too_long")
         self.assertNotIn("s3cr3t", ctx.exception.message)
 
+    def test_passwords_login_would_refuse_are_refused_at_creation(self) -> None:
+        for label, password in (("NUL", "pass\x00word"), ("lone surrogate", "pass\udcff")):
+            with self.subTest(label):
+                with self.assertRaises(RootPairingRefused) as ctx:
+                    passwords.hash_password(password, hasher=FAST)
+                self.assertEqual(ctx.exception.reason, "password_invalid")
+                self.assertFalse(passwords.usable_password(password))
+        for password in ("p", "ünïcode pass", "x" * 1024):
+            self.assertTrue(passwords.usable_password(password))
+        for password in ("", "x" * 1025, None, b"bytes"):
+            self.assertFalse(passwords.usable_password(password))
+
     def test_needs_rehash_follows_the_parameters(self) -> None:
         weak = passwords.hash_password("p", hasher=FAST)
         self.assertTrue(passwords.needs_rehash(weak))

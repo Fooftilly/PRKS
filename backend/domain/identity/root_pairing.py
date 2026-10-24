@@ -60,7 +60,7 @@ from psycopg.rows import dict_row
 from backend import entity_ids
 from backend.db.database import Database, Isolation, Transaction
 from backend.db.errors import DatabaseError
-from backend.domain.identity import passwords
+from backend.domain.identity import login_names, passwords
 from backend.domain.identity.bootstrap_tokens import (
     BootstrapToken,
     check_token,
@@ -152,12 +152,23 @@ class OwnerSpec:
         return f"OwnerSpec(login_name={self.login_name!r})"
 
 
+def check_owner_login(login_name: object) -> None:
+    """Refuse a login name login could never accept (:mod:`login_names`)."""
+    if login_names.login_key(login_name) is None:
+        raise RootPairingRefused(
+            "owner_login_invalid",
+            f"The owner login must be 1 to {login_names.MAX_LOGIN_NAME_CHARS} characters "
+            "of assigned Unicode text without NUL.",
+        )
+
+
 def _check_owner(owner: OwnerSpec) -> None:
     for value in (owner.login_name, owner.display_name, owner.library_name):
         if not isinstance(value, str) or not value.strip():
             raise RootPairingRefused(
                 "owner_invalid", "The owner login, display name and Library name are required."
             )
+    check_owner_login(owner.login_name)
     if not passwords.is_argon2id_hash(owner.password_hash):
         raise RootPairingRefused(
             "owner_password_invalid", "Bootstrap needs the owner's Argon2id password hash."

@@ -40,6 +40,63 @@ class EntityIdTests(unittest.TestCase):
         self.assertEqual(len(body), 32)
         self.assertRegex(body, r"^[A-Za-z0-9]{1,32}$")
 
+    def test_parser_accepts_exact_legacy_and_distributed_forms(self):
+        cases = (
+            ("A-01234567", ("A", "01234567"), False),
+            ("AB-ABCDEF12", ("AB", "ABCDEF12"), False),
+            ("ABC-0123456789ABCDEF0123456789ABCDEF",
+             ("ABC", "0123456789ABCDEF0123456789ABCDEF"), True),
+        )
+        for value, parts, distributed in cases:
+            with self.subTest(value=value):
+                self.assertEqual(entity_ids.parse(value), parts)
+                self.assertTrue(entity_ids.is_generated(value, parts[0]))
+                self.assertEqual(entity_ids.is_distributed(value, parts[0]), distributed)
+                self.assertFalse(entity_ids.is_generated(value, "X"))
+                self.assertFalse(entity_ids.is_distributed(value, "X"))
+
+    def test_generator_accepts_all_documented_prefix_lengths(self):
+        for prefix in ("P", "IN", "LIB"):
+            with self.subTest(prefix=prefix):
+                generated = entity_ids.generate(prefix)
+                self.assertTrue(entity_ids.is_generated(generated, prefix))
+                self.assertTrue(entity_ids.is_distributed(generated, prefix))
+                self.assertEqual(entity_ids.parse(generated), (prefix, generated[len(prefix) + 1:]))
+                self.assertEqual(len(generated), len(prefix) + 1 + entity_ids.HEX_CHARS)
+
+    def test_parser_rejects_malformed_ids_and_nontext_inputs(self):
+        invalid = (
+            "P-0123456",  # 7 hex characters, not a legacy ID
+            "P-012345678",  # 9, neither supported length
+            "P-" + "A" * 31,
+            "P-" + "A" * 33,
+            "P-abcdef12",  # lowercase must never be normalized implicitly
+            "P-G1234567",  # eight uppercase characters but G is not hexadecimal
+            "P-" + "G" * 32,  # correct length with non-hexadecimal characters
+            "P1-ABCDEF12",  # prefix contains a digit
+            "1-ABCDEF12",
+            "abc-ABCDEF12",
+            "p-ABCDEF12",
+            "ABCD-ABCDEF12",  # prefix has at most three uppercase letters
+            "P-ABCDEF12\\n",  # an appended literal escape sequence
+            "P-ABCDEF12\n",  # an actual trailing newline
+            "P- ABCDEF12",
+            "É-ABCDEF12",
+            None,
+            b"P-ABCDEF12",
+            123,
+        )
+        for value in invalid:
+            with self.subTest(value=value):
+                self.assertIsNone(entity_ids.parse(value))
+                self.assertFalse(entity_ids.is_generated(value))
+                self.assertFalse(entity_ids.is_distributed(value))
+
+    def test_generator_rejects_unsupported_prefix_shapes(self):
+        for prefix in ("a", "ab", "abc", "abcd", "ABCD", "P1", "1", "AB-", " A", "A ", "Ä", "A\n", 42, None):
+            with self.subTest(prefix=prefix), self.assertRaises(ValueError):
+                entity_ids.generate(prefix)
+
     def test_invalid_prefix_is_refused(self):
         with self.assertRaises(ValueError):
             entity_ids.generate("person")

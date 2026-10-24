@@ -26,6 +26,7 @@ transaction explicitly with its isolation level.
 from __future__ import annotations
 
 import time
+import weakref
 from random import SystemRandom
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -66,11 +67,22 @@ class Isolation(Enum):
 _COMMAND_ISOLATIONS = (Isolation.READ_COMMITTED, Isolation.SERIALIZABLE)
 
 
+class TransactionClosed(RuntimeError):
+    """A transaction handle (or a cursor it returned) was used after its transaction ended."""
+
+
 class Transaction:
     """The handle a command or query function receives.
 
     ``execute`` returns a cursor whose rows are dicts. ``attempt`` is 1 on the
     first run of a command and grows on each serialization retry.
+
+    The handle is valid only while its function runs. When the function
+    returns or raises, the handle and every cursor it returned are closed, so
+    one kept past that point cannot run SQL on the pooled connection outside
+    the transaction (and the checks) it was issued for: a retained handle
+    raises :class:`TransactionClosed`, a retained cursor psycopg's own
+    "cursor is closed" error. Fetch what you need inside the function.
     """
 
     def __init__(
@@ -85,15 +97,32 @@ class Transaction:
         self.isolation = isolation
         self.read_only = read_only
         self.attempt = attempt
+        # Weak: a cursor the caller dropped is freed with its result at once;
+        # only cursors still reachable need closing when the handle ends.
+        self._cursors: weakref.WeakSet[psycopg.Cursor[DictRow]] = weakref.WeakSet()
+        self._closed = False
 
     @property
-    def connection(self) -> psycopg.Connection[Any]:
-        return self._connection
+    def closed(self) -> bool:
+        return self._closed
 
     def execute(self, query: QueryNoTemplate, params: Params | None = None) -> psycopg.Cursor[DictRow]:
+        self._check_open()
         cursor = self._connection.cursor(row_factory=dict_row)
+        self._cursors.add(cursor)
         cursor.execute(query, params)
         return cursor
+
+    def close(self) -> None:
+        """End the handle; called by the helper that issued it, on every path."""
+        self._closed = True
+        cursors, self._cursors = list(self._cursors), weakref.WeakSet()
+        for cursor in cursors:
+            cursor.close()
+
+    def _check_open(self) -> None:
+        if self._closed:
+            raise TransactionClosed("this transaction has ended")
 
 
 def _begin_statement(isolation: Isolation, read_only: bool) -> sql.Composed:
@@ -178,9 +207,11 @@ class Database:
         with self._borrow() as conn:
             with conn.transaction():
                 conn.execute(_begin_statement(isolation, read_only))
-                return fn(
-                    Transaction(conn, isolation=isolation, read_only=read_only, attempt=attempt)
-                )
+                tx = Transaction(conn, isolation=isolation, read_only=read_only, attempt=attempt)
+                try:
+                    return fn(tx)
+                finally:
+                    tx.close()
 
     def command(
         self,

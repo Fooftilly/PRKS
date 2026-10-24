@@ -26,6 +26,8 @@ FAILURE_DIAGNOSTICS_PATH = Path(".tests") / "e2e-failure-diagnostics.json"
 # runner reads the same names to decide whether a run may train history.
 PROFILE_ENV = "PRKS_E2E_PROFILE"
 SEED_CACHE_ENV = "PRKS_E2E_SEED_CACHE"
+# Opt-in experiment: identical catch-all interception with a cheaper local URL fast path.
+ROUTE_FASTPATH_ENV = "PRKS_E2E_ROUTE_FASTPATH"
 
 FALSE_ENV_VALUES = frozenset({"0", "false", "no", "off"})
 
@@ -53,6 +55,8 @@ def benchmark_modes(environ=None) -> tuple:
         modes.append("profile")
     if not env_flag_enabled(SEED_CACHE_ENV, default=True, environ=environ):
         modes.append("no-seed-cache")
+    if env_flag_enabled(ROUTE_FASTPATH_ENV, environ=environ):
+        modes.append("route-fastpath")
     return tuple(modes)
 
 
@@ -372,6 +376,7 @@ AFFECTED_RULES = (
             "tests/e2e/sharding.py",
             "tests/e2e/policy.py",
             "tests/e2e/install_browser.py",
+            "scripts/ci/install_pinned_python.py",
             "tests/e2e/fixtures.py",
             "tests/e2e/timing-baseline.json",
             "tests/e2e/__init__.py",
@@ -887,18 +892,19 @@ AFFECTED_RULES = (
         "skip": True,
         "note": "Non-E2E tests → no browser E2E selection",
     },
-    # PG-1/PG-2 plumbing isn't imported by the served SQLite/browser app.
-    # Do not exempt shared backend/domain/__init__.py: it can gain runtime
-    # imports or side effects unrelated to isolated migration plumbing.
-    # It is tested by the PostgreSQL Test Gate, not by Chromium. Keep this
-    # allowlist narrow: unknown backend/db files still require full E2E.
-    # tests/test_e2e_policy.py guards against leaving this exemption active
-    # when PostgreSQL becomes a runtime dependency.
+    # The schema files and the snapshot tooling aren't imported by the served
+    # app. The opt-in PRKS_AUTH start loads backend/db/__init__.py and the pool
+    # lazily (L-ID-1 PR 5/5), and its embedded job worker runs the schema check
+    # of backend/db/migrate.py (L-J-1 PR 3/3), so neither of those is exempt
+    # any more. Do not exempt shared backend/domain/__init__.py
+    # either: it can gain runtime imports or side effects unrelated to isolated
+    # migration plumbing. These files are tested by the PostgreSQL Test Gate,
+    # not by Chromium. Keep this allowlist narrow: unknown backend/db files
+    # still require full E2E. tests/test_e2e_policy.py fails when a skipped
+    # Python file becomes reachable from the served app, lazily or not.
     {
         "name": "postgres-migration-infrastructure",
         "paths": (
-            "backend/db/__init__.py",
-            "backend/db/migrate.py",
             "backend/db/schema/*.sql",
             "backend/db/schema/snapshot.json",
             "backend/db/schema_snapshot.py",

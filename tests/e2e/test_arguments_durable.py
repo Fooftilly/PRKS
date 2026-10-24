@@ -18,11 +18,100 @@ from tests.e2e.fixtures import (
     POSITION_ARGUMENT_NAME,
     seed_arguments_library,
 )
-from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
+from tests.e2e.harness import (AppServer, open_app_page, profile_e2e_phase,
+                               record_e2e_phase_seconds, require_chromium, wait_for_async)
 
 
 def load_tests(loader, standard_tests, pattern):
     return standard_tests if os.environ.get("PRKS_E2E") == "1" else unittest.TestSuite()
+
+
+
+# Profiling-only wrapper around the EXISTING updateArgument API. The global
+# wrappers are installed only while that one awaited write runs, and restored
+# in finally even if the original write raises. They time real async calls;
+# no revision checks, offline fallbacks or durable queue semantics are bypassed.
+_ARGUMENT_WRITE_INNER_PROFILE_JS = """async ({id, name}) => {
+    const elapsed = Object.create(null);
+    const counts = Object.create(null);
+    const restores = [];
+    let activeBaseReads = 0;
+    function intercept(symbol, classify) {
+        const original = window[symbol];
+        if (typeof original !== 'function') {
+            throw new Error('Missing Argument write profile hook: ' + symbol);
+        }
+        const timed = async function (...args) {
+            const label = classify(...args);
+            if (!label) return original.apply(this, args);
+            const started = performance.now();
+            if (label === 'base') activeBaseReads += 1;
+            try {
+                return await original.apply(this, args);
+            } finally {
+                if (label === 'base') activeBaseReads -= 1;
+                elapsed[label] = (elapsed[label] || 0) +
+                    (performance.now() - started) / 1000;
+                counts[label] = (counts[label] || 0) + 1;
+            }
+        };
+        window[symbol] = timed;
+        restores.push(() => { window[symbol] = original; });
+        if (window[symbol] !== timed) throw new Error('Hook not writable: ' + symbol);
+    }
+    try {
+        // The queue snapshot is a global function; reject additional calls
+        // rather than silently attributing concurrent work to this write.
+        intercept('prksDurableOperationsOrNone', () => 'ops');
+        intercept('prksAcknowledgedArgumentBase',
+            entityId => entityId === id ? 'base' : null);
+        intercept('prksSaveArgumentFieldsDurably',
+            entityId => entityId === id ? 'enqueue' : null);
+        // The detail page displays a different Argument. Exclude its reads,
+        // and require that these reads happen within our awaited base lookup.
+        intercept('prksOfflineReadEntity', (kind, entityId) => {
+            if (activeBaseReads !== 1 || entityId !== id) return null;
+            return kind === 'argument-state' ? 'revision_read' :
+                kind === 'argument' ? 'record_read' : null;
+        });
+        const result = await updateArgument(id, {name});
+        if (!result || result.id !== id) {
+            throw new Error('Instrumented Argument write returned wrong identity');
+        }
+    } finally {
+        for (const restore of restores.reverse()) restore();
+    }
+    return {elapsed, counts};
+}"""
+
+_ARGUMENT_WRITE_PROFILE_STAGES = (
+    "ops", "base", "revision_read", "record_read", "enqueue",
+)
+
+
+def profiled_argument_rename(page, argument_id, name, owner):
+    # The ordinary E2E path is unchanged; instrument only explicit --profile.
+    if os.environ.get("PRKS_E2E_PROFILE") != "1":
+        page.evaluate("args => updateArgument(args.id, {name: args.name})",
+                      {"id": argument_id, "name": name})
+        return
+
+    result = page.evaluate(_ARGUMENT_WRITE_INNER_PROFILE_JS,
+                           {"id": argument_id, "name": name})
+    elapsed = result.get("elapsed", {})
+    counts = result.get("counts", {})
+    for stage in _ARGUMENT_WRITE_PROFILE_STAGES:
+        if counts.get(stage, 0) != 1 or stage not in elapsed:
+            raise AssertionError(
+                "Argument write stage must execute exactly once: "
+                + stage + " (count=" + str(counts.get(stage, 0)) + ")"
+            )
+    if elapsed["revision_read"] + elapsed["record_read"] > elapsed["base"] + 0.01:
+        raise AssertionError("Argument cache reads exceed acknowledged base duration")
+    for stage in _ARGUMENT_WRITE_PROFILE_STAGES:
+        record_e2e_phase_seconds(
+            "arg_overlay_" + owner + "_write_" + stage, elapsed[stage]
+        )
 
 
 def setUpModule():
@@ -287,45 +376,68 @@ class DurableArgumentTests(unittest.TestCase):
                 self.index(page); o._wait_content_contains(page, name)
 
     def test_pending_rename_reaches_position_argument_picker_and_graph(self):
-        server, page, context = self.start()
+        # Opt-in phase timings only: preserve real browser assertions and
+        # storage/context isolation; no extra waits or weaker success criteria.
+        with profile_e2e_phase("arg_overlay_setup"):
+            server, page, context = self.start()
         argument = server.ids["position_argument"]
-        self.prepare(page, argument)
-        self.prepare(page, server.ids["argument_target"])
-        self.prepare(page, server.ids["argument_response"])
-        # Warm every acknowledged surface before disconnect.
-        self.detail(page, server.ids["argument_a"])
-        o._wait_entity_cached(page, "argument", server.ids["argument_a"])
-        page.evaluate("id => prksNavigate('#/positions/' + id)", server.ids["position_a"])
-        o._wait_content_contains(page, server.ids["position_a_name"])
-        o._wait_entity_cached(page, "position", server.ids["position_a"])
-        page.evaluate("() => prksNavigate('#/graph')")
-        page.wait_for_function("() => { const d=prksGetResearchGraphDebug(); return !!(d&&d.cy); }")
-        o._wait_entity_cached(page, "research-graph-core", "snapshot")
-        self.offline(page, context)
-        page.evaluate("id => updateArgument(id,{name:'Pending Argument Name'})", argument)
+        with profile_e2e_phase("arg_overlay_warm_argument_details"):
+            self.prepare(page, argument)
+            self.prepare(page, server.ids["argument_target"])
+            self.prepare(page, server.ids["argument_response"])
+            # Warm every acknowledged surface before disconnect.
+            self.detail(page, server.ids["argument_a"])
+            o._wait_entity_cached(page, "argument", server.ids["argument_a"])
+        with profile_e2e_phase("arg_overlay_warm_position"):
+            page.evaluate("id => prksNavigate('#/positions/' + id)", server.ids["position_a"])
+            o._wait_content_contains(page, server.ids["position_a_name"])
+            o._wait_entity_cached(page, "position", server.ids["position_a"])
+        with profile_e2e_phase("arg_overlay_warm_graph"):
+            page.evaluate("() => prksNavigate('#/graph')")
+            page.wait_for_function("() => { const d=prksGetResearchGraphDebug(); return !!(d&&d.cy); }")
+            o._wait_entity_cached(page, "research-graph-core", "snapshot")
+        with profile_e2e_phase("arg_overlay_offline_rename"):
+            self.offline(page, context)
+            page.evaluate("id => updateArgument(id,{name:'Pending Argument Name'})", argument)
 
-        page.evaluate("id => prksNavigate('#/positions/' + id)", server.ids["position_a"])
-        o._wait_content_contains(page, "Pending Argument Name")
-        picker_name = page.evaluate("id => fetchArguments().then(rows => rows.find(x=>x.id===id).name)",
-                                    argument)
-        self.assertEqual(picker_name, "Pending Argument Name")
-        graph_name = page.evaluate("""async id => {
-            await prksRefreshPendingArgumentNames();
-            const result=await prksOfflineResearchGraphFetch(false);
-            const node=result.snapshot.nodes.find(n=>n.type==='argument'&&n.record_id===id);
-            return node&&node.label;
-        }""", argument)
-        self.assertEqual(graph_name, "Pending Argument Name")
+        with profile_e2e_phase("arg_overlay_verify_position"):
+            page.evaluate("id => prksNavigate('#/positions/' + id)", server.ids["position_a"])
+            o._wait_content_contains(page, "Pending Argument Name")
+        with profile_e2e_phase("arg_overlay_verify_picker"):
+            picker_name = page.evaluate("id => fetchArguments().then(rows => rows.find(x=>x.id===id).name)",
+                                        argument)
+            self.assertEqual(picker_name, "Pending Argument Name")
+        with profile_e2e_phase("arg_overlay_verify_graph"):
+            graph_name = page.evaluate("""async id => {
+                await prksRefreshPendingArgumentNames();
+                const result=await prksOfflineResearchGraphFetch(false);
+                const node=result.snapshot.nodes.find(n=>n.type==='argument'&&n.record_id===id);
+                return node&&node.label;
+            }""", argument)
+            self.assertEqual(graph_name, "Pending Argument Name")
 
         # Another Argument's target and response rows use same hydrated map.
-        target = server.ids["argument_target"]
-        page.evaluate("id => updateArgument(id,{name:'Pending Target Name'})", target)
-        self.detail(page, server.ids["argument_a"])
-        o._wait_content_contains(page, "Pending Target Name")
-        response = server.ids["argument_response"]
-        page.evaluate("id => updateArgument(id,{name:'Pending Response Name'})", response)
-        self.detail(page, server.ids["argument_a"])
-        o._wait_content_contains(page, "Pending Response Name")
+        # Keep the inclusive phase totals comparable with the first profile,
+        # and add nested timers to separate the offline writer, awaited
+        # navigation/detail render, and residual DOM visibility check.
+        # prksNavigate awaits the detail render: this is NOT route-only time.
+        # These are diagnostics, not additional work or assertions.
+        with profile_e2e_phase("arg_overlay_verify_target"):
+            target = server.ids["argument_target"]
+            with profile_e2e_phase("arg_overlay_target_write"):
+                profiled_argument_rename(page, target, "Pending Target Name", "target")
+            with profile_e2e_phase("arg_overlay_target_render"):
+                self.detail(page, server.ids["argument_a"])
+            with profile_e2e_phase("arg_overlay_target_visible"):
+                o._wait_content_contains(page, "Pending Target Name")
+        with profile_e2e_phase("arg_overlay_verify_response"):
+            response = server.ids["argument_response"]
+            with profile_e2e_phase("arg_overlay_response_write"):
+                profiled_argument_rename(page, response, "Pending Response Name", "response")
+            with profile_e2e_phase("arg_overlay_response_render"):
+                self.detail(page, server.ids["argument_a"])
+            with profile_e2e_phase("arg_overlay_response_visible"):
+                o._wait_content_contains(page, "Pending Response Name")
 
 
 if __name__ == "__main__":

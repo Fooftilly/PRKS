@@ -48,6 +48,38 @@ python3 -m venv .venv
 PRKS_UX_RECORD=1 ./.venv/bin/python run_tests.py --ux-tour   # record every scenario for review
 ```
 
+### Workflow lint status and branch protection (#651)
+
+The `.github/workflows/actionlint.yml` workflow publishes the PR check
+**`Workflow syntax and ShellCheck`**, inside the workflow named
+`Workflow lint (actionlint + ShellCheck)`. GitHub's **required status check**
+must use the **job check name**, not the workflow title.
+
+On **every pull request targeting `master`**, the job runs a quick selector.
+When `.github/workflows/**` or `scripts/ci_workflow_lint_scope.py` changes,
+it downloads checksum-pinned actionlint and ShellCheck, checks the SC2086
+integration fixture, and fails on lint findings. For a docs-only or unrelated
+code PR, it reports **success** without downloading either tool. If the PR
+merge/diff cannot be examined, it runs lint rather than silently skipping.
+
+**Ruleset migration:** After observing both a workflow-edit PR (full scan)
+and an unrelated PR (tool steps skipped but the job succeeds), open
+**Settings → Rules → Rulesets → Default → Require status checks to pass**,
+add `Workflow syntax and ShellCheck` from **GitHub Actions**, and preserve
+every existing required check. An actionlint check is only truly
+*merge-blocking* once this rule is enabled. Do not make the overall workflow
+display name required; do not mark a path-filtered/missing job required.
+
+**Maintainer verification:** On the current PR's **Checks** tab, open
+`Workflow syntax and ShellCheck` and inspect the **Determine whether to run
+workflow lint** step. An unrelated change should print `No workflow changes:
+successful check without tool downloads.` and mark the install and lint steps
+skipped. A workflow edit should print `Workflow lint selected.` and execute
+those steps. Never assume a green check meant linting actually ran; note
+which branch was exercised. The separate test
+`python -m unittest tests.test_ci_workflow_lint_scope` covers both decisions
+using synthetic local PR merge histories.
+
 ### Optional SonarQube CLI (Claude Code)
 
 Shared Claude Code secrets hooks (`.claude/settings.json`) and the project

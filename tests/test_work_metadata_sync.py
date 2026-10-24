@@ -634,6 +634,17 @@ class WorkMetadataSyncTests(unittest.TestCase):
         return self.db.execute_query(
             "SELECT typeof(%s) AS t FROM works WHERE id = ?" % field, (self.work,))[0]["t"]
 
+    def test_codec_input_contract_is_explicit_for_page_and_identity_fields(self):
+        # Both codec classes expose is_valid_input: the native page value
+        # differs from its wire form, while a text field uses the same form.
+        for value, accepted in ((3, True), ("3", True), (None, True),
+                                (0, False), ("1.5", False), (True, False)):
+            with self.subTest(value=value):
+                self.assertIs(meta.is_valid_field_value("thumb_page", value), accepted)
+        identity = meta.codec_for("title")
+        self.assertTrue(identity.is_valid_input("Some Work"))
+        self.assertFalse(identity.is_valid_input(None))
+
     def test_the_thumb_page_codec_accepts_only_page_numbers(self):
         """Rejecting a value is not the same as clearing it. `""` is the one
         spelling of "no explicit page"; everything else either parses as a page

@@ -18,11 +18,37 @@ The Vue 3 application source lives in `frontend-app/` (its own `package.json` an
 
 `dependency-inventory.json` records dependency inventory used by the repository's dependency checks.
 
+The production Vue bundle's `frontend/vue/THIRD_PARTY_LICENSES.md` is
+generated from `frontend-app/THIRD_PARTY_LICENSES.md`. The production
+dependency inventory inside the latter is regenerated from
+`frontend-app/package-lock.json` by `npm run build`; keep the original
+upstream copyright and license **texts below the inventory** reviewed and
+up to date when introducing new libraries. A dependency bump needs a build
+commit, not manual editing of every inventory version row. The build rejects
+missing package versions, direct-dependency version mismatches, and license
+metadata outside a deliberately small reviewed SPDX identifier allowlist
+before Vite clears its output. The check does not establish whether an
+upstream project's declared license is accurate or whether license changes
+require new notices; maintainers must still review those changes.
+
 ## Dependency gate
 
 The repository contains dependency-gate logic in `backend/dependency_gate.py` and `scripts/dependency_gate.py`. It exists to catch mismatches between declarations, vendored artifacts, and the supported dependency model.
 
 When adding/updating a dependency, update every authoritative declaration/inventory required by the gate rather than patching only the file that first fails.
+
+## Distribution and licensing
+
+The project's own code is published under AGPL-3.0-only; this does not
+change the licenses of vendored third-party works. See the root
+[third-party notices](https://github.com/Fooftilly/PRKS/blob/master/THIRD_PARTY_NOTICES.md) and keep each vendored
+`LICENSE`, `LICENSES/`, copyright header and any required upstream notices
+intact when rebuilding or distributing artifacts.
+
+PyMuPDF is offered by its upstream publisher under AGPL terms or a
+separate commercial agreement. Anyone choosing a different license for a
+distribution must independently satisfy that dependency's licensing terms.
+Do not present this project's AGPL license as a grant over PyMuPDF.
 
 ## PDF viewer
 
@@ -33,6 +59,26 @@ Treat viewer source and built/vendor artifacts according to the repository guida
 ## Platform-aware instructions
 
 Installation/remediation commands shown to users should account for the platform/package-management context. In particular, PEP 668 distributions must not be instructed to bypass their package manager with unsafe global pip flags.
+
+## Maintainer dependency-update helpers
+
+CI installs Python dependencies through `python scripts/ci/install_pinned_python.py PROFILE`
+(`runtime`, `unit`, `postgres`, `plan`, or `e2e`). The helper reads only exact
+`name==version` declarations in `requirements.txt` and `requirements-dev.txt`,
+selects the intended subset, and installs those pins with an argument-list
+subprocess and binary-only policy. The workflow files must never maintain
+second copies of those version strings.
+
+For an npm dependency PR, rebuild the affected island with
+`bash scripts/refresh_dependency_artifacts.sh frontend-app`,
+`frontend-vendor`, `research-graph`, or `pdf-viewer` as the argument.
+This installs the directory's locked dependencies, executes its existing
+deterministic build, and runs the offline repository dependency gate. Review
+and commit the resulting bundle, dependency manifest, service-worker revision,
+and licensing notices; do not suppress the build-consistency checks.
+
+This is a maintainer-only operation, never part of application startup or
+a blanket automatic write to untrusted pull-request branches.
 
 ## Update discipline
 

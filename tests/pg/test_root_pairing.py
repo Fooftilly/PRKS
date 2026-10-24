@@ -184,6 +184,22 @@ class RootPairingTestCase(unittest.TestCase):
             StorageKey("asset-objects", name), lambda handle: handle.write(b"%PDF-1.7\n")
         )
 
+    def relocated(self, root: str, name: str = "moved") -> str:
+        """A destination root whose marker relocation built from ``root``'s (P1, P6)."""
+        source = self.marker(root)
+        destination = os.path.join(self.tmp, name)
+        os.makedirs(os.path.join(destination, root_marker.MAINTENANCE_DIRNAME))
+        lock = root_marker.ExclusiveFileLock.acquire(root_marker.lease_path(destination))
+        try:
+            unpaired = {
+                k: v for k, v in source.document.items() if k not in root_marker.PAIRING_FIELDS
+            }
+            built = root_marker.carry_pairing_fields(source, unpaired)
+            root_marker.write_marker(destination, built, lease=lock)
+        finally:
+            lock.release()
+        return destination
+
     def assert_paired(self, name: str, root: str, generation: int) -> None:
         row = self.instance(name)
         assert row is not None
@@ -228,6 +244,16 @@ class BootstrapTests(RootPairingTestCase):
         self.refused("already_ready", self.bootstrap, name, root)
         with psycopg.connect(self.harness.conninfo(name)) as conn:
             self.assertEqual(fetch_one(conn.execute("SELECT count(*) FROM prks.users"))[0], 1)
+
+    def test_a_login_name_login_would_refuse_is_refused(self) -> None:
+        name, root = self.database(), self.new_root()
+        for login in ("x" * 257, "own\x00er", "own\U000e0080er"):
+            with self.subTest(length=len(login)):
+                owner = OwnerSpec(login, "Owner", "Library", OWNER.password_hash)
+                self.refused("owner_login_invalid", self.bootstrap, name, root, owner=owner)
+        self.assertIsNone(self.instance(name))
+        longest = OwnerSpec("x" * 256, "Owner", "Library", OWNER.password_hash)
+        self.assertTrue(self.bootstrap(name, root, owner=longest).created)
 
     def test_simultaneous_bootstraps_create_one_owner_and_library(self) -> None:
         name, root = self.database(), self.new_root()
@@ -732,15 +758,7 @@ class StartTests(RootPairingTestCase):
     def test_relocated_root_keeps_its_pairing_and_starts(self) -> None:
         name, root = self.ready()
         self.start(name, root)
-        source = self.marker(root)
-        destination = os.path.join(self.tmp, "moved")
-        os.makedirs(os.path.join(destination, root_marker.MAINTENANCE_DIRNAME))
-        lock = root_marker.ExclusiveFileLock.acquire(root_marker.lease_path(destination))
-        try:
-            built = root_marker.carry_pairing_fields(source, dict(source.document))
-            root_marker.write_marker(destination, built, lease=lock)
-        finally:
-            lock.release()
+        destination = self.relocated(root)
         result = self.start(name, destination)
         self.assertEqual(result.start_generation, 3)
         self.assert_paired(name, destination, 3)
