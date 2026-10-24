@@ -414,6 +414,18 @@
       "dependabot_monitored": true
     },
     {
+      "name": "fast-check",
+      "scope": "build",
+      "authoritative_source": "frontend-app/package.json -> devDependencies.fast-check",
+      "manifest": "frontend-app/package.json",
+      "lockfile": "frontend-app/package-lock.json",
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true,
+      "notes": "Test-only property-based invariants under #854; Vitest only; never bundled in production."
+    },
+    {
       "name": "@vitest/coverage-v8",
       "scope": "build",
       "authoritative_source": "frontend-app/package.json -> devDependencies.@vitest/coverage-v8",
