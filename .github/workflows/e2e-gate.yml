@@ -17,6 +17,13 @@ on:
         description: "Benchmark same-origin routing fast path (experimental)"
         type: boolean
         default: false
+      shard_count:
+        description: "Manual full-suite shard-width pilot; normal PR/master gates stay at six"
+        type: choice
+        options:
+          - "6"
+          - "8"
+        default: "6"
 
 concurrency:
   group: e2e-gate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -76,6 +83,8 @@ jobs:
           PRKS_E2E: "1"
           # Full E2E for shipped frontend changes, not unrelated PRs.
           PRKS_E2E_CI_FRONTEND_FULL: "1"
+          # Only workflow_dispatch may request eight shards; PR/master always use six.
+          PRKS_E2E_MANUAL_SHARDS: ${{ github.event_name == 'workflow_dispatch' && inputs.shard_count || '6' }}
         run: |
           set -euo pipefail
           if [[ "${{ steps.base.outputs.force }}" == "1" ]]; then
@@ -110,6 +119,16 @@ jobs:
                   )
           matrix = plan.get("matrix") or {}
           include = matrix.get("include") or []
+          # Optional full-suite comparison; keep automatic PR/master width fixed.
+          # Reuse the exact production shard partitioner rather than hand-made rows.
+          manual_shards = (os.environ.get("PRKS_E2E_MANUAL_SHARDS") or "6").strip()
+          if manual_shards not in ("6", "8"):
+              raise SystemExit("unsupported manual E2E shard width: %r" % manual_shards)
+          if manual_shards == "8":
+              if not plan.get("run") or mode != "full" or not plan.get("pointer_capture"):
+                  raise SystemExit("eight-shard pilot requires complete E2E plus pointer capture")
+              from tests.e2e.policy import ci_matrix_include
+              include = ci_matrix_include(8, 1)
           if plan.get("run") and mode != "skip" and not include:
               raise SystemExit("runnable plan missing matrix.include (fail closed)")
           run = "true" if plan.get("run") else "false"
