@@ -45,16 +45,14 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
 
       - name: Install plan-time dependencies
         # Playwright is importable for E2E discovery when mode=affected sizes shards.
         # Chromium itself is not downloaded here.
-        run: >-
-          python -m pip install --isolated --disable-pip-version-check
-          "--only-binary=:all:" "playwright==1.63.0"
+        run: python scripts/ci/install_pinned_python.py plan
 
       - name: Resolve comparison base
         id: base
@@ -76,6 +74,8 @@ jobs:
         shell: bash
         env:
           PRKS_E2E: "1"
+          # Full E2E for shipped frontend changes, not unrelated PRs.
+          PRKS_E2E_CI_FRONTEND_FULL: "1"
         run: |
           set -euo pipefail
           if [[ "${{ steps.base.outputs.force }}" == "1" ]]; then
@@ -164,18 +164,18 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
           cache: pip
 
       - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
 
       - name: Cache Playwright Chromium
-        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .playwright-browsers
           key: >-
@@ -187,11 +187,8 @@ jobs:
       - name: Install runtime and E2E dependencies
         # Keep runtime pins in sync with requirements.txt. Playwright comes from
         # requirements-dev.txt. Explicit package== pins plus --only-binary satisfy
-        # Sonar githubactions:S8541 / S8544; -r alone is treated as unlocked.
-        run: >-
-          python -m pip install --isolated --disable-pip-version-check
-          "--only-binary=:all:" "PyMuPDF==1.28.2" "Pillow==12.3.0" "pydantic==2.13.5"
-          "playwright==1.63.0"
+        # The CI installer passes validated exact pins and --only-binary to pip.
+        run: python scripts/ci/install_pinned_python.py e2e
 
       - name: Ensure Chromium in repo cache
         # install_browser.py reuses .playwright-browsers when the pin matches.
@@ -256,10 +253,10 @@ jobs:
 
       - name: Upload shard failure log
         if: failure()
-        # Pin v4.6.2 supports include-hidden-files (needed because paths live
+        # Pinned upload-artifact supports include-hidden-files (needed because paths live
         # under hidden `.tests/`). Upload only the privacy-reviewed files —
         # not the whole tree (timings / accidental traces stay out).
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-shard-${{ matrix.shard }}-of-${{ matrix.total }}-log
           path: |
@@ -287,13 +284,13 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
           cache: pip
 
       - name: Cache Playwright Chromium
-        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .playwright-browsers
           key: >-
@@ -303,9 +300,7 @@ jobs:
             playwright-${{ runner.os }}-
 
       - name: Install Playwright
-        run: >-
-          python -m pip install --isolated --disable-pip-version-check
-          "--only-binary=:all:" "playwright==1.63.0"
+        run: python scripts/ci/install_pinned_python.py plan
 
       - name: Install Chromium for pointer capture
         run: python tests/e2e/install_browser.py
@@ -327,7 +322,7 @@ jobs:
 
       - name: Upload pointer failure diagnostics
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-pointer-failure-diagnostics
           path: .tests/e2e-failure-diagnostics.json
@@ -353,7 +348,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
 
