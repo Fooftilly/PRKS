@@ -16,6 +16,7 @@ on:
       - backend/storage/root_binding.py
       - prks_app.py
       - scripts/ci/check_runtime_smoke.py
+      - tests/test_docker_runtime_smoke.py
       - .github/workflows/docker-runtime-smoke.yml
   push:
     branches:
@@ -32,6 +33,7 @@ on:
       - backend/storage/root_binding.py
       - prks_app.py
       - scripts/ci/check_runtime_smoke.py
+      - tests/test_docker_runtime_smoke.py
       - .github/workflows/docker-runtime-smoke.yml
   workflow_dispatch:
 
@@ -81,7 +83,9 @@ jobs:
           # Volatile isolated data; no host-mounted database or persistent secrets.
           # Publish only to loopback on the isolated GitHub-hosted runner.
           docker run -d --name "$container" --publish 127.0.0.1:18080:8080 \
-            --tmpfs /data:rw,size=128m --env PRKS_STORAGE=/data \
+            --user 1000:1000 \
+            --tmpfs /data:rw,size=128m,uid=1000,gid=1000 \
+            --env PRKS_STORAGE=/data --env PRKS_PDF_LINEARIZE=1 \
             prks-ci-runtime-smoke:latest
 
           ready=0
