@@ -263,11 +263,15 @@ jobs:
           set -euo pipefail
           # Curated smoke IDs must all exist; the runner fails closed otherwise.
           python tests/e2e/run.py --jobs 1 --smoke --no-pointer-capture
-          # Keep the real PDF/mounted runtime/request-invariant boundary in this
-          # pilot rather than interpreting the nine smoke tests as full parity.
+          # Include high-risk packaged PDF/offline and Graph/record navigation
+          # boundaries in addition to the nine curated smoke cases. This
+          # is still a manual experiment, NOT a full-suite substitute.
           python tests/e2e/run.py --jobs 1 --no-pointer-capture \
             tests.e2e.test_app.MainSecondaryDividerTests.test_divider_drag_causes_no_additional_route_or_pdf_requests \
-            tests.e2e.test_app.PdfPersistenceTests.test_annotation_copy_link_reports_clipboard_success_and_failure
+            tests.e2e.test_app.PdfPersistenceTests.test_annotation_copy_link_reports_clipboard_success_and_failure \
+            tests.e2e.test_offline.OfflineFoundationTests.test_previously_opened_pdf_reopens_offline \
+            tests.e2e.test_offline.OfflineFoundationTests.test_cached_pdf_reopened_offline_keeps_annotation_tools \
+            tests.e2e.test_research_graph_offline.ResearchGraphOfflineTests.test_record_graph_navigation_both_directions
 
       - name: Record scope and code provenance
         env:
@@ -275,7 +279,7 @@ jobs:
         shell: bash
         run: |
           printf 'Manual packaged-smoke pilot only; full PR six-shard package coverage is unchanged.\n' >> "$GITHUB_STEP_SUMMARY"
-          printf 'Commit: %s; packaged smoke: 9 curated + 2 explicit browser tests; SW upgrade/rollback and Docker checks are separate jobs.\n' "$PRKS_E2E_BASE_SHA" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Commit: %s; packaged smoke: 9 curated + 5 explicit browser tests; SW upgrade/rollback and Docker checks are separate jobs.\n' "$PRKS_E2E_BASE_SHA" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload smoke failure diagnostics
         if: failure()
