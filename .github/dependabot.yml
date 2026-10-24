@@ -109,7 +109,13 @@ updates:
         patterns:
           - "storybook"
           - "@storybook/*"
-        update-types: ["minor", "patch"]
+        # Include majors atomically, but leave them for explicit compatibility review.
+      vitest-stack:
+        applies-to: version-updates
+        patterns:
+          - "vitest"
+          - "@vitest/*"
+        # @vitest/coverage-v8 has an exact Vitest peer; all versions must move together.
       vite-toolchain:
         applies-to: version-updates
         patterns:
