@@ -127,6 +127,43 @@ async function check(operations, catalogueExpected, options = {}) {
     await check([], false, { offline: false, staleAfter: 2 });
     await check([], false, { runtimeState: null, staleAfter: 2 });
     await check([], false, { runtimeState: 'unavailable', staleAfter: 1 });
+    // The Concept detail route must opt into the existing guarded cache-first
+    // reader only for this detail fetch. Its runtime still owns provenance,
+    // domain invalidation and reconnect fencing; the route validates shape.
+    const routeStart = source.indexOf("case 'concept-detail': {");
+    const routeEnd = source.indexOf("case 'positions': {", routeStart);
+    assert.ok(routeStart > 0 && routeEnd > routeStart);
+    const conceptRoute = source.slice(routeStart, routeEnd);
+    assert.match(conceptRoute, /prksOfflineDetailFetch\(/);
+    assert.match(conceptRoute, /domain:\s*PRKS_CONCEPTS_DOMAIN/);
+    assert.match(conceptRoute, /preferCacheWhenOffline:\s*true/);
+    assert.match(conceptRoute, /prksIsConceptShape\(value, conceptId\)/);
+
+    // The wrapper must pass the opt-in through untouched without enabling it
+    // for ordinary callers. Use the actual function extracted from app.js.
+    const detailStart = source.indexOf('async function prksOfflineDetailFetch(');
+    const detailEnd = source.indexOf('\n/**\n * List counterpart', detailStart);
+    assert.ok(detailStart > 0 && detailEnd > detailStart);
+    const observed = [];
+    const detailSandbox = {
+        prksOfflineReadEntity: async (...args) => {
+            observed.push(args);
+            return { value: { id: args[1] }, source: 'cache', cachedAt: 1 };
+        },
+    };
+    vm.createContext(detailSandbox);
+    vm.runInContext(source.slice(detailStart, detailEnd), detailSandbox);
+    await detailSandbox.prksOfflineDetailFetch(
+        'concept', 'C-child', '/api/concepts/C-child', null,
+        { domain: 'concepts', preferCacheWhenOffline: true });
+    assert.equal(observed[0][3].preferCacheWhenOffline, true);
+    assert.equal(observed[0][3].domain, 'concepts');
+    await detailSandbox.prksOfflineDetailFetch(
+        'concept', 'C-child', '/api/concepts/C-child', null,
+        { domain: 'concepts' });
+    assert.equal(observed[1][3].preferCacheWhenOffline, false,
+        'default Concept reads must remain server-first');
+
     console.log('concept detail catalogue fast-path checks passed');
 })().catch(err => {
     console.error(err);

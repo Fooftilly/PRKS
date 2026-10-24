@@ -43,35 +43,44 @@ LANE_MIXINS = {
 }
 
 
-class _SavedViewsPort(FacadeMixin):
+class _ProcessingPort(FacadeMixin):
     @ported
-    def get_saved_views(self):
+    def scan_processing_files(self):
         return ["from-postgres"]
 
 
 class _OtherPort(FacadeMixin):
     @ported
-    def get_saved_views(self):
+    def scan_processing_files(self):
         return []
 
 
+class _BareLibrary(FacadeMixin):
+    """The facade core without the lane mixins, so a test's registrations are the only ones."""
+
+    __init__ = PostgresLibrary.__init__
+    __getattr__ = PostgresLibrary.__getattr__
+
+
 class FacadeSkeletonTests(unittest.TestCase):
-    def test_facade_is_composed_of_one_empty_mixin_per_lane(self):
+    def test_facade_is_composed_of_one_mixin_per_lane(self):
         names = {cls.__name__ for cls in facade_mixins(PostgresLibrary)}
         self.assertEqual(names, LANE_MIXINS)
+        # A lane mixin holds ported methods and private helpers, nothing else.
+        registered = ported_methods(PostgresLibrary)
         for cls in facade_mixins(PostgresLibrary):
-            own = {name for name in vars(cls) if not name.startswith("__")}
-            self.assertEqual(own, set(), f"{cls.__name__} is not empty")
+            public = {name for name in vars(cls) if not name.startswith("_")}
+            self.assertEqual({registered.get(name) for name in public} - {cls.__name__}, set(),
+                             f"{cls.__name__} has a public member that is not ported")
 
-    def test_nothing_is_ported_yet_and_the_registry_is_valid(self):
-        self.assertEqual(ported_methods(PostgresLibrary), {})
+    def test_the_registry_of_the_real_facade_is_valid(self):
         self.assertEqual(validate_registry(PostgresLibrary), [])
 
     def test_unported_method_is_a_typed_refusal_not_a_fallback(self):
         library = PostgresLibrary(object())  # type: ignore[arg-type]
         with self.assertRaises(NotPortedError) as ctx:
-            library.get_saved_views()
-        self.assertEqual(ctx.exception.method, "get_saved_views")
+            library.scan_processing_files()
+        self.assertEqual(ctx.exception.method, "scan_processing_files")
         # Not an AttributeError: hasattr()/getattr(default) must not hide it.
         self.assertNotIsInstance(ctx.exception, AttributeError)
         with self.assertRaises(AttributeError):
@@ -95,18 +104,18 @@ class FacadeSkeletonTests(unittest.TestCase):
 
 class RegistryDiscoveryTests(unittest.TestCase):
     def test_one_decorator_in_a_mixin_registers_the_method(self):
-        class Library(_SavedViewsPort, PostgresLibrary):
+        class Library(_ProcessingPort, _BareLibrary):
             pass
 
-        self.assertEqual(ported_methods(Library), {"get_saved_views": "_SavedViewsPort"})
+        self.assertEqual(ported_methods(Library), {"scan_processing_files": "_ProcessingPort"})
         self.assertEqual(validate_registry(Library), [])
         library = Library(object())  # type: ignore[arg-type]
-        self.assertEqual(library.get_saved_views(), ["from-postgres"])
+        self.assertEqual(library.scan_processing_files(), ["from-postgres"])
         # The real facade is untouched by a subclass's registrations.
-        self.assertEqual(ported_methods(PostgresLibrary), {})
+        self.assertNotIn("scan_processing_files", ported_methods(PostgresLibrary))
 
     def test_two_mixins_registering_one_method_are_refused(self):
-        class Library(_SavedViewsPort, _OtherPort, PostgresLibrary):
+        class Library(_ProcessingPort, _OtherPort, PostgresLibrary):
             pass
 
         with self.assertRaises(RegistryError):
@@ -116,7 +125,7 @@ class RegistryDiscoveryTests(unittest.TestCase):
     def test_a_registration_with_another_signature_is_refused(self):
         class Drifted(FacadeMixin):
             @ported
-            def get_saved_views(self, limit=10):
+            def scan_processing_files(self, limit=10):
                 return []
 
         class Library(Drifted, PostgresLibrary):
@@ -141,7 +150,7 @@ class RegistryDiscoveryTests(unittest.TestCase):
 
     def test_an_unregistered_override_is_refused(self):
         class Forgot(FacadeMixin):
-            def get_saved_views(self):
+            def scan_processing_files(self):
                 return []
 
             def _private_helper(self):
@@ -161,7 +170,7 @@ class RegistryDiscoveryTests(unittest.TestCase):
             def etag_for_representation(payload):
                 return "x"
 
-        class Library(Members, PostgresLibrary):
+        class Library(Members, _BareLibrary):
             pass
 
         self.assertIn("etag_for_representation", ported_methods(Library))
@@ -174,7 +183,7 @@ class DescriptorKindTests(unittest.TestCase):
             def etag_for_representation(label, rows):  # type: ignore[no-self-argument]
                 return "x"
 
-        class Library(Plain, PostgresLibrary):
+        class Library(Plain, _BareLibrary):
             pass
 
         problems = validate_registry(Library)
@@ -188,7 +197,7 @@ class DescriptorKindTests(unittest.TestCase):
             def etag_for_representation(label, rows):
                 return "x"
 
-        class Library(Static, PostgresLibrary):
+        class Library(Static, _BareLibrary):
             pass
 
         self.assertEqual(validate_registry(Library), [])
@@ -233,16 +242,16 @@ class SurfaceTests(unittest.TestCase):
             )
 
     def test_coverage_counts_ported_and_unported(self):
-        class Library(_SavedViewsPort, PostgresLibrary):
+        class Library(_ProcessingPort, _BareLibrary):
             pass
 
         report = coverage(Library)
-        self.assertIn("get_saved_views", report.ported_in_surface)
-        self.assertNotIn("get_saved_views", report.unported)
+        self.assertIn("scan_processing_files", report.ported_in_surface)
+        self.assertNotIn("scan_processing_files", report.unported)
         self.assertEqual(len(report.unported), len(report.surface) - 1)
         real = coverage()
-        self.assertEqual(real.ported_in_surface, frozenset())
-        self.assertEqual(real.unported, real.surface)
+        self.assertEqual(real.ported_in_surface, real.surface & frozenset(real.ported))
+        self.assertEqual(real.unported, real.surface - frozenset(real.ported))
 
 
 if __name__ == "__main__":

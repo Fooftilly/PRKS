@@ -276,7 +276,8 @@ class MigrateTests(EmptyDatabaseTestCase):
         self.assertIn("42P07", error.message)
         self.assertEqual(self.query("SELECT to_regclass('prks.half') IS NULL"), [(True,)])
         self.assertEqual(self.query("SELECT to_regclass('prks.after') IS NULL"), [(True,)])
-        self.assertEqual(self.query("SELECT max(version) FROM prks.schema_migrations"), [(40,)])
+        baseline = max(f.version for f in load_schema_files())
+        self.assertEqual(self.query("SELECT max(version) FROM prks.schema_migrations"), [(baseline,)])
         self.write(directory, "900_broken.sql", "CREATE TABLE prks.half (id int);\n")
         self.assertEqual(
             migrate(self.conninfo, directory=directory).applied, ("900_broken.sql", "910_after.sql")
@@ -388,10 +389,11 @@ class MigrateTests(EmptyDatabaseTestCase):
     def test_verify_refuses_an_empty_or_partial_database(self) -> None:
         self.assert_refused("not_migrated", verify_schema, self.conninfo)
         directory = self.schema_copy()
-        os.remove(os.path.join(directory, "040_sync.sql"))
+        last = load_schema_files()[-1].filename
+        os.remove(os.path.join(directory, last))
         migrate(self.conninfo, directory=directory)
         error = self.assert_refused("pending", verify_schema, self.conninfo)
-        self.assertIn("040_sync.sql", error.message)
+        self.assertIn(last, error.message)
 
 
 class SchemaFileLoadingTests(unittest.TestCase):
@@ -420,10 +422,11 @@ class SchemaFileLoadingTests(unittest.TestCase):
         directory = self.directory("100_b.sql", "020_a.sql", "snapshot.json")
         self.assertEqual([f.filename for f in load_schema_files(directory)], ["020_a.sql", "100_b.sql"])
 
-    def test_checked_in_files_are_the_pg2_baseline(self) -> None:
+    def test_checked_in_files_are_the_baseline(self) -> None:
         self.assertEqual(
             [f.filename for f in load_schema_files()],
-            ["000_extensions.sql", "010_instance.sql", "020_identity.sql", "030_jobs.sql", "040_sync.sql"],
+            ["000_extensions.sql", "010_instance.sql", "020_identity.sql", "030_jobs.sql", "040_sync.sql",
+             "100_works.sql", "110_people.sql", "120_organization.sql"],
         )
 
 

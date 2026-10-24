@@ -203,6 +203,7 @@ async function prksRefreshSyncQueueCue() {
     const host = document.querySelector('[data-prks-role="sync-queue-badge"]');
     if (!cue) return;
     let n = null;
+    let conflicts = 0;
     try {
         if (
             typeof prksSync !== 'undefined' &&
@@ -216,6 +217,7 @@ async function prksRefreshSyncQueueCue() {
                 return st && st !== 'acknowledged' && st !== 'discarded';
             });
             n = active.length;
+            conflicts = active.filter(op => op.status === 'conflict').length;
         }
     } catch (_e) {
         n = null;
@@ -226,17 +228,19 @@ async function prksRefreshSyncQueueCue() {
         if (host) host.innerHTML = '';
         return;
     }
+    const queued = n - conflicts;
+    const labels = [];
+    if (queued) labels.push(queued + (queued === 1 ? ' change queued' : ' changes queued'));
+    if (conflicts) labels.push(conflicts + (conflicts === 1 ? ' change needs attention' : ' changes need attention'));
+    const ariaLabel = labels.join('; ');
     cue.hidden = false;
     cue.classList.remove('hidden');
-    cue.setAttribute(
-        'aria-label',
-        n + (n === 1 ? ' change queued' : ' changes queued')
-    );
+    cue.setAttribute('aria-label', ariaLabel);
     cue.title = 'Open Settings → Diagnostics';
     if (host && typeof prksNavAttentionBadgeHtml === 'function') {
         host.innerHTML = prksNavAttentionBadgeHtml({
             count: n,
-            ariaLabel: n + (n === 1 ? ' change queued' : ' changes queued'),
+            ariaLabel: ariaLabel,
         });
     }
 }
@@ -1403,6 +1407,7 @@ async function prksOfflineDetailFetch(kind, id, path, signal, options) {
         signal: signal,
         domain: opts.domain,
         validate: opts.validate,
+        preferCacheWhenOffline: opts.preferCacheWhenOffline === true,
     });
 }
 
@@ -4891,6 +4896,13 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                         routeSignal,
                         {
                             domain: PRKS_CONCEPTS_DOMAIN,
+                            // This is a route read, not a canonical write. When
+                            // confirmed offline, an eligible cached Concept
+                            // can render without a known-failing network fetch.
+                            // The underlying reader still fences domain/entity
+                            // invalidations and reconnect races; online remains
+                            // server-first and the resolver validates shape.
+                            preferCacheWhenOffline: true,
                             validate: function (value) {
                                 return prksIsConceptShape(value, conceptId);
                             },
@@ -5012,6 +5024,11 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                         routeSignal,
                         {
                             domain: PRKS_POSITIONS_DOMAIN,
+                            // Reuse an eligible, warmed Position snapshot only
+                            // when PRKS has already confirmed it is offline.
+                            // Online reads, cache misses, and invalidated
+                            // snapshots preserve the existing read-through.
+                            preferCacheWhenOffline: true,
                             validate: function (value) {
                                 return prksIsPositionShape(value, positionId);
                             },
@@ -5152,6 +5169,12 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                         routeSignal,
                         {
                             domain: PRKS_ARGUMENTS_DOMAIN,
+                            // Only a confirmed-offline, eligible cache entry
+                            // skips the known-failing network read. The shared
+                            // reader still fences changed/blocked Arguments,
+                            // reconnect races, and cache misses; online detail
+                            // and ordinary Argument index reads stay server-first.
+                            preferCacheWhenOffline: true,
                             validate: function (value) {
                                 return prksIsArgumentShape(value, argumentId);
                             },
@@ -5296,6 +5319,12 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                         routeSignal,
                         {
                             domain: PRKS_PEOPLE_DOMAIN,
+                            // A warmed Person profile can render directly from
+                            // a coherent snapshot only when confirmed offline.
+                            // The shared reader rejects invalidated/blocked
+                            // People domains and reconnect races; online and
+                            // cache-missing detail reads still use the server.
+                            preferCacheWhenOffline: true,
                             validate: function (value) {
                                 return prksIsPersonShape(value, personId);
                             },
@@ -6046,6 +6075,7 @@ function initForms() {
     const folderParentInput = document.getElementById('folder-parent-search');
     const folderParentHidden = document.getElementById('folder-parent-id');
     const folderParentResults = document.getElementById('folder-parent-results');
+    let revalidateFolderTitle = null;
     if (folderTitleInput && folderTitleError && folderBtn) {
         let folderModalFolders = [];
         let folderParentBound = false;
@@ -6081,9 +6111,11 @@ function initForms() {
                 folderTitleError.textContent = '';
                 folderTitleError.classList.add('hidden');
                 folderTitleInput.removeAttribute('aria-invalid');
-                folderBtn.disabled = false;
+                // Input events and async validation must not enable Save while busy.
+                folderBtn.disabled = folderBtn.getAttribute('aria-busy') === 'true';
             }
         }
+        revalidateFolderTitle = updateFolderTitleDuplicateUi;
         function renderFolderParentDropdown() {
             if (!folderParentInput || !folderParentHidden || !folderParentResults) return;
             const q = String(folderParentInput.value || '').trim().toLowerCase();
@@ -6156,84 +6188,120 @@ function initForms() {
     }
 
     if (folderBtn) {
+        // A second click must not mint a second durable CREATE_FOLDER id while
+        // the first save is still queued or resolving (including offline).
+        let folderCreateInFlight = null;
         folderBtn.onclick = async () => {
-            /* No offline guard: a folder is created durably, under an id this
-             * device mints, so it exists and is usable the moment it is saved. */
-            const ownerCtx =
-                typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+            const folderModal = document.getElementById('folder-modal');
+            const opening = folderModal ? folderModal.dataset.prksOpenGeneration : '';
+            const isCurrentOpening = () => !!folderModal &&
+                !folderModal.classList.contains('hidden') &&
+                folderModal.dataset.prksOpenGeneration === opening;
+            if (folderCreateInFlight && folderCreateInFlight.opening === opening) return;
             if (folderBtn.disabled) return;
-            const payload = {
-                title: document.getElementById('folder-title').value,
-                description: document.getElementById('folder-description').value,
-                parent_id: (() => {
-                    const raw = (document.getElementById('folder-parent-id')?.value || '').trim();
-                    return raw || null;
-                })()
-            };
-            let newFolderId;
-            try {
-                newFolderId = await createFolder(payload.title, payload.description, {
-                    parent_id: payload.parent_id,
-                });
-            } catch (e) {
-                if (!prksOfflineWasGuardRefusal(e)) {
-                    await prksAlertMessage((e && e.message) || 'Could not create folder', 'Could not save');
-                }
-                return;
+            const saveToken = { opening };
+            folderCreateInFlight = saveToken;
+            if (typeof prksSetButtonBusy === 'function') {
+                prksSetButtonBusy(folderBtn, true, { busyLabel: 'Creating…' });
             }
-            const data = { id: newFolderId };
-            const pending = window.__prksPendingWorkFolderAttach;
-            if (pending && pending.workId && typeof patchWorkFolder === 'function') {
-                const attachWid = String(pending.workId);
-                const opener = pending.tabId && typeof prksGetTabContext === 'function'
-                    ? prksGetTabContext(String(pending.tabId)) : null;
-                const still = function () {
-                    return typeof prksCapturedWorkPanelStill === 'function' &&
-                        prksCapturedWorkPanelStill(pending);
+            try {
+                /* No offline guard: a folder is created durably, under an id this
+                 * device mints, so it exists and is usable the moment it is saved. */
+                const ownerCtx =
+                    typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+                const payload = {
+                    title: document.getElementById('folder-title').value,
+                    description: document.getElementById('folder-description').value,
+                    parent_id: (() => {
+                        const raw = (document.getElementById('folder-parent-id')?.value || '').trim();
+                        return raw || null;
+                    })()
                 };
-                window.__prksPendingWorkFolderAttach = null;
-                closeModals();
-                if (!still()) return;
-                let attachCoherenceToken = null;
+                let newFolderId;
                 try {
-                    attachCoherenceToken = await patchWorkFolder(attachWid, data.id, still);
+                    newFolderId = await createFolder(payload.title, payload.description, {
+                        parent_id: payload.parent_id,
+                    });
                 } catch (e) {
-                    if (still()) {
-                        await prksAlertMessage(
-                            (e && e.message) || 'Folder created but could not assign this file.',
-                            'Error'
-                        );
+                    if (!isCurrentOpening()) return;
+                    if (!prksOfflineWasGuardRefusal(e)) {
+                        await prksAlertMessage((e && e.message) || 'Could not create folder', 'Could not save');
                     }
-                }
-                if (!still()) return;
-                if (typeof fetchWorkDetails === 'function') {
-                    const _aw = await fetchWorkDetails(attachWid);
-                    if (_aw && typeof prksOfflineCacheEntityIfCurrent === 'function' && attachCoherenceToken != null) {
-                        void prksOfflineCacheEntityIfCurrent('work', attachWid, _aw, attachCoherenceToken);
-                    }
-                    if (typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(opener, attachWid, _aw)) {
-                        if (opener && opener.ui) opener.ui.workFolderEditing = false;
-                        if (typeof prksTabContextIsFocused === 'function' ? prksTabContextIsFocused(opener) : false) {
-                            updatePanelContent('details');
+                    return;
+                } finally {
+                    if (folderCreateInFlight === saveToken) {
+                        folderCreateInFlight = null;
+                        if (isCurrentOpening() && typeof prksSetButtonBusy === 'function') {
+                            prksSetButtonBusy(folderBtn, false);
+                            if (revalidateFolderTitle) revalidateFolderTitle();
                         }
                     }
                 }
-                return;
+                // The durable create is complete; the later Work attachment
+                // owns a separate liveness fence and does not hold this guard.
+                if (!isCurrentOpening()) return;
+                const data = { id: newFolderId };
+                const pending = window.__prksPendingWorkFolderAttach;
+                if (pending && pending.workId && typeof patchWorkFolder === 'function') {
+                    const attachWid = String(pending.workId);
+                    const opener = pending.tabId && typeof prksGetTabContext === 'function'
+                        ? prksGetTabContext(String(pending.tabId)) : null;
+                    const still = function () {
+                        return typeof prksCapturedWorkPanelStill === 'function' &&
+                            prksCapturedWorkPanelStill(pending);
+                    };
+                    window.__prksPendingWorkFolderAttach = null;
+                    closeModals();
+                    if (!still()) return;
+                    let attachCoherenceToken = null;
+                    try {
+                        attachCoherenceToken = await patchWorkFolder(attachWid, data.id, still);
+                    } catch (e) {
+                        if (still()) {
+                            await prksAlertMessage(
+                                (e && e.message) || 'Folder created but could not assign this file.',
+                                'Error'
+                            );
+                        }
+                    }
+                    if (!still()) return;
+                    if (typeof fetchWorkDetails === 'function') {
+                        const _aw = await fetchWorkDetails(attachWid);
+                        if (_aw && typeof prksOfflineCacheEntityIfCurrent === 'function' && attachCoherenceToken != null) {
+                            void prksOfflineCacheEntityIfCurrent('work', attachWid, _aw, attachCoherenceToken);
+                        }
+                        if (typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(opener, attachWid, _aw)) {
+                            if (opener && opener.ui) opener.ui.workFolderEditing = false;
+                            if (typeof prksTabContextIsFocused === 'function' ? prksTabContextIsFocused(opener) : false) {
+                                updatePanelContent('details');
+                            }
+                        }
+                    }
+                    return;
+                }
+                closeModals();
+                const ownerRoute = ownerCtx && (ownerCtx.lastResolvedRoute || ownerCtx.route);
+                if (
+                    ownerRoute &&
+                    ownerRoute.name === 'folders' &&
+                    typeof prksNavigate === 'function'
+                ) {
+                    prksNavigate('#/folders', { replace: true, tabId: ownerCtx.tabId });
+                    return;
+                }
+                /* Not a reload: the record is local, and reloading would throw away
+                 * every other pending change on the page. The Folder Library is
+                 * where a new folder belongs, so go there. */
+                if (typeof prksNavigate === 'function') prksNavigate('#/folders');
+            } finally {
+                if (folderCreateInFlight === saveToken) {
+                    folderCreateInFlight = null;
+                    if (isCurrentOpening() && typeof prksSetButtonBusy === 'function') {
+                        prksSetButtonBusy(folderBtn, false);
+                        if (revalidateFolderTitle) revalidateFolderTitle();
+                    }
+                }
             }
-            closeModals();
-            const ownerRoute = ownerCtx && (ownerCtx.lastResolvedRoute || ownerCtx.route);
-            if (
-                ownerRoute &&
-                ownerRoute.name === 'folders' &&
-                typeof prksNavigate === 'function'
-            ) {
-                prksNavigate('#/folders', { replace: true, tabId: ownerCtx.tabId });
-                return;
-            }
-            /* Not a reload: the record is local, and reloading would throw away
-             * every other pending change on the page. The Folder Library is
-             * where a new folder belongs, so go there. */
-            if (typeof prksNavigate === 'function') prksNavigate('#/folders');
         };
     }
 
