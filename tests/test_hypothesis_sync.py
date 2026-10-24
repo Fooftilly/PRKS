@@ -180,11 +180,17 @@ class WorkTagRevisionMachine(RuleBasedStateMachine):
         self.revision = 0
         self.ordinal = 0
 
+    @staticmethod
+    def check_equal(actual, expected):
+        # Unlike bare asserts, this remains effective under python -O.
+        if actual != expected:
+            raise AssertionError(f"expected {expected!r}, got {actual!r}")
+
     @rule(desired=st.booleans())
     def direct_edit(self, desired):
         with self.db.connection() as conn:
             changed = work_tag_sync.set_state(conn, self.work, self.tag, desired)
-        assert changed == (desired != self.present)
+        self.check_equal(changed, desired != self.present)
         self.revision += int(changed)
         self.present = desired
 
@@ -199,22 +205,22 @@ class WorkTagRevisionMachine(RuleBasedStateMachine):
         self.ordinal += 1
         response = sync_protocol.process_operation(self.db, op)
         if base > self.revision:
-            assert (response[0], response[1]["code"]) == (400, "FUTURE_REVISION")
+            self.check_equal((response[0], response[1]["code"]), (400, "FUTURE_REVISION"))
         elif base < self.revision and desired != self.present:
-            assert (response[0], response[1]["code"]) == (409, "REVISION_CONFLICT")
+            self.check_equal((response[0], response[1]["code"]), (409, "REVISION_CONFLICT"))
         else:
-            assert (response[0], response[1]["code"]) == (200, "ACKNOWLEDGED")
+            self.check_equal((response[0], response[1]["code"]), (200, "ACKNOWLEDGED"))
             changed = desired != self.present
-            assert response[1]["changed"] == changed
+            self.check_equal(response[1]["changed"], changed)
             self.revision += int(changed)
             self.present = desired
-            assert response[1]["server_revision"] == self.revision
+            self.check_equal(response[1]["server_revision"], self.revision)
         # A duplicate op_id must replay the original result, never modify state.
-        assert sync_protocol.process_operation(self.db, op) == response
+        self.check_equal(sync_protocol.process_operation(self.db, op), response)
 
     @invariant()
     def canonical_state_matches_model(self):
-        assert tag_state(self.db, self.work, self.tag) == (self.present, self.revision)
+        self.check_equal(tag_state(self.db, self.work, self.tag), (self.present, self.revision))
 
     def teardown(self):
         self._temp.cleanup()
