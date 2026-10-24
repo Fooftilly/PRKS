@@ -7,7 +7,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-      time: "03:00"
+      time: "01:10"
       timezone: "Europe/Podgorica"
     open-pull-requests-limit: 4
     # Routine versions only; security patches are not delayed.
@@ -22,7 +22,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-      time: "03:15"
+      time: "01:30"
       timezone: "Europe/Podgorica"
     open-pull-requests-limit: 3
     # Routine versions only; security patches are not delayed.
@@ -58,7 +58,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-      time: "03:30"
+      time: "01:50"
       timezone: "Europe/Podgorica"
     open-pull-requests-limit: 3
     # Routine versions only; security patches are not delayed.
@@ -73,7 +73,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-      time: "03:45"
+      time: "02:10"
       timezone: "Europe/Podgorica"
     open-pull-requests-limit: 3
     # Routine versions only; security patches are not delayed.
@@ -94,7 +94,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-      time: "04:00"
+      time: "02:30"
       timezone: "Europe/Podgorica"
     open-pull-requests-limit: 3
     # Routine versions only; security patches are not delayed.
@@ -123,7 +123,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-      time: "04:15"
+      time: "02:50"
       timezone: "Europe/Podgorica"
     open-pull-requests-limit: 2
     # Routine versions only; security patches are not delayed.
@@ -138,7 +138,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-      time: "04:30"
+      time: "03:10"
       timezone: "Europe/Podgorica"
     open-pull-requests-limit: 4
     # Routine versions only; security patches are not delayed.
