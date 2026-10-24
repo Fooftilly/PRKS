@@ -21,33 +21,58 @@ def job_source(workflow: str, job: str) -> str:
     return match.group(1)
 
 
+def named_upload_step(job: str, name: str) -> str:
+    match = re.search(
+        r"(?ms)^      - name: " + re.escape(name)
+        + r"\n(.*?)(?=^      - name: |\Z)",
+        job,
+    )
+    if match is None:
+        raise AssertionError("Missing upload step: " + name)
+    return match.group(1)
+
+
 class E2ETimingArtifactWorkflowTests(unittest.TestCase):
     def test_manual_source_full_is_unprofiled_and_successful(self):
         workflow = SOURCE.read_text(encoding="utf-8")
         shard = job_source(workflow, "e2e")
-        self.assertIn("github.event_name == 'workflow_dispatch' &&", shard)
-        self.assertIn("!inputs.profile && !inputs.route_fastpath &&", shard)
-        self.assertIn("needs.e2e-plan.outputs.mode == 'full' &&", shard)
-        self.assertIn("steps.tests.outcome == 'success'", shard)
+        step = named_upload_step(
+            shard, "Export exact test timings (manual full benchmark only)"
+        )
+        self.assertIn(
+            "        if: >-\n"
+            "          github.event_name == 'workflow_dispatch' &&\n"
+            "          !inputs.profile && !inputs.route_fastpath &&\n"
+            "          needs.e2e-plan.outputs.mode == 'full' &&\n"
+            "          steps.tests.outcome == 'success'\n",
+            step,
+        )
         self.assertIn(
             "name: e2e-timings-${{ matrix.shard }}-of-${{ matrix.total }}",
-            shard,
+            step,
         )
-        self.assertIn("path: .tests/e2e-timings.json", shard)
-        self.assertIn("if-no-files-found: error", shard)
+        self.assertIn("path: .tests/e2e-timings.json", step)
+        self.assertIn("if-no-files-found: error", step)
         self.assertEqual(shard.count("path: .tests/e2e-timings.json"), 1)
-        self.assertNotIn("path: .tests/\n", shard)
+        self.assertNotIn("path: .tests/\n", step)
 
     def test_manual_packaged_full_not_smoke_or_pr(self):
         workflow = PACKAGED.read_text(encoding="utf-8")
         shard = job_source(workflow, "packaged-frontend")
-        self.assertIn("github.event_name == 'workflow_dispatch' &&", shard)
-        self.assertIn("inputs.packaged_mode == 'full' && success()", shard)
-        self.assertIn("name: packaged-e2e-timings-${{ matrix.shard }}-of-6", shard)
-        self.assertIn("path: .tests/e2e-timings.json", shard)
-        self.assertIn("if-no-files-found: error", shard)
+        step = named_upload_step(
+            shard, "Export packaged test timings (manual full benchmark only)"
+        )
+        self.assertIn(
+            "        if: >-\n"
+            "          github.event_name == 'workflow_dispatch' &&\n"
+            "          inputs.packaged_mode == 'full' && success()\n",
+            step,
+        )
+        self.assertIn("name: packaged-e2e-timings-${{ matrix.shard }}-of-6", step)
+        self.assertIn("path: .tests/e2e-timings.json", step)
+        self.assertIn("if-no-files-found: error", step)
         self.assertEqual(shard.count("path: .tests/e2e-timings.json"), 1)
-        self.assertNotIn("path: .tests/\n", shard)
+        self.assertNotIn("path: .tests/\n", step)
         manual_smoke = job_source(workflow, "packaged-smoke")
         self.assertNotIn("e2e-timings.json", manual_smoke)
 
