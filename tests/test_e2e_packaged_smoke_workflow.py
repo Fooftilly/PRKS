@@ -5,6 +5,7 @@ routing and offline/production-distribution invariants at code review time.
 """
 from __future__ import annotations
 
+import ast
 import re
 import unittest
 from pathlib import Path
@@ -76,11 +77,49 @@ class PackagedSmokeWorkflowTests(unittest.TestCase):
                 self.assertIn(command, full)
                 self.assertIn(command, smoke)
         self.assertIn("python tests/e2e/run.py --jobs 1 --smoke --no-pointer-capture", smoke)
-        for test_name in (
-            "test_divider_drag_causes_no_additional_route_or_pdf_requests",
-            "test_annotation_copy_link_reports_clipboard_success_and_failure",
-        ):
-            self.assertIn(test_name, smoke)
+        expected_cases = {
+            "tests/e2e/test_app.py": {
+                "MainSecondaryDividerTests": (
+                    "test_divider_drag_causes_no_additional_route_or_pdf_requests",
+                ),
+                "PdfPersistenceTests": (
+                    "test_annotation_copy_link_reports_clipboard_success_and_failure",
+                ),
+            },
+            "tests/e2e/test_offline.py": {
+                "OfflineFoundationTests": (
+                    "test_previously_opened_pdf_reopens_offline",
+                    "test_cached_pdf_reopened_offline_keeps_annotation_tools",
+                ),
+            },
+            "tests/e2e/test_research_graph_offline.py": {
+                "ResearchGraphOfflineTests": (
+                    "test_record_graph_navigation_both_directions",
+                ),
+            },
+        }
+        for path, classes in expected_cases.items():
+            # Validate real unittest methods, not just matching strings in a
+            # comment. The full suite is unchanged; smoke is a manual pilot.
+            source = ast.parse((ROOT / path).read_text(encoding="utf-8"))
+            actual = {
+                node.name: {
+                    method.name
+                    for method in node.body
+                    if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
+                }
+                for node in source.body
+                if isinstance(node, ast.ClassDef)
+            }
+            for class_name, methods in classes.items():
+                for method_name in methods:
+                    with self.subTest(class_name=class_name, method_name=method_name):
+                        self.assertIn(
+                            f"tests.e2e.{Path(path).stem}.{class_name}.{method_name}",
+                            smoke,
+                        )
+                        self.assertIn(method_name, actual.get(class_name, set()))
+        self.assertIn("9 curated + 5 explicit browser tests", smoke)
 
 
 if __name__ == "__main__":
