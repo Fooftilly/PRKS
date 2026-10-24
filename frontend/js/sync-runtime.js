@@ -87,6 +87,10 @@
             if (outcome.conflict) {
                 await store.updateOperationSyncState(op.op_id, {
                     status: 'conflict', server_result: outcome.conflict, last_error: null });
+                // A non-reappliable rejected create can never satisfy its
+                // dependents. Preserve those intents as Diagnostics conflicts,
+                // rather than leaving them queued behind a permanent refusal.
+                if (outcome.failDependents === true) await blockDependents(op.op_id);
                 emit();
                 return;
             }
