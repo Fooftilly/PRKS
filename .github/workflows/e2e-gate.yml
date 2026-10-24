@@ -26,8 +26,10 @@ on:
         default: "6"
 
 concurrency:
-  group: e2e-gate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Manual comparisons must neither cancel master gates nor be cancelled by merges.
+  # Dispatches share a serial group; start each sample after the prior run finishes.
+  group: e2e-gate-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && 'dispatch-' || '' }}${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
   e2e-plan:
@@ -83,8 +85,8 @@ jobs:
           PRKS_E2E: "1"
           # Full E2E for shipped frontend changes, not unrelated PRs.
           PRKS_E2E_CI_FRONTEND_FULL: "1"
-          # Only workflow_dispatch may request eight shards; PR/master always use six.
-          PRKS_E2E_MANUAL_SHARDS: ${{ github.event_name == 'workflow_dispatch' && inputs.shard_count || '6' }}
+          # Only manual runs expose the width input; the planner owns validation.
+          PRKS_E2E_CI_MANUAL_SHARDS: ${{ github.event_name == 'workflow_dispatch' && inputs.shard_count || '' }}
         run: |
           set -euo pipefail
           if [[ "${{ steps.base.outputs.force }}" == "1" ]]; then
@@ -106,6 +108,8 @@ jobs:
           if missing:
               raise SystemExit("malformed ci-plan missing keys: %s" % ", ".join(missing))
           mode = plan["mode"]
+          if type(plan.get("run")) is not bool or type(plan.get("pointer_capture")) is not bool:
+              raise SystemExit("malformed ci-plan run/pointer_capture must be booleans")
           if mode not in ("skip", "affected", "full"):
               raise SystemExit("malformed ci-plan mode: %r" % mode)
           if mode == "affected":
@@ -119,16 +123,6 @@ jobs:
                   )
           matrix = plan.get("matrix") or {}
           include = matrix.get("include") or []
-          # Optional full-suite comparison; keep automatic PR/master width fixed.
-          # Reuse the exact production shard partitioner rather than hand-made rows.
-          manual_shards = (os.environ.get("PRKS_E2E_MANUAL_SHARDS") or "6").strip()
-          if manual_shards not in ("6", "8"):
-              raise SystemExit("unsupported manual E2E shard width: %r" % manual_shards)
-          if manual_shards == "8":
-              if not plan.get("run") or mode != "full" or not plan.get("pointer_capture"):
-                  raise SystemExit("eight-shard pilot requires complete E2E plus pointer capture")
-              from tests.e2e.policy import ci_matrix_include
-              include = ci_matrix_include(8, 1)
           if plan.get("run") and mode != "skip" and not include:
               raise SystemExit("runnable plan missing matrix.include (fail closed)")
           run = "true" if plan.get("run") else "false"
