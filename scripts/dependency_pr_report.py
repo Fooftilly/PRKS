@@ -19,16 +19,16 @@ RULES = (
      "python -m unittest tests.test_dependency_gate"),
     ("Vue app", ("frontend-app/package.json", "frontend-app/package-lock.json"),
      "Typecheck, Vitest, reproducible production assets and affected E2E",
-     "bash scripts/refresh_dependency_artifacts.sh frontend-app"),
+     "npm ci --ignore-scripts --no-audit --prefix frontend-app && npm run build --prefix frontend-app"),
     ("Frontend vendor", ("tools/frontend-vendor/package.json", "tools/frontend-vendor/package-lock.json"),
      "Vendored asset reproducibility, dependency gate and browser E2E",
-     "bash scripts/refresh_dependency_artifacts.sh frontend-vendor"),
+     "npm ci --ignore-scripts --no-audit --prefix tools/frontend-vendor && npm run build --prefix tools/frontend-vendor"),
     ("PDF viewer", ("tools/pdf-viewer/package.json", "tools/pdf-viewer/package-lock.json"),
      "EmbedPDF build/guard, vendor hashes and PDF/browser E2E",
-     "bash scripts/refresh_dependency_artifacts.sh pdf-viewer"),
+     "npm ci --no-audit --prefix tools/pdf-viewer && npm run build --prefix tools/pdf-viewer && npm run guard --prefix tools/pdf-viewer"),
     ("Research graph", ("tools/research-graph/package.json", "tools/research-graph/package-lock.json"),
      "Cytoscape vendor build, dependency gate and graph/browser E2E",
-     "bash scripts/refresh_dependency_artifacts.sh research-graph"),
+     "npm ci --ignore-scripts --no-audit --prefix tools/research-graph && npm run build --prefix tools/research-graph"),
     ("GitHub automation", (".github/workflows/", ".github/dependabot.yml"),
      "actionlint, ShellCheck, zizmor and affected workflow execution",
      "Inspect pinned actions and relevant workflow runs"),
@@ -60,14 +60,27 @@ def classify(paths: set[str]) -> list[tuple[str, str, str, bool]]:
     return results
 
 
-def changed_paths(base_sha: str, root: Path = ROOT) -> set[str]:
-    if re.fullmatch(r"[0-9a-fA-F]{40}", base_sha) is None:
-        raise ValueError("invalid 40-character comparison SHA")
+def changed_paths(root: Path = ROOT) -> set[str]:
+    """Diff against the *actual* base of the checked-out PR merge commit.
+
+    Event base.sha can be stale when a workflow is rerun after master moves.
+    GitHub pull_request checkout normally has HEAD = two-parent merge commit.
+    Fail closed if checkout is not that shape; never inflate the report with
+    unrelated master commits.
+    """
+    parents = subprocess.run(
+        ["git", "rev-list", "--parents", "-n", "1", "HEAD"],
+        cwd=root, capture_output=True, check=True, text=True,
+    ).stdout.split()
+    if len(parents) != 3 or any(
+        re.fullmatch(r"[0-9a-fA-F]{40}", part) is None for part in parents
+    ):
+        raise ValueError("dependency report requires a two-parent PR merge commit")
     result = subprocess.run(
-        ["git", "diff", "--name-only", "-z", base_sha, "HEAD", "--"],
+        ["git", "diff", "--name-only", "-z", parents[1], "HEAD", "--"],
         cwd=root, capture_output=True, check=True,
     )
-    return {part.decode("utf-8") for part in result.stdout.split(b"\0") if part}
+    return {part.decode("utf-8") for part in result.stdout.split(b"\\0") if part}
 
 
 def render(paths: set[str]) -> str:
@@ -104,9 +117,8 @@ def render(paths: set[str]) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base", required=True, help="40-character PR base SHA")
-    args = parser.parse_args(argv)
-    output = render(changed_paths(args.base))
+    parser.parse_args(argv)
+    output = render(changed_paths())
     print(output)
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as stream:
