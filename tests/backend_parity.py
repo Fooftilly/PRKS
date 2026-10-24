@@ -198,6 +198,8 @@ class BackendParityTestCase(unittest.TestCase):
     def _open_postgres_library(self, storage: Any) -> ParityRecorder:
         from backend.db import Database, DatabaseConfig
         from backend.pg_facade import PostgresLibrary, ported_methods
+        from backend.pg_facade import context as facade_context
+        from tests.pg.facade_context import provision_actor
         from tests.pg.harness import get_harness
 
         harness = get_harness()
@@ -207,6 +209,10 @@ class BackendParityTestCase(unittest.TestCase):
             DatabaseConfig(conninfo=harness.conninfo(name), role="test", pool_min=0, pool_max=2)
         )
         self.addCleanup(database.close)
+        # The facade acts for a bound request context (L-W-1 #628): a real
+        # signed-in owner of a fresh Library, bound until the test ends.
+        actor = provision_actor(database)
+        self.addCleanup(facade_context.unbind, facade_context.bind(actor.context))
         library = with_refusal_log(PostgresLibrary, self.parity_log)(database, storage=storage)
         return ParityRecorder(library, frozenset(ported_methods(PostgresLibrary)), self.parity_log)
 

@@ -16,8 +16,10 @@ that belongs to the lanes that build them, not to this pool configuration.
 
 from __future__ import annotations
 
+import math
 import os
 import re
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
@@ -36,6 +38,15 @@ _MAX_URL_FILE_BYTES = 64 * 1024
 # §6.1: canonical data in ``prks``, extensions in ``ext``.
 DEFAULT_SEARCH_PATH = ("prks", "ext")
 _SCHEMA_NAME_RE = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
+
+
+def _finite_positive_pool_seconds(value: float) -> bool:
+    """Reject impossible pool intervals without leaking low-level conversion errors."""
+    try:
+        return math.isfinite(value) and 0 < value <= threading.TIMEOUT_MAX
+    except (OverflowError, TypeError, ValueError):
+        # A caller can pass an enormous int despite the float annotation.
+        return False
 
 
 @dataclass(frozen=True)
@@ -60,8 +71,10 @@ class DatabaseConfig:
             raise DatabaseConfigError("empty_url", "The database URL is empty.")
         if self.pool_min < 0 or self.pool_max < 1 or self.pool_min > self.pool_max:
             raise DatabaseConfigError("invalid_pool_size", "The database pool size is invalid.")
-        if self.pool_timeout_seconds <= 0:
+        if not _finite_positive_pool_seconds(self.pool_timeout_seconds):
             raise DatabaseConfigError("invalid_pool_timeout", "The database pool timeout is invalid.")
+        if not _finite_positive_pool_seconds(self.max_idle_seconds):
+            raise DatabaseConfigError("invalid_pool_idle", "The database pool idle time is invalid.")
         if not self.search_path or not all(
             _SCHEMA_NAME_RE.fullmatch(schema) for schema in self.search_path
         ):

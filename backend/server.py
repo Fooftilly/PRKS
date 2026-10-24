@@ -56,7 +56,9 @@ from backend.research_network import ResearchError
 import backend.research_network as research_network
 from backend.api_contract.boundary import dump_response, parse_request
 from backend.api_contract.errors import research_error_envelope
+from backend.api_contract.jobs import JobDiagnostics
 from backend.api_contract.openapi import (
+    job_diagnostics_openapi_document,
     performance_diagnostics_openapi_document,
     positions_openapi_document,
     processing_files_openapi_document,
@@ -826,6 +828,64 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             return False
         return True
 
+    def _prks_admit(self, parsed_path) -> bool:
+        """Authentication admission for an ``/api/`` request (L-ID-1 #626).
+
+        True to dispatch the route; False when the request has been answered.
+        Without ``PRKS_AUTH`` (the SQLite runtime) only the existing Origin
+        check applies, to mutations. With it, ``backend.api.session`` answers
+        the identity routes and admits every other route only for a live
+        session with the route's capability and, for a Library mutation, the
+        Library's current epoch.
+        """
+        self._prks_library_epoch = None
+        method = (getattr(self, "command", "") or "").upper()
+        auth = getattr(self.server, "prks_auth", None)
+        if auth is None:
+            return method in ("GET", "HEAD") or self._validate_mutation_origin()
+        # Only an authenticated (PostgreSQL) process imports the identity code.
+        from backend.api import session as session_api
+
+        def read_json():
+            data = self._read_json_body()
+            if data is _JSON_BODY_REJECTED:
+                return session_api.ANSWERED
+            return {} if data is _JSON_BODY_ABSENT else data
+
+        outcome = session_api.handle(
+            auth,
+            session_api.HttpRequest(
+                method=method,
+                path=parsed_path.path,
+                headers=self.headers,
+                peer=str(self.client_address[0]),
+                request_host=self._prks_request_host,
+                parse_origin=parse_request_origin,
+                read_json=read_json,
+            ),
+        )
+        if isinstance(outcome, session_api.Admitted):
+            self._prks_library_epoch = outcome.epoch
+            return True
+        if isinstance(outcome, session_api.Reply):
+            if outcome.status >= 400:
+                LOGGER.info(
+                    "request_rejected reason=%s request_id=%s",
+                    safe_log_label(str(outcome.body.get("error", ""))),
+                    safe_log_id(self._prks_request_id),
+                )
+            body = b"" if method == "HEAD" else json.dumps(outcome.body).encode("utf-8")
+            self.send_response(outcome.status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            for name, value in outcome.headers:
+                self.send_header(name, value)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if body:
+                self.wfile.write(body)
+        return False
+
     def _read_json_body(self):
         types = self.headers.get_all("Content-Type") or []
         if len(types) != 1 or not json_content_type_allowed(types[0]):
@@ -939,11 +999,19 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             pass
         if self._prks_request_id:
             self.send_header("X-Request-ID", self._prks_request_id)
+        self._send_library_epoch_header()
         # Every response declares its own Content-Type; no response may be
         # re-interpreted as HTML by MIME sniffing. This closes the reflected-XSS
         # class for JSON/API bodies that echo library content back to the page.
         self.send_header("X-Content-Type-Options", "nosniff")
         super().end_headers()
+
+    def _send_library_epoch_header(self):
+        epoch = getattr(self, "_prks_library_epoch", None)
+        if epoch is not None:  # set only by an authenticated process's admission
+            from backend.api.session import EPOCH_HEADER
+
+            self.send_header(EPOCH_HEADER, str(epoch))
 
     def log_request(self, code="-", size="-"):
         ctx = self._request_context()
@@ -972,6 +1040,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             return
         parsed_path = urlparse(self.path)
         if parsed_path.path.startswith('/api/'):
+            if not self._prks_admit(parsed_path):
+                return
             with self._library_access(parsed_path):
                 self.handle_api_get(parsed_path)
         else:
@@ -994,6 +1064,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             return
         parsed_path = urlparse(self.path)
         if parsed_path.path.startswith('/api/'):
+            if not self._prks_admit(parsed_path):
+                return
             with self._library_access(parsed_path):
                 self.handle_api_head(parsed_path)
         else:
@@ -1015,7 +1087,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             return
         parsed_path = urlparse(self.path)
         if parsed_path.path.startswith('/api/'):
-            if not self._validate_mutation_origin():
+            if not self._prks_admit(parsed_path):
                 return
             if parsed_path.path == '/api/backups/stage':
                 self._handle_backup_stage(parsed_path)
@@ -1033,7 +1105,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             return
         parsed_path = urlparse(self.path)
         if parsed_path.path.startswith('/api/'):
-            if not self._validate_mutation_origin():
+            if not self._prks_admit(parsed_path):
                 return
             data = self._read_json_body()
             if data is _JSON_BODY_REJECTED:
@@ -1355,7 +1427,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             return
         parsed_path = urlparse(self.path)
         if parsed_path.path.startswith('/api/'):
-            if not self._validate_mutation_origin():
+            if not self._prks_admit(parsed_path):
                 return
             data = self._read_json_body()
             if data is _JSON_BODY_REJECTED:
@@ -1445,7 +1517,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             return
         parsed_path = urlparse(self.path)
         if parsed_path.path.startswith('/api/'):
-            if not self._validate_mutation_origin():
+            if not self._prks_admit(parsed_path):
                 return
             with self._library_access(parsed_path):
                 self.handle_api_delete(parsed_path)
@@ -1880,6 +1952,22 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             prepared.body, prepared.subtype, max_age=3600
         )
 
+    def _handle_job_diagnostics(self):
+        """Owner-only job diagnostics (§12.4); the route exists only with ``PRKS_AUTH``.
+
+        ``backend.api.session`` admitted the request for ADMIN_LIBRARY. The
+        SQLite runtime has no jobs, so it answers like any unknown route.
+        """
+        jobs = getattr(self.server, "prks_jobs", None)
+        if jobs is None:
+            self.send_error(404, "API endpoint not found")
+            return
+        body = jobs.diagnostics()
+        if body is None:
+            self.send_json(503, {"error": "unavailable", "code": "unavailable"})
+            return
+        self.send_json(200, dump_response(JobDiagnostics, body))
+
     def handle_api_get(self, parsed_path):
         query = parse_qs(parsed_path.query)
         path = parsed_path.path
@@ -1887,6 +1975,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         try:
             if path == '/api/diagnostics/performance':
                 self.send_json(200, dump_response(PerformanceSnapshot, performance_snapshot()))
+            elif path == '/api/diagnostics/jobs':
+                self._handle_job_diagnostics()
             elif path == '/api/works':
                 # `?projection=browse` is an explicit, additive contract: the
                 # compact catalog the browse routes cache. The default response
@@ -2329,6 +2419,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(200, positions_openapi_document())
             elif path == '/api/openapi/performance-diagnostics.json':
                 self.send_json(200, performance_diagnostics_openapi_document())
+            elif path == '/api/openapi/job-diagnostics.json':
+                self.send_json(200, job_diagnostics_openapi_document())
             elif path == '/api/openapi/publishers.json':
                 self.send_json(200, publishers_openapi_document())
             elif path == '/api/openapi/saved-views.json':
@@ -3695,7 +3787,7 @@ class PRKSThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer
     allow_reuse_address = True
 
 
-def run_server(port=PORT, host=DEFAULT_HOST):
+def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None):
     if _bound_storage is None:
         raise RuntimeError("storage is not bound; call bind_storage() before run_server()")
     host = normalize_listen_host(host)
@@ -3731,11 +3823,24 @@ def run_server(port=PORT, host=DEFAULT_HOST):
         httpd.prks_bind_host = host
         httpd.prks_trusted_hosts = trusted_hosts
         httpd.prks_access_gate = LibraryAccessGate()
+        # Authentication (PRKS_AUTH, backend.domain.identity.web_start); None
+        # keeps the SQLite runtime's behavior.
+        httpd.prks_auth = auth
+        # The PRKS_AUTH runtime's jobs (backend.jobs.embedded.WebJobs): the
+        # embedded worker and the job diagnostics. None for the SQLite runtime.
+        httpd.prks_jobs = jobs
+        if auth is not None and auth.settings.public_origin is not None:
+            httpd.prks_trusted_hosts = trusted_hosts | {auth.settings.public_origin[1]}
         LOGGER.info(
             "server_starting bind_scope=%s port=%s",
             safe_bind_scope(host),
             port,
         )
+        if jobs is not None:
+            # Runs the embedded worker while serving and stops it gracefully
+            # when the server stops (SIGTERM or SIGINT included).
+            jobs.serve(httpd)
+            return
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:

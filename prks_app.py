@@ -5,7 +5,14 @@ import sys
 
 from backend.log_config import setup_logging
 from backend.backup_restore import recover_incomplete_restore
-from backend.server import DEFAULT_HOST, PORT, bind_storage, normalize_listen_host, run_server
+from backend.server import (
+    DEFAULT_HOST,
+    PORT,
+    bind_storage,
+    normalize_listen_host,
+    parse_request_origin,
+    run_server,
+)
 from backend.storage.config import StorageConfig
 from backend.storage.errors import StorageRootError
 from backend.storage.resolver import bootstrap_config_path
@@ -72,6 +79,89 @@ def open_storage(config):
         raise SystemExit(2) from None
 
 
+def start_identity(args, config, environ=None):
+    """Authentication for this process (``PRKS_AUTH``), or ``None`` for the SQLite runtime.
+
+    With ``PRKS_AUTH`` set, the PostgreSQL start check and bump run here,
+    before the storage root is opened; any refusal exits with status 2.
+    """
+    env = os.environ if environ is None else environ
+    if not (env.get("PRKS_AUTH") or "").strip():
+        return None
+    # Imported only when used, so the SQLite runtime never loads psycopg.
+    try:
+        import argon2  # noqa: F401 - checked here for a clear refusal
+        import psycopg  # noqa: F401
+    except ImportError:
+        print(
+            "PRKS cannot start authentication: PRKS_AUTH needs the PostgreSQL packages "
+            "(psycopg, psycopg-pool and argon2-cffi in requirements-dev.txt).",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from None
+    from backend.db.config import load_database_config
+    from backend.db.database import Database
+    from backend.db.errors import DatabaseConfigError
+    from backend.domain.identity.errors import RootPairingRefused
+    from backend.domain.identity.login_limiter import LimiterConfigError
+    from backend.domain.identity.sessions import SessionConfigError
+    from backend.domain.identity.web_start import (
+        WebAuthConfigError,
+        settings_from_env,
+        start_web_identity,
+    )
+
+    testing = config.mode == "testing"
+    try:
+        settings = settings_from_env(
+            env, testing=testing and bool(args.testing), host=args.host,
+            parse_origin=parse_request_origin,
+        )
+    except (WebAuthConfigError, LimiterConfigError, SessionConfigError) as exc:
+        print(f"PRKS cannot start authentication: {exc}", file=sys.stderr)
+        raise SystemExit(2) from None
+    if settings is None:
+        return None
+    try:
+        db = Database(load_database_config(env, role="web"))
+    except DatabaseConfigError as exc:
+        print(f"PRKS cannot start authentication: {exc.message}", file=sys.stderr)
+        raise SystemExit(2) from None
+    try:
+        return start_web_identity(db, settings, root=os.path.realpath(config.root), testing=testing)
+    except RootPairingRefused as exc:
+        db.close()
+        print(f"PRKS refuses to start: {exc.message}", file=sys.stderr)
+        raise SystemExit(2) from None
+
+
+def start_jobs(auth, environ=None):
+    """The web process's jobs runtime (``backend.jobs.embedded``), or ``None`` for the SQLite runtime.
+
+    Only with ``PRKS_AUTH`` (``auth`` from :func:`start_identity`, whose start
+    check already ran): unless ``PRKS_EMBEDDED_WORKER`` is ``0`` it prepares
+    one embedded worker, which ``run_server`` starts with the server and
+    stops on shutdown. Any refusal exits with status 2.
+    """
+    if auth is None:
+        return None
+    env = os.environ if environ is None else environ
+    # Imported only when used, so the SQLite runtime never loads psycopg.
+    from backend.db.errors import DatabaseConfigError, DatabaseError
+    from backend.jobs.embedded import EmbeddedWorkerConfigError, web_jobs
+
+    try:
+        return web_jobs(auth.db, env)
+    except EmbeddedWorkerConfigError as exc:
+        print(f"PRKS cannot start its job worker: {exc}", file=sys.stderr)
+    except DatabaseConfigError as exc:
+        print(f"PRKS cannot start its job worker: {exc.message}", file=sys.stderr)
+    except DatabaseError:
+        print("PRKS cannot start its job worker: the database cannot be reached.", file=sys.stderr)
+    auth.db.close()
+    raise SystemExit(2)
+
+
 if __name__ == "__main__":
     args = build_parser().parse_args()
     if args.testing:
@@ -87,6 +177,10 @@ if __name__ == "__main__":
     except StorageRootError as exc:
         print(f"PRKS cannot select its storage root: {exc.message}", file=sys.stderr)
         raise SystemExit(2) from None
+    # Before the root is opened: the PostgreSQL start check takes the root's
+    # shared lease, which the single-process lease below excludes.
+    auth = start_identity(args, config)
+    jobs = start_jobs(auth)
     # Held until this process exits: the single-process lease (root.lock).
     bound_root = open_storage(config)
     # Every later open stays beneath the root that was validated and leased,
@@ -98,4 +192,4 @@ if __name__ == "__main__":
     bound_root.log_binding()
 
     port = args.port if args.port is not None else (8070 if args.testing else PORT)
-    run_server(port=port, host=args.host)
+    run_server(port=port, host=args.host, auth=auth, jobs=jobs)

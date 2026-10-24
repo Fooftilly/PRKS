@@ -26,6 +26,8 @@ FAILURE_DIAGNOSTICS_PATH = Path(".tests") / "e2e-failure-diagnostics.json"
 # runner reads the same names to decide whether a run may train history.
 PROFILE_ENV = "PRKS_E2E_PROFILE"
 SEED_CACHE_ENV = "PRKS_E2E_SEED_CACHE"
+# Opt-in experiment: identical catch-all interception with a cheaper local URL fast path.
+ROUTE_FASTPATH_ENV = "PRKS_E2E_ROUTE_FASTPATH"
 
 FALSE_ENV_VALUES = frozenset({"0", "false", "no", "off"})
 
@@ -53,6 +55,8 @@ def benchmark_modes(environ=None) -> tuple:
         modes.append("profile")
     if not env_flag_enabled(SEED_CACHE_ENV, default=True, environ=environ):
         modes.append("no-seed-cache")
+    if env_flag_enabled(ROUTE_FASTPATH_ENV, environ=environ):
+        modes.append("route-fastpath")
     return tuple(modes)
 
 
@@ -886,6 +890,36 @@ AFFECTED_RULES = (
         "features": (),
         "skip": True,
         "note": "Non-E2E tests → no browser E2E selection",
+    },
+    # The schema files and the snapshot tooling aren't imported by the served
+    # app. The opt-in PRKS_AUTH start loads backend/db/__init__.py and the pool
+    # lazily (L-ID-1 PR 5/5), and its embedded job worker runs the schema check
+    # of backend/db/migrate.py (L-J-1 PR 3/3), so neither of those is exempt
+    # any more. Do not exempt shared backend/domain/__init__.py
+    # either: it can gain runtime imports or side effects unrelated to isolated
+    # migration plumbing. These files are tested by the PostgreSQL Test Gate,
+    # not by Chromium. Keep this allowlist narrow: unknown backend/db files
+    # still require full E2E. tests/test_e2e_policy.py fails when a skipped
+    # Python file becomes reachable from the served app, lazily or not.
+    {
+        "name": "postgres-migration-infrastructure",
+        "paths": (
+            "backend/db/schema/*.sql",
+            "backend/db/schema/snapshot.json",
+            "backend/db/schema_snapshot.py",
+        ),
+        "features": (),
+        "skip": True,
+        "note": "Isolated PostgreSQL schema/migrations → PostgreSQL tests, no browser E2E",
+    },
+    # This will eventually become shared login/identity logic; do not blanket
+    # skip it. Smoke is the small browser boundary; SQL/Python parity tests
+    # remain the authoritative normalization coverage.
+    {
+        "name": "postgres-text-identity",
+        "paths": ("backend/domain/text_identity.py",),
+        "features": ("smoke",),
+        "note": "Text identity helper → smoke; PostgreSQL parity checked separately",
     },
     # Storybook is a maintainer catalog. It is not the Vue app and must not
     # explain a rebuilt frontend/vue bundle or select a feature suite.

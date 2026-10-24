@@ -29,6 +29,14 @@ handle, conflicts within a process as well, and is released when the handle
 closes or the process exits. A held file cannot be deleted on Windows, which is
 why removing a lock file is reserved for the terminal-teardown procedure of a
 later phase and never happens here.
+
+:class:`SharedFileLock` is the same lock taken in **shared** mode
+(``flock(LOCK_SH | LOCK_NB)``): any number of shared holders coexist, and a
+shared holder and an exclusive holder exclude each other. It is the
+PostgreSQL-era ``root.lock`` that every process of one paired instance holds
+(``docs/postgresql-architecture.md`` §7.5, §11.1). ``msvcrt`` has no shared
+mode, so Windows refuses it (``shared_lock_unsupported``) rather than
+silently taking an exclusive lock with different semantics.
 """
 
 from __future__ import annotations
@@ -39,7 +47,7 @@ import os
 import stat
 import sys
 import time
-from typing import Optional
+from typing import Optional, Self
 
 
 _BUSY_ERRNOS = frozenset(
@@ -79,8 +87,10 @@ def is_link_or_reparse_point(st: os.stat_result) -> bool:
     return bool(attributes & _FILE_ATTRIBUTE_REPARSE_POINT)
 
 
-class ExclusiveFileLock:
-    """A held exclusive lock on ``path``. Create with :meth:`acquire`."""
+class _HeldFileLock:
+    """A held OS lock on ``path``; subclasses fix the mode. Create with ``acquire``."""
+
+    _shared = False
 
     def __init__(self, path: str, fd: int) -> None:
         self._path = path
@@ -101,15 +111,16 @@ class ExclusiveFileLock:
         *,
         timeout: float = 0.0,
         poll_interval: float = 0.05,
-    ) -> "ExclusiveFileLock":
+    ) -> Self:
         """Take the lock, creating the file (owner-only) if it is absent.
 
         ``timeout`` 0 is a single non-blocking attempt. A positive timeout polls
         until the deadline; it bounds how long this *caller* waits and has
         nothing to do with how long the holder may keep the lock.
 
-        Raises ``LockBusy`` when another handle holds it, ``LockUnavailable``
-        when the file is a link, not a regular file, or cannot be opened.
+        Raises ``LockBusy`` when another handle holds it in a conflicting mode,
+        ``LockUnavailable`` when the file is a link, not a regular file, or
+        cannot be opened.
         """
         deadline = time.monotonic() + max(0.0, float(timeout))
         for _ in range(_IDENTITY_RETRIES):
@@ -117,7 +128,7 @@ class ExclusiveFileLock:
             try:
                 while True:
                     try:
-                        _try_lock(fd)
+                        _try_lock(fd, shared=cls._shared)
                         break
                     except LockBusy:
                         if time.monotonic() >= deadline:
@@ -137,7 +148,7 @@ class ExclusiveFileLock:
         if fd is not None:
             _close_quietly(fd)
 
-    def __enter__(self) -> "ExclusiveFileLock":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_exc: object) -> None:
@@ -149,6 +160,23 @@ class ExclusiveFileLock:
         # because the kernel releases the lock on exit anyway.
         with contextlib.suppress(Exception):
             self.release()
+
+
+class ExclusiveFileLock(_HeldFileLock):
+    """A held exclusive lock on ``path``. Create with :meth:`acquire`."""
+
+    _shared = False
+
+
+class SharedFileLock(_HeldFileLock):
+    """A held shared lock on ``path``. Create with :meth:`acquire`.
+
+    ``LockBusy`` means an exclusive holder has it. Never a subclass of
+    :class:`ExclusiveFileLock`, so code that requires an exclusive lease can
+    never be handed a shared one.
+    """
+
+    _shared = True
 
 
 def _refuse_non_regular_existing(path: str) -> None:
@@ -194,9 +222,12 @@ def _open_lock_file(path: str) -> int:
     return fd
 
 
-def _try_lock(fd: int) -> None:
+def _try_lock(fd: int, *, shared: bool = False) -> None:
     if sys.platform == "win32":  # pragma: no cover - exercised on Windows only
         import msvcrt
+
+        if shared:
+            raise LockUnavailable("shared_lock_unsupported")
 
         try:
             os.lseek(fd, 0, os.SEEK_SET)
@@ -209,7 +240,7 @@ def _try_lock(fd: int) -> None:
         import fcntl
 
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(fd, (fcntl.LOCK_SH if shared else fcntl.LOCK_EX) | fcntl.LOCK_NB)
         except OSError as exc:
             if exc.errno in _BUSY_ERRNOS:
                 raise LockBusy() from exc

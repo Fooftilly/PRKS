@@ -8,6 +8,15 @@ on:
     branches:
       - master
   workflow_dispatch:
+    inputs:
+      profile:
+        description: "Collect per-test infrastructure phase timings (diagnostic only)"
+        type: boolean
+        default: false
+      route_fastpath:
+        description: "Benchmark same-origin routing fast path (experimental)"
+        type: boolean
+        default: false
 
 concurrency:
   group: e2e-gate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -189,16 +198,26 @@ jobs:
         run: python tests/e2e/install_browser.py
 
       - name: Run E2E selection shard
+        id: tests
         env:
+          PRKS_JUNIT_REPORT_DIR: test-reports/e2e
+          # Manual benchmark only. Normal PR/master gates still persist timing history.
+          PRKS_E2E_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profile && '1' || '0' }}
+          PRKS_E2E_ROUTE_FASTPATH: ${{ github.event_name == 'workflow_dispatch' && inputs.route_fastpath && '1' || '0' }}
           PRKS_E2E_MODE: ${{ needs.e2e-plan.outputs.mode }}
           PRKS_E2E_FEATURES: ${{ needs.e2e-plan.outputs.features }}
+          # Use typed matrix values through the environment, rather than
+          # interpolating GitHub expressions into Bash arithmetic (SC2309).
+          PRKS_E2E_SHARD_TOTAL: ${{ matrix.total }}
+          PRKS_E2E_SHARD_INDEX: ${{ matrix.shard }}
+          PRKS_E2E_SHARD_JOBS: ${{ matrix.jobs }}
         shell: bash
         run: |
           set -euo pipefail
           mode="${PRKS_E2E_MODE}"
-          args=(python tests/e2e/run.py --jobs "${{ matrix.jobs }}" --no-pointer-capture)
-          if [[ "${{ matrix.total }}" -gt 1 ]]; then
-            args+=(--shard "${{ matrix.shard }}/${{ matrix.total }}")
+          args=(python tests/e2e/run.py --jobs "${PRKS_E2E_SHARD_JOBS}" --no-pointer-capture)
+          if [[ "${PRKS_E2E_SHARD_TOTAL}" -gt 1 ]]; then
+            args+=(--shard "${PRKS_E2E_SHARD_INDEX}/${PRKS_E2E_SHARD_TOTAL}")
           fi
           if [[ "$mode" == "affected" ]]; then
             mapfile -t features < <(python -c 'import json,os; print("\n".join(json.loads(os.environ["PRKS_E2E_FEATURES"])))')
@@ -217,6 +236,23 @@ jobs:
           printf ' %q' "${args[@]}"
           printf '\n'
           "${args[@]}"
+
+      # E2E runs Python unittest cases through Playwright, not Playwright Test.
+      # Upload privacy-limited JUnit suites from each worker; never traces/logs.
+      - name: Report E2E test results to Mergify
+        if: >-
+          (success() || failure()) && !cancelled() &&
+          github.actor != 'dependabot[bot]' &&
+          (github.event_name != 'pull_request' ||
+           github.event.pull_request.head.repo.full_name == github.repository)
+        continue-on-error: true
+        uses: Mergifyio/gha-mergify-ci@392d123d84a27960993927aec1f2cbb059fb95c1 # v27
+        with:
+          action: junit-process
+          token: ${{ secrets.MERGIFY_TOKEN }}
+          report_path: 'test-reports/e2e/*.xml'
+          job_name: E2E (${{ matrix.shard }}/${{ matrix.total }})
+          test_step_outcome: ${{ steps.tests.outcome }}
 
       - name: Upload shard failure log
         if: failure()

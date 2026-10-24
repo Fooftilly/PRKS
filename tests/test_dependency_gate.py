@@ -67,7 +67,7 @@ _TEST_GATE_RUN_TESTS_STEP = "Run PRKS unit, API, structural, and Node tests"
 # ``scripts/test-postgres``. Both steps or neither.
 _TEST_GATE_PG_INSTALL_STEP = "Install pinned runtime and PostgreSQL dependencies"
 _TEST_GATE_PG_RUN_STEP = "Run PostgreSQL helper and harness tests"
-_TEST_GATE_PG_DEV_PINS = ("psycopg", "psycopg-binary", "psycopg-pool")
+_TEST_GATE_PG_DEV_PINS = ("psycopg", "psycopg-binary", "psycopg-pool", "argon2-cffi")
 # The backend parity job (#625): the same pinned install and exactly
 # ``scripts/test-postgres --parity``. Both steps or neither.
 _TEST_GATE_PARITY_INSTALL_STEP = "Install pinned runtime and PostgreSQL dependencies for parity"

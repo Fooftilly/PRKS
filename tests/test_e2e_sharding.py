@@ -993,17 +993,93 @@ class ParallelRunnerProtocolTests(unittest.TestCase):
             self.assertTrue(report["failed_ids"][0].endswith("test_also_fails"))
 
 
+
+class MergifyE2EReportingTests(unittest.TestCase):
+    """Both E2E execution shapes report individual tests without altering gates."""
+
+    def test_serial_full_gate_emits_junit_on_pass_and_failure(self):
+        from xml.etree import ElementTree as ET
+
+        with _import_runner() as runner, tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "e2e-serial.xml"
+            with mock.patch.dict(os.environ, {"PRKS_JUNIT_REPORT_DIR": raw}):
+                passed, _, failed, _ = runner.run_serial(
+                    _ids(_CASES, "PassingCases", "test_first"), False
+                )
+                self.assertTrue(passed)
+                self.assertEqual(failed, [])
+                suite = ET.parse(path).getroot()
+                self.assertEqual(suite.attrib["tests"], "1")
+                self.assertEqual(suite.attrib["failures"], "0")
+
+                passed, _, failed, _ = runner.run_serial(
+                    _ids(_CASES, "FailingCases", "test_fails"), False
+                )
+                self.assertFalse(passed)
+                self.assertEqual(len(failed), 1)
+                suite = ET.parse(path).getroot()
+                self.assertEqual(suite.attrib["tests"], "1")
+                self.assertEqual(suite.attrib["failures"], "1")
+                self.assertNotIn("Traceback", path.read_text(encoding="utf-8"))
+
+    def test_serial_reporting_fault_preserves_original_outcome(self):
+        output = io.StringIO()
+        with _import_runner() as runner, tempfile.TemporaryDirectory() as raw:
+            with mock.patch.dict(
+                os.environ, {"PRKS_JUNIT_REPORT_DIR": raw}
+            ), mock.patch(
+                "tests.junit_reporting.write_junit_report",
+                side_effect=OSError("PRIVATE REPORT PATH"),
+            ), contextlib.redirect_stderr(output):
+                passed, timings, failed, _ = runner.run_serial(
+                    _ids(_CASES, "FailingCases", "test_fails"), False
+                )
+            self.assertFalse(passed)
+            self.assertEqual(len(failed), 1)
+            self.assertEqual(len(timings), 1)
+            self.assertIn("optional JUnit report unavailable", output.getvalue())
+            self.assertNotIn("PRIVATE REPORT PATH", output.getvalue())
+
+    def test_parallel_worker_reporting_fault_preserves_diagnostics(self):
+        output = io.StringIO()
+        with _import_runner() as runner, tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            tests_file = root / "shard.json"
+            report_file = root / "report.json"
+            tests_file.write_text(
+                json.dumps(_ids(_CASES, "FailingCases", "test_fails")),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ, {"PRKS_JUNIT_REPORT_DIR": str(root / "junit")}
+            ), mock.patch(
+                "tests.junit_reporting.write_junit_report",
+                side_effect=OSError("PRIVATE REPORT PATH"),
+            ), contextlib.redirect_stderr(output):
+                rc = runner.run_worker(0, 1, str(tests_file), str(report_file))
+            self.assertEqual(rc, 1)
+            report = json.loads(report_file.read_text(encoding="utf-8"))
+            self.assertEqual(report["tests"], 1)
+            self.assertEqual(report["failures"], 1)
+            self.assertEqual(report["errors"], 0)
+            self.assertEqual(len(report["failed_ids"]), 1)
+            self.assertEqual(len(report["timings"]), 1)
+            self.assertNotIn("PRIVATE REPORT PATH", output.getvalue())
+
+
 class RunnerDiscoveryTests(unittest.TestCase):
     def test_manifest_covers_every_e2e_module_on_disk(self):
         """The gate runs the manifest, not the directory. A module missing from
         it is not "not yet wired up" -- it is a suite nobody runs, which is
         indistinguishable from having no coverage at all."""
         with _import_runner() as runner:
-            listed = set(runner.E2E_MODULES)
+            normal = set(runner.DEFAULT_E2E_MODULES)
+            opt_in = set(runner.OPT_IN_E2E_MODULES)
         directory = Path(__file__).resolve().parents[1] / "tests" / "e2e"
         on_disk = {"tests.e2e." + path.stem for path in sorted(directory.glob("test_*.py"))}
-        self.assertEqual(on_disk - listed, set(), "add these to run.py's E2E_MODULES")
-        self.assertEqual(listed - on_disk, set(), "these E2E modules no longer exist")
+        self.assertFalse(normal & opt_in, "opt-in tests cannot be in required gates")
+        self.assertEqual(on_disk - normal - opt_in, set(), "register in default or opt-in inventory")
+        self.assertEqual((normal | opt_in) - on_disk, set(), "declared E2E module no longer exists")
 
     def test_discovery_yields_individual_test_ids_for_every_e2e_module(self):
         with _import_runner() as runner:

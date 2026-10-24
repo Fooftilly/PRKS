@@ -140,16 +140,12 @@ async function failedPrerequisite() {
 async function readinessJudgesOutcome() {
     const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
     const created = await store.createPerson({ first_name: 'Jane', last_name: 'Doe' });
-    /* The dependent is enqueued while the creation is still in flight -- which
-     * is the only way it can be, now that the enqueue boundary refuses a
-     * prerequisite that has already failed. The refusal lands afterwards. */
     await store.saveWorkPersonRole('W-1',
         { person_id: created.entity_id, role_type: 'Author', state: '' },
         { state: null, revision: 0 }, null);
-    /* A prerequisite the server REFUSED. It is marked `acknowledged` because
-     * nothing further is owed on it -- that is what the status means here --
-     * and it records why. The dependent already sitting behind it must still
-     * not run: reading the status alone cannot tell "applied" from "refused". */
+    /* A prerequisite the server REFUSED. It is marked acknowledged because
+     * nothing further is owed; a failed result must never unlock its
+     * dependent, including after a restart between refusal and propagation. */
     await store.updateOperationSyncState(created.op_id, {
         status: 'acknowledged', server_result: { code: 'INVALID_ENVELOPE' } });
 
@@ -162,18 +158,32 @@ async function readinessJudgesOutcome() {
     await settle();
     runtime.stop();
     assert.deepEqual(sent, [], 'a refused prerequisite never makes its dependent eligible');
+    const refusedRole = (await store.listOperations()).find(
+        row => row.operation === 'ADD_WORK_PERSON_ROLE');
+    assert.equal(refusedRole.status, 'conflict',
+        'recovery converts an unreachable dependent into a Diagnostics decision');
+    assert.equal(refusedRole.server_result.code, 'DEPENDENCY_FAILED');
 
-    /* The same row, having actually SUCCEEDED, does unlock it. */
-    await store.updateOperationSyncState(created.op_id, {
+    /* A different prerequisite that actually SUCCEEDED unlocks its
+     * dependent. Do not mutate the refused prerequisite into a fictitious
+     * success: the dependent is now durably failed and cannot be resurrected
+     * by rewriting the server outcome in test data. */
+    const goodStore = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const goodPerson = await goodStore.createPerson({ first_name: 'Jane', last_name: 'Doe' });
+    await goodStore.saveWorkPersonRole('W-2',
+        { person_id: goodPerson.entity_id, role_type: 'Author', state: '' },
+        { state: null, revision: 0 }, null);
+    await goodStore.updateOperationSyncState(goodPerson.op_id, {
         status: 'acknowledged', server_result: null });
-    const second = runtimeFor(store, async (_path, options) => {
+    const second = runtimeFor(goodStore, async (_path, options) => {
         sent.push(JSON.parse(options.body).operation);
         return { ok: true, status: 200, json: async () => roleAck(JSON.parse(options.body)) };
     }, []);
     await second.wake();
     await settle();
     second.stop();
-    assert.deepEqual(sent, ['ADD_WORK_PERSON_ROLE']);
+    assert.deepEqual(sent, ['ADD_WORK_PERSON_ROLE'],
+        'only an actual successful prerequisite unlocks the role');
 }
 
 /* ---- a server that disagrees about dependencies is terminal, not retried ---- */

@@ -232,6 +232,48 @@ class WaitForAsyncParityTests(unittest.TestCase):
         self.assertIn("async_wait", profile)
         self.assertGreater(profile["async_wait"], 0.0)
 
+    def test_route_fastpath_still_blocks_external_http_before_network(self):
+        """Both routing modes abort a real off-origin request before the sink sees it."""
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        from threading import Thread
+        from unittest import mock
+
+        from playwright.sync_api import Error as PlaywrightError
+
+        hits = []
+
+        class Sink(BaseHTTPRequestHandler):
+            def do_GET(self):
+                hits.append(self.path)
+                self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, *_args):
+                pass
+
+        sink = ThreadingHTTPServer(("127.0.0.1", 0), Sink)
+        thread = Thread(target=sink.serve_forever, daemon=True)
+        thread.start()
+        try:
+            target = "http://127.0.0.1:%d/routing-probe" % sink.server_port
+            for enabled in (False, True):
+                with self.subTest(fastpath=enabled):
+                    page = self.context.new_page()
+                    try:
+                        flag = "1" if enabled else "0"
+                        with mock.patch.dict(os.environ, {"PRKS_E2E_ROUTE_FASTPATH": flag}):
+                            collector = harness.PageCollector(page, "http://127.0.0.1:1")
+                        with self.assertRaises(PlaywrightError):
+                            page.goto(target, timeout=2500)
+                        self.assertEqual(collector.external, [target])
+                    finally:
+                        page.close()
+            self.assertEqual(hits, [], "off-origin requests reached the HTTP sink")
+        finally:
+            sink.shutdown()
+            sink.server_close()
+            thread.join(timeout=2)
+
     def test_single_evaluate_round_trip_for_delayed_ready(self):
         """Browser-side polling must not re-enter page.evaluate every 50ms."""
         calls = {"n": 0}

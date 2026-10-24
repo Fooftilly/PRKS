@@ -195,6 +195,17 @@ class PostgresHarness:
         self._create(name, template)
         return name
 
+    def clone_database(self, source: str, label: str = "copy") -> str:
+        """A copy of ``source`` (a database this run owns), as a cluster copy would be.
+
+        ``CREATE DATABASE … TEMPLATE`` needs every other session on ``source``
+        closed first.
+        """
+        self.verify_owned(source)
+        name = self._new_name(label)
+        self._create(name, source)
+        return name
+
     def conninfo(self, name: str) -> str:
         """Connection string for a database this run owns."""
         self.verify_owned(name)

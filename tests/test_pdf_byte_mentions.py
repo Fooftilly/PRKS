@@ -36,6 +36,36 @@ class PdfByteMentionsTests(unittest.TestCase):
         self.assertEqual(normalize_pdf_mentioned_label(b"A@B#C"), "ABC")
         self.assertEqual(normalize_pdf_mentioned_label(b"   "), "")
 
+    def test_custom_raw_byte_limit_is_inclusive(self) -> None:
+        # The bound is on raw bytes, not decoded Unicode characters.
+        payload = "é".encode("utf-8") * 100  # exactly 200 bytes
+        data = b"[[" + payload + b"]] [[After]]"
+        self.assertEqual(list(iter_double_bracket_inners(data)), [payload, b"After"])
+        self.assertEqual(list(iter_pdf_mentioned_labels(data)), ["é" * 100, "After"])
+
+        too_large = b"[[" + payload + b"x]] [[Next]]"
+        self.assertEqual(list(iter_double_bracket_inners(too_large)), [b"Next"])
+
+        limited = b"[[AB]] [[C]] [[]]"
+        self.assertEqual(
+            list(iter_double_bracket_inners(limited, max_inner=1)), [b"C", b""]
+        )
+        self.assertEqual(
+            list(iter_double_bracket_inners(limited, max_inner=0)), [b""]
+        )
+        self.assertEqual(
+            list(iter_double_bracket_inners(limited, max_inner=-1)), []
+        )
+
+    def test_invalid_utf8_and_empty_filtered_labels_do_not_hide_later_mentions(self) -> None:
+        data = b"[[\xff\xfe]] [[!@#$]] [[A@B]] [[Ren\xc3\xa9]] [[After]]"
+        self.assertEqual(
+            list(iter_pdf_mentioned_labels(data)), ["AB", "René", "After"]
+        )
+        self.assertEqual(normalize_pdf_mentioned_label(b"\xff\xfe"), "")
+        self.assertEqual(normalize_pdf_mentioned_label(b"!@#$"), "")
+        self.assertEqual(normalize_pdf_mentioned_label(b" -- "), "--")
+
     def test_pathological_prefix_stays_linear(self) -> None:
         # Former ReDoS shape: many '[[a' without closing. Must finish quickly.
         data = b"[[" + (b"[[a" * 20000)

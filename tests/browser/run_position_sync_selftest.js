@@ -256,7 +256,34 @@ async function theBaseIsAcknowledgedAndNeverGuessed() {
         "guessing a revision would silently overwrite another device");
 }
 
+function positionDetailUsesGuardedOfflineRead() {
+    // Keep the explicit opt-in scoped to this route and use the existing
+    // validators and invalidation domain; do not silently cache-first
+    // regular reads, indexes, or the acknowledged field writer.
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const app = fs.readFileSync(
+        path.join(__dirname, "../../frontend/js/app.js"), "utf8");
+    const start = app.indexOf("case 'position-detail': {");
+    const end = app.indexOf("case 'arguments': {", start);
+    assert(start >= 0 && end > start, "Position detail route exists");
+    const route = app.slice(start, end);
+    assert.match(route, /prksOfflineDetailFetch\(/);
+    assert.match(route, /domain:\s*PRKS_POSITIONS_DOMAIN/);
+    assert.match(route, /preferCacheWhenOffline:\s*true/);
+    assert.match(route, /prksIsPositionShape\(value, positionId\)/);
+    assert.match(route, /prksPendingPositionDeletions/);
+    assert.match(route, /prksPendingPositionCreates/);
+    assert.match(route, /prksResolveOfflinePosition\(/);
+    const indexStart = app.indexOf("case 'positions': {");
+    assert(indexStart >= 0 && indexStart < start);
+    assert.doesNotMatch(app.slice(indexStart, start),
+        /preferCacheWhenOffline:\s*true/,
+        "Position index must retain server-first and cache-warming behavior");
+}
+
 async function main() {
+    positionDetailUsesGuardedOfflineRead();
     await aPositionIsRealImmediately();
     await aPositionNeedsAName();
     await eachFieldCoalescesAndCancelsOnItsOwn();
