@@ -24,11 +24,11 @@
       "runtime_files": [
         {
           "path": "/vendor/cytoscape/cytoscape.min.js",
-          "sha256": "5f3b5b529546d5af1fc5628590af033b74511a5b6f789f5f4682845863228b91"
+          "sha256": "081591ab735b2b6a3b31a3c60f8f3a3e2fee8c92939e0c7820ad1208571b6cd8"
         }
       ],
       "source_category": "npm:tools/research-graph",
-      "version": "3.34.3"
+      "version": "3.34.4"
     },
     {
       "name": "dompurify",
@@ -172,7 +172,7 @@
       "runtime_files": [
         {
           "path": "/vue/prks-vue.js",
-          "sha256": "cc60e8ba49f30ef9e2b6b91440a57967ab4d633a340de4c41156d67355714331"
+          "sha256": "76311ffe71f73f183ec7117ce43bad2f63276f35b7756768f314c229d7e41dbe"
         }
       ],
       "source_category": "npm:frontend-app",
