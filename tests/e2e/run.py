@@ -1886,7 +1886,7 @@ def _main(argv=None) -> int:
         # Cheap-ish CI decision: no Chromium. Compare committed tree to --base
         # (default HEAD). Discovery failures fail closed to mode=full — never
         # exit 2 and trip the aggregate job before any shard runs.
-        force_full = bool(
+        explicit_force_full = bool(
             (os.environ.get("PRKS_E2E_CI_FORCE_FULL") or "").strip()
             in ("1", "true", "yes", "on")
         )
@@ -1897,7 +1897,7 @@ def _main(argv=None) -> int:
                 plan = apply_manual_full_ci_shards(
                     plan,
                     os.environ.get("PRKS_E2E_CI_MANUAL_SHARDS"),
-                    force_full=force_full,
+                    force_full=explicit_force_full,
                 )
             except ValueError as exc:
                 print("ci-plan: %s" % exc, file=sys.stderr)
@@ -1936,8 +1936,10 @@ def _main(argv=None) -> int:
             in ("1", "true", "yes", "on")
             and frontend_browser_change_requires_full_ci(paths)
         )
-        force_full = force_full or frontend_full
-        plan = plan_ci_e2e(paths, force_full=force_full, path_diffs=path_diffs)
+        # Frontend change classification may require the full suite, but it
+        # must never authorize the manual width override on a PR.
+        plan_force_full = explicit_force_full or frontend_full
+        plan = plan_ci_e2e(paths, force_full=plan_force_full, path_diffs=path_diffs)
         if frontend_full:
             plan["reason"] = "frontend-affecting PR change — complete E2E required"
         if plan["mode"] == "affected":
@@ -1962,7 +1964,7 @@ def _main(argv=None) -> int:
                 print("ci-plan: %s" % reason, file=sys.stderr)
                 plan = plan_ci_e2e([], force_full=True)
                 plan["reason"] = reason
-        elif plan["mode"] == "full" and not force_full:
+        elif plan["mode"] == "full" and not plan_force_full:
             # Optional count for aggregator messaging; never fail the plan on
             # discovery here — full already runs regardless.
             try:
