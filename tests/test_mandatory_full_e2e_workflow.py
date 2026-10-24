@@ -58,9 +58,13 @@ class FrontendCISelectionTests(unittest.TestCase):
         self.assertIn('plan="$(python tests/e2e/run.py --ci-plan --base "$base")"', source)
         self.assertIn('if [[ "${{ steps.base.outputs.force }}" == "1" ]]; then', source)
         self.assertIn("needs: [e2e-plan, e2e, e2e-pointer]", source)
+        self.assertIn("github.event_name != 'workflow_dispatch'", source)
+        self.assertIn("PRKS_E2E_CI_MANUAL_SHARDS:", source)
 
     @staticmethod
-    def _plan(paths: list[str]) -> dict:
+    def _plan(
+        paths: list[str], *, manual_shards: str = "", force_full: bool = False
+    ) -> dict:
         # The production workflow provides this flag only to its plan job.
         from tests.e2e import run as runner
 
@@ -69,7 +73,8 @@ class FrontendCISelectionTests(unittest.TestCase):
             os.environ,
             {
                 "PRKS_E2E_CI_FRONTEND_FULL": "1",
-                "PRKS_E2E_CI_FORCE_FULL": "",
+                "PRKS_E2E_CI_FORCE_FULL": "1" if force_full else "",
+                "PRKS_E2E_CI_MANUAL_SHARDS": manual_shards,
                 "PRKS_E2E": "1",
             },
         ):
@@ -98,6 +103,59 @@ class FrontendCISelectionTests(unittest.TestCase):
                 plan = self._plan([changed])
                 self.assertEqual(plan["mode"], "skip")
                 self.assertFalse(plan["run"])
+
+    def test_manual_full_shard_pilot_emits_exact_six_or_eight_rows(self):
+        # The CLI plan is the exact JSON consumed by the GitHub workflow.
+        # Ordinary frontend PR selection remains six; only force-full manual
+        # runs are allowed to request a different width.
+        normal = self._plan(["frontend/js/app.js"])
+        self.assertEqual(normal["matrix"]["include"], policy.ci_matrix_include(6, 1))
+        for requested, count in (("6", 6), ("8", 8)):
+            with self.subTest(requested=requested):
+                plan = self._plan(
+                    ["docs/testing.md"], manual_shards=requested, force_full=True
+                )
+                self.assertEqual(plan["mode"], "full")
+                self.assertIs(plan["run"], True)
+                self.assertIs(plan["pointer_capture"], True)
+                self.assertEqual(plan["external_shards"], count)
+                self.assertEqual(
+                    plan["matrix"]["include"], policy.ci_matrix_include(count, 1)
+                )
+
+    def test_manual_width_is_rejected_without_explicit_force_and_for_bad_inputs(self):
+        # Simulates a PR-like run attempting to inject manual-shard data.
+        with self.assertRaisesRegex(AssertionError, "CI planning failed: 2"):
+            self._plan(["frontend/js/app.js"], manual_shards="8")
+        for invalid in ("7", "bad", " 8 ", "0"):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(AssertionError, "CI planning failed: 2"):
+                    self._plan(
+                        ["docs/testing.md"], manual_shards=invalid, force_full=True
+                    )
+
+    def test_manual_width_rejects_malformed_boolean_or_affected_plan(self):
+        valid = policy.plan_ci_e2e([], force_full=True)
+        for key, value in (
+            ("run", "false"),
+            ("run", 1),
+            ("pointer_capture", "false"),
+            ("pointer_capture", 1),
+            ("mode", "affected"),
+            ("external_shards", 0),
+            ("local_jobs", 2),
+        ):
+            with self.subTest(key=key, value=value):
+                corrupted = {**valid, key: value}
+                with self.assertRaises(ValueError):
+                    policy.apply_manual_full_ci_shards(
+                        corrupted, "8", force_full=True
+                    )
+        # The ordinary planner is unaffected when no manual input was supplied.
+        self.assertEqual(
+            policy.apply_manual_full_ci_shards(valid, "", force_full=False),
+            valid,
+        )
 
     def test_same_change_without_ci_flag_still_uses_affected_mode(self):
         self.assertEqual(

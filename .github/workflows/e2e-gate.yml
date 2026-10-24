@@ -17,10 +17,19 @@ on:
         description: "Benchmark same-origin routing fast path (experimental)"
         type: boolean
         default: false
+      shard_count:
+        description: "Manual full-suite shard-width pilot; normal PR/master gates stay at six"
+        type: choice
+        options:
+          - "6"
+          - "8"
+        default: "6"
 
 concurrency:
-  group: e2e-gate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Manual comparisons must neither cancel master gates nor be cancelled by merges.
+  # Dispatches share a serial group; start each sample after the prior run finishes.
+  group: e2e-gate-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && 'dispatch-' || '' }}${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
   e2e-plan:
@@ -76,6 +85,8 @@ jobs:
           PRKS_E2E: "1"
           # Full E2E for shipped frontend changes, not unrelated PRs.
           PRKS_E2E_CI_FRONTEND_FULL: "1"
+          # Only manual runs expose the width input; the planner owns validation.
+          PRKS_E2E_CI_MANUAL_SHARDS: ${{ github.event_name == 'workflow_dispatch' && inputs.shard_count || '' }}
         run: |
           set -euo pipefail
           if [[ "${{ steps.base.outputs.force }}" == "1" ]]; then
@@ -97,6 +108,8 @@ jobs:
           if missing:
               raise SystemExit("malformed ci-plan missing keys: %s" % ", ".join(missing))
           mode = plan["mode"]
+          if type(plan.get("run")) is not bool or type(plan.get("pointer_capture")) is not bool:
+              raise SystemExit("malformed ci-plan run/pointer_capture must be booleans")
           if mode not in ("skip", "affected", "full"):
               raise SystemExit("malformed ci-plan mode: %r" % mode)
           if mode == "affected":
