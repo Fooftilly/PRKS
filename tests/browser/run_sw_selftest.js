@@ -613,6 +613,14 @@ async function run() {
         assert('worker put rejection maps to a failed cache write', pageApi.prksPdfCacheInstallOutcome(rejectedOutcome) === false);
     }
 
+    // The source shell loads app.js directly; the packaged shell loads it
+    // inside its required body bundle. Exercise the live boot-script contract
+    // in both modes rather than hard-coding the unbundled source path.
+    const requiredBootScript = sw.PRKS_SW_STATIC_PRECACHE_PATHS.includes(
+        '/js/prks-classic-body.bundle.js'
+    ) ? '/js/prks-classic-body.bundle.js' : '/js/app.js';
+    assert('bootstrap script is required at install', sw.PRKS_SW_STATIC_PRECACHE_PATHS.includes(requiredBootScript));
+
     /* ---- performInstall(): required-asset failure fails the whole install,
      * decorative optional-asset failure never blocks it (AGENTS.md "Make
      * shell precache success meaningful"). Writes go into the *staging*
@@ -652,7 +660,7 @@ async function run() {
             const cacheStorage = makeFakeCacheStorage();
             const optional = sw.PRKS_SW_STATIC_PRECACHE_OPTIONAL_PATHS;
             await sw.performInstall(cacheStorage, function (path) {
-                if (path === '/js/app.js') return Promise.reject(new Error('network down'));
+                if (path === requiredBootScript) return Promise.reject(new Error('network down'));
                 return Promise.resolve(new Response('body:' + path, { status: 200 }));
             });
         }
@@ -769,10 +777,10 @@ async function run() {
         }
 
         // Attempt installing a new revision: most required files succeed,
-        // one required file (/js/app.js) fails.
+        // one required boot-script file fails.
         await assertRejectsOrThrows('rollback: new-worker install rejects on one failing required file', async function () {
             await sw.performInstall(cacheStorage, function (path) {
-                if (path === '/js/app.js') return Promise.reject(new Error('network down'));
+                if (path === requiredBootScript) return Promise.reject(new Error('network down'));
                 return Promise.resolve(new Response('NEW:' + path, { status: 200 }));
             });
         });

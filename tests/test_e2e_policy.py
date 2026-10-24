@@ -957,7 +957,6 @@ class AffectedMappingTests(unittest.TestCase):
 
     def test_postgres_schema_and_migration_only_diff_skips_browser_ci(self):
         paths = [
-            "backend/db/migrate.py",
             "backend/db/schema/000_extensions.sql",
             "backend/db/schema/010_instance.sql",
             "backend/db/schema/020_identity.sql",
@@ -969,14 +968,17 @@ class AffectedMappingTests(unittest.TestCase):
             "tests/pg/test_schema_snapshot.py",
             "backend/AGENTS.md",
         ]
-        for path in paths[:8]:
+        for path in paths[:7]:
             with self.subTest(path=path):
                 classified = policy.classify_affected_path(path)
                 self.assertEqual(classified["rules"], ["postgres-migration-infrastructure"])
                 self.assertTrue(classified["skip"])
-        # A newly added executable under schema/, or a shared domain
-        # package initializer, must not get the SQL/migration exemption.
-        for runtime in ("backend/db/schema/new_helper.py", "backend/domain/__init__.py"):
+        # A newly added executable under schema/, a shared domain package
+        # initializer, or the schema runner (the embedded worker's schema
+        # check is served) must not get the SQL/migration exemption.
+        for runtime in (
+            "backend/db/schema/new_helper.py", "backend/domain/__init__.py", "backend/db/migrate.py",
+        ):
             with self.subTest(runtime=runtime):
                 self.assertEqual(policy.plan_ci_e2e([runtime])["mode"], "full")
                 self.assertEqual(policy.plan_ci_e2e(paths + [runtime])["mode"], "full")
@@ -1001,7 +1003,7 @@ class AffectedMappingTests(unittest.TestCase):
         self.assertFalse(plan["pointer_capture"])
 
     def test_postgres_exemption_does_not_hide_runtime_or_unknown_changes(self):
-        pg_paths = ["backend/db/migrate.py", "backend/db/schema/040_sync.sql"]
+        pg_paths = ["backend/db/schema_snapshot.py", "backend/db/schema/040_sync.sql"]
         for runtime in (
             "prks_app.py", "backend/server.py", "backend/db_manager.py",
             "backend/db/__init__.py", "backend/db/database.py",
@@ -1032,7 +1034,7 @@ class AffectedMappingTests(unittest.TestCase):
             for rule in policy.AFFECTED_RULES if rule.get("skip")
             for pattern in rule["paths"] if pattern.startswith("backend/")
         ]
-        self.assertIn("backend/db/migrate.py", skipped)
+        self.assertIn("backend/db/schema_snapshot.py", skipped)
         for path in sorted(root.glob("backend/**/*.py")):
             rel = path.relative_to(root).as_posix()
             if not any(fnmatch.fnmatchcase(rel, pattern) for pattern in skipped):
@@ -2649,8 +2651,15 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
         result.errors = []
         result.skipped = []
         result.phase_timings = {
-            "case.one": {"routing_decision": 0.015, "app_ready": 0.20},
-            "case.two": {"routing_decision": 0.025, "app_ready": 0.30},
+            "case.one": {
+                "routing_decision": 0.015, "app_ready": 0.20,
+                "nav_timing_attempts": 2.0, "nav_timing_samples": 2.0,
+                "nav_response_wait": 0.01,
+            },
+            "case.two": {
+                "routing_decision": 0.025, "app_ready": 0.30,
+                "nav_timing_attempts": 1.0,
+            },
         }
         with tempfile.TemporaryDirectory() as raw:
             destination = Path(raw) / "benchmark.json"
@@ -2667,7 +2676,13 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                 ):
                     runner._write_serial_benchmark_result(result, 4.5678)
                 data = json.loads(destination.read_text(encoding="utf-8"))
-                self.assertEqual(data["schema_version"], 1)
+                self.assertEqual(data["schema_version"], 2)
+                self.assertEqual(data["navigation_samples"], {
+                    "attempted": 3, "captured": 2,
+                })
+                self.assertNotIn("nav_timing_attempts", data["phase_seconds"])
+                self.assertNotIn("nav_timing_samples", data["phase_seconds"])
+                self.assertEqual(data["phase_seconds"]["nav_response_wait"], 0.01)
                 self.assertEqual(data["benchmark_modes"], (
                     ["profile", "route-fastpath"] if fastpath == "1" else ["profile"]
                 ))
@@ -2774,6 +2789,12 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                 "app_sidebar_wait": 3.0,
                 "app_folder_wait": 4.0,
                 "app_route_wait": 1.0,
+                "nav_response_wait": 3.0,
+                "nav_response_body": 0.4,
+                "nav_dom_content_loaded": 4.0,
+                "nav_until_interactive": 2.5,
+                "nav_interactive_to_dcl": 1.0,
+                "nav_dcl_handlers": 0.5,
             }
             for trial, mode in enumerate(
                 ("baseline", "fastpath", "fastpath", "baseline"), 1
@@ -2785,8 +2806,10 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                     # medians observably different; a mislabeled column fails.
                     phases["app_navigation"] = 9.0
                     phases["app_ready"] = 17.0
+                    phases["nav_response_wait"] = 2.0
                 result = {
-                    "schema_version": 1,
+                    "schema_version": 2,
+                    "navigation_samples": {"attempted": 40, "captured": 40},
                     "benchmark_modes": (
                         ["profile"] if mode == "baseline"
                         else ["profile", "route-fastpath"]
@@ -2818,6 +2841,15 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             self.assertIn("| ↳ Page navigation | 12.00s | 9.00s |", body)
             self.assertIn("| App readiness (inclusive) | 20.00s | 17.00s |", body)
             self.assertIn("| ↳ Python process spawn | 7.00s | 7.00s |", body)
+            self.assertIn("### Browser Navigation Timing (opt-in, diagnostic)", body)
+            self.assertIn("| Response wait / first byte | 3.00s | 2.00s |", body)
+            self.assertIn("| Response body transfer | 0.40s | 0.40s |", body)
+            self.assertIn(
+                "| Response-end → DOMContentLoaded (inclusive) | 4.00s | 4.00s |", body
+            )
+            self.assertIn("| ↳ Response-end → DOM interactive | 2.50s | 2.50s |", body)
+            self.assertIn("| ↳ DOM interactive → DCL event start | 1.00s | 1.00s |", body)
+            self.assertIn("| ↳ DCL event handlers | 0.50s | 0.50s |", body)
 
             bad = root / "e2e-routing-ab-2.json"
             original = json.loads(bad.read_text(encoding="utf-8"))
@@ -2847,6 +2879,73 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             failed = run_summary()
             self.assertNotEqual(failed.returncode, 0)
             self.assertIn("missing/invalid server_spawn metric", failed.stderr)
+
+            # Invalid optional telemetry is rejected rather than shown in
+            # medians; missing optional entries still allow the old A/B report.
+            payload = json.loads(json.dumps(original))
+            payload["phase_seconds"]["nav_response_wait"] = -1
+            bad.write_text(json.dumps(payload), encoding="utf-8")
+            failed = run_summary()
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertIn("invalid nav_response_wait metric", failed.stderr)
+
+            # In complete-capture trials, the nested browser milestones
+            # must exactly partition responseEnd -> DCL, within rounding.
+            payload = json.loads(json.dumps(original))
+            payload["phase_seconds"]["nav_dcl_handlers"] = 1.5
+            bad.write_text(json.dumps(payload), encoding="utf-8")
+            inconsistent_dom = run_summary()
+            self.assertNotEqual(inconsistent_dom.returncode, 0)
+            self.assertIn("browser DOM milestone totals disagree", inconsistent_dom.stderr)
+
+            # Zero-valued nested intervals may be filtered by the recorder.
+            payload = json.loads(json.dumps(original))
+            payload["phase_seconds"]["nav_until_interactive"] = 4.0
+            payload["phase_seconds"]["nav_interactive_to_dcl"] = 0.0
+            payload["phase_seconds"]["nav_dcl_handlers"] = 0.0
+            bad.write_text(json.dumps(payload), encoding="utf-8")
+            zero_details = run_summary()
+            self.assertEqual(zero_details.returncode, 0, zero_details.stderr)
+            self.assertIn("| ↳ DCL event handlers |", zero_details.stdout)
+
+            # Partial capture must suppress all browser medians even though
+            # every sum key is present from other successful page opens.
+            payload = json.loads(json.dumps(original))
+            payload["navigation_samples"]["captured"] = 39
+            bad.write_text(json.dumps(payload), encoding="utf-8")
+            partial = run_summary()
+            self.assertEqual(partial.returncode, 0, partial.stderr)
+            self.assertIn("trial 2: 39/40", partial.stdout)
+            self.assertIn("Navigation Timing incomplete or uneven", partial.stdout)
+            self.assertNotIn("| Response wait / first byte |", partial.stdout)
+
+            # Valid zero-duration totals are filtered out of phase_seconds,
+            # but captured=attempted proves that the missing key means zero.
+            for trial in (2, 3):
+                zero = json.loads(json.dumps(original))
+                del zero["phase_seconds"]["nav_response_body"]
+                (root / f"e2e-routing-ab-{trial}.json").write_text(
+                    json.dumps(zero), encoding="utf-8"
+                )
+            complete_zero = run_summary()
+            self.assertEqual(complete_zero.returncode, 0, complete_zero.stderr)
+            self.assertIn("| Response body transfer | 0.40s | 0.00s |", complete_zero.stdout)
+
+            # Uneven numbers of attempted navigations must not be compared
+            # even if both trials report 100% valid samples.
+            mismatch = json.loads(json.dumps(original))
+            mismatch["navigation_samples"] = {"attempted": 39, "captured": 39}
+            bad.write_text(json.dumps(mismatch), encoding="utf-8")
+            uneven = run_summary()
+            self.assertEqual(uneven.returncode, 0, uneven.stderr)
+            self.assertIn("Navigation Timing incomplete or uneven", uneven.stdout)
+
+            # Invalid count metadata must fail closed.
+            mismatch["navigation_samples"] = {"attempted": 39, "captured": 40}
+            bad.write_text(json.dumps(mismatch), encoding="utf-8")
+            invalid = run_summary()
+            self.assertNotEqual(invalid.returncode, 0)
+            self.assertIn("invalid navigation sample counts", invalid.stderr)
 
     def test_watchdog_does_not_touch_last_failed_in_profile_mode(self):
         """Even watchdog os._exit paths must preserve benchmark history."""

@@ -109,6 +109,475 @@ collapsed-chrome layout enough to break scroll-restore and compact-notes
 assertions. Enable it for motion-latency experiments; leave it off for the
 ordinary gate.
 
+### Opt-in offline Research Graph navigation phases
+
+The normal six-shard CI logs recorded a **27.1s** duration for
+`ResearchGraphOfflineTests.test_record_graph_navigation_both_directions`
+on [PR #742's checkout gate](https://github.com/Fooftilly/PRKS/actions/runs/39054070761).
+That was a single unprofiled CI observation, **not** a phase attribution or
+same-commit comparison.
+
+Use **Actions → E2E Offline Graph Navigation Profile → Run workflow**
+on a commit containing the profiler. The manual-only job runs one excluded
+warm-up, then **three isolated full Chromium test repeats on the same runner**
+using the normal application source checkout, with `--profile`. It publishes
+per-phase timings in the Actions job summary (no fixture paths, user records,
+or test data artifacts). Its phases show:
+- startup/initial page readiness, then warming five record caches;
+- warming core/people Graph snapshots and switching offline;
+- five record → Graph → record round trips (Concept, Position, two Arguments, Person);
+- separate `graph_nav_stage_*` intervals for **entering the record** (navigate,
+  provenance, drawer), **opening the Graph** (click, Cytoscape mount/focus,
+  provenance), and **returning** (click, hash, provenance);
+- the uncached destination and missing Graph cases.
+
+A [temporary, PR-only counterbalanced probe](https://github.com/Fooftilly/PRKS/actions/runs/39070620726)
+on #752 tested Concept-first vs Position-first on one runner, using two
+excluded warm-ups and six measured runs. Concept still took **5.250s vs
+5.235s** when switched from first to second, while Position took **3.332s vs
+3.364s** when switched from second to first. Therefore the ~1.9s gap is
+**Concept-detail navigation/return work, not a first Graph mount effect**.
+The Concept-to-Graph step itself took ~1.2s in both orders, similar to
+Position. Do not infer the precise inner route function responsible from
+these grouped timings alone; a narrower experiment is needed before changing
+production behavior.
+
+The fine-grained stages are **nested in their parent roundtrip totals**,
+not extra time to add. A completed trial with an optional stage is displayed
+in the manual workflow summary only if every trial measured that stage.
+The phase labels start `graph_nav_` and **overlap** generic `async_wait`,
+request routing and startup phase totals. They are diagnostic breakdowns,
+excluded from the infrastructure-additive slowest-test ranking. Profiling
+runs do not train shard timing history and must not be compared as if ordinary
+CI were also instrumented. Keep all real DOM/navigation/offline assertions;
+use the largest measured phase to motivate a distinct, same-runner A/B
+optimization before touching production logic or test assertions.
+
+### Opt-in offline Argument rename/Graph propagation phases
+
+The slowest non-Graph case observed in [PR #742's full checkout gate](https://github.com/Fooftilly/PRKS/actions/runs/39054070761)
+was `DurableArgumentTests.test_pending_rename_reaches_position_argument_picker_and_graph`,
+at **15.1s** in one unprofiled Chromium shard. That observation is not
+a measurement of which substep costs the time.
+
+Use **Actions → E2E Argument Overlay Phase Profile → Run workflow** after
+merging the instrumentation. The manual-only workflow runs the unchanged test
+with fresh test storage/browser contexts for one excluded warm-up and three
+serial profile repeats on the same hosted runner. It fails rather than
+summarizing incomplete or failing browser runs.
+
+The ten `arg_overlay_*` phases distinguish browser/server setup; warming
+Argument, Position and Graph snapshots; offline rename; Position, picker and
+Graph propagation; and renamed target/response navigation. The summary
+reports the median and each sample for every phase plus the whole-test wall
+median. These phases do **not** add default E2E cost, and neither storage
+isolation nor the real-browser/offline assertions are changed.
+
+The [first master run #39102509934](https://github.com/Fooftilly/PRKS/actions/runs/39102509934)
+passed all four Chromium executions: one excluded warm-up and three
+measured. Median single-test wall time was **16.176s**. The slowest
+**inclusive** phases were `arg_overlay_verify_target` (**2.862s**) and
+`arg_overlay_verify_response` (**3.095s**); together **5.957s**. The
+offline state transition plus first rename was **2.079s**, Argument cache
+warming **1.896s**, and initial setup **1.690s**. This does not prove
+whether time within the target/response stages was spent writing the
+offline operation, starting navigation or waiting for the visible names.
+
+A [temporary same-branch real-Chromium probe](https://github.com/Fooftilly/PRKS/actions/runs/39103351420)
+passed its excluded warm-up plus three measured trials. Median whole-test
+wall time was **16.353s**. Nested subphase medians (seconds) were:
+
+| Verification | Full phase | Offline write | Awaited route + detail render | Residual visible-text wait |
+| --- | ---: | ---: | ---: | ---: |
+| Target rename | 3.438 | 2.221 | 1.179 | 0.002 |
+| Response rename | 3.040 | 1.960 | 1.031 | 0.004 |
+
+The writer calls (≈2 seconds each) account for the largest component of
+these stages. The `render` step also includes route navigation: `prksNavigate`
+returns a promise that is only fulfilled after the current detail render
+completes. It must **not** be interpreted as just URL/history routing cost.
+The residual DOM checks are negligible because the awaited navigation already
+renders the visible content. The nested timers
+`arg_overlay_target_{write,render,visible}` and
+`arg_overlay_response_{write,render,visible}` are contained inside their
+respective `arg_overlay_verify_{target,response}` totals; they explain, not
+supplement, those parents. Missing or failing subphases invalidate the manual
+profiler report. No real-browser assertion or test operation was removed.
+
+The next opt-in probe measures the real offline `updateArgument` writer
+*inside* each existing `arg_overlay_{target,response}_write` phase. Browser
+`performance.now()` wrappers time its operations snapshot, acknowledged
+revision/base acquisition, cached revision/entity reads, and durable field
+enqueue/after-hook. Wrappers are installed only around the existing awaited
+write, then restored in `finally`; ordinary E2E is not instrumented.
+The browser timings are returned to the Python runner and rejected if missing,
+non-finite, or negative. No acknowledged revision is guessed, no new network
+mutations are permitted, and no offline queue ordering is changed.
+
+[The first one-off writer run #39104403107](https://github.com/Fooftilly/PRKS/actions/runs/39104403107)
+completed all four Chromium executions (one excluded warm-up, three measured).
+The complete test wall median was **16.327s**. Target/response write medians
+were **1.972s / 2.015s**. The acknowledged-base subphases were
+**1.968s / 2.011s**, while durable enqueue was **0.002s** for both.
+Within base acquisition, target/response revision-state reads took
+**0.915s / 0.972s**, and Argument record reads **1.046s / 0.932s**.
+
+A reviewer identified a measurement-validity limitation in that first run:
+the original global cache-read wrappers classified by kind alone. Follow-up
+instrumentation matches the edited Argument id, measures cached reads only
+while acquiring that acknowledged base, and requires **exactly one** completed
+call for every expected stage; unexpected extra/missing calls or an impossible
+parent/child relationship invalidate the profile.
+
+[The corrected one-off run #39136910046](https://github.com/Fooftilly/PRKS/actions/runs/39136910046)
+passed one excluded warm-up and all three independent Chromium trials.
+Median whole-test wall time was **15.839s**. Per-rename medians (seconds):
+
+| Inner step | Target | Response |
+| --- | ---: | ---: |
+| Complete offline write | 1.767 | 1.986 |
+| Acknowledged base (inclusive) | 1.762 | 1.981 |
+| Revision-state read | 0.876 | 0.988 |
+| Argument record read | 0.888 | 0.957 |
+| Durable field enqueue/refresh | 0.002 | 0.002 |
+
+The corrected evidence points to two **sequential offline read-through
+attempts** during acknowledged-base acquisition, not to IndexedDB enqueue.
+A guarded follow-up implements opt-in `preferCacheWhenOffline` on entity
+read-through, used **only** for Argument acknowledged-base revision and
+record reads. When PRKS is confirmed offline and the cached entity is
+eligible, this skips a network attempt already known to be failing.
+
+The default remains server-first. The opt-in refuses to return a cached
+entry after an entity/domain coherence invalidation, when a domain is
+blocked, when reconnecting/online, or after a generation/connectivity
+change while an IndexedDB read is pending. Connectivity uses a monotonic
+transition generation, so even offline → online → offline while a cache read
+is pending cannot expose its older snapshot. Missing cache entries fall
+through to the existing read-through behavior: an unknown base is never
+synthesized. Future server acknowledgments and revision conflict checks
+remain mandatory.
+
+[The initial same-runner Chromium A/B run #39140250984](https://github.com/Fooftilly/PRKS/actions/runs/39140250984)
+passed baseline and candidate warm-ups plus three alternating measured trials
+for each side, checking out the pre-change master SHA `76be455` as baseline.
+Median test wall time changed **16.476s → 12.412s** (a **4.064s reduction,
+24.7%**). Target write time changed **1.875s → 0.005s**, and response
+write time **1.949s → 0.005s**. These figures apply to the profiled
+offline Argument E2E test, not the full suite or production usage. A later
+guard adds a monotonic connectivity generation for reconnect cycles; verify
+the final candidate with another exact-head test gate and compare on the
+same runner if available before merging.
+
+The `write_base` parent **includes** its `write_revision_read` and
+`write_record_read` children. The profile fails when the child timings
+exceed the parent. `write_enqueue` is the existing durable writer including
+its pending-name refresh. Treat the original `write` Python timer as
+inclusive; browser timings can differ slightly because of IPC and
+diagnostic overhead. Collect measurements on one runner before deciding
+whether the dominant cost is safe to optimize. This is **not** authorization
+to bypass revision validation, cache invalidation, or durable persistence.
+
+Generic infrastructure and async wait telemetry may overlap all these
+diagnostics; do not double-count them. Use the dominant measured inner step
+to motivate a *separate* same-runner baseline/candidate experiment before
+altering production logic. Never infer speedup from profiled-vs-normal CI
+times alone.
+
+### Graph → Concept offline cache read: same-runner A/B (#761)
+
+[Baseline/candidate Chromium run 39144040444](https://github.com/Fooftilly/PRKS/actions/runs/39144040444)
+completed one excluded warm-up **per ref** and three alternating measured
+trials per ref on the same runner. All eight isolated browser tests passed,
+retaining Graph selection, back-navigation, uncached destination, and
+uncached Graph assertions. The baseline was merged master `570239c`;
+the candidate opted in **only** Concept detail navigation to the
+already-merged `preferCacheWhenOffline` guard. All numbers below are
+medians of three independent measured runs, in seconds:
+
+| Real-browser phase | Baseline | Candidate | Delta |
+| --- | ---: | ---: | ---: |
+| Full Graph navigation test | 27.260 | 22.928 | -4.332 |
+| Concept roundtrip (inclusive) | 3.187 | 1.387 | -1.800 |
+| Concept detail entry | 0.969 | 0.038 | -0.931 |
+| Concept detail return | 1.117 | 0.068 | -1.049 |
+| Position roundtrip (control) | 3.162 | 3.292 | +0.130 |
+| Uncached Concept destination | 2.042 | 2.144 | +0.102 |
+| Uncached Graph | 3.033 | 0.994 | -2.039 |
+
+The 4.332-second (15.9%) whole-test improvement is **specific to this
+profiled test**, not a full-suite speedup claim. No source-graph test or
+availability assertion was removed. The position control and uncached
+destination did not materially improve; the Concept entry/return changes
+identify the targeted win. Other phase medians cannot be treated as additive
+because the test overlaps nested timing intervals.
+
+The Concept detail route retains its original `PRKS_CONCEPTS_DOMAIN`,
+`prksIsConceptShape` validation, pending-creation/deletion handling, and
+route generation checks. The opt-in reader only uses coherent, eligible
+cached entities in *confirmed offline* state and falls back to the normal
+server-first request for online/transition and cache misses. Its coherence
+and connectivity fences are owned and tested by `offline-runtime.js`
+(PR #760); this PR adds a route/wrapper contract test without changing that
+shared runtime. The temporary A/B workflow was removed after the result.
+
+### Graph Argument/Stance detail: confirmed-offline read-through A/B (#763)
+
+[One-runner Chromium A/B #39158307945](https://github.com/Fooftilly/PRKS/actions/runs/39158307945)
+tested the unchanged `ResearchGraphOfflineTests.test_record_graph_navigation_both_directions`
+from merged master `173fdad` and exact candidate head `dc6a982`. Each
+revision ran an excluded warm-up, then three **alternating**, passing,
+isolated Chromium trials on the same runner. The selected phase keys were
+required and missing samples or test failures aborted the experiment.
+
+| Real-browser profile phase | Baseline median (s) | Candidate median (s) | Change (s) |
+| --- | ---: | ---: | ---: |
+| Whole test | 21.559 | 17.606 | **-3.953 (-18.3%)** |
+| Argument roundtrip | 3.102 | 1.375 | -1.727 |
+| Argument detail entry | 1.033 | 0.025 | -1.008 |
+| Argument detail return | 0.926 | 0.075 | -0.851 |
+| Stance roundtrip | 3.328 | 1.194 | -2.134 |
+| Stance detail entry | 1.167 | 0.023 | -1.144 |
+| Stance detail return | 1.106 | 0.069 | -1.037 |
+| Concept roundtrip (control) | 1.210 | 1.272 | +0.062 |
+| Position roundtrip (control) | 1.365 | 1.299 | -0.066 |
+| Person roundtrip (control) | 3.479 | 3.321 | -0.158 |
+| Uncached Concept detail | 2.240 | 2.359 | +0.119 |
+| Uncached Graph | 1.199 | 1.166 | -0.033 |
+
+The opt-in is limited to **Argument detail route** reads. That route
+also renders Stances and preserves the same explicit `PRKS_ARGUMENTS_DOMAIN`,
+`prksIsArgumentShape` guard, pending creates/deletions, and Work/Position
+/Argument name overlays. The shared runtime's online server-first behavior,
+coherence/invalidations and connectivity-generation fences were not
+changed. The index remains server-first. Missing cached details still show
+the original unavailable state and don't fabricate entities.
+
+The percentages refer to this profiled test only, not the full E2E suite.
+Nested stage durations overlap their parents and cannot be summed; no
+assertions or browser isolation were relaxed. The temporary experiment
+workflow was deleted after recording its results.
+
+### Graph Person detail: coherent confirmed-offline cached read A/B (#764)
+
+[Same-runner Chromium run #39161854813](https://github.com/Fooftilly/PRKS/actions/runs/39161854813)
+compared exact merged master `6f9564a` with candidate `293ef4e`,
+using one excluded warm-up for each version followed by three alternating
+measured real-Chromium trials per version on one runner. All eight
+executions passed the unchanged Graph navigation and unavailable-case
+assertions. Results are medians of **three measured executions**, in seconds:
+
+| Profiled phase | Baseline | Candidate | Difference |
+| --- | ---: | ---: | ---: |
+| Whole Graph test | 16.592 | 15.168 | **-1.424 (-8.6%)** |
+| Person roundtrip | 3.158 | 2.048 | **-1.110** |
+| Person detail entry | 1.050 | 0.031 | -1.019 |
+| Person Graph navigation | 1.082 | 1.245 | +0.163 |
+| Person detail return | 1.043 | 0.922 | -0.121 |
+| Concept control | 1.352 | 1.160 | -0.192 |
+| Position control | 1.150 | 1.366 | +0.217 |
+| Argument control | 1.233 | 1.100 | -0.133 |
+| Stance control | 1.200 | 1.150 | -0.050 |
+| Uncached Concept | 2.148 | 2.013 | -0.135 |
+| Uncached Graph | 1.048 | 1.133 | +0.085 |
+
+Only the **Person detail route** opts into the already-merged
+`preferCacheWhenOffline` reader. The shared runtime remains responsible
+for entity and People-domain coherence, blocked/ineligible entries,
+abort signals, and reconnect-generation fencing. Online/transitioning and
+missing-cache reads stay server-first, as do People index reads so a device
+continues warming its offline catalogue. The route retains
+`prksIsPersonShape`, pending Person create/delete intent, editable
+profile overlays and cache provenance; cached profiles still suppress
+offline portrait/thumbnail requests.
+
+This is a measured **single profiled Graph test** gain, not a whole-suite
+claim. The 0.9-second Person return after the candidate is a remaining
+measured cost, but its causes are unproven and require separate
+instrumentation before further optimization. Nested phases are not
+additive. The temporary one-off A/B workflow was deleted after
+recording these results; no regular CI coverage was reduced.
+
+### Graph detail return attribution (#767)
+
+[Manual real-Chromium Graph profile #39165518995](https://github.com/Fooftilly/PRKS/actions/runs/39165518995)
+ran against exact PR head `3fadc95` on one runner (one excluded
+warm-up and **three passing** measured trials). The added opt-in
+`graph_nav_stage_*_return_{click,hash,banner}` phases were present
+for all five record visits in every measured trial. All Graph navigation
+and offline-unavailable assertions were unchanged. Stage medians in seconds:
+
+| Graph return stage | Concept | Position | Argument | Stance | Person |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Click | 0.047 | 0.046 | 0.048 | 0.044 | 0.046 |
+| Hash confirmation | 0.002 | 0.002 | 0.002 | 0.002 | 0.002 |
+| Offline banner DOM wait | 0.020 | 0.021 | 0.025 | 0.022 | **1.041** |
+| Entire return | 0.069 | 0.070 | 0.070 | 0.068 | **1.081** |
+
+The three individual **Person banner waits** were **1.041, 1.132,
+0.026s**, while Person return totals were 1.081, 1.182, 0.074s.
+The test wall median was **16.065s**. For context, a separate manual
+[master profile #39165176532](https://github.com/Fooftilly/PRKS/actions/runs/39165176532)
+on `059e56e` passed all three trials and found Person return timings
+0.062, 0.086, 0.895s (median 0.086s). Those independent runs are
+**not** a controlled cross-commit A/B; do not infer a regression or
+suite-wide speedup from their median difference.
+
+The measured intermittent delay is **after hash change and before the
+focused Person route's offline-provenance banner exists in the DOM**,
+not in the click or hash confirmation. The banner is appended *after*
+the route resolves durable lifecycle, cached Person detail, effective
+profile/group overlays, and pending Work/relationship/name metadata
+hydration. These possible contributing operations have **not**
+been individually timed yet; this measurement does not prove which
+one is slow. The banner wait checks DOM attachment, **not browser paint**.
+Next instrument those awaited Person route stages independently with
+strict route ownership and opt-in profiling before proposing production
+optimizations; keep all revision/cache coherence and pending-overlay
+safeguards. The split timers are nested into the existing inclusive
+return timers and must not be summed with their parents.
+
+### Graph Person return: awaited-route diagnosis (#768)
+
+[Manual source-Chromium profile #39199744078](https://github.com/Fooftilly/PRKS/actions/runs/39199744078)
+on PR #768 head `fdf071c` passed one excluded warm-up and three
+serial measured runs. Every run produced the eight required nested
+Person-route phases, both inclusive sum/max metrics, and the chronological
+per-call trace. All normal Graph/offline and unavailable-state assertions
+passed. Results below are **browser-side `performance.now()`** timings from
+the same runner, in **milliseconds**, not Playwright IPC durations:
+
+| Awaited Person return stage | Trial 1 | Trial 2 | Trial 3 | Median |
+| --- | ---: | ---: | ---: | ---: |
+| Full route commit (inclusive) | 958.0 | 881.0 | 1085.9 | **958.0** |
+| `prksOfflineDetailFetch` (inclusive) | 928.1 | 851.7 | 1054.3 | **928.1** |
+| Durable queue reads (sum; **two calls**) | 9.6 | 10.8 | 11.8 | 10.8 |
+| Pending metadata hydration | 2.3 | 2.4 | 2.5 | 2.4 |
+| Person renderer | 6.6 | 5.5 | 5.8 | 5.8 |
+| Banner insertion (DOM operation) | 2.1 | 2.1 | 2.3 | 2.1 |
+
+The raw trace also shows one route commit, one detail fetch, one Person
+effective-profile projection and one metadata hydration per measured trial,
+with **no recorded aborts or non-abort exceptions**. No overlapping
+Person route commits were observed in these samples. Person Graph return
+wait medians were 1.009s for the inclusive return and 0.951s for the
+offline banner wait; the single-test wall median was 16.443s.
+
+**Finding:** On these three measured returns, the awaited
+`prksOfflineDetailFetch` **accounts for nearly all of the delay**.
+The legacy helper delegates to `prksOfflineReadEntity`, which can use
+an explicitly opted-in coherent IndexedDB snapshot when confirmed offline,
+or can fall back to its usual network/error-classification read-through
+path when its safety guards disallow that snapshot. **This run does not
+distinguish those internal branches or establish why one took 0.85–1.05s.**
+The next diagnostic should capture the reader's initial connectivity
+state, returned source (`cache`/`server`/`unavailable`), guarded
+cache eligibility versus read-through fallback, and relevant actual
+network attempts. Instrument only opt-in tests or the runtime's existing
+optional diagnostics, without changing connectivity/coherence/abort
+fences, cache publication, or ordinary E2E coverage. Only consider
+a production change after branch attribution and controlled same-runner
+A/B correctness evidence.
+
+This is **attribution**, not a measured production speedup; the child
+durable read and metadata timings are inclusive and must not be summed
+with their enclosing parent intervals.
+
+### Person offline read branch diagnosis (#774)
+
+[Manual real-Chromium run #39239438391](https://github.com/Fooftilly/PRKS/actions/runs/39239438391)
+on PR #774 implementation commit `ed2cbc6` completed successfully, with
+one unmeasured warm-up and three passing serial measured trials. The opt-in
+probe observed the offline reader's entry/exit state, result provenance and
+browser-context Person GET events during the Graph → Person return:
+
+| Diagnostic | Trial 1 | Trial 2 | Trial 3 |
+| --- | ---: | ---: | ---: |
+| `prksOfflineReadEntity('person', …)` inclusive ms | 1159.9 | 1047.8 | 1045.1 |
+| Total route commit ms | 1185.4 | 1073.1 | 1071.5 |
+| Reader entry state | reconnecting | reconnecting | reconnecting |
+| Reader exit state | offline | offline | offline |
+| Returned source | cache | cache | cache |
+| Browser-observed Person-detail GET events | 3 | 3 | 3 |
+
+Reader median was **1047.8 ms** and total route-commit median **1073.1 ms**.
+Every measured call opted in to cache-first reads, began with an unblocked
+People domain and an un-aborted signal, and returned `source: 'cache'`.
+The profile did not record concurrent readers or aborted route commits.
+
+**Branch attribution:** `frontend/js/offline-runtime.js` permits the
+cache-first fast path only when its state is `STATE_OFFLINE`. When the
+runtime is `STATE_RECONNECTING`, that condition fails before IndexedDB is
+queried, and `readThroughEntity` attempts the ordinary network request;
+on a network failure it can return a cached row. A reconnect probe calls
+`setState(STATE_RECONNECTING)` while checking server reachability.
+Consequently, the measured `reconnecting → offline` state transitions,
+three observed Person GET request events per trial and cached fallback
+outcomes are **consistent with the slow network-error/fallback branch**.
+The fast cache-first branch cannot run at entry while state is
+`reconnecting`. There is a second, independently inspectable contributor:
+`frontend/js/request-coordinator.js` defaults ordinary foreground GETs
+to **one initial request plus two transport retries**, with jittered
+base-backoff delays of **250 ms and 750 ms**. Its `performReadNetwork`
+retries non-abort transport failures before reporting unreachability.
+Thus three browser-observed Person GET events and about one second per
+offline-reader call strongly match the default retry path. The exact
+attempt sequence is **not independently timed within the coordinator** by
+this profile, and the request count is a window-wide observation rather
+than a per-reader transport log. A future limited experiment could use
+the existing `requestPolicy.retry = false` contract for a carefully
+scoped opt-in Person detail read under `reconnecting`, retaining its
+server-first attempt and cached fallback; however a one-attempt policy
+would be **less tolerant of transient failures** and must not be
+presented as a proven-safe production optimization without separate
+tests and a same-runner performance comparison.
+
+**Safety:** Do not turn `reconnecting` into `offline` or enable cache-first
+reads in that state without a separate correctness design and test.
+A reconnect in progress may succeed, so returning an older cached snapshot
+could defeat the existing reconnect, entity-generation or domain-fencing
+semantics; `navigator.onLine` is not authoritative. Follow-up work should
+investigate source-specific request policy or an opt-in/controlled experiment
+that preserves server-first behavior during uncertain reachability, and use
+same-runner A/B plus genuine offline/reconnect race tests before proposing
+a production change. This is diagnostic attribution, **not** an achieved
+application speedup.
+
+### Cached Person reconnect retry A/B (#776)
+
+The manual [source-Chromium workflow run #39270914591](https://github.com/Fooftilly/PRKS/actions/runs/39270914591)
+on commit `e0fd8c9` **passed**, including one excluded warm-up and
+three passing serial measured trials. Each trial used a newly isolated
+browser context and test server, warmed the Person detail in the normal
+online route, established actual Playwright offline transport, then made
+four direct runtime Person detail reads in A-B-B-A order. Each arm began
+with the runtime in `reconnecting` after an actual offline event,
+attempted the server, and returned the correct cached Person record.
+
+| Request policy | GET attempts per read | Trial median 1 | Trial median 2 | Trial median 3 | Median of trial medians |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Default coordinator retries | 3 | 0.962s | 1.011s | 1.030s | **1.011s** |
+| Existing `requestPolicy.retry=false` | 1 | 0.004s | 0.005s | 0.005s | **0.005s** |
+
+The test observes and asserts the network GET count and cached
+provenance of *each* read: **3 vs 1 GET events** in all four A/B arms.
+No production read-path or retry policy was changed. The one-attempt
+case avoided approximately 1.006 seconds per read in these controlled
+fully disconnected conditions. Because this is a tiny, source-runner,
+opt-in study, do not describe the difference as a statistically
+generalizable production speedup, a UX improvement in all network states,
+or a reason to treat `reconnecting` as `offline`.
+
+**Correctness trade-off:** `retry=false` is an existing coordinator
+contract but will abandon an initially failing server request instead
+of retrying through transient trouble. Before adopting it for a
+production Person route, test a server that fails once and succeeds
+on retry, as well as offline/online/offline races, response provenance,
+abort propagation, and People domain/record invalidation across pending
+reads. Preserve server-first behavior while reachability is uncertain
+and never bypass offline cache-coherence fences. This is **A/B evidence
+for a candidate policy**, not a proposed or deployed production fix.
+
 ### Opt-in infrastructure profiling
 
 `--profile` records per-test infrastructure phases without making ordinary runs
@@ -125,6 +594,12 @@ pay profiling overhead:
   - `app_sidebar_wait` (visible `#sidebar`)
   - `app_folder_wait` (visible `.prks-folder-library`)
   - `app_route_wait` (canonical `#/folders` hash confirmation)
+- `nav_response_wait` (browser Navigation Timing: `fetchStart` → `responseStart`)
+- `nav_response_body` (browser: `responseStart` → `responseEnd`)
+- `nav_dom_content_loaded` (browser: `responseEnd` → `domContentLoadedEventEnd`, inclusive)
+  - `nav_until_interactive` (`responseEnd` → `domInteractive`: parsing, blocking scripts, resource waits)
+  - `nav_interactive_to_dcl` (`domInteractive` → `domContentLoadedEventStart`)
+  - `nav_dcl_handlers` (`domContentLoadedEventStart` → `domContentLoadedEventEnd`)
 - `async_wait`
 - `request_routing`
 - `server_stop`
@@ -168,7 +643,22 @@ readiness is responsible before attempting another optimization. The sums are
 The runner's **slowest profiled tests** sort key excludes successful
 nested detail phases when an inclusive parent exists; otherwise it would count
 the same intervals twice. Failed `*_failed` phases remain additive even when
-the test contains other successful attempts. Individual phase details and
+the test contains other successful attempts. Browser-native `nav_*` diagnostics
+are also excluded from the additive ranking when `app_navigation` or
+`app_ready` is present. Every successful profiled page-open counts a
+`nav_timing_attempts` event and every validated browser Navigation Timing
+entry counts a `nav_timing_samples` event. These are *counts, not seconds*:
+the manual serial benchmark exports them in the distinct
+`navigation_samples` JSON object, excluding them from phase sums and
+slowest-test rankings. The browser Navigation Timing intervals are a **subset
+of browser navigation**, not additional app setup work and not an exact
+partition of the Playwright-measured `app_navigation`: browser event and
+Python RPC clocks differ. The three nested DOM milestones partition
+`nav_dom_content_loaded` (which is an inclusive parent, not extra work).
+`nav_until_interactive` includes synchronous scripts and blocking resource
+fetches; it is not a pure JavaScript execution/CPU timer. They are read only after real app readiness succeeds,
+under active profiling, with missing/unsupported browser entries skipped
+without masking or causing test failures. Individual phase details and
 aggregate phase totals remain visible.
 
 For a comparable measurement after this profiling change, manually run
@@ -262,7 +752,22 @@ the workflow does not depend on human-readable log formatting.
 Open **Actions → E2E Routing A/B Benchmark → Run workflow** on `master`.
 The job summary reports each trial's E2E runtime and the instrumented
 `routing_decision` total, the two per-mode medians, and the relative change
-(negative is faster). It also reports **baseline and fast-path median phase
+(negative is faster). When browser Navigation Timing is available in all four
+trials, an additional table shows browser response wait, response transfer,
+and the inclusive response-to-DOMContentLoaded aggregate, split into response
+end → DOM interactive, DOM interactive → DCL event start, and DCL event
+handlers. The summary validates this nested partition without double-counting.
+Missing navigation entries instead
+produce an explicit coverage note without failing the routing A/B experiment;
+invalid/nonfinite navigation values are rejected. The benchmark requires
+`captured == attempted > 0` **in each trial**, with matching attempted
+navigation counts across all four trials, before showing browser milestone
+medians. Missing phase sums with complete coverage mean a *valid zero*
+(the profile serializer omits zero-duration sums). Partial/uneven coverage
+never produces misleading A/B browser medians; it prints each trial's
+captured/attempted count instead. The structured diagnostic report uses
+schema version 2 to separate integer counters from elapsed phase seconds.
+It also reports **baseline and fast-path median phase
 sums** for the successful server startup (`server_spawn`,
 `server_http_ready`) and application readiness (`app_navigation`,
 `app_sidebar_wait`, `app_folder_wait`, `app_route_wait`) breakdowns from
@@ -275,6 +780,154 @@ none is skipped or automatically retried. Run the experiment more than once, and
 promising improvement using paired, fully profiled six-shard runs before
 changing defaults. Comparing four small feature selections does **not**
 establish a full-suite performance gain.
+
+### One-run classic-script deferral A/B (manual only)
+
+The independent **E2E Classic Script Deferral A/B Benchmark** is a targeted
+experiment following measured browser response-end → `domInteractive` costs.
+The baseline is the committed `frontend/index.html`. The alternate HTML
+adds `defer` to external classic script tags, preserving classic script
+source paths and relative order. Because a module tag originally appears amid
+parser-blocking classics (and normally runs after them), the temporary
+candidate moves the **unmodified module tags after the deferred classics**
+to preserve classic-before-module execution order. This is deliberate:
+deferring classics without moving the module tags would change their execution
+order and confound the experiment. The candidate preserves module source URLs
+and relative order. Only the manual workflow generates this variant in a
+temporary file and copies it over the
+working tree's HTML between runs. A shell trap restores the original HTML.
+**Production HTML, JavaScript, service-worker precache and ordinary CI are
+not changed.**
+
+The workflow runs the same real `--feature shell --feature work-create` E2E
+selection in **baseline → deferred → deferred → baseline** order, after an
+unmeasured baseline warm-up, on the same runner and commit. The routing fast
+path is OFF in both arms, and both use real browser readiness checks and
+per-test process/storage/context isolation. All trials must pass. The
+summary reports elapsed wall time, the inclusive startup phases, browser DOM
+milestones and verified navigation sample coverage. A failed/partial run
+cannot be treated as evidence for the alternate loading strategy. If the
+alternate mode is faster, repeat before proposing any production loading
+change, then confirm it with the full six-shard E2E gate. If it is slower or
+breaks behavior, do not change production script loading.
+
+Open **Actions → E2E Classic Script Deferral A/B Benchmark → Run workflow**
+on a `master` commit containing that workflow. Keep the existing routing
+A/B benchmark unchanged; the two experiments measure different decisions.
+
+### Measured script-loading experiments and next diagnostic
+
+The [October 17 routing benchmark](https://github.com/Fooftilly/PRKS/actions/runs/39011721006)
+found a **+1.49%** (slower) fast-path wall change on the 40-test serial
+selection, despite lower in-process routing decision time. Keep the route
+fast path disabled. Navigation Timing split the baseline response-end to DCL
+interval into ~82% before DOM interactive, 7% interactive to DCL event start,
+and 12% DCL handlers; these percentages are browser milestones, **not**
+exclusive CPU work.
+
+The [October 17 deferral benchmark](https://github.com/Fooftilly/PRKS/actions/runs/39017400245)
+passed all trials and observed baseline **59.50s** versus deferred **58.96s**
+median wall time (**−0.91%**). Across 38 page opens per trial, the baseline
+response-end to DCL sum was **14.70s**, versus **14.02s** deferred. Most of
+the time simply moved from before DOM interactive (12.00s → 0.88s)
+to between DOM interactive and the DCL event (0.95s → 11.63s).
+**Do not adopt blanket deferral from this small, marginal result.**
+
+A separate manual-only **E2E Classic Script Coalescing A/B Benchmark** now
+tests a different hypothesis: request volume may be material because
+`frontend/index.html` includes 84 external classic scripts. The runner
+generates **two temporary bundles**, one for head classics and one for body
+classics, keeping both parser-blocking boundaries, original classic source
+order, existing module tags and all real UI waits. It uses the same 40-test
+selection on one runner: unmeasured baseline warm-up, then baseline → bundled
+→ bundled → baseline. Both arms disable the route fast path and use real
+per-test server/storage/browser isolation and off-origin request blocking.
+
+This tests whether request coalescing is **worth investigating**, not whether
+the generated bundles are safe to ship. Combining separate scripts can change
+`document.currentScript`, strict-mode directive scope, source URLs,
+lexical initialization timing and runtime error attribution; offline service
+worker precache and content updates would also need separate design. The
+workflow syntax-checks each bundle before running, fails if a selected E2E
+test fails, requires complete structured benchmark summaries and restores
+the original index and removes temporary assets on normal exit. It never
+commits or uploads the candidate. As with other small experiments, require
+repeated measurements, dependency/semantics review, offline coverage and a
+full six-shard E2E gate before proposing any production adoption.
+
+Open **Actions → E2E Classic Script Coalescing A/B Benchmark → Run workflow**
+on a master commit that includes the workflow.
+
+### Classic script coalescing: measured improvement and full-suite canary
+
+The [October 17 classic-script coalescing benchmark](https://github.com/Fooftilly/PRKS/actions/runs/39022151709)
+passed all 40 selected tests in each of its four ABBA trials. Same-runner
+baseline trials took **61.69s** and **62.01s**; temporary head/body bundles
+took **57.38s** and **57.56s**. Median wall time changed **61.85s → 57.47s**
+(**−7.08%**). Across the same 38/38 navigations in each trial,
+response-end→DOMContentLoaded aggregate fell **15.67s → 11.59s**,
+and Playwright app-readiness aggregate fell **19.50s → 15.45s**.
+Nested timings overlap their parents and do not represent additional savings.
+This result supports *further testing*, not production deployment.
+
+The **E2E Temporary Classic Bundle Full-Suite Canary** workflow tests the
+same generated candidate against all six complete external E2E shards in
+parallel, without replacing the normal full gate. It must be invoked manually
+from Actions on a commit containing the workflow. Each job checks out an
+isolated workspace, generates the exact two temporary bundles using the
+existing diagnostic builder, validates JavaScript with `node --check`,
+rewrites the local `index.html` only for the job, then executes
+`python tests/e2e/run.py --jobs 1 --shard INDEX/6 --no-pointer-capture`.
+The routing fast path remains OFF. All jobs restore original HTML and remove
+temporary assets even on failure; pre-existing candidate filenames cause a
+fail-closed abort. Every shard must pass; there is no aggregate check that
+can mask one failed shard. The manual workflow never edits master or
+production assets.
+
+**Remaining caveats before adoption:** E2E browser contexts block service
+workers, so even a green six-shard canary does **not** establish offline/PWA
+equivalence. The service worker currently maintains an explicit static precache
+for all 84 individual script assets, and `DEPENDENCY_REVISION` is linked to
+the dependency manifest. A future production design must account for cache
+revision, offline install/upgrade, rollback and generated artifact freshness,
+and assess global/script semantics and source attribution. Recheck the
+performance result in additional same-runner ABBA runs before changing
+production. Do not merge a production bundle without these checks.
+
+### Bundled full-suite canary: missing offline asset coverage
+
+The [October 17 full-suite canary](https://github.com/Fooftilly/PRKS/actions/runs/39023728966)
+failed all six shards in both attempts (~139–140 tests per shard).
+The failures concentrate in offline/service-worker cases and include
+missing `prksNavigate`, `createPrksOfflineStore`,
+`prksOfflineNoteRequestFailure` and `prksGetResearchGraphDebug`
+after offline reloads. The smaller 40-test A/B ran with service workers
+blocked, so its **−7.08%** timing result cannot establish offline safety.
+
+Root cause for the missing globals in those scenarios: the diagnostic's
+temporary index referenced `/__e2e_classic_head_bundle.js` and
+`/__e2e_classic_body_bundle.js`, neither of which is present in the normal
+service worker's required static precache or its strict static-fetch allowlist.
+An offline reload used the cached shell but could not reload its two scripts.
+This is a **canary candidate/asset staging error**, not yet evidence of a
+JavaScript concatenation semantic regression.
+
+The manual-only canary now stages a **temporary copy of `sw.js`** alongside
+the generated bundle files and HTML in each isolated Actions checkout.
+The copy adds only the two temporary root-level script URLs to the required
+static precache and static fetch allowlist; it is validated with `node --check`
+and restored byte-for-byte even if the browser or E2E command fails. No
+production service worker, asset manifest, or normal E2E gate is changed.
+
+The canary's preflight now exercises the **failing path**: start the real
+server and Chromium with `service_workers='allow'`, complete service-worker
+installation and control, go offline and reload the cached shell, then verify
+all four globals, successful HTTP statuses for both bundle scripts, and that
+both responses came from the service worker. Preflight failure skips all
+six expensive shards. A passing preflight is a smoke gate, not proof of
+full-suite parity: all six shards must still pass. Before production adoption,
+a permanent bundler needs its own cache revision, dependency/update/rollback
+design, complete offline tests, and repeated speed measurements.
 
 ### Opt-in hang diagnostics and Chromium recycle
 

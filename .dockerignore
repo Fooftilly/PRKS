@@ -20,5 +20,9 @@ data/
 data_testing/
 
 *.md
+# License notices must accompany both source and built Docker distributions.
+!THIRD_PARTY_NOTICES.md
+!frontend/vue/THIRD_PARTY_LICENSES.md
+!frontend/vendor/prks-pdf-viewer/THIRD_PARTY.md
 to-do.md
 folder_res.json

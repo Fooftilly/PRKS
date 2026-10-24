@@ -2,6 +2,8 @@
 
 PRKS is a self-hosted, local-first research library for organizing PDFs, Markdown research notes, online video references, bibliographic metadata, people, tags, reading progress, PDF annotations, playlists, and structured research relationships.
 
+**License:** [GNU Affero General Public License v3.0 only](LICENSE) (`AGPL-3.0-only`). See [Licensing](#licensing) for third-party notices and source-availability details.
+
 It uses Python, SQLite, and on-disk files on your machine—no separate database server is required.
 
 ![Folder of public-domain books](docs/screenshots/folders.png)
@@ -72,6 +74,8 @@ Build with `./docker-build.sh`, which builds `prks:latest` and prunes dangling i
 ```bash
 docker compose up -d
 ```
+
+Docker images build the classic frontend into two ordered JavaScript bundles (rather than 84 separate requests); the raw Python source checkout remains unbundled. To rebuild the previous frontend without bundles, use `docker compose build --build-arg PRKS_CLASSIC_BUNDLES=0` followed by `docker compose up -d`. This affects packaged static assets only, not library files or the database. Build details, cache versioning and validation: [Classic-script distribution](docs/classic-script-distribution.md).
 
 The container process binds **0.0.0.0:8080** so Docker port forwarding can reach it. Compose then publishes that port on the **host loopback** only (`127.0.0.1:8080:8080`). Container `0.0.0.0` is not the same as exposing PRKS on every host interface.
 
@@ -188,6 +192,34 @@ Full browser E2E gate (Playwright; Chromium installs into `.playwright-browsers/
 A runtime-only install (`requirements.txt` alone) is enough to run `prks_app.py`, but not enough for `run_tests.py`: the unit suite preflights `openapi-core` from `requirements-dev.txt`.
 
 Use [Developer Reference](docs/wiki/Developer-Reference.md) for targeted E2E modes, UX tours, browser fixtures, Sonar tooling, project layout, and the local post-commit archive. Contributor/agent rules are authoritative in [AGENTS.md](AGENTS.md).
+
+## Licensing
+
+Copyright © 2026 Nikola Perović and other PRKS contributors. Each contributor retains
+copyright in their own contributions. This notice does not claim ownership of
+vendored, third-party or user-supplied material.
+
+PRKS's original application code and documentation are made available under the
+[GNU Affero General Public License version 3 only](LICENSE)
+(`SPDX-License-Identifier: AGPL-3.0-only`), subject to the rights of
+individual authors and separately licensed materials. You may use, modify, and
+redistribute covered code under that license; **no warranty** is provided.
+
+This license does **not** relicense third-party dependencies, vendored scripts,
+fonts, PDF viewer components, or user-supplied research files. The
+[third-party notices](THIRD_PARTY_NOTICES.md) list bundled components and their
+original license files. Contributors should read [CONTRIBUTING.md](CONTRIBUTING.md).
+
+**Source for network users:** The unmodified upstream source is at
+[Fooftilly/PRKS](https://github.com/Fooftilly/PRKS). The application also exposes
+a source and license link under **Settings → Diagnostics → About PRKS**.
+If you distribute or operate a *modified* PRKS, you are responsible for making
+the Corresponding Source for **your actual deployed version** available under
+the applicable AGPL terms. An upstream link alone is not sufficient for
+your own modifications; update the in-app source link or supply an equally
+prominent link to the exact matching source, including build instructions and
+required corresponding material. The application's original data (PDFs, notes,
+research libraries, and backups) is not licensed by this project.
 
 ## Security
 

@@ -130,8 +130,23 @@ class FrontendRequestCoordinatorTests(unittest.TestCase):
         self.assertIn("root.prksOfflineNoteRequestSuccess", src)
         self.assertIn("root.prksOfflineNoteRequestFailure", src)
         self.assertIn("if (prksIsAbortError(error)) return;", src)
-        self.assertIn("if (!isManagedPdfHref(href)) reportPrksReachable();", src)
-        self.assertIn("reportPrksUnreachable(err);", src)
+        # The dedicated offline-runtime reachability probe owns its own
+        # settlement and must not invoke coordinator health callbacks. Every
+        # ordinary request still reports at the transport boundary.
+        self.assertIn("const reportReachability = pol.reportReachability !== false;", src)
+        self.assertIn(
+            "if (reportReachability && !isManagedPdfHref(href)) reportPrksReachable();",
+            src,
+        )
+        self.assertIn(
+            "if (reportReachability && !isManagedPdfHref(href)) reportPrksUnreachable(err);",
+            src,
+        )
+        self.assertIn(
+            "if (reportReachability && !isManagedPdfHref(href)) reportPrksUnreachable(lastError);",
+            src,
+        )
+        self.assertIn("reportReachability: reportReachability,", src)
         self.assertNotIn("indexedDB", src)
         self.assertNotIn("localStorage", src)
 

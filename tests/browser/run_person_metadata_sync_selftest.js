@@ -532,7 +532,35 @@ async function aCommittedFieldWriteStillNotifiesAfterTheEditorMovesOn() {
     assert.ok(runtime.notifications() >= 1, 'a committed field still notifies sync');
 }
 
+function personDetailUsesGuardedOfflineRead() {
+    // The Person detail route opts in without changing People list warming,
+    // durable creates/deletes or cache-provenance media suppression.
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const app = fs.readFileSync(path.join(__dirname, '../../frontend/js/app.js'), 'utf8');
+    const begin = app.indexOf("case 'person': {");
+    const end = app.indexOf('default: {', begin);
+    assert(begin > 0 && end > begin, 'Person detail route is present');
+    const segment = app.slice(begin, end);
+    assert.match(segment, /prksOfflineDetailFetch\(/);
+    assert.match(segment, /domain:\s*PRKS_PEOPLE_DOMAIN/);
+    assert.match(segment, /preferCacheWhenOffline:\s*true/);
+    assert.match(segment, /prksIsPersonShape\(value, personId\)/);
+    assert.match(segment, /prksPendingPersonDeletions/);
+    assert.match(segment, /prksPendingPersonCreates/);
+    assert.match(segment, /prksResolveOfflinePerson\(/);
+    assert.match(segment, /prksEffectivePersonRecord\(/);
+    assert.match(segment, /personOfflineCached\s*=\s*offlinePerson\.source\s*===\s*'cache'/,
+        'a cached Person must still suppress offline portrait/thumbnail fetches');
+    const people = app.indexOf("case 'people': {");
+    const role = app.indexOf("case 'people-role': {", people);
+    assert(people > 0 && role > people);
+    assert.doesNotMatch(app.slice(people, role), /preferCacheWhenOffline:\s*true/,
+        'People index remains server-first and warms the offline catalogue');
+}
+
 async function main() {
+    personDetailUsesGuardedOfflineRead();
     await fieldsAreIndependent();
     await repeatedEditsCoalesce();
     await editsFollowCreation();

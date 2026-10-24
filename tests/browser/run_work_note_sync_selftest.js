@@ -1031,12 +1031,106 @@ async function reconciliation() {
         'stale convergence fences People Graph');
 }
 
+
+async function guardedCarriedReminderCancellation() {
+    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const base = observed('V', 4);
+    const rows = async () => noteRows(await store.listOperations(), PRIVATE, 'W-1')
+        .filter(row => row.status !== 'acknowledged');
+    const cancel = text => store.saveWorkNote('W-1', PRIVATE, 'V', base, { cancelPendingText: text });
+
+    /* Missing predecessor is not proof of an unchanged value. */
+    await assert.rejects(cancel('X'), e => e.prksLocalStoreCode === 'stale_handoff');
+    assert.equal((await rows()).length, 0);
+
+    /* Also exercise the acknowledged tombstone, not merely an empty store.
+     * An ACK must not be confused with a still-cancelable pending row. */
+    const acknowledged = await store.saveWorkNote('W-1', PRIVATE, 'X', base);
+    await store.updateOperationSyncState(acknowledged.op_id, {
+        status: 'acknowledged', server_revision: 5, server_result: null,
+    });
+    await assert.rejects(cancel('X'), e => e.prksLocalStoreCode === 'stale_handoff');
+    const persistedAck = await store.getOperation(acknowledged.op_id);
+    assert.equal(persistedAck.status, 'acknowledged');
+    assert.equal(persistedAck.payload.text, 'X');
+    assert.equal((await rows()).length, 0);
+
+    /* While X is never-sent, reverting to V cancels X atomically. */
+    await store.saveWorkNote('W-1', PRIVATE, 'X', base);
+    await assert.rejects(cancel('foreign'), e => e.prksLocalStoreCode === 'stale_handoff');
+    assert.equal((await rows())[0].payload.text, 'X', 'a foreign row is never removed');
+    const cancelled = await cancel('X');
+    assert.equal(cancelled, null);
+    assert.equal((await rows()).length, 0, 'the never-sent row was cancelled');
+
+    /* Once claimed, X may be on the server and cancellation must not hide it. */
+    await store.saveWorkNote('W-1', PRIVATE, 'X', base);
+    const attempted = (await rows())[0];
+    await store.claimOperation(attempted.op_id);
+    await assert.rejects(cancel('X'), e => e.prksLocalStoreCode === 'scope_busy');
+    assert.equal((await rows()).length, 1, 'the attempted row stays immutable');
+}
+
+function committedPrivateAckProofIsExactAndBounded() {
+    const listeners = [];
+    globalThis.prksSync = { subscribe(fn) { listeners.push(fn); return () => {}; } };
+    const ctx = {
+        destroyed: false, tabId: 'ack-proof',
+        registerCleanup() {},
+        getEntity() { return null; },
+    };
+    globalThis.prksBindWorkNotesSync(ctx);
+    const emit = event => listeners.forEach(fn => fn(event));
+    const op = {
+        op_id: 'own-ack-1', operation: PRIVATE, entity_id: 'W-1',
+        base_revision: 4, payload: { text: 'X' },
+    };
+    const ack = {
+        code: 'ACKNOWLEDGED', work_id: 'W-1',
+        note_kind: PRIVATE_KIND, server_revision: 5,
+    };
+    emit({ op, acknowledged: ack });
+    const proof = globalThis.prksAcknowledgedWorkPrivateNote('own-ack-1');
+    assert.deepEqual(proof, { entityId: 'W-1', baseRevision: 4, revision: 5 });
+    proof.revision = 900;
+    assert.equal(globalThis.prksAcknowledgedWorkPrivateNote('own-ack-1').revision, 5,
+        'callers cannot modify the saved acknowledgement');
+    assert.equal(globalThis.prksAcknowledgedWorkPrivateNote('other-op'), null);
+
+    emit({ op: Object.assign({}, op, { op_id: 'foreign', entity_id: 'W-2' }),
+        acknowledged: ack });
+    assert.equal(globalThis.prksAcknowledgedWorkPrivateNote('foreign'), null,
+        'foreign Work bodies cannot borrow this acknowledgement');
+    emit({ op: Object.assign({}, op, { op_id: 'research', operation: RESEARCH }),
+        acknowledged: ack });
+    assert.equal(globalThis.prksAcknowledgedWorkPrivateNote('research'), null);
+    emit({ op: Object.assign({}, op, { op_id: 'old-revision' }),
+        acknowledged: Object.assign({}, ack, { server_revision: 3 }) });
+    assert.equal(globalThis.prksAcknowledgedWorkPrivateNote('old-revision'), null);
+
+    /* Only the most recent 64 valid receipts are kept. Evicted proof must
+     * be absent, so a carried edit falls back to its original safe base. */
+    for (let i = 1; i <= 65; i += 1) {
+        emit({ op: Object.assign({}, op, { op_id: 'bounded-' + i }),
+            acknowledged: ack });
+    }
+    assert.equal(globalThis.prksAcknowledgedWorkPrivateNote('own-ack-1'), null,
+        'oldest receipt is evicted when the map is bounded');
+    assert.equal(globalThis.prksAcknowledgedWorkPrivateNote('bounded-1'), null,
+        'the 65th new ACK evicts the first new receipt');
+    assert.deepEqual(globalThis.prksAcknowledgedWorkPrivateNote('bounded-65'),
+        { entityId: 'W-1', baseRevision: 4, revision: 5 },
+        'newest ACK remains available');
+    delete globalThis.prksSync;
+}
+
 async function main() {
     acknowledgedBase();
     handlerContract();
     enqueueSelectsAcknowledgedObserved();
     await coalescingFor(RESEARCH, 'Research');
     await coalescingFor(PRIVATE, 'Private');
+    await guardedCarriedReminderCancellation();
     await scopesDoNotBlockEachOther();
     await byteLimits();
     await mutationTestAtoBtoA();
@@ -1053,6 +1147,7 @@ async function main() {
     await blockedRevertToTheStaleBaseIsNeverReadAsSaved();
     await aStaleWorksBlockedSettlementLeavesTheLiveRetry();
     await reconciliation();
+    committedPrivateAckProofIsExactAndBounded();
     console.log('All ' + checks + ' Work note checks passed');
 }
 
