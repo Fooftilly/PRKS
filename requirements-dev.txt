@@ -4,6 +4,9 @@ playwright==1.64.0
 # the Unit / API / contract Test Gate job (installed alongside runtime pins);
 # not used by Docker or production runtime.
 openapi-core==0.23.1
+# Bounded property/state-machine tests for revision and sync invariants (#854).
+# Unit Test Gate installs this; not included in PRKS production runtime.
+hypothesis==6.170.9
 # PostgreSQL driver and pool for backend/db/ (#623, PG-1). Only the PostgreSQL
 # helper tests (scripts/test-postgres and the Test Gate PostgreSQL job) import
 # them while SQLite stays the only application backend; they move to

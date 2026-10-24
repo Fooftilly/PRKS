@@ -542,8 +542,8 @@ class InstalledPinTests(unittest.TestCase):
         )
         self.assertTrue(result.ok)
 
-    def test_unit_contract_gate_requires_openapi_core_only(self):
-        """Unit preflight must check openapi-core without requiring Playwright."""
+    def test_unit_contract_gate_requires_contract_and_property_deps(self):
+        """Unit preflight checks openapi-core and Hypothesis, not Playwright."""
         pin = pinned_openapi_core_version(_PROJECT)
         dev_pins = parse_requirements_pins(
             (_PROJECT / "requirements-dev.txt").read_text()
@@ -558,6 +558,8 @@ class InstalledPinTests(unittest.TestCase):
             seen.append(name)
             if name == "openapi-core":
                 return pin
+            if name == "hypothesis":
+                return dev_pins["hypothesis"]
             return runtime_pins.get(name)
 
         result = run_unit_contract_gate(
@@ -567,6 +569,7 @@ class InstalledPinTests(unittest.TestCase):
         )
         self.assertTrue(result.ok, result.issues)
         self.assertIn("openapi-core", seen)
+        self.assertIn("hypothesis", seen)
         self.assertNotIn("playwright", seen)
 
     def test_unit_contract_gate_fails_when_openapi_core_missing(self):
@@ -574,10 +577,14 @@ class InstalledPinTests(unittest.TestCase):
             (_PROJECT / "requirements.txt").read_text()
         )
 
+        dev_pins = parse_requirements_pins(
+            (_PROJECT / "requirements-dev.txt").read_text()
+        )
+
         def lookup(name: str) -> str | None:
             if name == "openapi-core":
                 return None
-            return runtime_pins.get(name)
+            return dev_pins.get(name, runtime_pins.get(name))
 
         result = run_unit_contract_gate(
             repo_root=_PROJECT,
@@ -589,6 +596,21 @@ class InstalledPinTests(unittest.TestCase):
             any(i.code == "missing_package" for i in result.issues),
             result.issues,
         )
+
+    def test_unit_contract_gate_fails_when_hypothesis_missing(self):
+        runtime_pins = parse_requirements_pins((_PROJECT / "requirements.txt").read_text())
+        dev_pins = parse_requirements_pins((_PROJECT / "requirements-dev.txt").read_text())
+
+        def lookup(name: str) -> str | None:
+            if name == "hypothesis":
+                return None
+            return dev_pins.get(name, runtime_pins.get(name))
+
+        result = run_unit_contract_gate(
+            repo_root=_PROJECT, version_lookup=lookup, current_python=(3, 12, 0),
+        )
+        self.assertFalse(result.ok)
+        self.assertTrue(any(i.code == "missing_package" for i in result.issues))
 
     def test_unit_contract_gate_missing_requirements_dev_is_missing_requirements(self):
         """Absent requirements-dev must not raise FileNotFoundError."""
@@ -1157,7 +1179,8 @@ class RepoGateLiveTests(unittest.TestCase):
         runtime = parse_requirements_pins((_PROJECT / "requirements.txt").read_text())
         dev = parse_requirements_pins((_PROJECT / "requirements-dev.txt").read_text())
         self.assertIn("openapi-core", dev)
-        expected_unit = dict(runtime, **{"openapi-core": dev["openapi-core"]})
+        self.assertIn("hypothesis", dev)
+        expected_unit = dict(runtime, **{name: dev[name] for name in ("openapi-core", "hypothesis")})
         expected_pg = dict(runtime)
         for name in _TEST_GATE_PG_DEV_PINS:
             expected_pg[name] = dev[name]

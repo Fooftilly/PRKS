@@ -21,7 +21,7 @@ from backend.dependency_gate import read_requirements_pins  # noqa: E402
 # Workflows select explicit, purpose-limited dev requirements.
 DEV_PROFILES: dict[str, tuple[str, ...]] = {
     "runtime": (),
-    "unit": ("openapi-core",),
+    "unit": ("openapi-core", "hypothesis"),
     "plan": ("playwright",),
     "e2e": ("playwright",),
     "postgres": ("psycopg", "psycopg-binary", "psycopg-pool", "argon2-cffi"),

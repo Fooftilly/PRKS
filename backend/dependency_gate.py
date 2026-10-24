@@ -639,9 +639,9 @@ def validate_unit_contract_python(
     version_lookup: Callable[[str], str | None] | None = None,
     current_python: tuple[int, ...] | None = None,
 ) -> GateResult:
-    """Runtime pins plus openapi-core only (no Playwright / browser deps).
+    """Runtime pins plus openapi-core and Hypothesis (no Playwright / browser deps).
 
-    Unit discovery imports ``openapi_core`` from the Positions contract tests;
+    Unit discovery imports ``openapi_core`` and ``hypothesis`` from tests;
     the default unit preflight must refuse a runtime-only install before
     discovery raises ``ModuleNotFoundError``.
     """
@@ -663,15 +663,18 @@ def validate_unit_contract_python(
         )
         return result
     try:
-        pin = pinned_openapi_core_version(root)
-    except RuntimeError as exc:
-        result.fail("missing_openapi_core_pin", str(exc), str(dev_path))
-        return result
+        pins = read_requirements_pins(dev_path)
     except RequirementsPinError as exc:
         result.fail("non_exact_requirement", str(exc), str(dev_path))
         return result
+    required = ("openapi-core", "hypothesis")
+    missing_pins = [name for name in required if not pins.get(name)]
+    if missing_pins:
+        for name in missing_pins:
+            result.fail("missing_unit_pin", f"requirements-dev.txt has no {name}== pin", str(dev_path))
+        return result
     extra = validate_installed_pins(
-        {"openapi-core": pin},
+        {name: pins[name] for name in required},
         version_lookup=version_lookup,
     )
     if not extra.ok and result.ok:
