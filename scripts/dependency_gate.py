@@ -42,7 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument(
         "--unit-contract",
         action="store_true",
-        help="Runtime + openapi-core (unit/API contract tests; no Playwright)",
+        help="Runtime + openapi-core + Hypothesis (unit/API tests; no Playwright)",
     )
     mode.add_argument("--test", action="store_true", help="Runtime + test (Playwright) pins")
     mode.add_argument(
