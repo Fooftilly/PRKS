@@ -175,6 +175,56 @@ async function aRefusedFolderCreateDoesNotStrandTheWorksFolderProjection() {
         "neither rejected operation is silently discarded");
 }
 
+async function failedDependencyWriteRecoversWithoutResendingCreate() {
+    // The terminal create is already committed before the dependent walk.
+    // If the local transaction aborts, only a fresh drain/restart can repair
+    // the pending Work filing; the server must never see the create twice.
+    for (const restart of [false, true]) {
+        const store = newStore();
+        const created = await store.createFolder({ title: "Refused locally" });
+        const filing = await store.setWorkFolder("W-1", created.entity_id,
+            { folder_id: "F-old", revision: 2 });
+        const original = store.markDependentsFailed.bind(store);
+        let failedOnce = false;
+        store.markDependentsFailed = async (...args) => {
+            if (!failedOnce) {
+                failedOnce = true;
+                throw new Error("simulated IndexedDB transaction failure");
+            }
+            return original(...args);
+        };
+        let sent = 0;
+        const respond = async () => {
+            sent += 1;
+            return { ok: false, status: 409,
+                json: async () => ({ code: "TITLE_TAKEN", folder_id: created.entity_id }) };
+        };
+        const first = runtimeFor(store, respond);
+        await first.wake();
+        const unfinished = await store.listOperations();
+        assert.equal(unfinished.find(op => op.op_id === created.op_id).status, "conflict",
+            "the terminal parent remains durably settled despite a dependent write failure");
+        assert.equal(unfinished.find(op => op.op_id === filing.op_id).status, "pending",
+            "the failed IndexedDB write leaves a dependent requiring recovery");
+        assert.equal(sent, 1, "the refused construction reached the server once");
+
+        // Restart uses the same durable store but a new coordinator. The
+        // same-runtime case exercises the scheduled wake's recovery logic.
+        if (restart) first.stop();
+        const recovered = restart ? runtimeFor(store, respond) : first;
+        await recovered.wake();
+        const ops = await store.listOperations();
+        assert.equal(ops.find(op => op.op_id === created.op_id).status, "conflict");
+        assert.equal(ops.find(op => op.op_id === filing.op_id).status, "conflict");
+        assert.equal(ops.find(op => op.op_id === filing.op_id).server_result.code,
+            "DEPENDENCY_FAILED");
+        assert.equal(sent, 1, "recovery never resends a rejected construction");
+        assert.equal((await store.stats()).byStatus.conflict, 2,
+            "the operation and dependent remain in Diagnostics");
+        recovered.stop();
+    }
+}
+
 async function anEmptyTitleBecomesThePlaceholder() {
     const store = newStore();
     const created = await store.createFolder({ title: "   " });
@@ -387,6 +437,7 @@ async function main() {
     await aFolderIsAValidDestinationImmediately();
     await refusedCreateStaysInDiagnosticsButNotTheFolderLibrary();
     await aRefusedFolderCreateDoesNotStrandTheWorksFolderProjection();
+    await failedDependencyWriteRecoversWithoutResendingCreate();
     await anEmptyTitleBecomesThePlaceholder();
     await aFolderInsideALocalFolderWaitsForIt();
     await fieldEditsCoalesceAndCancel();
