@@ -15,17 +15,16 @@ updates:
       default-days: 7
     commit-message:
       prefix: "build(deps)"
-    # Batch compatible maintainer Python tooling, but keep production runtime
-    # pins and browser engine upgrades separate for focused review.
+    # Coordinate the PostgreSQL driver and pool family only. All three move
+    # into production together; never combine these with unrelated packages.
+    # Argon2id, API validation, runtime imaging and Playwright stay separate.
     groups:
-      python-maintainer-routine:
+      psycopg-stack:
         applies-to: version-updates
         patterns:
           - "psycopg"
           - "psycopg-binary"
           - "psycopg-pool"
-          - "argon2-cffi"
-          - "openapi-core"
         update-types: ["minor", "patch"]
 
   # Maintainer-only EmbedPDF build dependencies.

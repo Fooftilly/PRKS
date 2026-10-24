@@ -1,4 +1,4 @@
-"""Static safety contract for PRKS Dependabot PR consolidation."""
+"""Guard Dependabot batching boundaries, especially security and runtime pins."""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ import unittest
 from pathlib import Path
 
 
-CONFIG = (Path(__file__).resolve().parents[1] / ".github/dependabot.yml")
+CONFIG = Path(__file__).resolve().parents[1] / ".github/dependabot.yml"
 
 
-def _ecosystem(config: str, kind: str, directory: str) -> str:
+def ecosystem(config: str, kind: str, directory: str) -> str:
     match = re.search(
         r'(?ms)^  - package-ecosystem: "' + re.escape(kind) + r'"\n'
         + r'    directory: "' + re.escape(directory) + r'"\n'
@@ -18,8 +18,30 @@ def _ecosystem(config: str, kind: str, directory: str) -> str:
         config,
     )
     if match is None:
-        raise AssertionError(f"Dependabot ecosystem {kind}:{directory} missing")
+        raise AssertionError(f"Missing Dependabot ecosystem {kind}:{directory}")
     return match.group(1)
+
+
+def group(config: str, name: str) -> str:
+    match = re.search(
+        r"(?ms)^      " + re.escape(name) + r":\n"
+        + r"(.*?)(?=^      [\w-]+:\n|\Z)",
+        config,
+    )
+    if match is None:
+        raise AssertionError(f"Missing Dependabot group {name}")
+    return match.group(1)
+
+
+def values(section: str, field: str) -> set[str]:
+    match = re.search(
+        r"(?m)^        " + re.escape(field) + r":\n"
+        + r"((?:^          - \"[^\"]+\"\n)+)",
+        section,
+    )
+    if match is None:
+        raise AssertionError(f"Missing or malformed {field}")
+    return set(re.findall(r'(?m)^          - "([^"]+)"$', match.group(1)))
 
 
 class DependabotGroupingSafetyTests(unittest.TestCase):
@@ -27,46 +49,60 @@ class DependabotGroupingSafetyTests(unittest.TestCase):
     def setUpClass(cls):
         cls.config = CONFIG.read_text(encoding="utf-8")
 
-    def test_python_routine_group_does_not_include_runtime_or_browser(self):
-        pip = _ecosystem(self.config, "pip", "/")
-        group = pip.split("      python-maintainer-routine:", 1)[1]
-        for name in ("psycopg", "psycopg-binary", "psycopg-pool", "argon2-cffi", "openapi-core"):
-            self.assertIn(f'          - "{name}"', group)
-        for name in ("PyMuPDF", "Pillow", "pydantic", "playwright"):
-            self.assertNotIn(f'          - "{name}"', group)
-        self.assertIn("applies-to: version-updates", group)
-        self.assertIn('update-types: ["minor", "patch"]', group)
+    def test_psycopg_stack_is_only_database_driver_family(self):
+        pip = ecosystem(self.config, "pip", "/")
+        stack = group(pip, "psycopg-stack")
+        self.assertEqual(
+            values(stack, "patterns"),
+            {"psycopg", "psycopg-binary", "psycopg-pool"},
+        )
+        self.assertIn("applies-to: version-updates", stack)
+        self.assertIn('update-types: ["minor", "patch"]', stack)
+        # Crucially, these must not be grouped even if they move to runtime.
+        for pkg in ("argon2-cffi", "openapi-core", "pydantic", "playwright"):
+            self.assertNotIn(pkg, values(stack, "patterns"))
 
-    def test_frontend_stacks_remain_separate_from_routine(self):
-        frontend = _ecosystem(self.config, "npm", "/frontend-app")
-        for group in ("storybook-stack", "vitest-stack", "vite-toolchain", "vue-core", "frontend-routine"):
-            self.assertIn(f"      {group}:", frontend)
-        routine = frontend.split("      frontend-routine:", 1)[1]
-        self.assertIn("exclude-patterns:", routine)
-        for name in ("storybook", "@storybook/*", "vitest", "@vitest/*", "vite", "@vitejs/plugin-vue", "vue-tsc", "vue", "@vue/*"):
-            self.assertIn(f'          - "{name}"', routine)
+    def test_frontend_stacks_are_excluded_from_routine(self):
+        frontend = ecosystem(self.config, "npm", "/frontend-app")
+        reserved = {
+            "storybook", "@storybook/*", "vitest", "@vitest/*", "vite",
+            "@vitejs/plugin-vue", "vue-tsc", "vue", "@vue/*",
+        }
+        for key in ("storybook-stack", "vitest-stack", "vite-toolchain", "vue-core"):
+            self.assertTrue(values(group(frontend, key), "patterns"))
+        routine = group(frontend, "frontend-routine")
+        self.assertEqual(values(routine, "patterns"), {"*"})
+        self.assertTrue(reserved.issubset(values(routine, "exclude-patterns")))
         self.assertIn('update-types: ["minor", "patch"]', routine)
-        self.assertIn('          - "vue-tsc"', frontend.split("      vite-toolchain:", 1)[1].split("      vue-core:", 1)[0])
+        self.assertIn("vue-tsc", values(group(frontend, "vite-toolchain"), "patterns"))
 
-    def test_pdf_react_and_embedpdf_remain_independent(self):
-        viewer = _ecosystem(self.config, "npm", "/tools/pdf-viewer")
-        for group in ("embedpdf", "react-stack", "pdf-viewer-routine"):
-            self.assertIn(f"      {group}:", viewer)
-        routine = viewer.split("      pdf-viewer-routine:", 1)[1]
-        for name in ("@embedpdf/*", "react", "react-dom", "@types/react", "@types/react-dom"):
-            self.assertIn(f'          - "{name}"', routine)
+    def test_pdf_react_and_embedpdf_not_swallowed_by_routine(self):
+        viewer = ecosystem(self.config, "npm", "/tools/pdf-viewer")
+        routine = group(viewer, "pdf-viewer-routine")
+        protected = {"@embedpdf/*", "react", "react-dom", "@types/react", "@types/react-dom"}
+        self.assertTrue(protected.issubset(values(routine, "exclude-patterns")))
+        self.assertEqual(values(routine, "patterns"), {"*"})
+        self.assertIn('update-types: ["minor", "patch"]', routine)
+        self.assertTrue(protected.intersection(values(group(viewer, "react-stack"), "patterns")))
+        self.assertIn("@embedpdf/*", values(group(viewer, "embedpdf"), "patterns"))
+
+    def test_dompurify_exclusion_is_real(self):
+        vendor = ecosystem(self.config, "npm", "/tools/frontend-vendor")
+        routine = group(vendor, "frontend-vendor-routine")
+        self.assertEqual(values(routine, "patterns"), {"*"})
+        self.assertIn("dompurify", values(routine, "exclude-patterns"))
         self.assertIn('update-types: ["minor", "patch"]', routine)
 
-    def test_security_updates_and_majors_are_not_batched(self):
-        gh = _ecosystem(self.config, "github-actions", "/")
-        self.assertIn("      codeql-security:\n        applies-to: security-updates", gh)
-        self.assertIn("      codeql-action:\n        applies-to: version-updates", gh)
-        routine = gh.split("      actions-routine:", 1)[1]
-        self.assertIn('          - "actions/*"', routine)
-        self.assertIn('update-types: ["minor", "patch"]', routine)
+    def test_action_security_and_major_updates_remain_separate(self):
+        gh = ecosystem(self.config, "github-actions", "/")
+        security = group(gh, "codeql-security")
+        codeql = group(gh, "codeql-action")
+        routine = group(gh, "actions-routine")
+        self.assertIn("applies-to: security-updates", security)
+        self.assertIn("applies-to: version-updates", codeql)
         self.assertIn("applies-to: version-updates", routine)
-        vendor = _ecosystem(self.config, "npm", "/tools/frontend-vendor")
-        self.assertIn('          - "dompurify"', vendor.split("      frontend-vendor-routine:", 1)[1])
+        self.assertEqual(values(routine, "patterns"), {"actions/*"})
+        self.assertIn('update-types: ["minor", "patch"]', routine)
 
 
 if __name__ == "__main__":
