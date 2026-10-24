@@ -119,7 +119,9 @@ class FrontendCISelectionTests(unittest.TestCase):
                 self.assertIs(plan["run"], True)
                 self.assertIs(plan["pointer_capture"], True)
                 self.assertEqual(plan["external_shards"], count)
-                self.assertEqual(plan["matrix"]["include"], policy.ci_matrix_include(count, 1))
+                self.assertEqual(
+                    plan["matrix"]["include"], policy.ci_matrix_include(count, 1)
+                )
 
     def test_manual_width_is_rejected_without_explicit_force_and_for_bad_inputs(self):
         # Simulates a PR-like run attempting to inject manual-shard data.
