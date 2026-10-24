@@ -1,7 +1,10 @@
 {
   "schema_version": 1,
   "description": "PRKS accepted-dependency inventory. Prefer authoritative_source references over duplicated version literals. Freshness is Dependabot/explicit watchers; consistency is scripts/dependency_gate.py (offline).",
-  "python_min_version": [3, 12],
+  "python_min_version": [
+    3,
+    12
+  ],
   "dependencies": [
     {
       "name": "PyMuPDF",
@@ -49,6 +52,17 @@
     },
     {
       "name": "openapi-core",
+      "scope": "test",
+      "authoritative_source": "requirements-dev.txt",
+      "manifest": "requirements-dev.txt",
+      "lockfile": null,
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": true,
+      "dependabot_monitored": true
+    },
+    {
+      "name": "hypothesis",
       "scope": "test",
       "authoritative_source": "requirements-dev.txt",
       "manifest": "requirements-dev.txt",
