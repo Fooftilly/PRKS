@@ -46,7 +46,7 @@ The Python unit suite includes a bounded [Hypothesis](https://hypothesis.readthe
 Run just the pilot (after installing `requirements.txt` and `requirements-dev.txt`):
 
 ```bash
-python -m unittest tests.test_hypothesis_sync -v
+./.venv/bin/python -m unittest tests.test_hypothesis_sync -v
 ```
 
 Ordinary CI uses a small fixed maximum number of generated examples and state-machine steps; it is not a replacement for deterministic regression tests. A failure reports a minimized counterexample. Preserve it as an explicit `@example(...)` or a named deterministic regression test for reliable future replay; use a `@reproduce_failure(...)` blob when printed, or record a `@seed(...)` when reproducing a generated run. A plain rerun is not guaranteed to regenerate the same counterexample. Hypothesis' local example database (when enabled) is an accelerator, not a CI prerequisite. The tests deliberately set `database=None` to keep results independent of a developer's cached examples. Avoid hiding flaky failures behind relaxed deadlines or retry loops. Test databases and records are disposable, with no connection to a real research library.
