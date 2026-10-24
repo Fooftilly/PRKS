@@ -6024,6 +6024,7 @@ function initForms() {
     const folderParentInput = document.getElementById('folder-parent-search');
     const folderParentHidden = document.getElementById('folder-parent-id');
     const folderParentResults = document.getElementById('folder-parent-results');
+    let revalidateFolderTitle = null;
     if (folderTitleInput && folderTitleError && folderBtn) {
         let folderModalFolders = [];
         let folderParentBound = false;
@@ -6059,9 +6060,11 @@ function initForms() {
                 folderTitleError.textContent = '';
                 folderTitleError.classList.add('hidden');
                 folderTitleInput.removeAttribute('aria-invalid');
-                folderBtn.disabled = false;
+                // Input events and async validation must not enable Save while busy.
+                folderBtn.disabled = folderBtn.getAttribute('aria-busy') === 'true';
             }
         }
+        revalidateFolderTitle = updateFolderTitleDuplicateUi;
         function renderFolderParentDropdown() {
             if (!folderParentInput || !folderParentHidden || !folderParentResults) return;
             const q = String(folderParentInput.value || '').trim().toLowerCase();
@@ -6179,6 +6182,7 @@ function initForms() {
                         folderCreateInFlight = null;
                         if (isCurrentOpening() && typeof prksSetButtonBusy === 'function') {
                             prksSetButtonBusy(folderBtn, false);
+                            if (revalidateFolderTitle) revalidateFolderTitle();
                         }
                     }
                 }
@@ -6243,6 +6247,7 @@ function initForms() {
                     folderCreateInFlight = null;
                     if (isCurrentOpening() && typeof prksSetButtonBusy === 'function') {
                         prksSetButtonBusy(folderBtn, false);
+                        if (revalidateFolderTitle) revalidateFolderTitle();
                     }
                 }
             }
