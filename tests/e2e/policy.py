@@ -1419,6 +1419,36 @@ def _is_mapped_vue_feature_source(rel: str, classified: dict) -> bool:
     return bool(classified.get("features"))
 
 
+def frontend_browser_change_requires_full_ci(changed_paths) -> bool:
+    """True if a PR can change the shipped browser or its frontend build.
+
+    Keep documentation, Storybook-only, and frontend unit/spec changes eligible
+    for the ordinary CI selection. Maintainer-only PDF viewer tooling does not
+    ship as the PRKS browser application. Backend and E2E harness high-risk
+    decisions remain handled by the existing CI policy.
+    """
+    for path in changed_paths:
+        rel = _posix(path)
+        name = rel.rsplit("/", 1)[-1]
+        if name.endswith(".md") or name == "AGENTS.md":
+            continue
+        if rel.startswith(("tools/frontend-vendor/", "tools/research-graph/")):
+            return True
+        if rel.startswith("frontend/"):
+            return True
+        if rel.startswith("frontend-app/"):
+            if rel.startswith(("frontend-app/.storybook/", "frontend-app/storybook-static/")):
+                continue
+            if any(
+                name.endswith(f".{kind}.{ext}")
+                for kind in ("test", "spec", "stories")
+                for ext in ("js", "jsx", "ts", "tsx", "vue")
+            ):
+                continue
+            return True
+    return False
+
+
 def plan_ci_e2e(changed_paths, *, force_full: bool = False, path_diffs=None):
     """Authoritative CI gate plan for ``--ci-plan`` / e2e-gate.yml.
 

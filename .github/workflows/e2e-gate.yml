@@ -74,6 +74,8 @@ jobs:
         shell: bash
         env:
           PRKS_E2E: "1"
+          # Full E2E for shipped frontend changes, not unrelated PRs.
+          PRKS_E2E_CI_FRONTEND_FULL: "1"
         run: |
           set -euo pipefail
           if [[ "${{ steps.base.outputs.force }}" == "1" ]]; then
