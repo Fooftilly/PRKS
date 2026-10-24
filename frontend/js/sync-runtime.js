@@ -12,6 +12,8 @@
  *   terminal(data, op)  {conflict: <bounded structured result>} for an outcome
  *                       the user must resolve, or {discard: <code>} for one
  *                       with no resolution worth offering.
+ *   failDependentsOnConflict  true when any conflict in this family means its
+ *                       prerequisites can never succeed (e.g. refused CREATE_FOLDER).
  */
 (function (root) {
     'use strict';
@@ -87,10 +89,11 @@
             if (outcome.conflict) {
                 await store.updateOperationSyncState(op.op_id, {
                     status: 'conflict', server_result: outcome.conflict, last_error: null });
-                // A non-reappliable rejected create can never satisfy its
-                // dependents. Preserve those intents as Diagnostics conflicts,
-                // rather than leaving them queued behind a permanent refusal.
-                if (outcome.failDependents === true) await blockDependents(op.op_id);
+                // A terminal construction refusal cannot satisfy its
+                // dependents. The family's policy also drives crash recovery.
+                if (handlers[op.operation].failDependentsOnConflict === true) {
+                    await blockDependents(op.op_id);
+                }
                 emit();
                 return;
             }
@@ -144,10 +147,30 @@
         async function blockDependents(opId) {
             try {
                 await store.markDependentsFailed(opId);
-            } catch (_) { /* a row that changed underneath is re-read next drain */ }
+            } catch (_) {
+                // The parent was already durably settled. Never revert it to
+                // pending or silently abandon dependents on a failed IDB write.
+                schedule(5000);
+            }
+        }
+        /* A crash or failed IDB transaction may interrupt propagation AFTER
+         * a terminal conflict was durably recorded. The recorded status and
+         * the operation family's policy are enough to resume, without sending
+         * the refused create again. The store walks the full dependent graph
+         * atomically, and repeating that walk after success is harmless.
+         * This runs on every wake (including offline) so same-session retries
+         * and fresh-runtime recovery both repair pending descendants. */
+        async function repairTerminalConflictDependents() {
+            for (const op of await store.listOperations()) {
+                if (op.status !== 'conflict' || !supported(op)) continue;
+                if (handlers[op.operation].failDependentsOnConflict === true) {
+                    await store.markDependentsFailed(op.op_id);
+                }
+            }
         }
         async function drain() {
             if (!recovered) await recover();
+            await repairTerminalConflictDependents();
             while (deps.online()) {
                 const all = (await store.listOperations()).filter(supported);
                 const pending = all.filter(op => op.status === 'pending');
