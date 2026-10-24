@@ -29,7 +29,7 @@ class ImpactReportTests(unittest.TestCase):
 
     @patch("scripts.dependency_pr_report.subprocess.run")
     def test_refuses_non_merge_checkout(self, run) -> None:
-        run.return_value.stdout = "a" * 40 + " " + "b" * 40 + "\\n"
+        run.return_value.stdout = "a" * 40 + " " + "b" * 40 + "\n"
         with self.assertRaisesRegex(ValueError, "two-parent PR merge"):
             changed_paths()
         self.assertEqual(run.call_count, 1)
@@ -41,8 +41,8 @@ class ImpactReportTests(unittest.TestCase):
         head = "c" * 40
         from unittest.mock import Mock
         run.side_effect = [
-            Mock(stdout=f"{sha} {actual_base} {head}\\n"),
-            Mock(stdout=b"requirements.txt\\0frontend-app/package.json\\0"),
+            Mock(stdout=f"{sha} {actual_base} {head}\n"),
+            Mock(stdout=b"requirements.txt\0frontend-app/package.json\0"),
         ]
         result = changed_paths()
         self.assertEqual(result, {"requirements.txt", "frontend-app/package.json"})
