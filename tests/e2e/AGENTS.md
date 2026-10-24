@@ -271,14 +271,22 @@ whenever the module changes. The scheduling and aggregation logic lives in
 
 External CI sharding. `--shard INDEX/TOTAL` (1-based) selects one bucket from
 the same LPT partition used by `--jobs TOTAL`. The authoritative GitHub Actions
-E2E gate (`.github/workflows/e2e-gate.yml`) plans via
-`python tests/e2e/run.py --ci-plan --base <ref>`:
+E2E gate (`.github/workflows/e2e-gate.yml`) plans pull requests via
+`python tests/e2e/run.py --ci-plan --base <ref>` with
+`PRKS_E2E_CI_FRONTEND_FULL=1`:
 
 | Mode | When | Matrix |
 | --- | --- | --- |
-| `skip` | docs/unit/ignored-only | no runners |
-| `affected` | mapped feature production/E2E paths | features ∪ smoke; shard count from selected test size (1 runner + local workers when small) |
-| `full` | high-risk/shared/unmapped, `master` push, `workflow_dispatch`, discovery failure | `FULL_GATE_EXTERNAL_SHARDS` runners × `--jobs 1` |
+| `skip` | docs/unit/ignored-only and unrelated workflow changes | no browser runners |
+| `affected` | selected backend/E2E feature changes without frontend impact | features ∪ smoke; shard count from selected test size |
+| `full` | frontend production/source/build dependency changes, high-risk/shared/unmapped, `master` push, manual dispatch, discovery failure | `FULL_GATE_EXTERNAL_SHARDS` runners × `--jobs 1` |
+
+Browser-affecting changes under `frontend/**`, `frontend-app/**`, or
+`tools/frontend-vendor/**` / `tools/research-graph/**` always run full CI,
+except docs, frontend-only unit/specs, and Storybook catalog files. The separate
+maintainer-only PDF viewer does not on its own require full browser E2E.
+Local affected selection (without the CI flag) still uses the existing feature
+mapping; changes to unrelated/backend areas retain their previous CI policy.
 
 Pointer capture runs **in parallel** with the matrix (both need only the plan
 job) when mode is `full`, or when affected features intersect tiling /

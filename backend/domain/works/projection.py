@@ -28,11 +28,16 @@ same rules:
   :func:`backend.domain.people.roles.attach_credits` puts on the core, with
   SQLite's display rule (the trimmed credit name, else the Person's name).
 
-Fields owned by lanes that have not landed (folders, playlists,
-annotations, Research references) are rendered as the empty value SQLite
-gives a Work that has none; those lanes add them to this projection. The
-detail's ``tags`` are the Organization lane's: ``get_work`` reads them in the
-same snapshot (``backend.domain.organization.links``).
+- Folder fields (``folder_id``, and the detail's ``folder_title``): the
+  Work's ``folder_files`` row and its Folder (the Organization lane's), in
+  the same row; the detail's ``playlist_id`` and ``playlist_title`` likewise
+  from its ``playlist_items`` row and Playlist.
+
+Fields owned by lanes that have not landed (annotations, Research
+references) are rendered as the empty value SQLite gives a Work
+that has none; those lanes add them to this projection. The detail's
+``tags`` are the Organization lane's: ``get_work`` reads them in the same
+snapshot (``backend.domain.organization.links``).
 The facade adds ``file_size_bytes`` and ``html_content``, which come from the
 file system and the wiki-link resolver rather than from these tables.
 """
@@ -112,7 +117,12 @@ SELECT
   mc.n AS manifestation_count,
   COALESCE(ac.n, 0) AS asset_count,
   rn.body AS research_note,
-  pn.body AS private_note
+  pn.body AS private_note,
+  ff.folder_id,
+  fo.title AS folder_title,
+  pi.playlist_id,
+  pi.position AS playlist_position,
+  pl.title AS playlist_title
 FROM prks.works w
 JOIN prks.manifestations m
   ON m.library_id = w.library_id AND m.id = w.primary_manifestation_id AND m.work_id = w.id
@@ -128,6 +138,14 @@ LEFT JOIN prks.work_notes rn
   ON rn.library_id = w.library_id AND rn.work_id = w.id AND rn.kind = 'research'
 LEFT JOIN prks.work_notes pn
   ON pn.library_id = w.library_id AND pn.work_id = w.id AND pn.kind = 'private'
+LEFT JOIN prks.folder_files ff
+  ON ff.library_id = w.library_id AND ff.work_id = w.id
+LEFT JOIN prks.folders fo
+  ON fo.library_id = ff.library_id AND fo.id = ff.folder_id
+LEFT JOIN prks.playlist_items pi
+  ON pi.library_id = w.library_id AND pi.work_id = w.id
+LEFT JOIN prks.playlists pl
+  ON pl.library_id = pi.library_id AND pl.id = pi.playlist_id
 WHERE w.library_id = %(library_id)s
 """
 
@@ -149,6 +167,13 @@ BY_TITLE_SQL: LiteralString = (
 )
 BY_ID_SQL: LiteralString = " AND w.id = %(work_id)s"
 BY_IDS_SQL: LiteralString = " AND w.id = ANY(%(work_ids)s)"
+IN_FOLDER_SQL: LiteralString = " AND ff.folder_id = %(folder_id)s"
+# A Playlist's items in its order; SQLite breaks a tie of positions by
+# creation time, and an equal rendered time falls back to the id.
+IN_PLAYLIST_SQL: LiteralString = (
+    " AND pi.playlist_id = %(playlist_id)s"
+    " ORDER BY pi.position, date_trunc('second', w.created_at), w.id COLLATE \"C\""
+)
 LIMIT_SQL: LiteralString = " LIMIT %(limit)s"
 
 
@@ -194,6 +219,11 @@ def work_core(row: Mapping[str, Any]) -> dict[str, Any]:
         "primary_asset_id": row["primary_asset_id"],
         "manifestation_count": int(row["manifestation_count"]),
         "asset_count": int(row["asset_count"]),
+        "folder_id": row["folder_id"],
+        "folder_title": row["folder_title"],
+        "playlist_id": row["playlist_id"],
+        "playlist_title": row["playlist_title"],
+        "playlist_position": row["playlist_position"],
     }
     for field in MANIFESTATION_FIELDS:
         core[field] = row[field]
@@ -264,10 +294,10 @@ def work_detail(core: Mapping[str, Any]) -> dict[str, Any]:
         "research_refs": {"concepts": [], "arguments": []},
         "annotations": "[]",
         "tags": [],
-        "playlist_id": None,
-        "playlist_title": None,
-        "folder_id": None,
-        "folder_title": None,
+        "playlist_id": core["playlist_id"],
+        "playlist_title": core["playlist_title"],
+        "folder_id": core["folder_id"],
+        "folder_title": core["folder_title"],
     })
     return out
 
@@ -276,7 +306,7 @@ def work_summary(core: Mapping[str, Any], *, with_folder: bool = True) -> dict[s
     """The list/search summary row (``get_all_works`` and friends)."""
     out = _pick(core, WORK_SUMMARY_COLUMNS)
     if with_folder:
-        out["folder_id"] = None
+        out["folder_id"] = core["folder_id"]
     return _with_extras(out, core)
 
 
@@ -287,7 +317,7 @@ def work_browse(core: Mapping[str, Any], *, excerpt: bool = True,
     if excerpt:
         out["abstract_excerpt"] = str(core["abstract"] or "")[:ABSTRACT_EXCERPT_LEN]
     for column in extra:
-        out[column] = None if column == "folder_id" else core[column]
+        out[column] = core[column]
     return _with_extras(out, core)
 
 
