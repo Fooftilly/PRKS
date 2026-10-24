@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Validate the production Docker API readiness response, not just HTTP 200.
 
-The runtime smoke uses fresh volatile storage and no authentication. The
-expected /api/works payload is exactly an empty JSON array. Do not log the
-response body or treat error objects, HTML, or nonempty data as healthy.
+Read a small JSON response from standard input. The fresh volatile storage
+must return exactly an empty works array; reject errors or other payloads.
+Do not accept caller-selected filesystem paths or log response contents.
 """
 
 from __future__ import annotations
 
 import json
 import sys
-from pathlib import Path
+
+MAX_RESPONSE_CHARS = 65536
 
 
 def valid_initial_works_catalog(raw: str) -> bool:
@@ -23,15 +24,15 @@ def valid_initial_works_catalog(raw: str) -> bool:
 
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
-    if len(args) != 1:
-        print("usage: check_runtime_smoke.py RESPONSE_FILE", file=sys.stderr)
+    if args:
+        print("usage: check_runtime_smoke.py < RESPONSE_FILE", file=sys.stderr)
         return 2
     try:
-        raw = Path(args[0]).read_text(encoding="utf-8")
+        raw = sys.stdin.read(MAX_RESPONSE_CHARS + 1)
     except (OSError, UnicodeError):
         print("runtime smoke response cannot be read", file=sys.stderr)
         return 1
-    if not valid_initial_works_catalog(raw):
+    if len(raw) > MAX_RESPONSE_CHARS or not valid_initial_works_catalog(raw):
         print("runtime smoke response is not an empty works catalog", file=sys.stderr)
         return 1
     return 0
