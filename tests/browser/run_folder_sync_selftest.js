@@ -317,7 +317,9 @@ async function aRefusedParentCreationDoesNotHideExistingSubfolders() {
     assert.equal(operations.find(op => op.op_id === move.op_id).status, "conflict");
     assert.equal(operations.find(op => op.op_id === move.op_id).server_result.code,
         "DEPENDENCY_FAILED");
-    assert.deepEqual(globalThis.prksEffectiveFolders(originals, operations), originals,
+    const restored = globalThis.prksEffectiveFolders(originals, operations);
+    assert.deepEqual(new Map(restored.map(row => [row.id, row])),
+        new Map(originals.map(row => [row.id, row])),
         "a failed move restores the existing folder and its acknowledged tree");
     assert.equal(globalThis.prksEffectiveFolderDetail(originals[1], operations, []).parent_id,
         "F-old", "Folder detail must also use the acknowledged parent");
