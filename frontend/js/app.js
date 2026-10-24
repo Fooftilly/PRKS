@@ -424,6 +424,17 @@ function initPrksConceptDetailReturnRefresh() {
     window.addEventListener('focus', schedule);
 }
 
+/** Whether unsettled Concept parent edits require names from the catalogue. */
+function prksConceptDetailNeedsCatalogue(ops) {
+    // The catalogue supplies names only when pending parent-set operations
+    // add/relink Concept parents or children. With no such operation, the
+    // acknowledged detail already names those relationships. This predicate
+    // must match concept-state.js pendingParents() (including conflicted rows).
+    return Array.isArray(ops) && ops.some(op => op &&
+        op.entity_type === 'concept' && op.operation === 'SET_CONCEPT_PARENTS' &&
+        op.status !== 'acknowledged');
+}
+
 /**
  * A Concept detail with every pending intent applied, or null once `stale()`
  * says its reader no longer owns the route. Backlink rows name a
@@ -437,7 +448,18 @@ function initPrksConceptDetailReturnRefresh() {
 async function prksEffectiveConceptDetailView(item, conceptOps, stale) {
     await prksHydratePendingWorkMetadata();
     if (stale()) return null;
-    const conceptCatalogue = typeof prksEffectiveConceptCatalogue === 'function'
+    // ONLINE: this read also refreshes concepts:index after Notes saves and
+    // Concept-domain invalidations, so it must stay awaited even when no
+    // hierarchy edit is pending. Otherwise a detail opened while connected
+    // would cease preparing the list for later offline reparenting.
+    // OFFLINE: a read cannot rewarm the index; without pending parent edits,
+    // the acknowledged detail already names its parents and children. Skip
+    // the extra failed fetch/cache fallback on this common navigation path.
+    const confidentlyOffline = typeof prksOfflineRuntimeState === 'function' &&
+        prksOfflineRuntimeState() === 'offline';
+    const needsCatalogue = !confidentlyOffline ||
+        prksConceptDetailNeedsCatalogue(conceptOps);
+    const conceptCatalogue = needsCatalogue && typeof prksEffectiveConceptCatalogue === 'function'
         ? await prksEffectiveConceptCatalogue(conceptOps) : [];
     if (stale()) return null;
     const overlaid = typeof prksEffectiveConceptDetail === 'function'
@@ -1269,6 +1291,10 @@ function prksActivateSettingsCategory(categoryId, options) {
 window.prksActivateSettingsCategory = prksActivateSettingsCategory;
 
 function prksOpenSettingsToLastCategory() {
+    // matchMedia 'change' may be delivered after a viewport resize; the
+    // Settings modal must expose the orientation matching its current layout
+    // as soon as it opens, not only after the queued change event fires.
+    prksSyncSettingsNavOrientation();
     prksActivateSettingsCategory(__prksSettingsActiveCategory);
 }
 window.prksOpenSettingsToLastCategory = prksOpenSettingsToLastCategory;
@@ -1381,6 +1407,7 @@ async function prksOfflineDetailFetch(kind, id, path, signal, options) {
         signal: signal,
         domain: opts.domain,
         validate: opts.validate,
+        preferCacheWhenOffline: opts.preferCacheWhenOffline === true,
     });
 }
 
@@ -4869,6 +4896,13 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                         routeSignal,
                         {
                             domain: PRKS_CONCEPTS_DOMAIN,
+                            // This is a route read, not a canonical write. When
+                            // confirmed offline, an eligible cached Concept
+                            // can render without a known-failing network fetch.
+                            // The underlying reader still fences domain/entity
+                            // invalidations and reconnect races; online remains
+                            // server-first and the resolver validates shape.
+                            preferCacheWhenOffline: true,
                             validate: function (value) {
                                 return prksIsConceptShape(value, conceptId);
                             },
@@ -4990,6 +5024,11 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                         routeSignal,
                         {
                             domain: PRKS_POSITIONS_DOMAIN,
+                            // Reuse an eligible, warmed Position snapshot only
+                            // when PRKS has already confirmed it is offline.
+                            // Online reads, cache misses, and invalidated
+                            // snapshots preserve the existing read-through.
+                            preferCacheWhenOffline: true,
                             validate: function (value) {
                                 return prksIsPositionShape(value, positionId);
                             },
@@ -5130,6 +5169,12 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                         routeSignal,
                         {
                             domain: PRKS_ARGUMENTS_DOMAIN,
+                            // Only a confirmed-offline, eligible cache entry
+                            // skips the known-failing network read. The shared
+                            // reader still fences changed/blocked Arguments,
+                            // reconnect races, and cache misses; online detail
+                            // and ordinary Argument index reads stay server-first.
+                            preferCacheWhenOffline: true,
                             validate: function (value) {
                                 return prksIsArgumentShape(value, argumentId);
                             },
@@ -5274,6 +5319,12 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                         routeSignal,
                         {
                             domain: PRKS_PEOPLE_DOMAIN,
+                            // A warmed Person profile can render directly from
+                            // a coherent snapshot only when confirmed offline.
+                            // The shared reader rejects invalidated/blocked
+                            // People domains and reconnect races; online and
+                            // cache-missing detail reads still use the server.
+                            preferCacheWhenOffline: true,
                             validate: function (value) {
                                 return prksIsPersonShape(value, personId);
                             },

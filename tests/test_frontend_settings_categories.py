@@ -197,6 +197,18 @@ class SettingsCategoryJsTests(unittest.TestCase):
         self.assertIn("PRKS_SETTINGS_NARROW_MEDIA_QUERY = '(max-width: 640px)'", app)
         self.assertIn("@media (max-width: 640px)", css)
 
+    def test_open_settings_synchronizes_orientation_before_category_activation(self):
+        app = _read(_APP)
+        fn = app.split("function prksOpenSettingsToLastCategory()", 1)[1].split(
+            "\nwindow.prksOpenSettingsToLastCategory", 1
+        )[0]
+        self.assertIn("prksSyncSettingsNavOrientation();", fn)
+        self.assertIn("prksActivateSettingsCategory(__prksSettingsActiveCategory);", fn)
+        self.assertLess(
+            fn.index("prksSyncSettingsNavOrientation();"),
+            fn.index("prksActivateSettingsCategory(__prksSettingsActiveCategory);"),
+        )
+
     def test_orientation_sync_uses_matchmedia_change_not_raw_resize(self):
         app = _read(_APP)
         fn_start = app.index("function initPrksSettingsCategoryNav(")

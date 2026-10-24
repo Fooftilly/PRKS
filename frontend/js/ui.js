@@ -2859,11 +2859,50 @@ function prksReconcileSavedPrivateNote(family, ctx, settledSession, id, content)
     current.dirty = false;
     current.state = 'committed';
     current.saveError = false;
+    /* A save may settle on the replaced generation after its successor was
+     * mounted from an old Work GET. Transfer only the identical saved body's
+     * base proof; later saves still conflict with foreign revisions. */
+    if (family.entityType === 'work' && settledSession.settledBase) {
+        current.settledBase = Object.assign({}, settledSession.settledBase);
+        current.settledOpId = settledSession.settledOpId || null;
+    }
     current.updatedAt = Date.now();
     const live = typeof ctx.getResource === 'function' ? ctx.getResource('privateNotesEditor') : null;
     if (!live || String(live.entityType) !== family.entityType || String(live.entityId) !== key) return;
     const shown = live.textarea && live.textarea.isConnected ? String(live.textarea.value) : null;
     if (shown == null || shown === saved) live.dirty = false;
+}
+
+/* A locally settled Work save can outlive a cold-parked route generation.
+ * The remount GET may contain the pre-ack body, even after the pending queue
+ * overlay has gone. Keep this specific same-tab body visible as clean text
+ * until a read agrees; never re-enqueue it or apply this rule to Folder notes.
+ */
+function prksWorkPrivateNoteNeedsCommittedHandoff(family, existing, ctx, id, initialText, carried) {
+    if (carried || family.entityType !== 'work' || !existing ||
+        existing.retired || existing.dirty || existing.promise ||
+        existing.state !== 'committed' ||
+        String(existing.entityId) !== String(id) ||
+        String(existing.ownerTabId) !== String(ctx.tabId) ||
+        !Number.isSafeInteger(existing.settledSaveToken) ||
+        existing.settledSaveToken <= 0 ||
+        existing.settledSaveToken !== existing.latestSaveToken) return false;
+    const base = existing.settledBase;
+    const canonical = ctx.getResource && ctx.getResource('workNotesCanonical');
+    if (!base || typeof base.value !== 'string' ||
+        !Number.isSafeInteger(base.revision) || base.revision < 0 ||
+        !canonical || String(canonical.id) !== String(id) ||
+        !canonical.sources || canonical.sources.private !== 'server' ||
+        canonical.private_notes !== base.value ||
+        canonical.private_notes === String(existing.draftText)) return false;
+    /* Read the body before overlay, not initialText: initialText may already
+     * be this pane's queued text. A different body cannot be proved stale;
+     * it could be another device's newer save. */
+    const painted = String(initialText == null ? '' : initialText);
+    if (painted !== base.value && painted !== String(existing.draftText)) return false;
+    const observed = ctx.getResource && ctx.getResource('workNotesObserved');
+    const rev = observed && observed.private ? observed.private.revision : null;
+    return !Number.isSafeInteger(rev) || rev <= base.revision + 1;
 }
 
 function prksEnsurePrivateNoteSession(family, ctx, id, initialText) {
@@ -2880,18 +2919,28 @@ function prksEnsurePrivateNoteSession(family, ctx, id, initialText) {
     }
     const remembered = prksTakeRememberedPrivateNote(family, ctx, id);
     const carried = remembered != null;
+    const priorCommitted = prksWorkPrivateNoteNeedsCommittedHandoff(
+        family, existing, ctx, id, initialText, carried
+    );
     const session = {
         key: prksPrivateNoteSessionKey(family, ctx.tabId, id),
         entityType: family.entityType,
         entityId: String(id),
         ownerTabId: String(ctx.tabId),
         ownerGeneration: ctx.generation,
-        draftText: carried ? remembered.text : String(initialText == null ? '' : initialText),
+        draftText: carried ? remembered.text : priorCommitted ? String(existing.draftText) : String(initialText == null ? '' : initialText),
         editGeneration: 0,
-        saveSequence: 0,
-        latestSaveToken: 0,
+        saveSequence: priorCommitted ? existing.saveSequence : 0,
+        latestSaveToken: priorCommitted ? existing.latestSaveToken : 0,
         latestSaveEditGeneration: 0,
-        settledSaveToken: 0,
+        settledSaveToken: priorCommitted ? existing.settledSaveToken : 0,
+        settledOpId: priorCommitted ? existing.settledOpId : null,
+        /* A locally saved draft remains tied to the base it was measured on.
+         * Never let an edit of a carried value silently adopt the new route's
+         * unrelated revision: that would overwrite a concurrent writer. */
+        settledBase: priorCommitted ? Object.assign({}, existing.settledBase) : null,
+        handoffBase: priorCommitted ? Object.assign({}, existing.settledBase) : null,
+        handoffText: priorCommitted ? String(existing.draftText) : null,
         state: carried ? 'drafting' : 'committed',
         saveError: false,
         dirty: carried,
@@ -2928,7 +2977,11 @@ function prksPrivateNoteText(family, ctx, id, serverText) {
     /* Drop the draft only when the stored body matches it. A pending overlay
      * can equal the draft and then clear before that body is updated; retiring
      * on the overlay lets the next Reminders paint show the stale text. */
-    if (session.state === 'committed' && !session.promise && session.draftText === server) {
+    const canonical = family.entityType === 'work' && ctx.getResource
+        ? ctx.getResource('workNotesCanonical') : null;
+    const stored = canonical && String(canonical.id) === String(id)
+        ? String(canonical.private_notes == null ? '' : canonical.private_notes) : server;
+    if (session.state === 'committed' && !session.promise && session.draftText === stored) {
         session.retired = true;
         const drop = prksPrivateNoteRecoveryHook(family, 'drop');
         if (drop) drop(session);
@@ -3605,6 +3658,7 @@ function prksPrivateNoteLatestSaveToken(editor) {
 function prksPrivateNotesStatusForResult(code, family) {
     if (code === 'saved' || code === 'queued' || code === 'unchanged') return 'Saved';
     if (code === 'scope_busy' || code === 'conflict') return 'Still syncing — wait or resolve the conflict in Diagnostics';
+    if (code === 'stale_handoff') return 'Reminder not saved — copy your text and reload this Work before retrying';
     if (code === 'unknown_base') {
         return (family || PRKS_PRIVATE_NOTE_FAMILIES.work).unknownBaseStatus;
     }
@@ -3771,8 +3825,31 @@ async function prksSaveWorkPrivateNoteForSession(editor, entityId, content) {
         ? prksWorkNoteObserved(editor.ctx, 'work-private-note')
         : null;
     if (typeof prksSaveWorkNoteDurably !== 'function') return { result: { code: 'unavailable' }, base: null };
-    const base = observed ? { value: observed.value, revision: observed.revision } : null;
-    return { result: await prksSaveWorkNoteDurably(entityId, 'work-private-note', content, observed), base: base };
+    const session = editor.ctx && editor.ctx.ui ? editor.ctx.ui.workPrivateNoteSession : null;
+    const handoff = session && String(session.entityId) === String(entityId)
+        ? session.handoffBase : null;
+    /* The ACK is keyed by this session's exact queued op ID. It survives a
+     * cold-park route replacement in memory, while a foreign write advances
+     * the server revision and still triggers an ordinary revision conflict.
+     * If the proof is absent (offline, eviction, reload), retain the earlier
+     * safe stale-base behavior instead of guessing from a route response. */
+    const receipt = handoff && session.settledOpId &&
+        typeof prksAcknowledgedWorkPrivateNote === 'function'
+        ? prksAcknowledgedWorkPrivateNote(session.settledOpId) : null;
+    const acked = receipt && receipt.entityId === String(entityId) &&
+        receipt.baseRevision === handoff.revision &&
+        Number.isSafeInteger(receipt.revision) &&
+        receipt.revision >= handoff.revision &&
+        typeof session.handoffText === 'string';
+    const source = acked
+        ? { value: session.handoffText, revision: receipt.revision }
+        : handoff || observed;
+    const base = source ? { value: source.value, revision: source.revision } : null;
+    /* Cancel the never-sent X row only when ACK proof is unavailable.
+     * An acknowledged revert to V is a real edit from X, not a no-op. */
+    const options = handoff && !acked && content === handoff.value
+        ? { cancelPendingText: session.handoffText } : null;
+    return { result: await prksSaveWorkNoteDurably(entityId, 'work-private-note', content, source, options), base: base };
 }
 
 /**
@@ -3844,6 +3921,17 @@ async function prksSaveFolderPrivateNoteInOrder(editor, entityId, content, sessi
     return { result: await prksFolderSaveDurably(ctx, entityId, content, base), base: base };
 }
 
+/* A settled local Work save records the body/revision it was measured on.
+ * Later cold-park generations may use this provenance without adopting the
+ * unrelated revision of a fresh route read. */
+function prksRememberSettledWorkPrivateNoteBase(family, session, usedBase) {
+    if (family.entityType !== 'work' || !usedBase ||
+        typeof usedBase.value !== 'string' ||
+        !Number.isSafeInteger(usedBase.revision)) return;
+    session.settledBase = { value: usedBase.value, revision: usedBase.revision };
+    session.handoffBase = null;
+}
+
 function prksEnqueuePrivateNoteSave(family, editor) {
     if (!family || !editor || !editor.ctx || !editor.ctx.ui) return null;
     const entityId = String(editor.entityId);
@@ -3903,6 +3991,11 @@ function prksEnqueuePrivateNoteSave(family, editor) {
             if (token !== session.latestSaveToken) return;
             const hasNewerDraft = session.editGeneration > session.latestSaveEditGeneration;
             session.settledSaveToken = token;
+            /* A scope_busy retry did not save a new body. Keep the prior
+             * carried op ID until the original ACK can prove its revision;
+             * clearing it here would restore the first-edit self-conflict. */
+            if (ok) session.settledOpId =
+                result && typeof result.opId === 'string' ? result.opId : null;
             session.promise = null;
             const foreign = code === 'scope_busy' && result.foreign === true;
             session.foreignWaits = foreign && !hasNewerDraft ? (session.foreignWaits || 0) + 1 : 0;
@@ -3927,7 +4020,7 @@ function prksEnqueuePrivateNoteSave(family, editor) {
             }
             /* A row that needs resolution: the text stays unsaved, and the next
              * edit, blur or leave tries again; a timer would only meet it again. */
-            const keepDirty = code === 'conflict' && !hasNewerDraft;
+            const keepDirty = (code === 'conflict' || code === 'stale_handoff') && !hasNewerDraft;
             session.saveError = !ok && !hasNewerDraft;
             session.state = hasNewerDraft ? 'drafting' : !ok ? 'error' : 'committed';
             session.dirty = hasNewerDraft || keepDirty;
@@ -3935,6 +4028,7 @@ function prksEnqueuePrivateNoteSave(family, editor) {
             session.updatedAt = Date.now();
             if (settled) settled(editor.ctx, entityId, session, result, savedGeneration, content);
             if (ok && !hasNewerDraft) {
+                prksRememberSettledWorkPrivateNoteBase(family, session, usedBase);
                 prksReconcileSavedPrivateNote(family, editor.ctx, session, entityId, content);
             }
             if (!prksPrivateNotesOwnerCurrent(editor)) return;

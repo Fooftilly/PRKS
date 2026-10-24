@@ -6,18 +6,30 @@
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolvePython } from "../../tools/resolve-python3.mjs";
+import { renderLicenseInventory } from "./vue-license-inventory.mjs";
 
 const appRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = join(appRoot, "..");
 const outDir = join(repoRoot, "frontend", "vue");
-const allowedNames = new Set(["prks-vue.js", "BUILD-MANIFEST.json"]);
+const allowedNames = new Set(["prks-vue.js", "BUILD-MANIFEST.json", "THIRD_PARTY_LICENSES.md"]);
 
 function sha256(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+// Regenerate the lockfile table *before* Vite empties frontend/vue. Unknown
+// licenses/invalid lockfiles fail without destroying committed build output.
+const licenseNoticesPath = join(appRoot, "THIRD_PARTY_LICENSES.md");
+const pkg = JSON.parse(readFileSync(join(appRoot, "package.json"), "utf8"));
+const lockfile = JSON.parse(readFileSync(join(appRoot, "package-lock.json"), "utf8"));
+const existingNotices = readFileSync(licenseNoticesPath, "utf8");
+const licenseNotices = renderLicenseInventory(existingNotices, pkg, lockfile);
+if (licenseNotices !== existingNotices) {
+  writeFileSync(licenseNoticesPath, licenseNotices);
 }
 
 const viteBin = join(appRoot, "node_modules", "vite", "bin", "vite.js");
@@ -43,6 +55,8 @@ if (emittedCss.length) {
   process.exit(1);
 }
 
+// Vite clears the distribution directory, so copy the prepared notice back.
+copyFileSync(licenseNoticesPath, join(outDir, "THIRD_PARTY_LICENSES.md"));
 const unexpected = readdirSync(outDir).filter((name) => !allowedNames.has(name));
 if (unexpected.length) {
   console.error("unexpected Vite output in frontend/vue:", unexpected.join(", "));
@@ -55,7 +69,6 @@ if (!existsSync(jsPath)) {
   process.exit(1);
 }
 
-const pkg = JSON.parse(readFileSync(join(appRoot, "package.json"), "utf8"));
 const outputSha256 = {
   "prks-vue.js": sha256(jsPath),
 };

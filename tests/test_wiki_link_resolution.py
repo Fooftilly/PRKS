@@ -5,12 +5,14 @@ rendered -- Work before Person, first matching row in table order -- while
 issuing statements per distinct target set rather than per marker.
 """
 import html
+import itertools
 import re
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
-from backend.db_manager import PRKSDatabase
+from backend.db_manager import PRKSDatabase, wiki_link_spans
 from backend.storage.config import StorageConfig
 
 
@@ -270,6 +272,24 @@ class WikiLinkResolutionTests(unittest.TestCase):
         # Only the targets no Work claimed reach the Person lookup.
         unresolved_after_works = count - len(range(0, count, 3))
         self.assertEqual(len(person_selects), -(-unresolved_after_works // chunk))
+
+
+class WikiLinkSpanTests(unittest.TestCase):
+    def test_spans_are_the_markers_the_pattern_finds(self):
+        pattern = re.compile(r"\[\[(.*?)\]\]")
+        for size in range(8):
+            for chars in itertools.product("[]\na", repeat=size):
+                text = "".join(chars)
+                expected = [(m.start(), m.end(), m.group(1)) for m in pattern.finditer(text)]
+                self.assertEqual(list(wiki_link_spans(text)), expected, repr(text))
+
+    def test_unclosed_markers_scan_in_linear_time(self):
+        # The pattern took about 30 s on 40,000 unclosed markers.
+        for text in ("[[" * 200_000, "[[x\n" * 100_000 + "]]", "[[" * 100_000 + "\n[[a]]"):
+            started = time.monotonic()
+            spans = list(wiki_link_spans(text))
+            self.assertLess(time.monotonic() - started, 2.0)
+            self.assertEqual(spans, [(len(text) - 5, len(text), "a")] if text.endswith("[[a]]") else [])
 
 
 if __name__ == "__main__":

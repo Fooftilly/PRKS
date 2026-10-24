@@ -122,6 +122,14 @@ class UnlockLoginTests(RootPairingTestCase):
         code, _out, err = self.run_cli("Straße Owner", name=stale)
         self.assert_refused_unchanged(code, err, stale)
 
+    def test_a_relocated_root_keeps_its_pairing_and_the_command_starts(self) -> None:
+        moved = self.relocated(self.root)
+        before = self.generation(self.name)
+        code, _out, err = self.run_cli("Straße Owner", root=moved)
+        self.assertEqual((code, err), (admin.EXIT_OK, ""))
+        self.assertNotIn(ACCT, self.attempts(self.name))
+        self.assert_paired(self.name, moved, before + 1)
+
     def test_an_unbound_or_missing_root_is_refused(self) -> None:
         for root in (self.tmp + "/no-such-root", self.tmp):
             with self.subTest(root=root):

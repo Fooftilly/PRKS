@@ -184,6 +184,22 @@ class RootPairingTestCase(unittest.TestCase):
             StorageKey("asset-objects", name), lambda handle: handle.write(b"%PDF-1.7\n")
         )
 
+    def relocated(self, root: str, name: str = "moved") -> str:
+        """A destination root whose marker relocation built from ``root``'s (P1, P6)."""
+        source = self.marker(root)
+        destination = os.path.join(self.tmp, name)
+        os.makedirs(os.path.join(destination, root_marker.MAINTENANCE_DIRNAME))
+        lock = root_marker.ExclusiveFileLock.acquire(root_marker.lease_path(destination))
+        try:
+            unpaired = {
+                k: v for k, v in source.document.items() if k not in root_marker.PAIRING_FIELDS
+            }
+            built = root_marker.carry_pairing_fields(source, unpaired)
+            root_marker.write_marker(destination, built, lease=lock)
+        finally:
+            lock.release()
+        return destination
+
     def assert_paired(self, name: str, root: str, generation: int) -> None:
         row = self.instance(name)
         assert row is not None
@@ -742,15 +758,7 @@ class StartTests(RootPairingTestCase):
     def test_relocated_root_keeps_its_pairing_and_starts(self) -> None:
         name, root = self.ready()
         self.start(name, root)
-        source = self.marker(root)
-        destination = os.path.join(self.tmp, "moved")
-        os.makedirs(os.path.join(destination, root_marker.MAINTENANCE_DIRNAME))
-        lock = root_marker.ExclusiveFileLock.acquire(root_marker.lease_path(destination))
-        try:
-            built = root_marker.carry_pairing_fields(source, dict(source.document))
-            root_marker.write_marker(destination, built, lease=lock)
-        finally:
-            lock.release()
+        destination = self.relocated(root)
         result = self.start(name, destination)
         self.assertEqual(result.start_generation, 3)
         self.assert_paired(name, destination, 3)

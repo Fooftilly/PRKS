@@ -800,13 +800,15 @@ describe('Research Notes owner lifetime', () => {
       bind(main)
       bind(main)
       bind(side)
-      expect(listeners).toHaveLength(2)
+      // One window-lifetime ACK-proof subscriber plus one per route owner.
+      expect(listeners).toHaveLength(3)
       expect(main.getResource('workNotesSyncBound')).toBeUndefined()
 
       const record = main.getEntity('work') as { id: string; private_notes?: string }
       expect(main.suspend(parking())).toBe(true)
       expect(listeners[0].dead).toBe(false)
-      listeners[0].fn({
+      expect(listeners[1].dead).toBe(false)
+      listeners[1].fn({
         operation: 'SET_WORK_PRIVATE_NOTE',
         op: { operation: 'SET_WORK_PRIVATE_NOTE', entity_id: 'work-a', payload: { text: 'acknowledged while parked' } },
         acknowledged: { server_revision: 3 },
@@ -815,14 +817,16 @@ describe('Research Notes owner lifetime', () => {
       expect(main.resume(parking())).toBe(true)
 
       main.beginRoute({ name: 'work', params: { workId: 'work-a' } })
-      expect(listeners[0].dead).toBe(true)
-      expect(listeners[1].dead).toBe(false)
-      main.setEntity('work', { id: 'work-a' })
-      bind(main)
-      expect(listeners).toHaveLength(3)
-      side.unmount('park')
+      expect(listeners[0].dead).toBe(false)
       expect(listeners[1].dead).toBe(true)
       expect(listeners[2].dead).toBe(false)
+      main.setEntity('work', { id: 'work-a' })
+      bind(main)
+      expect(listeners).toHaveLength(4)
+      side.unmount('park')
+      expect(listeners[2].dead).toBe(true)
+      expect(listeners[3].dead).toBe(false)
+      expect(listeners[0].dead).toBe(false)
     } finally {
       ;(window as unknown as { prksSync: unknown }).prksSync = previous
     }

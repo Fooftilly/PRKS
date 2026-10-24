@@ -3902,7 +3902,7 @@
          * one is the user's to resolve; either way it stays immutable and this
          * refuses with `scope_busy` rather than guessing.
          */
-        function saveWorkNote(workId, operation, text, observed) {
+        function saveWorkNote(workId, operation, text, observed, options) {
             if (!isNonBlankString(workId) || (operation !== 'SET_WORK_RESEARCH_NOTE' && operation !== 'SET_WORK_PRIVATE_NOTE')) {
                 return Promise.reject(localStoreError('invalid_envelope', 'Invalid note save.'));
             }
@@ -3913,6 +3913,15 @@
             }
             const limit = operation === 'SET_WORK_RESEARCH_NOTE' ? WORK_RESEARCH_NOTE_BYTES : WORK_PRIVATE_NOTE_BYTES;
             if (utf8ByteLength(text) > limit) return Promise.reject(localStoreError('payload_too_large', 'Note exceeds byte limit.'));
+            /* Reverting a carried Work reminder to its pre-save value may be
+             * an actual change after acknowledgement. Only treat it as a
+             * cancellation if the original unsent row is still present.
+             * This check and deletion must happen in the same transaction. */
+            const cancelOnly = options && Object.prototype.hasOwnProperty.call(options, 'cancelPendingText');
+            if (cancelOnly && (operation !== 'SET_WORK_PRIVATE_NOTE' ||
+                typeof options.cancelPendingText !== 'string' || text !== observed.value)) {
+                return Promise.reject(localStoreError('invalid_envelope', 'Invalid carried reminder cancellation.'));
+            }
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
                 const rows = await request(STORE_OPERATIONS, s => s.getAll());
                 assertWorkIsNotBeingDeleted(rows, workId, 'edited');
@@ -3923,6 +3932,10 @@
                     throw localStoreError('scope_busy', 'Note has ' + active.length + ' unsynchronized changes; let them finish.');
                 }
                 const existing = active[0];
+                if (cancelOnly && (!existing || !existing.payload ||
+                    existing.payload.text !== options.cancelPendingText)) {
+                    throw localStoreError('stale_handoff', 'The original reminder save is no longer cancelable.');
+                }
                 if (existing) {
                     if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
                         throw localStoreError('scope_busy', 'Note is syncing or needs resolution.');
