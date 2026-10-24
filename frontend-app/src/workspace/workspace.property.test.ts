@@ -6,6 +6,7 @@
  */
 import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
+import { validateWorkspace } from './invariants'
 import { planReorder } from './transitions'
 import {
   collectLeafTabIds,
@@ -118,35 +119,47 @@ describe('fast-check workspace invariant pilot', () => {
         fc.boolean(),
         (numbers, fromIndex, beforeIndex, moveToEnd) => {
           const tabs = numbers.map(tab)
+          const originalTabs = [...tabs] // independent pre-state; not mutated by the transition
           const main = tabs[0].id
+          const focused = tabs[1].id // deliberately non-Main in a tiled workspace
+          // Limit visible Secondary leaves to the domain cap (3); others stay parked.
+          const secondaryTree = buildTree(numbers.slice(1, 4), idsFactory())
           const original: WorkspaceState = {
             version: 1,
-            mode: 'stacked',
+            mode: 'tiled',
             tabs,
             mainTabId: main,
-            focusedTabId: main,
-            secondaryTree: null,
+            focusedTabId: focused,
+            secondaryTree,
             mainSplitRatio: 0.58,
           }
+          expect(validateWorkspace(original).errors).toEqual([])
+          const beforeState = JSON.stringify(original)
           const selected = tabs[fromIndex % tabs.length].id
           const before = moveToEnd ? null : tabs[beforeIndex % tabs.length].id
           const result = planReorder(original, selected, before)
+          // Snapshot *before* the operation, so mutating original.tabs fails.
+          expect(JSON.stringify(original)).toBe(beforeState)
           if (selected === before) {
             expect(result.ok).toBe(false)
             expect(result.state).toBe(original)
             return
           }
           expect(result.ok).toBe(true)
+          expect(validateWorkspace(result.state).errors).toEqual([])
+          expect(result.state.mode).toBe('tiled')
           expect(result.state.mainTabId).toBe(main)
-          expect(result.state.focusedTabId).toBe(main)
-          expect(result.state.secondaryTree).toBe(original.secondaryTree)
+          expect(result.state.focusedTabId).toBe(focused)
+          expect(result.state.secondaryTree).toBe(secondaryTree)
           expect(result.state.tabs).toHaveLength(tabs.length)
-          expect(new Set(result.state.tabs.map((item) => item.id))).toEqual(new Set(tabs.map((item) => item.id)))
-          const expected = tabs.filter((item) => item.id !== selected)
+          expect(new Set(result.state.tabs.map((item) => item.id))).toEqual(new Set(originalTabs.map((item) => item.id)))
+          const expected = originalTabs.filter((item) => item.id !== selected)
           const insertion = before === null ? expected.length : expected.findIndex((item) => item.id === before)
-          expected.splice(insertion, 0, tabs.find((item) => item.id === selected)!)
+          const moved = originalTabs.find((item) => item.id === selected)
+          if (!moved) throw new Error('Generated selected tab missing from original snapshot')
+          expected.splice(insertion, 0, moved)
           expect(result.state.tabs).toEqual(expected)
-          expect(original.tabs).toEqual(tabs)
+          expect(original.tabs).toEqual(originalTabs)
         },
       ),
       LIMIT,
