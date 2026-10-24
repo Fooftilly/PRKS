@@ -61,6 +61,7 @@ from tests.e2e.policy import (
     clear_failure_diagnostics,
     format_feature_catalog,
     aggregate_ci_gate_outcome,
+    apply_manual_full_ci_shards,
     full_gate_timeout_s,
     frontend_browser_change_requires_full_ci,
     list_changed_paths,
@@ -1889,6 +1890,27 @@ def _main(argv=None) -> int:
             (os.environ.get("PRKS_E2E_CI_FORCE_FULL") or "").strip()
             in ("1", "true", "yes", "on")
         )
+        def _emit_ci_plan(plan: dict) -> int:
+            # The manual width is applied before JSON emission so CI logs and
+            # the actual matrix describe the same shard layout.
+            try:
+                plan = apply_manual_full_ci_shards(
+                    plan,
+                    os.environ.get("PRKS_E2E_CI_MANUAL_SHARDS"),
+                    force_full=force_full,
+                )
+            except ValueError as exc:
+                print("ci-plan: %s" % exc, file=sys.stderr)
+                return 2
+            plan["matrix"] = {
+                "include": ci_matrix_include(
+                    int(plan.get("external_shards") or 0),
+                    int(plan.get("local_jobs") or 1),
+                )
+            }
+            print(json.dumps(plan, sort_keys=True))
+            return 0
+
         try:
             paths = list_changed_paths(
                 REPO, base=args.base, include_untracked=False
@@ -1901,13 +1923,7 @@ def _main(argv=None) -> int:
             shape_plan = plan_ci_e2e([], force_full=True)
             shape_plan["reason"] = reason
             shape_plan["changed_paths"] = None
-            shape_plan["matrix"] = {
-                "include": ci_matrix_include(
-                    shape_plan["external_shards"], shape_plan["local_jobs"]
-                )
-            }
-            print(json.dumps(shape_plan, sort_keys=True))
-            return 0
+            return _emit_ci_plan(shape_plan)
         path_diffs = None
         if any(path.replace("\\", "/") == "frontend/sw.js" for path in paths):
             path_diffs = {
@@ -1956,14 +1972,7 @@ def _main(argv=None) -> int:
                 plan.setdefault("test_count", None)
         plan = dict(plan)
         plan["changed_paths"] = len(paths)
-        plan["matrix"] = {
-            "include": ci_matrix_include(
-                int(plan.get("external_shards") or 0),
-                int(plan.get("local_jobs") or 1),
-            )
-        }
-        print(json.dumps(plan, sort_keys=True))
-        return 0
+        return _emit_ci_plan(plan)
 
     try:
         shard = parse_shard(args.shard, os.environ.get("PRKS_E2E_SHARD"))
