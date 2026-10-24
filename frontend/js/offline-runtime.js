@@ -54,6 +54,7 @@
     const DOMAIN_PLAYLISTS = 'playlists';
     const PLAYLISTS_LIST_KEY = 'playlists:index';
     const PROBE_BACKOFF_MS = [3000, 6000, 12000, 30000, 60000];
+    const PROBE_TIMEOUT_MS = 15000; // Dedicated health check only, not ordinary API requests.
     const PDF_CACHE_NAME = 'prks-pdf-v1';
 
     function defaultNow() {
@@ -63,6 +64,13 @@
     function isAbort(root2, err) {
         if (typeof root2.prksIsAbortError === 'function') return root2.prksIsAbortError(err);
         return !!(err && err.name === 'AbortError');
+    }
+
+    function throwIfSignalAborted(signal) {
+        if (!signal || !signal.aborted) return;
+        const error = new Error('The operation was aborted.');
+        error.name = 'AbortError';
+        throw error;
     }
 
     function createPrksOfflineRuntime(deps) {
@@ -98,6 +106,13 @@
               : null;
 
         let state = STATE_ONLINE;
+        // Monotonic transition token guards cache reads that outlive an
+        // offline -> reconnect -> offline sequence (same final state).
+        let connectivityGeneration = 0;
+        // Only increments on CONFIRMED server reachability; unlike the
+        // general transition token, a failed reconnect probe does not
+        // invalidate a perfectly good offline fallback snapshot.
+        let onlineGeneration = 0;
         const listeners = [];
         let probeTimer = null;
         let probeAttempt = 0;
@@ -146,6 +161,8 @@
         function setState(next) {
             if (state === next) return;
             state = next;
+            connectivityGeneration += 1;
+            if (next === STATE_ONLINE) onlineGeneration += 1;
             listeners.slice().forEach(function (fn) {
                 try {
                     fn(state);
@@ -176,41 +193,89 @@
             probeTimer = setTimer(runProbe, delay);
         }
 
+        function recoverAfterStaleProbe() {
+            // A newer real request might have FAILED after restoring online.
+            // Its timer may have fired while this old probe was still busy,
+            // consuming the only scheduled recovery. Never downgrade state
+            // from the old result, but keep the newer failure recoverable.
+            if (state !== STATE_ONLINE && !probeTimer) scheduleProbe();
+        }
+
         function runProbe() {
             probeTimer = null;
             if (probeInFlight || !requestImpl) return;
+            // A newer confirmed response must supersede this older probe,
+            // whether it settles normally or reaches its deadline.
+            const startedOnlineGeneration = onlineGeneration;
+            const controller = typeof AbortController === 'function'
+                ? new AbortController()
+                : null;
+            let settled = false;
+            let deadlineTimer = null;
             probeInFlight = true;
             setState(STATE_RECONNECTING);
-            let p;
-            try {
-                p = requestImpl(PROBE_PATH, {}, { priority: 'background' });
-            } catch (_e) {
-                p = Promise.reject(_e);
+
+            function releaseProbe() {
+                if (settled) return false;
+                settled = true;
+                if (deadlineTimer !== null && clearTimer) clearTimer(deadlineTimer);
+                deadlineTimer = null;
+                probeInFlight = false;
+                return true;
             }
-            Promise.resolve(p)
-                .then(function (res) {
-                    probeInFlight = false;
-                    // Connectivity reflects PRKS server reachability, not
-                    // application-level health: the request resolving with
-                    // *any* real HTTP response (2xx, 4xx, or 5xx) means the
-                    // PRKS process answered. Only a rejected request (no
-                    // transport response at all) means the server is
-                    // unreachable.
-                    if (res) {
-                        probeAttempt = 0;
-                        setState(STATE_ONLINE);
-                    } else {
-                        probeAttempt += 1;
-                        setState(STATE_OFFLINE);
-                        scheduleProbe();
-                    }
-                })
-                .catch(function () {
-                    probeInFlight = false;
+
+            function completeProbe(res, failed) {
+                if (!releaseProbe()) return;
+                if (onlineGeneration !== startedOnlineGeneration) {
+                    recoverAfterStaleProbe();
+                    return;
+                }
+                // Any actual HTTP response (even an error status) proves
+                // reachability; only rejection/falsy completion is offline.
+                if (!failed && res) {
+                    probeAttempt = 0;
+                    setState(STATE_ONLINE);
+                } else {
                     probeAttempt += 1;
                     setState(STATE_OFFLINE);
                     scheduleProbe();
+                }
+            }
+
+            let p;
+            try {
+                // The dedicated probe owns its connectivity signal. The
+                // coordinator must not report an old failure ahead of this
+                // completion fence or join a foreground GET.
+                p = requestImpl(PROBE_PATH, controller ? { signal: controller.signal } : {}, {
+                    priority: 'background',
+                    dedupe: false,
+                    retry: false,
+                    reportReachability: false,
                 });
+            } catch (err) {
+                p = Promise.reject(err);
+            }
+            // Bounded probe lifetime: a request that ignores AbortSignal can
+            // still settle later; releaseProbe() prevents any late result
+            // from changing state or double-scheduling backoff.
+            if (setTimer) {
+                deadlineTimer = setTimer(function () {
+                    if (!releaseProbe()) return;
+                    if (controller) controller.abort();
+                    if (onlineGeneration !== startedOnlineGeneration) {
+                        recoverAfterStaleProbe();
+                        return;
+                    }
+                    probeAttempt += 1;
+                    setState(STATE_OFFLINE);
+                    scheduleProbe();
+                }, PROBE_TIMEOUT_MS);
+            }
+            Promise.resolve(p).then(
+                function (res) { completeProbe(res, false); },
+                function () { completeProbe(null, true); }
+            );
         }
 
         function noteRequestSuccess() {
@@ -312,6 +377,33 @@
             const domain = options2.domain ? String(options2.domain) : '';
             const coherenceToken = currentEntityGeneration(kind, id);
             const domainToken = currentDomainGeneration(domain);
+            const connectionToken = connectivityGeneration;
+
+            // An explicitly opted-in revision-base caller may use a known,
+            // already-cached server snapshot when PRKS is CONFIRMED offline.
+            // Ordinary reads remain server-first. Never serve a row invalidated
+            // by a mutation/domain sweep, or a row read across a reconnect or
+            // coherence-generation change while awaiting IndexedDB.
+            if (options2.preferCacheWhenOffline === true &&
+                state === STATE_OFFLINE && store &&
+                typeof store.getEntity === 'function' &&
+                !(options2.signal && options2.signal.aborted) &&
+                !ineligibleEntities.has(entityKey(kind, id)) &&
+                !isDomainBlocked(domain)) {
+                let cached = null;
+                try { cached = await store.getEntity(kind, id); }
+                catch (_e) { /* a cache failure keeps the normal read-through path */ }
+                if (cached && state === STATE_OFFLINE &&
+                    connectivityGeneration === connectionToken &&
+                    currentEntityGeneration(kind, id) === coherenceToken &&
+                    currentDomainGeneration(domain) === domainToken &&
+                    !ineligibleEntities.has(entityKey(kind, id)) &&
+                    !isDomainBlocked(domain) &&
+                    !(options2.signal && options2.signal.aborted)) {
+                    return { value: cached.value, source: 'cache', cachedAt: cached.cachedAt };
+                }
+            }
+
             let raw;
             try {
                 raw = await fetchJsonStrict(path, options2);
@@ -329,11 +421,24 @@
                 if (ineligibleEntities.has(entityKey(kind, id)) || isDomainBlocked(domain)) {
                     return { value: null, source: 'unavailable', cachedAt: null };
                 }
+                // Failure may move ONLINE -> OFFLINE; capture after that
+                // transition. Only a later CONFIRMED online state can stale
+                // fallback. Failed probes/offline hints must not.
+                const fallbackOnlineToken = onlineGeneration;
                 if (store) {
                     const cached = await store.getEntity(kind, id).catch(function () {
                         return null;
                     });
-                    if (cached) {
+                    // A route can be aborted, a mutation acknowledged or a
+                    // domain swept while this async read is pending. Never
+                    // resurrect that stale row, even after a sweep unblocks.
+                    throwIfSignalAborted(options2.signal);
+                    if (cached &&
+                        onlineGeneration === fallbackOnlineToken &&
+                        currentEntityGeneration(kind, id) === coherenceToken &&
+                        currentDomainGeneration(domain) === domainToken &&
+                        !ineligibleEntities.has(entityKey(kind, id)) &&
+                        !isDomainBlocked(domain)) {
                         return { value: cached.value, source: 'cache', cachedAt: cached.cachedAt };
                     }
                 }
@@ -2939,11 +3044,19 @@
                 if (isDomainBlocked(domain)) {
                     return { value: null, source: 'unavailable', cachedAt: null };
                 }
+                const fallbackOnlineToken = onlineGeneration;
                 if (store) {
                     const cached = await store.getList(listKey).catch(function () {
                         return null;
                     });
-                    if (cached) {
+                    // A completed sweep may unblock this domain while an
+                    // older IndexedDB snapshot is still resolving. Recheck
+                    // the generation and reachability after the await.
+                    throwIfSignalAborted(options2.signal);
+                    if (cached &&
+                        onlineGeneration === fallbackOnlineToken &&
+                        currentDomainGeneration(domain) === domainToken &&
+                        !isDomainBlocked(domain)) {
                         return { value: cached.value, source: 'cache', cachedAt: cached.cachedAt };
                     }
                 }

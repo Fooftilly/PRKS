@@ -55,6 +55,25 @@ class GraphNavigationPhaseProfileTests(unittest.TestCase):
 
 
 class ArgumentOverlayPhaseProfileTests(unittest.TestCase):
+    def test_browser_phase_samples_are_opt_in_and_reject_invalid_values(self):
+        with mock.patch.dict(os.environ, {"PRKS_E2E_PROFILE": "0"}):
+            harness.start_test_profile("browser-disabled")
+            harness.record_e2e_phase_seconds("arg_overlay_target_write_base", 0.25)
+            self.assertEqual(harness.finish_test_profile("browser-disabled"), {})
+
+        with mock.patch.dict(os.environ, {"PRKS_E2E_PROFILE": "1"}):
+            harness.start_test_profile("browser-timed")
+            try:
+                harness.record_e2e_phase_seconds("arg_overlay_target_write_base", 0.25)
+                harness.record_e2e_phase_seconds("arg_overlay_target_write_base", 0.375)
+                for bad in (-1.0, float("nan"), float("inf")):
+                    with self.assertRaises(ValueError):
+                        harness.record_e2e_phase_seconds("arg_overlay_target_write_base", bad)
+                phases = harness.finish_test_profile("browser-timed")
+            finally:
+                harness.finish_test_profile("browser-timed")
+        self.assertEqual(phases, {"arg_overlay_target_write_base": 0.625})
+
     def test_argument_interactions_do_not_inflate_infrastructure_ranking(self):
         from tests.e2e import run as runner
 
