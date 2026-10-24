@@ -1,0 +1,15 @@
+{
+  "owner": "Fooftilly",
+  "project_number": 3,
+  "repository": "Fooftilly/PRKS",
+  "status_field": "Status",
+  "statuses": {
+    "inbox": "Inbox",
+    "ready": "Ready",
+    "in_progress": "In Progress",
+    "review": "Review",
+    "changes_requested": "Changes requested",
+    "blocked": "Blocked",
+    "done": "Done"
+  }
+}

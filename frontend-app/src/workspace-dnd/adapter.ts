@@ -342,7 +342,7 @@ export function bindWorkspaceDnd(options: BindWorkspaceDndOptions): WorkspaceDnd
   const hover = options.hover ?? createHoverController()
   const handlers = options.handlers ?? browserCommitHandlers()
   const permanentCleanups: CleanupFn[] = []
-  let bindingCleanups: CleanupFn[] = []
+  const bindingCleanups: CleanupFn[] = []
   let active = false
   let source: DragSource | null = null
   let intent: WorkspaceDropIntent | null = null

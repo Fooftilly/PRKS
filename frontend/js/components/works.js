@@ -72,7 +72,10 @@ function prksPruneResearchDrafts() {
         .sort((a, b) => a.updatedAt - b.updatedAt);
     while (committed.length > PRKS_RESEARCH_DRAFT_MAX_COMMITTED) {
         const old = committed.shift();
-        if (old) prksWorkResearchDrafts.delete(old.key);
+        if (old) {
+            prksWorkResearchDrafts.delete(old.key);
+            prksResearchRecoveryRelease(old);
+        }
     }
 }
 
@@ -88,6 +91,7 @@ function prksResearchNotesTextForWork(workId, serverText, ctx) {
     }
     if (entry.state === 'committed' && !entry.promise && entry.text === acknowledged) {
         prksWorkResearchDrafts.delete(entry.key);
+        prksResearchRecoveryRelease(entry);
         if (ctx.ui && ctx.ui.workResearchNoteSession === entry) ctx.ui.workResearchNoteSession = null;
         return acknowledged;
     }
@@ -109,17 +113,45 @@ function prksSyncResearchNotesState(notes, entry) {
     notes.latestSaveEditGeneration = entry.latestSaveEditGeneration;
     notes.settledSaveToken = entry.settledSaveToken;
     notes.pendingSave = entry.latestSaveToken > entry.settledSaveToken;
-    notes.drafting = entry.state === 'drafting';
+    notes.drafting = entry.state === 'drafting' || entry.state === 'blocked';
     notes.saveError = entry.state === 'error';
 }
 
 function prksLiveResearchDraftStatus(entry, result) {
     if (entry && entry.state === 'drafting') return 'Drafting...';
     if (entry && entry.state === 'saving') return 'Saving...';
+    if (entry && entry.state === 'blocked') return prksResearchNotesStatusForResult('scope_busy', false);
     if (result && result.code) {
         return prksResearchNotesStatusForResult(result.code, !!result.pending);
     }
     return 'Error saving changes';
+}
+
+/**
+ * Status for one sync event on this owner's Research Notes (#465). An
+ * acknowledgement says the server holds THAT operation's body. It reads as
+ * "All changes saved" only when that body is what the editor shows and no
+ * newer session revision (drafting, saving, or blocked behind it) remains.
+ * Otherwise the save path owns the status, so this returns null.
+ */
+function prksResearchNotesSyncEventStatus(ctx, notes, event) {
+    if (!event || !notes) return null;
+    if (!event.acknowledged) {
+        return event.op && event.op.status === 'conflict'
+            ? 'This note needs a decision in Diagnostics'
+            : null;
+    }
+    return prksResearchNotesAckIsCurrent(ctx, notes, event.op) ? 'All changes saved' : null;
+}
+
+/** The acknowledged body is the editor body and the session holds nothing newer. */
+function prksResearchNotesAckIsCurrent(ctx, notes, op) {
+    const payload = op && op.payload;
+    if (!payload || typeof payload.text !== 'string') return false;
+    const editor = notes.editor;
+    if (!editor || typeof editor.value !== 'function' || editor.value() !== payload.text) return false;
+    const entry = prksWorkResearchDrafts.get(prksResearchDraftKey(ctx, notes.workId));
+    return !entry || (entry.state === 'committed' && entry.text === payload.text);
 }
 
 function prksSyncLiveResearchDraft(workId, entry, generation, result) {
@@ -142,10 +174,230 @@ function prksSyncLiveResearchDraft(workId, entry, generation, result) {
     });
 }
 
+/*
+ * Browser-local recovery of Research Notes text (#466). The shared adapter
+ * (`work-note-recovery.js`) owns the recovery writer of each session entry,
+ * the restore plan, acknowledgements, the notice view and Review; this file
+ * supplies the Research Notes sessions (`prksWorkResearchDrafts`) and how
+ * recovered text gets into the editor.
+ */
+const PRKS_RESEARCH_RECOVERY_KIND = 'work-research-note';
+const PRKS_RESEARCH_NOTES_RESTORED_STATUS = 'Restored unsaved changes';
+let prksResearchNotesRecoveryAdapter = null;
+
+/* The Research Notes adapter, or null where the shared recovery module is not loaded. */
+function prksResearchNotesRecovery() {
+    if (prksResearchNotesRecoveryAdapter) return prksResearchNotesRecoveryAdapter;
+    if (typeof window.prksCreateWorkNoteRecovery !== 'function') return null;
+    prksResearchNotesRecoveryAdapter = window.prksCreateWorkNoteRecovery({
+        kind: PRKS_RESEARCH_RECOVERY_KIND,
+        operation: 'SET_WORK_RESEARCH_NOTE',
+        bodyField: 'text_content',
+        revisionField: 'research_note_revision',
+        reportSlot: 'researchNotesRecovery',
+        entries: function () { return prksWorkResearchDrafts.values(); },
+        key: prksResearchDraftKey,
+        entry: function (ctx, id) { return prksWorkResearchDrafts.get(prksResearchDraftKey(ctx, id)) || null; },
+        text: function (entry) { return entry.text; },
+        hasSession: function (ctx, id) { return prksWorkResearchDrafts.has(prksResearchDraftKey(ctx, id)); },
+        paintable: prksResearchNotesMayPaint,
+        target: prksResearchNotesBusyRetryTarget,
+        shown: function (notes) { return notes.editor.value(); },
+        install: prksResearchRecoveryInstall,
+        takeOver: prksResearchNotesRecoveryTakeOver,
+        replace: prksResearchNotesRecoveryReplaceText,
+        publish: prksResearchNotesRecoveryPublish,
+        forget: function (entry) {
+            if (prksWorkResearchDrafts.get(entry.key) === entry) prksWorkResearchDrafts.delete(entry.key);
+            prksResearchRecoveryRelease(entry);
+        },
+        owners: function (fn) {
+            if (typeof prksForEachLiveTabContext !== 'function') return;
+            prksForEachLiveTabContext(function (ctx) {
+                const live = ctx && ctx.getResource && ctx.getResource('workNotes') && ctx.getEntity ? ctx.getEntity('work') : null;
+                if (live && live.id != null) fn(ctx, live.id);
+            });
+        },
+    });
+    return prksResearchNotesRecoveryAdapter;
+}
+
+function prksResearchRecoveryEdit(owner, entry) {
+    const adapter = prksResearchNotesRecovery();
+    if (adapter) adapter.edit(owner, entry);
+}
+
+function prksResearchRecoveryRelease(entry) {
+    const adapter = prksResearchNotesRecovery();
+    if (adapter) adapter.release(entry);
+}
+
+function prksResearchRecoveryFlush(entry) {
+    const adapter = prksResearchNotesRecovery();
+    if (adapter) adapter.flush(entry);
+}
+
+function prksResearchRecoveryPipeline(entry, patch) {
+    const adapter = prksResearchNotesRecovery();
+    if (adapter) adapter.pipeline(entry, patch);
+}
+
+function prksResearchRecoveryQueued(entry, opId, generation, text, base) {
+    const adapter = prksResearchNotesRecovery();
+    if (adapter) adapter.queued(entry, opId, generation, text, base);
+}
+
+function prksResearchRecoverySettled(owner, id, entry, result, saved) {
+    const adapter = prksResearchNotesRecovery();
+    if (adapter) adapter.settled(owner, id, entry, result, saved);
+}
+
+/** A restore on mount: the session the editor opens with. */
+function prksResearchRecoveryInstall(api, ctx, id, writer, restore, base) {
+    const adapter = prksResearchNotesRecovery();
+    const entry = prksResearchDraftEntry(ctx, id, restore.body);
+    entry.text = restore.body;
+    entry.editGeneration = restore.record.generation;
+    entry.state = restore.state;
+    entry.saveError = false;
+    entry.updatedAt = Date.now();
+    entry.recovery = writer;
+    entry.recoveryBase = base;
+    entry.recoveryRestored = true;
+    entry.recoverySaveDue = restore.state === 'drafting';
+    entry.recoveryPipeline = restore.record.pipeline;
+    entry.recoveryPipelineStored = true;
+    entry.recoveryQueued = null;
+    const acknowledged = { value: base.value, revision: base.revision };
+    if (restore.predecessor) {
+        /* #475 provenance after reload: the queued predecessor's exact text,
+         * queued from the base the server still holds. */
+        entry.ownQueuedToken = 0;
+        entry.ownQueuedText = restore.predecessor.text;
+        entry.ownQueuedBase = acknowledged;
+        entry.recoveryQueued = { opId: restore.predecessor.opId, generation: 0, text: restore.predecessor.text };
+    }
+    if (restore.state === 'blocked') entry.blockedBase = acknowledged;
+    writer.setBase(adapter.draftBase(api, base));
+    adapter.pipeline(entry, { state: restore.state });
+    return entry;
+}
+
+/** Review restored a draft into this open editor: its clean session gives way to the restored lineage. */
+function prksResearchNotesRecoveryTakeOver(api, ctx, id, notes, writer, restore, base) {
+    const key = prksResearchDraftKey(ctx, id);
+    const existing = prksWorkResearchDrafts.get(key);
+    if (existing) {
+        prksWorkResearchDrafts.delete(key);
+        prksResearchRecoveryRelease(existing);
+        if (ctx.ui && ctx.ui.workResearchNoteSession === existing) ctx.ui.workResearchNoteSession = null;
+    }
+    const entry = prksResearchRecoveryInstall(api, ctx, id, writer, restore, base);
+    prksResearchNotesApplyText(notes, entry.text);
+    prksSyncResearchNotesState(notes, entry);
+    if (entry.state === 'blocked') {
+        const statusEl = ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
+        if (statusEl) statusEl.innerText = prksLiveResearchDraftStatus(entry, null);
+        prksScheduleResearchNotesBusyRetry(ctx, id, entry);
+    }
+    prksResearchNotesAnnounceRestored(ctx, id, entry);
+}
+
+/** Review chose `text` for this editor: it saves through the ordinary path as this pane's edit. */
+function prksResearchNotesRecoveryReplaceText(ctx, id, notes, text) {
+    prksResearchNotesApplyText(notes, text);
+    prksWorkNotesMarkEdit(notes, id, text, ctx);
+    const statusEl = ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
+    if (statusEl) statusEl.innerText = 'Drafting...';
+    if (ctx.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
+        window.prksWorkspaceRefreshTabStatus(ctx.tabId);
+    }
+    prksScheduleWorkResearchNotesSave(ctx, id);
+    const owner = prksResearchNotesEditOwner(notes, ctx);
+    return owner ? prksWorkResearchDrafts.get(prksResearchDraftKey(owner, id)) || null : null;
+}
+
+function prksResearchNotesRecoveryView(ctx) {
+    const adapter = prksResearchNotesRecovery();
+    return adapter ? adapter.view(ctx) : null;
+}
+
+function prksResearchNotesRecoveryPublish(ctx) {
+    if (typeof window.prksVueUpdateResearchNotesRecovery === 'function') window.prksVueUpdateResearchNotesRecovery(ctx);
+}
+
+/* Repaints the pane that owns this session entry. */
+function prksResearchNotesRecoveryPublishFor(entry) {
+    const adapter = prksResearchNotesRecovery();
+    if (adapter) adapter.publishFor(entry);
+}
+
+/* Puts text in the editor without it reading as a keystroke; callers decide what follows. */
+function prksResearchNotesApplyText(notes, text) {
+    notes.applyingRecovery = true;
+    try {
+        notes.editor.value(text);
+    } finally {
+        notes.applyingRecovery = false;
+    }
+}
+
+/** Status and save for a session that was just restored from recovery storage. */
+function prksResearchNotesAnnounceRestored(ctx, workId, entry) {
+    const statusEl = ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
+    if (statusEl && entry.state === 'drafting') statusEl.innerText = PRKS_RESEARCH_NOTES_RESTORED_STATUS;
+    if (entry.recoverySaveDue && entry.state === 'drafting') {
+        entry.recoverySaveDue = false;
+        prksScheduleWorkResearchNotesSave(ctx, workId);
+    }
+    if (ctx.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
+        window.prksWorkspaceRefreshTabStatus(ctx.tabId);
+    }
+}
+
+/* With no shared recovery module loaded, Review and restore offer nothing. */
+const PRKS_RESEARCH_RECOVERY_UNAVAILABLE = { ok: false, code: 'unavailable' };
+
+function prksRestoreResearchNotesRecovery(ctx, work, options) {
+    const adapter = prksResearchNotesRecovery();
+    return adapter ? adapter.restore(ctx, work, options) : Promise.resolve(null);
+}
+
+window.prksResearchNotesRecoveryView = prksResearchNotesRecoveryView;
+window.prksResearchNotesRecoveryDetails = function (ctx, workId) {
+    const adapter = prksResearchNotesRecovery();
+    return adapter ? adapter.details(ctx, workId) : Promise.resolve(null);
+};
+window.prksResearchNotesRecoveryRestore = function (ctx, workId, token, expect) {
+    const adapter = prksResearchNotesRecovery();
+    return adapter ? adapter.restoreReviewed(ctx, workId, token, expect) : Promise.resolve(PRKS_RESEARCH_RECOVERY_UNAVAILABLE);
+};
+window.prksResearchNotesRecoveryReplace = function (ctx, workId, token, expect, text, shown) {
+    const adapter = prksResearchNotesRecovery();
+    return adapter ? adapter.replace(ctx, workId, token, expect, text, shown) : Promise.resolve(PRKS_RESEARCH_RECOVERY_UNAVAILABLE);
+};
+window.prksResearchNotesRecoveryDiscard = function (ctx, workId, token, expect) {
+    const adapter = prksResearchNotesRecovery();
+    return adapter ? adapter.discard(ctx, workId, token, expect) : Promise.resolve(PRKS_RESEARCH_RECOVERY_UNAVAILABLE);
+};
+window.prksRefreshResearchNotesRecovery = function (ctx, workId) {
+    const adapter = prksResearchNotesRecovery();
+    return adapter ? adapter.refresh(ctx, workId) : Promise.resolve(null);
+};
+window.prksRestoreResearchNotesRecovery = prksRestoreResearchNotesRecovery;
 window.prksResearchNotesTextForWork = prksResearchNotesTextForWork;
 window.prksResearchNotesMayPaint = prksResearchNotesMayPaint;
+window.prksResearchNotesSyncEventStatus = prksResearchNotesSyncEventStatus;
+window.prksScheduleResearchNotesBusyRetryForTest = prksScheduleResearchNotesBusyRetry;
+window.prksSetResearchRecoveryRestoreMsForTest = function (ms) {
+    const adapter = prksResearchNotesRecovery();
+    if (adapter) adapter.setRestoreMsForTest(ms);
+};
 window.prksResetResearchDraftsForTest = function () {
+    prksWorkResearchDrafts.forEach(prksResearchRecoveryRelease);
     prksWorkResearchDrafts.clear();
+    const adapter = prksResearchNotesRecovery();
+    if (adapter) adapter.resetForTest();
     if (typeof prksForEachLiveTabContext === 'function') {
         prksForEachLiveTabContext(function (ctx) {
             if (ctx && ctx.ui) ctx.ui.workResearchNoteSession = null;
@@ -800,7 +1052,12 @@ async function deleteWork(w_id, ownerCtx) {
     const generation = ctx && ctx.generation;
     const confirmed = await prksConfirmDestructive({
         title: 'Delete file?',
-        message: 'Are you sure you want to delete this file?',
+        /* #533: drafts are removed only once the server confirms the deletion,
+         * and only where no tab may still hold them. */
+        message: 'This permanently deletes the file and cannot be undone, and unsaved Research Notes and ' +
+            'Reminders text for it can be lost. Once the deletion is confirmed, drafts this browser kept for ' +
+            'the file are removed where that is safe; a draft another open or unresponsive tab still holds ' +
+            'stays until it can be removed safely.',
         confirmLabel: 'Delete file',
     });
     if (!confirmed) return;
@@ -827,348 +1084,6 @@ async function deleteWork(w_id, ownerCtx) {
                 'Error');
         }
     }
-}
-
-function prksWorkDetailsShellHtml(shell) {
-    const editorRegionId = shell.editorRegionId || 'work-notes-editor-region';
-    let leftPane = '';
-    if (shell.kind === 'pdf') {
-        leftPane = shell.hasFile
-            ? '<div class="work-pdf-pane"><div data-prks-role="pdf-viewer"></div></div>'
-            : '<div class="work-pdf-pane work-pdf-pane--empty"><p class="work-pdf-empty">No PDF file attached.</p></div>';
-    } else if (shell.kind === 'video') {
-        leftPane = shell.viewerHtml
-            || '<div class="work-pdf-pane work-pdf-pane--empty"><p class="work-pdf-empty">Video viewer unavailable.</p></div>';
-    } else {
-        leftPane = '<div class="work-pdf-pane work-pdf-pane--empty"><p class="work-pdf-empty">No file attached.</p></div>';
-    }
-    const header = shell.showHeader
-        ? `
-            <div class="prks-page-header page-header page-header--work">
-                <div class="card-heading-row card-heading-row--wrap">
-                    <h2 class="page-header--work-title">${prksEscapeHtmlLite(shell.title || 'Document')}</h2>
-                    <span data-prks-role="work-header-doc-type-slot">${shell.docTypeHtml || ''}</span>
-                </div>
-                ${shell.relSummaryHtml || ''}
-            </div>
-        `
-        : '';
-    return `
-        <div class="work-detail">
-            ${header}
-            <div class="document-view document-view--work">
-                <div class="work-main-column">
-                    <div class="work-workspace" data-work-id="${prksEscapeAttr(shell.workId)}">
-                        ${leftPane}
-                        <div class="work-split-handle" role="separator" aria-orientation="horizontal" aria-label="Resize between document and research notes" tabindex="0">
-                            <span class="work-split-handle-grip" aria-hidden="true"></span>
-                        </div>
-                        <div data-prks-role="work-research-notes-anchor">
-                        <div class="work-notes-pane">
-                            <div class="work-notes-pane-header">
-                                <h3 class="work-notes-title">Research Notes</h3>
-                                <div class="work-notes-pane-header-actions">
-                                    <button type="button" class="work-notes-toggle-btn" data-prks-role="work-notes-collapse-btn" aria-expanded="true" aria-controls="${editorRegionId}" aria-label="Collapse research notes editor" title="Collapse notes"><span class="work-notes-toggle-btn__icon" aria-hidden="true"><svg class="work-notes-toggle-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.65" stroke-linecap="round" stroke-linejoin="round"><polyline points="6.5 13 12 19 17.5 13"/><polyline points="6.5 6 12 12 17.5 6"/></svg></span></button>
-                                    <div data-prks-role="annotation-sync-status" class="work-annotation-sync-status work-annotation-sync-status--hidden" aria-live="polite"></div>
-                                    <div data-prks-role="editor-status" class="work-editor-status"></div>
-                                </div>
-                            </div>
-                            <div class="work-notes-editor-wrap" data-prks-role="work-notes-editor-region" id="${editorRegionId}">
-                                <textarea data-prks-role="research-notes-editor"></textarea>
-                            </div>
-                        </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    `;
-}
-
-async function renderWorkDetails(ctx, work, requestCtx) {
-    const generation = requestCtx && requestCtx.generation;
-    const routeSignal = requestCtx && requestCtx.signal;
-    const container = ctx && ctx.root ? ctx.root : null;
-    if (!container) return;
-    if (!ctx || typeof ctx.isCurrent !== 'function') return;
-
-    const isCurrent = function () {
-        return ctx.isCurrent(generation);
-    };
-
-    if (!work) {
-        container.innerHTML = '<p class="prks-inline-message prks-inline-message--error">File not found.</p>';
-        return;
-    }
-    if (typeof prksRememberWorkNotesCanonical === 'function') {
-        prksRememberWorkNotesCanonical(ctx, work);
-    }
-    if (typeof prksBindWorkNotesSync === 'function') prksBindWorkNotesSync(ctx);
-    /* The EFFECTIVE source: a pending identity change decides which video
-     * plays before the server has heard about it. All four columns move
-     * together, so the viewer can never be handed a URL naming one video and
-     * an id naming another. The acknowledged Work is not mutated. */
-    /* Only a Work that is ALREADY a video can have a pending source: the
-     * aggregate refuses every other transition, and nothing renders a control
-     * to attempt one. So the acknowledged kind is enough to decide whether
-     * this read is needed -- and for everything else the detail must not wait
-     * on the durable queue at all. Blocking every Work's render on an
-     * IndexedDB read means a slow or stuck durable store leaves the user
-     * looking at nothing, for a value that Work could not have. */
-    const acknowledgedKind =
-        typeof prksInferWorkSourceKind === 'function' ? prksInferWorkSourceKind(work) : '';
-    /* The Work route already refreshed and overlaid an acknowledged video.
-     * Repeating that read here would wait twice for the same pending map. */
-    const sourcePrepared = !!(requestCtx && requestCtx.sourcePrepared);
-    if (!sourcePrepared && acknowledgedKind === 'video' && typeof prksRefreshPendingWorkSources === 'function') {
-        await prksRefreshPendingWorkSources();
-        if (!isCurrent()) return;
-    }
-    if (acknowledgedKind === 'video' && typeof prksEffectiveWorkSource === 'function') {
-        work = prksEffectiveWorkSource(work);
-    }
-    let pdfModule = null;
-    const inferredKind =
-        typeof prksInferWorkSourceKind === 'function' ? prksInferWorkSourceKind(work) : '';
-
-    if (inferredKind === 'pdf' && work.file_path) {
-        pdfModule = await import('/js/components/works-pdf.js');
-    }
-    if (!isCurrent()) return;
-    let videoModule = null;
-    if (inferredKind === 'video') {
-        videoModule = await import('/js/components/works-video.js');
-    }
-    if (!isCurrent()) return;
-
-    let authorsStr = '';
-    if (work.roles) {
-        const authorsList = [];
-        work.roles.forEach((r) => {
-            if (r.role_type === 'Author') authorsList.push(r);
-            else {
-                const display =
-                    typeof prksRoleDisplayName === 'function'
-                        ? prksRoleDisplayName(r)
-                        : `${r.first_name || ''} ${r.last_name || ''}`.trim();
-                const nm = `${prksEscapeHtmlLite(display)} (${prksEscapeHtmlLite(r.role_type)})`;
-                authorsStr += `<span class="tag prks-person-chip" data-person-id="${prksEscapeAttr(String(r.id || ''))}" data-prks-route="#/people/${encodeURIComponent(String(r.id || ''))}">${nm}</span>`;
-            }
-        });
-        if (authorsList.length > 0) {
-            const authorChips = authorsList
-                .map((a) => {
-                    const display =
-                        typeof prksRoleDisplayName === 'function'
-                            ? prksRoleDisplayName(a)
-                            : `${a.first_name || ''} ${a.last_name || ''}`.trim();
-                    return `<span class="tag author-tag prks-person-chip" data-person-id="${prksEscapeAttr(String(a.id || ''))}" data-prks-route="#/people/${encodeURIComponent(String(a.id || ''))}">${typeof prksIcon === 'function' ? prksIcon('user', { size: 'sm' }) : ''} ${prksEscapeHtmlLite(display)}</span>`;
-                })
-                .join(' ');
-            authorsStr = authorChips + authorsStr;
-        }
-    }
-
-    let viewerHtml = '';
-    if (inferredKind === 'video') {
-        viewerHtml =
-            videoModule && typeof window.renderVideoViewerPane === 'function'
-                ? window.renderVideoViewerPane(work)
-                : '<div class="work-pdf-pane work-pdf-pane--empty"><p class="work-pdf-empty">Video viewer unavailable.</p></div>';
-    }
-
-    if (typeof ctx.setEntity === 'function') ctx.setEntity('work', work);
-    const workTitle = String((work && work.title) || '').trim();
-    const pdfViewerActive = inferredKind === 'pdf' && !!work.file_path;
-    const rolesForRel =
-        typeof prksEffectiveWorkDetailRoles === 'function'
-            ? prksEffectiveWorkDetailRoles(work)
-            : work;
-    const peopleN = Array.isArray(rolesForRel && rolesForRel.roles)
-        ? rolesForRel.roles.length
-        : Array.isArray(work.roles)
-          ? work.roles.length
-          : null;
-    const tagsN = Array.isArray(work.tags) ? work.tags.length : null;
-    const folderTitle = work.folder_title || (work.folder && work.folder.title) || '';
-    const folderId = work.folder_id || (work.folder && work.folder.id) || '';
-    const credit =
-        typeof prksWorkCardCreditText === 'function'
-            ? prksWorkCardCreditText(work)
-            : '';
-    const relSummaryHtml =
-        !pdfViewerActive && typeof prksRelSummaryHtml === 'function'
-            ? prksRelSummaryHtml({
-                  parts: [
-                      folderTitle
-                          ? folderId
-                              ? {
-                                    text: folderTitle,
-                                    href: '#/folders/' + encodeURIComponent(String(folderId)),
-                                }
-                              : folderTitle
-                          : null,
-                      credit || null,
-                      peopleN != null && peopleN > 0
-                          ? peopleN + (peopleN === 1 ? ' person' : ' people')
-                          : null,
-                      tagsN != null && tagsN > 0
-                          ? tagsN + (tagsN === 1 ? ' tag' : ' tags')
-                          : null,
-                  ],
-              })
-            : '';
-    const shell = {
-        workId: String(work.id),
-        generation: typeof generation === 'number' ? generation : null,
-        kind: inferredKind === 'pdf' || inferredKind === 'video' ? inferredKind : 'empty',
-        hasFile: !!work.file_path,
-        showHeader: !pdfViewerActive,
-        title: workTitle || 'Document',
-        docTypeHtml: typeof prksDocTypeBadgeHtml === 'function' ? prksDocTypeBadgeHtml(work.doc_type) : '',
-        relSummaryHtml: relSummaryHtml,
-        viewerHtml: viewerHtml,
-        editorRegionId: ctx.domId('work-notes-editor-region'),
-    };
-    /* The legacy shell exists only when the Vue bridge was never registered.
-     * A bridge that rejects this generation or Work must not dismiss the
-     * current tile or write this shell into the replaced root. */
-    if (typeof prksVuePresentWorkMainSurface !== 'function') {
-        if (!isCurrent()) return;
-        const liveWork = typeof ctx.getEntity === 'function' ? ctx.getEntity('work') : null;
-        if (!liveWork || String(liveWork.id) !== String(work.id)) return;
-        container.innerHTML = prksWorkDetailsShellHtml(shell);
-    } else if (prksVuePresentWorkMainSurface(ctx, shell) !== true) {
-        return;
-    }
-
-    const notesTa = ctx.query('[data-prks-role="research-notes-editor"]');
-    if (notesTa) {
-        notesTa.value = prksResearchNotesTextForWork(work.id, work.text_content, ctx);
-    }
-    container.querySelectorAll('.prks-person-chip').forEach((el) => {
-        el.style.cursor = 'pointer';
-    });
-
-    // Populate Right Panel only when this context is focused.
-    if (typeof prksTabContextIsFocused === 'function' ? prksTabContextIsFocused(ctx) : true) {
-        const panelTab = (ctx.ui && ctx.ui.rightPanelTab) || 'details';
-        updatePanelContent(panelTab);
-        if (typeof prksSyncRightPanelTabStrip === 'function') prksSyncRightPanelTabStrip(panelTab);
-
-        const editBtn = document.getElementById('edit-metadata-btn');
-        if (editBtn) {
-            editBtn.onclick = () => toggleWorkMetaEdit(true);
-        }
-    }
-
-    if (work.file_path && pdfModule && isCurrent()) {
-        pdfModule.initPdfViewerForWork(ctx, work);
-    }
-
-    const setupTimer = setTimeout(async () => {
-        if (ctx && ctx.timers && ctx.timers.get('workDeferredSetup') === setupTimer) {
-            ctx.clearTimer('workDeferredSetup');
-        }
-        if (!isCurrent()) return;
-        const wsEarly = container.querySelector('.work-workspace');
-        if (wsEarly) {
-            const key = 'prks.workNotesCollapsed.' + work.id;
-            const saved = localStorage.getItem(key);
-            const defaultCollapsed =
-                saved == null &&
-                typeof prksIsSmallScreen === 'function' &&
-                prksIsSmallScreen();
-            const shouldCollapse = saved === '1' || defaultCollapsed;
-            if (shouldCollapse) wsEarly.classList.add('work-workspace--notes-collapsed');
-        }
-        try {
-            const works = await fetchWorks({ signal: routeSignal });
-            if (!isCurrent()) return;
-            if (typeof ctx.setResource === 'function') {
-                ctx.setResource('wikiTitleMap', prksBuildWorkTitleLowerToIdMap(works));
-                ctx.setResource('wikiWorkList', prksBuildWikiAutocompleteWorkList(works));
-            }
-        } catch (_e) {
-            if (!isCurrent()) return;
-            if (typeof ctx.setResource === 'function') {
-                ctx.setResource('wikiTitleMap', {});
-                ctx.setResource('wikiWorkList', []);
-            }
-        }
-        try {
-            if (typeof fetchConcepts === 'function') {
-                const concepts = await fetchConcepts({ signal: routeSignal });
-                if (!isCurrent()) return;
-                if (typeof ctx.setResource === 'function') ctx.setResource('conceptHintList', concepts);
-            }
-        } catch (_e) {
-            if (!isCurrent()) return;
-            if (typeof ctx.setResource === 'function') ctx.setResource('conceptHintList', []);
-        }
-        try {
-            if (typeof fetchArguments === 'function') {
-                const argumentsList = await fetchArguments(undefined, { signal: routeSignal });
-                if (!isCurrent()) return;
-                if (typeof ctx.setResource === 'function') ctx.setResource('argumentHintList', argumentsList);
-            }
-        } catch (_e) {
-            if (!isCurrent()) return;
-            if (typeof ctx.setResource === 'function') ctx.setResource('argumentHintList', []);
-        }
-        if (!isCurrent()) return;
-        if (typeof prksRefreshPendingWorkNotes === 'function') {
-            await prksRefreshPendingWorkNotes();
-            if (!isCurrent()) return;
-        }
-        if (typeof prksEnsureWorkNotesBase === 'function') {
-            await prksEnsureWorkNotesBase(ctx, ctx.getResource && ctx.getResource('workNotesCanonical') || work);
-            if (!isCurrent()) return;
-        }
-        const notesText = prksResearchNotesTextForWork(work.id, work.text_content, ctx);
-        const presentNotes = typeof prksVuePresentWorkResearchNotes === 'function'
-            ? prksVuePresentWorkResearchNotes
-            : null;
-        const vueNotes = presentNotes ? presentNotes(ctx, work, notesText) === true : false;
-        if (!vueNotes) {
-            const notesTaLive = ctx.query ? ctx.query('[data-prks-role="research-notes-editor"]') : null;
-            if (notesTaLive && !notesTaLive.dataset.prksNotesBound) {
-                notesTaLive.value = notesText;
-            }
-        }
-        initEasyMDE(ctx, work);
-        setupWorkNotesSplitResize(ctx, work.id);
-        setupWorkNotesCollapseToggle(ctx, work.id);
-    }, 200);
-    if (ctx && typeof ctx.setTimer === 'function') ctx.setTimer('workDeferredSetup', setupTimer);
-
-    prksRequest(
-        '/api/works/' + encodeURIComponent(work.id) + '/related_folders',
-        { signal: routeSignal },
-        { priority: 'background' }
-    )
-        .then((r) => (r.ok ? r.json() : []))
-        .then((related) => {
-            if (!isCurrent()) return;
-            const target = ctx.query ? ctx.query('[data-prks-role="related-folders"]') : null;
-            if (!target || !Array.isArray(related) || related.length === 0) return;
-            target.replaceChildren();
-            for (const f of related) {
-                const span = document.createElement('span');
-                span.className = 'tag';
-                span.style.background = 'var(--accent)';
-                span.style.color = 'white';
-                span.style.cursor = 'pointer';
-                span.textContent = '\uD83D\uDCC1 ' + String(f.title || '');
-                const fid = String(f.id || '');
-                span.setAttribute('data-prks-route', '#/folders/' + encodeURIComponent(fid));
-                target.appendChild(span);
-            }
-        })
-        .catch((err) => {
-            if (typeof prksIsAbortError === 'function' && prksIsAbortError(err)) return;
-            console.error('related folders fetch failed', err);
-        });
 }
 
 /** EasyMDE toolbar uses Font Awesome class names; PRKS does not load that webfont. Map buttons to Lucide. */
@@ -1207,7 +1122,26 @@ function prksPaintEasyMDEToolbarIcons(toolbar) {
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(toolbar);
 }
 
-function initEasyMDE(ctx, work) {
+/**
+ * Research Notes liveness: the owner generation and Work still match, and
+ * this exact session is the installed `workNotes` slot. A same-generation
+ * replacement fails the identity check.
+ */
+function prksWorkNotesSessionLive(ctx, notes, generation) {
+    if (!prksResearchNotesMayPaint(ctx, notes && notes.workId, generation)) return false;
+    return typeof ctx.getResource === 'function' && ctx.getResource('workNotes') === notes;
+}
+
+/**
+ * Builds the pane-local EasyMDE session and registers it as the `workNotes`
+ * owner resource with `ticket`, captured when the Work paint began. The
+ * session is warm-suspendable: it lives in the parked pane DOM beside the
+ * PDF, keeps its buffer and undo history, and its `saveNotesTimeout`
+ * debounce stays a TabContext timer. Cold release destroys it. A stale or
+ * rejected ticket builds nothing.
+ */
+function initEasyMDE(ctx, work, ticket) {
+    if (!ctx || !work || !ctx.resourceRegistry || !ctx.resourceRegistry.accepts(ticket)) return;
     const titleLowerToId = (ctx && ctx.getResource ? ctx.getResource('wikiTitleMap') : null) || {};
     const prksNotesHelpHtml = `
 <div class="prks-help-section">
@@ -1259,7 +1193,7 @@ function initEasyMDE(ctx, work) {
     } catch (_e) {
         /* ignore */
     }
-    const notesEl = ctx && ctx.query ? ctx.query('[data-prks-role="research-notes-editor"]') : null;
+    const notesEl = ctx.query ? ctx.query('[data-prks-role="research-notes-editor"]') : null;
     if (!notesEl) return;
     const easyMDE = new EasyMDE({
         element: notesEl,
@@ -1372,34 +1306,51 @@ function initEasyMDE(ctx, work) {
             try {
                 if (typeof easyMDE.toTextArea === 'function') easyMDE.toTextArea();
             } catch (_e) {}
+            try {
+                /* toTextArea() keeps EasyMDE's document keydown; cleanup() is its pair (#459). */
+                if (typeof easyMDE.cleanup === 'function') easyMDE.cleanup();
+            } catch (_e) {}
         },
     };
     if (transient) prksSyncResearchNotesState(workNotes, transient);
-    if (ctx && typeof ctx.setResource === 'function') {
-        ctx.setResource('workNotes', workNotes, function () {
+    const attached = ctx.registerResource(ticket, {
+        kind: 'workNotes',
+        value: workNotes,
+        suspendable: true,
+        dispose: function () {
             if (typeof workNotes.stopSync === 'function') workNotes.stopSync();
             workNotes.destroy();
             if (typeof window.prksVueDismissWorkResearchNotes === 'function') {
                 window.prksVueDismissWorkResearchNotes(ctx);
             }
-        });
+        },
+    });
+    if (attached === 'rejected') {
+        workNotes.destroy();
+        return;
     }
-    const notesGeneration = ctx && typeof ctx.generation === 'number' ? ctx.generation : undefined;
+    const notesGeneration = ticket.generation;
     if (window.prksSync && typeof window.prksSync.subscribe === 'function') {
         workNotes.stopSync = window.prksSync.subscribe(function (event) {
             if (!event || event.operation !== 'SET_WORK_RESEARCH_NOTE') return;
             if (event.op && event.op.entity_id !== workNotes.workId) return;
             if (workNotes.drafting) return;
-            if (!prksResearchNotesMayPaint(ctx, workNotes.workId, notesGeneration)) return;
-            const statusEl = ctx && ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
+            if (!prksWorkNotesSessionLive(ctx, workNotes, notesGeneration)) return;
+            const statusEl = ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
             if (!statusEl) return;
-            if (event.acknowledged) {
-                statusEl.innerText = 'All changes saved';
-            } else if (event.op && event.op.status === 'conflict') {
-                statusEl.innerText = 'This note needs a decision in Diagnostics';
-            }
+            const text = prksResearchNotesSyncEventStatus(ctx, workNotes, event);
+            if (text) statusEl.innerText = text;
         });
     }
+    /* A refresh of the same Work may remount while a newer body is still
+     * waiting behind an earlier save (#465); its retry died with the old
+     * editor, so arm one for this session. */
+    if (transient && transient.state === 'blocked') {
+        prksScheduleResearchNotesBusyRetry(ctx, work.id, transient);
+    }
+    /* Restored from recovery storage (#466): say so, and send it through the
+     * ordinary save path as if it had just been typed. */
+    if (transient && transient.recoveryRestored) prksResearchNotesAnnounceRestored(ctx, work.id, transient);
     prksAttachWikiLinkAutocomplete(easyMDE.codemirror, ctx);
     const toolbarHost = ctx && ctx.query ? ctx.query('.work-notes-editor-wrap .editor-toolbar') : null;
     prksPaintEasyMDEToolbarIcons(toolbarHost);
@@ -1425,7 +1376,9 @@ function initEasyMDE(ctx, work) {
     }
 
     const notesChangeHandler = () => {
-        if (!prksResearchNotesMayPaint(ctx, work.id, notesGeneration)) return;
+        /* Review put recovered text in; it decides what that means. */
+        if (workNotes.applyingRecovery) return;
+        if (!prksWorkNotesSessionLive(ctx, workNotes, notesGeneration)) return;
         const statusEl = ctx && ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
         if (statusEl) statusEl.innerText = "Drafting...";
         prksWorkNotesMarkEdit(workNotes, work.id, easyMDE.value(), ctx);
@@ -1465,7 +1418,10 @@ function prksWorkNotesMarkEdit(notes, workId, text, ctx) {
         entry.state = 'drafting';
         entry.saveError = false;
         entry.updatedAt = Date.now();
+        entry.recoveryRestored = false;
+        prksResearchRecoveryEdit(owner, entry);
         prksSyncResearchNotesState(notes, entry);
+        prksStopResearchNotesBusyRetry(owner);
     }
     return notes.editGeneration;
 }
@@ -1504,6 +1460,198 @@ function prksScheduleWorkResearchNotesSave(ctx, workId) {
     if (ctx && typeof ctx.setTimer === 'function') ctx.setTimer('saveNotesTimeout', tid);
 }
 
+const PRKS_RESEARCH_NOTES_BUSY_RETRY_TIMER = 'researchNotesBusyRetry';
+const PRKS_RESEARCH_NOTES_BUSY_RETRY_MAX_MS = 30000;
+// ctx -> stop for that owner's one Research Notes busy retry.
+const prksResearchNotesBusyRetryStops = new WeakMap();
+
+function prksStopResearchNotesBusyRetry(ctx) {
+    const stop = ctx ? prksResearchNotesBusyRetryStops.get(ctx) : null;
+    if (stop) stop();
+}
+
+/** The owner's live Research Notes editor for this Work, or null. */
+function prksResearchNotesBusyRetryTarget(ctx, workId) {
+    if (!ctx || ctx.destroyed) return null;
+    if (typeof ctx.isCurrent === 'function' && !ctx.isCurrent()) return null;
+    const live = ctx.getEntity ? ctx.getEntity('work') : null;
+    if (!live || String(live.id) !== String(workId)) return null;
+    const notes = ctx.getResource ? ctx.getResource('workNotes') : null;
+    if (!notes || String(notes.workId) !== String(workId) || !notes.editor) return null;
+    return notes;
+}
+
+/**
+ * The base a blocked body is re-sent against. A blocked body was refused
+ * against `entry.blockedBase`. The owner's current observed base replaces it
+ * only when it is unchanged, or when it advanced to the body this session
+ * itself last queued from that same blocked base: that save is B's immediate
+ * predecessor, B was typed on top of it, and replacing it overwrites nothing
+ * this session has not seen. An older own save with the same text, queued
+ * from a different base, does not count. The blocking row comes from
+ * the shared queue, its acknowledgement advances every same-Work owner, and
+ * a same-Work refresh rebuilds the base from the server, so an advanced base
+ * holding any other body keeps the blocked base, and the server reports the
+ * conflict instead of the retry silently overwriting it.
+ */
+function prksResearchNotesBlockedSendBase(ctx, entry) {
+    const blockedBase = entry && entry.blockedBase;
+    const slot = typeof prksWorkNoteObserved === 'function' ? prksWorkNoteObserved(ctx, 'work-research-note') : null;
+    if (!blockedBase) return prksResearchNotesBaseCopy(slot);
+    if (!slot) return blockedBase;
+    if (slot.value === blockedBase.value && slot.revision === blockedBase.revision) return prksResearchNotesBaseCopy(slot);
+    const ownBase = entry.ownQueuedBase;
+    const advancedByOwn = typeof entry.ownQueuedText === 'string' && slot.value === entry.ownQueuedText &&
+        !!ownBase && ownBase.value === blockedBase.value && ownBase.revision === blockedBase.revision &&
+        slot.revision >= blockedBase.revision;
+    return advancedByOwn ? prksResearchNotesBaseCopy(slot) : blockedBase;
+}
+
+/**
+ * Re-send a blocked body against `prksResearchNotesBlockedSendBase`. When
+ * that base still predates the blocking save's outcome (its revision is not
+ * newer than the refused base) and the body equals it, the store would treat
+ * the save as a no-op and nothing would reach the server, although the
+ * blocking save may have changed the note there. That cannot be confirmed
+ * locally, so the body is left explicitly unsaved instead of reading as
+ * saved; the next edit saves it again.
+ */
+function prksSendBlockedResearchNote(ctx, id, entry) {
+    const base = prksResearchNotesBlockedSendBase(ctx, entry);
+    const notes = prksResearchNotesBusyRetryTarget(ctx, id);
+    const editor = notes && notes.editor;
+    const body = editor && typeof editor.value === 'function' ? editor.value() : null;
+    const refused = entry.blockedBase;
+    if (base && refused && body === base.value && base.revision <= refused.revision) {
+        entry.state = 'error';
+        entry.saveError = true;
+        entry.updatedAt = Date.now();
+        prksResearchRecoveryPipeline(entry, { state: 'error' });
+        prksSyncResearchNotesState(notes, entry);
+        const statusEl = ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
+        if (statusEl) statusEl.innerText = PRKS_RESEARCH_NOTES_UNCONFIRMED_STATUS;
+        if (ctx.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
+            window.prksWorkspaceRefreshTabStatus(ctx.tabId);
+        }
+        return;
+    }
+    void prksEnqueueWorkResearchNotesSave(ctx, id, base ? { base: base } : undefined);
+}
+
+const PRKS_RESEARCH_NOTES_UNCONFIRMED_STATUS = 'Not saved: this note changed elsewhere. Edit to save it again.';
+
+/**
+ * A save refused with `scope_busy` (#465): an earlier, attempted operation
+ * still holds this note's aggregate, and the store keeps it immutable. The
+ * newer body was never written. It stays `blocked` on the session, and this
+ * re-enqueues the live editor body once no unsettled Research Notes row is
+ * left for the Work, on a sync event or a backed-off fallback timer. The
+ * re-send uses this owner's observed base, which only an acknowledgement in
+ * this runtime advances: when another browser tab sent the blocking row, that
+ * base is stale and the server may park B as REVISION_CONFLICT instead of
+ * saving it (#476). It retries only while this owner
+ * generation, Work, live editor, and blocked session still hold, so a newer
+ * edit, a route change, cold release, or destroy stops it. The timer is a
+ * TabContext timer and the subscription a `registerCleanup`, so teardown
+ * stops both. Only one retry runs per owner.
+ */
+function prksScheduleResearchNotesBusyRetry(ctx, workId, entry) {
+    /* A stale settlement (another Work, a released editor, or a replaced
+     * session) must not replace this owner's live retry. */
+    if (!entry || !prksResearchNotesBusyRetryTarget(ctx, workId)) return;
+    if (prksWorkResearchDrafts.get(prksResearchDraftKey(ctx, workId)) !== entry) return;
+    prksStopResearchNotesBusyRetry(ctx);
+    /* A same-Work remount starts with a blank status; keep disclosing that
+     * the body is unsaved while the retry waits. */
+    const blockedStatus = entry.state === 'blocked' && ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
+    if (blockedStatus) blockedStatus.innerText = prksLiveResearchDraftStatus(entry, null);
+    const id = String(workId);
+    const generation = ctx.generation;
+    const token = entry.latestSaveToken;
+    let delay = 1000;
+    let stopped = false;
+    let checking = false;
+    let recheck = false;
+    let stopSync = null;
+    let unregisterCleanup = null;
+    const stop = function () {
+        if (stopped) return;
+        stopped = true;
+        if (prksResearchNotesBusyRetryStops.get(ctx) === stop) prksResearchNotesBusyRetryStops.delete(ctx);
+        if (typeof ctx.clearTimer === 'function') ctx.clearTimer(PRKS_RESEARCH_NOTES_BUSY_RETRY_TIMER);
+        const unsubscribe = stopSync;
+        const unregister = unregisterCleanup;
+        stopSync = null;
+        unregisterCleanup = null;
+        if (unregister) unregister();
+        if (unsubscribe) {
+            try { unsubscribe(); } catch (_e) { /* ignore */ }
+        }
+    };
+    const due = function () {
+        if (stopped) return false;
+        if (typeof generation === 'number' && ctx.generation !== generation) return false;
+        if (!prksResearchNotesBusyRetryTarget(ctx, id)) return false;
+        if (prksWorkResearchDrafts.get(prksResearchDraftKey(ctx, id)) !== entry) return false;
+        return entry.state === 'blocked' && !entry.promise && entry.latestSaveToken === token;
+    };
+    const arm = function () {
+        if (stopped || typeof ctx.setTimer !== 'function') return;
+        const tid = setTimeout(function () {
+            if (ctx.timers && ctx.timers.get(PRKS_RESEARCH_NOTES_BUSY_RETRY_TIMER) === tid) {
+                ctx.clearTimer(PRKS_RESEARCH_NOTES_BUSY_RETRY_TIMER);
+            }
+            void check();
+        }, delay);
+        delay = Math.min(delay * 2, PRKS_RESEARCH_NOTES_BUSY_RETRY_MAX_MS);
+        ctx.setTimer(PRKS_RESEARCH_NOTES_BUSY_RETRY_TIMER, tid);
+    };
+    const check = async function () {
+        if (checking) {
+            recheck = true;
+            return;
+        }
+        if (!due()) {
+            stop();
+            return;
+        }
+        checking = true;
+        let busy = false;
+        try {
+            if (typeof prksRefreshPendingWorkNotes === 'function' && typeof prksWorkNoteOperations === 'function') {
+                const rows = await prksRefreshPendingWorkNotes();
+                busy = prksWorkNoteOperations(rows, id, 'work-research-note').length > 0;
+            }
+        } catch (_e) {
+            busy = true;
+        } finally {
+            checking = false;
+        }
+        if (!due()) {
+            stop();
+            return;
+        }
+        if (busy) {
+            if (recheck) {
+                recheck = false;
+                void check();
+                return;
+            }
+            const armed = ctx.timers && ctx.timers.has(PRKS_RESEARCH_NOTES_BUSY_RETRY_TIMER);
+            if (!armed) arm();
+            return;
+        }
+        stop();
+        prksSendBlockedResearchNote(ctx, id, entry);
+    };
+    if (window.prksSync && typeof window.prksSync.subscribe === 'function') {
+        stopSync = window.prksSync.subscribe(function () { void check(); });
+    }
+    if (typeof ctx.registerCleanup === 'function') unregisterCleanup = ctx.registerCleanup(stop);
+    prksResearchNotesBusyRetryStops.set(ctx, stop);
+    arm();
+}
+
 window.prksWorkNotesMarkEdit = prksWorkNotesMarkEdit;
 window.prksWorkNotesBeginSave = prksWorkNotesBeginSave;
 window.prksWorkNotesSettleSave = prksWorkNotesSettleSave;
@@ -1525,7 +1673,33 @@ function prksResearchNotesStatusForResult(code, pending) {
     return 'Error saving changes';
 }
 
-function prksEnqueueWorkResearchNotesSave(ctx, workId) {
+/** Whether a Research Notes row is still queued for the Work after a save. */
+async function prksResearchNotesPendingAfterSave(workId) {
+    if (typeof prksRefreshPendingWorkNotes !== 'function') return false;
+    await prksRefreshPendingWorkNotes();
+    if (typeof prksWorkNoteOperations !== 'function') return false;
+    const rows = await prksRefreshPendingWorkNotes();
+    return prksWorkNoteOperations(rows, workId, 'work-research-note').length > 0;
+}
+
+/**
+ * Session state after a save settles. `scope_busy` means an earlier save
+ * still holds the aggregate (#465): this body was never written, so it stays
+ * unsaved (`blocked`) and is retried once that save settles, not dropped as
+ * an error.
+ */
+function prksResearchDraftSettledState(code, hasNewerDraft) {
+    if (hasNewerDraft) return 'drafting';
+    if (code === 'scope_busy') return 'blocked';
+    return code === 'saved' ? 'committed' : 'error';
+}
+
+function prksResearchNotesBaseCopy(base) {
+    return base ? { value: base.value, revision: base.revision } : null;
+}
+
+function prksEnqueueWorkResearchNotesSave(ctx, workId, options) {
+    const sendBase = options && options.base ? options.base : null;
     const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
     const saveGeneration = owner && typeof owner.generation === 'number' ? owner.generation : undefined;
     const _cwSave = owner && owner.getEntity ? owner.getEntity('work') : null;
@@ -1562,16 +1736,21 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
         transient.saveError = false;
         transient.updatedAt = Date.now();
         prksSyncResearchNotesState(notes, transient);
+        /* The queue never holds a body newer than recovery storage. */
+        prksResearchRecoveryFlush(transient);
+        prksResearchRecoveryPipeline(transient, { state: 'saving' });
     }
+    const savedGeneration = transient ? transient.latestSaveEditGeneration : 0;
     if (statusEl) statusEl.innerText = 'Saving...';
     if (owner && owner.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
         window.prksWorkspaceRefreshTabStatus(owner.tabId);
     }
 
+    let usedBase = null;
     const savePromise = (async function () {
-        let observed = typeof prksWorkNoteObserved === 'function'
+        let observed = sendBase || (typeof prksWorkNoteObserved === 'function'
             ? prksWorkNoteObserved(owner, 'work-research-note')
-            : null;
+            : null);
         if (!observed && typeof prksEnsureWorkNotesBase === 'function') {
             const capturedWork = (owner.getResource && owner.getResource('workNotesCanonical')) || _cwSave;
             const base = await prksEnsureWorkNotesBase(owner, capturedWork, { publish: false });
@@ -1588,44 +1767,54 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
         if (typeof prksSaveWorkNoteDurably !== 'function') {
             return { code: 'unavailable' };
         }
-        return prksSaveWorkNoteDurably(id, 'work-research-note', content, observed);
+        usedBase = prksResearchNotesBaseCopy(observed);
+        const saved = await prksSaveWorkNoteDurably(id, 'work-research-note', content, observed);
+        /* Provenance for a later blocked body: every save this session queued,
+         * newest token wins, recorded before the pending scan and whether or
+         * not a newer save has since taken over the session's status. */
+        if (saved && saved.code === 'saved' && transient && transientToken > (transient.ownQueuedToken || 0)) {
+            transient.ownQueuedToken = transientToken;
+            transient.ownQueuedText = content;
+            transient.ownQueuedBase = usedBase;
+            prksResearchRecoveryQueued(transient, saved.opId, savedGeneration, content, usedBase);
+        }
+        return saved;
     })();
     if (transient) transient.promise = savePromise;
     void savePromise
         .then(async function (result) {
             const code = result && result.code;
             const ok = code === 'saved';
-            if (ok && typeof prksRefreshPendingWorkNotes === 'function') {
-                await prksRefreshPendingWorkNotes();
-            }
-            let pending = false;
-            if (ok && typeof prksRefreshPendingWorkNotes === 'function' &&
-                typeof prksWorkNoteOperations === 'function') {
-                const rows = await prksRefreshPendingWorkNotes();
-                pending = prksWorkNoteOperations(rows, id, 'work-research-note').length > 0;
-            }
+            const pending = ok ? await prksResearchNotesPendingAfterSave(id) : false;
             const localApplied = prksWorkNotesSettleSave(notes, token, ok);
             let transientApplied = false;
             if (transient && transientToken === transient.latestSaveToken) {
                 const hasNewerDraft = transient.editGeneration > transient.latestSaveEditGeneration;
                 transient.settledSaveToken = transientToken;
                 transient.promise = null;
-                transient.saveError = !ok && !hasNewerDraft;
-                transient.state = hasNewerDraft ? 'drafting' : !ok ? 'error' : 'committed';
+                transient.state = prksResearchDraftSettledState(code, hasNewerDraft);
+                transient.saveError = transient.state === 'error';
+                const blocked = transient.state === 'blocked';
+                if (blocked) {
+                    /* Refused against this base; a retry keeps it (#465). */
+                    transient.blockedBase = usedBase;
+                }
                 transient.updatedAt = Date.now();
                 transientApplied = true;
+                prksResearchRecoverySettled(owner, id, transient, result,
+                    { generation: savedGeneration, text: content });
                 prksSyncResearchNotesState(notes, transient);
                 prksSyncLiveResearchDraft(id, transient, saveGeneration, { code: code, pending: pending });
                 prksPruneResearchDrafts();
+                if (blocked) prksScheduleResearchNotesBusyRetry(owner, id, transient);
             }
             if (!localApplied && !transientApplied) return undefined;
             if (prksResearchNotesMayPaint(owner, id, saveGeneration)) {
                 const liveStatus = owner.query ? owner.query('[data-prks-role="editor-status"]') : null;
                 if (liveStatus) {
-                    liveStatus.innerText =
-                        transientApplied && transient.state === 'drafting'
-                            ? 'Drafting...'
-                            : prksResearchNotesStatusForResult(code, pending);
+                    liveStatus.innerText = transientApplied
+                        ? prksLiveResearchDraftStatus(transient, { code: code, pending: pending })
+                        : prksResearchNotesStatusForResult(code, pending);
                 }
             }
             return result;
@@ -1641,6 +1830,7 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
                 transient.state = hasNewerDraft ? 'drafting' : 'error';
                 transient.updatedAt = Date.now();
                 transientApplied = true;
+                prksResearchRecoverySettled(owner, id, transient, { code: 'failed' }, null);
                 prksSyncResearchNotesState(notes, transient);
                 prksSyncLiveResearchDraft(id, transient, saveGeneration, { code: 'failed', pending: false });
             }
@@ -1660,12 +1850,33 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
 
 function prksFlushPendingWorkResearchNotes(ctx) {
     const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
-    const _hasSaveTimer = owner && owner.timers && owner.timers.has('saveNotesTimeout');
-    if (!_hasSaveTimer) return;
-    if (owner && typeof owner.clearTimer === 'function') owner.clearTimer('saveNotesTimeout');
-    const _cw = owner && owner.getEntity ? owner.getEntity('work') : null;
+    if (!owner) return;
+    const _hasSaveTimer = owner.timers && owner.timers.has('saveNotesTimeout');
+    if (_hasSaveTimer && typeof owner.clearTimer === 'function') owner.clearTimer('saveNotesTimeout');
+    const _cw = owner.getEntity ? owner.getEntity('work') : null;
     const id = _cw && _cw.id;
     if (!id) return;
+    if (_hasSaveTimer) {
+        prksEnqueueWorkResearchNotesSave(owner, id);
+        return;
+    }
+    prksFlushTimerlessResearchNote(owner, id);
+}
+
+/**
+ * A scope_busy settlement leaves the newest body unsaved with no debounce
+ * timer (#465). Leaving still sends it, through the live editor only, and a
+ * blocked body against the base it was refused on.
+ */
+function prksFlushTimerlessResearchNote(owner, id) {
+    const entry = prksWorkResearchDrafts.get(prksResearchDraftKey(owner, id));
+    if (!entry || entry.promise || (entry.state !== 'blocked' && entry.state !== 'drafting')) return;
+    if (!prksResearchNotesBusyRetryTarget(owner, id)) return;
+    prksStopResearchNotesBusyRetry(owner);
+    if (entry.state === 'blocked') {
+        prksSendBlockedResearchNote(owner, id, entry);
+        return;
+    }
     prksEnqueueWorkResearchNotesSave(owner, id);
 }
 
@@ -1977,6 +2188,9 @@ function setupWorkNotesSplitResize(ctx, workId) {
         }
     });
 
+    /* The one split-view observer for this route. registerCleanup ties it to
+     * the route: warm park keeps it on the parked pane; beginRoute, cold park,
+     * and destroy disconnect it. */
     if (typeof ResizeObserver === 'function') {
         const ro = new ResizeObserver(function () {
             prksReapplyWorkNotesSplitLayout(ctx);
@@ -2028,28 +2242,6 @@ function setupWorkNotesSplitResize(ctx, workId) {
             requestAnimationFrame(() => refreshNotesEditor());
         }
     });
-
-    if (ctx && typeof ctx.setResource === 'function' && typeof ResizeObserver !== 'undefined') {
-        if (!ctx.getResource('workNotesSideRo')) {
-            let ticking = false;
-            const ro = new ResizeObserver(function () {
-                if (ticking) return;
-                ticking = true;
-                requestAnimationFrame(function () {
-                    ticking = false;
-                    if (typeof prksReapplyWorkNotesSplitLayout === 'function') {
-                        prksReapplyWorkNotesSplitLayout(ctx);
-                    }
-                });
-            });
-            ro.observe(ws);
-            ctx.setResource('workNotesSideRo', ro, function () {
-                try {
-                    ro.disconnect();
-                } catch (_e) {}
-            });
-        }
-    }
 }
 
 function setupWorkNotesCollapseToggle(ctx, workId) {

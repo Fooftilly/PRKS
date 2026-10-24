@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
 import {
   annotationPopupEscapeYields,
   focusAfterAnnotationPopupClose,
@@ -50,7 +51,7 @@ const props = defineProps<{
 }>()
 
 const panelRef = ref<HTMLElement | null>(null)
-const closeRef = ref<HTMLButtonElement | null>(null)
+const closeRef = ref<{ focus: () => void } | null>(null)
 const resizeRef = ref<HTMLElement | null>(null)
 const wasOpen = ref(false)
 let opener: HTMLElement | null = null
@@ -292,24 +293,22 @@ onBeforeUnmount(() => {
     />
     <header class="pdf-annotation-drawer__header">
       <h3 class="pdf-annotation-drawer__title">Annotations</h3>
-      <button
-        type="button"
-        class="prks-btn prks-btn--secondary prks-btn--sm"
+      <PrksButton
+        size="sm"
         :aria-pressed="actuallyPinned() ? 'true' : 'false'"
         :disabled="!actuallyPinned() && !state.pinEnabled"
         :title="actuallyPinned() ? 'Unpin annotations' : (state.pinEnabled ? 'Pin annotations' : 'Pin needs a wider pane')"
         @click="pinDrawer()"
       >
         {{ actuallyPinned() ? 'Unpin' : 'Pin' }}
-      </button>
-      <button
+      </PrksButton>
+      <PrksButton
         ref="closeRef"
-        type="button"
-        class="prks-btn prks-btn--secondary prks-btn--sm"
+        size="sm"
         @click="onClose(ticket())"
       >
         Close
-      </button>
+      </PrksButton>
     </header>
     <div class="annotation-list-status">{{ state.status }}</div>
     <div class="pdf-annotation-drawer__list annotation-fallback-list" role="list">

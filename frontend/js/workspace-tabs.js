@@ -114,11 +114,8 @@
             };
         const homeHash = deps.homeHash || defaultHome();
         const historyAdapter = deps.historyAdapter || {};
-        const canLeave =
-            deps.canLeave ||
-            function () {
-                return true;
-            };
+        /* Test seam. Production leaves through prksTabLeave probes and does not inject this. */
+        const injectedCanLeave = typeof deps.canLeave === 'function' ? deps.canLeave : null;
         const renderRoute =
             deps.renderRoute ||
             function () {
@@ -297,23 +294,6 @@
                 return state.focusedTabId;
             }
             return null;
-        }
-
-        /** Depth-first, stop-at-first-rejection preflight across several mounted leaves. Used
-         * anywhere a structural transaction would unmount more than one live leaf at once
-         * (global Hide split, physical narrow fallback) so the whole thing is atomic: either
-         * every leaf agrees to leave, or none of them are touched. */
-        function preflightLeaves(leafIds, nextHash) {
-            function step(i) {
-                if (i >= leafIds.length) return Promise.resolve(true);
-                const id = leafIds[i];
-                const p = contextMounted(id) ? awaitLeave(id, nextHash) : Promise.resolve(true);
-                return p.then(function (ok) {
-                    if (!ok) return false;
-                    return step(i + 1);
-                });
-            }
-            return step(0);
         }
 
         function markHandled() {
@@ -732,12 +712,187 @@
             tab.titleRouteGen = null;
         }
 
-        function awaitLeave(tabId, nextHash) {
-            try {
-                return Promise.resolve(canLeave(tabId, nextHash));
-            } catch (_e) {
-                return Promise.resolve(false);
+        function leaveEngine() {
+            return root.prksTabLeave || null;
+        }
+
+        /* Production has one leave implementation. A missing or partial
+         * prksTabLeave must not approve navigation, parking, or destruction.
+         * deps.canLeave is the only substitute, and only tests inject it. */
+        function productionLeaveEngine() {
+            const engine = leaveEngine();
+            if (!engine) return null;
+            if (typeof engine.run !== 'function') return null;
+            if (typeof engine.runBatch !== 'function') return null;
+            if (typeof engine.assessOwner !== 'function') return null;
+            if (typeof engine.flushOwner !== 'function') return null;
+            return engine;
+        }
+
+        function ownerSnapshot(tabId) {
+            const tab = getTab(tabId);
+            if (!tab) return null;
+            if (typeof root.prksGetTabContext !== 'function') {
+                return { ownerId: String(tabId), generation: null, token: tab };
             }
+            const ctx = root.prksGetTabContext(tabId);
+            if (!ctx || ctx.destroyed) return null;
+            return {
+                ownerId: String(tabId),
+                generation: typeof ctx.generation === 'number' ? ctx.generation : null,
+                token: ctx,
+            };
+        }
+
+        function ownerStill(tabId, snap) {
+            if (!snap || !getTab(tabId)) return false;
+            if (typeof root.prksGetTabContext !== 'function') return true;
+            const ctx = root.prksGetTabContext(tabId);
+            return !!(
+                ctx &&
+                snap.token === ctx &&
+                !ctx.destroyed &&
+                ctx.generation === snap.generation
+            );
+        }
+
+        function assessLeave(tabId, nextHash) {
+            if (injectedCanLeave) {
+                try {
+                    return injectedCanLeave(tabId, nextHash);
+                } catch (_e) {
+                    return false;
+                }
+            }
+            const engine = productionLeaveEngine();
+            if (engine && typeof root.prksGetTabContext === 'function') {
+                return engine.assessOwner(root.prksGetTabContext(tabId), nextHash);
+            }
+            return false;
+        }
+
+        function flushLeaveNotes(tabId) {
+            if (injectedCanLeave) return;
+            const engine = leaveEngine();
+            if (!engine || typeof engine.flushOwner !== 'function') return;
+            if (typeof root.prksGetTabContext !== 'function') return;
+            const ctx = root.prksGetTabContext(tabId);
+            if (ctx) engine.flushOwner(ctx);
+        }
+
+        function interpretLeave(decision) {
+            if (!decision || decision.status !== 'approved') return false;
+            if (decision.value === undefined) return true;
+            return decision.value;
+        }
+
+        function leaveAttempt(tabId, nextHash, transition, includeFlush) {
+            const attempt = {
+                ownerId: String(tabId || ''),
+                destination: nextHash == null ? null : nextHash,
+                transition: transition,
+                capture: function () {
+                    return ownerSnapshot(tabId);
+                },
+                still: function (snap) {
+                    return ownerStill(tabId, snap);
+                },
+                assess: function () {
+                    return assessLeave(tabId, nextHash);
+                },
+            };
+            /* Omit flush when this approval can still abort or open another
+             * wave. runBatch flushes before commit, so a nested reject would
+             * otherwise keep the earlier wave's notes. */
+            if (includeFlush !== false) {
+                attempt.flushNotes = function () {
+                    flushLeaveNotes(tabId);
+                };
+            }
+            return attempt;
+        }
+
+        function leaveRejected(result) {
+            if (result === false) return true;
+            return !!(result && result.status && result.status !== 'approved');
+        }
+
+        /** One owner. The commit runs only after approval, while the owner lock is held. */
+        function runLeave(tabId, nextHash, transition, commit) {
+            const engine = productionLeaveEngine();
+            if (!engine) {
+                if (!injectedCanLeave) return Promise.resolve(false);
+                return Promise.resolve()
+                    .then(function () {
+                        return assessLeave(tabId, nextHash);
+                    })
+                    .then(function (result) {
+                        if (leaveRejected(result)) return false;
+                        flushLeaveNotes(tabId);
+                        return commit ? commit() : true;
+                    })
+                    .catch(function () {
+                        return false;
+                    });
+            }
+            const attempt = leaveAttempt(tabId, nextHash, transition);
+            attempt.commit = commit;
+            return engine.run(attempt).then(interpretLeave);
+        }
+
+        /**
+         * Every entry is assessed, in order, before `commit`. A rejection commits nothing.
+         * Callers that must ignore unmounted tabs filter before calling.
+         * `options.flush === false` assesses only. The caller flushes later, and only
+         * on a path that can no longer abort.
+         */
+        function runLeaves(entries, transition, commit, options) {
+            const includeFlush = !options || options.flush !== false;
+            const live = [];
+            for (let i = 0; i < entries.length; i++) {
+                if (entries[i] && entries[i].tabId) live.push(entries[i]);
+            }
+            if (!live.length) return Promise.resolve(commit ? commit() : true);
+            const engine = productionLeaveEngine();
+            if (!engine) {
+                if (!injectedCanLeave) return Promise.resolve(false);
+                function step(i) {
+                    if (i >= live.length) {
+                        if (includeFlush) {
+                            for (let n = 0; n < live.length; n++) flushLeaveNotes(live[n].tabId);
+                        }
+                        return Promise.resolve(commit ? commit() : true);
+                    }
+                    return Promise.resolve(assessLeave(live[i].tabId, live[i].nextHash)).then(function (result) {
+                        if (leaveRejected(result)) return false;
+                        return step(i + 1);
+                    });
+                }
+                return step(0).catch(function () {
+                    return false;
+                });
+            }
+            return engine
+                .runBatch({
+                    transition: transition,
+                    attempts: live.map(function (entry) {
+                        return leaveAttempt(entry.tabId, entry.nextHash, transition, includeFlush);
+                    }),
+                    commit: commit || function () {
+                        return true;
+                    },
+                })
+                .then(interpretLeave);
+        }
+
+        function mainPromotionLeaveEntry(targetId) {
+            const pf = workspaceModelApi.preflightMakeMain(state, targetId, {
+                narrowFallback: narrowFallback,
+                homeHash: homeHash,
+                oldMainSupportsTile: oldMainSupportsTile(),
+            });
+            if (pf.type !== 'main-promotion' || !pf.requiresLeave) return null;
+            return { tabId: pf.oldMainId, nextHash: pf.nextHash };
         }
 
         function enforceInvariants() {
@@ -905,6 +1060,13 @@
             paint();
         }
 
+        /* Leave approved this id as the Main that may be parked. Tile-capable Make
+         * Main can put a different tab in that role without a leave and without
+         * changing generation, so a commit must not park the later Main. */
+        function outgoingMainStill(leavingMainId) {
+            return !!leavingMainId && state.mainTabId === leavingMainId && !!getTab(leavingMainId);
+        }
+
         function openTab(hash, options) {
             const opts = options || {};
             const shouldActivate = opts.activate === true;
@@ -916,12 +1078,12 @@
                 announce(tab.title);
                 return Promise.resolve(copyTab(tab));
             }
-            return awaitLeave(state.mainTabId, route).then(function (ok) {
-                if (!ok) return false;
-                const prevId = state.mainTabId;
+            const leavingMainId = state.mainTabId;
+            return runLeave(leavingMainId, route, 'route-replace', function () {
+                if (!outgoingMainStill(leavingMainId)) return false;
                 const tab = makeTab(route);
                 state.tabs.push(tab);
-                if (prevId && prevId !== tab.id) warmParkContext(prevId);
+                if (leavingMainId !== tab.id) warmParkContext(leavingMainId);
                 setMain(tab.id);
                 mountContext(tab.id);
                 commitUrl(tab, 'replace');
@@ -951,33 +1113,20 @@
             return true;
         }
 
-        /**
-         * Promise<boolean> preflight shared by every path that promotes a Secondary leaf to
-         * Main (explicit Make Main, a Secondary navigating to a non-tile route, and a visible
-         * Secondary's popstate promotion): explicit Make Main / Make Main-shaped promotion
-         * paths. `promoteSecondaryToMain()` itself stays a synchronous, unchecked state
-         * mutation primitive; this is the operation wrapped around it. When the old Main
-         * supports tiling it is demoted in place (a role swap) and never leaves, so no leave
-         * prompt is needed. When it does not, promotion would cold-park/unmount it, so it must
-         * pass `awaitLeave()` before anything is mutated. The nextHash passed is the old Main's
-         * OWN current route (not the incoming target's route): it is being parked, not
-         * navigated, so this lets autosave flushes / owned-draft guards run without a false
-         * "route change" read.
-         */
-        function preflightMainPromotion(targetId) {
-            const pf = workspaceModelApi.preflightMakeMain(state, targetId, {
-                narrowFallback: narrowFallback,
-                homeHash: homeHash,
-                oldMainSupportsTile: oldMainSupportsTile(),
-            });
-            if (pf.type !== 'main-promotion' || !pf.requiresLeave) return Promise.resolve(true);
-            return awaitLeave(pf.oldMainId, pf.nextHash);
+        function finishMakeMain(tab) {
+            if (!getTab(tab.id) || !root.containsTab(state.secondaryTree, tab.id)) return false;
+            if (!promoteSecondaryToMain(tab.id)) return false;
+            commitUrl(tab, 'replace');
+            paintAndRestore(tab.id);
+            publishShell(tab.id);
+            refreshFocusedPanel();
+            return true;
         }
 
         /**
-         * Promise<boolean> orchestration for the explicit Make Main command: preflight, then
-         * (only if approved) promote/commit/paint. A rejected preflight is an atomic no-op --
-         * no tree/tab/URL/mount mutation at all.
+         * Explicit Make Main. A tileable old Main is a role swap and does not leave.
+         * A non-tileable old Main is cold-parked only after its leave is approved.
+         * The destination passed to that leave is the old Main's own route.
          */
         function makeMain(tabId) {
             const tab = getTab(tabId);
@@ -989,15 +1138,10 @@
                 refreshFocusedPanel();
                 return Promise.resolve(true);
             }
-            return preflightMainPromotion(tab.id).then(function (ok) {
-                if (!ok) return false;
-                if (!getTab(tab.id) || !root.containsTab(state.secondaryTree, tab.id)) return false;
-                if (!promoteSecondaryToMain(tab.id)) return false;
-                commitUrl(tab, 'replace');
-                paintAndRestore(tab.id);
-                publishShell(tab.id);
-                refreshFocusedPanel();
-                return true;
+            const entry = mainPromotionLeaveEntry(tab.id);
+            if (!entry) return Promise.resolve(finishMakeMain(tab));
+            return runLeave(entry.tabId, entry.nextHash, 'promote-main', function () {
+                return finishMakeMain(tab);
             });
         }
 
@@ -1164,9 +1308,7 @@
                 mounted: contextMounted(tabId),
             });
             if (pf.type === 'none' && !root.containsTab(state.secondaryTree, tabId)) return Promise.resolve(false);
-            const leaveP = pf.type === 'leave-tab' ? awaitLeave(pf.tabId, pf.nextHash) : Promise.resolve(true);
-            return leaveP.then(function (ok) {
-                if (!ok) return false;
+            const commitHide = function () {
                 const plan = workspaceModelApi.planHideLeaf(state, tabId);
                 if (!plan.ok) return false;
                 if (contextMounted(tabId)) coldParkContext(tabId);
@@ -1174,7 +1316,9 @@
                 paintAndRestore(state.focusedTabId);
                 refreshFocusedPanel();
                 return true;
-            });
+            };
+            if (pf.type !== 'leave-tab') return Promise.resolve(commitHide());
+            return runLeave(pf.tabId, pf.nextHash, 'cold-park', commitHide);
         }
 
         function tileTab(tabId) {
@@ -1322,31 +1466,35 @@
             const replace = !!opts.replace;
             if (tab.id !== state.mainTabId && !routeSupportsTile(route)) {
                 const leavingId = tab.id;
-                return awaitLeave(leavingId, route).then(function (ok) {
-                    if (!ok) return false;
+                const entries = [{ tabId: leavingId, nextHash: route }];
+                const promo = mainPromotionLeaveEntry(leavingId);
+                if (promo) entries.push(promo);
+                /* Target leave, then the old Main's cold-park leave, then one commit.
+                 * promoteSecondaryToMain stays the unchecked mutation. The render
+                 * promise stays outside the lock so a later navigation can start
+                 * while this detail request is still open. */
+                let pendingPromotion = null;
+                return runLeaves(entries, 'promote-main', function () {
                     if (!getTab(leavingId) || !root.containsTab(state.secondaryTree, leavingId)) return false;
-                    /* This Secondary is becoming Main because its own route no longer supports
-                     * tiling. That promotion may also cold-park the OLD Main (if IT doesn't
-                     * support tiling either) -- preflight that too, before any mutation, via
-                     * the same helper explicit Make Main uses. Calling promoteSecondaryToMain()
-                     * directly (rather than makeMain()) avoids a redundant commit/paint here:
-                     * applyCurrentNavigation() below performs the one commit/paint for the
-                     * promoted tab's new route. */
-                    return preflightMainPromotion(leavingId).then(function (mainOk) {
-                        if (!mainOk) return false;
-                        if (!getTab(leavingId) || !root.containsTab(state.secondaryTree, leavingId)) return false;
-                        if (!promoteSecondaryToMain(leavingId)) return false;
-                        announce('', 'promote');
-                        const promoted = getMainTab();
-                        if (!promoted || promoted.id !== leavingId) return false;
-                        return applyCurrentNavigation(promoted, route, replace);
-                    });
+                    if (!promoteSecondaryToMain(leavingId)) return false;
+                    announce('', 'promote');
+                    const promoted = getMainTab();
+                    if (!promoted || promoted.id !== leavingId) return false;
+                    pendingPromotion = applyCurrentNavigation(promoted, route, replace);
+                    return true;
+                }).then(function (ok) {
+                    if (!ok) return false;
+                    return pendingPromotion;
                 });
             }
-            return awaitLeave(tab.id, route).then(function (ok) {
-                if (!ok) return false;
+            let pendingRender = null;
+            return runLeave(tab.id, route, 'route-replace', function () {
                 if (!getTab(tab.id)) return false;
-                return applyCurrentNavigation(tab, route, replace);
+                pendingRender = applyCurrentNavigation(tab, route, replace);
+                return true;
+            }).then(function (ok) {
+                if (!ok) return false;
+                return pendingRender;
             });
         }
 
@@ -1372,11 +1520,11 @@
             if (visualTiled() && root.containsTab(state.secondaryTree, tab.id) && !opts.fromPopstate) {
                 return Promise.resolve(focusTab(tab.id));
             }
-            return awaitLeave(state.mainTabId, tab.route).then(function (ok) {
-                if (!ok) return false;
+            const leavingMainId = state.mainTabId;
+            return runLeave(leavingMainId, tab.route, 'route-replace', function () {
                 if (!getTab(tabId)) return false;
-                const prevId = state.mainTabId;
-                if (prevId && prevId !== tabId) warmParkContext(prevId);
+                if (!outgoingMainStill(leavingMainId)) return false;
+                if (leavingMainId !== tabId) warmParkContext(leavingMainId);
                 if (root.containsTab(state.secondaryTree, tabId)) {
                     if (!promoteSecondaryToMain(tabId)) return false;
                 } else {
@@ -1409,30 +1557,11 @@
             const closing = state.tabs[idx];
             const closingMain = closing.id === state.mainTabId;
             const closingLeaf = root.containsTab(state.secondaryTree, closing.id);
-            let leaveP;
-            if (!closingMain) {
-                const needLeave = closingLeaf && visualTiled();
-                leaveP = needLeave ? awaitLeave(closing.id, homeHash) : Promise.resolve(true);
-            } else {
-                const previewForLeave = workspaceModelApi.planCloseTab(state, tabId, null);
-                const successorForLeave = previewForLeave.successorId ? getTab(previewForLeave.successorId) : null;
-                const nextHash = successorForLeave ? successorForLeave.route : homeHash;
-                leaveP = awaitLeave(closing.id, nextHash);
-            }
-            if (!closingMain) {
-                return leaveP.then(function (ok) {
-                    if (!ok) return false;
-                    if (!getTab(tabId)) return false;
-                    const plan = workspaceModelApi.planCloseTab(state, tabId, null);
-                    if (!plan.ok || plan.needsHomeTab) return false;
-                    destroyContext(closing.id);
-                    commitCanonical(plan.state);
-                    paintAndRestore(state.focusedTabId);
-                    return true;
-                });
-            }
-            return leaveP.then(function (ok) {
-                if (!ok) return false;
+            /* The role before the dialog only chooses whether to leave and which
+             * destination the confirmation is about. Tile-capable Make Main is not
+             * a leave and does not change generation, so it can swap Main while
+             * this close is waiting. Effects come from a fresh plan at approval. */
+            const commitClose = function () {
                 if (tabIndex(tabId) < 0) return false;
                 const preview = workspaceModelApi.planCloseTab(state, tabId, null);
                 if (preview.needsHomeTab) {
@@ -1452,8 +1581,15 @@
                     });
                 }
                 if (!preview.ok) return false;
-                const successor = preview.successorId ? getTab(preview.successorId) : null;
-                const wasMountedSuccessor = !!(successor && contextMounted(successor.id));
+                if (!preview.successorId) {
+                    destroyContext(tabId);
+                    commitCanonical(preview.state);
+                    paintAndRestore(state.focusedTabId);
+                    return true;
+                }
+                const successor = getTab(preview.successorId);
+                if (!successor) return false;
+                const wasMountedSuccessor = contextMounted(successor.id);
                 destroyContext(tabId);
                 commitCanonical(preview.state);
                 const resumedSuccessor = !wasMountedSuccessor && mountContext(preview.successorId);
@@ -1469,7 +1605,16 @@
                 ).then(function () {
                     return true;
                 });
-            });
+            };
+            if (!closingMain) {
+                const needLeave = closingLeaf && visualTiled();
+                if (!needLeave) return Promise.resolve(commitClose());
+                return runLeave(closing.id, homeHash, 'close', commitClose);
+            }
+            const previewForLeave = workspaceModelApi.planCloseTab(state, tabId, null);
+            const successorForLeave = previewForLeave.successorId ? getTab(previewForLeave.successorId) : null;
+            const nextHash = successorForLeave ? successorForLeave.route : homeHash;
+            return runLeave(closing.id, nextHash, 'close', commitClose);
         }
 
         function paintAndRestore(tabId) {
@@ -1535,18 +1680,16 @@
             }
             if (!unique.length) return Promise.resolve(true);
 
-            function preflight(i) {
-                if (i >= unique.length) return Promise.resolve(true);
-                const id = unique[i];
-                const p = contextMounted(id) ? awaitLeave(id, keep.route) : Promise.resolve(true);
-                return p.then(function (ok) {
-                    if (!ok) return false;
-                    return preflight(i + 1);
-                });
-            }
+            /* Ids mounted when a prompt opens are the only ones that have approved.
+             * A parked id can mount while that prompt is open (browser Back on a
+             * warm-parked tab). Recheck before any destroy, and preflight the new
+             * mounted owners first. A rejection commits nothing.
+             * Those assessment waves do not flush. runBatch flushes before commit,
+             * and the commit may open another wave or abort. Flush once, only when
+             * the mounted close set is stable, immediately before destroy. */
+            const preflighted = Object.create(null);
 
-            return preflight(0).then(function (ok) {
-                if (!ok) return false;
+            function commitBatch() {
                 if (!getTab(keepId)) return false;
                 const closingMain = unique.indexOf(state.mainTabId) >= 0;
                 const treeLeavesBefore = root.collectLeafTabIds(state.secondaryTree);
@@ -1601,7 +1744,50 @@
                 paintAndRestore(state.focusedTabId);
                 refreshFocusedPanel();
                 return true;
-            });
+            }
+
+            function mountedAwaitingLeave() {
+                const pending = [];
+                for (let i = 0; i < unique.length; i++) {
+                    const id = unique[i];
+                    if (preflighted[id] || !getTab(id) || !contextMounted(id)) continue;
+                    pending.push(id);
+                }
+                return pending;
+            }
+
+            function flushMountedThenDestroy() {
+                if (!getTab(keepId)) return false;
+                if (mountedAwaitingLeave().length) return preflightThenClose();
+                for (let i = 0; i < unique.length; i++) {
+                    const id = unique[i];
+                    if (!getTab(id) || !contextMounted(id)) continue;
+                    flushLeaveNotes(id);
+                }
+                return commitBatch();
+            }
+
+            function preflightThenClose() {
+                const anchor = getTab(keepId);
+                if (!anchor) return Promise.resolve(false);
+                const pending = mountedAwaitingLeave();
+                if (!pending.length) return Promise.resolve(flushMountedThenDestroy());
+                const entries = [];
+                for (let i = 0; i < pending.length; i++) {
+                    preflighted[pending[i]] = true;
+                    entries.push({ tabId: pending[i], nextHash: anchor.route });
+                }
+                return runLeaves(
+                    entries,
+                    'close',
+                    function () {
+                        return flushMountedThenDestroy();
+                    },
+                    { flush: false }
+                );
+            }
+
+            return preflightThenClose();
         }
 
         function closeOtherTabs(tabId) {
@@ -1669,8 +1855,12 @@
              * make-main, narrow fallback, and popstate already re-read or replan after
              * approval; they do not commit a pre-await snapshot. */
             const mountedLeaves = visualTiled() ? plan.leafIds.filter(contextMounted) : [];
-            return preflightLeaves(mountedLeaves, homeHash).then(function (ok) {
-                if (!ok) return false;
+            return runLeaves(
+                mountedLeaves.map(function (id) {
+                    return { tabId: id, nextHash: homeHash };
+                }),
+                'hide-secondary',
+                function () {
                 const fresh = workspaceModelApi.planSetMode(state, mode, presentation());
                 if (!fresh.ok || fresh.kind !== 'hide') return false;
                 const stillMounted = fresh.leafIds.filter(contextMounted);
@@ -1698,8 +1888,12 @@
                 }
                 /* Atomic across every mounted Secondary leaf: depth-first preflight order, stop
                  * at the first rejection, and no partial parking if any leaf rejects. */
-                return preflightLeaves(mountedLeaves, homeHash).then(function (ok) {
-                    if (!ok) return false;
+                return runLeaves(
+                    mountedLeaves.map(function (id) {
+                        return { tabId: id, nextHash: homeHash };
+                    }),
+                    'hide-secondary',
+                    function () {
                     const stillLeaves = root.collectLeafTabIds(state.secondaryTree);
                     if (stillLeaves.join(',') !== leaves.join(',')) return false;
                     mountedLeaves.forEach(coldParkContext);
@@ -1794,64 +1988,60 @@
             if (isVisibleSecondaryTarget) {
                 const want = historyWant(target, raw, locHash);
                 const routeChanging = target.route !== want.route;
-                const targetPreflight = routeChanging ? awaitLeave(target.id, want.route) : Promise.resolve(true);
-                return targetPreflight.then(function (ok) {
-                    if (!ok) {
-                        restoreMainUrl();
-                        return false;
-                    }
+                const entries = [];
+                if (routeChanging) entries.push({ tabId: target.id, nextHash: want.route });
+                const promo = mainPromotionLeaveEntry(target.id);
+                if (promo) entries.push(promo);
+                /* Claim the history route inside the commit and return before the
+                 * detail render. The owner lock must not cover that request. */
+                let pendingHistoryRender = null;
+                const commitHistory = function () {
                     if (!getTab(target.id) || !root.containsTab(state.secondaryTree, target.id)) {
                         restoreMainUrl();
                         return false;
                     }
-                    /* Promoting this visible Secondary to Main may also cold-park the OLD Main
-                     * (if it doesn't support tiling). Both preflights must succeed BEFORE any
-                     * mutation -- no state change happens between them. */
-                    return preflightMainPromotion(target.id).then(function (mainOk) {
-                        if (!mainOk) {
-                            restoreMainUrl();
-                            return false;
-                        }
-                        if (!getTab(target.id) || !root.containsTab(state.secondaryTree, target.id)) {
-                            restoreMainUrl();
-                            return false;
-                        }
-                        applyWantToTab(target, want);
-                        if (!promoteSecondaryToMain(target.id)) {
-                            restoreMainUrl();
-                            return false;
-                        }
-                        markHandled();
-                        paint();
-                        if (routeChanging) {
-                            return Promise.resolve(
-                                invokeRender({
-                                    workspaceSwitch: false,
-                                    fromPopstate: true,
-                                    tabId: target.id,
-                                    hash: target.route,
-                                })
-                            ).then(function () {
-                                return true;
-                            });
-                        }
-                        publishShell(target.id);
-                        refreshFocusedPanel();
+                    applyWantToTab(target, want);
+                    if (!promoteSecondaryToMain(target.id)) {
+                        restoreMainUrl();
+                        return false;
+                    }
+                    markHandled();
+                    paint();
+                    if (routeChanging) {
+                        pendingHistoryRender = Promise.resolve(
+                            invokeRender({
+                                workspaceSwitch: false,
+                                fromPopstate: true,
+                                tabId: target.id,
+                                hash: target.route,
+                            })
+                        );
+                        return true;
+                    }
+                    publishShell(target.id);
+                    refreshFocusedPanel();
+                    return true;
+                };
+                const after = function (ok) {
+                    if (!ok) {
+                        restoreMainUrl();
+                        return false;
+                    }
+                    if (!pendingHistoryRender) return true;
+                    return pendingHistoryRender.then(function () {
                         return true;
                     });
-                });
+                };
+                if (!entries.length) return Promise.resolve(commitHistory()).then(after);
+                return runLeaves(entries, 'history', commitHistory).then(after);
             }
 
             if (!target || target.id === main.id) {
                 const tab = main;
                 const want = target ? historyWant(tab, raw, locHash) : historyWant(tab, null, locHash);
                 const routeChanging = tab.route !== want.route;
-                const preflight = routeChanging ? awaitLeave(tab.id, want.route) : Promise.resolve(true);
-                return preflight.then(function (ok) {
-                    if (!ok) {
-                        restoreMainUrl();
-                        return false;
-                    }
+                let pendingHistoryRender = null;
+                const commitHistory = function () {
                     if (target) applyWantToTab(tab, want);
                     else {
                         applyWantToTab(tab, want);
@@ -1860,30 +2050,42 @@
                     markHandled();
                     paint();
                     if (routeChanging) {
-                        return Promise.resolve(
+                        pendingHistoryRender = Promise.resolve(
                             invokeRender({
                                 workspaceSwitch: false,
                                 fromPopstate: true,
                                 tabId: tab.id,
                                 hash: tab.route,
                             })
-                        ).then(function () {
-                            return true;
-                        });
+                        );
+                        return true;
                     }
                     return true;
-                });
+                };
+                const after = function (ok) {
+                    if (!ok) {
+                        restoreMainUrl();
+                        return false;
+                    }
+                    if (!pendingHistoryRender) return true;
+                    return pendingHistoryRender.then(function () {
+                        return true;
+                    });
+                };
+                if (!routeChanging) return Promise.resolve(commitHistory()).then(after);
+                return runLeave(tab.id, want.route, 'history', commitHistory).then(after);
             }
 
             const parkedWant = historyWant(target, raw, locHash);
-            return awaitLeave(state.mainTabId, parkedWant.route).then(function (ok) {
-                if (!ok) {
+            const leavingMainId = state.mainTabId;
+            let pendingHistoryRender = null;
+            return runLeave(leavingMainId, parkedWant.route, 'history', function () {
+                if (!getTab(target.id)) {
                     restoreMainUrl();
                     return false;
                 }
-                if (!getTab(target.id)) return false;
-                const prevId = state.mainTabId;
-                if (prevId && prevId !== target.id) warmParkContext(prevId);
+                if (!outgoingMainStill(leavingMainId)) return false;
+                if (leavingMainId !== target.id) warmParkContext(leavingMainId);
                 /* A visually parked tab may still occupy a leaf in the preserved logical tree
                  * (Hide split / narrow fallback). Promotion uses the same eligibility rule as
                  * Make Main / startup: demote into that leaf only when the old Main is
@@ -1905,14 +2107,22 @@
                     refreshFocusedPanel();
                     return true;
                 }
-                return Promise.resolve(
+                pendingHistoryRender = Promise.resolve(
                     invokeRender({
                         workspaceSwitch: false,
                         fromPopstate: true,
                         tabId: target.id,
                         hash: target.route,
                     })
-                ).then(function () {
+                );
+                return true;
+            }).then(function (ok) {
+                if (!ok) {
+                    restoreMainUrl();
+                    return false;
+                }
+                if (!pendingHistoryRender) return true;
+                return pendingHistoryRender.then(function () {
                     return true;
                 });
             });
@@ -2684,21 +2894,6 @@
                               ? root.prksGetMainTabContext()
                               : null;
                     return root.prksIsRouteGenCurrent(routeGen, ctx);
-                }
-                return true;
-            },
-            canLeave: function (tabId, nextHash) {
-                if (typeof root.prksCanLeaveTabContext === 'function') {
-                    const ctx =
-                        typeof root.prksGetTabContext === 'function' && tabId
-                            ? root.prksGetTabContext(tabId)
-                            : typeof root.prksGetMainTabContext === 'function'
-                              ? root.prksGetMainTabContext()
-                              : null;
-                    return root.prksCanLeaveTabContext(ctx, nextHash);
-                }
-                if (typeof root.prksCanLeaveCurrentRoute === 'function') {
-                    return root.prksCanLeaveCurrentRoute(nextHash);
                 }
                 return true;
             },

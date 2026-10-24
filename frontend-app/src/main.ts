@@ -21,8 +21,10 @@ import { registerWorkPanelReadBridge } from './features/work/panel-session'
 import { registerWorkMetadataEditorBridge } from './features/work/metadata-session'
 import { registerWorkPrivateNotesBridge } from './features/work/private-note-session'
 import { registerWorkResearchNotesBridge } from './features/work/research-note-session'
-import { registerWorkMainSurfaceBridge } from './features/work/main-surface'
-import { registerWorkPdfAdapterBridge } from './features/work/pdf-adapter'
+import { registerResearchNotesRecoveryBridge } from './features/work/research-notes-recovery'
+import { registerPrivateNotesRecoveryBridge } from './features/work/private-notes-recovery'
+import { registerFolderPrivateNotesRecoveryBridge } from './features/folder-detail/private-notes-recovery'
+import { registerWorkDetailBridge } from './features/work/session'
 import { registerWorkPdfAnnotationPopupBridge } from './features/work/pdf-annotation-popup'
 import { registerWorkPdfAnnotationDrawerBridge } from './features/work/pdf-annotation-drawer'
 
@@ -53,7 +55,9 @@ registerWorkPanelReadBridge(window)
 registerWorkMetadataEditorBridge(window)
 registerWorkPrivateNotesBridge(window)
 registerWorkResearchNotesBridge(window)
-registerWorkMainSurfaceBridge(window)
-registerWorkPdfAdapterBridge(window)
+registerResearchNotesRecoveryBridge(window)
+registerPrivateNotesRecoveryBridge(window)
+registerFolderPrivateNotesRecoveryBridge(window)
+registerWorkDetailBridge(window)
 registerWorkPdfAnnotationPopupBridge(window)
 registerWorkPdfAnnotationDrawerBridge(window)

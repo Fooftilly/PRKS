@@ -10,7 +10,6 @@ import uuid
 
 from backend import pdf_annotation_sync, pdf_materialization
 from backend.db_manager import PRKSDatabase
-from backend.db_migrations import LATEST_SCHEMA_VERSION
 from backend.storage.config import StorageConfig
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -42,7 +41,6 @@ class PdfMaterializationTests(unittest.TestCase):
         self.work_id = self.db.add_work(title="Mat Work")
 
     def test_schema_has_materialization_columns(self) -> None:
-        self.assertEqual(LATEST_SCHEMA_VERSION, 17)
         row = self.db.execute_query(
             """
             SELECT canonical_annotation_set_revision, materialized_pdf_annotation_revision
@@ -113,6 +111,45 @@ class PdfMaterializationTests(unittest.TestCase):
         self.assertEqual(rev, claim)
         mat2 = self.db.get_work_pdf_materialization(self.work_id)
         self.assertFalse(mat2["stale"])
+
+    def test_noninteger_materialization_claims_do_not_acknowledge_generation(self) -> None:
+        self.db.sync_work_annotations(self.work_id, [_highlight("a", "A")])
+        before = self.db.get_work_pdf_materialization(self.work_id)
+        self.assertEqual(before["canonical_annotation_set_revision"], 1)
+        self.assertTrue(before["stale"])
+
+        # bool is a subclass of int, and int() silently truncates floats.
+        # None and numeric strings must not be treated as acknowledgements.
+        invalid_claims = (True, False, 1.0, 1.9, "1", None, [], {})
+        for claim in invalid_claims:
+            with self.subTest(claim=repr(claim)):
+                with self.assertRaisesRegex(
+                    ValueError, pdf_materialization.STALE_CODE
+                ):
+                    self.db.mark_work_pdf_materialized_if_claim_current(
+                        self.work_id, claim
+                    )
+                after = self.db.get_work_pdf_materialization(self.work_id)
+                self.assertEqual(after, before)
+
+    def test_noninteger_explicit_materialization_revisions_do_not_update_state(self) -> None:
+        self.db.sync_work_annotations(self.work_id, [_highlight("a", "A")])
+        before = self.db.get_work_pdf_materialization(self.work_id)
+        self.assertEqual(before["canonical_annotation_set_revision"], 1)
+
+        # The internal mark path has the same type boundary as PDF claims.
+        # Omitted None retains its separate "current canonical" meaning.
+        for revision in (True, False, 1.0, 1.9, "1", [], {}):
+            with self.subTest(revision=repr(revision)):
+                with self.assertRaisesRegex(
+                    ValueError, pdf_materialization.STALE_CODE
+                ):
+                    self.db.mark_work_pdf_materialized(
+                        self.work_id, at_revision=revision
+                    )
+                self.assertEqual(
+                    self.db.get_work_pdf_materialization(self.work_id), before
+                )
 
     def test_identical_set_does_not_bump_canonical(self) -> None:
         items = [_highlight("a", "A")]

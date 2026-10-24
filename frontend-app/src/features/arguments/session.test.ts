@@ -1,9 +1,8 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readRouteSurface } from '../../route-surface/lifecycle'
+import { dismissRouteSurface, readRouteSurface } from '../../route-surface/lifecycle'
 import {
   ARGUMENTS_RETAIN_SURFACE_KEY,
-  dismissArguments,
   presentArgumentDetail,
   presentArgumentsIndex,
   registerArgumentsBridge,
@@ -15,13 +14,10 @@ afterEach(() => {
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
   delete window.prksVuePresentRoute
-  delete window.prksVueDismissArguments
+  delete window.prksVueDismissRoute
   delete window.prksPageHeaderIconHtml
   delete window.prksIcon
-  delete window.prksPaintScopeHost
   delete window.prksRefreshIcons
-  delete window.prksResearchSectionHeadHtml
-  delete window.prksResearchIndexRowHtml
   delete window.prksResearchMarkdownHtml
   delete window.prksEscapeHtml
   delete window.prksPrepareArgumentEdit
@@ -56,7 +52,6 @@ function owner(tabId = 'tab') {
 function paintHelpers(): void {
   window.prksPageHeaderIconHtml = () => ''
   window.prksIcon = () => '<svg data-icon="messages-square"></svg>'
-  window.prksPaintScopeHost = () => {}
   window.prksRefreshIcons = () => {}
   window.prksEscapeHtml = (value) =>
     String(value ?? '')
@@ -64,13 +59,6 @@ function paintHelpers(): void {
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
   window.prksResearchMarkdownHtml = (text) => `<p>${text || ''}</p>`
-  window.prksResearchSectionHeadHtml = (title, opts) => {
-    const count =
-      opts?.count != null ? `<span class="research-entity__section-count">${opts.count}</span>` : ''
-    return `<div class="research-entity__section-head"><h3 id="${opts?.headingId || ''}">${title}</h3>${count}</div>`
-  }
-  window.prksResearchIndexRowHtml = (opts) =>
-    `<a class="prks-list-row prks-research-row" href="${opts.href}"><span class="prks-research-row__title">${opts.title}</span></a>`
 }
 
 function coordinationOwner() {
@@ -364,7 +352,7 @@ describe('Arguments route bridge', () => {
     pane[ARGUMENTS_RETAIN_SURFACE_KEY] = false
     expect(cleanups.size).toBe(1)
 
-    dismissArguments(pane)
+    dismissRouteSurface(pane)
     expect(routeHost.querySelector('[data-prks-arguments-index-view]')).toBeNull()
     contentDiv.innerHTML = '<p><button type="button" id="prks-route-retry">Retry</button></p>'
     expect(contentDiv.querySelector('[data-prks-arguments-index-view]')).toBeNull()
@@ -678,7 +666,7 @@ describe('Arguments route bridge', () => {
     const other = owner('other')
     const otherHost = host()
     presentArgumentsIndex({ owner: other, host: otherHost, items: [rows[1]], generation: 1 })
-    dismissArguments(pane)
+    dismissRouteSurface(pane)
     expect(el.querySelector('[data-prks-arguments-index-view]')).toBeNull()
     expect(otherHost.textContent).toContain('Unrelated Argument')
   })

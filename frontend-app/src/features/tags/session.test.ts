@@ -1,8 +1,7 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readRouteSurface } from '../../route-surface/lifecycle'
+import { dismissRouteSurface, readRouteSurface } from '../../route-surface/lifecycle'
 import {
-  dismissTags,
   presentTags,
   registerTagsBridge,
   reportTagsRefreshFailure,
@@ -14,7 +13,7 @@ afterEach(() => {
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
   delete window.prksVuePresentRoute
-  delete window.prksVueDismissTags
+  delete window.prksVueDismissRoute
   delete window.prksVueCloseTagsAliasModal
   delete window.prksVueCloseTagsMergeModal
   delete window.prksIcon
@@ -117,7 +116,7 @@ describe('Tags route bridge', () => {
     const el = host()
     presentTags({ owner: pane, host: el, tags: [], generation: 2 })
     expect(el.querySelector('.tags-page__empty')?.textContent).toContain('No tags in use yet')
-    dismissTags(pane)
+    dismissRouteSurface(pane)
     presentTags({
       owner: pane,
       host: el,
@@ -156,7 +155,7 @@ describe('Tags route bridge', () => {
     }
     registerTagsBridge(window)
     expect(window.prksVuePresentRoute).toBeTypeOf('function')
-    expect(window.prksVueDismissTags).toBeTypeOf('function')
+    expect(window.prksVueDismissRoute).toBeTypeOf('function')
     expect((el as HTMLElement & { __prksVueRouteRequest?: unknown }).__prksVueRouteRequest).toBeUndefined()
     expect(el.querySelector('[data-tag-alias-edit="t1"]')).not.toBeNull()
     expect(decoy.querySelector('[data-prks-tags-page]')).toBeNull()
@@ -186,7 +185,7 @@ describe('Tags route bridge', () => {
       resume: { aliasTagId: 't2' },
     })
     expect(secondaryHost.querySelector('#tags-page-alias-canonical')?.textContent).toBe('Beta')
-    window.prksVueDismissTags?.(main)
+    window.prksVueDismissRoute?.(main)
     expect(mainHost.querySelector('[data-prks-tags-page]')).toBeNull()
     expect(secondaryHost.querySelector('[data-tag-merge="t2"]')).not.toBeNull()
     expect(secondaryHost.querySelector('#tags-page-alias-canonical')?.textContent).toBe('Beta')

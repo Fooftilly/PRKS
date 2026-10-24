@@ -1,0 +1,404 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "PRKS API \u2014 Publishers slice",
+    "version": "0.1.0",
+    "description": "Vertical-slice OpenAPI for the online-only Publishers family (#45 / #232). Schemas are generated from the same Pydantic boundary as the rest of backend/api_contract."
+  },
+  "paths": {
+    "/api/publishers": {
+      "get": {
+        "operationId": "listPublishersInUse",
+        "summary": "List canonical Publishers with aliases and Work counts",
+        "tags": [
+          "publishers"
+        ],
+        "parameters": [
+          {
+            "name": "used",
+            "in": "query",
+            "required": false,
+            "description": "`1`, `true`, or `yes` returns the catalog. Any other value returns an empty list.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Publishers ordered by name, case-insensitively.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublisherInUseList"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createPublisher",
+        "summary": "Create a canonical Publisher, or return the existing one",
+        "tags": [
+          "publishers"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublisherCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Created or existing Publisher.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublisherCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Schema or domain refusal (empty name).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body larger than the JSON body limit (request_too_large).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Missing or unsupported Content-Type (unsupported_media_type).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/publishers/{publisher_id}": {
+      "parameters": [
+        {
+          "name": "publisher_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "delete": {
+        "operationId": "deletePublisher",
+        "summary": "Delete a Publisher group and its aliases",
+        "description": "Works keep their publisher text. Deleting a missing id is not an error.",
+        "tags": [
+          "publishers"
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublisherDeleted"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/publishers/{publisher_id}/aliases": {
+      "parameters": [
+        {
+          "name": "publisher_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "addPublisherAlias",
+        "summary": "Add an alternate spelling to a Publisher",
+        "tags": [
+          "publishers"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublisherAliasRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Added, or already an alias of this Publisher.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublisherAliasAdded"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Schema or domain refusal (empty, unknown Publisher, canonical name, or used elsewhere).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body larger than the JSON body limit (request_too_large).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Missing or unsupported Content-Type (unsupported_media_type).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "removePublisherAlias",
+        "summary": "Remove an alternate spelling from a Publisher",
+        "tags": [
+          "publishers"
+        ],
+        "parameters": [
+          {
+            "name": "alias",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Removed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublisherDeleted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing alias.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This Publisher has no such alias.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ApiErrorEnvelope": {
+        "additionalProperties": false,
+        "description": "Standard JSON error body at the HTTP adapter boundary.",
+        "properties": {
+          "error": {
+            "description": "Human-readable error message.",
+            "minLength": 1,
+            "title": "Error",
+            "type": "string"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Stable machine-readable code when the domain provides one.",
+            "title": "Code"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "PublisherInUse": {
+        "additionalProperties": false,
+        "description": "One row of GET /api/publishers?used=1.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Aliases",
+            "type": "array"
+          },
+          "work_count": {
+            "minimum": 0,
+            "title": "Work Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "aliases",
+          "work_count"
+        ],
+        "type": "object"
+      },
+      "PublisherCreateRequest": {
+        "description": "POST /api/publishers. Emptiness is a domain refusal, not a schema one.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "PublisherCreated": {
+        "additionalProperties": false,
+        "description": "POST /api/publishers body. ``existed`` is true when the name was already canonical.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "existed": {
+            "title": "Existed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "existed"
+        ],
+        "type": "object"
+      },
+      "PublisherAliasRequest": {
+        "description": "POST /api/publishers/{id}/aliases.",
+        "properties": {
+          "alias": {
+            "title": "Alias",
+            "type": "string"
+          }
+        },
+        "required": [
+          "alias"
+        ],
+        "type": "object"
+      },
+      "PublisherAliasAdded": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "pattern": "^added$",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "PublisherDeleted": {
+        "additionalProperties": false,
+        "description": "DELETE /api/publishers/{id} and DELETE /api/publishers/{id}/aliases body.",
+        "properties": {
+          "status": {
+            "pattern": "^deleted$",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "PublisherInUseList": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/PublisherInUse"
+        }
+      }
+    }
+  }
+}

@@ -50,6 +50,15 @@ function makeFakeTimers() {
                 e[1].fn();
             });
         },
+        flushDelay: function (delay) {
+            const entries = Array.from(pending.entries()).filter(function (e) {
+                return e[1].delay === delay;
+            });
+            entries.forEach(function (e) {
+                pending.delete(e[0]);
+                e[1].fn();
+            });
+        },
         pendingCount: function () {
             return pending.size;
         },
@@ -553,6 +562,363 @@ async function run() {
         assertEq('pending probe cleared by noteRequestSuccess', timers.pendingCount(), 0);
     }
 
+    /* ---- stale in-flight probe cannot undo newer confirmed API reachability (#818) ---- */
+    {
+        function makeDeferredProbeFixture() {
+            const timers = makeFakeTimers();
+            const deferred = [];
+            const runtime = mod.createPrksOfflineRuntime({
+                prksRequest: function () {
+                    return new Promise(function (resolve, reject) {
+                        deferred.push({ resolve: resolve, reject: reject });
+                    });
+                },
+                store: makeFakeStore(),
+                setTimeout: timers.setTimeout,
+                clearTimeout: timers.clearTimeout,
+                window: null, caches: null, navigator: null,
+            });
+            runtime.noteRequestFailure();
+            timers.flushAll();
+            assertEq('probe race fixture starts reconnecting', runtime.getState(), 'reconnecting');
+            assertEq('probe race fixture dispatches one reachability request', deferred.length, 1);
+            return { timers: timers, deferred: deferred, runtime: runtime };
+        }
+        // Rejection of a probe started BEFORE a successful API request is
+        // stale evidence. It cannot downgrade online or schedule more probes.
+        {
+            const c = makeDeferredProbeFixture();
+            c.runtime.noteRequestSuccess();
+            assertEq('newer foreground response restores online', c.runtime.getState(), 'online');
+            c.deferred[0].reject(new TypeError('old reachability probe failed'));
+            await Promise.resolve();
+            await Promise.resolve();
+            await Promise.resolve();
+            assertEq('stale failed probe leaves newer online state intact', c.runtime.getState(), 'online');
+            assertEq('stale failed probe schedules no retry', c.timers.pendingCount(), 0);
+            assertEq('sync/mutation gate stays open after newer success', c.runtime.isMutationBlocked(), false);
+            // Clearing stale probeInFlight is essential: a subsequent real
+            // browser connectivity hint must be able to start a new probe.
+            c.runtime._runProbe();
+            assertEq('new hint may start a fresh probe', c.deferred.length, 2);
+            assertEq('fresh hint probes rather than trusting navigator', c.runtime.getState(), 'reconnecting');
+            c.deferred[1].resolve(okJsonResponse({}));
+            await Promise.resolve();
+            await Promise.resolve();
+            assertEq('fresh successful probe correctly restores online', c.runtime.getState(), 'online');
+        }
+        // A falsy/empty result is transport-unreachable evidence too; it is
+        // equally stale once a newer response confirmed server reachability.
+        {
+            const c = makeDeferredProbeFixture();
+            c.runtime.noteRequestSuccess();
+            c.deferred[0].resolve(null);
+            await Promise.resolve();
+            await Promise.resolve();
+            assertEq('stale falsy probe cannot override newer success', c.runtime.getState(), 'online');
+            assertEq('stale falsy probe schedules no backoff', c.timers.pendingCount(), 0);
+        }
+        // A genuinely LATER foreground failure must still put PRKS offline.
+        // The obsolete older probe must not reschedule or extend backoff.
+        {
+            const c = makeDeferredProbeFixture();
+            c.runtime.noteRequestSuccess();
+            c.runtime.noteRequestFailure();
+            assertEq('newer transport failure still marks offline', c.runtime.getState(), 'offline');
+            assertEq('newer failure owns first retry alongside older probe watchdog',
+                c.timers.pendingDelays(), [15000, 3000]);
+            c.deferred[0].reject(new TypeError('obsolete probe rejection'));
+            await Promise.resolve();
+            await Promise.resolve();
+            await Promise.resolve();
+            assertEq('obsolete probe cannot change newer offline state', c.runtime.getState(), 'offline');
+            assertEq('obsolete probe cannot extend newer retry timer', c.timers.pendingDelays(), [3000]);
+        }
+        // Regression: the newer failure's retry timer can expire while the
+        // old probe is still in flight. That timer must not be lost forever.
+        for (const settle of ['reject', 'falsy', 'response']) {
+            const c = makeDeferredProbeFixture();
+            c.runtime.noteRequestSuccess();
+            c.runtime.noteRequestFailure();
+            assertEq('newer failure schedules retry before old probe ' + settle,
+                c.timers.pendingDelays(), [15000, 3000]);
+            c.timers.flushDelay(3000); // only retry; not the older probe deadline
+            assertEq('older pending probe prevents overlap for ' + settle, c.deferred.length, 1);
+            assertEq('expired retry leaves only old probe watchdog ' + settle,
+                c.timers.pendingDelays(), [15000]);
+            if (settle === 'reject') c.deferred[0].reject(new TypeError('old probe failed'));
+            else c.deferred[0].resolve(settle === 'falsy' ? null : okJsonResponse({}));
+            await Promise.resolve();
+            await Promise.resolve();
+            await Promise.resolve();
+            assertEq('stale ' + settle + ' settles without overriding newer offline state',
+                c.runtime.getState(), 'offline');
+            assertEq('stale ' + settle + ' restores one recovery timer', c.timers.pendingDelays(), [3000]);
+            c.timers.flushAll();
+            assertEq('restored backoff actually starts replacement probe', c.deferred.length, 2);
+            c.deferred[1].resolve(okJsonResponse({}));
+            await Promise.resolve();
+            await Promise.resolve();
+            assertEq('replacement probe can restore connectivity', c.runtime.getState(), 'online');
+            assertEq('successful replacement leaves no retry timer', c.timers.pendingCount(), 0);
+        }
+        // A real probe failure WITHOUT newer success must still mark offline.
+        {
+            const c = makeDeferredProbeFixture();
+            c.deferred[0].reject(new TypeError('server remains unavailable'));
+            await Promise.resolve();
+            await Promise.resolve();
+            await Promise.resolve();
+            assertEq('uncontested probe failure marks offline', c.runtime.getState(), 'offline');
+            assertEq('uncontested probe failure backs off', c.timers.pendingDelays(), [6000]);
+        }
+    }
+
+    /* ---- live request coordinator: probe transport cannot signal offline
+     * before the runtime's generation fence settles the old request. ---- */
+    {
+        const requests = require(path.join(rootDir, 'frontend/js/request-coordinator.js'));
+        async function integratedProbeCase(laterForegroundFailure) {
+            const timers = makeFakeTimers();
+            let rejectOldProbe = null;
+            let probeAttempts = 0;
+            let failForeground = false;
+            const coordinator = requests.createPrksRequestCoordinator({
+                origin: 'http://127.0.0.1',
+                random: function () { return 0.5; },
+                sleep: async function () {},
+                fetchImpl: function (url) {
+                    if (url === '/api/settings') {
+                        probeAttempts += 1;
+                        if (probeAttempts === 1) {
+                            return new Promise(function (_resolve, reject) {
+                                rejectOldProbe = reject;
+                            });
+                        }
+                        return Promise.reject(new TypeError('old probe retry failed'));
+                    }
+                    if (url === '/api/works') {
+                        if (failForeground) return Promise.reject(new TypeError('foreground failed'));
+                        return Promise.resolve(new Response('[]', {
+                            status: 200, headers: { 'Content-Type': 'application/json' },
+                        }));
+                    }
+                    throw new Error('unexpected request ' + url);
+                },
+            });
+            const runtime = mod.createPrksOfflineRuntime({
+                prksRequest: function (url, init, policy) {
+                    return coordinator.prksRequest(url, init, policy);
+                },
+                store: makeFakeStore(),
+                setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout,
+                window: null, caches: null, navigator: null,
+            });
+            const originalSuccess = global.prksOfflineNoteRequestSuccess;
+            const originalFailure = global.prksOfflineNoteRequestFailure;
+            global.prksOfflineNoteRequestSuccess = runtime.noteRequestSuccess;
+            global.prksOfflineNoteRequestFailure = runtime.noteRequestFailure;
+            try {
+                runtime.noteRequestFailure();
+                timers.flushAll();
+                for (let i = 0; i < 12 && !rejectOldProbe; i++) {
+                    await new Promise(function (resolve) { setImmediate(resolve); });
+                }
+                if (!rejectOldProbe) throw Error('coordinator did not start deferred reachability GET');
+                assertEq('real coordinator starts runtime reachability probe', runtime.getState(), 'reconnecting');
+                await coordinator.prksRequest('/api/works');
+                assertEq('real foreground response marks online during old probe', runtime.getState(), 'online');
+                if (laterForegroundFailure) {
+                    failForeground = true;
+                    let err = null;
+                    try { await coordinator.prksRequest('/api/works'); } catch (e) { err = e; }
+                    assert('real later failed GET is an ordinary transport failure', err instanceof TypeError);
+                    assertEq('real later failed foreground request marks offline', runtime.getState(), 'offline');
+                    assertEq('real newer failure owns a probe timer', timers.pendingDelays(), [15000, 3000]);
+                    timers.flushDelay(3000); // older probe remains in flight
+                    assertEq('real timer can expire while old probe remains pending',
+                        timers.pendingDelays(), [15000]);
+                }
+                rejectOldProbe(new TypeError('stale reachability transport rejection'));
+                // The isolated health probe is one-shot; ordinary GETs keep
+                // coordinator retry policy. The probe never emits global
+                // reachability reports before the runtime's generation fence.
+                for (let i = 0; i < 12; i++) {
+                    await new Promise(function (resolve) { setImmediate(resolve); });
+                }
+                assertEq('real coordinator probe has one transport attempt', probeAttempts, 1);
+                assertEq('old coordinator failure cannot override newer reachability',
+                    runtime.getState(), laterForegroundFailure ? 'offline' : 'online');
+                assertEq('real probe settlement keeps required recovery timer state',
+                    timers.pendingDelays(), laterForegroundFailure ? [3000] : []);
+                assertEq('real runtime mutation gate reflects freshest foreground evidence',
+                    runtime.isMutationBlocked(), laterForegroundFailure);
+            } finally {
+                if (originalSuccess === undefined) delete global.prksOfflineNoteRequestSuccess;
+                else global.prksOfflineNoteRequestSuccess = originalSuccess;
+                if (originalFailure === undefined) delete global.prksOfflineNoteRequestFailure;
+                else global.prksOfflineNoteRequestFailure = originalFailure;
+            }
+        }
+        await integratedProbeCase(false);
+        await integratedProbeCase(true);
+    }
+
+    /* A real retryable 503 response proves reachability immediately. A
+     * second coordinator attempt that hangs must not cause a false timeout. */
+    {
+        const requests = require(path.join(rootDir, 'frontend/js/request-coordinator.js'));
+        const timers = makeFakeTimers();
+        let attempts = 0;
+        const coordinator = requests.createPrksRequestCoordinator({
+            origin: 'http://127.0.0.1',
+            fetchImpl: function (url) {
+                assertEq('HTTP probe uses settings path', url, '/api/settings');
+                attempts += 1;
+                if (attempts === 1) {
+                    return Promise.resolve(new Response('{}', {
+                        status: 503, headers: { 'Content-Type': 'application/json' },
+                    }));
+                }
+                return new Promise(function () {}); // should never be reached
+            },
+        });
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function (url, init, policy) {
+                assertEq('one-shot health probe has retries disabled', policy.retry, false);
+                return coordinator.prksRequest(url, init, policy);
+            },
+            store: makeFakeStore(),
+            setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        runtime.noteRequestFailure();
+        timers.flushDelay(3000);
+        for (let i = 0; i < 12 && runtime.getState() !== 'online'; i++) {
+            await new Promise(function (resolve) { setImmediate(resolve); });
+        }
+        assertEq('HTTP 503 proves reachability before any retry', runtime.getState(), 'online');
+        assertEq('retryable HTTP status never starts another health fetch', attempts, 1);
+        assertEq('successful HTTP 503 health result clears watchdog', timers.pendingCount(), 0);
+    }
+
+    /* ---- #819: a permanently stalled probe cannot monopolize recovery ---- */
+    {
+        const timers = makeFakeTimers();
+        let attempts = 0;
+        let firstResolve = null;
+        let firstSignal = null;
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function (_url, init, policy) {
+                attempts += 1;
+                assertEq('probe uses the isolated background policy', policy.reportReachability, false);
+                if (attempts === 1) {
+                    firstSignal = init.signal;
+                    // Deliberately ignore AbortSignal to prove even a
+                    // non-cooperative promise cannot publish a late answer.
+                    return new Promise(function (resolve) {
+                        firstResolve = resolve;
+                    });
+                }
+                return Promise.resolve(okJsonResponse({}));
+            },
+            store: makeFakeStore(),
+            setTimeout: timers.setTimeout,
+            clearTimeout: timers.clearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        runtime.noteRequestFailure();
+        timers.flushDelay(3000);
+        assertEq('stalled probe enters reconnecting', runtime.getState(), 'reconnecting');
+        assertEq('stalled probe sets a bounded deadline', timers.pendingDelays(), [15000]);
+        runtime._runProbe();
+        assertEq('hints cannot start a duplicate probe before deadline', attempts, 1);
+        timers.flushDelay(15000);
+        assertEq('deadline moves stalled probe offline', runtime.getState(), 'offline');
+        assert('deadline aborts first stalled probe transport', firstSignal && firstSignal.aborted);
+        assertEq('deadline schedules normal growing retry backoff', timers.pendingDelays(), [6000]);
+        timers.flushDelay(6000);
+        assertEq('deadline released in-flight guard so recovery can run', attempts, 2);
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq('replacement successful response restores online', runtime.getState(), 'online');
+        assertEq('replacement success cancels all timers', timers.pendingCount(), 0);
+        firstResolve(null);
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq('late null completion does not undo recovery', runtime.getState(), 'online');
+        assertEq('late completion does not add retry timer', timers.pendingCount(), 0);
+    }
+    {
+        const timers = makeFakeTimers();
+        let lateResolve = null;
+        let started = 0;
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                started += 1;
+                if (started === 1) {
+                    return new Promise(function (resolve) { lateResolve = resolve; });
+                }
+                return Promise.resolve(okJsonResponse({}));
+            },
+            store: makeFakeStore(),
+            setTimeout: timers.setTimeout,
+            clearTimeout: timers.clearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        runtime.noteRequestFailure();
+        timers.flushDelay(3000);
+        runtime.noteRequestSuccess();
+        assertEq('new foreground success restores online during stalled probe', runtime.getState(), 'online');
+        timers.flushDelay(15000);
+        assertEq('old timed-out probe cannot override newer success', runtime.getState(), 'online');
+        assertEq('superseded timeout schedules no retry', timers.pendingCount(), 0);
+        // The expired probe must release probeInFlight, even though a newer
+        // success superseded its deadline: a genuinely newer failure still
+        // needs to launch another reachability check.
+        runtime.noteRequestFailure();
+        assertEq('later genuine failure still schedules recovery after superseded timeout',
+            timers.pendingDelays(), [3000]);
+        timers.flushDelay(3000);
+        assertEq('new probe starts after superseded watchdog releases guard', started, 2);
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq('replacement probe restores online', runtime.getState(), 'online');
+        lateResolve(null);
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq('late superseded probe result still cannot mark offline', runtime.getState(), 'online');
+        assertEq('late result cannot add another timer', timers.pendingCount(), 0);
+    }
+    {
+        const timers = makeFakeTimers();
+        const deferred = [];
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                return new Promise(function (resolve, reject) { deferred.push({ resolve, reject }); });
+            },
+            store: makeFakeStore(),
+            setTimeout: timers.setTimeout,
+            clearTimeout: timers.clearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        runtime.noteRequestFailure();
+        timers.flushDelay(3000);
+        timers.flushDelay(15000);
+        timers.flushDelay(6000);
+        assertEq('second deferred probe started after timed-out first', deferred.length, 2);
+        deferred[0].reject(new TypeError('late timeout rejection'));
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq('late rejection cannot interrupt replacement reconnect', runtime.getState(), 'reconnecting');
+        assertEq('replacement owns exactly one watchdog', timers.pendingDelays(), [15000]);
+        deferred[1].resolve(domainErrorResponse(503));
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq('HTTP 503 response still proves server reachable', runtime.getState(), 'online');
+        assertEq('HTTP-success replacement clears deadline', timers.pendingCount(), 0);
+    }
+
     /* ---- runProbe reachability: an HTTP response of ANY status (even 4xx/5xx) means the server is reachable ---- */
     {
         const timers = makeFakeTimers();
@@ -711,6 +1077,199 @@ async function run() {
         assertEq('offline fallback returns cache provenance', result.source, 'cache');
         assertEq('offline fallback returns the previously cached value', result.value, { id: 'W-2', title: 'Cached Work' });
         assertEq('runtime transitioned to offline after the network failure', runtime.getState(), mod.PRKS_OFFLINE_STATE_OFFLINE);
+    }
+
+    /* ---- opt-in confirmed-offline reads bypass repeated failed requests only for eligible cache ---- */
+    {
+        const store = makeFakeStore();
+        await store.putEntity('argument-state', 'A-1', { argument_id: 'A-1', revision: 7 }, '');
+        let requests = 0;
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                requests += 1;
+                return Promise.reject(new Error('offline'));
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        runtime.noteRequestFailure();
+        const fast = await runtime.readThroughEntity(
+            'argument-state', 'A-1', '/api/arguments/A-1/sync-state',
+            { preferCacheWhenOffline: true });
+        assertEq('opt-in offline read retains cache provenance', fast.source, 'cache');
+        assertEq('opt-in offline read returns stored revision', fast.value.revision, 7);
+        assertEq('opt-in offline read skips a known-failing network attempt', requests, 0);
+        const regular = await runtime.readThroughEntity(
+            'argument-state', 'A-1', '/api/arguments/A-1/sync-state');
+        assertEq('default read stays server-first even while offline', requests, 1);
+        assertEq('default offline failure retains cache fallback', regular.source, 'cache');
+
+        // Opt-in must still attempt the server if the cache entry is absent.
+        const missing = await runtime.readThroughEntity(
+            'argument-state', 'A-missing', '/api/arguments/A-missing/sync-state',
+            { preferCacheWhenOffline: true });
+        assertEq('missing base is unavailable, never synthesized', missing.source, 'unavailable');
+        assertEq('missing cache uses existing read-through behavior', requests, 2);
+    }
+
+    /* ---- opt-in never bypasses server if online or a cache generation is invalid ---- */
+    {
+        const store = makeFakeStore({
+            deleteEntity: async function () { return false; }, // invalid rows remain on disk
+        });
+        await store.putEntity('argument', 'A-stale', { id: 'A-stale', name: 'old' }, '');
+        let requests = 0;
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                requests += 1;
+                return Promise.reject(new Error('offline'));
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        runtime.markEntityChanged('argument', 'A-stale');
+        runtime.noteRequestFailure();
+        const invalidated = await runtime.readThroughEntity(
+            'argument', 'A-stale', '/api/arguments/A-stale',
+            { preferCacheWhenOffline: true });
+        assertEq('invalidated row cannot be used by cache-first path', invalidated.source, 'unavailable');
+        assertEq('invalidated row follows normal read-through attempt', requests, 1);
+    }
+    {
+        const store = makeFakeStore();
+        await store.putEntity('argument', 'A-blocked', { id: 'A-blocked', name: 'old' }, '');
+        let requests = 0;
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                requests += 1;
+                return Promise.reject(new Error('offline'));
+            },
+            store: Object.assign(store, {
+                deleteEntitiesByKind: async function () { return false; },
+            }),
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        runtime.noteRequestFailure();
+        await runtime.markDomainChanged('arguments', { entityKinds: ['argument'] });
+        const blocked = await runtime.readThroughEntity(
+            'argument', 'A-blocked', '/api/arguments/A-blocked',
+            { domain: 'arguments', preferCacheWhenOffline: true });
+        assertEq('blocked domain refuses cache-first read', blocked.source, 'unavailable');
+        assertEq('blocked domain still attempts normal request', requests, 1);
+    }
+    {
+        const store = makeFakeStore();
+        await store.putEntity('argument', 'A-online', { id: 'A-online', name: 'old' }, '');
+        let requests = 0;
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                requests += 1;
+                return Promise.resolve(okJsonResponse({ id: 'A-online', name: 'new' }));
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        const fresh = await runtime.readThroughEntity(
+            'argument', 'A-online', '/api/arguments/A-online',
+            { preferCacheWhenOffline: true });
+        assertEq('online opt-in always uses server data', fresh.value.name, 'new');
+        assertEq('online opt-in retains server provenance', fresh.source, 'server');
+        assertEq('online opt-in performs one request', requests, 1);
+    }
+
+    /* ---- a reconnect while IndexedDB is pending rejects stale cache-first result ---- */
+    {
+        let resumeCache;
+        const store = makeFakeStore({
+            getEntity: function () {
+                return new Promise(resolve => { resumeCache = resolve; });
+            },
+        });
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: () => Promise.resolve(okJsonResponse({ id: 'A-race', name: 'live' })),
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        runtime.noteRequestFailure();
+        const read = runtime.readThroughEntity(
+            'argument', 'A-race', '/api/arguments/A-race',
+            { preferCacheWhenOffline: true });
+        runtime.noteRequestSuccess();
+        resumeCache({ value: { id: 'A-race', name: 'stale' }, cachedAt: 1 });
+        const result = await read;
+        assertEq('reconnected read ignores pending stale cache', result.value.name, 'live');
+        assertEq('reconnected read restores server provenance', result.source, 'server');
+    }
+
+    /* ---- a full offline -> online -> offline cycle must invalidate a pending fast path ---- */
+    {
+        let resumeCache;
+        let reads = 0;
+        const store = makeFakeStore({
+            getEntity: function () {
+                reads += 1;
+                if (reads === 1) return new Promise(resolve => { resumeCache = resolve; });
+                return Promise.resolve(null);
+            },
+        });
+        let requests = 0;
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: () => {
+                requests += 1;
+                return Promise.resolve(okJsonResponse({ id: 'A-cycle', name: 'fresh' }));
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        runtime.noteRequestFailure();
+        const pending = runtime.readThroughEntity(
+            'argument', 'A-cycle', '/api/arguments/A-cycle',
+            { preferCacheWhenOffline: true });
+        runtime.noteRequestSuccess();
+        runtime.noteRequestFailure();
+        resumeCache({ value: { id: 'A-cycle', name: 'stale' }, cachedAt: 1 });
+        const result = await pending;
+        assertEq('offline/online/offline cycle discards old pending cache', result.value.name, 'fresh');
+        assertEq('offline/online/offline cycle rechecks the server', requests, 1);
+        assertEq('cycle read keeps truthful server provenance', result.source, 'server');
+    }
+
+    /* ---- coherence invalidation while a fast cache read is pending is fail-closed ---- */
+    {
+        let resumeCache;
+        const store = makeFakeStore({
+            getEntity: function () {
+                return new Promise(resolve => { resumeCache = resolve; });
+            },
+            deleteEntity: async function () { return false; },
+        });
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: () => Promise.reject(new Error('offline')),
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        runtime.noteRequestFailure();
+        const pending = runtime.readThroughEntity(
+            'argument', 'A-invalidate', '/api/arguments/A-invalidate',
+            { preferCacheWhenOffline: true });
+        runtime.markEntityChanged('argument', 'A-invalidate');
+        resumeCache({ value: { id: 'A-invalidate', name: 'stale' }, cachedAt: 1 });
+        const result = await pending;
+        assertEq('invalidation during cache read refuses stale return', result.source, 'unavailable');
     }
 
     /* ---- explicit cache coherence: complete authoritative Work replaces cache; partial success invalidates it ---- */
@@ -2203,6 +2762,345 @@ async function run() {
     const src = require('fs').readFileSync(path.join(rootDir, 'frontend/js/offline-runtime.js'), 'utf8');
     assert('offline-runtime.js does not create its own IndexedDB connection', src.indexOf('indexedDB.open') === -1);
     assert('offline-runtime.js delegates persistence to createPrksOfflineStore', src.indexOf('createPrksOfflineStore') !== -1);
+
+    /* ---- real coordinator + offline runtime: reconnecting Person retry correctness ----
+     * The browser A/B in #776 measured fully-offline latency only. This test
+     * exercises the ACTUAL request coordinator and offline runtime together
+     * with deterministic failed-then-successful transports. No retry contract
+     * or production state machine is patched or replaced. */
+    {
+        const requestModule = require(path.join(rootDir, 'frontend/js/request-coordinator.js'));
+        const personPath = '/api/persons/P-1';
+        const oldPerson = { id: 'P-1', name: 'cached-before-reconnect' };
+        const livePerson = { id: 'P-1', name: 'recovered-server-value' };
+
+        function httpJson(value, status) {
+            return new Response(JSON.stringify(value), {
+                status: status || 200,
+                headers: { 'Content-Type': 'application/json' },
+            });
+        }
+
+        async function fixture(transport, customStore) {
+            const store = customStore || makeFakeStore();
+            await store.putEntity('person', 'P-1', oldPerson, '');
+            const attempts = [];
+            const coordinator = requestModule.createPrksRequestCoordinator({
+                origin: 'http://127.0.0.1',
+                random: function () { return 0.5; },
+                sleep: async function () {},
+                fetchImpl: function (url, opts) {
+                    attempts.push({ url: url, signal: opts.signal });
+                    return transport(attempts.length, url, opts);
+                },
+            });
+            let rejectProbe = null;
+            const runtime = mod.createPrksOfflineRuntime({
+                store: store,
+                // A real reachability probe begins at init(). Its response
+                // is held open by default, but tests can reject it to simulate
+                // an unsuccessful reconnecting -> offline transition.
+                prksRequest: function (url, opts, policy) {
+                    if (url === '/api/settings') {
+                        return new Promise(function (_resolve, reject) { rejectProbe = reject; });
+                    }
+                    return coordinator.prksRequest(url, opts, policy);
+                },
+                setTimeout: noopSetTimeout, clearTimeout: noopClearTimeout,
+                window: null, caches: null, navigator: null,
+            });
+            runtime.noteRequestFailure();
+            runtime.init();
+            assertEq('Person test starts with a real pending probe', runtime.getState(), 'reconnecting');
+            return {
+                store: store, runtime: runtime, coordinator: coordinator,
+                attempts: attempts,
+                failProbe: function () { rejectProbe(new TypeError('probe unreachable')); },
+            };
+        }
+
+        function readPerson(c, options) {
+            return c.runtime.readThroughEntity('person', 'P-1', personPath,
+                Object.assign({
+                    domain: 'people',
+                    preferCacheWhenOffline: true,
+                    validate: function (value) { return !!value && value.id === 'P-1'; },
+                }, options || {}));
+        }
+
+        // A brief transport failure is NOT equivalent to the server being
+        // offline. With retries the live answer supersedes the cached value.
+        {
+            const c = await fixture(function (n) {
+                return n === 1 ? Promise.reject(new TypeError('temporary network error'))
+                    : Promise.resolve(httpJson(livePerson));
+            });
+            const r = await readPerson(c);
+            assertEq('Person default policy recovered live value on second GET', r.value, livePerson);
+            assertEq('Person default policy attributes recovered data to server', r.source, 'server');
+            assertEq('Person default policy made two GET attempts', c.attempts.length, 2);
+            assertEq('Person successful recovery transitions online', c.runtime.getState(), 'online');
+        }
+
+        // The existing no-retry policy is faster when disconnected, but can
+        // show an older cached record after a transient first-attempt failure.
+        {
+            const c = await fixture(function (n) {
+                return n === 1 ? Promise.reject(new TypeError('temporary network error'))
+                    : Promise.resolve(httpJson(livePerson));
+            });
+            const r = await readPerson(c, { requestPolicy: { retry: false } });
+            assertEq('Person single attempt returned cached value after transient error', r.value, oldPerson);
+            assertEq('Person single attempt truthfully labels the cached fallback', r.source, 'cache');
+            assertEq('Person single attempt does not retry', c.attempts.length, 1);
+            assertEq('Person single attempt does not assert server reachability', c.runtime.getState(), 'reconnecting');
+        }
+
+        // A reachable 503 is a domain response, never an offline cache
+        // fallback. The coordinator retries 503 by default; disabling it
+        // leaves the runtime's domain-error path intact (no stale masking).
+        {
+            const transport = function (n) {
+                return Promise.resolve(n === 1 ? httpJson({}, 503) : httpJson(livePerson));
+            };
+            const c = await fixture(transport);
+            const r = await readPerson(c);
+            assertEq('Person default retry recovers from a transient 503', r.source, 'server');
+            assertEq('Person default retry recovered fresh 503-followup value', r.value, livePerson);
+            assertEq('Person default retry performs second GET after 503', c.attempts.length, 2);
+        }
+        {
+            const c = await fixture(function (n) {
+                return Promise.resolve(n === 1 ? httpJson({}, 503) : httpJson(livePerson));
+            });
+            let error = null;
+            try {
+                await readPerson(c, { requestPolicy: { retry: false } });
+            } catch (err) { error = err; }
+            assert('Person single-attempt 503 fails as domain error, not cache fallback',
+                !!error && error.isPrksDomainError && error.status === 503);
+            assertEq('Person single-attempt 503 sends one GET', c.attempts.length, 1);
+            assertEq('Person 503 does not discard cached entity', (await c.store.getEntity('person','P-1')).value, oldPerson);
+        }
+
+        // A mutation/domain sweep that fails to delete a stale cached row
+        // MUST keep People blocked. A pending no-retry transport failure
+        // cannot surface that row as a seemingly valid offline fallback.
+        {
+            let rejectPending = null;
+            const stuckStore = makeFakeStore({
+                deleteEntitiesByKind: async function () { return false; },
+            });
+            const c = await fixture(function () {
+                return new Promise(function (_resolve, reject) { rejectPending = reject; });
+            }, stuckStore);
+            const pending = readPerson(c, { requestPolicy: { retry: false } });
+            for (let i = 0; i < 12 && !rejectPending; i++) {
+                await new Promise(function (resolve) { setImmediate(resolve); });
+            }
+            if (!rejectPending) throw new Error('Person test transport never started');
+            c.runtime.markDomainChanged('people', { entityKinds: ['person'] });
+            await c.runtime._domainCleanup('people');
+            assert('failed People sweep remains blocked', c.runtime.isDomainBlocked('people'));
+            rejectPending(new TypeError('network unavailable'));
+            const r = await pending;
+            assertEq('pending failed read cannot return blocked stale Person', r.source, 'unavailable');
+            assertEq('blocked Person result has no cached payload', r.value, null);
+            assertEq('failed sweep deliberately retained stale cache row', (await stuckStore.getEntity('person', 'P-1')).value, oldPerson);
+        }
+
+        // The network can fail, then IndexedDB may pause BEFORE the cached
+        // value is returned. Keep a snapshot of the original row while its
+        // read is unresolved, just as an IDB transaction can finish after
+        // another route invalidates the record.
+        async function pausedCacheFallback(extraReadOptions) {
+            const store = makeFakeStore();
+            const originalGet = store.getEntity.bind(store);
+            let resume = null;
+            store.getEntity = function (kind, id) {
+                const snapshot = originalGet(kind, id);
+                return new Promise(function (resolve) {
+                    resume = function () { void snapshot.then(resolve); };
+                });
+            };
+            const c = await fixture(function () {
+                return Promise.reject(new TypeError('network unreachable'));
+            }, store);
+            const pending = readPerson(c, Object.assign(
+                { requestPolicy: { retry: false } }, extraReadOptions || {}));
+            for (let i = 0; i < 12 && !resume; i++) {
+                await new Promise(function (resolve) { setImmediate(resolve); });
+            }
+            if (!resume) throw new Error('Person fallback never began its deferred cache read');
+            return { c, pending, resume };
+        }
+
+        // A failed connectivity probe is not a successful reconnect.
+        // A pending fallback must still return a valid cached row through
+        // reconnecting -> offline, and even an offline -> reconnecting hint.
+        {
+            const f = await pausedCacheFallback();
+            f.c.failProbe();
+            await new Promise(function (resolve) { setImmediate(resolve); });
+            assertEq('failed probe settles offline during Person cache read',
+                f.c.runtime.getState(), 'offline');
+            f.c.runtime.init();
+            assertEq('fresh offline hint starts another pending probe', f.c.runtime.getState(), 'reconnecting');
+            f.resume();
+            const r = await f.pending;
+            assertEq('unsuccessful reconnect probe does not hide valid cached Person', r.source, 'cache');
+            assertEq('failed probe retains cached Person content', r.value, oldPerson);
+        }
+
+        {
+            const f = await pausedCacheFallback();
+            f.c.runtime.markEntityChanged('person', 'P-1');
+            f.resume();
+            const r = await f.pending;
+            assertEq('entity mutation during pending fallback fails closed', r.source, 'unavailable');
+            assertEq('mutated Person fallback contains no stale data', r.value, null);
+        }
+
+        {
+            const f = await pausedCacheFallback();
+            f.c.runtime.markDomainChanged('people', { entityKinds: ['person'] });
+            await f.c.runtime._domainCleanup('people');
+            assert('successful domain sweep unblocks People', !f.c.runtime.isDomainBlocked('people'));
+            // The row was removed from the store, but its older asynchronous
+            // getEntity had already captured it. The generation still fences.
+            assert('swept Person row is absent from store',
+                !f.c.store._entities.has('person:P-1'));
+            f.resume();
+            const r = await f.pending;
+            assertEq('domain change during pending fallback fails closed after unblock', r.source, 'unavailable');
+            assertEq('unblocked Person does not resurrect old IDB snapshot', r.value, null);
+        }
+
+        {
+            const f = await pausedCacheFallback();
+            f.c.runtime.noteRequestSuccess();
+            assertEq('separate successful request restores online state', f.c.runtime.getState(), 'online');
+            f.resume();
+            const r = await f.pending;
+            assertEq('reconnect while fallback cache pending fails closed', r.source, 'unavailable');
+            assertEq('reconnected Person fallback cannot show stale record', r.value, null);
+        }
+
+        {
+            const f = await pausedCacheFallback();
+            f.c.runtime.noteRequestSuccess();
+            f.c.runtime.noteRequestFailure();
+            f.resume();
+            const r = await f.pending;
+            assertEq('online-offline cycle fences pending stale Person', r.source, 'unavailable');
+        }
+
+        {
+            const controller = new AbortController();
+            const f = await pausedCacheFallback({ signal: controller.signal });
+            controller.abort();
+            f.resume();
+            let error = null;
+            try { await f.pending; } catch (err) { error = err; }
+            assertEq('route abort while fallback cache pending rejects AbortError',
+                error && error.name, 'AbortError');
+        }
+
+        // A list fallback has the same async IndexedDB race as an entity.
+        // A completed People sweep must fence an already-started list read,
+        // even when that snapshot resolves after the domain unblocks.
+        async function pausedListFallback(extraReadOptions) {
+            const store = makeFakeStore();
+            await store.putList('people:index', [oldPerson], '');
+            const originalGet = store.getList.bind(store);
+            let resume = null;
+            store.getList = function (key) {
+                const snapshot = originalGet(key);
+                return new Promise(function (resolve) {
+                    resume = function () { void snapshot.then(resolve); };
+                });
+            };
+            const c = await fixture(function () {
+                return Promise.reject(new TypeError('network unreachable'));
+            }, store);
+            const pending = c.runtime.readThroughList(
+                'people:index', '/api/persons',
+                Object.assign({
+                    domain: 'people',
+                    requestPolicy: { retry: false },
+                }, extraReadOptions || {}));
+            for (let i = 0; i < 12 && !resume; i++) {
+                await new Promise(function (resolve) { setImmediate(resolve); });
+            }
+            if (!resume) throw new Error('People list fallback never began its deferred cache read');
+            return { c, pending, resume };
+        }
+
+        {
+            const f = await pausedListFallback();
+            f.resume();
+            const r = await f.pending;
+            assertEq('unchanged People list still permits valid cached fallback', r.source, 'cache');
+            assertEq('unchanged People list preserves its cached contents', r.value, [oldPerson]);
+        }
+
+        {
+            const f = await pausedListFallback();
+            f.c.failProbe();
+            await new Promise(function (resolve) { setImmediate(resolve); });
+            assertEq('failed probe settles offline during People list read',
+                f.c.runtime.getState(), 'offline');
+            f.resume();
+            const r = await f.pending;
+            assertEq('offline transition still serves valid cached People list', r.source, 'cache');
+            assertEq('failed probe retains People list contents', r.value, [oldPerson]);
+        }
+
+        {
+            const f = await pausedListFallback();
+            f.c.runtime.markDomainChanged('people', { listKeys: ['people:index'] });
+            await f.c.runtime._domainCleanup('people');
+            assert('successful People list sweep unblocks domain', !f.c.runtime.isDomainBlocked('people'));
+            assert('swept People list row removed from store', !f.c.store._lists.has('people:index'));
+            f.resume();
+            const r = await f.pending;
+            assertEq('stale People list cannot return after sweep unblocks', r.source, 'unavailable');
+            assertEq('invalidation during list fallback returns no old snapshot', r.value, null);
+        }
+
+        {
+            const f = await pausedListFallback();
+            f.c.runtime.noteRequestSuccess();
+            f.resume();
+            const r = await f.pending;
+            assertEq('reconnect during cached People list read fails closed', r.source, 'unavailable');
+        }
+
+        {
+            const controller = new AbortController();
+            const f = await pausedListFallback({ signal: controller.signal });
+            controller.abort();
+            f.resume();
+            let error = null;
+            try { await f.pending; } catch (err) { error = err; }
+            assertEq('abort during cached People list read rejects AbortError',
+                error && error.name, 'AbortError');
+        }
+
+        // An aborted route remains aborted, not a cached read. In particular,
+        // a per-request retry policy must not weaken AbortSignal handling.
+        {
+            const c = await fixture(function () { throw new Error('should not fetch'); });
+            const controller = new AbortController();
+            controller.abort();
+            let error = null;
+            try {
+                await readPerson(c, { signal: controller.signal, requestPolicy: { retry: false } });
+            } catch (err) { error = err; }
+            assertEq('pre-aborted reconnecting Person read rejects AbortError', error && error.name, 'AbortError');
+            assertEq('pre-aborted Person request causes zero fetches', c.attempts.length, 0);
+        }
+    }
 
     if (failed) {
         console.log(failed + ' failed, ' + passed + ' passed');

@@ -292,7 +292,33 @@ async function commitWritesOnlyDirtyUnits() {
     assert.match(String(unavailable && unavailable.message), /does not know its revision/);
 }
 
+function argumentDetailUsesGuardedOfflineRead() {
+    // The real Argument detail route is the only new cache-first opt-in.
+    // Its normal index and acknowledged-base logic must keep their own
+    // coherence policies and server-first/default behavior.
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const app = fs.readFileSync(path.join(__dirname, "../../frontend/js/app.js"), "utf8");
+    const start = app.indexOf("case 'argument-detail': {");
+    const end = app.indexOf("case 'research-graph': {", start);
+    assert(start >= 0 && end > start, "Argument detail route exists");
+    const segment = app.slice(start, end);
+    assert.match(segment, /prksOfflineDetailFetch\(/);
+    assert.match(segment, /domain:\s*PRKS_ARGUMENTS_DOMAIN/);
+    assert.match(segment, /preferCacheWhenOffline:\s*true/);
+    assert.match(segment, /prksIsArgumentShape\(value, argumentId\)/);
+    assert.match(segment, /prksPendingArgumentDeletions/);
+    assert.match(segment, /prksPendingArgumentCreates/);
+    assert.match(segment, /prksResolveOfflineArgument\(/);
+    assert.match(segment, /prksApplyPendingPositionNamesToTargets/);
+    const index = app.indexOf("case 'arguments': {");
+    assert(index >= 0 && index < start);
+    assert.doesNotMatch(app.slice(index, start), /preferCacheWhenOffline:\s*true/,
+        "Argument index must continue refreshing online and warming its offline cache");
+}
+
 async function main() {
+    argumentDetailUsesGuardedOfflineRead();
     await constructionAndDependencies();
     await scalarCoalescingAndIndependence();
     await orderedAggregatesCoalesceAndCancel();

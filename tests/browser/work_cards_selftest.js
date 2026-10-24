@@ -25,116 +25,7 @@
             record(name, ok, ok ? '' : 'got ' + JSON.stringify(got) + ' want ' + JSON.stringify(want));
         }
 
-        const cardHtml = root.prksWorkCardHtml;
-        if (typeof cardHtml !== 'function') {
-            record('prksWorkCardHtml exists', false, 'missing');
-            return { passed: passed, failed: failed + 1, rows: rows };
-        }
-
-        // Bibliographic identity vs. contextual metadata: distinct areas, not concatenated.
-        const pdfWork = {
-            id: 'W-1',
-            title: 'The Culture Industry',
-            primary_author: 'Theodor W. Adorno',
-            year: '1972',
-            status: 'In Progress',
-            doc_type: 'article',
-            file_size_bytes: 1024 * 1024,
-            file_path: '/api/pdfs/w1.pdf',
-        };
-        const withContext = cardHtml(pdfWork, { subtitle: 'Added Sep 5, 2026' });
-        assert('meta line present', withContext.indexOf('work-card__meta') !== -1);
-        assert('context line present', withContext.indexOf('work-card__context') !== -1);
-        assert('meta line has author + year', /work-card__meta">Author: Theodor W\. Adorno · 1972</.test(withContext));
-        assert(
-            'context text not concatenated into meta line',
-            !/work-card__meta">[^<]*Added Sep 5, 2026/.test(withContext)
-        );
-        assert('context line carries subtitle text', /work-card__context">Added Sep 5, 2026</.test(withContext));
-
-        const noContext = cardHtml({ id: 'W-2', title: 'No Subtitle', year: '2001' });
-        assert('no context line when subtitle omitted', noContext.indexOf('work-card__context') === -1);
-
-        // Cache validation rejects these shapes. Card helper still fails safe
-        // when called directly with imperfect data from another surface.
-        let malformedYearCard = '';
-        let malformedDateCard = '';
-        let malformedCardError = '';
-        try {
-            malformedYearCard = cardHtml({ id: 'W-bad-year', title: 'Bad year', year: [] });
-            malformedDateCard = cardHtml({ id: 'W-bad-date', title: 'Bad date', published_date: {} });
-        } catch (err) {
-            malformedCardError = String(err && err.message ? err.message : err);
-        }
-        assertEq('malformed year/date do not throw', malformedCardError, '');
-        assert('malformed year omitted', malformedYearCard.indexOf('work-card__meta') === -1);
-        assert('malformed published date omitted', malformedDateCard.indexOf('work-card__meta') === -1);
-
-        // Title clamp contract: full title kept via title attribute, not truncated.
-        const longTitle =
-            'A Very Long Work Title That Would Otherwise Break Card Height Consistency Across A Dense Grid Layout';
-        const longCard = cardHtml({ id: 'W-3', title: longTitle });
-        assert('full title present in DOM text', longCard.indexOf(longTitle) !== -1);
-        assert('full title exposed via title attribute', longCard.indexOf('title="' + longTitle + '"') !== -1);
-
-        // Thumbnail source-awareness: PDF vs video classes, no URL in DOM attrs.
-        const pdfCard = cardHtml({ id: 'W-4', title: 'PDF Work', file_path: '/api/pdfs/w4.pdf' });
-        assert('pdf card gets pdf thumb class', pdfCard.indexOf('work-card__thumb--pdf') !== -1);
-        assert('pdf card has no video thumb class', pdfCard.indexOf('work-card__thumb--video') === -1);
-        assert('pdf thumb starts in loading state', pdfCard.indexOf('work-card__thumb--loading') !== -1);
-        assert(
-            'pdf thumb marks preview kind (no URL attr)',
-            pdfCard.indexOf('data-prks-thumb-preview-kind="pdf"') !== -1
-        );
-        assert(
-            'pdf thumb carries digit page for rebuild',
-            pdfCard.indexOf('data-prks-thumb-page="1"') !== -1
-        );
-        assert(
-            'pdf markup has no URL-bearing preview-src attr',
-            pdfCard.indexOf('data-prks-thumb-preview-src') === -1
-        );
-        assert(
-            'pdf markup has no lazy URL attr',
-            pdfCard.indexOf('data-prks-thumb-src') === -1 && pdfCard.indexOf('data-prks-thumb-lazy="1"') !== -1
-        );
-
-        const videoWork = { id: 'W-5', title: 'Video Work', source_kind: 'video', thumb_url: 'https://img.example/thumb.jpg' };
-        const videoCard = cardHtml(videoWork);
-        assert('video card gets video thumb class', videoCard.indexOf('work-card__thumb--video') !== -1);
-        assert('video card has no pdf thumb class', videoCard.indexOf('work-card__thumb--pdf') === -1);
-        assert(
-            'video thumb uses lazy marker without embedding URL in markup',
-            videoCard.indexOf('data-prks-thumb-lazy="1"') !== -1 &&
-                videoCard.indexOf('https://img.example/thumb.jpg') === -1
-        );
-        assert(
-            'no eager network request in markup',
-            videoCard.indexOf(' src="https://img.example/thumb.jpg"') === -1
-        );
-        if (typeof root.prksLookupRegisteredWorkThumbUrl === 'function') {
-            assertEq(
-                'video thumb registered by work id (not DOM)',
-                root.prksLookupRegisteredWorkThumbUrl('W-5'),
-                'https://img.example/thumb.jpg'
-            );
-        }
-
-        // Empty thumbnail fallback is source-appropriate, not a blanket "PDF".
-        const emptyVideoCard = cardHtml({ id: 'W-6', title: 'Video no thumb', source_kind: 'video' });
-        assert('empty video card marked empty', emptyVideoCard.indexOf('work-card__thumb--empty') !== -1);
-        assert('empty video card keeps video class for CSS-driven label', emptyVideoCard.indexOf('work-card__thumb--video') !== -1);
-
-        const emptyPdfCard = cardHtml({ id: 'W-7', title: 'PDF no thumb' });
-        assert('empty pdf card marked empty', emptyPdfCard.indexOf('work-card__thumb--empty') !== -1);
-        assert('empty pdf card keeps pdf class for CSS-driven label', emptyPdfCard.indexOf('work-card__thumb--pdf') !== -1);
-
-        const suppressed = cardHtml(
-            { id: 'W-8', title: 'Offline PDF', file_path: '/api/pdfs/w8.pdf' },
-            { suppressThumbnail: true }
-        );
-        assert('suppressThumbnail yields empty slot', suppressed.indexOf('work-card__thumb--empty') !== -1);
-        assert('suppressThumbnail does not embed thumb URL', suppressed.indexOf('/thumbnail') === -1);
+        assert('classic prksWorkCardHtml is retired', typeof root.prksWorkCardHtml !== 'function');
 
         // Browse mode preference helpers (default cards; list is opt-in).
         if (typeof root.prksGetWorkBrowseMode === 'function') {
@@ -312,12 +203,104 @@
                         !document.getElementById('prks-work-thumb-preview').hidden)
                 );
                 if (card.parentNode) card.parentNode.removeChild(card);
-                root.prksReleaseWorkThumbPreview();
+                root.prksReleaseWorkThumbPreview(document.body);
                 preview = document.getElementById('prks-work-thumb-preview');
-                assert('detach+release hides preview', !!(preview && preview.hidden));
-                assert('detach+release clears source', window.__prksWorkThumbPreviewSource == null);
+                assert('detach+scoped-release hides leftover preview', !!(preview && preview.hidden));
+                assert('detach+scoped-release clears source', window.__prksWorkThumbPreviewSource == null);
             } else {
                 root.prksHideWorkThumbPreview();
+            }
+
+            if (typeof document._dispatch === 'function') {
+                const nativeCard = document.createElement('div');
+                nativeCard.className = 'project-card project-card--work-card';
+                nativeCard.setAttribute('data-work-id', 'W-preview-link');
+                nativeCard.setAttribute('data-prks-route', '#/works/W-preview-link');
+                const nativeLink = document.createElement('a');
+                nativeLink.className = 'work-card__link';
+                nativeLink.setAttribute('href', '#/works/W-preview-link');
+                const nativeThumb = document.createElement('div');
+                nativeThumb.className = 'work-card__thumb work-card__thumb--ready';
+                nativeThumb.setAttribute('data-prks-thumb-preview-kind', 'pdf');
+                nativeThumb.setAttribute('data-prks-thumb-page', '1');
+                const nativeBody = document.createElement('div');
+                nativeBody.className = 'work-card__body';
+                const nativeTitle = document.createElement('div');
+                nativeTitle.className = 'card-title';
+                nativeBody.appendChild(nativeTitle);
+                nativeLink.appendChild(nativeThumb);
+                nativeLink.appendChild(nativeBody);
+                nativeCard.appendChild(nativeLink);
+                document.body.appendChild(nativeCard);
+
+                document._dispatch('keydown', { key: 'p', target: nativeLink });
+                let kbdPreview = document.getElementById('prks-work-thumb-preview');
+                assert(
+                    'P on native work-card__link shows preview',
+                    !!(kbdPreview && !kbdPreview.hidden && window.__prksWorkThumbPreviewSource === nativeThumb)
+                );
+
+                root.prksHideWorkThumbPreview();
+                document._dispatch('pointerover', { target: nativeTitle });
+                kbdPreview = document.getElementById('prks-work-thumb-preview');
+                assert(
+                    'hover on card body does not show preview',
+                    !!(kbdPreview && kbdPreview.hidden)
+                );
+                document._dispatch('pointerover', { target: nativeThumb });
+                kbdPreview = document.getElementById('prks-work-thumb-preview');
+                assert(
+                    'hover on thumbnail shows preview',
+                    !!(kbdPreview && !kbdPreview.hidden && window.__prksWorkThumbPreviewSource === nativeThumb)
+                );
+
+                const thumbInner = document.createElement('img');
+                nativeThumb.appendChild(thumbInner);
+                document._dispatch('pointerout', { target: nativeThumb, relatedTarget: thumbInner });
+                kbdPreview = document.getElementById('prks-work-thumb-preview');
+                assert(
+                    'pointerout within the thumbnail keeps preview',
+                    !!(kbdPreview && !kbdPreview.hidden && window.__prksWorkThumbPreviewSource === nativeThumb)
+                );
+
+                document._dispatch('pointerout', { target: nativeThumb, relatedTarget: kbdPreview });
+                kbdPreview = document.getElementById('prks-work-thumb-preview');
+                assert(
+                    'pointerout into preview overlay keeps preview',
+                    !!(kbdPreview && !kbdPreview.hidden && window.__prksWorkThumbPreviewSource === nativeThumb)
+                );
+
+                document._dispatch('pointerout', { target: nativeThumb, relatedTarget: nativeTitle });
+                kbdPreview = document.getElementById('prks-work-thumb-preview');
+                assert(
+                    'pointerout from thumbnail to card body hides preview',
+                    !!(kbdPreview && kbdPreview.hidden)
+                );
+
+                document._dispatch('pointerover', { target: nativeThumb });
+                const outside = document.createElement('div');
+                document.body.appendChild(outside);
+                document._dispatch('pointerout', { target: nativeThumb, relatedTarget: outside });
+                kbdPreview = document.getElementById('prks-work-thumb-preview');
+                assert(
+                    'pointerout leaving the thumbnail hides preview',
+                    !!(kbdPreview && kbdPreview.hidden)
+                );
+
+                const select = document.createElement('div');
+                select.className = 'work-card__select';
+                nativeCard.appendChild(select);
+                document._dispatch('pointerover', { target: select });
+                kbdPreview = document.getElementById('prks-work-thumb-preview');
+                assert(
+                    'hover on bulk checkbox does not show preview',
+                    !!(kbdPreview && kbdPreview.hidden)
+                );
+
+                if (typeof document.body.removeChild === 'function') {
+                    document.body.removeChild(nativeCard);
+                    document.body.removeChild(outside);
+                }
             }
         }
 
@@ -373,23 +356,6 @@
             assert('prune on init drops detached', !(observed && observed.has(img)));
             assert('prune on init unobserves detached', !(obs && obs.targets && obs.targets.has(img)));
         }
-
-        // Thumbnails stay decorative — no redundant screen-reader announcement of the title.
-        assert('thumb image alt is empty', /alt=""/.test(pdfCard));
-        assert('thumb image alt does not repeat title', pdfCard.indexOf('alt="PDF Work"') === -1);
-
-        // Status/type/size stay at the bottom, after title + meta + context.
-        const fullCard = cardHtml(
-            { ...pdfWork, doc_type: 'book' },
-            { subtitle: 'Last opened: Sep 5, 2026, 14:20' }
-        );
-        const titleAt = fullCard.indexOf('card-title');
-        const metaAt = fullCard.indexOf('work-card__meta');
-        const contextAt = fullCard.indexOf('work-card__context');
-        const badgesAt = fullCard.indexOf('work-card__badges');
-        assert('title precedes meta', titleAt < metaAt);
-        assert('meta precedes context', metaAt < contextAt);
-        assert('context precedes badges', contextAt < badgesAt);
 
         return { passed: passed, failed: failed, rows: rows };
     }

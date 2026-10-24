@@ -108,6 +108,49 @@
         return item && typeof item === 'object' ? Object.assign({}, item) : null;
     }
 
+    // EmbedPDF annotation fields typed `Date`. Acknowledged rows arrive through
+    // JSON, so these are ISO strings by then. Handing a string to the viewer
+    // makes its engine write never settle: the commit lock stays held and no
+    // later edit in that document is ever committed or synced (#401).
+    const DATE_KEYS = ['created', 'modified'];
+
+    /** A copy of `desired` the viewer can commit: dates revived, bad ones dropped. */
+    function viewerAnnotationObject(desired) {
+        const out = Object.assign({}, desired);
+        DATE_KEYS.forEach(function (key) {
+            if (!Object.prototype.hasOwnProperty.call(out, key)) return;
+            const value = out[key];
+            if (value instanceof Date && !Number.isNaN(value.getTime())) return;
+            const revived = typeof value === 'string' || typeof value === 'number'
+                ? new Date(value)
+                : null;
+            if (revived && !Number.isNaN(revived.getTime())) out[key] = revived;
+            else delete out[key];
+        });
+        return out;
+    }
+
+    // Fields a user edit can add that the viewer keeps unless a patch names
+    // them, with the value that clears each one.
+    const CLEARABLE_KEYS = { contents: '', custom: undefined };
+
+    /**
+     * The update that puts `live` back on `desired`. An update only merges, so
+     * a comment the acknowledged row never had (an unsaved popup draft on a
+     * highlight with no comment yet) is cleared explicitly; otherwise it
+     * stays in the viewer and its next commit records the draft (#401).
+     */
+    function viewerUpdatePatch(live, desired) {
+        const patch = viewerAnnotationObject(desired);
+        delete patch.id;
+        Object.keys(CLEARABLE_KEYS).forEach(function (key) {
+            if (Object.prototype.hasOwnProperty.call(patch, key)) return;
+            if (!live || live[key] === undefined) return;
+            patch[key] = CLEARABLE_KEYS[key];
+        });
+        return patch;
+    }
+
     function semanticallyEqual(left, right) {
         if (typeof root.prksPdfAnnotationsSemanticallyEqual === 'function') {
             return root.prksPdfAnnotationsSemanticallyEqual(left, right);
@@ -200,7 +243,7 @@
                 if (!live) {
                     if (typeof viewer.createAnnotation === 'function') {
                         const page = pageIndexOf(desired);
-                        viewer.createAnnotation(page, desired);
+                        viewer.createAnnotation(page, viewerAnnotationObject(desired));
                         stats.created += 1;
                     }
                     continue;
@@ -211,14 +254,13 @@
                 }
                 // Prefer update; fall back to delete+create when update is absent.
                 if (typeof viewer.updateAnnotation === 'function') {
-                    const patch = Object.assign({}, desired);
-                    delete patch.id;
+                    const patch = viewerUpdatePatch(live, desired);
                     viewer.updateAnnotation(id, patch);
                     stats.updated += 1;
                 } else if (typeof viewer.deleteAnnotation === 'function' &&
                            typeof viewer.createAnnotation === 'function') {
                     await Promise.resolve(viewer.deleteAnnotation(id));
-                    viewer.createAnnotation(pageIndexOf(desired), desired);
+                    viewer.createAnnotation(pageIndexOf(desired), viewerAnnotationObject(desired));
                     stats.updated += 1;
                 }
             }
@@ -238,4 +280,5 @@
     root.prksViewerIsReconcilingAnnotations = viewerIsReconcilingAnnotations;
     root.prksReconcileViewerAnnotations = reconcileViewerAnnotations;
     root.prksDefaultIsManagedPdfAnnotation = defaultIsManaged;
+    root.prksViewerAnnotationObject = viewerAnnotationObject;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyWorkspaceCommand, preflightHideLeaf, preflightMakeMain, preflightSetMode } from './commands'
+import { applyWorkspaceCommand, preflightCloseTab, preflightHideLeaf, preflightMakeMain, preflightSetMode } from './commands'
 import { MAX_SECONDARY_LEAVES } from './constants'
 import { hiddenSecondaryTabIds, logicalTabRole, parkedTabIds, visibleTabIds } from './derive'
 import { validateWorkspace } from './invariants'
@@ -13,6 +13,7 @@ import {
   normalizeTree,
   removeLeaf,
   replaceTabId,
+  setSplitRatio,
   splitLeaf,
   validateTree,
   type SplitIdFactory,
@@ -31,7 +32,7 @@ import {
   planTabHistory,
   repairWorkspaceState,
 } from './transitions'
-import { asSplitId, asTabId, type WorkspaceState, type WorkspaceTab } from './types'
+import { asSplitId, asTabId, type WorkspacePaneNode, type WorkspaceState, type WorkspaceTab } from './types'
 
 const wide = { narrowFallback: false }
 const narrow = { narrowFallback: true }
@@ -482,5 +483,444 @@ describe('command boundary', () => {
     expect(result.changed).toBe(false)
     expect(result.state).toBe(only)
     expect(result.effects).toEqual([])
+  })
+
+  it('routes main close to a real successor but leaves parked and hidden tabs alone', () => {
+    const current = base()
+    const context = { narrowFallback: false, homeHash: '#/folders' }
+    expect(preflightCloseTab(current, main.id, context)).toEqual({
+      type: 'leave-tab', tabId: main.id, nextHash: second.route,
+    })
+    expect(preflightCloseTab(current, second.id, context)).toEqual({
+      type: 'leave-tab', tabId: second.id, nextHash: '#/folders',
+    })
+    const parked = tab('tab-3')
+    const withParked = { ...current, tabs: [...current.tabs, parked] }
+    expect(preflightCloseTab(withParked, parked.id, context)).toEqual({ type: 'none' })
+    expect(preflightCloseTab(current, 'missing', context)).toEqual({ type: 'none' })
+    const hidden = { ...current, mode: 'stacked' as const, focusedTabId: main.id }
+    expect(preflightCloseTab(hidden, second.id, context)).toEqual({ type: 'none' })
+    expect(preflightCloseTab(current, second.id, { ...context, narrowFallback: true })).toEqual({ type: 'none' })
+  })
+
+  it('rejects invisible focus and skips effects on an already-focused tab', () => {
+    const current = base()
+    const context = { narrowFallback: false, homeHash: '#/folders' }
+    const already = applyWorkspaceCommand(current, { type: 'focus', tabId: second.id }, context)
+    expect(already).toMatchObject({ ok: true, changed: false, state: current, effects: [] })
+    for (const [tabId, presentation] of [
+      ['missing', context],
+      [second.id, { ...context, narrowFallback: true }],
+    ] as const) {
+      const rejected = applyWorkspaceCommand(current, { type: 'focus', tabId }, presentation)
+      expect(rejected).toMatchObject({ ok: false, changed: false, state: current, effects: [] })
+    }
+    const mainFocus = applyWorkspaceCommand(current, { type: 'focus', tabId: main.id }, context)
+    expect(mainFocus.state.mainTabId).toBe(main.id)
+    expect(mainFocus.state.focusedTabId).toBe(main.id)
+    expect(mainFocus.effects).toEqual([{ type: 'paint-focus' }, { type: 'refresh-focused-panel' }])
+    expect(mainFocus.preflight).toEqual({ type: 'none' })
+  })
+
+  it('distinguishes a role swap from cold-parking an untileable Main', () => {
+    const current = base()
+    const command = { type: 'make-main' as const, tabId: second.id }
+    const context = { narrowFallback: false, homeHash: '#/folders' }
+    const swapped = applyWorkspaceCommand(current, command, { ...context, oldMainSupportsTile: true })
+    expect(swapped).toMatchObject({ ok: true, changed: true })
+    expect(swapped.preflight).toEqual({
+      type: 'main-promotion', oldMainId: main.id, requiresLeave: false, nextHash: main.route,
+    })
+    expect(swapped.state.mainTabId).toBe(second.id)
+    expect(swapped.state.mode).toBe('tiled')
+    expect(swapped.state.secondaryTree).toEqual(makeLeaf(main.id))
+    expect(swapped.effects.some((effect) => effect.type === 'cold-park')).toBe(false)
+
+    const parked = applyWorkspaceCommand(current, command, { ...context, oldMainSupportsTile: false })
+    expect(parked.preflight).toEqual({
+      type: 'main-promotion', oldMainId: main.id, requiresLeave: true, nextHash: main.route,
+    })
+    expect(parked.state.mainTabId).toBe(second.id)
+    expect(parked.state.mode).toBe('stacked')
+    expect(parked.state.secondaryTree).toBeNull()
+    expect(parked.effects).toContainEqual({ type: 'cold-park', tabId: main.id })
+    expect(parked.effects).toContainEqual({
+      type: 'commit-main-url', tabId: second.id, history: 'replace',
+    })
+    expect(current.mainTabId).toBe(main.id)
+    expect(validateWorkspace(swapped.state).ok).toBe(true)
+    expect(validateWorkspace(parked.state).ok).toBe(true)
+  })
+
+  it('hides an already-hidden secondary without prompting or parking an unmounted pane', () => {
+    const current = { ...base(), mode: 'stacked' as const, focusedTabId: main.id }
+    const context = { narrowFallback: false, homeHash: '#/folders', mounted: true }
+    const removed = applyWorkspaceCommand(current, { type: 'hide-leaf', tabId: second.id }, context)
+    expect(removed).toMatchObject({ ok: true, changed: true })
+    expect(removed.preflight).toEqual({ type: 'none' })
+    expect(removed.effects.some((effect) => effect.type === 'cold-park')).toBe(false)
+    expect(removed.state.secondaryTree).toBeNull()
+    expect(removed.state.focusedTabId).toBe(main.id)
+    expect(validateWorkspace(removed.state).ok).toBe(true)
+    expect(current.secondaryTree).toEqual(makeLeaf(second.id))
+    expect(applyWorkspaceCommand(current, { type: 'hide-leaf', tabId: 'missing' }, context))
+      .toMatchObject({ ok: false, changed: false, state: current, effects: [] })
+  })
+
+  it('preserves command failure and no-op contracts before performing effects', () => {
+    const current = base()
+    const context = { narrowFallback: false, homeHash: '#/folders' }
+    const attempts = [
+      { type: 'set-mode' as const, mode: 'invalid' },
+      { type: 'move-pane' as const, sourceTabId: second.id, targetTabId: second.id, axis: 'left-right', placement: 'first' },
+      { type: 'close-tab' as const, tabId: 'missing', homeTab: null },
+    ]
+    for (const command of attempts) {
+      const result = applyWorkspaceCommand(current, command, context)
+      expect(result).toMatchObject({ ok: false, changed: false, state: current, effects: [] })
+      expect(result.preflight).toEqual({ type: 'none' })
+    }
+
+    // The new tab is valid and in state.tabs: only the missing ID factory blocks this split.
+    const splitReady = { ...current, tabs: [...current.tabs, tab('tab-3')] }
+    const splitCommand = {
+      type: 'split-leaf' as const,
+      targetTabId: second.id,
+      newTabId: 'tab-3',
+      axis: 'left-right',
+      placement: 'first',
+    }
+    const noFactory = applyWorkspaceCommand(splitReady, splitCommand, context)
+    expect(noFactory).toMatchObject({ ok: false, changed: false, state: splitReady, effects: [] })
+    expect(noFactory.preflight).toEqual({ type: 'none' })
+    const withFactory = applyWorkspaceCommand(splitReady, splitCommand, { ...context, nextSplitId: ids() })
+    expect(withFactory.ok).toBe(true)
+    expect(withFactory.changed).toBe(true)
+    expect(collectLeafTabIds(withFactory.state.secondaryTree)).toEqual(['tab-3', second.id])
+    expect(validateWorkspace(withFactory.state).ok).toBe(true)
+
+    const hidden = { ...current, mode: 'stacked' as const, focusedTabId: main.id }
+    const unchanged = applyWorkspaceCommand(hidden, { type: 'set-mode', mode: 'stacked' }, context)
+    expect(unchanged).toMatchObject({ ok: true, changed: false, state: hidden, effects: [] })
+    expect(preflightSetMode(current, 'stacked', { ...context, narrowFallback: true, mountedTabIds: [second.id] }))
+      .toEqual({ type: 'none' })
+  })
+
+  it('keeps close effects scoped to the destroyed tab and the new Main', () => {
+    const current = base()
+    const context = { narrowFallback: false, homeHash: '#/folders' }
+    const promoted = applyWorkspaceCommand(current, { type: 'close-tab', tabId: main.id, homeTab: null }, context)
+    expect(promoted.ok).toBe(true)
+    expect(promoted.preflight).toEqual({ type: 'leave-tab', tabId: main.id, nextHash: second.route })
+    expect(promoted.state.mainTabId).toBe(second.id)
+    expect(promoted.effects).toEqual([
+      { type: 'destroy-context', tabId: main.id },
+      { type: 'commit-main-url', tabId: second.id, history: 'replace' },
+      { type: 'paint-and-restore', tabId: second.id },
+    ])
+    const secondary = applyWorkspaceCommand(current, { type: 'close-tab', tabId: second.id, homeTab: null }, context)
+    expect(secondary.state.mainTabId).toBe(main.id)
+    expect(secondary.effects).toEqual([
+      { type: 'destroy-context', tabId: second.id },
+      { type: 'paint-and-restore', tabId: main.id },
+    ])
+    const only = state({ tabs: [main] })
+    const home = tab('home', '#/folders')
+    const replacement = applyWorkspaceCommand(only, { type: 'close-tab', tabId: main.id, homeTab: home }, context)
+    expect(replacement.ok).toBe(true)
+    expect(replacement.state.mainTabId).toBe(home.id)
+    expect(replacement.effects).toContainEqual({ type: 'commit-main-url', tabId: home.id, history: 'replace' })
+    expect(validateWorkspace(replacement.state).ok).toBe(true)
+  })
+
+  it('preflights only mounted visible secondaries when hiding a split', () => {
+    const current = base()
+    const context = {
+      narrowFallback: false,
+      homeHash: '#/folders',
+      mountedTabIds: [main.id, second.id, 'not-a-leaf'],
+    }
+    const hiding = applyWorkspaceCommand(current, { type: 'set-mode', mode: 'stacked' }, context)
+    expect(hiding.preflight).toEqual({
+      type: 'leave-tabs', tabIds: [second.id], nextHash: '#/folders',
+    })
+    expect(hiding.effects.filter((effect) => effect.type === 'cold-park')).toEqual([
+      { type: 'cold-park', tabId: second.id },
+    ])
+    const hidden = { ...current, mode: 'stacked' as const, focusedTabId: main.id }
+    const showing = applyWorkspaceCommand(hidden, { type: 'set-mode', mode: 'tiled' }, context)
+    expect(showing.ok).toBe(true)
+    expect(showing.state.mode).toBe('tiled')
+    expect(showing.preflight).toEqual({ type: 'none' })
+    expect(showing.effects.some((effect) => effect.type === 'cold-park')).toBe(false)
+  })
+
+  it('splits and moves secondary leaves without ever relocating Main', () => {
+    const third = tab('tab-3')
+    const current = { ...base(), tabs: [main, second, third] }
+    const context = { narrowFallback: false, homeHash: '#/folders', nextSplitId: ids() }
+    const split = applyWorkspaceCommand(current, {
+      type: 'split-leaf', targetTabId: second.id, newTabId: third.id,
+      axis: 'top-bottom', placement: 'first',
+    }, context)
+    expect(split.ok).toBe(true)
+    expect(collectLeafTabIds(split.state.secondaryTree)).toEqual([third.id, second.id])
+    expect(split.state.mainTabId).toBe(main.id)
+    expect(validateWorkspace(split.state).ok).toBe(true)
+    const moved = applyWorkspaceCommand(split.state, {
+      type: 'move-pane', sourceTabId: third.id, targetTabId: second.id,
+      axis: 'left-right', placement: 'second',
+    }, context)
+    expect(moved.ok).toBe(true)
+    expect(collectLeafTabIds(moved.state.secondaryTree)).toEqual([second.id, third.id])
+    expect(moved.state.mainTabId).toBe(main.id)
+    expect(validateWorkspace(moved.state).ok).toBe(true)
+    expect(current.secondaryTree).toEqual(makeLeaf(second.id))
+  })
+})
+
+describe('workspace state recovery and snapshot boundaries', () => {
+  const main = tab('main', '#/folders')
+  const secondary = tab('secondary')
+  const parked = tab('parked')
+
+  function tiledState(): WorkspaceState {
+    return state({
+      mode: 'tiled',
+      tabs: [main, secondary, parked],
+      mainTabId: main.id,
+      focusedTabId: secondary.id,
+      secondaryTree: makeLeaf(secondary.id),
+    })
+  }
+
+  it('recovers an absent Main from the first tab and restores stacked focus', () => {
+    const current = state({ tabs: [main, secondary], mainTabId: null, focusedTabId: null })
+    const repaired = repairWorkspaceState(current)
+    expect(repaired).not.toBe(current)
+    expect(repaired.mainTabId).toBe(main.id)
+    expect(repaired.focusedTabId).toBe(main.id)
+    expect(repaired.mode).toBe('stacked')
+    expect(validateWorkspace(repaired)).toEqual({ ok: true, errors: [] })
+    expect(current.mainTabId).toBeNull()
+    expect(current.focusedTabId).toBeNull()
+  })
+
+  it('preserves a hidden Secondary tree while repairing stacked-mode focus', () => {
+    const current = state({
+      tabs: [main, secondary],
+      mainTabId: main.id,
+      focusedTabId: secondary.id,
+      mode: 'stacked',
+      secondaryTree: makeLeaf(secondary.id),
+    })
+    freezeDeep(current)
+    const repaired = repairWorkspaceState(current)
+    expect(repaired.focusedTabId).toBe(main.id)
+    expect(repaired.secondaryTree).toBe(current.secondaryTree)
+    expect(repaired.mode).toBe('stacked')
+    expect(validateWorkspace(repaired).ok).toBe(true)
+    expect(repairWorkspaceState(repaired)).toBe(repaired)
+  })
+
+  it('repairs focus on a parked tab without promoting or displaying it', () => {
+    const current = { ...tiledState(), focusedTabId: parked.id }
+    const repaired = repairWorkspaceState(current)
+    expect(repaired.mainTabId).toBe(main.id)
+    expect(repaired.focusedTabId).toBe(main.id)
+    expect(repaired.mode).toBe('tiled')
+    expect(repaired.secondaryTree).toBe(current.secondaryTree)
+    expect(repaired.tabs).toBe(current.tabs)
+    expect(validateWorkspace(repaired).ok).toBe(true)
+  })
+
+  it('removes nonexistent and Main leaves without discarding a surviving Secondary', () => {
+    const nested = makeSplit(
+      'top-bottom', makeLeaf('deleted'), makeLeaf(secondary.id), 0.4, asSplitId('inner'),
+    )
+    const root = makeSplit('left-right', makeLeaf(main.id), nested, 0.5, asSplitId('outer'))
+    const current = { ...tiledState(), secondaryTree: root }
+    freezeDeep(current)
+    const repaired = repairWorkspaceState(current)
+    expect(repaired.secondaryTree).toEqual(makeLeaf(secondary.id))
+    expect(repaired.mode).toBe('tiled')
+    expect(repaired.focusedTabId).toBe(secondary.id)
+    expect(validateWorkspace(repaired).ok).toBe(true)
+    expect(current.secondaryTree).toBe(root)
+  })
+
+  it('collapses an emptied Secondary tree and falls back from tiled to stacked', () => {
+    const badTree = makeSplit(
+      'left-right', makeLeaf('deleted'), makeLeaf(main.id), 0.5, asSplitId('gone'),
+    )
+    const current = state({
+      mode: 'tiled',
+      tabs: [main],
+      mainTabId: main.id,
+      focusedTabId: asTabId('deleted'),
+      secondaryTree: badTree,
+    })
+    const repaired = repairWorkspaceState(current)
+    expect(repaired.secondaryTree).toBeNull()
+    expect(repaired.mode).toBe('stacked')
+    expect(repaired.mainTabId).toBe(main.id)
+    expect(repaired.focusedTabId).toBe(main.id)
+    expect(validateWorkspace(repaired).ok).toBe(true)
+  })
+
+  it('rejects malformed split geometry that survives stale-leaf repair', () => {
+    const valid = makeSplit(
+      'left-right', makeLeaf(secondary.id), makeLeaf(parked.id), 0.5, asSplitId('split'),
+    )
+    const current = { ...tiledState(), secondaryTree: { ...valid, ratio: Number.NaN } }
+    // The corrupt split survives unchanged. If repair prunes a stale leaf below
+    // it, rewritePath currently rebuilds the ancestor and clamps its ratio.
+    // This assertion must not be read as a universal fail-closed guarantee.
+    expect(() => repairWorkspaceState(current)).toThrow(
+      /workspace secondaryTree invariant violation: invalid ratio NaN/,
+    )
+    expect(Number.isNaN(current.secondaryTree.ratio)).toBe(true)
+  })
+
+  it('keeps the exact state reference when all structural invariants already hold', () => {
+    const current = tiledState()
+    freezeDeep(current)
+    expect(validateWorkspace(current)).toEqual({ ok: true, errors: [] })
+    expect(repairWorkspaceState(current)).toBe(current)
+    expect(repairWorkspaceState(repairWorkspaceState(current))).toBe(current)
+  })
+
+  it('copies nested trees and tab histories without aliasing original state', () => {
+    const longHistory = { ...main, history: ['#/folders', '#/works/W1'], historyIndex: 1 }
+    const tertiary = tab('tertiary')
+    const current = state({
+      tabs: [longHistory, secondary, parked, tertiary],
+      mainTabId: main.id,
+      focusedTabId: secondary.id,
+      mode: 'tiled',
+      secondaryTree: makeSplit(
+        'top-bottom',
+        makeLeaf(secondary.id),
+        makeSplit(
+          'left-right', makeLeaf(parked.id), makeLeaf(tertiary.id), 0.65, asSplitId('inner'),
+        ),
+        0.3,
+        asSplitId('outer'),
+      ),
+    })
+    freezeDeep(current)
+    const snap = workspaceSnapshot(current)
+    expect(snap).toEqual(current)
+    expect(snap).not.toBe(current)
+    expect(snap.tabs).not.toBe(current.tabs)
+    expect(snap.tabs[0]).not.toBe(current.tabs[0])
+    expect(snap.tabs[0].history).not.toBe(current.tabs[0].history)
+    expect(snap.secondaryTree).not.toBe(current.secondaryTree)
+    expect(snap.secondaryTree?.type).toBe('split')
+    if (snap.secondaryTree?.type !== 'split' || current.secondaryTree?.type !== 'split') {
+      throw new Error('test requires a nested Secondary split')
+    }
+    expect(snap.secondaryTree.first).not.toBe(current.secondaryTree.first)
+    expect(snap.secondaryTree.second).not.toBe(current.secondaryTree.second)
+    const copiedInner = snap.secondaryTree.second
+    const sourceInner = current.secondaryTree.second
+    if (copiedInner.type !== 'split' || sourceInner.type !== 'split') {
+      throw new Error('test requires a second-level Secondary split')
+    }
+    expect(copiedInner.first).not.toBe(sourceInner.first)
+    expect(copiedInner.second).not.toBe(sourceInner.second)
+    ;(snap.tabs[0].history as string[]).push('#/unsaved')
+    expect(current.tabs[0].history).toEqual(['#/folders', '#/works/W1'])
+    expect(workspaceSnapshot(current)).toEqual(current)
+  })
+
+  it('rejects duplicate tabs, impossible ratios, and excess Secondary leaves', () => {
+    const current = tiledState()
+    const duplicate = validateWorkspace({ ...current, tabs: [...current.tabs, main] })
+    expect(duplicate.ok).toBe(false)
+    expect(duplicate.errors).toContain('duplicate tab id ' + main.id)
+
+    const badRatio = validateWorkspace({ ...current, mainSplitRatio: Number.POSITIVE_INFINITY })
+    expect(badRatio.ok).toBe(false)
+    expect(badRatio.errors.some((error) => error.includes('invalid mainSplitRatio'))).toBe(true)
+
+    const ids = Array.from({ length: MAX_SECONDARY_LEAVES + 1 }, (_, i) => 'leaf-' + i)
+    const overflow = ids.slice(1).reduce<WorkspacePaneNode>(
+      (tree, id, i) => makeSplit('left-right', tree, makeLeaf(id), 0.5, asSplitId('over-' + i)),
+      makeLeaf(ids[0]),
+    )
+    const tooMany = validateWorkspace(state({
+      tabs: [main, ...ids.map((id) => tab(id))],
+      mainTabId: main.id,
+      focusedTabId: main.id,
+      mode: 'tiled',
+      secondaryTree: overflow,
+    }))
+    expect(tooMany.ok).toBe(false)
+    expect(tooMany.errors).toContain('pane cap exceeded ' + ids.length)
+  })
+})
+
+describe('workspace split geometry during repair (#672)', () => {
+  const main = tab('main', '#/folders')
+  const a = tab('a')
+  const b = tab('b')
+
+  function withStaleLeaf(rootRatio: number): WorkspaceState {
+    const inner = makeSplit(
+      'top-bottom', makeLeaf(a.id), makeLeaf('deleted'), 0.4, asSplitId('inner'),
+    )
+    const outer = makeSplit('left-right', inner, makeLeaf(b.id), 0.63, asSplitId('outer'))
+    return state({
+      tabs: [main, a, b],
+      mode: 'tiled',
+      mainTabId: main.id,
+      focusedTabId: a.id,
+      secondaryTree: { ...outer, ratio: rootRatio },
+    })
+  }
+
+  it('rejects malformed surviving ancestors even when a stale child is pruned', () => {
+    for (const invalid of [Number.NaN, Number.POSITIVE_INFINITY, -0.2, 1.2]) {
+      const current = withStaleLeaf(invalid)
+      freezeDeep(current)
+      // The old rewritePath rebuilt the outer split via makeSplit and clamped
+      // these invalid ratios to a valid value during unrelated leaf cleanup.
+      expect(() => repairWorkspaceState(current)).toThrow(
+        /workspace secondaryTree invariant violation: invalid ratio/,
+      )
+      expect(current.secondaryTree?.type).toBe('split')
+      if (current.secondaryTree?.type === 'split') {
+        expect(Object.is(current.secondaryTree.ratio, invalid)).toBe(true)
+      }
+    }
+  })
+
+  it('preserves valid ancestor geometry and untouched input while repairing leaves', () => {
+    const current = withStaleLeaf(0.63)
+    freezeDeep(current)
+    const fixed = repairWorkspaceState(current)
+    expect(collectLeafTabIds(fixed.secondaryTree)).toEqual([a.id, b.id])
+    expect(fixed.secondaryTree).toMatchObject({
+      type: 'split', id: 'outer', axis: 'left-right', ratio: 0.63,
+      first: { type: 'leaf', tabId: a.id },
+      second: { type: 'leaf', tabId: b.id },
+    })
+    expect(validateWorkspace(fixed).ok).toBe(true)
+    expect(repairWorkspaceState(fixed)).toBe(fixed)
+    expect(collectLeafTabIds(current.secondaryTree)).toEqual([a.id, 'deleted', b.id])
+  })
+
+  it('retains intentional ratio clamping on construction and explicit resize', () => {
+    const split = makeSplit(
+      'left-right', makeLeaf(a.id), makeLeaf(b.id), Number.NaN, asSplitId('resize'),
+    )
+    expect(split.ratio).toBe(0.5)
+    const resized = setSplitRatio(split, 'resize', Number.POSITIVE_INFINITY)
+    expect(resized).toMatchObject({ type: 'split', ratio: 0.5 })
+    const clamped = setSplitRatio(split, 'resize', 1.4)
+    expect(clamped).toMatchObject({ type: 'split', ratio: 1 })
+    expect(split.ratio).toBe(0.5)
+    expect(validateTree(clamped).ok).toBe(true)
   })
 })

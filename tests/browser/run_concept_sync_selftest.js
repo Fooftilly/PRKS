@@ -17,6 +17,8 @@ const assert = new Proxy(function (...args) { checks += 1; return strict(...args
     { get: (_t, k) => (...args) => { checks += 1; return strict[k](...args); } });
 const { createFakeIndexedDBFactory } = require("./lib/fake_indexeddb.js");
 const { createPrksLocalStore } = require("../../frontend/js/local-store.js");
+const { createPrksOfflineStore } = require("../../frontend/js/offline-store.js");
+const { createPrksOfflineRuntime } = require("../../frontend/js/offline-runtime.js");
 require("../../frontend/js/sync-runtime.js");
 require("../../frontend/js/concept-state.js");
 
@@ -87,7 +89,7 @@ function installCachedConcept(id, options) {
             return {
                 value: {
                     concept_id: id,
-                    fields: { description: { revision: descriptionRevision } },
+                    fields: { description: { value: description, revision: descriptionRevision } },
                     identity: { name: "Systems", aliases: [] },
                     identity_revision: 0,
                     parent_ids: parentIds.slice(),
@@ -229,6 +231,287 @@ async function theDefinitionCancelGoesThroughApiWrapper() {
     await globalThis.updateConcept(id, { description: "First" });
     assert.equal((await rowsFor(store, "SET_CONCEPT_FIELD")).length, 0,
         "production updateConcept A→B→A cancel leaves no intent");
+}
+
+/* ---- #568: the Definition editor's base is the one it opened on ---- */
+
+/** A Concept whose acknowledged definition another tab can move. Setting
+ * `shown` makes the Concept detail read return other text, as a detail that
+ * fell back to an older cache while the state read was live. */
+function installMovableConcept(id, description, revision) {
+    const acknowledged = { description: description, revision: revision, shown: null };
+    globalThis.prksOfflineReadEntity = async (kind, entityId) => {
+        if (entityId !== id) return { value: null, source: "unavailable" };
+        if (kind === "concept-state") {
+            return { value: {
+                concept_id: id,
+                fields: { description: {
+                    value: acknowledged.description, revision: acknowledged.revision } },
+                identity: { name: "Systems", aliases: [] }, identity_revision: 0,
+                parent_ids: [], parents_revision: 0,
+            }, source: "server" };
+        }
+        if (kind === "concept") {
+            const text = acknowledged.shown == null ? acknowledged.description : acknowledged.shown;
+            return { value: { id: id, name: "Systems", description: text },
+                source: acknowledged.shown == null ? "server" : "cache" };
+        }
+        return { value: null, source: "unavailable" };
+    };
+    globalThis.prksOfflineInvalidateEntity = async () => true;
+    return acknowledged;
+}
+
+const changedElsewhere = error => error && error.code === "changed_elsewhere";
+
+async function anOlderDraftDoesNotReplaceAnotherTabsSave() {
+    const store = newStore();
+    globalThis.prksSync = { store: store };
+    const id = "C-" + "5".repeat(32);
+    const server = installMovableConcept(id, "Original", 2);
+
+    /* Both tabs open the editor on revision 2. */
+    const tabA = await globalThis.prksBeginConceptDefinitionEdit(id);
+    const tabB = await globalThis.prksBeginConceptDefinitionEdit(id);
+    assert.equal(tabB.value, "Original");
+    assert.deepEqual(tabB.base, fieldBase(2, "Original"));
+    assert.deepEqual(tabB.expected, { description: null });
+
+    await globalThis.updateConcept(id, { description: "Def A" }, { definitionEdit: tabA });
+    const sentA = await rowsFor(store, "SET_CONCEPT_FIELD");
+    assert.equal(sentA[0].base_revision, 2);
+    /* A is acknowledged: its row leaves the queue both tabs share, and the
+     * acknowledged definition moves, text and revision together. */
+    const shared = newStore();
+    globalThis.prksSync = { store: shared };
+    server.description = "Def A";
+    server.revision = 3;
+
+    await assert.rejects(
+        () => globalThis.updateConcept(id, { description: "Def B" }, { definitionEdit: tabB }),
+        changedElsewhere,
+        "B's draft was typed on revision 2; measuring it against 3 would replace A's text");
+    assert.equal((await rowsFor(shared, "SET_CONCEPT_FIELD")).length, 0,
+        "nothing is queued: A's save stands");
+
+    /* Recovery: a new session opens on what PRKS has now, and saving the kept
+     * draft from it is a decision made with A's text in view. */
+    const reopened = await globalThis.prksBeginConceptDefinitionEdit(id);
+    assert.equal(reopened.value, "Def A");
+    assert.deepEqual(reopened.base, fieldBase(3, "Def A"));
+    await globalThis.updateConcept(id, { description: "Def B" }, { definitionEdit: reopened });
+    const rows = await rowsFor(shared, "SET_CONCEPT_FIELD");
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].base_revision, 3, "the deliberate save is measured against A's revision");
+    assert.equal(rows[0].payload.value, "Def B");
+}
+
+async function aSaveTheServerAlreadyMatchesKeepsGoing() {
+    const store = newStore();
+    globalThis.prksSync = { store: store };
+    const id = "C-" + "6".repeat(32);
+    const server = installMovableConcept(id, "Shown", 4);
+    const session = await globalThis.prksBeginConceptDefinitionEdit(id);
+    /* The revision moved but the text is exactly what the editor showed:
+     * nothing this user did not see would be replaced. */
+    server.revision = 5;
+    await globalThis.updateConcept(id, { description: "Edited" }, { definitionEdit: session });
+    const rows = await rowsFor(store, "SET_CONCEPT_FIELD");
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].base_revision, 5);
+
+    /* Unchanged text from the session is not an edit. */
+    const store2 = newStore();
+    globalThis.prksSync = { store: store2 };
+    const again = await globalThis.prksBeginConceptDefinitionEdit(id);
+    await globalThis.updateConcept(id, { description: "Shown" }, { definitionEdit: again });
+    assert.equal((await rowsFor(store2, "SET_CONCEPT_FIELD")).length, 0);
+}
+
+async function anotherTabsQueuedRowIsNeverCoalescedOver() {
+    const store = newStore();
+    globalThis.prksSync = { store: store };
+    const id = "C-" + "7".repeat(32);
+    installMovableConcept(id, "Original", 1);
+    const tabB = await globalThis.prksBeginConceptDefinitionEdit(id);
+
+    /* Tab A saves while offline: its row waits in the queue both tabs share. */
+    const tabA = await globalThis.prksBeginConceptDefinitionEdit(id);
+    await globalThis.updateConcept(id, { description: "Def A" }, { definitionEdit: tabA });
+    const queued = await rowsFor(store, "SET_CONCEPT_FIELD");
+    assert.equal(queued.length, 1);
+
+    await assert.rejects(
+        () => globalThis.updateConcept(id, { description: "Def B" }, { definitionEdit: tabB }),
+        changedElsewhere,
+        "B never showed A's queued text, so it may not replace it");
+    const after = await rowsFor(store, "SET_CONCEPT_FIELD");
+    assert.equal(after.length, 1);
+    assert.equal(after[0].op_id, queued[0].op_id);
+    assert.equal(after[0].payload.value, "Def A", "A's queued save is untouched");
+
+    /* An editor that opened on A's queued text owns that row and coalesces. */
+    const onA = await globalThis.prksBeginConceptDefinitionEdit(id);
+    assert.equal(onA.value, "Def A");
+    assert.deepEqual(onA.expected, { description: queued[0].op_id });
+    assert.equal(onA.base.description.revision, 1, "the row keeps the revision it was typed on");
+    await globalThis.updateConcept(id, { description: "Def A2" }, { definitionEdit: onA });
+    const coalesced = await rowsFor(store, "SET_CONCEPT_FIELD");
+    assert.equal(coalesced.length, 1);
+    assert.equal(coalesced[0].payload.value, "Def A2");
+    assert.equal(coalesced[0].base_revision, 1);
+}
+
+/* An editor showing its own unsettled row is not told that row is a change
+ * made elsewhere: a newer acknowledgement under it is the row's own conflict. */
+async function anEditorOnItsOwnRowIsNotChangedElsewhere() {
+    const store = newStore();
+    globalThis.prksSync = { store: store };
+    const id = "C-" + "4".repeat(32);
+    const server = installMovableConcept(id, "Original", 1);
+    const first = await globalThis.prksBeginConceptDefinitionEdit(id);
+    await globalThis.updateConcept(id, { description: "Mine" }, { definitionEdit: first });
+    const [row] = await rowsFor(store, "SET_CONCEPT_FIELD");
+    server.description = "Theirs";
+    server.revision = 2;
+
+    /* Still pending: the edit stays in its row, measured against the revision
+     * it was typed on, so the server's revision check refuses it loudly. */
+    const pending = await globalThis.prksBeginConceptDefinitionEdit(id);
+    assert.equal(pending.value, "Mine");
+    assert.deepEqual(pending.expected, { description: row.op_id });
+    await globalThis.updateConcept(id, { description: "Mine 2" }, { definitionEdit: pending });
+    const coalesced = await rowsFor(store, "SET_CONCEPT_FIELD");
+    assert.equal(coalesced.length, 1);
+    assert.equal(coalesced[0].payload.value, "Mine 2");
+    assert.equal(coalesced[0].base_revision, 1, "never rebased onto text it did not see");
+
+    /* Refused by the server: the row needs a decision, and saying it changed
+     * in another tab would loop the editor on its own text. */
+    await store.updateOperationSyncState(coalesced[0].op_id,
+        { status: "conflict", server_result: { code: "REVISION_CONFLICT" } });
+    const conflicted = await globalThis.prksBeginConceptDefinitionEdit(id);
+    assert.deepEqual(conflicted.expected, { description: coalesced[0].op_id });
+    await assert.rejects(
+        () => globalThis.updateConcept(id, { description: "Mine 3" }, { definitionEdit: conflicted }),
+        error => !changedElsewhere(error) && /needs a decision/.test(error.message),
+        "the editor's own refused row is a decision, not another tab's change");
+
+    /* Once that row has left the queue, the session's claim on it is gone and
+     * the newer text is someone else's again. */
+    globalThis.prksSync = { store: newStore() };
+    await assert.rejects(
+        () => globalThis.updateConcept(id, { description: "Mine 3" }, { definitionEdit: conflicted }),
+        changedElsewhere);
+}
+
+/* Nikola's mixed-read case: the state read is live (revision 3) while the
+ * Concept detail fell back to its cache (text of revision 2). The base must
+ * pair text and revision from ONE read, before and after the network heals. */
+async function aMixedLiveAndCachedReadNeverPairsOldTextWithANewRevision() {
+    const store = newStore();
+    globalThis.prksSync = { store: store };
+    const id = "C-" + "3".repeat(32);
+    const server = installMovableConcept(id, "New", 3);
+    server.shown = "Old";
+
+    const session = await globalThis.prksBeginConceptDefinitionEdit(id);
+    assert.equal(session.value, "New", "the editor shows the text its revision stands for");
+    assert.deepEqual(session.base, fieldBase(3, "New"));
+
+    /* The network heals; the save is measured against the same pair. */
+    server.shown = null;
+    await globalThis.updateConcept(id, { description: "New, edited" }, { definitionEdit: session });
+    const rows = await rowsFor(store, "SET_CONCEPT_FIELD");
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].base_revision, 3);
+    assert.equal(rows[0].payload.value, "New, edited");
+
+    /* A session that somehow holds old text on the current revision (opened
+     * before this fix) cannot say what its save replaces. */
+    const store2 = newStore();
+    globalThis.prksSync = { store: store2 };
+    const incoherent = { concept_id: id, value: "Old",
+        base: fieldBase(3, "Old"), expected: { description: null } };
+    await assert.rejects(
+        () => globalThis.updateConcept(id, { description: "Old, edited" },
+            { definitionEdit: incoherent }),
+        changedElsewhere, "one revision, two texts: refuse rather than overwrite New");
+    assert.equal((await rowsFor(store2, "SET_CONCEPT_FIELD")).length, 0);
+
+    /* A state cached before it carried the text has no knowable base. */
+    globalThis.prksOfflineReadEntity = async (kind, entityId) => (kind === "concept-state"
+        ? { value: { concept_id: entityId, fields: { description: { revision: 3 } },
+            identity: { name: "Systems", aliases: [] }, identity_revision: 0,
+            parent_ids: [], parents_revision: 0 }, source: "cache" }
+        : { value: { id: entityId, name: "Systems", description: "Old" }, source: "cache" });
+    assert.equal(await globalThis.prksBeginConceptDefinitionEdit(id), null);
+}
+
+async function theStoreRefusesAForeignRow() {
+    const store = newStore();
+    const id = "C-" + "8".repeat(32);
+    const mine = await store.saveConceptFields(id, { description: "Mine" }, fieldBase(1, "Old"),
+        { description: null });
+    await assert.rejects(
+        () => store.saveConceptFields(id, { description: "Other" }, fieldBase(1, "Old"),
+            { description: null }),
+        error => error.prksLocalStoreCode === "scope_busy" && error.prksBusyForeign === true &&
+            error.prksBusyOpId === mine[0].op_id,
+        "a row the caller did not name is someone else's");
+    await store.saveConceptFields(id, { description: "Mine again" }, fieldBase(1, "Old"),
+        { description: mine[0].op_id });
+    assert.equal((await rowsFor(store, "SET_CONCEPT_FIELD"))[0].payload.value, "Mine again");
+    /* Callers that name nothing keep the old coalescing. */
+    await store.saveConceptFields(id, { description: "Anyone" }, fieldBase(1, "Old"));
+    assert.equal((await rowsFor(store, "SET_CONCEPT_FIELD"))[0].payload.value, "Anyone");
+    await assert.rejects(
+        () => store.saveConceptFields(id, { description: "x" }, fieldBase(1, "Old"), { description: 7 }),
+        error => error.prksLocalStoreCode === "invalid_envelope");
+}
+
+async function anEditorWithNoKnownBaseDoesNotOpen() {
+    globalThis.prksSync = { store: newStore() };
+    globalThis.prksOfflineReadEntity = async () => ({ value: null, source: "unavailable" });
+    assert.equal(await globalThis.prksBeginConceptDefinitionEdit("C-" + "9".repeat(32)), null);
+    globalThis.prksSync = { store: { listOperations: async () => { throw new Error("blocked"); } } };
+    installMovableConcept("C-" + "9".repeat(32), "Known", 1);
+    assert.equal(await globalThis.prksBeginConceptDefinitionEdit("C-" + "9".repeat(32)), null,
+        "an unreadable queue is not an empty one");
+}
+
+/** An acknowledgement whose text write fails must not publish its revision:
+ * the cached base would pair the new revision with the old text (#568). */
+async function aFailedTextWriteDoesNotPublishTheRevision() {
+    const id = "C-" + "4".repeat(32);
+    const cache = createPrksOfflineStore({ indexedDB: createFakeIndexedDBFactory() });
+    const state = globalThis.prksNewConceptState(id, { name: "Systems" });
+    state.fields.description = { value: "Old", revision: 2 };
+    await cache.putEntity("concept", id, { id: id, name: "Systems", description: "Old" });
+    await cache.putEntity("concept-state", id, state);
+    let failText = true;
+    const flaky = Object.assign(Object.create(cache), {
+        putEntity: (kind, entityId, value, token) => (kind === "concept" && failText
+            ? Promise.reject(new Error("quota"))
+            : cache.putEntity(kind, entityId, value, token)),
+    });
+    const offline = createPrksOfflineRuntime({ store: flaky, window: null,
+        prksRequest: async () => { throw new Error("no reads in this scenario"); } });
+    const ack = { code: "ACKNOWLEDGED", concept_id: id, field: "description",
+        changed: true, server_revision: 3, value_omitted: true };
+    const op = { entity_id: id, payload: { field: "description", value: "New" } };
+
+    assert.equal(await offline.reconcileConceptField(ack, op), false,
+        "the acknowledgement stays unreconciled, so it is retried");
+    assert.deepEqual((await cache.getEntity("concept-state", id)).value.fields.description,
+        { value: "Old", revision: 2 }, "the base did not move past the text shown");
+    assert.equal((await cache.getEntity("concept", id)).value.description, "Old");
+
+    failText = false;
+    assert.equal(await offline.reconcileConceptField(ack, op), true);
+    assert.equal((await cache.getEntity("concept", id)).value.description, "New");
+    assert.deepEqual((await cache.getEntity("concept-state", id)).value.fields.description,
+        { value: "New", revision: 3 }, "the retry moves the base, text and revision together");
 }
 
 async function theDefinitionIsNotTheIdentity() {
@@ -531,6 +814,14 @@ async function main() {
     await aConceptNeedsAName();
     await theDefinitionCoalescesAndCancels();
     await theDefinitionCancelGoesThroughApiWrapper();
+    await anOlderDraftDoesNotReplaceAnotherTabsSave();
+    await aSaveTheServerAlreadyMatchesKeepsGoing();
+    await anotherTabsQueuedRowIsNeverCoalescedOver();
+    await anEditorOnItsOwnRowIsNotChangedElsewhere();
+    await aMixedLiveAndCachedReadNeverPairsOldTextWithANewRevision();
+    await theStoreRefusesAForeignRow();
+    await anEditorWithNoKnownBaseDoesNotOpen();
+    await aFailedTextWriteDoesNotPublishTheRevision();
     await theDefinitionIsNotTheIdentity();
     await theIdentityIsOneDecision();
     await aPendingRenameReachesEverySurfaceThatNamesIt();

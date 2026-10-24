@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import type { ProcessingIntents } from './intents'
 import {
   PROCESSING_PAGE_SIZE,
@@ -78,12 +79,12 @@ onBeforeUnmount(() => {
         @click="refresh"
       >Refresh folder scan</PrksButton>
     </div>
-    <p
+    <PrksInlineMessage
       v-if="refreshError"
-      class="prks-inline-message prks-inline-message--error"
-      role="status"
+      tone="error"
+      status
       data-prks-processing-refresh-error
-    >{{ refreshError }}</p>
+    >{{ refreshError }}</PrksInlineMessage>
     <p class="meta-row meta-row--lede">
       Inbox reads PDFs recursively from <code>/data/for_processing</code>. Files here stay out of library search and graph until imported.
     </p>

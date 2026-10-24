@@ -1,6 +1,5 @@
 import { createVNode } from 'vue'
 import {
-  dismissRouteSurface,
   presentRouteSurface,
   registerEarlyRoutePresenter,
   registerRouteWindowBridge,
@@ -69,8 +68,8 @@ function attachGraph(input: ResearchGraphPresentInput): void {
 }
 
 /**
- * Paint one owner's Research Graph chrome. The coordinator owns the Cytoscape
- * instance (`ctx.setResource('researchGraph')`). Vue does not fetch or create it.
+ * Paint one owner's Research Graph chrome. The coordinator registers the
+ * Cytoscape runtime on that owner's resource registry. Vue does not fetch or create it.
  */
 export function presentResearchGraph(input: ResearchGraphPresentInput): void {
   if (!input || !input.owner || typeof input.owner !== 'object') return
@@ -100,17 +99,12 @@ export function presentResearchGraph(input: ResearchGraphPresentInput): void {
   attachGraph(input)
 }
 
-export function dismissResearchGraph(owner: object | null | undefined): void {
-  dismissRouteSurface(owner)
-}
-
 export function resetResearchGraphSessionForTests(): void {
   resetRouteSurfaceForTests()
 }
 
 export function registerResearchGraphBridge(target: Window = window): void {
   registerRouteWindowBridge(target)
-  target.prksVueDismissResearchGraph = dismissResearchGraph
   registerEarlyRoutePresenter(
     GRAPH_FEATURE,
     (request, host) => {

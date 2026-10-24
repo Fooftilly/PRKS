@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
+import PrksDisclosureButton from '../../components/PrksDisclosureButton.vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import type { ResearchGraphChromeIds } from './session'
 
 const props = defineProps<{
@@ -50,22 +53,18 @@ onBeforeUnmount(() => {
         data-prks-role="graph-find"
         :aria-controls="chrome?.resultsId || undefined"
       >
-      <button type="button" class="prks-btn prks-btn--secondary" data-prks-role="graph-fit">Fit</button>
-      <button type="button" class="prks-btn prks-btn--secondary" data-prks-role="graph-reset">Reset layout</button>
-      <button
-        type="button"
-        class="prks-btn prks-btn--secondary"
+      <PrksButton data-prks-role="graph-fit">Fit</PrksButton>
+      <PrksButton data-prks-role="graph-reset">Reset layout</PrksButton>
+      <PrksDisclosureButton
+        :expanded="false"
+        :controls="chrome?.filtersPanelId"
         data-prks-role="graph-filters-toggle"
-        aria-expanded="false"
-        :aria-controls="chrome?.filtersPanelId || undefined"
-      >Filters</button>
-      <button
-        type="button"
-        class="prks-btn prks-btn--secondary"
+      >Filters</PrksDisclosureButton>
+      <PrksDisclosureButton
+        :expanded="false"
+        :controls="chrome?.legendPanelId"
         data-prks-role="graph-legend-toggle"
-        aria-expanded="false"
-        :aria-controls="chrome?.legendPanelId || undefined"
-      >Legend</button>
+      >Legend</PrksDisclosureButton>
     </div>
     <div
       :id="chrome?.resultsId || undefined"
@@ -132,7 +131,7 @@ onBeforeUnmount(() => {
       </div>
     </div>
     <div data-prks-role="graph-body">
-      <p v-if="graphUnavailable" class="prks-inline-message" role="status">Graph UI unavailable.</p>
+      <PrksInlineMessage v-if="graphUnavailable" status>Graph UI unavailable.</PrksInlineMessage>
       <template v-else>
         <div class="research-graph__stage" data-prks-role="graph-stage">
           <div class="prks-panel research-graph__canvas-wrap">

@@ -23,5 +23,7 @@ select = [
   "B025",
   "B032",
   "B033",
+  # B035: static-key dict comprehensions silently discard all but one value.
+  "B035",
   "B039",
 ]

@@ -1,6 +1,19 @@
 # Maintainer / browser-test dependencies. Not used by Docker or production runtime.
-playwright==1.63.0
+playwright==1.64.0
 # Contract-test helpers for the typed API boundary (#180 / #45). Required by
 # the Unit / API / contract Test Gate job (installed alongside runtime pins);
 # not used by Docker or production runtime.
 openapi-core==0.23.1
+# PostgreSQL driver and pool for backend/db/ (#623, PG-1). Only the PostgreSQL
+# helper tests (scripts/test-postgres and the Test Gate PostgreSQL job) import
+# them while SQLite stays the only application backend; they move to
+# requirements.txt with the first slice whose runtime path opens a database.
+# psycopg-binary is the bundled libpq build of psycopg[binary].
+psycopg==3.3.6
+psycopg-binary==3.3.6
+psycopg-pool==3.3.3
+# Argon2id password hashing for backend/domain/identity/ (#626, L-ID-1).
+# Like psycopg, only the PostgreSQL helper tests import it until the first
+# slice whose runtime path opens a database; it moves to requirements.txt
+# with psycopg then.
+argon2-cffi==25.1.0

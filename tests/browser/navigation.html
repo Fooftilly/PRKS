@@ -15,7 +15,7 @@
 </head>
 <body>
     <h1>PRKS navigation fixture</h1>
-    <p>Loads production <code>frontend/js/navigation.js</code>. Serve with <code>python tests/browser/serve.py</code>.</p>
+    <p>Loads production <code>frontend/js/route-model.js</code> and <code>frontend/js/navigation.js</code>. Serve with <code>python tests/browser/serve.py</code>.</p>
     <p id="summary">Running…</p>
     <ol id="results"></ol>
     <nav>
@@ -32,6 +32,7 @@
         <a href="#/concepts" class="nav-link">Concepts</a>
     </nav>
     <div id="main-content"><div style="height:2000px">pad</div></div>
+    <script src="/frontend/js/route-model.js"></script>
     <script src="/frontend/js/navigation.js"></script>
     <script src="/tests/browser/navigation_selftest.js"></script>
     <script>

@@ -1,5 +1,5 @@
 /**
- * Escape and overlay dismissal call `prksClosePublishersAliasModal`.
+ * Escape and overlay dismissal call `prksVueClosePublishersAliasModal`.
  * That name closes whichever owner's dialog is open. It does not keep a
  * window singleton of the selected publisher.
  */

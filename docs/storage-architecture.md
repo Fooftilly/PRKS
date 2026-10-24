@@ -1,10 +1,12 @@
 # Storage location and Asset storage backends: design (#311)
 
-**Status: proposed design. Not implemented.** This is the design gate for
-#311, under the #310 target architecture. It settles the storage-location and
-physical-object contract that #60's Asset work consumes. It adds no schema,
-migration, API, configuration behavior or UI. Once approved, the phases in
-[§13](#13-implementation-phases) become focused implementation issues.
+**Status: Phase A (contract and foundation) implemented; Phases B–F are
+proposed.** This is the design gate for #311, under the #310 target
+architecture. It settles the storage-location and physical-object contract
+that #60's Asset work consumes. The phases in
+[§13](#13-implementation-phases) become focused implementation issues. How
+Phase A maps onto the code, and the choices it made inside this design's
+latitude, are recorded in [§18](#18-phase-a-implementation-record).
 
 It follows the shape of [work-identity-model.md](work-identity-model.md): audit
 the code first, then decide. Every claim about current behavior was checked
@@ -39,10 +41,11 @@ Contents:
 11. [Path-sensitive systems](#11-path-sensitive-systems)
 12. [Multi-process semantics](#12-multi-process-semantics)
 13. [Implementation phases](#13-implementation-phases)
-14. [Deferred until the frontend migration finishes](#14-deferred-until-the-frontend-migration-finishes)
+14. [Deferred frontend and API work](#14-deferred-frontend-and-api-work)
 15. [Rejected alternatives](#15-rejected-alternatives)
 16. [Open questions](#16-open-questions)
 17. [Conformance checks](#17-conformance-checks)
+18. [Phase A implementation record](#18-phase-a-implementation-record)
 
 ---
 
@@ -1515,17 +1518,17 @@ commit may replace the OS lock. That is a Phase F/PostgreSQL design item.
 
 ## 13. Implementation phases
 
-Every phase starts **after** the frontend migration (#230/#290/#302/#303),
-except where noted. Each phase leaves `master` deployable with no change in
+The frontend migration (#230/#290/#302/#303) that originally gated these
+phases has finished, and Phase A is implemented (§18). Each phase leaves `master` deployable with no change in
 behavior unless stated.
 
 | Phase | Content | Schema? | API/OpenAPI? | UI? | Waits for |
 | --- | --- | --- | --- | --- | --- |
-| **A. Contract and foundation** | The root resolver with §5.2 precedence and `(root, source)`; `--storage-root`; normalization (V1); the platform-default table (§6) behind the distribution flag, so a source checkout still gets `data/`; the bootstrap config reader and its guarded compare-and-set writer (§5.1: config lock, re-read, expected-state check, atomic replace; no UI writes yet); the root marker (adopt on first bind, refuse wrong, retired or foreign roots); startup validation (§7.2, startup subset); the single-process lease; `StorageKey`, `ObjectInfo`, `StorageBackend`, `LocalFilesystemStorage` over the existing primitives, with contract tests shared by any future backend; `backup_storage_inventory` classification of the marker and config (operational, not backed up). The `/data/for_processing` special case is **kept unchanged** (§1.2). **Behavior must be identical for every existing deployment**: the same root is chosen and the same paths are derived, the processing inbox included; the only new file is the marker. | no | no | no | nothing (backend-only; may start before the migration ends if it touches no frontend file) |
+| **A. Contract and foundation** | The root resolver with §5.2 precedence and `(root, source)`; `--storage-root`; normalization (V1); the platform-default table (§6) behind the distribution flag, so a source checkout still gets `data/`; the bootstrap config reader and its guarded compare-and-set writer (§5.1: config lock, re-read, expected-state check, atomic replace; no UI writes yet); the root marker (adopt on first bind, refuse wrong, retired or foreign roots); startup validation (§7.2, startup subset); the single-process lease; `StorageKey`, `ObjectInfo`, `StorageBackend`, `LocalFilesystemStorage` over the existing primitives, with contract tests shared by any future backend; `backup_storage_inventory` classification of the marker and config (operational, not backed up). The `/data/for_processing` special case is **kept unchanged** (§1.2). **Behavior must be identical for every existing deployment**: the same root is chosen and the same paths are derived, the processing inbox included; the only new files are the marker and the lease file `.prks-maintenance/root.lock`. | no | no | no | nothing (implemented; §18) |
 | **B. Route managed files through the backend** | Managed PDF create, replace, COW, adoption, cleanup and linearization; portraits; import; backup enumeration; locks keyed by `StorageKey`; `processing_files.abs_path` derived from `rel_path` (the column is left unused). Behavior is preserved and proven by the existing managed-PDF, cleanup and backup tests unchanged. | no (dropping `abs_path` is a later migration) | no | no | A |
 | **C. Asset identity coordination** | #60 Slice D lands on Phase B operations: `assets` locators are authoritative keys; the fingerprint pass uses `stat` and `verify`; the text-index fingerprint moves to `content_sha256`/`content_generation`; Slice G serves `/api/assets/{id}/content`. | #60's migrations | #60's typed API | no | **#60 Slice C/D** and B |
-| **D. Selectable root and diagnostics** | Backend: storage status (§11.1), "choose" and "open another library" commands writing the bootstrap config, with the full §7.2 validation, and hot-rebinding under the admission-time relocation mode and rebind barrier (§8.1), with the whole rebind held as one transaction under the config lock, a test that no in-flight read observes a mixed binding, a two-process hot-rebind race test, and a test that opening an existing library leaves its `storage_root_id` unchanged; typed API with OpenAPI (#45 pattern). Then the Settings → Storage UI, per `DESIGN.md`. The packaged platform default is activated by #46 packaging. The optional `cache_root` for derived data (§7.4). Retire the `/data/for_processing` special case with the discovery rule and release note in §1.2. | no | **yes** | **yes**, after the migration | A (backend); **the frontend migration** (UI); #46 (packaged default and "Open folder") |
-| **E. Relocation** | The §8 protocol: P0–P10 plus startup recovery, with the P2 source fence as the revocation mechanism; the offline `storage relocate`/`finalize`/`abort`/`verify` CLI first, then the in-app "Move library…". Crash tests at every phase boundary, as the restore suite already does. That includes the boundary between P1's config write and its destination-marker write, and the offline P1-only staging state, a crash during P0 that leaves a preflight scaffold, and resuming the same `relocation_id` through P0, and two concurrent offline `relocate` commands with different destinations, where the loser must refuse before writing any P1 marker. A gate-level test proves the in-app move route is classified at admission as backup mode (or the equivalent relocation mode), that reads continue while it runs, that mutations and backups wait, and that the move request itself does not deadlock. A config race test starts **open another library** immediately after P6 while P7 and P9 are delayed, and proves that the selection is refused while the move is unresolved. It also forces a stale P7/P9 write after a newer selection has been recorded, and proves the guarded compare-and-set leaves that newer selection intact. An inbox test adds, modifies and deletes source inbox files during P3, including a same-size in-place rewrite with a preserved `st_mtime_ns`, a rewrite during hashing, and an atomic replace or rename over the pathname while its old handle is being hashed, and proves the final pass converges on exactly the source bytes. An offline test crashes `relocate` after the P2 fence and before P4, and proves `finalize` refuses the unverified destination whether or not the source is reachable. Offline tests also cover an `abort` that crashes between unfencing the source and discarding the destination, proving a rerun finishes the discard, and a start after a P1-only crash that selects the source, proving it binds normally while the `staging` destination stays refused. Further offline tests cover `abort --to` after a P1-only crash and after unfencing, a P10 test with a post-P4 inbox file that proves the marker and config record survive until that file is imported or discarded, and that `open another library` and a new move are both refused while P10 is stopped on it; an offline variant sets `moved_from.residuals` on a CLI-selected root and proves `storage relocate` refuses and that no marker write drops the flag until the teardown completes, and Windows tests of the §12 terminal teardown for offline `abort`, P10 and one in-app discard path, asserting that the lock is released only after the marker is terminal and that a crash after the release leaves a state a rerun finishes. A second gate test holds an in-flight read across P6 and proves it finishes before the rebind barrier is granted, that reads arriving during P6 wait until it is released, and that no read observes a mixed binding; the same holds for revert's rebinds. | no | yes (move command, progress) | yes, after the migration | B (for derived `abs_path`, or reuse the restore rewrite), D. **Not** #60. |
+| **D. Selectable root and diagnostics** | Backend: storage status (§11.1), "choose" and "open another library" commands writing the bootstrap config, with the full §7.2 validation, and hot-rebinding under the admission-time relocation mode and rebind barrier (§8.1), with the whole rebind held as one transaction under the config lock, a test that no in-flight read observes a mixed binding, a two-process hot-rebind race test, and a test that opening an existing library leaves its `storage_root_id` unchanged; typed API with OpenAPI (#45 pattern). Then the Settings → Storage UI, per `DESIGN.md`. The packaged platform default is activated by #46 packaging. The optional `cache_root` for derived data (§7.4). Retire the `/data/for_processing` special case with the discovery rule and release note in §1.2. | no | **yes** | **yes** | A; #46 (packaged default and "Open folder") |
+| **E. Relocation** | The §8 protocol: P0–P10 plus startup recovery, with the P2 source fence as the revocation mechanism; the offline `storage relocate`/`finalize`/`abort`/`verify` CLI first, then the in-app "Move library…". Crash tests at every phase boundary, as the restore suite already does. That includes the boundary between P1's config write and its destination-marker write, and the offline P1-only staging state, a crash during P0 that leaves a preflight scaffold, and resuming the same `relocation_id` through P0, and two concurrent offline `relocate` commands with different destinations, where the loser must refuse before writing any P1 marker. A gate-level test proves the in-app move route is classified at admission as backup mode (or the equivalent relocation mode), that reads continue while it runs, that mutations and backups wait, and that the move request itself does not deadlock. A config race test starts **open another library** immediately after P6 while P7 and P9 are delayed, and proves that the selection is refused while the move is unresolved. It also forces a stale P7/P9 write after a newer selection has been recorded, and proves the guarded compare-and-set leaves that newer selection intact. An inbox test adds, modifies and deletes source inbox files during P3, including a same-size in-place rewrite with a preserved `st_mtime_ns`, a rewrite during hashing, and an atomic replace or rename over the pathname while its old handle is being hashed, and proves the final pass converges on exactly the source bytes. An offline test crashes `relocate` after the P2 fence and before P4, and proves `finalize` refuses the unverified destination whether or not the source is reachable. Offline tests also cover an `abort` that crashes between unfencing the source and discarding the destination, proving a rerun finishes the discard, and a start after a P1-only crash that selects the source, proving it binds normally while the `staging` destination stays refused. Further offline tests cover `abort --to` after a P1-only crash and after unfencing, a P10 test with a post-P4 inbox file that proves the marker and config record survive until that file is imported or discarded, and that `open another library` and a new move are both refused while P10 is stopped on it; an offline variant sets `moved_from.residuals` on a CLI-selected root and proves `storage relocate` refuses and that no marker write drops the flag until the teardown completes, and Windows tests of the §12 terminal teardown for offline `abort`, P10 and one in-app discard path, asserting that the lock is released only after the marker is terminal and that a crash after the release leaves a state a rerun finishes. A second gate test holds an in-flight read across P6 and proves it finishes before the rebind barrier is granted, that reads arriving during P6 wait until it is released, and that no read observes a mixed binding; the same holds for revert's rebinds. | no | yes (move command, progress) | yes | B (for derived `abs_path`, or reuse the restore rewrite), D. **Not** #60. |
 | **F. Object storage (optional)** | An S3-compatible backend passing the shared contract tests; restore and backup for it; immutable-object mode (§10.4). **Only when a deployment needs it.** | possibly a `storage_backend` column (#60) | config only | no | C, and in practice the PostgreSQL migration (#310) |
 
 **Why A ships before D.** It gives no user-visible feature, but it makes
@@ -1539,18 +1542,20 @@ needs only Phase B's fix. It does not need Asset authority.
 
 ---
 
-## 14. Deferred until the frontend migration finishes
+## 14. Deferred frontend and API work
+
+None of this is in Phase A. Each item belongs to the phase named in §13
+(mostly D and E); the frontend migration that first deferred them has finished.
 
 - Every Settings UI: Storage panel, root display, choose, open another
   library, move, retained-copy cleanup, and warnings.
 - "Open data folder" (it also needs #46 desktop packaging).
 - Relocation progress UI and the failed or retained notices.
 - The OpenAPI entries for storage status and commands. They are designed with
-  #45 when Phase D starts, so this PR does not change the contract while the
-  frontend migration is using it.
+  #45 when Phase D starts.
 
-Nothing in this document requires touching `frontend/`, `frontend-app/`,
-Storybook or OpenAPI before then.
+Phase A touches no file under `frontend/` or `frontend-app/`, no Storybook
+story and no OpenAPI document.
 
 ---
 
@@ -1623,5 +1628,131 @@ control through `--storage-root` and `PRKS_STORAGE` (§5.2). A NAS or another
 disk is supported wherever the filesystem provides the semantics PRKS relies
 on, and PRKS says so explicitly instead of assuming (§7.4).
 
-**What this PR changes.** Documentation only. There is no runtime, schema,
-API, OpenAPI, frontend, Storybook or dependency change.
+**What is implemented.** Phase A only (§18): runtime root selection,
+validation, marker, lease and the unrouted backend foundation, with no schema,
+API, OpenAPI, frontend, Storybook or dependency change. Phases B–F remain
+proposed.
+
+---
+
+## 18. Phase A implementation record
+
+**Where it lives.** Phase A adapts the existing owners instead of adding a
+parallel configuration system:
+
+| Concern | Before Phase A | Phase A |
+| --- | --- | --- |
+| Root selection | `StorageConfig.from_env()` | still the one entry; it asks `storage/resolver.py` (§5.2, V1, §6) and records `root_source` |
+| Path derivation | `storage/paths.py` via `StorageConfig._from_parts` | unchanged |
+| CLI | `prks_app.py` | `--storage-root`; `open_storage()` runs before restore recovery and `bind_storage()` |
+| Bootstrap file | none | `storage/bootstrap_config.py` (reader, `BootstrapConfigStore` compare-and-set, `transaction()` for later multi-step writers) |
+| Marker, validation, lease | none | `storage/root_marker.py`, `storage/root_binding.py`, `storage/preflight.py`, `storage/file_lock.py` |
+| Bind | `server.bind_storage()` | unchanged, plus a guard refusing a root this process has not leased |
+| Backup inventory | `backup_storage_inventory()` | adds `operational_root_entries` (marker, `root.lock`) and `external_operational` (bootstrap file and its lock) |
+| Durability | `fs_durability` | adds `replace_file_atomically()` (sibling temporary, fsync, replace, directory sync) used by the marker and the bootstrap file |
+| Backend boundary | none | `storage/objects.py` with the shared contract suite `tests/storage_backend_contract.py`; **no production operation uses it yet** |
+
+**Choices made inside the design's latitude.**
+
+- **Adoption (§7.1, open question 5) needs proof by type and content.** An
+  unmarked root is adopted only when it holds the mode's database as a regular
+  file with a SQLite header, `pdfs/` as a plain directory, or recognized
+  restore state under `.prks-maintenance/` (`restore-journal.json`,
+  `rollback/`, `restore-staging/`, `backup/`). The last case lets a root
+  interrupted mid-restore, whose database and `pdfs/` may be moved away, still
+  reach `recover_incomplete_restore()`. A same-named entry of the wrong type, or
+  arbitrary maintenance content, is foreign. A reserved name of the wrong type
+  next to otherwise valid proof is refused as `root_malformed`
+  (`root_contains_link` for a link) before anything is written, so that
+  directory is never marked as a library. Reserved names are the database,
+  `.prks-maintenance/`, and every component the bound `StorageConfig` derives
+  directly under the root: `pdfs/`, `thumbs/`, `people/` and the inbox must be
+  plain directories, and the index databases and the log plain files (say
+  `pdfs/` beside a file named `thumbs` is refused).
+  An empty database file is neither proof nor malformed. Open question 5 stays
+  open.
+- **Only a first run creates a root.** An empty or absent root becomes a new
+  root for the CLI, `PRKS_STORAGE` and default sources, as V3 prescribes. A
+  root selected by the **bootstrap file** must already carry a marker or be
+  adoptable: absent or empty, it is far more likely an unmounted disk than a
+  wish for a new library, so it is refused (`root_missing`) without creating
+  anything. Choosing a genuinely new root is Phase D's command.
+- **V7 and V13 cover the whole root.** Under the lease, startup walks the
+  resolved root completely without following links (excluding the root path
+  itself and top-level OS metadata: `lost+found`, and the volume metadata an
+  OS keeps at the top of a mounted volume, such as macOS `.Trashes` and
+  `.Spotlight-V100`, Linux `.Trash-<uid>`, and Windows `System Volume
+  Information` and `$RECYCLE.BIN`, which are often unlistable by the owner).
+  The same names do not make a fresh root non-empty for V3, so a library at
+  the root of an external disk keeps opening. Any link or Windows
+  reparse point is refused, and so is any entry -- directory or regular file,
+  so a file bind mount is caught -- on a device other than the root's. The one
+  relaxation is an overlayfs root, where unmodified files may report the lower
+  layer's device: there only directories are held to the device rule, with a
+  warning. A directory that cannot be listed, or an entry that cannot be
+  inspected, is refused as `root_unreadable`, because the invariant cannot be
+  proven for it. Components an override places outside the root are
+  not part of the walk. Device numbers alone cannot see a bind mount from the
+  same filesystem, across which `rename()` still fails with `EXDEV`, so the
+  mount table is consulted too (`/proc/self/mountinfo` on Linux, `mount(8)`
+  on macOS; on Windows a folder mount is a reparse point): any mount point
+  strictly inside the root, directory or file, is refused. The root itself may
+  be a mount point.
+- **Root links are resolved once.** After the lease is taken, the process
+  entry re-anchors every root-relative `StorageConfig` path beneath the leased
+  `root_real` (`BoundRoot.anchor()`), so retargeting a root link afterwards
+  cannot move database, PDF or index I/O to a root whose marker and lease were
+  never checked. `configured_root` keeps the configured spelling. The
+  development default's repository inbox fallback (used when
+  `/data/for_processing` cannot be created) is derived from the bound root
+  for the same reason.
+- **V11 install directory.** A packaged build refuses any root inside the
+  install directory. A source checkout refuses only the checkout itself or a
+  root containing it, so existing self-hosted roots inside a checkout keep
+  starting. The nested-marker scan is bounded to two levels and 2000 entries.
+- **Log file.** The error log (`PRKS_LOG_FILE`) must not resolve to the
+  marker, anything under `.prks-maintenance/`, or the bootstrap config file or
+  its lock; appending log text would corrupt them. This is refused as
+  `log_file_operational`, compared by real path and by file identity (so a
+  hard link is caught too), before anything is written.
+- **V9** refuses a filesystem type known with certainty to be a network mount,
+  before anything is written: Linux types from `/proc/mounts` (`nfs`, `cifs`,
+  `smb3`, network FUSE such as `fuse.sshfs`, …), macOS types from `mount(8)`
+  (`smbfs`, `nfs`, `afpfs`, `webdav`), and on Windows a UNC path or a drive
+  reported as `DRIVE_REMOTE`. Other FUSE types are uncertain and a filesystem
+  the platform cannot classify is never assumed local; both are warned about.
+  **V10** warns. **V5, V6, V8** run once per device; the result is cached in
+  the marker's `filesystem_probe`, and a different `st_dev` re-probes.
+- **Diagnostics.** Each bind records `active_process` (PID, host, start time)
+  in the marker for the "already open" message. It is never read as authority.
+  The process entry opens the root before logging is configured (the log file
+  lives in it), so the V9/V10 and durability warnings raised while opening are
+  held and logged, with the path-free `storage_root_bound source=…` summary,
+  once logging is set up; a refusal emits them immediately.
+- **Inbox for new sources.** A `config_file` or `platform_default` root uses
+  `<root>/for_processing`. No existing deployment has those sources; the
+  development default keeps `/data/for_processing` exactly (§1.2).
+- **Relocation records.** A marker in `fenced`, `staging` or `retired` state,
+  or an `active` marker with a relocation role, is refused with the relocation
+  ID and peer. A bootstrap `relocation` record with a known phase is parsed and
+  never acted on; the marker check refuses whichever end is not bindable.
+- **`put_new` publication** is always one atomic no-overwrite step: `link`
+  (POSIX), `rename` (Windows), or, on a filesystem without hard links,
+  `renameat2(RENAME_NOREPLACE)` / `renamex_np(RENAME_EXCL)`. Where none exists
+  it fails closed; the key is never reserved with an empty file.
+- **Bootstrap file identity.** `BootstrapConfigStore` canonicalizes a
+  symlinked config path to its target, so every alias shares one lock and a
+  write replaces the target rather than the link.
+- **Windows.** The lease is `msvcrt.locking` (`LockFile` on one byte, per
+  handle). A marker replace that meets a sharing violation from a concurrent
+  diagnostic reader is retried briefly.
+
+**Deliberately not in Phase A.** Routing any managed-file operation through
+`StorageBackend`, key-scoped locks, and a derived `processing_files.abs_path`
+(Phase B); storage status, choose, open another library, hot rebind,
+`unbind_storage()`, the Settings writer and the typed API (Phase D); every
+relocation step, recovery, `storage relocate/finalize/abort/verify` and terminal
+teardown (Phase E). Probing earlier default locations (§5.2) has nothing to
+probe yet: a source checkout's only earlier default is its current one, and no
+packaged build has shipped.
+

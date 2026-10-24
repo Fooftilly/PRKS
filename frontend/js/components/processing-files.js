@@ -1,8 +1,9 @@
 /**
- * Processing Files writes and the preview resource.
- * The coordinator in app.js loads the inbox. Vue paints the cards.
- * This module keeps the upload-style save/import, the catalog helpers those
- * cards call, and the iframe plus resize listener for one owner.
+ * Processing Files catalog helpers and the preview resource.
+ * The coordinator in app.js loads the inbox through `prksProcessingRecords`
+ * (frontend-app/src/features/processing/records.ts), which also owns save and
+ * import. Vue paints the cards. This module keeps the tag, folder, and person
+ * helpers those cards call, and the iframe plus resize listener for one owner.
  * There is no processing-file durable queue.
  *
  * Processing File roles share the People-navigation subset (excludes Mentioned).
@@ -178,22 +179,6 @@ function prksProcessingSetPreview(owner, file) {
     return 'side';
 }
 
-function prksProcessingNormalizeDraft(draft) {
-    const next = Object.assign({}, draft || {});
-    if (typeof prksParsePublishedDateInput === 'function') {
-        next.published_date = prksParsePublishedDateInput(next.published_date);
-    }
-    return next;
-}
-
-async function prksProcessingSave(fileId, draft) {
-    return patchProcessingFile(fileId, prksProcessingNormalizeDraft(draft));
-}
-
-async function prksProcessingImport(fileId) {
-    return importProcessingFile(fileId);
-}
-
 async function prksProcessingSearchTags() {
     if (typeof fetchTags !== 'function') return [];
     const rows = await fetchTags({ used: false });
@@ -283,8 +268,6 @@ window.prksProcessingDomPrefix = prksProcessingDomPrefix;
 window.prksProcessingAttachResources = prksProcessingAttachResources;
 window.prksProcessingReleaseResources = prksProcessingReleaseResources;
 window.prksProcessingSetPreview = prksProcessingSetPreview;
-window.prksProcessingSave = prksProcessingSave;
-window.prksProcessingImport = prksProcessingImport;
 window.prksProcessingSearchTags = prksProcessingSearchTags;
 window.prksProcessingCreateTag = prksProcessingCreateTag;
 window.prksProcessingQuickCreateFolder = prksProcessingQuickCreateFolder;

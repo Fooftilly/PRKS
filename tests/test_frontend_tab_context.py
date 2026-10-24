@@ -98,16 +98,13 @@ class TestMigratedGlobalsAbsent(unittest.TestCase):
 
 
 class TestTabContextResourceAPI(unittest.TestCase):
-    """Structural guard: tab-context.js exports focused resource helpers."""
+    """Structural guard: tab-context.js exports focused helpers; registry kinds have one owner path."""
 
     def test_focused_resource_exported(self):
         tc_path = os.path.join(FRONTEND_JS, "tab-context.js")
         with open(tc_path, encoding="utf-8") as fh:
             src = fh.read()
         for name in (
-            "prksFocusedResource",
-            "prksSetFocusedResource",
-            "prksClearFocusedResource",
             "prksFocusedTimer",
             "prksClearFocusedTimer",
             "prksFocusedRouteSidebar",
@@ -125,6 +122,31 @@ class TestTabContextResourceAPI(unittest.TestCase):
             suspend.find("prksReleaseWorkThumbPreview"),
             suspend.find("moveRoot(ctx.root, host)"),
         )
+        self.assertLess(
+            suspend.find("if (!moveRoot(ctx.root, host)) return false;"),
+            suspend.find("resourceRegistry.warmSuspend()"),
+        )
+        resume = src.split("ctx.resume = function (host)", 1)[1].split("ctx.unmount = function", 1)[0]
+        self.assertLess(
+            resume.find("if (!moveRoot(ctx.root, host)) return false;"),
+            resume.find("resourceRegistry.resume()"),
+        )
+
+    def test_focused_resource_bridge_is_retired(self):
+        for name in ("prksFocusedResource", "prksSetFocusedResource", "prksClearFocusedResource"):
+            hits = _scan_frontend_js(re.compile(r"\b" + name + r"\b"))
+            self.assertEqual(hits, [], f"{name} still referenced: {hits}")
+
+    def test_set_resource_refuses_registry_kinds(self):
+        tc_path = os.path.join(FRONTEND_JS, "tab-context.js")
+        with open(tc_path, encoding="utf-8") as fh:
+            src = fh.read()
+        at = src.index("ctx.setResource = function (name, value)")
+        body = src[at:src.index("ctx.getResource = function", at)]
+        self.assertLess(body.index("isRegistryKind(key)"), body.index("ctx.resources.set(key, value)"))
+        self.assertIn("throw new TypeError(", body)
+        self.assertNotIn("resourceRegistry.register(", body)
+        self.assertNotIn("disposer", src)
 
     def test_warm_pdf_parking_host_exists(self):
         index_path = os.path.join(ROOT, "frontend", "index.html")
@@ -222,8 +244,20 @@ class TestWorkPageLocalIdsGone(unittest.TestCase):
             'id="work-header-doc-type-slot"',
         ):
             self.assertNotIn(forbidden, src, forbidden + " still globally fixed")
-        self.assertIn('data-prks-role="pdf-viewer"', src)
-        self.assertIn('data-prks-role="research-notes-editor"', src)
+        shell_path = os.path.join(
+            ROOT, "frontend-app", "src", "features", "work", "WorkMainSurface.vue"
+        )
+        with open(shell_path, encoding="utf-8") as fh:
+            shell = fh.read()
+        for forbidden in (
+            'id="pdf-viewer"',
+            'id="research-notes-editor"',
+            'id="work-notes-editor-region"',
+            'id="work-header-doc-type-slot"',
+        ):
+            self.assertNotIn(forbidden, shell, forbidden + " still globally fixed")
+        self.assertIn('data-prks-role="pdf-viewer"', shell)
+        self.assertIn('data-prks-role="research-notes-editor"', shell)
         self.assertIn("ctx.query('[data-prks-role=\"research-notes-editor\"]')", src)
 
     def test_pdf_init_takes_ctx(self):
@@ -231,7 +265,9 @@ class TestWorkPageLocalIdsGone(unittest.TestCase):
         with open(pdf_path, encoding="utf-8") as fh:
             src = fh.read()
         self.assertIn("export function initPdfViewerForWork(ctx, work)", src)
-        self.assertIn('ctx.setResource(\'pdf\'', src)
+        self.assertIn("ctx.registerResource(_pdfTicket", src)
+        self.assertIn("kind: 'pdf'", src)
+        self.assertNotIn("ctx.setResource('pdf'", src)
         self.assertIn("if (_pdfStale())", src)
         self.assertIn("viewer.destroy", src)
 
@@ -243,15 +279,20 @@ class TestScriptOrderAndRenderer(unittest.TestCase):
             html = fh.read()
         nav = html.find('src="/js/navigation.js"')
         ws = html.find('src="/js/workspace-tabs.js"')
+        resource = html.find('src="/js/owner-resource.js"')
         tc = html.find('src="/js/tab-context.js"')
         tiling = html.find('src="/js/workspace-tiling.js"')
+        leave = html.find('src="/js/tab-leave.js"')
         pdf_rt = html.find('src="/js/pdf-work-runtime.js"')
         app = html.find('src="/js/app.js"')
         self.assertNotEqual(nav, -1)
+        self.assertNotEqual(resource, -1)
         self.assertLess(nav, ws)
-        self.assertLess(ws, tc)
+        self.assertLess(ws, resource)
+        self.assertLess(resource, tc)
         self.assertLess(tc, tiling)
-        self.assertLess(tiling, pdf_rt)
+        self.assertLess(tiling, leave)
+        self.assertLess(leave, pdf_rt)
         self.assertLess(pdf_rt, app)
 
     def test_render_tab_route_signature(self):
@@ -259,7 +300,8 @@ class TestScriptOrderAndRenderer(unittest.TestCase):
         with open(app, encoding="utf-8") as fh:
             src = fh.read()
         self.assertIn("async function prksRenderTabRoute(ctx, hash, options)", src)
-        self.assertIn("return { cancelled: true, reason: 'pending-sync' }", src)
+        self.assertIn("if (status === 'rejected-pending-pdf-sync') return 'pending-sync';", src)
+        self.assertIn("return { cancelled: true, reason: prksLeaveDecisionReason(decision) }", src)
         self.assertNotIn("window.location.hash = revertHash", src)
 
 
@@ -267,12 +309,14 @@ class TestEntityMigrationIntegration(unittest.TestCase):
     """Integration: ctx.setEntity/getEntity used for entity ownership."""
 
     def test_works_uses_ctx_set_entity(self):
-        w_path = os.path.join(FRONTEND_JS, "components", "works.js")
-        with open(w_path, encoding="utf-8") as fh:
+        lifecycle_path = os.path.join(
+            ROOT, "frontend-app", "src", "features", "work", "detail-lifecycle.ts"
+        )
+        with open(lifecycle_path, encoding="utf-8") as fh:
             src = fh.read()
         self.assertIn(
             "ctx.setEntity('work'", src,
-            "works.js must use ctx.setEntity for work ownership"
+            "the Work mount must use ctx.setEntity for work ownership"
         )
 
     def test_folders_uses_ctx_set_entity(self):
@@ -367,7 +411,9 @@ class TestPdfRuntimeShape(unittest.TestCase):
         with open(pdf_path, encoding="utf-8") as fh:
             src = fh.read()
         self.assertIn("createWorkPdfRuntime", src)
-        self.assertIn("ctx.setResource('pdf', runtime", src)
+        self.assertIn("ctx.registerResource(_pdfTicket", src)
+        self.assertIn("kind: 'pdf'", src)
+        self.assertNotIn("ctx.setResource('pdf'", src)
         self.assertIn("runtime.viewer = viewer", src)
         self.assertIn(
             "openPdfAnnotationEditorById(ctx, info.annotationId,",
@@ -427,10 +473,12 @@ class TestRightPanelTabContextOwned(unittest.TestCase):
             ui = fh.read()
         self.assertRegex(ui, _RIGHT_PANEL_TAB_WRITE_RE, "rightPanelTab never written in ui.js")
         self.assertIn("focusedCtx.ui.rightPanelTab", ui, "getActiveRightPanelTab must read focusedCtx.ui.rightPanelTab")
-        works_path = os.path.join(FRONTEND_JS, "components", "works.js")
-        with open(works_path, encoding="utf-8") as fh:
-            works = fh.read()
-        self.assertIn("ctx.ui.rightPanelTab", works)
+        lifecycle_path = os.path.join(
+            ROOT, "frontend-app", "src", "features", "work", "detail-lifecycle.ts"
+        )
+        with open(lifecycle_path, encoding="utf-8") as fh:
+            mount = fh.read()
+        self.assertIn("ctx.ui.rightPanelTab", mount)
 
 
 def _js_function_source(src, name):
@@ -460,16 +508,19 @@ class TestWorkRefreshHelpersUseOwnedEntity(unittest.TestCase):
         self.assertNotIn("prksSettleWorkMetaEditAfterSave", ui)
 
     def test_work_render_and_route_right_panel_require_focus(self):
-        works_path = os.path.join(FRONTEND_JS, "components", "works.js")
-        with open(works_path, encoding="utf-8") as fh:
-            works = fh.read()
-        render = _js_function_source(works, "renderWorkDetails")
-        self.assertIn("prksTabContextIsFocused", render)
-        self.assertLess(render.find("prksTabContextIsFocused"), render.find("updatePanelContent"))
+        lifecycle_path = os.path.join(
+            ROOT, "frontend-app", "src", "features", "work", "detail-lifecycle.ts"
+        )
+        with open(lifecycle_path, encoding="utf-8") as fh:
+            mount = fh.read()
+        attach_at = mount.index("const attach = () =>")
+        attach = mount[attach_at:mount.index("presentWork(ctx, contentDiv,", attach_at)]
+        self.assertIn("prksTabContextIsFocused", attach)
+        self.assertLess(attach.find("prksTabContextIsFocused"), attach.find("updatePanelContent"))
         app_path = os.path.join(FRONTEND_JS, "app.js")
         with open(app_path, encoding="utf-8") as fh:
             app = fh.read()
-        route = _js_function_source(app, "prksRenderTabRoute")
+        route = _js_function_source(app, "prksCommitTabRouteRender")
         self.assertIn("prksTabContextIsFocused", route)
         self.assertIn("isFocused", route)
 

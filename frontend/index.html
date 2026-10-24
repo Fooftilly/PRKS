@@ -502,6 +502,17 @@
                         </div>
                         <p class="prks-settings-hint" id="prks-offline-cache-status" aria-live="polite"></p>
                     </section>
+                    <section class="prks-settings-section prks-settings-section--sep" aria-labelledby="prks-settings-recovery-heading">
+                        <h5 id="prks-settings-recovery-heading" class="prks-settings-section__title">Editor recovery drafts <span class="prks-settings-scope">This device</span></h5>
+                        <p class="prks-settings-hint">Unsaved Research Notes and Reminders text this browser kept in case a tab closed or crashed. These are recovery copies, not changes waiting to sync, and nothing here changes the server. Clearing the offline cache keeps them; clearing this browser's site data removes them.</p>
+                        <div id="prks-settings-recovery-root"></div>
+                    </section>
+                    <section class="prks-settings-section prks-settings-section--sep" aria-labelledby="prks-settings-about-heading">
+                        <h5 id="prks-settings-about-heading" class="prks-settings-section__title">About PRKS</h5>
+                        <p class="prks-settings-hint" id="prks-copyright-notice">Copyright © 2026 Nikola Perović and other PRKS contributors. Each author retains copyright in their contributions; third-party works retain their respective copyrights.</p>
+                        <p class="prks-settings-hint">PRKS-authored code and documentation are free software licensed under the GNU Affero General Public License v3.0 only (AGPL-3.0-only). You may copy, modify, and redistribute that covered material under its terms. Third-party components retain their own licenses; no warranty is provided.</p>
+                        <p class="prks-settings-hint"><a id="prks-source-code-link" href="https://github.com/Fooftilly/PRKS" target="_blank" rel="noopener noreferrer">Upstream source code</a> · <a id="prks-license-link" href="https://github.com/Fooftilly/PRKS/blob/master/LICENSE" target="_blank" rel="noopener noreferrer">License text</a> · <a id="prks-third-party-link" href="https://github.com/Fooftilly/PRKS/blob/master/THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener noreferrer">Third-party notices</a></p>
+                    </section>
                 </section>
 
             </div>
@@ -1063,24 +1074,28 @@
     <script src="/vendor/lucide/lucide.min.js"></script>
     <script src="/js/icons.js"></script>
     <script src="/js/date-format.js"></script>
+    <script src="/js/route-model.js"></script>
     <script src="/js/navigation.js"></script>
     <script src="/js/workspace-hosts.js"></script>
     <script src="/js/workspace-model.js"></script>
     <script src="/js/workspace-tree.js"></script>
     <script src="/js/workspace-persistence.js"></script>
     <script src="/js/workspace-tabs.js"></script>
+    <script src="/js/owner-resource.js"></script>
     <script src="/js/tab-context.js"></script>
     <script src="/js/workspace-tiling.js"></script>
     <script src="/js/workspace-split.js"></script>
     <script src="/js/workspace-tab-menu.js"></script>
     <script src="/js/workspace-drag.js"></script>
     <script src="/js/workspace-overview.js"></script>
+    <script src="/js/tab-leave.js"></script>
     <script src="/js/pdf-work-runtime.js"></script>
     <script src="/js/request-coordinator.js"></script>
     <script src="/vendor/idb/idb.min.js"></script>
     <script src="/js/offline-store.js"></script>
     <script src="/js/offline-runtime.js"></script>
     <script src="/js/local-store.js"></script>
+    <script src="/js/editor-recovery.js"></script>
     <script src="/js/work-tag-state.js"></script>
     <script src="/js/folder-tag-state.js"></script>
     <script src="/js/work-lifecycle-state.js"></script>
@@ -1094,6 +1109,7 @@
     <script src="/js/work-metadata-state.js"></script>
     <script src="/js/work-source-state.js"></script>
     <script src="/js/work-notes-state.js"></script>
+    <script src="/js/work-note-recovery.js"></script>
     <script src="/js/work-role-state.js"></script>
     <script src="/js/pdf-annotation-state.js"></script>
     <script src="/js/pdf-annotation-reconcile.js"></script>
@@ -1126,11 +1142,11 @@
     <script src="/js/components/playlists.js"></script>
     <script src="/js/components/people.js"></script>
     <script src="/js/components/people-groups.js"></script>
-    <script src="/js/components/publishers.js"></script>
     <script src="/js/components/tags.js"></script>
     <script src="/js/components/types.js"></script>
     <script src="/js/components/processing-files.js"></script>
     <script src="/js/work-selection.js"></script>
+    <script src="/js/search-query-codec.js"></script>
     <script src="/js/saved-views.js"></script>
     <script src="/js/command-palette.js"></script>
     <script src="/js/work-route-projection.js"></script>

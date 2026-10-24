@@ -169,8 +169,6 @@ describe('Folder Library route lifecycle hardening', () => {
 
   it('same-tab Recently Added switch still awaits load via bridge', async () => {
     sessionStorage.setItem('prks-folder-library-tab', 'recently-added')
-    window.prksWorkCardHtml = (w) =>
-      `<article data-work-id="${String((w as { id?: string }).id || '')}">${String((w as { title?: string }).title || '')}</article>`
     window.prksWorkBrowseCollectionClass = () => 'card-grid'
     let loads = 0
     const secondGate = (() => {

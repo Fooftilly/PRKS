@@ -14,6 +14,7 @@ from tests.e2e.fixtures import (
     WORK_A_TITLE,
     WORK_B_TITLE,
     seed_graph_context_library,
+    seed_imported_highlight_library,
     seed_library,
     seed_person_profile_draft_library,
 )
@@ -2712,10 +2713,12 @@ def _viewer_annotation_count(page):
     )
 
 
-def _pdf_text_band_fractions():
+def _pdf_text_band_fractions(first_word=0, last_word=2):
     """Selectable-text location on the seeded minimal.pdf, as fractions of page size.
 
-    PyMuPDF uses a top-left origin matching the rendered page image.
+    Words ``first_word``..``last_word`` (one line): 0..2 "Hello page one",
+    3..6 "Selectable PRKS fixture text.". PyMuPDF uses a top-left origin
+    matching the rendered page image.
     """
     import pymupdf as fitz
 
@@ -2726,8 +2729,8 @@ def _pdf_text_band_fractions():
         if len(words) < 2:
             raise AssertionError("seeded PDF has no selectable words")
         pw, ph = float(page.rect.width), float(page.rect.height)
-        x0, y0, _x1, y1 = words[0][:4]
-        x1 = words[min(2, len(words) - 1)][2]
+        x0, y0, _x1, y1 = words[first_word][:4]
+        x1 = words[min(last_word, len(words) - 1)][2]
         return {
             "fx0": float(x0) / pw,
             "fx1": min(0.95, float(x1) / pw + 0.04),
@@ -2737,9 +2740,9 @@ def _pdf_text_band_fractions():
         doc.close()
 
 
-def _pdf_selection_geometry(page):
+def _pdf_selection_geometry(page, band=None):
     """Viewport coordinates for a real-mouse drag across rendered PDF text."""
-    band = _pdf_text_band_fractions()
+    band = band or _pdf_text_band_fractions()
     page.evaluate(
         """(band) => {
             const viewer = document.querySelector('[data-prks-role="pdf-viewer"]');
@@ -2801,7 +2804,7 @@ def _pdf_selection_geometry(page):
     return geo
 
 
-def _commit_pdf_highlight(page):
+def _commit_pdf_highlight(page, band=None):
     """Pointer mode → real mouse text selection → selection popup Highlight."""
     _wait_pdf_viewer(page)
     pointer = page.locator('[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Pointer"]')
@@ -2814,7 +2817,7 @@ def _commit_pdf_highlight(page):
         }"""
     )
     before = _viewer_annotation_count(page)
-    geo = _pdf_selection_geometry(page)
+    geo = _pdf_selection_geometry(page, band)
     page.mouse.move(geo["sx"], geo["sy"])
     page.mouse.down()
     page.mouse.move(geo["ex"], geo["ey"], steps=12)
@@ -3137,6 +3140,1108 @@ def _warm_person_group_sync_state(page, group_id):
         )
 
 
+_WAIT_PDF_DURABLE_JS = """() => {
+    const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+    const pdf = ctx && ctx.getResource ? ctx.getResource('pdf') : null;
+    return !!(pdf && pdf.mode === 'work' && pdf.annotationBaseReady &&
+        pdf.annotationMutationDurable && pdf.annotationMutationAllowed === true &&
+        !pdf._annotationMaterializing && !pdf._annotationMaterializationHandoff);
+}"""
+
+
+def _wait_pdf_annotation_durable(page):
+    page.wait_for_function(_WAIT_PDF_DURABLE_JS, timeout=30000)
+
+
+def _wait_pdf_annotation_ops_drained(page, work_id):
+    wait_for_async(
+        page,
+        """(workId) => prksSync.store.listOperations().then(rows => !rows.some(
+            r => r && r.entity_id === workId && /_PDF_ANNOTATION$/.test(r.operation || '')))""",
+        arg=work_id,
+        timeout=30000,
+    )
+
+
+_SERVER_ANNOTATION_JS = """async ([workId, annId]) => {
+    const res = await fetch('/api/works/' + workId + '/annotations-snapshot', { cache: 'no-store' });
+    const body = await res.json();
+    const row = ((body && body.items) || []).find(it => it && String(it.id) === annId) || null;
+    if (!row) return null;
+    const custom = row.custom && typeof row.custom === 'object' ? row.custom : {};
+    return {
+        contents: row.contents == null ? null : String(row.contents),
+        prksComment: custom.prksComment == null ? null : String(custom.prksComment),
+    };
+}"""
+
+
+def _server_annotation(page, work_id, ann_id):
+    """The canonical row for one annotation, read straight from the server."""
+    return page.evaluate(_SERVER_ANNOTATION_JS, [work_id, ann_id])
+
+
+def _wait_server_comment(page, work_id, ann_id, text, timeout=30000):
+    wait_for_async(
+        page,
+        """([workId, annId, text]) => (%s)([workId, annId]).then(row =>
+            !!row && row.contents === text && row.prksComment === text)"""
+        % _SERVER_ANNOTATION_JS,
+        arg=[work_id, ann_id, text],
+        timeout=timeout,
+        message="server never stored comment %r for %s" % (text, ann_id),
+    )
+
+
+def _keep_imported_highlight_unadopted(page):
+    """Opening a Work adopts byte-only markup the viewer has already loaded,
+    which it may or may not have by then. These tests need the imported
+    highlight to have no stored row, so the adoption finds nothing."""
+    page.route(
+        "**/api/works/*/annotations/adopt",
+        lambda route: route.fulfill(
+            status=200, content_type="application/json", body='{"adopted_count": 0}'
+        ),
+    )
+
+
+def _wait_server_annotation(page, work_id, ann_id, timeout=30000):
+    """A new highlight's create is recorded and sent asynchronously."""
+    wait_for_async(
+        page,
+        """([workId, annId]) => (%s)([workId, annId]).then(row => !!row)"""
+        % _SERVER_ANNOTATION_JS,
+        arg=[work_id, ann_id],
+        timeout=timeout,
+        message="server never stored annotation %s" % ann_id,
+    )
+
+
+def _wait_pdf_materialized(page, work_id, timeout=30000):
+    wait_for_async(
+        page,
+        """(workId) => fetch('/api/works/' + workId + '/pdf-materialization', { cache: 'no-store' })
+            .then(r => r.json()).then(m => !!m && m.stale === false
+                && m.canonical_annotation_set_revision > 0)""",
+        arg=work_id,
+        timeout=timeout,
+    )
+
+
+def _managed_pdf_annotation_contents(page, server, work_id):
+    """Every annotation /Contents in the managed PDF bytes the server holds."""
+    import pymupdf
+
+    file_path = page.evaluate(
+        """(workId) => fetch('/api/works/' + workId, { cache: 'no-store' })
+            .then(r => r.json()).then(w => w && w.file_path)""",
+        arg=work_id,
+    )
+    name = unquote(urlparse(file_path).path.rsplit("/", 1)[-1])
+    path = os.path.join(server.storage_root, "pdfs", name)
+    doc = pymupdf.open(path)
+    try:
+        return [a.info.get("content", "") for a in doc[0].annots()]
+    finally:
+        doc.close()
+
+
+def _viewer_annotation_ids(page):
+    return page.evaluate(
+        """() => {
+            const v = %s;
+            return v ? (v.getAnnotations() || []).map(a => String(a.id)) : [];
+        }"""
+        % _FOCUSED_VIEWER
+    )
+
+
+def _only_viewer_annotation_id(page):
+    ids = _viewer_annotation_ids(page)
+    if len(ids) != 1:
+        raise AssertionError("expected exactly one viewer annotation, got %r" % (ids,))
+    return ids[0]
+
+
+def _close_annotation_popup(page):
+    popup = page.locator('[data-prks-role="pdf-annotation-popup"]')
+    if popup.count() and popup.first.is_visible():
+        popup.first.get_by_role("button", name="Cancel").click()
+        popup.first.wait_for(state="hidden", timeout=15000)
+    # Selecting the annotation that is still selected does not reopen it.
+    page.evaluate(
+        """() => {
+            const v = %s;
+            if (v && typeof v.deselectAnnotation === 'function') v.deselectAnnotation();
+        }"""
+        % _FOCUSED_VIEWER
+    )
+
+
+def _open_annotation_popup(page, ann_id):
+    _close_annotation_popup(page)
+    page.evaluate(
+        "(annId) => %s.selectAnnotation(annId)" % _FOCUSED_VIEWER,
+        arg=ann_id,
+    )
+    popup = page.locator(
+        '[data-prks-role="pdf-annotation-popup"][data-prks-annotation-id="%s"]' % ann_id
+    )
+    popup.wait_for(state="visible", timeout=15000)
+    return popup
+
+
+def _save_annotation_comment(page, ann_id, text):
+    popup = _open_annotation_popup(page, ann_id)
+    popup.locator('[data-prks-role="pdf-annotation-popup-text"]').fill(text)
+    popup.get_by_role("button", name="Save comment").click()
+
+
+def _popup_comment(page, ann_id):
+    popup = _open_annotation_popup(page, ann_id)
+    return popup.locator('[data-prks-role="pdf-annotation-popup-text"]').input_value()
+
+
+def _sync_status_label(page):
+    return page.evaluate(
+        """() => {
+            const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+            const root = ctx && ctx.root;
+            const el = root && root.querySelector('.work-annotation-sync-status__label');
+            return el ? el.textContent : '';
+        }"""
+    )
+
+
+def _wait_local_save_warning_cleared(page):
+    """The status indicator repaints asynchronously once a failure settles."""
+    page.wait_for_function(
+        """() => {
+            const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+            const el = ctx && ctx.root && ctx.root.querySelector('.work-annotation-sync-status__label');
+            return !!el && el.textContent !== 'Could not save locally';
+        }""",
+        timeout=15000,
+    )
+
+
+def _pdf_has_pending_sync(page):
+    """The unsaved-edit leave guard (``hasPendingSync``) of the focused Work."""
+    return page.evaluate(
+        """() => {
+            const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+            return !!(pdf && pdf.hasPendingSync());
+        }"""
+    )
+
+
+class PdfAnnotationCommentEditTests(_BrowserE2E):
+    """#401: every comment edit reaches the server, the PDF and a reload."""
+
+    def _edit_comment_repeatedly(self, page, server, work_id, ann_id, texts):
+        for text in texts:
+            _wait_pdf_annotation_durable(page)
+            _save_annotation_comment(page, ann_id, text)
+            _wait_server_comment(page, work_id, ann_id, text)
+            _wait_pdf_annotation_ops_drained(page, work_id)
+            _wait_pdf_materialized(page, work_id)
+            self.assertEqual(_popup_comment(page, ann_id), text)
+        self.assertIn(texts[-1], _managed_pdf_annotation_contents(page, server, work_id))
+
+    def test_repeated_comment_edits_on_prks_highlight_persist(self):
+        server, page, _collector = self._start_app()
+        work_id = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        _commit_pdf_highlight(page)
+        ann_id = _only_viewer_annotation_id(page)
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+
+        self._edit_comment_repeatedly(
+            page, server, work_id, ann_id,
+            ["first comment", "second comment", "third comment"],
+        )
+
+        page.reload(wait_until="domcontentloaded")
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        self.assertEqual(_popup_comment(page, ann_id), "third comment")
+        # A later session edits the same annotation again.
+        self._edit_comment_repeatedly(page, server, work_id, ann_id, ["fourth comment"])
+        self.assertEqual(_server_annotation(page, work_id, ann_id)["contents"], "fourth comment")
+
+    def test_second_save_while_the_first_is_still_writing_keeps_the_latest_comment(self):
+        server, page, _collector = self._start_app()
+        work_id = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        _commit_pdf_highlight(page)
+        ann_id = _only_viewer_annotation_id(page)
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+
+        # The first local write is slow; the user saves again meanwhile.
+        page.evaluate(
+            """() => {
+                const store = window.prksSync.store;
+                const real = store.savePdfAnnotation;
+                store.savePdfAnnotation = function () {
+                    store.savePdfAnnotation = real;
+                    const args = arguments;
+                    return new Promise((resolve) => {
+                        window.__prksReleaseHeldSave = resolve;
+                    }).then(() => real.apply(store, args));
+                };
+            }"""
+        )
+        _wait_pdf_annotation_durable(page)
+        popup = _open_annotation_popup(page, ann_id)
+        text = popup.locator('[data-prks-role="pdf-annotation-popup-text"]')
+        text.fill("first of two")
+        popup.get_by_role("button", name="Save comment").click()
+        page.wait_for_function("() => typeof window.__prksReleaseHeldSave === 'function'", timeout=15000)
+        text.fill("second of two")
+        popup.get_by_role("button", name="Save comment").click()
+        page.wait_for_function(
+            """(id) => {
+                const v = %s;
+                const a = (v.getAnnotations() || []).find(row => String(row.id) === id);
+                const obj = a && a.raw ? a.raw : a;
+                return !!obj && obj.contents === 'second of two';
+            }"""
+            % _FOCUSED_VIEWER,
+            arg=ann_id,
+            timeout=15000,
+        )
+        page.evaluate("() => window.__prksReleaseHeldSave()")
+
+        _wait_server_comment(page, work_id, ann_id, "second of two")
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+        self.assertEqual(_server_annotation(page, work_id, ann_id)["contents"], "second of two")
+        self.assertEqual(_popup_comment(page, ann_id), "second of two")
+
+    def test_second_save_survives_the_first_save_failing(self):
+        server, page, _collector = self._start_app()
+        work_id = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        _commit_pdf_highlight(page)
+        ann_id = _only_viewer_annotation_id(page)
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+
+        # The first local write is slow and then fails; the user saves again
+        # while it is still writing.
+        page.evaluate(
+            """() => {
+                const store = window.prksSync.store;
+                const real = store.savePdfAnnotation;
+                store.savePdfAnnotation = function () {
+                    store.savePdfAnnotation = real;
+                    return new Promise((resolve) => {
+                        window.__prksReleaseHeldSave = resolve;
+                    }).then(() => Promise.reject(
+                        Object.assign(new Error('disk full'), { code: 'write_failed' })
+                    ));
+                };
+            }"""
+        )
+        _wait_pdf_annotation_durable(page)
+        popup = _open_annotation_popup(page, ann_id)
+        text = popup.locator('[data-prks-role="pdf-annotation-popup-text"]')
+        text.fill("first that fails")
+        popup.get_by_role("button", name="Save comment").click()
+        page.wait_for_function("() => typeof window.__prksReleaseHeldSave === 'function'", timeout=15000)
+        text.fill("second that saves")
+        popup.get_by_role("button", name="Save comment").click()
+        page.wait_for_function(
+            """(id) => {
+                const v = %s;
+                const a = (v.getAnnotations() || []).find(row => String(row.id) === id);
+                const obj = a && a.raw ? a.raw : a;
+                return !!obj && obj.contents === 'second that saves';
+            }"""
+            % _FOCUSED_VIEWER,
+            arg=ann_id,
+            timeout=15000,
+        )
+        page.evaluate("() => window.__prksReleaseHeldSave()")
+
+        _wait_server_comment(page, work_id, ann_id, "second that saves")
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+        _wait_local_save_warning_cleared(page)
+        self.assertEqual(_server_annotation(page, work_id, ann_id)["contents"], "second that saves")
+        self.assertEqual(_popup_comment(page, ann_id), "second that saves")
+        self.assertIn("second that saves", _managed_pdf_annotation_contents(page, server, work_id))
+        self.assertFalse(_pdf_has_pending_sync(page))
+
+    def test_an_edit_the_viewer_never_commits_is_reported_and_does_not_stick(self):
+        server, page, _collector = self._start_app()
+        work_id = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        _commit_pdf_highlight(page)
+        ann_id = _only_viewer_annotation_id(page)
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+        self._edit_comment_repeatedly(page, server, work_id, ann_id, ["committed comment"])
+
+        # The viewer's engine write fails: it emits no committed event for
+        # the next update. Drop that one event on its way to PRKS.
+        page.evaluate(
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                const handler = pdf._annotationEventHandler;
+                const removeBridge = pdf.viewer.onAnnotationEvent(handler);
+                removeBridge();
+                let dropped = false;
+                pdf.viewer.onAnnotationEvent((evt) => {
+                    if (!dropped && evt && evt.kind === 'update' && evt.committed === true) {
+                        dropped = true;
+                        return;
+                    }
+                    handler(evt);
+                });
+            }"""
+        )
+        _wait_pdf_annotation_durable(page)
+        _save_annotation_comment(page, ann_id, "never committed")
+        page.wait_for_function(
+            """() => {
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const el = ctx && ctx.root && ctx.root.querySelector('.work-annotation-sync-status__label');
+                return !!el && el.textContent === 'Could not save locally';
+            }""",
+            timeout=20000,
+        )
+        self.assertTrue(_pdf_has_pending_sync(page))
+        self.assertEqual(_server_annotation(page, work_id, ann_id)["contents"], "committed comment")
+
+        # Projection is not held for the rest of the session: the next save
+        # is recorded, synced and materialized, and the warning clears.
+        _wait_pdf_annotation_durable(page)
+        _save_annotation_comment(page, ann_id, "committed again")
+        _wait_server_comment(page, work_id, ann_id, "committed again")
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+        _wait_local_save_warning_cleared(page)
+        self.assertFalse(_pdf_has_pending_sync(page))
+        self.assertIn("committed again", _managed_pdf_annotation_contents(page, server, work_id))
+
+    def test_an_uncommitted_edit_does_not_hold_another_annotations_rollback(self):
+        server, page, _collector = self._start_app()
+        work_id = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        _commit_pdf_highlight(page)
+        a_id = _only_viewer_annotation_id(page)
+        _wait_server_annotation(page, work_id, a_id)
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_annotation_durable(page)
+        _close_annotation_popup(page)
+        _commit_pdf_highlight(page, _pdf_text_band_fractions(3, 6))
+        b_id = [i for i in _viewer_annotation_ids(page) if i != a_id][0]
+        _wait_server_annotation(page, work_id, b_id)
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+        self._edit_comment_repeatedly(page, server, work_id, a_id, ["stored A"])
+        _close_annotation_popup(page)
+        self._edit_comment_repeatedly(page, server, work_id, b_id, ["stored B"])
+        _close_annotation_popup(page)
+
+        # A's edit never commits (a failed engine write).
+        page.evaluate(
+            """(aId) => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                const handler = pdf._annotationEventHandler;
+                const removeBridge = pdf.viewer.onAnnotationEvent(handler);
+                removeBridge();
+                pdf.viewer.onAnnotationEvent((evt) => {
+                    if (evt && evt.committed === true && String(evt.annotationId) === aId) return;
+                    handler(evt);
+                });
+            }""",
+            a_id,
+        )
+        _wait_pdf_annotation_durable(page)
+        _save_annotation_comment(page, a_id, "uncommitted A")
+        _close_annotation_popup(page)
+
+        # B's next local write fails. B rolls back at once, while A's
+        # uncommitted edit stays in the viewer.
+        page.evaluate(
+            """() => {
+                const store = window.prksSync.store;
+                const real = store.savePdfAnnotation;
+                store.savePdfAnnotation = function () {
+                    store.savePdfAnnotation = real;
+                    return Promise.reject(Object.assign(new Error('disk full'), { code: 'write_failed' }));
+                };
+            }"""
+        )
+        _wait_pdf_annotation_durable(page)
+        _save_annotation_comment(page, b_id, "failed B")
+        page.wait_for_function(
+            """() => {
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const el = ctx && ctx.root && ctx.root.querySelector('.work-annotation-sync-status__label');
+                return !!el && el.textContent === 'Could not save locally';
+            }""",
+            timeout=5000,
+        )
+        viewer_comments = """([aId, bId]) => {
+            const v = %s;
+            const rows = (v.getAnnotations() || []).map(a => (a && a.raw ? a.raw : a));
+            const text = (id) => {
+                const row = rows.find(r => r && String(r.id) === id);
+                return row ? row.contents : null;
+            };
+            return [text(aId), text(bId)];
+        }""" % _FOCUSED_VIEWER
+        page.wait_for_function(
+            "(ids) => { const [a, b] = (%s)(ids); return a === 'uncommitted A' && b === 'stored B'; }"
+            % viewer_comments,
+            arg=[a_id, b_id],
+            timeout=5000,
+        )
+
+        # A's edit is then reported as not saved and rolled back too.
+        page.wait_for_function(
+            "(ids) => { const [a, b] = (%s)(ids); return a === 'stored A' && b === 'stored B'; }"
+            % viewer_comments,
+            arg=[a_id, b_id],
+            timeout=20000,
+        )
+        self.assertEqual(_server_annotation(page, work_id, a_id)["contents"], "stored A")
+        self.assertEqual(_server_annotation(page, work_id, b_id)["contents"], "stored B")
+        self.assertTrue(_pdf_has_pending_sync(page))
+
+    def test_repeated_comment_edits_on_imported_highlight_persist(self):
+        server, page, _collector = self._start_app(seed_fn=seed_imported_highlight_library)
+        work_id = server.ids["work_b"]
+        _keep_imported_highlight_unadopted(page)
+        _open_work_from_home(page, WORK_B_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        ann_id = _only_viewer_annotation_id(page)
+        self.assertEqual(
+            _popup_comment(page, ann_id), server.ids["imported_highlight_comment"]
+        )
+
+        self._edit_comment_repeatedly(
+            page, server, work_id, ann_id, ["imported first edit", "imported second edit"],
+        )
+
+        page.reload(wait_until="domcontentloaded")
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        self.assertEqual(_popup_comment(page, ann_id), "imported second edit")
+        self._edit_comment_repeatedly(page, server, work_id, ann_id, ["imported third edit"])
+
+    def test_failed_first_edit_of_imported_highlight_stays_until_saved(self):
+        server, page, _collector = self._start_app(seed_fn=seed_imported_highlight_library)
+        work_id = server.ids["work_b"]
+        _keep_imported_highlight_unadopted(page)
+        _open_work_from_home(page, WORK_B_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        ann_id = _only_viewer_annotation_id(page)
+        page.evaluate(
+            """() => {
+                const store = window.prksSync.store;
+                const real = store.savePdfAnnotation;
+                store.savePdfAnnotation = function () {
+                    store.savePdfAnnotation = real;
+                    return Promise.reject(Object.assign(new Error('disk full'), { code: 'write_failed' }));
+                };
+            }"""
+        )
+        _wait_pdf_annotation_durable(page)
+        _save_annotation_comment(page, ann_id, "imported draft")
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf._annotationDurableWriteChain).then(() => pdf.hasPendingSync());
+            }""",
+        )
+        self.assertIsNone(_server_annotation(page, work_id, ann_id))
+
+        # The highlight has no stored row to roll back to, so closing its
+        # popup leaves it unsaved on the page: the warning stays.
+        _close_annotation_popup(page)
+        self.assertTrue(_pdf_has_pending_sync(page))
+        self.assertEqual(_sync_status_label(page), "Could not save locally")
+
+        # Another highlight is saved and acknowledged. Its materialization
+        # must not write the unsaved comment into the PDF bytes.
+        _wait_pdf_annotation_durable(page)
+        _commit_pdf_highlight(page, _pdf_text_band_fractions(3, 6))
+        other_ids = [i for i in _viewer_annotation_ids(page) if i != ann_id]
+        self.assertEqual(len(other_ids), 1)
+        _wait_server_annotation(page, work_id, other_ids[0])
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        # Wait for its acknowledged generation to be claimed for (or already
+        # written to) the PDF, then run a materialization pass.
+        wait_for_async(
+            page,
+            """(workId) => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                if (Number.isSafeInteger(pdf.pendingMaterializationRevision)) return true;
+                return fetch('/api/works/' + workId + '/pdf-materialization', { cache: 'no-store' })
+                    .then(r => r.json()).then(m => !!m && m.stale === false);
+            }""",
+            arg=work_id,
+        )
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf.flushAnnotations()).then(() => true);
+            }""",
+        )
+        self.assertNotIn("imported draft", _managed_pdf_annotation_contents(page, server, work_id))
+        self.assertTrue(_pdf_has_pending_sync(page))
+
+        _close_annotation_popup(page)
+        _wait_pdf_annotation_durable(page)
+        _save_annotation_comment(page, ann_id, "imported retry")
+        _wait_server_comment(page, work_id, ann_id, "imported retry")
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf._annotationDurableWriteChain).then(() => !pdf.hasPendingSync());
+            }""",
+        )
+        _wait_local_save_warning_cleared(page)
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf.flushAnnotations()).then(
+                    () => !Number.isSafeInteger(pdf.pendingMaterializationRevision)
+                );
+            }""",
+        )
+        contents = _managed_pdf_annotation_contents(page, server, work_id)
+        self.assertIn("imported retry", contents)
+        self.assertNotIn("imported draft", contents)
+
+    def test_failed_edit_of_an_unacknowledged_imported_highlight_is_an_edit(self):
+        server, page, _collector = self._start_app(seed_fn=seed_imported_highlight_library)
+        work_id = server.ids["work_b"]
+        _keep_imported_highlight_unadopted(page)
+        _open_work_from_home(page, WORK_B_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        ann_id = _only_viewer_annotation_id(page)
+
+        # The first comment save is recorded locally; its sync is held, so
+        # it is not acknowledged.
+        held = []
+
+        def hold_sync(route):
+            held.append(route)
+
+        page.route("**/api/sync/operations", hold_sync)
+        try:
+            _wait_pdf_annotation_durable(page)
+            _save_annotation_comment(page, ann_id, "unacknowledged first")
+            wait_for_async(
+                page,
+                """(annId) => prksSync.store.listOperations().then(rows => rows.some(
+                    r => r && r.payload && r.payload.annotation_id === annId))""",
+                arg=ann_id,
+            )
+            self.assertIsNone(_server_annotation(page, work_id, ann_id))
+
+            # The next save fails. Its rollback puts the pending row back, so
+            # closing the popup leaves nothing unsaved on the page.
+            page.evaluate(
+                """() => {
+                    const store = window.prksSync.store;
+                    const real = store.savePdfAnnotation;
+                    store.savePdfAnnotation = function () {
+                        store.savePdfAnnotation = real;
+                        return Promise.reject(Object.assign(new Error('disk full'), { code: 'write_failed' }));
+                    };
+                }"""
+            )
+            _wait_pdf_annotation_durable(page)
+            _save_annotation_comment(page, ann_id, "failing second")
+            wait_for_async(
+                page,
+                """() => {
+                    const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                    return Promise.resolve(pdf._annotationDurableWriteChain).then(() => pdf.hasPendingSync());
+                }""",
+            )
+            _close_annotation_popup(page)
+            self.assertFalse(_pdf_has_pending_sync(page))
+            _wait_local_save_warning_cleared(page)
+            self.assertEqual(_popup_comment(page, ann_id), "unacknowledged first")
+            _close_annotation_popup(page)
+        finally:
+            page.unroute("**/api/sync/operations", hold_sync)
+            for route in held:
+                route.continue_()
+        _wait_server_comment(page, work_id, ann_id, "unacknowledged first", timeout=60000)
+        # No unsaved annotation is held on the page, so the acknowledged
+        # generation still reaches the managed PDF.
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf.flushAnnotations()).then(
+                    () => !Number.isSafeInteger(pdf.pendingMaterializationRevision)
+                );
+            }""",
+        )
+        self.assertIn("unacknowledged first", _managed_pdf_annotation_contents(page, server, work_id))
+
+    def test_a_delete_that_fails_after_its_popup_closed_does_not_wait_on_it(self):
+        server, page, _collector = self._start_app()
+        work_id = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        _commit_pdf_highlight(page)
+        ann_id = _only_viewer_annotation_id(page)
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+        self._edit_comment_repeatedly(page, server, work_id, ann_id, ["kept comment"])
+
+        # Delete from the popup: the editor closes right after the viewer
+        # mutation, before the local write runs, and that write fails.
+        page.evaluate(
+            """() => {
+                const store = window.prksSync.store;
+                const real = store.savePdfAnnotation;
+                store.savePdfAnnotation = function () {
+                    store.savePdfAnnotation = real;
+                    return Promise.reject(Object.assign(new Error('disk full'), { code: 'write_failed' }));
+                };
+            }"""
+        )
+        _wait_pdf_annotation_durable(page)
+        popup = _open_annotation_popup(page, ann_id)
+        popup.get_by_role("button", name="Delete annotation").click()
+        page.locator("#prks-modal-confirm-ok").click()
+        page.wait_for_function(
+            """() => {
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const el = ctx && ctx.root && ctx.root.querySelector('[data-prks-role="annotation-sync-status"]');
+                return !!(el && el.classList.contains('work-annotation-sync-status--error'));
+            }""",
+            timeout=15000,
+        )
+        # The rollback puts the stored highlight back.
+        page.wait_for_function(
+            "(id) => (%s.getAnnotations() || []).some(a => String(a.id) === id)" % _FOCUSED_VIEWER,
+            arg=ann_id,
+            timeout=15000,
+        )
+        self.assertEqual(_server_annotation(page, work_id, ann_id)["contents"], "kept comment")
+
+        # Nothing is left unsaved for it, so the next recorded write settles it.
+        _wait_pdf_annotation_durable(page)
+        _commit_pdf_highlight(page, _pdf_text_band_fractions(3, 6))
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf._annotationDurableWriteChain).then(() => !pdf.hasPendingSync());
+            }""",
+        )
+        _wait_local_save_warning_cleared(page)
+
+    def _fail_comment_save(self, page, work_id, ann_id, text_value):
+        """Save ``text_value`` from the popup while the local durable write
+        fails once; return the still-open popup and its text field once the
+        rollback has settled."""
+        # The local durable write fails once (quota, blocked IndexedDB, ...).
+        page.evaluate(
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                window.__prksCommittedUpdates = 0;
+                pdf.viewer.onAnnotationEvent((evt) => {
+                    if (evt && evt.kind === 'update' && evt.committed === true) {
+                        window.__prksCommittedUpdates += 1;
+                    }
+                });
+                const store = window.prksSync.store;
+                const real = store.savePdfAnnotation;
+                store.savePdfAnnotation = function () {
+                    store.savePdfAnnotation = real;
+                    return Promise.reject(Object.assign(new Error('disk full'), { code: 'write_failed' }));
+                };
+            }"""
+        )
+        _wait_pdf_annotation_durable(page)
+        popup = _open_annotation_popup(page, ann_id)
+        text = popup.locator('[data-prks-role="pdf-annotation-popup-text"]')
+        text.fill(text_value)
+        popup.get_by_role("button", name="Save comment").click()
+        page.wait_for_function(
+            """() => {
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const el = ctx && ctx.root && ctx.root.querySelector('[data-prks-role="annotation-sync-status"]');
+                return !!(el && el.classList.contains('work-annotation-sync-status--error'));
+            }""",
+            timeout=15000,
+        )
+        # Let the rollback finish: the user's committed update, then the
+        # viewer's commit echo of putting the stored comment back, and the
+        # durable write that echo starts. None of it may clear the error.
+        page.wait_for_function("() => window.__prksCommittedUpdates >= 2", timeout=15000)
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf._annotationDurableWriteChain).then(() => true);
+            }""",
+        )
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        return popup, text
+
+    def test_comment_edit_that_cannot_be_saved_is_not_reported_saved(self):
+        server, page, _collector = self._start_app()
+        work_id = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        _commit_pdf_highlight(page)
+        ann_id = _only_viewer_annotation_id(page)
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+        self._edit_comment_repeatedly(page, server, work_id, ann_id, ["saved comment"])
+
+        popup, text = self._fail_comment_save(page, work_id, ann_id, "comment that failed")
+        self.assertEqual(_sync_status_label(page), "Could not save locally")
+        # The user's text stays in the open popup so it can be saved again.
+        self.assertEqual(text.input_value(), "comment that failed")
+        self.assertEqual(_server_annotation(page, work_id, ann_id)["contents"], "saved comment")
+        # The viewer is back on the stored comment, not the unsaved one.
+        self.assertEqual(
+            page.evaluate(
+                """(id) => {
+                    const a = (%s.getAnnotations() || []).find(row => String(row.id) === id);
+                    const obj = a && a.raw ? a.raw : a;
+                    return obj ? obj.contents : null;
+                }"""
+                % _FOCUSED_VIEWER,
+                arg=ann_id,
+            ),
+            "saved comment",
+        )
+        self.assertTrue(_pdf_has_pending_sync(page))
+
+        # An empty flush (no materialization claim) writes nothing, so it must
+        # not clear the error or the unsaved-edit leave guard.
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf.flushAnnotations()).then(() => true);
+            }""",
+        )
+        self.assertEqual(_sync_status_label(page), "Could not save locally")
+        self.assertTrue(_pdf_has_pending_sync(page))
+        self.assertEqual(text.input_value(), "comment that failed")
+
+        # Saving again from the same popup succeeds and clears the error.
+        _wait_pdf_annotation_durable(page)
+        popup.get_by_role("button", name="Save comment").click()
+        _wait_server_comment(page, work_id, ann_id, "comment that failed")
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+        page.wait_for_function(
+            """() => {
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const el = ctx && ctx.root && ctx.root.querySelector('.work-annotation-sync-status__label');
+                return !!(el && el.textContent.indexOf('Saved') === 0);
+            }""",
+            timeout=15000,
+        )
+        self.assertIn("comment that failed", _managed_pdf_annotation_contents(page, server, work_id))
+        self.assertFalse(_pdf_has_pending_sync(page))
+
+    def test_closing_the_popup_of_a_failed_edit_clears_the_warning(self):
+        server, page, _collector = self._start_app()
+        work_id = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        _commit_pdf_highlight(page)
+        ann_id = _only_viewer_annotation_id(page)
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+        self._edit_comment_repeatedly(page, server, work_id, ann_id, ["saved comment"])
+
+        self._fail_comment_save(page, work_id, ann_id, "abandoned draft")
+        self.assertEqual(_sync_status_label(page), "Could not save locally")
+        self.assertTrue(_pdf_has_pending_sync(page))
+
+        # Closing the popup discards the draft: nothing is left to protect.
+        _close_annotation_popup(page)
+        self.assertFalse(_pdf_has_pending_sync(page))
+        page.wait_for_function(
+            """() => {
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const el = ctx && ctx.root && ctx.root.querySelector('.work-annotation-sync-status__label');
+                return !!(el && el.textContent.indexOf('Saved') === 0);
+            }""",
+            timeout=15000,
+        )
+        self.assertEqual(_server_annotation(page, work_id, ann_id)["contents"], "saved comment")
+        self.assertEqual(_popup_comment(page, ann_id), "saved comment")
+
+    def test_a_failure_after_its_popup_closed_does_not_wait_on_that_annotation(self):
+        server, page, _collector = self._start_app()
+        work_id = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        _commit_pdf_highlight(page)
+        ann_id = _only_viewer_annotation_id(page)
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+        self._edit_comment_repeatedly(page, server, work_id, ann_id, ["saved comment"])
+
+        # The local write is still running when the user closes the popup,
+        # and only then fails.
+        page.evaluate(
+            """() => {
+                const store = window.prksSync.store;
+                const real = store.savePdfAnnotation;
+                store.savePdfAnnotation = function () {
+                    store.savePdfAnnotation = real;
+                    return new Promise((_resolve, reject) => {
+                        window.__prksFailHeldSave = () => reject(
+                            Object.assign(new Error('disk full'), { code: 'write_failed' })
+                        );
+                    });
+                };
+            }"""
+        )
+        _wait_pdf_annotation_durable(page)
+        popup = _open_annotation_popup(page, ann_id)
+        popup.locator('[data-prks-role="pdf-annotation-popup-text"]').fill("late failure")
+        popup.get_by_role("button", name="Save comment").click()
+        page.wait_for_function("() => typeof window.__prksFailHeldSave === 'function'", timeout=15000)
+        _close_annotation_popup(page)
+        page.evaluate("() => window.__prksFailHeldSave()")
+        page.wait_for_function(
+            """() => {
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const el = ctx && ctx.root && ctx.root.querySelector('[data-prks-role="annotation-sync-status"]');
+                return !!(el && el.classList.contains('work-annotation-sync-status--error'));
+            }""",
+            timeout=15000,
+        )
+        self.assertEqual(_server_annotation(page, work_id, ann_id)["contents"], "saved comment")
+
+        # No draft is left for that annotation, so the next recorded write
+        # (here another highlight) settles it.
+        _wait_pdf_annotation_durable(page)
+        _commit_pdf_highlight(page, _pdf_text_band_fractions(3, 6))
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf._annotationDurableWriteChain).then(() => !pdf.hasPendingSync());
+            }""",
+        )
+        _wait_local_save_warning_cleared(page)
+
+    def test_a_failed_highlight_is_settled_by_saving_it_again(self):
+        server, page, _collector = self._start_app()
+        work_id = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        page.evaluate(
+            """() => {
+                const store = window.prksSync.store;
+                const real = store.savePdfAnnotation;
+                store.savePdfAnnotation = function () {
+                    store.savePdfAnnotation = real;
+                    return Promise.reject(Object.assign(new Error('disk full'), { code: 'write_failed' }));
+                };
+            }"""
+        )
+        _commit_pdf_highlight(page)
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf._annotationDurableWriteChain).then(() => pdf.hasPendingSync());
+            }""",
+        )
+        self.assertEqual(_sync_status_label(page), "Could not save locally")
+        ann_id = _only_viewer_annotation_id(page)
+
+        # Closing its popup or saving another highlight leaves it unsaved.
+        _close_annotation_popup(page)
+        _wait_pdf_annotation_durable(page)
+        _commit_pdf_highlight(page, _pdf_text_band_fractions(3, 6))
+        other_ids = [i for i in _viewer_annotation_ids(page) if i != ann_id]
+        self.assertEqual(len(other_ids), 1)
+        _wait_server_annotation(page, work_id, other_ids[0])
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf._annotationDurableWriteChain).then(() => true);
+            }""",
+        )
+        self.assertEqual(_sync_status_label(page), "Could not save locally")
+        self.assertTrue(_pdf_has_pending_sync(page))
+        self.assertIsNone(_server_annotation(page, work_id, ann_id))
+        _close_annotation_popup(page)
+
+        # The unsaved highlight is still on the page; saving a comment on it
+        # records it and settles the failure.
+        _wait_pdf_annotation_durable(page)
+        _save_annotation_comment(page, ann_id, "recovered highlight")
+        _wait_server_comment(page, work_id, ann_id, "recovered highlight")
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf._annotationDurableWriteChain).then(() => !pdf.hasPendingSync());
+            }""",
+        )
+        _wait_local_save_warning_cleared(page)
+
+    def test_removing_a_failed_highlight_clears_the_warning(self):
+        server, page, _collector = self._start_app()
+        work_id = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        page.evaluate(
+            """() => {
+                const store = window.prksSync.store;
+                const real = store.savePdfAnnotation;
+                store.savePdfAnnotation = function () {
+                    store.savePdfAnnotation = real;
+                    return Promise.reject(Object.assign(new Error('disk full'), { code: 'write_failed' }));
+                };
+            }"""
+        )
+        _commit_pdf_highlight(page)
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf._annotationDurableWriteChain).then(() => pdf.hasPendingSync());
+            }""",
+        )
+        ann_id = _only_viewer_annotation_id(page)
+
+        # The user removes the unsaved highlight: nothing is left to protect.
+        _wait_pdf_annotation_durable(page)
+        page.evaluate("(id) => %s.deleteAnnotation(id)" % _FOCUSED_VIEWER, ann_id)
+        page.wait_for_function(
+            "() => (%s.getAnnotations() || []).length === 0" % _FOCUSED_VIEWER,
+            timeout=15000,
+        )
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf._annotationDurableWriteChain).then(() => !pdf.hasPendingSync());
+            }""",
+        )
+        _wait_local_save_warning_cleared(page)
+        self.assertIsNone(_server_annotation(page, work_id, ann_id))
+
+    def test_another_annotations_save_does_not_settle_a_failed_edit(self):
+        server, page, _collector = self._start_app()
+        work_id = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        _commit_pdf_highlight(page)
+        failed_id = _only_viewer_annotation_id(page)
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_annotation_durable(page)
+        _close_annotation_popup(page)
+        _commit_pdf_highlight(page, _pdf_text_band_fractions(3, 6))
+        other_ids = [i for i in _viewer_annotation_ids(page) if i != failed_id]
+        self.assertEqual(len(other_ids), 1)
+        other_id = other_ids[0]
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+
+        popup, text = self._fail_comment_save(page, work_id, failed_id, "draft that failed")
+        self.assertTrue(_pdf_has_pending_sync(page))
+        # The rollback clears the draft from the viewer: the highlight had no
+        # comment, and its commit echo must not record half of the draft.
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        failed_row = _server_annotation(page, work_id, failed_id)
+        self.assertNotEqual(failed_row["prksComment"], "draft that failed")
+        self.assertNotEqual(failed_row["contents"], "draft that failed")
+
+        # The other highlight's comment changes and is recorded and synced
+        # while the failed draft is still only in the open popup.
+        _wait_pdf_annotation_durable(page)
+        page.evaluate(
+            """(id) => {
+                const v = %s;
+                const a = (v.getAnnotations() || []).find(row => String(row.id) === id);
+                const obj = a && a.raw ? a.raw : a;
+                const custom = Object.assign({}, (obj && obj.custom) || {}, { prksComment: 'other comment' });
+                v.updateAnnotation(id, { custom: custom, contents: 'other comment' });
+            }"""
+            % _FOCUSED_VIEWER,
+            arg=other_id,
+        )
+        _wait_server_comment(page, work_id, other_id, "other comment")
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf._annotationDurableWriteChain).then(() => true);
+            }""",
+        )
+        self.assertEqual(_sync_status_label(page), "Could not save locally")
+        self.assertTrue(_pdf_has_pending_sync(page))
+        self.assertEqual(text.input_value(), "draft that failed")
+
+        # Only saving the failed annotation itself settles it.
+        _wait_pdf_annotation_durable(page)
+        popup.get_by_role("button", name="Save comment").click()
+        _wait_server_comment(page, work_id, failed_id, "draft that failed")
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf._annotationDurableWriteChain).then(() => !pdf.hasPendingSync());
+            }""",
+        )
+        _wait_local_save_warning_cleared(page)
+
 class RequestCoordinatorTests(_BrowserE2E):
     def test_identical_work_detail_gets_dedupe_to_one_network_request(self):
         server, page, _collector = self._start_app()
@@ -3405,8 +4510,101 @@ class WorkspaceTabsTests(_BrowserE2E):
         )
         self.assertEqual(persisted, final_text)
 
-    def test_private_reminder_hide_show_prefers_unsettled_complete_draft(self):
+    def test_private_reminder_committed_handoff_excludes_foreign_and_failed_saves(self):
+        _server, page, _collector = self._start_app()
+        evidence = page.evaluate(
+            """() => {
+                const guard = window.prksWorkPrivateNoteNeedsCommittedHandoff;
+                if (typeof guard !== 'function') throw Error('handoff guard missing');
+                const family = { entityType: 'work' };
+                const session = {
+                    entityId: 'W', ownerTabId: 'tab',
+                    state: 'committed', retired: false, dirty: false,
+                    promise: null, latestSaveToken: 1, settledSaveToken: 1,
+                    draftText: 'locally queued X',
+                    settledBase: { value: 'previous V', revision: 4 },
+                };
+                function test(patch = {}, canonicalText = 'previous V',
+                              revision = 5, source = 'server', displayed = 'previous V',
+                              familyType = family) {
+                    const existing = Object.assign({}, session, patch);
+                    const ctx = { tabId: 'tab', getResource: key => {
+                        if (key === 'workNotesCanonical') return {
+                            id: 'W', private_notes: canonicalText,
+                            sources: { private: source }
+                        };
+                        if (key === 'workNotesObserved') return {
+                            private: { revision }
+                        };
+                        return null;
+                    }};
+                    return guard(familyType, existing, ctx, 'W', displayed, false);
+                }
+                return {
+                    stale: test(),
+                    pendingOverlay: test({}, 'previous V', 5, 'server', 'locally queued X'),
+                    foreign: test({}, 'foreign B', 6, 'server', 'foreign B'),
+                    newerRevision: test({}, 'previous V', 7),
+                    cacheOnly: test({}, 'previous V', 5, 'cache'),
+                    inflight: test({ promise: {} }),
+                    failed: test({ state: 'error', dirty: true }),
+                    unsettled: test({ settledSaveToken: 0 }),
+                    noBase: test({ settledBase: null }),
+                    foreignTab: test({ ownerTabId: 'elsewhere' }),
+                    folder: test({}, 'previous V', 5, 'server',
+                        'previous V', { entityType: 'folder' }),
+                };
+            }"""
+        )
+        self.assertEqual(evidence, {
+            "stale": True,
+            "pendingOverlay": True,
+            "foreign": False,
+            "newerRevision": False,
+            "cacheOnly": False,
+            "inflight": False,
+            "failed": False,
+            "unsettled": False,
+            "noBase": False,
+            "foreignTab": False,
+            "folder": False,
+        })
+
+    def test_private_reminder_handoff_revert_cancels_never_sent_row(self):
         server, page, _collector = self._start_app()
+        # The sync coordinator takes this same Web Lock with ifAvailable.
+        # Hold it across enqueue + cancellation so a startup reachability
+        # notification cannot claim the test row between IndexedDB awaits.
+        # Keep the browser online: unrelated settings requests must work.
+        evidence = page.evaluate(
+            """async id => {
+                if (!navigator.locks) throw new Error('Web Locks required for cancellation check');
+                return navigator.locks.request('prks-sync', async () => {
+                    const base = { value: 'before', revision: 4 };
+                    await prksSync.store.saveWorkNote(id, 'SET_WORK_PRIVATE_NOTE',
+                        'not yet sent', base);
+                    const ctx = {
+                        ui: { workPrivateNoteSession: {
+                            entityId: id, handoffBase: base, handoffText: 'not yet sent'
+                        }},
+                        getResource: key => key === 'workNotesObserved'
+                            ? { private: base } : null,
+                    };
+                    const out = await prksSaveWorkPrivateNoteForSession(
+                        { ctx }, id, 'before'
+                    );
+                    const rows = await prksSync.store.listOperations();
+                    return { code: out.result.code, opId: out.result.opId,
+                        active: rows.filter(r => r.operation === 'SET_WORK_PRIVATE_NOTE'
+                            && r.entity_id === id && r.status !== 'acknowledged').length };
+                });
+            }""",
+            arg=server.ids["work_a"],
+        )
+        self.assertEqual(evidence, {"code": "saved", "opId": None, "active": 0})
+
+    def _prepare_private_reminder_acknowledged_handoff(self):
+        server, page, collector = self._start_app()
         work_a = server.ids["work_a"]
         work_b = server.ids["work_b"]
 
@@ -3441,6 +4639,12 @@ class WorkspaceTabsTests(_BrowserE2E):
         )
         selector = "#prks-private-notes-work-" + work_a
         page.locator(selector).wait_for()
+        # Snapshot the *pre-edit* server Work. A delayed delivery of this GET
+        # after the acknowledgement reproduces the cold-park race reliably.
+        stale_work = page.evaluate(
+            "async id => (await (await fetch('/api/works/' + id)).json())",
+            arg=work_a,
+        )
         new_text = "PRIVATE-PARK-NEW-%s" % int(time.time() * 1000)
         page.locator(selector).fill(new_text)
         # Unsettled draft only: dirty editor, or draft overlay that still
@@ -3465,10 +4669,59 @@ class WorkspaceTabsTests(_BrowserE2E):
             }""",
             arg={"selector": selector, "text": new_text, "workId": work_a},
         )
-        # Hide/tile are async (leave preflight + flush). Awaiting both keeps the
-        # remount from racing the park and makes the unsettled draft observable.
+        # The hide flush makes the save durable. Retile with a held GET whose
+        # *body* predates the edit; only deliver it after the server has applied
+        # the sync op. No wall-clock sleep or production API mock is involved.
         page.evaluate("async id => { await window.prksWorkspaceHideLeaf(id); }", arg=ids["a"])
-        page.evaluate("async id => { await window.prksWorkspaceTileTab(id); }", arg=ids["a"])
+        held = []
+        work_url = "/api/works/" + work_a
+
+        def hold_stale_work(route):
+            if route.request.method == "GET" and urlparse(route.request.url).path == work_url:
+                held.append(route)
+                return
+            route.fallback()
+
+        page.route("**/api/works/*", hold_stale_work)
+        # Playwright emits the request event before delivering the route
+        # callback. Await the intercepted route itself, not merely the request
+        # event, without a wall-clock sleep or racing the Python event loop.
+        page.expose_function("__prksTestHeldWorkGet", lambda: bool(held))
+        try:
+            # Do not await: the route deliberately holds the Work GET until
+            # the ack has completed. Awaiting tile here would deadlock.
+            with page.expect_request(
+                lambda req: req.method == "GET" and urlparse(req.url).path == work_url,
+                timeout=15000,
+            ):
+                page.evaluate("id => { void window.prksWorkspaceTileTab(id); }", arg=ids["a"])
+            wait_for_async(
+                page,
+                "() => window.__prksTestHeldWorkGet()",
+                timeout=15000,
+                message="re-tile did not make an interceptable Work GET",
+            )
+            wait_for_async(
+                page,
+                """() => prksSync.store.listOperations().then(rows =>
+                    rows.every(r => r.operation !== 'SET_WORK_PRIVATE_NOTE'))""",
+                timeout=15000,
+            )
+            # APIRequestContext bypasses Playwright page.route. Once all
+            # pending Work note ops are acknowledged, the server is the oracle.
+            server_url = (
+                urlparse(page.url).scheme + "://" + urlparse(page.url).netloc + work_url
+            )
+            response = page.request.get(server_url, timeout=5000)
+            self.assertTrue(response.ok)
+            self.assertEqual(response.json().get("private_notes"), new_text)
+            held.pop(0).fulfill(
+                status=200, content_type="application/json", body=json.dumps(stale_work)
+            )
+        finally:
+            for pending in held:
+                pending.continue_()
+            page.unroute("**/api/works/*", hold_stale_work)
         page.wait_for_function(
             """() => {
                 const snap = window.prksWorkspaceSnapshot();
@@ -3485,26 +4738,265 @@ class WorkspaceTabsTests(_BrowserE2E):
             arg={"selector": selector, "text": new_text},
         )
 
-        final_text = new_text + "!"
-        page.locator(selector).fill(final_text)
-        page.locator(selector).press("Tab")
-        wait_for_async(page,
-            """() => prksSync.store.listOperations().then(rows =>
-                rows.filter(r => r.operation === 'SET_WORK_PRIVATE_NOTE').length === 0)""",
-            timeout=15000,
-        )
+        # Only the exact ACK of the carried operation authorizes a new save
+        # against its server revision. A stale route GET or another writer's
+        # revision is not sufficient evidence.
         wait_for_async(
             page,
-            """(args) => fetch('/api/works/' + args.id).then(r => r.json()).then(w =>
-                w.private_notes === args.text)""",
-            arg={"id": work_a, "text": final_text},
+            """id => {
+                const ctx = window.prksGetTabContext(id);
+                const s = ctx && ctx.ui && ctx.ui.workPrivateNoteSession;
+                if (!s || !s.handoffBase || !s.settledOpId) return false;
+                const ack = window.prksAcknowledgedWorkPrivateNote(s.settledOpId);
+                return !!(ack && ack.entityId === s.entityId
+                    && ack.baseRevision === s.handoffBase.revision
+                    && ack.revision > ack.baseRevision);
+            }""",
+            arg=ids["a"],
             timeout=15000,
+            message="the carried reminder is missing its own acknowledged revision",
         )
-        persisted = page.evaluate(
-            """async (id) => (await (await fetch('/api/works/' + id)).json()).private_notes""",
-            arg=work_a,
+        return page, work_a, ids, selector, stale_work, new_text, server_url, collector
+
+    def test_private_reminder_hide_show_prefers_unsettled_complete_draft(self):
+        page, work_a, _, selector, _, new_text, server_url, _collector = (
+            self._prepare_private_reminder_acknowledged_handoff()
         )
-        self.assertEqual(persisted, final_text)
+        # The first forward edit uses this tab's proven ACK, rather than
+        # conflicting against itself or adopting the stale route revision.
+        desired_text = new_text + "!"
+        # Require the actual successful sync POST for this precise edit.
+        # A server GET plus rows.every(empty) alone could pass vacuously.
+        with page.expect_response(
+            lambda response: (
+                response.status == 200
+                and urlparse(response.url).path == "/api/sync/operations"
+                and response.request.method == "POST"
+                and (response.request.post_data_json or {}).get("operation")
+                == "SET_WORK_PRIVATE_NOTE"
+                and (response.request.post_data_json or {}).get("entity_id") == work_a
+                and (response.request.post_data_json or {}).get("payload", {}).get("text")
+                == desired_text
+            ),
+            timeout=15000,
+        ) as acknowledged:
+            page.locator(selector).fill(desired_text)
+            page.locator(selector).press("Tab")
+        self.assertEqual(acknowledged.value.json().get("code"), "ACKNOWLEDGED")
+        wait_for_async(
+            page,
+            """async ([id, text]) => {
+                const response = await fetch('/api/works/' + id);
+                if (!response.ok) return false;
+                const work = await response.json();
+                if ((work.private_notes ?? '') !== text) return false;
+                const rows = await prksSync.store.listOperations();
+                return rows.every(r => r.operation !== 'SET_WORK_PRIVATE_NOTE'
+                    || r.entity_id !== id || r.status === 'acknowledged');
+            }""",
+            arg=[work_a, desired_text],
+            timeout=20000,
+            message="post-handoff edit was not acknowledged without a pending conflict",
+        )
+        persisted = page.request.get(server_url, timeout=5000)
+        self.assertTrue(persisted.ok)
+        self.assertEqual(persisted.json().get("private_notes"), desired_text)
+
+    def test_private_reminder_acknowledged_handoff_revert_persists(self):
+        page, work_a, _, selector, stale_work, _, server_url, _collector = (
+            self._prepare_private_reminder_acknowledged_handoff()
+        )
+        # Reverting X to pre-save V after the X ACK must enqueue a real V edit.
+        # A false unchanged-success would leave X on the server.
+        # Empty reminders are stored as SQL NULL, so the GET returns JSON null.
+        # The UI and note sync scope consistently treat it as empty text.
+        desired_text = stale_work.get("private_notes") or ""
+        # Require the actual successful sync POST for this precise edit.
+        # A server GET plus rows.every(empty) alone could pass vacuously.
+        with page.expect_response(
+            lambda response: (
+                response.status == 200
+                and urlparse(response.url).path == "/api/sync/operations"
+                and response.request.method == "POST"
+                and (response.request.post_data_json or {}).get("operation")
+                == "SET_WORK_PRIVATE_NOTE"
+                and (response.request.post_data_json or {}).get("entity_id") == work_a
+                and (response.request.post_data_json or {}).get("payload", {}).get("text")
+                == desired_text
+            ),
+            timeout=15000,
+        ) as acknowledged:
+            page.locator(selector).fill(desired_text)
+            page.locator(selector).press("Tab")
+        self.assertEqual(acknowledged.value.json().get("code"), "ACKNOWLEDGED")
+        wait_for_async(
+            page,
+            """async ([id, text]) => {
+                const response = await fetch('/api/works/' + id);
+                if (!response.ok) return false;
+                const work = await response.json();
+                if ((work.private_notes ?? '') !== text) return false;
+                const rows = await prksSync.store.listOperations();
+                return rows.every(r => r.operation !== 'SET_WORK_PRIVATE_NOTE'
+                    || r.entity_id !== id || r.status === 'acknowledged');
+            }""",
+            arg=[work_a, desired_text],
+            timeout=20000,
+            message="post-handoff edit was not acknowledged without a pending conflict",
+        )
+        persisted = page.request.get(server_url, timeout=5000)
+        self.assertTrue(persisted.ok)
+        self.assertEqual(persisted.json().get("private_notes") or "", desired_text)
+
+
+    def _assert_carried_reminder_conflict(self, page, collector, work_id,
+                                          selector, text, server_url, expected_server_text):
+        # This POST 409 is deliberately expected; do not suppress other
+        # console errors or HTTP failures from the test collector.
+        with page.expect_response(
+            lambda response: (
+                response.status == 409
+                and urlparse(response.url).path == "/api/sync/operations"
+                and response.request.method == "POST"
+            ),
+            timeout=15000,
+        ) as conflict:
+            page.locator(selector).fill(text)
+            page.locator(selector).press("Tab")
+        self.assertEqual(conflict.value.status, 409)
+        wait_for_async(
+            page,
+            """([id, desired]) => prksSync.store.listOperations().then(rows =>
+                rows.some(r => r.operation === 'SET_WORK_PRIVATE_NOTE'
+                    && r.entity_id === id && r.status === 'conflict'
+                    && r.payload.text === desired)
+                && rows.every(r => r.operation !== 'SET_WORK_PRIVATE_NOTE'
+                    || r.entity_id !== id || !['pending', 'syncing'].includes(r.status)))""",
+            arg=[work_id, text],
+            timeout=15000,
+            message="carried reminder failed to enter a terminal, resolvable conflict",
+        )
+        persisted = page.request.get(server_url, timeout=5000)
+        self.assertTrue(persisted.ok)
+        self.assertEqual(persisted.json().get("private_notes"), expected_server_text)
+        expected_log = ("Failed to load resource: the server responded with a "
+                        "status of 409 (Conflict)")
+        expected = [entry for entry in collector.console_errors
+                    if expected_log in entry
+                    and "/api/sync/operations" in entry]
+        self.assertLessEqual(len(expected), 1)
+        if expected:
+            collector.console_errors.remove(expected[0])
+
+    def test_private_reminder_ack_proof_must_match_work_and_base(self):
+        _server, page, _collector = self._start_app()
+        # Invoke the real UI save-selection boundary. Stub only durable
+        # enqueue (so no network mutation); wrong or absent receipts must
+        # NEVER replace the pinned handoff base with the newer revision.
+        bases = page.evaluate(
+            """async () => {
+                const save = window.prksSaveWorkNoteDurably;
+                const ack = window.prksAcknowledgedWorkPrivateNote;
+                const id = 'W-proof-scope';
+                const base = { value: 'V', revision: 4 };
+                const ctx = {
+                    ui: { workPrivateNoteSession: {
+                        entityId: id, handoffBase: base, handoffText: 'X',
+                        settledOpId: 'original-op',
+                    }},
+                    getResource: key => key === 'workNotesObserved'
+                        ? { private: base } : null,
+                };
+                let selected = null;
+                try {
+                    window.prksSaveWorkNoteDurably = (_id, _kind, _text, observed) => {
+                        selected = { value: observed.value, revision: observed.revision };
+                        return Promise.resolve({ code: 'saved', opId: null });
+                    };
+                    const cases = [
+                        null,
+                        { entityId: 'W-foreign', baseRevision: 4, revision: 5 },
+                        { entityId: id, baseRevision: 3, revision: 5 },
+                        { entityId: id, baseRevision: 4, revision: 5 },
+                    ];
+                    const result = [];
+                    for (const receipt of cases) {
+                        window.prksAcknowledgedWorkPrivateNote = () => receipt;
+                        selected = null;
+                        await prksSaveWorkPrivateNoteForSession({ ctx }, id, 'Y');
+                        result.push(selected);
+                    }
+                    return result;
+                } finally {
+                    window.prksSaveWorkNoteDurably = save;
+                    window.prksAcknowledgedWorkPrivateNote = ack;
+                }
+            }"""
+        )
+        self.assertEqual(bases, [
+            {"value": "V", "revision": 4},
+            {"value": "V", "revision": 4},
+            {"value": "V", "revision": 4},
+            {"value": "X", "revision": 5},
+        ])
+
+    def test_private_reminder_handoff_without_ack_proof_still_conflicts(self):
+        page, work_a, ids, selector, _stale, new_text, server_url, collector = (
+            self._prepare_private_reminder_acknowledged_handoff()
+        )
+        # Simulate a different tab having sent the op or its proof being
+        # evicted. The held body is still X but the pinned source is pre-save V.
+        page.evaluate(
+            """id => {
+                const ctx = prksGetTabContext(id);
+                const s = ctx && ctx.ui && ctx.ui.workPrivateNoteSession;
+                if (!s || !s.handoffBase || !s.settledOpId) throw new Error('no carried session');
+                s.settledOpId = null;
+            }""",
+            arg=ids["a"],
+        )
+        self._assert_carried_reminder_conflict(
+            page, collector, work_a, selector, new_text + '-without-proof',
+            server_url, new_text,
+        )
+
+    def test_private_reminder_handoff_proven_ack_rejects_foreign_write(self):
+        page, work_a, ids, selector, _stale, new_text, server_url, collector = (
+            self._prepare_private_reminder_acknowledged_handoff()
+        )
+        ack = page.evaluate(
+            """id => {
+                const s = prksGetTabContext(id).ui.workPrivateNoteSession;
+                return prksAcknowledgedWorkPrivateNote(s.settledOpId);
+            }""", arg=ids["a"],
+        )
+        self.assertEqual(ack["entityId"], work_a)
+        # APIRequestContext is independent from Playwright's stale-GET route.
+        # An external device advances the server revision after our own ACK,
+        # without updating this tab's held editor or its in-memory receipt.
+        from datetime import datetime, timezone
+        from uuid import uuid4
+        stamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        foreign_text = new_text + "-foreign"
+        external = dict(
+            op_id=str(uuid4()), device_id=str(uuid4()),
+            operation="SET_WORK_PRIVATE_NOTE", entity_type="work",
+            entity_id=work_a, payload={"text": foreign_text},
+            base_revision=ack["revision"], occurred_at=stamp,
+            created_at=stamp, depends_on=[],
+        )
+        origin = server_url.rsplit("/api/works/", 1)[0]
+        foreign = page.request.post(
+            origin + "/api/sync/operations", data=json.dumps(external),
+            headers={"Content-Type": "application/json"}, timeout=10000,
+        )
+        self.assertEqual(foreign.status, 200, foreign.text())
+        self.assertEqual(foreign.json().get("code"), "ACKNOWLEDGED")
+        self.assertGreater(foreign.json()["server_revision"], ack["revision"])
+        self._assert_carried_reminder_conflict(
+            page, collector, work_a, selector, new_text + "-my-edit",
+            server_url, foreign_text,
+        )
 
     def test_delayed_secondary_concept_mutation_refreshes_owner_not_main(self):
         server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
@@ -3830,8 +5322,13 @@ class WorkspaceTabsTests(_BrowserE2E):
                 };
                 const coldCtx = window.prksEnsureTabContext('e2e-cold-last-page');
                 coldCtx.mount(document.createElement('div'));
-                coldCtx.setResource('pdf', {
-                    flushLastPage: function () { cold += 1; },
+                coldCtx.registerResource(coldCtx.resourceTicket(), {
+                    kind: 'pdf',
+                    value: {
+                        flushLastPage: function () { cold += 1; },
+                    },
+                    suspendable: true,
+                    dispose: function () {},
                 });
                 window.prksUnmountTabContext(coldCtx.tabId, 'cold-park');
                 window.prksFlushPdfLastPageToStorage();
@@ -4010,7 +5507,7 @@ class TabContextHostRootTests(_BrowserE2E):
             1,
         )
         page.locator(".person-profile__works-action", has_text="Edit relationships").click()
-        page.wait_for_selector(".person-profile__work-card-wrap, .person-profile__role-block")
+        page.wait_for_selector(".person-profile__work-card-wrap")
         self._assert_single_mounted_root(page, root_id)
         self.assertGreaterEqual(
             page.locator(".prks-tab-root .person-profile").count(),
@@ -4458,7 +5955,7 @@ class TabContextHostRootTests(_BrowserE2E):
                 const ctxB = window.prksEnsureTabContext('prks-test-secondary');
                 ctxB.mount(host);
                 const workB = await fetchWorkDetails(workBId);
-                await renderWorkDetails(ctxB, workB, { generation: ctxB.generation });
+                await window.prksMountWorkDetail(ctxB, ctxB.root, workB, { generation: ctxB.generation, workId: workBId });
                 const afterFocused = window.prksGetFocusedTabContext();
                 const afterWork = afterFocused && afterFocused.getEntity ? afterFocused.getEntity('work') : null;
                 const annBtn = document.querySelector('#right-panel .tab-btn[data-target="annotations"]');
@@ -9151,27 +10648,192 @@ class MainSecondaryDividerTests(_BrowserE2E):
     def test_divider_drag_causes_no_additional_route_or_pdf_requests(self):
         server, page, _collector = self._start_app()
         page.set_viewport_size({"width": 1600, "height": 900})
-        _open_work_work_split(page, server)
 
+        # Install the request tracker BEFORE mounting the two Work/PDF panes.
+        # A listener added only after viewer.getPageCount() becomes nonzero
+        # mistakes late mount-originated GETs for divider-triggered reloads.
         requests = []
+        inflight = set()
+        phase = "mount"
+        # A single empty-set check is not a mount barrier: a request's
+        # completion can schedule a follow-up GET on a later task/frame.
+        # Require a measured request-free interval after the latest start or
+        # completion; the 300 ms observation window tests absence, not speed.
+        quiet_seconds = 0.3
+        last_activity = [time.monotonic()]
+
+        def relevant(req):
+            path = urlparse(req.url).path
+            return req.method == "GET" and (
+                path.startswith("/api/works/") or path.startswith("/api/pdfs/")
+            )
 
         def on_request(req):
-            path = urlparse(req.url).path
-            if req.method == "GET" and (path.startswith("/api/works/") or path.startswith("/api/pdfs/")):
-                requests.append(path)
+            if not relevant(req):
+                return
+            inflight.add(req)
+            at = time.monotonic()
+            last_activity[0] = at
+            requests.append({"path": urlparse(req.url).path, "phase": phase,
+                             "at": at})
+
+        def on_done(req):
+            if req in inflight:
+                inflight.discard(req)
+                last_activity[0] = time.monotonic()
 
         page.on("request", on_request)
+        page.on("requestfinished", on_done)
+        page.on("requestfailed", on_done)
+        _open_work_work_split(page, server)
+        _wait_pdf_annotation_gates_idle(page)
+
+        # Annotation catch-up can release _annotationMaterializing before its
+        # materialization handoff has acquired the next gate. It may schedule
+        # another PDF operation during that interval. Observe the complete
+        # PDF lifecycle, not just the original one-gate idle helper.
+        pdf_lifecycle_idle = """() => {
+            const snap = window.prksTabContextDebugSnapshot &&
+                window.prksTabContextDebugSnapshot();
+            const owners = (snap && snap.contexts) || [];
+            for (const owner of owners) {
+                if (!owner || !owner.mounted) continue;
+                const ctx = window.prksGetTabContext(owner.tabId);
+                const pdf = ctx && ctx.getResource && ctx.getResource('pdf');
+                if (pdf && (pdf._annotationMaterializing ||
+                    pdf._annotationMaterializationHandoff ||
+                    pdf._annotationCatchUpBlocksMutation ||
+                    pdf._annotationMaterializationGate)) return false;
+            }
+            return true;
+        }"""
+
+        # A request-free instant can precede another mount-originated GET
+        # (e.g. fetch A -> resolve -> enqueue B), so wait for a genuine
+        # quiescent interval and THEN flush two paint frames. If those frames
+        # initiate another request, begin a fresh quiet window. One 15-second
+        # deadline bounds the whole barrier; no blind multi-second sleeps.
+        # A full PDF handoff may become idle after the last tracked GET.
+        # Require the quiet window AFTER observing that idle transition, not
+        # merely after the previous network completion.
+        pdf_idle_observed_at = [time.monotonic()]
+
+        def mount_quiet():
+            since = max(last_activity[0], pdf_idle_observed_at[0])
+            return not inflight and time.monotonic() - since >= quiet_seconds
+
+        page.expose_function("__prksDividerMountQuiet", mount_quiet)
+        deadline = time.monotonic() + 15
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self.fail(
+                    "Work/PDF initial mount never became quiet: "
+                    "inflight=%r, latest requests=%r" %
+                    ([urlparse(req.url).path for req in inflight], requests[-8:])
+                )
+            # A lifecycle still busy with catch-up/materialization can schedule
+            # further Work/PDF requests after its gate clears. Wait for it
+            # first and start the measured quiet interval from that point.
+            page.wait_for_function(
+                pdf_lifecycle_idle, timeout=max(1, int(remaining * 1000))
+            )
+            pdf_idle_observed_at[0] = time.monotonic()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                continue
+            wait_for_async(
+                page, "() => window.__prksDividerMountQuiet()",
+                timeout=max(1, int(remaining * 1000)),
+                message="initial Work/PDF mount requests did not become quiescent",
+            )
+            snapshot = len(requests)
+            page.evaluate(
+                """() => new Promise(resolve =>
+                    requestAnimationFrame(() => requestAnimationFrame(resolve)))"""
+            )
+            # Evaluate the PDF state before examining the Python-side request
+            # tracker: Playwright may dispatch new request events during the
+            # browser round-trip. Never allow that GET to slip past the guard.
+            if not page.evaluate(pdf_lifecycle_idle) or not mount_quiet() or len(requests) != snapshot:
+                continue
+            _capture_divider_runtime_ids(page)
+            # Runtime capture also crosses an event-loop turn. Recheck lifecycle
+            # FIRST, then in-flight requests and the quiet interval.
+            if page.evaluate(pdf_lifecycle_idle) and mount_quiet() and len(requests) == snapshot:
+                break
+        mount_barrier_at = time.monotonic()
+        barrier_last_activity = last_activity[0]
         before = len(requests)
+        phase = "drag"
 
         _drag_divider(page, 150)
-        page.wait_for_timeout(150)
         _drag_divider(page, -220)
-        page.wait_for_timeout(150)
         _drag_divider(page, 90)
-        page.wait_for_timeout(150)
 
-        self.assertEqual(len(requests), before, "divider drags must not fetch a Work route or reload a PDF")
-        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 2)
+        # A drag-end callback can enqueue a debounced reload on a later task
+        # (workspace persistence currently debounces by 200 ms). Start a
+        # measured quiet window AFTER the final pointerup rather than trusting
+        # a fixed 150 ms delay. Retain the mount's PDF lifecycle guard and
+        # double-frame check, with one deadline for the whole observation.
+        drag_ended_at = time.monotonic()
+
+        def drag_quiet():
+            return (not inflight and
+                    time.monotonic() - max(last_activity[0], drag_ended_at) >= quiet_seconds)
+
+        def drag_settled_or_reloaded():
+            # A broken drag can leave its request in flight; report the exact
+            # GET through the assertion instead of timing out on quietness.
+            return len(requests) > before or drag_quiet()
+
+        page.expose_function("__prksDividerDragSettledOrReloaded", drag_settled_or_reloaded)
+        drag_deadline = time.monotonic() + 8
+        while True:
+            remaining = drag_deadline - time.monotonic()
+            if remaining <= 0:
+                self.fail(
+                    "divider post-drag state never became quiet: "
+                    "inflight=%r, post-barrier GETs=%r" %
+                    ([urlparse(req.url).path for req in inflight], requests[before:])
+                )
+            wait_for_async(
+                page, "() => window.__prksDividerDragSettledOrReloaded()",
+                timeout=max(1, int(remaining * 1000)),
+                message="divider post-drag network did not settle",
+            )
+            if len(requests) > before:
+                break
+            snapshot = len(requests)
+            page.evaluate(
+                """() => new Promise(resolve =>
+                    requestAnimationFrame(() => requestAnimationFrame(resolve)))"""
+            )
+            if len(requests) > before:
+                break
+            if page.evaluate(pdf_lifecycle_idle) and drag_quiet() and len(requests) == snapshot:
+                break
+
+        unexpected = requests[before:]
+        late_gets = [
+            {"path": r["path"], "phase": r["phase"],
+             "after_barrier_ms": round((r["at"] - mount_barrier_at) * 1000)}
+            for r in unexpected
+        ]
+        self.assertEqual(
+            late_gets, [],
+            "divider drags must not initiate Work/PDF reloads; "
+            "mount barrier was %d ms after last network activity; "
+            "initial mount GETs=%r; post-barrier GETs=%r" %
+            (round((mount_barrier_at - barrier_last_activity) * 1000),
+             [r["path"] for r in requests[:before]], late_gets),
+        )
+        self.assertEqual(
+            _divider_runtime_ids_unchanged(page),
+            {"aPdf": True, "bPdf": True, "aNotes": True,
+             "bNotes": True, "mounted": 2},
+            "divider drag must preserve both mounted Work/PDF runtimes",
+        )
 
 
 class WorkspacePersistenceTests(_BrowserE2E):
@@ -11933,6 +13595,40 @@ def _open_settings(page):
     page.wait_for_selector("#settings-modal:not(.hidden)")
 
 
+def _settings_nav_orientation_on_open(page, stale_orientation):
+    # Force the pre-open attribute stale, then open and inspect in the *same*
+    # browser task. The matchMedia 'change' callback cannot rescue a missing
+    # synchronous modal-open update between these statements.
+    return page.evaluate(
+        """stale => {
+            const nav = document.getElementById('prks-settings-nav');
+            nav.setAttribute('aria-orientation', stale);
+            openModal('settings-modal');
+            return {
+                flex: getComputedStyle(nav).flexDirection,
+                aria: nav.getAttribute('aria-orientation'),
+                visible: !document.getElementById('settings-modal').classList.contains('hidden')
+            };
+        }""",
+        arg=stale_orientation,
+    )
+
+
+def _wait_settings_nav_orientation(page, orientation, direction):
+    # CSS media-query layout can update before the matchMedia change handler
+    # updates the ARIA state. Treat both as one observable accessibility
+    # contract, not as unrelated instantaneous reads after modal visibility.
+    page.wait_for_function(
+        """expected => {
+            const nav = document.getElementById('prks-settings-nav');
+            return nav &&
+                getComputedStyle(nav).flexDirection === expected.direction &&
+                nav.getAttribute('aria-orientation') === expected.orientation;
+        }""",
+        arg={"orientation": orientation, "direction": direction},
+    )
+
+
 def _diagnostics_requests(page):
     return [
         r
@@ -12095,15 +13791,8 @@ class SettingsCategoryWorkflowTests(_BrowserE2E):
     def test_responsive_narrow_category_strip(self):
         _server, page, _collector = self._start_app()
         page.set_viewport_size({"width": 420, "height": 800})
-        page.evaluate("() => { openModal('settings-modal'); }")
-        page.wait_for_selector("#settings-modal:not(.hidden)")
-        nav_display = page.evaluate(
-            "() => getComputedStyle(document.getElementById('prks-settings-nav')).flexDirection"
-        )
-        self.assertEqual(nav_display, "row")
-        self.assertEqual(
-            page.locator("#prks-settings-nav").get_attribute("aria-orientation"), "horizontal"
-        )
+        state = _settings_nav_orientation_on_open(page, "vertical")
+        self.assertEqual(state, {"flex": "row", "aria": "horizontal", "visible": True})
         page.locator("#prks-settings-tab-reading").click()
         page.wait_for_selector("#prks-settings-panel-reading:not([hidden])")
         overflow = page.evaluate("() => document.documentElement.scrollWidth > document.documentElement.clientWidth")
@@ -12122,14 +13811,8 @@ class SettingsCategoryWorkflowTests(_BrowserE2E):
     def test_desktop_category_layout_two_columns(self):
         _server, page, _collector = self._start_app()
         page.set_viewport_size({"width": 1280, "height": 800})
-        _open_settings(page)
-        nav_display = page.evaluate(
-            "() => getComputedStyle(document.getElementById('prks-settings-nav')).flexDirection"
-        )
-        self.assertEqual(nav_display, "column")
-        self.assertEqual(
-            page.locator("#prks-settings-nav").get_attribute("aria-orientation"), "vertical"
-        )
+        state = _settings_nav_orientation_on_open(page, "horizontal")
+        self.assertEqual(state, {"flex": "column", "aria": "vertical", "visible": True})
         workspace_display = page.evaluate(
             "() => getComputedStyle(document.getElementById('prks-settings-nav').parentElement).display"
         )
@@ -12139,16 +13822,8 @@ class SettingsCategoryWorkflowTests(_BrowserE2E):
         _server, page, _collector = self._start_app()
         page.set_viewport_size({"width": 1280, "height": 800})
         _open_settings(page)
-        self.assertEqual(
-            page.locator("#prks-settings-nav").get_attribute("aria-orientation"), "vertical"
-        )
+        _wait_settings_nav_orientation(page, "vertical", "column")
         page.set_viewport_size({"width": 420, "height": 800})
-        page.wait_for_function(
-            "() => document.getElementById('prks-settings-nav')"
-            ".getAttribute('aria-orientation') === 'horizontal'"
-        )
+        _wait_settings_nav_orientation(page, "horizontal", "row")
         page.set_viewport_size({"width": 1280, "height": 800})
-        page.wait_for_function(
-            "() => document.getElementById('prks-settings-nav')"
-            ".getAttribute('aria-orientation') === 'vertical'"
-        )
+        _wait_settings_nav_orientation(page, "vertical", "column")

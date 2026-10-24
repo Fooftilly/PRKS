@@ -43,11 +43,11 @@ class FrontendTypesBrowseTests(unittest.TestCase):
         self.assertGreater(types_at, 0)
         types_body = app[types_at:detail_at]
         self.assertIn("prksTypesIndexModel(works)", types_body)
-        self.assertIn("prksPresentVueTypesIndex", types_body)
+        self.assertIn("prksPresentVueRoute(ctx, contentDiv, 'types'", types_body)
         self.assertNotIn("renderTypesIndex", types_body)
         detail_body = app[detail_at:app.index("case 'work':", detail_at)]
         self.assertIn("prksTypesDetailModel(works, route.params.docType)", detail_body)
-        self.assertIn("prksPresentVueTypeDetail", detail_body)
+        self.assertIn("prksPresentVueRoute(ctx, contentDiv, 'type-detail'", detail_body)
         self.assertNotIn("renderWorksByDocType", detail_body)
         self.assertIn("publishSidebar", types_body)
         self.assertIn("publishSidebar", detail_body)

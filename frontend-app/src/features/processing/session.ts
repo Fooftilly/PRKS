@@ -1,6 +1,5 @@
 import { createVNode } from 'vue'
 import {
-  dismissRouteSurface,
   presentRouteSurface,
   registerEarlyRoutePresenter,
   registerRouteWindowBridge,
@@ -11,6 +10,7 @@ import { browserProcessingIntents, type ProcessingIntentOwner } from './intents'
 import { buildProcessingProjection, type ProcessingProjection, type ProcessingResume } from './projection'
 import type { ProcessingRouteInstance } from './route'
 import ProcessingFilesRoute from './ProcessingFilesRoute.vue'
+import { processingRecords } from './records'
 
 export interface ProcessingPresentInput {
   owner: RouteSurfaceOwner & ProcessingIntentOwner
@@ -42,7 +42,8 @@ function isProcessingEarlyRequest(
 
 /**
  * Paint one owner's Processing inbox. The coordinator has already loaded the
- * rescan, people, and folders. Vue does not fetch them. The preview iframe
+ * rescan (through `prksProcessingRecords`), people, and folders. The page
+ * does not fetch them. The preview iframe
  * is attached by the page and released with the owner.
  */
 export function presentProcessing(input: ProcessingPresentInput): void {
@@ -83,20 +84,13 @@ export function presentProcessing(input: ProcessingPresentInput): void {
   })
 }
 
-export function dismissProcessing(owner: object | null | undefined): void {
-  if (owner && typeof window.prksProcessingReleaseResources === 'function') {
-    window.prksProcessingReleaseResources(owner)
-  }
-  dismissRouteSurface(owner)
-}
-
 export function resetProcessingSessionForTests(): void {
   resetRouteSurfaceForTests()
 }
 
 export function registerProcessingBridge(target: Window = window): void {
   registerRouteWindowBridge(target)
-  target.prksVueDismissProcessing = dismissProcessing
+  target.prksProcessingRecords = processingRecords()
   registerEarlyRoutePresenter(
     PROCESSING_FEATURE,
     (request, host) => {

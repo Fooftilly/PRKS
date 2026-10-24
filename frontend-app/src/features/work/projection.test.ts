@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  adoptPaintedWorkRoute,
   projectWorkRoute,
   publishWorkRouteProjection,
   replaceWorkRoutePlacement,
@@ -333,19 +332,4 @@ describe('owner publication', () => {
     expect(ctx.getEntity('work')).not.toBe(replaced?.effectiveWork)
   })
 
-  it('does not adopt a painted Work after the generation moves', () => {
-    let currentGeneration = 1
-    const ctx = ctxFor('main', 1)
-    ctx.isCurrent = (token: number) => token === currentGeneration
-    publishWorkRouteProjection(
-      ctx,
-      1,
-      projectWorkRoute(input({ workId: 'w1', owner: owner('main', 1), work: { id: 'w1', title: 'A' } })),
-    )
-    currentGeneration = 2
-    ctx.setEntity('work', { id: 'w1', title: 'Painted later' })
-    expect(adoptPaintedWorkRoute(ctx, 1, 'w1')).toBeNull()
-    const stored = ctx.getResource('workRouteProjection') as WorkRouteProjection
-    expect(stored.work?.title).toBe('A')
-  })
 })

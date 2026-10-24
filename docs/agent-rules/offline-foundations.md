@@ -83,7 +83,11 @@ invalidation is not enough and must not be pretended to be. Those use an
 explicit **offline coherence domain**: a named group of entity kinds and list
 keys that are invalidated together.
 
-`prksOfflineMarkDomainChanged(domain, { entityKinds, listKeys })` increments the
+The runtime's internal `markDomainChanged(domain, { entityKinds, listKeys })`
+in `offline-runtime.js` owns this contract. Callers reach it only through one
+named wrapper per domain (for example `prksOfflineMarkConceptsChanged()`), which
+defines the domain's entity kinds and list keys once; there is no generic
+global. A new domain adds its own wrapper. `markDomainChanged` increments the
 domain's generation and blocks its cached fallback **synchronously**, then
 sweeps the disposable cache (`deleteEntitiesByKind()` / `deleteList()`) in the
 background. During that window no cached value in the domain may be served. The

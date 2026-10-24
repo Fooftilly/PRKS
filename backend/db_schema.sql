@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS works (
     urldate TEXT,     -- BibLaTeX @online access date (YYYY-MM-DD)
     thumb_page INTEGER, -- 1-based preferred thumbnail page for PDF cards
     -- Bibliographical metadata
-    author_text TEXT,       -- Free-text string (search, cards, video channel); BibTeX authors use linked Author roles
+    author_text TEXT,       -- Search/card/channel credit; BibTeX falls back here only without linked Author roles
     year TEXT,
     publisher TEXT,
     location TEXT, -- place(s) of publication; semicolon-separated; BibLaTeX joins with "and"

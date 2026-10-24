@@ -64,6 +64,9 @@ function makeDom() {
 
     function matches(el, sel) {
         if (!sel || !el) return false;
+        if (sel.indexOf(',') !== -1) {
+            return sel.split(',').some((part) => matches(el, part.trim()));
+        }
         // Compound ".foo[bar]" / "div.foo[bar=baz]" — split attr suffix first.
         const attrSuffix = sel.match(/^([^\[\]]+)(\[[^\]]+\])$/);
         if (attrSuffix) {
@@ -334,7 +337,26 @@ function makeDom() {
         getElementById(id) {
             return byId[id] || null;
         },
-        addEventListener() {},
+        _listeners: Object.create(null),
+        addEventListener(type, fn, opts) {
+            const capture = opts === true || (opts && opts.capture);
+            const key = String(type) + (capture ? ':c' : ':b');
+            if (!this._listeners[key]) this._listeners[key] = [];
+            this._listeners[key].push(fn);
+        },
+        removeEventListener() {},
+        _dispatch(type, event) {
+            const ev = event && typeof event === 'object' ? event : {};
+            if (typeof ev.preventDefault !== 'function') {
+                ev.preventDefault = function () {
+                    this.prevented = true;
+                };
+            }
+            const cap = this._listeners[String(type) + ':c'] || [];
+            const bub = this._listeners[String(type) + ':b'] || [];
+            for (const fn of cap.concat(bub)) fn(ev);
+            return ev;
+        },
         querySelector() {
             return null;
         },

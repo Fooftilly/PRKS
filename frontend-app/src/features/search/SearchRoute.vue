@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
+import PrksScopeLine from '../../components/PrksScopeLine.vue'
 import SearchResultsCollection from './SearchResultsCollection.vue'
 import type { SearchIntents } from './intents'
 import type { SearchRouteProjection } from './projection'
@@ -15,10 +17,8 @@ const modeHost = ref<HTMLElement | null>(null)
 const request = computed(() => props.projection.request)
 const showForm = computed(() => !request.value.tag)
 const searchIcon = computed(() => window.prksTagSearchIconHtml?.() ?? '')
-const scopeHtml = computed(() => {
-  const total = props.projection.results.rows.length
-  return window.prksScopeLineHtml?.({ total, label: total === 1 ? 'result' : 'results' }) ?? ''
-})
+const scopeTotal = computed(() => props.projection.results.rows.length)
+const scopeLabel = computed(() => (scopeTotal.value === 1 ? 'result' : 'results'))
 
 const q = ref('')
 const author = ref('')
@@ -61,18 +61,16 @@ watch(() => props.projection.generation, paintMode, { flush: 'post' })
         <h2 class="prks-page-title">{{ projection.title }}</h2>
         <div class="page-header__actions">
           <div ref="modeHost" class="work-html-slot" data-prks-search-mode-host></div>
-          <button
+          <PrksButton
             v-if="projection.canOfferSave"
             id="prks-save-view-btn"
-            type="button"
-            class="prks-btn prks-btn--secondary"
             @click="intents.saveView()"
           >
             Save View
-          </button>
+          </PrksButton>
         </div>
       </div>
-      <div class="work-html-slot" v-html="scopeHtml"></div>
+      <PrksScopeLine :total="scopeTotal" :label="scopeLabel" />
       <div v-if="showForm" class="search-advanced" role="search">
         <div v-if="request.any" class="search-advanced__row">
           <label class="search-advanced__label" for="search-any-input">All</label>
@@ -152,9 +150,9 @@ watch(() => props.projection.generation, paintMode, { flush: 'post' })
             </div>
           </div>
         </template>
-        <button id="search-run-btn" type="button" class="prks-btn prks-btn--secondary search-advanced__submit" @click="run">
+        <PrksButton id="search-run-btn" class="search-advanced__submit" @click="run">
           Search
-        </button>
+        </PrksButton>
       </div>
     </div>
     <SearchResultsCollection :projection="projection.results" />

@@ -7,7 +7,6 @@ const client: ClientRequestSnapshot = {
     started: 1,
     dedupeJoins: 0,
     burstCacheHits: 0,
-    coalescedMutations: 0,
     retries: 0,
     aborted: 0,
   },

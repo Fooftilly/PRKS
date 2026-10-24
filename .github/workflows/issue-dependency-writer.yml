@@ -1,0 +1,123 @@
+name: Issue dependency writer
+
+# Records one maintainer-approved native "Blocked by" issue relationship (#441).
+# Runs only on an explicit workflow_dispatch from the default branch by an
+# allowed actor. The plan job is read-only; only the apply job holds
+# issues: write, and only when mode is "apply". It adds a relationship and
+# nothing else: no removals, comments, labels, pull requests or Project #3
+# fields. Operating and revoking it: docs/agent-workflows/issue-dependencies.md.
+
+run-name: "Issue dependency (${{ inputs.mode }})"
+
+on:
+  workflow_dispatch:
+    inputs:
+      blocked:
+        description: "Issue number that cannot proceed (is blocked)"
+        required: true
+        type: string
+      blocking:
+        description: "Issue number it is blocked by (the prerequisite)"
+        required: true
+        type: string
+      justification:
+        description: "Why the blocked issue cannot meaningfully proceed first (10-1000 characters)"
+        required: true
+        type: string
+      mode:
+        description: "dry-run reports the change; apply writes it"
+        required: true
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - apply
+
+permissions: {}
+
+# One writer at a time across the repository, so a re-check is never raced by
+# another run of this workflow. Without "queue: max" GitHub keeps only one
+# pending run per group and a newer dispatch cancels it; with it, up to 100
+# runs wait. Past that limit GitHub does not document the behavior,
+# so a dispatch that does not appear as a run must be repeated (it is
+# idempotent).
+concurrency:
+  group: issue-dependency-writer
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  plan:
+    name: Check and report (read-only)
+    # No job-level branch condition: a skipped job reports success and would
+    # leave no audit record. The first step refuses instead, before any
+    # repository code is checked out, and the failure skips the apply job.
+    permissions:
+      contents: read # check out the writer script
+      issues: read # read both issues and their dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require the default branch
+        env:
+          RUN_REF: ${{ github.ref }}
+          DEFAULT_REF: refs/heads/${{ github.event.repository.default_branch }}
+        run: |
+          if [ "${RUN_REF}" != "${DEFAULT_REF}" ]; then
+            reason="the run is from ${RUN_REF}, not the default branch (${DEFAULT_REF})"
+            REASON="${reason}" python3 -c 'import json, os; print(json.dumps({"outcome": "refused", "reason": os.environ["REASON"], "tool": "issue-dependency-writer"}, sort_keys=True))'
+            printf '## Issue dependency writer: refused\n\n%s. Nothing was written.\n' "${reason}" >> "${GITHUB_STEP_SUMMARY}"
+            echo "::error::refused: ${reason}"
+            exit 1
+          fi
+
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Dry run
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BLOCKED: ${{ inputs.blocked }}
+          BLOCKING: ${{ inputs.blocking }}
+          JUSTIFICATION: ${{ inputs.justification }}
+          ALLOWED_ACTORS: ${{ vars.ISSUE_DEPENDENCY_WRITERS }}
+        run: >-
+          python3 scripts/issue_dependency_writer.py
+          --blocked "${BLOCKED}"
+          --blocking "${BLOCKING}"
+          --justification "${JUSTIFICATION}"
+          --allowed-actors "${ALLOWED_ACTORS}"
+
+  apply:
+    name: Write the relationship
+    needs: plan
+    if: >-
+      inputs.mode == 'apply' &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    permissions:
+      contents: read # check out the writer script
+      issues: write # add the blocked-by relationship
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Re-check and write
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BLOCKED: ${{ inputs.blocked }}
+          BLOCKING: ${{ inputs.blocking }}
+          JUSTIFICATION: ${{ inputs.justification }}
+          ALLOWED_ACTORS: ${{ vars.ISSUE_DEPENDENCY_WRITERS }}
+        run: >-
+          python3 scripts/issue_dependency_writer.py
+          --apply
+          --blocked "${BLOCKED}"
+          --blocking "${BLOCKING}"
+          --justification "${JUSTIFICATION}"
+          --allowed-actors "${ALLOWED_ACTORS}"

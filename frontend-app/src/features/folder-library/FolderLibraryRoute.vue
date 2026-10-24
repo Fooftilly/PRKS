@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useDebounceFn } from '@vueuse/core'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import FolderTree from './FolderTree.vue'
 import RecentlyAddedPane from './RecentlyAddedPane.vue'
@@ -404,9 +405,9 @@ onBeforeUnmount(() => {
       <div class="prks-page-header page-header">
         <h2 class="prks-page-title">Folders not available offline</h2>
       </div>
-      <p class="prks-inline-message" data-prks-role="offline-unavailable">
+      <PrksInlineMessage data-prks-role="offline-unavailable">
         This list has not been cached on this device.
-      </p>
+      </PrksInlineMessage>
     </template>
     <template v-else>
       <div class="prks-page-header page-header prks-folder-library__header">

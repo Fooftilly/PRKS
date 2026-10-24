@@ -79,6 +79,146 @@ coordinator names no family: adding one is a registration.
 - Clear offline cache never touches durable operations. Without a cached Work
   base, PRKS shows unavailable rather than inventing a complete Work. Pending
   changes remain in Settings → Diagnostics and synchronize when possible.
+- `prks-editor-recovery-v1` (#466) is browser-local editor draft recovery,
+  a separate database and a distinct layer: not server state, not the
+  operation queue, not a cache. `frontend/js/editor-recovery.js` (built from
+  `frontend-app/src/lifecycle/editor-recovery/`) writes metadata and body in
+  one transaction with relaxed durability where supported (a plain readwrite
+  transaction otherwise), resolves only on completion, and never claims an
+  acknowledgement. Relaxed covers reload, tab close and a browser crash, not
+  OS crash or power loss; the operation queue stays the strict boundary.
+  Only a lineage's owner page (a fresh `pageInstanceId` per load) writes it;
+  generations are monotonic; adoption is compare-and-set. Records are deleted
+  only on an exact acknowledgement (same generation, `===` body), proven
+  equality, explicit discard or a confirmed Work deletion, never by age.
+  A Work delete that is only requested keeps them (it cancels never-sent
+  note rows, so a draft can be the only copy if the delete then
+  conflicts); its acknowledgement or a never-sent creation folding away,
+  both seen by this device, removes both note kinds for that Work (#533).
+  The Work stays marked in localStorage (one key per Work,
+  `prks.workRecoveryCleanup.v1.<workId>`, so tabs never overwrite each
+  other's marks) until a later load's retry finds nothing of it left,
+  readable or not (a record or emergency key of a newer schema, or a key
+  whose read failed or whose only unreadable entries are of a draft kind a
+  newer bundle added, keeps the mark; a malformed, older or mismatched key,
+  which no bundle can merge, names no Work and is left in place), and no pane
+  of that page still shows it: right after the confirmation another tab may
+  hold an edit not yet in storage. Only the tab holding the sync
+  lock hears the acknowledgement, so another tab still holding a draft of
+  that Work keeps it until its editor lets go and a later load retries;
+  faster cross-tab notice belongs to #476. A later load retries marked
+  Works: at most 8 per load, the least recently tried first so none
+  starves, each only on the server's own "Work not found"; a Work the
+  server holds again keeps its drafts and loses its mark. An inconclusive
+  retry (no answer, an owner still live or not proven gone) keeps the
+  mark, however often it happens; no mark or draft is dropped for its age
+  or count. A Work this device never saw deleted keeps
+  its drafts whatever the server answers: the library this origin serves
+  now may not be the one they were typed against. This page's note
+  sessions that no pane shows give their lineages back first (on a folded
+  creation, the deleting pane's own sessions too). Only a lineage whose
+  owner is this page without a writer, or a page proven gone (its page
+  lock released or its final `pagehide` recorded), is removed, by
+  compare-and-set on its owner page, generation and status; a stale
+  emergency key's such lineages are tombstoned. A live or unknown owner
+  keeps its lineage, because a frozen tab still holding the text looks the
+  same: a later retry removes it once that page is proven gone. Without Web
+  Locks (LAN) a crashed tab is never proven gone, so its draft and its
+  Work's mark stay, costing one probe on the loads that reach it. Such a
+  draft is reached in Settings → Diagnostics (#466 slice 5), apart from its
+  Work. A discard whose emergency key could not be cleared leaves a bodyless
+  tombstone until that key is gone, so the key cannot recreate the draft.
+  A draft a merge created from another page's key carries that page's id
+  until the key is removed; deleting it meanwhile leaves the same tombstone.
+  Settings → Diagnostics (#466 slice 5,
+  `lifecycle/editor-recovery/diagnostics.ts`, reached through
+  `prksEditorRecovery.diagnostics()`) lists every kind's drafts apart from
+  the durable queue and without opening their Work or Folder: stored
+  records with entity, kind, time, owner class, completeness, size and
+  flags (old, superseded, deleted on this device), records this build
+  cannot read (a newer schema or a damaged row), and emergency entries still
+  outside IndexedDB (a live or unproven page's key, and keys it cannot
+  parse). Listing first runs the ordinary emergency scan, which merges only
+  pages proven gone. It never asks the server whether an entity exists
+  (#550), and it never restores, enqueues or applies text. View, Copy and
+  Download read the text again at that moment and refuse a record whose
+  owner page, generation or status changed or that an open editor holds.
+  The only write is Discard of a stored record, after a destructive
+  confirmation: the record and its owner class are read again, a live owner
+  refuses, an unknown owner needs the confirmation that names that risk,
+  and the runtime's compare-and-set `discardReviewed` removes it (leaving a
+  tombstone when an emergency key still lists it). Unreadable records and
+  emergency entries are copy-only and never removed there; nothing is
+  removed for its age, size or orphan state. Total size is shown and a
+  warning appears above 256 MB.
+  Clear offline cache does not touch it. Research Notes is its consumer
+  (slice 2): a reload restores the same pane's own draft automatically only
+  when the server's acknowledged note is the one it was typed on (or this
+  pane's own queued predecessor, #475 rules); every other draft is kept,
+  not enqueued and not applied. A recovery commit means recoverable, never
+  saved. Slice 3 extends automatic restore to one complete draft from a
+  closed tab or another pane of this tab, under the same base and queue
+  rules and only when no other lineage is live. A closed tab is proven by
+  its lock disappearing or its final-pagehide record in `localStorage`
+  (needed on LAN, where Web Locks are absent); a crashed LAN tab stays
+  unknown and is review-only. A tab that is already open re-scans when
+  another tab's final-pagehide record appears; that record also lets it
+  merge a close-time emergency entry written before the closing tab's
+  runtime claim settled. Everything else appears in the Notes pane's
+  recovery notice and Review dialog, where restoring adopts by
+  compare-and-set and reconciling is an explicit confirmed replace; nothing
+  is enqueued until the user chooses. Review's Restore and Replace pass the
+  same checks as the automatic restore (#490): Restore needs a base proven
+  one server snapshot, and both re-read the queue, base and other panes
+  after the asynchronous adoption or claim before applying anything.
+  When the server acknowledges text recovery storage never took, the older
+  stored generation is superseded and removed; if storage refuses that
+  removal, it is recorded in `localStorage`
+  (one `prks.editorRecovery.superseded.v1.<draftId>` key per draft, so tabs
+  never overwrite each other's marks), never adopted or restored by this
+  or any other page (an already open tab reads the record again before it
+  adopts), and removed once storage accepts it. If `localStorage` refuses
+  that mark too, the page keeps its leave guard until the removal lands.
+  Work Reminders (#474, slice 4) use the same runtime through the shared
+  adapter `frontend/js/work-note-recovery.js` (kind `work-private-note`),
+  with the same restore, Review, acknowledgement and superseded rules. The
+  Reminders session in `ui.js` reports every edit before the 850 ms save
+  debounce, and its lineage follows the session across a Work switch, a
+  right-panel owner change, warm or cold park and re-tile. Reminders have
+  no blocked state: text typed behind its own sent predecessor waits for it
+  through the existing scope_busy retry. A queued Reminders row is not a
+  saved note: the record and the leave guard stay until its acknowledgement.
+  Folder Reminders (#534) use the same runtime through the same adapter
+  (kind `folder-private-note`, entity type `folder`), with the same
+  restore, Review, acknowledgement, tombstone and superseded rules. What the
+  Folder kind supplies differs only in what it measures against: its base is
+  the pane's observed `private_notes` Folder field (value, Folder field
+  revision, source), its queued rows are `SET_FOLDER_FIELD` rows for that
+  field, a base is verified by reading the Folder body and then its field
+  revision from the server, and an acknowledgement is matched by op id and
+  exact payload text while the base becomes what the server stores. A
+  Folder field revision is never compared with a Work note revision. The
+  Folder route restores once the base and the pending rows are read
+  (`prksOpenFolderPrivateNotes`); the Folder Reminders card shows the shared
+  notice and Review (`features/folder-detail/private-notes-recovery.ts`).
+  Their save contract: `prksSaveFolderPrivateNoteDurably` (`folder-state.js`) saves
+  only the `private_notes` field against that field's own revision (the
+  Folder field revision, never a Work note revision) and answers with a
+  code and the exact queued row (`queued` + `opId`, `unchanged`,
+  `scope_busy` or `conflict` naming the row that holds the field,
+  `unknown_base`, `unproven`, `too-long`, `failed`), never a throw.
+  `prksFolderPrivateNoteAck` matches an acknowledgement to one row and its
+  exact payload text, and reports what the server stores (stripped as
+  Python's `str.strip()` strips, not `trim()`, as the
+  acknowledgement reconciles into the cache).
+  Folder Reminders sessions are per pane like Work ones
+  (`ctx.ui.folderPrivateNoteSession`, the shared session lifecycle in
+  `ui.js`), and each pane observes its acknowledged `private_notes` base
+  (body from the Folder detail read before pending rows are overlaid,
+  revision from the Folder sync-state, and where both came from). A base is
+  `server` only when both halves are; an acknowledgement advances it, and
+  an older read never moves it back. A session's own queued row is cleared
+  only by that row's exact acknowledgement, never by another pane's.
 - A device ID is an identity for synchronization, never authentication or trust.
 - Editor state and observed projections belong to the Work's TabContext.
   The sync coordinator owns transport and retry policy, with one in-flight
@@ -609,11 +749,12 @@ what the user sees. That is not a defect to design around; it is the existing
 composition, and synchronization must not quietly take it over.
 
 **The overlay produces the field; the existing credit helper decides the
-rest.** `prksWorkCardCreditLine()` is unchanged and remains the single place
-that rule lives. The ordering is the whole design:
+rest.** `workCardCreditText()` in `frontend-app/src/components/work-card.ts`
+is the single place that rule lives; `PrksWorkCard` renders its text. The ordering is the
+whole design:
 
 ```
-acknowledged row -> apply pending fields -> effective row -> credit helper -> HTML
+acknowledged row -> apply pending fields -> effective row -> credit helper -> card
 ```
 
 Never the reverse. Composing the credit first and patching `author_text` onto
@@ -1023,6 +1164,16 @@ the user's own C then arrives stale — while the screen said C the whole time.
 only a NEVER SENT row may be rewritten, and editing back to the acknowledged
 identity leaves no intent at all. A row that has been attempted might already be
 ledgered, so it stays immutable and the save refuses with `scope_busy`.
+
+`scope_busy` refuses the write; it does not record the newer intent anywhere.
+The editor that asked keeps it. A whole-document note must not turn the refusal
+into a dead error or let a later acknowledgement of the *older* row read as
+"saved": Reminders and Research Notes (#465) keep the refused body dirty and
+re-enqueue it once the attempted row settles. Acknowledgements are emitted
+only in the runtime that sent the row, so when another browser tab settled it
+the re-enqueued body is measured against a stale observed base and can park as
+`REVISION_CONFLICT` rather than saving automatically. Cross-tab acknowledgement
+and base coherence is #476 (roadmap overlap with #58/#310).
 
 Identity, not URL text, decides all of this — `A -> B -> A` is no change even
 when the two spellings of A differ.

@@ -5,41 +5,12 @@ interface TagsMutationOutcome {
   reason?: string
 }
 
-interface PublishersMutationOutcome {
-  ok?: boolean
-  reason?: string
-}
-
 /** Painted inbox people. The coordinator stores the person rows; quick-create appends `{ id, name }`. */
 interface ProcessingPeopleCatalogueEntry {
   id?: string
   name?: string
   first_name?: string
   last_name?: string
-}
-
-interface ProcessingDraft {
-  title?: string
-  status_draft?: string
-  abstract?: string
-  source_url?: string
-  published_date?: string
-  year?: string
-  publisher?: string
-  location?: string
-  edition?: string
-  journal?: string
-  volume?: string
-  issue?: string
-  pages?: string
-  isbn?: string
-  doi?: string
-  doc_type?: string
-  private_notes?: string
-  thumb_page?: string
-  target_folder_id?: string
-  roles?: Array<{ person_id?: string; person_name?: string; role_type?: string }>
-  tags?: Array<{ id?: string; name?: string }>
 }
 
 interface ProcessingPreviewTarget {
@@ -75,6 +46,8 @@ interface PrksNavigateOptions {
 }
 
 interface Window {
+  /** Sanitized `/api/client-errors` reporter from `api.js` (deduped there). */
+  prksReportClientError?: (input: { kind: string; source: string; request_id?: string }) => void
   prksVueActivatePerformanceDiagnostics?: () => void
   __prksPerformanceDiagnosticsRequested?: boolean
   prksRequestCoordinatorSnapshot?: () => {
@@ -86,40 +59,16 @@ interface Window {
   prksResetRequestCoordinatorDiagnostics?: () => void
   PRKS_REQUEST_MAX_READS?: number
   prksAbstractExcerpt?: (value: unknown) => string
-  prksWorkCardHtml?: (
-    work: {
-      id?: unknown
-      title?: unknown
-      status?: unknown
-      file_path?: unknown
-      thumb_url?: unknown
-      thumb_page?: unknown
-      doc_type?: unknown
-      year?: unknown
-      published_date?: unknown
-      file_size_bytes?: unknown
-      linked_authors?: unknown
-      author_text?: unknown
-      primary_author?: unknown
-      primary_editor?: unknown
-      source_kind?: unknown
-      source_url?: unknown
-      provider?: unknown
-      provider_id?: unknown
-      abstract_excerpt?: unknown
-      abstract?: unknown
-    },
-    options: { subtitle?: string; suppressThumbnail?: boolean; hideDocTypeBadge?: boolean },
-  ) => string
   prksDocTypeBadgeHtml?: (docType: string) => string
   prksWorkBrowseModeToggleHtml?: (hiddenId?: string) => string
   prksWorkBrowseCollectionClass?: (extraClass?: string) => string
   prksBindWorkBrowseMode?: (root: ParentNode | null) => void
   prksTagSearchIconHtml?: () => string
   prksInitLazyWorkThumbs?: (root: ParentNode | null) => void
+  prksRegisterWorkThumbUrl?: (workId: string, rawSrc: string) => string
   prksRefreshIcons?: (root: ParentNode | Document | null) => void
   prksBindAutosizeTextareas?: (root: ParentNode | null) => void
-  prksProgressStatusIconHtml?: (status: string, opts?: { size?: string | number }) => string
+  prksProgressStatusIconHtml?: (status: string, opts?: { className?: string; size?: string | number }) => string
   initPrksDocTypeMenu?: (hiddenInputId: string, opts?: { disabled?: boolean; selectedValue?: string }) => void
   prksSaveWorkMetadataFields?: (workId: string, groupName?: string) => void
   prksSaveWorkSource?: (workId: string) => void
@@ -134,16 +83,8 @@ interface Window {
   prksResolveWorkMetadataFieldConflict?: (opId: string, apply: boolean, group: string) => void
   prksResolveWorkSourceConflict?: (opId: string, apply: boolean) => void
   prksVueAcceptWorkMetadataField?: (ctx: object, field: string, value: unknown) => boolean
-  prksVuePresentWorkResearchNotes?: (
-    ctx: object,
-    work: { id?: unknown },
-    initialText: string,
-  ) => boolean
   prksVuePresentRoute?: (request: unknown) => boolean
-  prksVueDismissProgress?: (owner: object) => void
-  prksVueDismissRecent?: (owner: object) => void
-  prksVueDismissTypes?: (owner: object) => void
-  prksVueDismissTags?: (owner: object) => void
+  prksVueDismissRoute?: (owner: object) => void
   prksVueCloseTagsAliasModal?: (modal?: Element | null) => void
   prksVueCloseTagsMergeModal?: (modal?: Element | null) => void
   prksVueReportTagsRefreshFailure?: (owner: object, message: string) => void
@@ -162,19 +103,7 @@ interface Window {
   prksTagsMerge?: (sourceId: string, targetId: string) => Promise<TagsMutationOutcome>
   fetchTags?: (options?: { used?: boolean; signal?: AbortSignal }) => Promise<unknown>
   prksTagVocabularyMessage?: (error: unknown, action: string) => string
-  prksVueDismissPublishers?: (owner: object) => void
   prksVueClosePublishersAliasModal?: () => void
-  prksVueReportPublishersRefreshFailure?: (owner: object, message: string) => void
-  prksReloadPublishersPage?: (
-    owner: object,
-    generation: number,
-    resume?: { aliasPublisherId?: string | null } | null,
-  ) => Promise<boolean>
-  prksPublishersCreate?: (name: string) => Promise<PublishersMutationOutcome>
-  prksPublishersAddAlias?: (publisherId: string, alias: string) => Promise<PublishersMutationOutcome>
-  prksPublishersRemoveAlias?: (publisherId: string, alias: string) => Promise<PublishersMutationOutcome>
-  prksPublishersDelete?: (publisherId: string) => Promise<PublishersMutationOutcome>
-  prksVueDismissResearchGraph?: (owner: object) => void
   renderResearchGraph?: (
     container: HTMLElement,
     options?: {
@@ -190,22 +119,20 @@ interface Window {
   ) => Promise<unknown>
   prksReleaseResearchGraph?: (owner: object) => void
   __prksProcessingPeople?: ProcessingPeopleCatalogueEntry[]
-  prksVueDismissProcessing?: (owner: object) => void
   prksReloadProcessingFiles?: (
     owner: object,
     generation: number,
     resume?: { visibleCount?: number | null } | null,
   ) => Promise<boolean | string>
-  prksProcessingRoleTypes?: () => string[]
-  prksProcessingDomPrefix?: (owner: { tabId?: string } | null | undefined) => string
   prksProcessingAttachResources?: (owner: object, host: HTMLElement) => void
   prksProcessingReleaseResources?: (owner: object) => void
   prksProcessingSetPreview?: (
     owner: object,
     file: ProcessingPreviewTarget,
   ) => 'card' | 'side' | 'unavailable'
-  prksProcessingSave?: (fileId: string, draft: ProcessingDraft) => Promise<unknown>
-  prksProcessingImport?: (fileId: string) => Promise<unknown>
+  prksProcessingRecords?: import('./src/features/processing/records').ProcessingRecords
+  prksMarkProcessingImportChanged?: () => void
+  prksParsePublishedDateInput?: (raw: string) => string
   prksProcessingSearchTags?: () => Promise<unknown>
   prksProcessingCreateTag?: (name: string) => Promise<{ id: string; name: string }>
   prksProcessingQuickCreateFolder?: (title: string) => Promise<{
@@ -247,27 +174,15 @@ interface Window {
     roleType: string,
   ) => boolean
   prksTagPlusIconHtml?: () => string
-  fetchPublishersInUse?: (options?: { signal?: AbortSignal; errorOwner?: object }) => Promise<unknown>
-  prksVueDismissSearch?: (owner: object) => void
-  prksVueDismissSavedViews?: (owner: object) => void
-  prksSearchHashFromDefinition?: (definition: Record<string, string>) => string
   prksOpenSavedViewModalFromCurrentSearch?: (hash?: string) => void
   prksOpenSavedViewModal?: (options: {
     viewId?: string
     name?: string
     definition?: { mode: string; q: string; tag: string; author: string; publisher: string }
   }) => void
-  prksDeleteSavedViewFromDetail?: (viewId: string, still?: () => boolean, tabId?: string) => Promise<void>
-  prksDeleteSavedViewFromIndex?: (
-    viewId: string,
-    still?: () => boolean,
-    tabId?: string,
-  ) => Promise<{ ok?: boolean; reason?: string; message?: string } | void>
-  prksSearchSummaryText?: (definition: unknown) => string
-  fetchSavedView?: (id: string) => Promise<{ id?: string; name?: string; search?: { mode: string; q: string; tag: string; author: string; publisher: string } } | null>
+  /** Saved View records for classic callers (coordinator, modal, palette). Owned by frontend-app. */
+  prksSavedViewRecords?: import('./src/features/saved-views/records').SavedViewRecords
   prksOpenCommandPalette?: () => void
-  prksScopeLineHtml?: (options: { total?: number; label?: string }) => string
-  prksVueDismissFolderDetail?: (owner: object) => void
   prksEffectiveFolderDetailWorks?: (folder: unknown) => unknown[]
   prksFolderDetailSummaryHtml?: (folder: unknown) => string
   prksFolderDetailNavHtml?: (ctx: unknown, folder: unknown) => string
@@ -281,15 +196,7 @@ interface Window {
   prksMountFolderHierarchyNav?: (ctx: unknown, folder: unknown, container: ParentNode | null) => void
   prksDeleteFolderFromDetail?: (folderId: string, still?: () => boolean) => Promise<void>
   prksOpenNewFolderFromDetail?: (folder: Record<string, unknown>) => void
-  prksVueDismissConcepts?: (owner: object) => void
-  prksVueDismissPositions?: (owner: object) => void
-  prksVueDismissArguments?: (owner: object) => void
-  prksVueDismissPlaylists?: (owner: object) => void
-  prksVueDismissPeople?: (owner: object) => void
-  prksVueDismissPersonGroups?: (owner: object) => void
   prksOpenNewGroupModalFromGroupsPage?: (owner?: object) => void
-  prksTakePersonGroupCreateNavigation?: () => { mode?: string; tabId?: string }
-  prksClearPersonGroupIndexCreateOrigin?: () => void
   openPersonGroupEdit?: (owner?: object) => void
   closePersonGroupEdit?: (owner?: object) => void
   prksTogglePersonGroupMembersEdit?: (owner?: object) => void
@@ -371,7 +278,6 @@ interface Window {
   prksTogglePersonWorksEdit?: (ctx?: unknown) => void
   prksRemoveWorkRoleLink?: (button: HTMLButtonElement) => Promise<void>
   prksPersonViewInGraph?: () => void
-  prksVueDismissFolderLibrary?: (owner: object) => void
   prksFolderLibraryTreeInnerHtml?: (
     list: unknown,
     filterQuery?: string,
@@ -395,24 +301,10 @@ interface Window {
     [key: string]: unknown
   }) => void
   prksUnpublishFolderDashboardState?: (container: HTMLElement) => void
-  prksFolderDashboardStateForRoot?: (root: ParentNode | HTMLElement | null) =>
-    | {
-        container?: HTMLElement | null
-        folders?: unknown[]
-        recentlyAddedWorks?: unknown[] | null
-        [key: string]: unknown
-      }
-    | undefined
   prksFolderLibraryExpandToggleLabel?: (folders: unknown) => string
   prksFolderLibraryExpandToggleInnerHtml?: () => string
   prksFolderTreeHasCollapsibleNodes?: (folders: unknown) => boolean
   prksFolderTreeAllCollapsed?: (folders: unknown) => boolean
-  prksRecentlyAddedDateLabel?: (createdAt: unknown) => string
-  prksRecentlyAddedWorkMatchesQuery?: (
-    work: unknown,
-    query: string,
-    foldersById: Map<string, unknown>,
-  ) => boolean
   prksBindFolderOfflineState?: (ctx: unknown, container: HTMLElement) => void
   prksOpenFolderModalFromLibrarySearch?: (query?: string) => void
   prksToggleFolderNode?: (folderId: string) => void
@@ -447,7 +339,6 @@ interface Window {
     switchTab?: (tab: string) => void | Promise<void>
     [key: string]: unknown
   }
-  __prksRecentlyAddedDirty?: boolean
   __prksFolderLibraryBrandHomeReset?: boolean
   prksSync?: { subscribe?: (listener: () => void) => () => void }
   prksCreateConceptFlow?: (
@@ -458,24 +349,6 @@ interface Window {
       isCurrent?: (generation: number) => boolean
     },
   ) => Promise<unknown>
-  prksResearchIndexRowHtml?: (opts: {
-    href: string
-    title: string
-    kind?: string
-    icon?: string
-    meta?: string[]
-  }) => string
-  prksResearchSectionHeadHtml?: (
-    title: string,
-    opts?: {
-      headingId?: string
-      actionId?: string
-      actionLabel?: string
-      actionRole?: string
-      count?: number | string | null
-      sub?: string
-    },
-  ) => string
   prksResearchMarkdownHtml?: (text: string) => string
   prksEscapeHtml?: (value: unknown) => string
   prksPageHeaderIconHtml?: (name: string) => string
@@ -483,16 +356,6 @@ interface Window {
     name: string,
     options?: { size?: string | number; className?: string },
   ) => string
-  prksPaintScopeHost?: (
-    rootEl: ParentNode | HTMLElement | null,
-    options: {
-      shown?: number
-      total?: number
-      filter?: string
-      label?: string
-    },
-  ) => void
-  prksRelSummaryHtml?: (options: { parts?: Array<string | null | undefined> }) => string
   prksPromptTextDialog?: (opts: PrksPromptTextOptions) => Promise<string | null>
   prksConfirmDestructive?: (opts: PrksConfirmDestructiveOptions) => Promise<boolean>
   prksAlertDialog?: (opts: PrksAlertOptions) => Promise<void>
@@ -541,6 +404,8 @@ interface Window {
   prksConsumeApiError?: (owner: object) => { message?: string } | null
   prksInferWorkSourceKind?: (work: unknown) => string
   prksOfflineRuntimeState?: () => string
+  /** True when the offline runtime refused an online-only write and showed `message`. */
+  prksOfflineGuardMutation?: (message: string) => boolean
   prksOfflineRuntimeSubscribe?: (listener: (state: string) => void) => () => void
   prksAlertMessage?: (message: string, title?: string) => Promise<void> | void
   prksApplyPlaylistOfflineState?: (container: ParentNode | null) => void
@@ -573,8 +438,14 @@ interface Window {
     onPick: (id: string, pickType?: string) => void
   }) => void
   createPosition?: (body: { name: string; description?: string }) => Promise<{ id?: string } | null>
-  createConcept?: (body: { name: string }) => Promise<{ id?: string } | null>
-  updateConcept?: (id: string, body: { name?: string; description?: string }) => Promise<unknown>
+  updateConcept?: (
+    id: string,
+    body: { name?: string; description?: string },
+    options?: { definitionEdit?: import('./src/features/concepts/types').ConceptDefinitionEdit },
+  ) => Promise<unknown>
+  prksBeginConceptDefinitionEdit?: (
+    conceptId: string,
+  ) => Promise<import('./src/features/concepts/types').ConceptDefinitionEdit | null>
   deleteConcept?: (id: string) => Promise<unknown>
   putConceptAliases?: (id: string, aliases: string[]) => Promise<unknown>
   putConceptParents?: (id: string, parentIds: string[]) => Promise<unknown>

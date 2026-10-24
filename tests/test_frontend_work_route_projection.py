@@ -1,4 +1,4 @@
-"""Work route projection stays a typed owner boundary around the legacy painter."""
+"""Work route projection stays a typed owner boundary around the route mount."""
 import json
 import subprocess
 import unittest
@@ -45,7 +45,7 @@ class WorkRouteProjectionContractTests(unittest.TestCase):
         project_at = body.index("prksProjectWorkRoute(")
         publish_at = body.index("prksPublishWorkRouteProjection(ctx, generation, workProjection)")
         refuse_at = body.index("if (!publishedWork) return;")
-        paint_at = body.index("await renderWorkDetails(ctx, work,")
+        paint_at = body.index("await prksMountWorkDetail(ctx, contentDiv, work,")
         self.assertLess(project_at, publish_at)
         self.assertLess(publish_at, refuse_at)
         self.assertLess(refuse_at, paint_at)
@@ -79,7 +79,7 @@ class WorkRouteProjectionContractTests(unittest.TestCase):
         self.assertNotIn("prksDurableOperationsOrNone()", body)
         self.assertIn("prksReadDurableOperations()", body)
         self.assertEqual(body.count("workOpsKnown = Array.isArray(workOps)"), 2)
-        before_paint = body[:body.index("await renderWorkDetails")]
+        before_paint = body[:body.index("await prksMountWorkDetail")]
         self.assertEqual(before_paint.count("workOps = await workOpsPromise"), 2)
         self.assertNotIn("if (work && !workOps.length)", body)
         callback_at = body.index("void workOpsPromise.then(function (ops) {")
@@ -118,14 +118,21 @@ class WorkRouteProjectionContractTests(unittest.TestCase):
         self.assertNotIn("currentWorkProjection", body)
         self.assertNotIn(".listOperations(", body)
 
-    def test_render_work_details_stays_the_painter(self):
+    def test_mount_work_detail_is_the_painter(self):
         works = _WORKS.read_text(encoding="utf-8")
-        self.assertIn("async function renderWorkDetails(ctx, work, requestCtx)", works)
-        self.assertIn("const sourcePrepared = !!(requestCtx && requestCtx.sourcePrepared);", works)
-        self.assertIn("if (typeof ctx.setEntity === 'function') ctx.setEntity('work', work);", works)
-        self.assertIn("initPdfViewerForWork", works)
+        self.assertNotIn("function renderWorkDetails", works)
+        self.assertNotIn("prksWorkDetailsShellHtml", works)
+        self.assertNotIn("prksVuePresentWorkMainSurface", works)
         app = _APP.read_text(encoding="utf-8")
-        self.assertEqual(app.count("renderWorkDetails("), 1)
+        self.assertEqual(app.count("renderWorkDetails("), 0)
+        self.assertEqual(app.count("prksAdoptPaintedWorkRoute"), 0)
+        self.assertIn("await prksMountWorkDetail(ctx, contentDiv, work,", app)
+        lifecycle = (_FEATURE / "detail-lifecycle.ts").read_text(encoding="utf-8")
+        mount = lifecycle[lifecycle.index("export async function mountWorkDetail") :]
+        self.assertLess(mount.index("ctx.resourceTicket(generation)"), mount.index("await "))
+        self.assertIn("sourcePrepared", lifecycle)
+        self.assertIn("if (typeof ctx.setEntity === 'function') ctx.setEntity('work', current)", lifecycle)
+        self.assertIn("initPdf(ctx, current)", lifecycle)
 
     def test_typed_boundary_does_not_own_durable_state_or_vue(self):
         sources = list(_BOUNDARY)
@@ -149,10 +156,10 @@ class WorkRouteProjectionContractTests(unittest.TestCase):
             "prksProjectWorkRoute",
             "prksPublishWorkRouteProjection",
             "prksReplaceWorkRoutePlacement",
-            "prksAdoptPaintedWorkRoute",
             "prksWorkOpenShouldRecord",
         ):
             self.assertIn(name, built, name)
+        self.assertNotIn("prksAdoptPaintedWorkRoute", built)
         html = _INDEX.read_text(encoding="utf-8")
         script = html.index('src="/js/work-route-projection.js"')
         app_script = html.index('src="/js/app.js"')

@@ -48,7 +48,7 @@ function armPlaylistsOwnerCleanup(owner: PlaylistsOwner): void {
       armPlaylistsOwnerCleanup(owner)
       return
     }
-    dismissPlaylists(owner)
+    dismissRouteSurface(owner)
   })
 }
 
@@ -152,10 +152,6 @@ export function presentPlaylistDetail(input: PlaylistDetailPresentInput): void {
   armPlaylistsOwnerCleanup(input.owner)
 }
 
-export function dismissPlaylists(owner: object | null | undefined): void {
-  dismissRouteSurface(owner)
-}
-
 export function resetPlaylistsSessionForTests(): void {
   resetRouteSurfaceForTests()
 }
@@ -178,7 +174,6 @@ function isDetailEarlyRequest(
 
 export function registerPlaylistsBridge(target: Window = window): void {
   registerRouteWindowBridge(target)
-  target.prksVueDismissPlaylists = dismissPlaylists
   registerEarlyRoutePresenter(
     PLAYLISTS_FEATURE,
     (request, host) => {

@@ -144,6 +144,9 @@ function makeCoordinator(extra) {
             return 0.5;
         },
         origin: extra.origin || 'http://127.0.0.1',
+        setTimeout: extra.setTimeout,
+        clearTimeout: extra.clearTimeout,
+        readHeaderTimeoutMs: extra.readHeaderTimeoutMs,
     });
     coord.__now = function (v) {
         nowMs = v;
@@ -192,6 +195,148 @@ async function testReadBound() {
     await drain(box, pending);
     record('read bound never exceeds 4', okPeak && peak <= 4, 'peak=' + peak);
     record('read bound queues remainder', okQueued, 'queued=' + snap.current.queuedForegroundReads);
+}
+
+function makeReadDeadlineClock() {
+    let nextId = 1;
+    const pending = new Map();
+    return {
+        setTimeout: function (fn, ms) {
+            const id = nextId++;
+            pending.set(id, { fn: fn, ms: ms });
+            return id;
+        },
+        clearTimeout: function (id) { pending.delete(id); },
+        pendingCount: function () { return pending.size; },
+        fireOne: function (ms) {
+            const entry = Array.from(pending.entries()).find(function (x) {
+                return x[1].ms === ms;
+            });
+            if (!entry) throw Error('Missing timer at ' + ms + 'ms');
+            pending.delete(entry[0]);
+            entry[1].fn();
+        },
+    };
+}
+
+async function testStalledReadHeaderDeadline() {
+    const clock = makeReadDeadlineClock();
+    const calls = [];
+    const signals = installReachabilitySpies();
+    try {
+        const coord = makeCoordinator({
+            fetchImpl: function (url, init) {
+                return new Promise(function (resolve, reject) {
+                    // Deliberately ignore the abort signal to reproduce the
+                    // provider stall that can pin every coordinator slot.
+                    calls.push({ url: url, init: init, resolve: resolve, reject: reject });
+                });
+            },
+            setTimeout: clock.setTimeout,
+            clearTimeout: clock.clearTimeout,
+            readHeaderTimeoutMs: 1000,
+        });
+        const pending = [];
+        for (let i = 0; i < 5; i++) {
+            pending.push(coord.prksRequest('/api/stalled/' + i).then(
+                function (r) { return { response: r }; },
+                function (err) { return { error: err }; }
+            ));
+        }
+        record('read header timeout queues fifth request behind four stalled reads',
+            calls.length === 4 && coord.snapshot().current.queuedForegroundReads === 1,
+            'calls=' + calls.length);
+        clock.fireOne(1000);
+        const timedOut = await pending[0];
+        await waitUntil(function () { return calls.length === 5; });
+        record('header deadline fails first caller with a named TimeoutError',
+            timedOut.error && timedOut.error.name === 'TimeoutError' && calls[0].init.signal.aborted,
+            timedOut.error && timedOut.error.name);
+        record('deadline freed an occupied slot and launched fifth queued GET',
+            coord.snapshot().current.activeReads === 4 &&
+            coord.snapshot().current.queuedForegroundReads === 0,
+            'reads=' + coord.snapshot().current.activeReads);
+        const failedBeforeLate = coord.snapshot().counts.failed;
+        // Resolving the abandoned request must not publish a cache value,
+        // emit a connectivity signal, or release the same slot twice.
+        calls[0].resolve(jsonResponse([{ id: 'obsolete' }]));
+        await flush();
+        record('late response cannot publish stale server reachability',
+            signals.success === 0 && signals.failure === 0 &&
+            coord.snapshot().counts.failed === failedBeforeLate &&
+            coord.snapshot().current.activeReads === 4,
+            'health=' + signals.success + '/' + signals.failure);
+        for (let i = 1; i < 5; i++) calls[i].resolve(jsonResponse([{ id: i }]));
+        const settled = await Promise.all(pending);
+        record('healthy queued read completes without duplicating old failure',
+            settled.slice(1).every(function (x) { return x.response && x.response.ok; }) &&
+            coord.snapshot().current.activeReads === 0 &&
+            clock.pendingCount() === 0,
+            'reads=' + coord.snapshot().current.activeReads);
+        record('ordinary successful reads still signal reachability',
+            signals.success === 4 && signals.failure === 0,
+            'success=' + signals.success);
+
+        // Identity of the timed-out dedupe flight must not poison a new GET.
+        const abandoned = coord.prksRequest('/api/same').catch(function (e) { return e; });
+        clock.fireOne(1000);
+        const expired = await abandoned;
+        const renewed = coord.prksRequest('/api/same');
+        record('re-request after timeout does not join the expired dedupe flight',
+            expired.name === 'TimeoutError' &&
+            calls.filter(function (c) { return c.url === '/api/same'; }).length === 2,
+            'requests=' + calls.length);
+        calls[calls.length - 1].resolve(jsonResponse([{ id: 'fresh' }]));
+        await renewed;
+        const beforeLateReject = coord.snapshot().counts.failed;
+        calls[calls.length - 2].reject(new TypeError('late obsolete transport failure'));
+        await flush();
+        record('late rejection cannot poison newer flight or double-count error',
+            coord.snapshot().current.activeReads === 0 &&
+            coord.snapshot().counts.failed === beforeLateReject,
+            'failed=' + coord.snapshot().counts.failed);
+    } finally {
+        clearReachabilitySpies();
+    }
+
+    // If the transport honors AbortSignal, the watchdog must surface a
+    // TimeoutError (not the transport's incidental AbortError).
+    {
+        const clock = makeReadDeadlineClock();
+        const box = makeDeferredFetch();
+        const coord = makeCoordinator({
+            fetchBundle: box, setTimeout: clock.setTimeout,
+            clearTimeout: clock.clearTimeout, readHeaderTimeoutMs: 1000,
+        });
+        const pending = coord.prksRequest('/api/abort-aware').then(
+            function () { return null; },
+            function (err) { return err; }
+        );
+        record('abort-aware read installs a header deadline',
+            clock.pendingCount() === 1 && box.calls.length === 1, 'timers=' + clock.pendingCount());
+        clock.fireOne(1000);
+        const err = await pending;
+        record('watchdog keeps TimeoutError even when abort-aware fetch rejects',
+            err && err.name === 'TimeoutError' && box.calls[0].aborted &&
+            coord.snapshot().current.activeReads === 0 && clock.pendingCount() === 0,
+            err && err.name);
+    }
+
+    // Managed PDF byte requests retain the explicit no-short-header-deadline
+    // exception; a long streamed response body also remains out of scope.
+    {
+        const clock = makeReadDeadlineClock();
+        const box = makeDeferredFetch();
+        const coord = makeCoordinator({
+            fetchBundle: box, setTimeout: clock.setTimeout,
+            clearTimeout: clock.clearTimeout, readHeaderTimeoutMs: 1000,
+        });
+        const pdf = coord.prksRequest('/api/pdfs/managed');
+        record('managed PDF GET does not install ordinary metadata header watchdog',
+            clock.pendingCount() === 0, 'timers=' + clock.pendingCount());
+        box.calls[0].resolve(jsonResponse({ ok: true }));
+        await pdf;
+    }
 }
 
 async function testBackgroundBoundAndPreferFg() {
@@ -365,22 +510,6 @@ async function testDedupe() {
         c.resolve(jsonResponse([]));
     });
     await Promise.all([da, db]);
-
-    const pBox = makeDeferredFetch();
-    const pCoord = makeCoordinator({ fetchBundle: pBox });
-    const pa = pCoord.prksRequest('/api/processing-files?rescan=1');
-    const pb = pCoord.prksRequest('/api/processing-files?rescan=1');
-    await waitUntil(function () {
-        return pBox.calls.length === 1;
-    });
-    record('processing rescan is mutation-serialized not deduped', pBox.calls.length === 1 && pCoord.snapshot().current.queuedMutations === 1, '');
-    pBox.calls[0].resolve(jsonResponse([]));
-    await waitUntil(function () {
-        return pBox.calls.length === 2;
-    });
-    pBox.calls[1].resolve(jsonResponse([]));
-    await Promise.all([pa, pb]);
-    record('processing-files?rescan=1 does not dedupe', pBox.calls.length === 2, 'calls=' + pBox.calls.length);
 }
 
 async function testSubscriberAbort() {
@@ -753,17 +882,17 @@ async function testCacheAndEpoch() {
     await Promise.all([d1, d2]);
 }
 
-async function testCoalesce() {
+async function testMutationsAreNeverMerged() {
     const box = makeDeferredFetch();
     const coord = makeCoordinator({ fetchBundle: box });
     const a = coord.prksRequest(
         '/api/works/W1',
-        { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text_content: 'A' }) },
-        { coalesceKey: 'work-research-notes:W1' }
+        { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text_content: 'A' }) }
     );
     await waitUntil(function () {
         return box.calls.length === 1;
     });
+    // A retired coalescing policy key is ignored: every queued write is sent.
     const b = coord.prksRequest(
         '/api/works/W1',
         { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text_content: 'B' }) },
@@ -774,45 +903,26 @@ async function testCoalesce() {
         { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text_content: 'C' }) },
         { coalesceKey: 'work-research-notes:W1' }
     );
-    const d = coord.prksRequest(
-        '/api/works/W2',
-        { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text_content: 'D' }) },
-        { coalesceKey: 'work-research-notes:W2' }
-    );
     await flush();
-    record('coalesce keeps A active and independent D queued', box.calls.length === 1 && coord.snapshot().current.queuedMutations === 2, 'queued=' + coord.snapshot().current.queuedMutations);
+    record('same-target mutations queue behind the active one', box.calls.length === 1 && coord.snapshot().current.queuedMutations === 2, 'queued=' + coord.snapshot().current.queuedMutations);
     box.calls[0].resolve(jsonResponse({ saved: 'A' }));
-    const aBody = await (await a).json();
     await waitUntil(function () {
         return box.calls.length === 2;
     });
-    record('network sees C not B after A', box.calls[1].init.body === JSON.stringify({ text_content: 'C' }), String(box.calls[1].init.body));
-    box.calls[1].resolve(jsonResponse({ saved: 'C' }));
-    const [bRes, cRes] = await Promise.all([b, c]);
-    const bBody = await bRes.json();
-    const cBody = await cRes.json();
-    record('B and C waiters resolve from C', aBody.saved === 'A' && bBody.saved === 'C' && cBody.saved === 'C', JSON.stringify({ a: aBody, b: bBody, c: cBody }));
+    record('B is sent after A, not replaced', box.calls[1].init.body === JSON.stringify({ text_content: 'B' }), String(box.calls[1].init.body));
+    box.calls[1].resolve(jsonResponse({ saved: 'B' }));
     await waitUntil(function () {
         return box.calls.length === 3;
     });
-    record('different coalesce key remains independent', box.calls[2].init.body === JSON.stringify({ text_content: 'D' }), String(box.calls[2].init.body));
-    box.calls[2].resolve(jsonResponse({ saved: 'D' }));
-    await d;
-
-    const box2 = makeDeferredFetch();
-    const coord2 = makeCoordinator({ fetchBundle: box2 });
-    const x = coord2.prksRequest('/api/works/1', { method: 'DELETE' });
-    const y = coord2.prksRequest('/api/works/1', { method: 'DELETE' });
-    await waitUntil(function () {
-        return box2.calls.length === 1;
-    });
-    box2.calls[0].resolve(jsonResponse({ ok: true }));
-    await waitUntil(function () {
-        return box2.calls.length === 2;
-    });
-    box2.calls[1].resolve(jsonResponse({ ok: true }));
-    await Promise.all([x, y]);
-    record('ordinary mutations do not coalesce without coalesceKey', box2.calls.length === 2 && coord2.snapshot().counts.coalescedMutations === 0, 'calls=' + box2.calls.length);
+    record('C is sent after B', box.calls[2].init.body === JSON.stringify({ text_content: 'C' }), String(box.calls[2].init.body));
+    box.calls[2].resolve(jsonResponse({ saved: 'C' }));
+    const bodies = await Promise.all([a, b, c].map(function (p) {
+        return p.then(function (res) {
+            return res.json();
+        });
+    }));
+    record('each waiter gets its own response', bodies.map(function (x) { return x.saved; }).join('') === 'ABC', JSON.stringify(bodies));
+    record('snapshot has no coalescing counter', !('coalescedMutations' in coord.snapshot().counts), JSON.stringify(coord.snapshot().counts));
 }
 
 async function testDiagnosticsPrivacyAndReset() {
@@ -821,7 +931,6 @@ async function testDiagnosticsPrivacyAndReset() {
     const secretId = 'W-SECRET-WORK-ID-9f3c';
     const secretQ = 'secretSearchTermXYZ';
     const secretBody = 'SECRET_BODY_PAYLOAD_q=leak';
-    const secretKey = 'work-research-notes:' + secretId;
     const holdMut = coord.prksRequest('/api/hold-mut', { method: 'POST', body: '{}' });
     await waitUntil(function () {
         return box.calls.length === 1 && coord.snapshot().current.activeMutation === 1;
@@ -834,8 +943,7 @@ async function testDiagnosticsPrivacyAndReset() {
     const queued = coord.prksRequest('/api/search?q=' + encodeURIComponent(secretQ) + '&work=' + secretId);
     const mut = coord.prksRequest(
         '/api/works/' + secretId,
-        { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text_content: secretBody }) },
-        { coalesceKey: secretKey }
+        { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text_content: secretBody }) }
     );
     await waitUntil(function () {
         return coord.snapshot().current.queuedForegroundReads === 1 && coord.snapshot().current.queuedMutations === 1;
@@ -847,9 +955,8 @@ async function testDiagnosticsPrivacyAndReset() {
         serialized.indexOf(secretId) !== -1 ||
         serialized.indexOf(secretQ) !== -1 ||
         serialized.indexOf(secretBody) !== -1 ||
-        serialized.indexOf(secretKey) !== -1 ||
         serialized.indexOf('text_content') !== -1;
-    record('snapshot contains no private URL/query/body/id/coalesceKey', !leaked, leaked ? serialized : '');
+    record('snapshot contains no private URL/query/body/id', !leaked, leaked ? serialized : '');
 
     coord.resetDiagnostics();
     const after = coord.snapshot();
@@ -1072,6 +1179,47 @@ async function testReachabilitySignalling() {
         clearReachabilitySpies();
     }
 
+    /* The runtime's dedicated reachability probe owns its OWN settlement.
+     * Disabling coordinator callbacks for that request must not silence
+     * ordinary traffic or dedupe with its independently-signalled flight. */
+    try {
+        const signals = installReachabilitySpies();
+        const box = makeDeferredFetch();
+        const coord = makeCoordinator({ fetchBundle: box });
+        const isolated = coord.prksRequest('/api/settings', {}, {
+            priority: 'background', reportReachability: false, retry: false,
+        });
+        const foreground = coord.prksRequest('/api/settings');
+        await waitUntil(function () { return box.calls.length === 2; });
+        record('dedicated probe cannot join normally signalled GET',
+            box.calls.length === 2 && coord.snapshot().counts.dedupeJoins === 0,
+            'calls=' + box.calls.length);
+        box.calls[0].reject(new TypeError('probe transport failed'));
+        box.calls[1].resolve(jsonResponse({ ok: true }));
+        let failedProbe = null;
+        try { await isolated; } catch (err) { failedProbe = err; }
+        const normal = await foreground;
+        record('isolated failed probe emits no health callback, normal GET still does',
+            !!failedProbe && normal.ok && signals.success === 1 && signals.failure === 0,
+            's=' + signals.success + ' f=' + signals.failure);
+    } finally {
+        clearReachabilitySpies();
+    }
+    try {
+        const signals = installReachabilitySpies();
+        const coord = makeCoordinator({
+            fetchImpl: function () { return Promise.resolve(jsonResponse({ ok: true })); },
+        });
+        const res = await coord.prksRequest('/api/settings', {}, {
+            priority: 'background', reportReachability: false,
+        });
+        record('isolated successful probe emits no health callback',
+            res.ok && signals.success === 0 && signals.failure === 0,
+            's=' + signals.success + ' f=' + signals.failure);
+    } finally {
+        clearReachabilitySpies();
+    }
+
     /* Memory-cache hit is not a fresh reachability signal. */
     try {
         const signals = installReachabilitySpies();
@@ -1187,12 +1335,12 @@ async function testApiWarningOwnership() {
     const ownerA = {};
     const ownerB = {};
     nextStatus = 500;
-    await sandbox.fetchFolders({ signal: ownerA });
+    await sandbox.fetchWorks({ signal: ownerA });
     nextStatus = 200;
-    await sandbox.fetchFolders({ signal: ownerB });
+    await sandbox.fetchWorks({ signal: ownerB });
     record('successful B cannot consume A warning', sandbox.prksConsumeApiError(ownerB) === null, '');
     const warningA = sandbox.prksConsumeApiError(ownerA);
-    record('failed A consumes its own warning', !!(warningA && warningA.context === 'folders'), JSON.stringify(warningA));
+    record('failed A consumes its own warning', !!(warningA && warningA.context === 'works'), JSON.stringify(warningA));
     record('A warning consumed once', sandbox.prksConsumeApiError(ownerA) === null, '');
 }
 
@@ -1200,6 +1348,7 @@ async function main() {
     record('exports createPrksRequestCoordinator', typeof createPrksRequestCoordinator === 'function', '');
     record('does not monkeypatch fetch', typeof fetch === 'function', '');
     await testReadBound();
+    await testStalledReadHeaderDeadline();
     await testBackgroundBoundAndPreferFg();
     await testReadMutationOverlap();
     await testMutationFifo();
@@ -1207,7 +1356,7 @@ async function main() {
     await testSubscriberAbort();
     await testRetry();
     await testCacheAndEpoch();
-    await testCoalesce();
+    await testMutationsAreNeverMerged();
     await testDiagnosticsPrivacyAndReset();
     await testWorkHintStalePublication();
     await testReachabilitySignalling();

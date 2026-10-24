@@ -58,6 +58,24 @@ once with `GROUP BY` in a CTE or joined derived table. `scripts/check_correlated
 its owning issue in `scripts/correlated_catalog_counts_allowlist.json` and may
 only shrink. See the script docstring for codes and the reviewed escape hatch.
 
+## Storage root (storage-architecture Phase A)
+
+`docs/storage-architecture.md` is the design authority. Root selection lives only
+in `storage/resolver.py`; never read `PRKS_STORAGE` or the bootstrap file
+elsewhere, and never let testing mode consult the bootstrap file or a platform
+default. Every bootstrap-config write goes through `BootstrapConfigStore`
+(config lock, re-read, expected-state check, atomic replace). Only the holder of
+a root's `root.lock` lease writes its `prks-root.json`; lease diagnostics in the
+marker are never lock authority. The one exception is the PostgreSQL database
+pairing (`instance_id`, `start_generation`, `start_token`;
+`docs/postgresql-architecture.md` §11.1): only `root_marker.claim_root` (under
+the exclusive `root.claim` lock) and `root_marker.bump_start_generation` change
+those fields, under the **shared** `root.lock`, and `write_marker` refuses to
+change them. The marker, the lease file, `root.claim` and the bootstrap
+config are operational and never backup payload. Production operations are not
+yet routed through `storage/objects.py` (Phase B); do not route them
+incidentally.
+
 ## Backup and restore
 
 Backup/restore code must never operate on production storage during tests.
@@ -235,6 +253,20 @@ Never ALTER/CREATE/DROP schema objects from feature/request code.
 Never swallow migration DDL failures.
 Never manually bump `schema_version` before migration success.
 Migrations may modify SQLite state only, not managed filesystem data.
+
+PostgreSQL schema (#624, `docs/postgresql-architecture.md` §4.4; not the
+running backend yet): `backend/db/schema/NNN_name.sql` are pre-1.0 baseline
+files applied in order by `backend/db/migrate.py`, which records each file's
+SHA-256 and refuses a database whose applied file has since changed. Each lane
+edits only the files it owns (§15.2), schema-qualifies every name (the runner
+applies files with an empty `search_path`), and regenerates
+`backend/db/schema/snapshot.json` with `scripts/check_pg_schema.py --write` in
+the same PR. Never index, default or generate a column from
+`prks.search_norm` (§8.3; the snapshot check fails it), and give any SQL function
+that an index, default or generated column calls a `BEGIN ATOMIC` body: the
+check refuses stored values computed through string-bodied functions, whose
+calls the catalog does not record. The runner never reads
+or writes the data root; the root claim and start generation belong to L-ID-1.
 
 ## Bulk work mutations
 

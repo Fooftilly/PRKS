@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import PrksIconButton from '../../components/PrksIconButton.vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import { usePendingAction } from '../../route-surface/pending-action'
 import { registerTagsAliasCloser, registerTagsMergeCloser } from './closers'
 import type { TagsIntents } from './intents'
@@ -260,12 +262,16 @@ watch(mergeTargetId, () => {
 
 onMounted(() => {
   window.prksRefreshIcons?.(rootEl.value)
+  // Owner-scoped callback slot, not component state. Vue forbids assigning
+  // to props, but this sink is a WeakMap handle the session owns.
+  // eslint-disable-next-line vue/no-mutating-props -- refresh sink protocol
   if (props.refreshSink) props.refreshSink.set = showRefreshFailure
   unregisterAlias = registerTagsAliasCloser(closeAliasFor)
   unregisterMerge = registerTagsMergeCloser(closeMergeFor)
 })
 
 onUnmounted(() => {
+  // eslint-disable-next-line vue/no-mutating-props -- refresh sink protocol
   if (props.refreshSink?.set === showRefreshFailure) props.refreshSink.set = null
   unregisterAlias?.()
   unregisterMerge?.()
@@ -284,14 +290,9 @@ onUnmounted(() => {
         name becomes an alias and no longer appears as its own tag.
       </p>
     </div>
-    <p
-      v-if="refreshError"
-      class="prks-inline-message prks-inline-message--error"
-      role="status"
-      data-tags-refresh-error
-    >
+    <PrksInlineMessage v-if="refreshError" tone="error" status data-tags-refresh-error>
       {{ refreshError }}
-    </p>
+    </PrksInlineMessage>
     <div id="tags-page-cloud" class="tag-cloud tag-cloud--page">
       <p v-if="!rows.length" class="tags-page__empty">
         No tags in use yet. Add tags to files or folders from the details panel.
@@ -311,26 +312,24 @@ onUnmounted(() => {
           :data-tag-nav="row.encodedName"
           @keydown="onTagKeydown(row, $event)"
         >{{ row.name }}</span>
-        <button
-          type="button"
-          class="prks-icon-btn prks-icon-btn--sm"
-          :data-tag-alias-edit="row.id"
+        <PrksIconButton
+          size="sm"
+          :label="`Edit aliases for ${row.name}`"
           title="Aliases"
-          :aria-label="`Edit aliases for ${row.name}`"
+          :data-tag-alias-edit="row.id"
           @click="openAlias(row, $event)"
         >
           <span v-if="aliasIcon" class="work-html-slot" v-html="aliasIcon"></span>
-        </button>
-        <button
-          type="button"
-          class="prks-icon-btn prks-icon-btn--sm"
-          :data-tag-merge="row.id"
+        </PrksIconButton>
+        <PrksIconButton
+          size="sm"
+          :label="`Merge ${row.name} into another tag`"
           title="Merge into another tag"
-          :aria-label="`Merge ${row.name} into another tag`"
+          :data-tag-merge="row.id"
           @click="openMerge(row, $event)"
         >
           <span v-if="mergeIcon" class="work-html-slot" v-html="mergeIcon"></span>
-        </button>
+        </PrksIconButton>
       </span>
     </div>
 
@@ -351,15 +350,14 @@ onUnmounted(() => {
       >
         <div class="modal-header">
           <h3 id="tags-page-alias-heading">Tag aliases</h3>
-          <button
+          <PrksIconButton
             id="tags-page-alias-modal-close"
-            type="button"
-            class="prks-icon-btn close-btn"
-            aria-label="Close"
+            class="close-btn"
+            label="Close"
             @click="closeAlias"
           >
             <span v-if="closeIcon" class="work-html-slot" v-html="closeIcon"></span>
-          </button>
+          </PrksIconButton>
         </div>
         <div class="modal-body tags-page-alias-modal__body">
           <p class="modal-helper">Alternate names for this tag (same file set). Not shown as separate tags in the list.</p>
@@ -370,30 +368,30 @@ onUnmounted(() => {
             <li v-if="!aliasTag.aliases.length" class="tags-page-alias-list__none">No aliases yet.</li>
             <li v-for="alias in aliasTag.aliases" :key="alias" class="tags-page-alias-list__item">
               <span class="tags-page-alias-list__text">{{ alias }}</span>
-              <button
-                type="button"
-                class="prks-icon-btn prks-icon-btn--sm prks-icon-btn--danger"
+              <PrksIconButton
+                variant="danger"
+                size="sm"
                 :class="{ 'tags-page-alias-remove--busy': actionBusy(`alias-remove:${alias}`) }"
                 :data-alias-remove="alias"
-                :aria-label="actionBusy(`alias-remove:${alias}`) ? 'Removing…' : 'Remove alias'"
-                :aria-busy="actionBusy(`alias-remove:${alias}`) ? 'true' : undefined"
-                :disabled="actionBlocked(`alias-remove:${alias}`) || actionBusy(`alias-remove:${alias}`)"
+                label="Remove alias"
+                :busy="actionBusy(`alias-remove:${alias}`)"
+                :disabled="actionBlocked(`alias-remove:${alias}`)"
+                busy-label="Removing…"
                 @click="removeAlias(alias)"
               >
-                <template v-if="actionBusy(`alias-remove:${alias}`)">Removing…</template>
-                <span v-else-if="closeIcon" class="work-html-slot" v-html="closeIcon"></span>
-              </button>
+                <span v-if="closeIcon" class="work-html-slot" v-html="closeIcon"></span>
+              </PrksIconButton>
             </li>
           </ul>
-          <p
+          <PrksInlineMessage
             v-if="aliasRemoveError"
             id="tags-page-alias-remove-error"
-            class="prks-inline-message prks-inline-message--error"
-            role="status"
+            tone="error"
+            status
             data-tags-alias-remove-error
           >
             {{ aliasRemoveError }}
-          </p>
+          </PrksInlineMessage>
           <div class="tags-page-alias-add">
             <input
               id="tags-page-alias-input"
@@ -419,15 +417,15 @@ onUnmounted(() => {
               Add alias
             </PrksButton>
           </div>
-          <p
+          <PrksInlineMessage
             v-if="aliasAddError"
             id="tags-page-alias-add-error"
-            class="prks-inline-message prks-inline-message--error"
-            role="status"
+            tone="error"
+            status
             data-tags-alias-add-error
           >
             {{ aliasAddError }}
-          </p>
+          </PrksInlineMessage>
           <div class="tags-page-alias-delete">
             <PrksButton
               id="tags-page-alias-delete-btn"
@@ -439,15 +437,15 @@ onUnmounted(() => {
             >
               Delete tag
             </PrksButton>
-            <p
+            <PrksInlineMessage
               v-if="aliasDeleteError"
               id="tags-page-alias-delete-error"
-              class="prks-inline-message prks-inline-message--error"
-              role="status"
+              tone="error"
+              status
               data-tags-alias-delete-error
             >
               {{ aliasDeleteError }}
-            </p>
+            </PrksInlineMessage>
           </div>
         </div>
       </div>
@@ -470,15 +468,14 @@ onUnmounted(() => {
       >
         <div class="modal-header">
           <h3 id="tags-page-merge-heading">Merge tag</h3>
-          <button
+          <PrksIconButton
             id="tags-page-merge-modal-close"
-            type="button"
-            class="prks-icon-btn close-btn"
-            aria-label="Close"
+            class="close-btn"
+            label="Close"
             @click="closeMerge"
           >
             <span v-if="closeIcon" class="work-html-slot" v-html="closeIcon"></span>
-          </button>
+          </PrksIconButton>
         </div>
         <div class="modal-body tags-page-merge-modal__body">
           <p class="modal-helper">
@@ -523,15 +520,15 @@ onUnmounted(() => {
               It will no longer appear as a separate tag; searches and links using that name will use the same files
               as the target tag.
             </p>
-            <p
+            <PrksInlineMessage
               v-if="mergeError"
               id="tags-page-merge-error"
-              class="prks-inline-message prks-inline-message--error"
-              role="status"
+              tone="error"
+              status
               data-tags-merge-error
             >
               {{ mergeError }}
-            </p>
+            </PrksInlineMessage>
             <div class="tags-page-merge-confirm-actions">
               <PrksButton
                 id="tags-page-merge-back-btn"

@@ -1,0 +1,221 @@
+name: E2E Flake Acceptance Stress
+
+# Opt-in 20x acceptance for #456, #457, #458. One automatic validation
+# when this workflow itself changes; no extra matrix on ordinary PRs/master.
+on:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: "Consecutive fresh targeted E2E runs per case (normally 20)"
+        type: number
+        required: true
+        default: 20
+  pull_request:
+    branches:
+      - master
+    paths:
+      - .github/workflows/e2e-flake-stress.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-flake-acceptance-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  stress:
+    name: Stress ${{ matrix.case }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - case: divider-network-456
+            test_id: tests.e2e.test_app.MainSecondaryDividerTests.test_divider_drag_causes_no_additional_route_or_pdf_requests
+          - case: recent-cache-457
+            test_id: tests.e2e.test_browse_offline.BrowseOfflineTests.test_display_changes_stale_all_three_projections
+          - case: settings-narrow-458
+            test_id: tests.e2e.test_app.SettingsCategoryWorkflowTests.test_responsive_narrow_category_strip
+          - case: settings-viewport-458
+            test_id: tests.e2e.test_app.SettingsCategoryWorkflowTests.test_nav_orientation_updates_on_runtime_viewport_transition
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .playwright-browsers
+          key: >-
+            playwright-${{ runner.os }}-${{ hashFiles('requirements-dev.txt',
+            'tests/e2e/install_browser.py') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install runtime and E2E dependencies
+        run: python scripts/ci/install_pinned_python.py e2e
+
+      - name: Ensure Chromium in repo cache
+        run: python tests/e2e/install_browser.py
+
+      - name: Run consecutive isolated targeted tests (no retries)
+        shell: bash
+        env:
+          PRKS_E2E_TEST_ID: ${{ matrix.test_id }}
+          # format() converts numeric zero to the nonempty string '0' so the
+          # shell rejects it instead of the || fallback silently choosing 20.
+          PRKS_E2E_STRESS_ITERATIONS: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.iterations) || '20' }}
+          # PR runs check out a synthetic merge commit. Preserve both real
+          # parents for auditable 20/20 evidence even after that ref expires.
+          PRKS_E2E_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          PRKS_E2E_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$PRKS_E2E_STRESS_ITERATIONS" =~ ^[0-9]+$ ]] ||
+             (( PRKS_E2E_STRESS_ITERATIONS < 1 || PRKS_E2E_STRESS_ITERATIONS > 100 )); then
+            echo "::error::iterations must be an integer from 1 to 100"
+            exit 1
+          fi
+          echo "Case: $PRKS_E2E_TEST_ID (iterations: $PRKS_E2E_STRESS_ITERATIONS)"
+          echo "Tested code: base $PRKS_E2E_BASE_SHA, head $PRKS_E2E_HEAD_SHA, checkout $GITHUB_SHA"
+          printf 'Tested code: base %s, head %s, checkout %s\n' \
+            "$PRKS_E2E_BASE_SHA" "$PRKS_E2E_HEAD_SHA" "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+          for ((i=1; i<=PRKS_E2E_STRESS_ITERATIONS; i++)); do
+            printf '\n=== targeted iteration %d/%d ===\n' "$i" "$PRKS_E2E_STRESS_ITERATIONS"
+            if ! python tests/e2e/run.py --jobs 1 --no-pointer-capture "$PRKS_E2E_TEST_ID"; then
+              echo "::error::${PRKS_E2E_TEST_ID} failed on iteration ${i}/${PRKS_E2E_STRESS_ITERATIONS}"
+              echo "FAILED ${PRKS_E2E_TEST_ID}: ${i}/${PRKS_E2E_STRESS_ITERATIONS}" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+          done
+          echo "PASS: ${PRKS_E2E_TEST_ID}, ${PRKS_E2E_STRESS_ITERATIONS}/${PRKS_E2E_STRESS_ITERATIONS} consecutive targeted runs" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  negative-control:
+    name: Divider drag reload must fail the oracle
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .playwright-browsers
+          key: >-
+            playwright-${{ runner.os }}-${{ hashFiles('requirements-dev.txt',
+            'tests/e2e/install_browser.py') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install runtime and E2E dependencies
+        run: python scripts/ci/install_pinned_python.py e2e
+
+      - name: Ensure Chromium in repo cache
+        run: python tests/e2e/install_browser.py
+
+      - name: Verify drag-time and post-release reloads both fail the oracle
+        shell: bash
+        env:
+          PRKS_E2E_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          PRKS_E2E_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          target=tests.e2e.test_app.MainSecondaryDividerTests.test_divider_drag_causes_no_additional_route_or_pdf_requests
+          cp tests/e2e/test_app.py "$RUNNER_TEMP/prks-divider-original-test.py"
+          for mode in during-drag after-release; do
+            # Each control runs INDEPENDENTLY so the first injected request
+            # cannot conceal a false negative in the delayed-request case.
+            cp "$RUNNER_TEMP/prks-divider-original-test.py" tests/e2e/test_app.py
+            PRKS_DIVIDER_NEGATIVE_CONTROL_MODE="$mode" python - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path("tests/e2e/test_app.py")
+          source = path.read_text(encoding="utf-8")
+          mode = os.environ["PRKS_DIVIDER_NEGATIVE_CONTROL_MODE"]
+          if mode == "during-drag":
+              anchor = '        phase = "drag"\n\n        _drag_divider(page, 150)\n'
+              injection = (
+                  '        phase = "drag"\n\n'
+                  '        # Deliberately broken behavior, only in this runner.\n'
+                  '        page.evaluate("""() => {\n'
+                  "            window.addEventListener('pointermove', function onMove(event) {\n"
+                  '                if ((event.buttons & 1) === 0) return;\n'
+                  "                window.removeEventListener('pointermove', onMove, true);\n"
+                  "                void fetch('/api/works/PRKS_DIVIDER_NEGATIVE_CONTROL');\n"
+                  '            }, true);\n'
+                  '        }""")\n\n'
+                  '        _drag_divider(page, 150)\n'
+              )
+          elif mode == "after-release":
+              anchor = '        _drag_divider(page, 90)\n'
+              injection = (
+                  '        # Delay the request beyond the former 150 ms tail.\n'
+                  '        page.evaluate("""() => {\n'
+                  "            window.addEventListener('pointerup', function onRelease() {\n"
+                  "                window.removeEventListener('pointerup', onRelease, true);\n"
+                  '                setTimeout(() => {\n'
+                  "                    void fetch('/api/works/PRKS_DIVIDER_DELAYED_NEGATIVE_CONTROL');\n"
+                  '                }, 200);\n'
+                  '            }, true);\n'
+                  '        }""")\n'
+                  '        _drag_divider(page, 90)\n'
+              )
+          else:
+              raise SystemExit("Unexpected negative-control mode")
+          if source.count(anchor) != 1:
+              raise SystemExit("Divider anchor changed: negative control must fail closed")
+          path.write_text(source.replace(anchor, injection), encoding="utf-8")
+          PY
+            log="$RUNNER_TEMP/prks-negative-control-${mode}.log"
+            if python tests/e2e/run.py --jobs 1 --no-pointer-capture "$target" > "$log" 2>&1; then
+              cat "$log"
+              echo "::error::The divider regression oracle accepted a deliberate ${mode} GET"
+              exit 1
+            fi
+            cat "$log"
+            case "$mode" in
+              during-drag) sentinel="/api/works/PRKS_DIVIDER_NEGATIVE_CONTROL" ;;
+              after-release) sentinel="/api/works/PRKS_DIVIDER_DELAYED_NEGATIVE_CONTROL" ;;
+            esac
+            # An unrelated setup/timeout failure must never count as a pass.
+            if ! grep -Fq 'divider drags must not initiate Work/PDF reloads' "$log" ||
+               ! grep -Fq "$sentinel" "$log" ||
+               ! grep -Fq 'after_barrier_ms' "$log"; then
+              echo "::error::${mode} test did not fail for the injected post-barrier GET"
+              exit 1
+            fi
+            printf 'PASS (expected rejection): %s %s\n' "$mode" "$target" >> "$GITHUB_STEP_SUMMARY"
+          done
+          printf 'Tested code: base %s, head %s, checkout %s\n' \
+            "$PRKS_E2E_BASE_SHA" "$PRKS_E2E_HEAD_SHA" "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+          echo 'Both independent negative controls correctly rejected deliberate Work GETs'

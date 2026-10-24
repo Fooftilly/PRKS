@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
 import { bindFloatingPosition } from '../../floating/bind-floating-position'
 import { popupDraftForSession, type PopupDraftIdentity } from './pdf-annotation-popup-draft'
 import {
@@ -221,9 +222,9 @@ onBeforeUnmount(() => {
       ></textarea>
     </label>
     <div class="pdf-annotation-popup__actions">
-      <button type="button" class="prks-btn prks-btn--secondary" @click="onClose(ticket())">Cancel</button>
-      <button v-if="state.deletable" type="button" class="prks-btn prks-btn--danger" @click="onDelete(ticket())">Delete annotation</button>
-      <button type="button" class="prks-btn prks-btn--primary" @click="onSave(draft, ticket())">Save comment</button>
+      <PrksButton @click="onClose(ticket())">Cancel</PrksButton>
+      <PrksButton v-if="state.deletable" variant="danger" @click="onDelete(ticket())">Delete annotation</PrksButton>
+      <PrksButton variant="primary" @click="onSave(draft, ticket())">Save comment</PrksButton>
     </div>
   </div>
 </template>

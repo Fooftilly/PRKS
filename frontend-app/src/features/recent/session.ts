@@ -1,6 +1,5 @@
 import { createVNode } from 'vue'
 import {
-  dismissRouteSurface,
   presentRouteSurface,
   registerEarlyRoutePresenter,
   registerRouteWindowBridge,
@@ -64,17 +63,12 @@ export function presentRecent(input: RecentPresentInput): void {
   })
 }
 
-export function dismissRecent(owner: object | null | undefined): void {
-  dismissRouteSurface(owner)
-}
-
 export function resetRecentSessionForTests(): void {
   resetRouteSurfaceForTests()
 }
 
 export function registerRecentBridge(target: Window = window): void {
   registerRouteWindowBridge(target)
-  target.prksVueDismissRecent = dismissRecent
   registerEarlyRoutePresenter(
     RECENT_FEATURE,
     (request, host) => {

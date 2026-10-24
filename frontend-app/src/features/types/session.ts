@@ -1,6 +1,5 @@
 import { createVNode } from 'vue'
 import {
-  dismissRouteSurface,
   presentRouteSurface,
   registerEarlyRoutePresenter,
   registerRouteWindowBridge,
@@ -118,17 +117,12 @@ export function presentTypeDetail(input: TypeDetailPresentInput): void {
   })
 }
 
-export function dismissTypes(owner: object | null | undefined): void {
-  dismissRouteSurface(owner)
-}
-
 export function resetTypesSessionForTests(): void {
   resetRouteSurfaceForTests()
 }
 
 export function registerTypesBridge(target: Window = window): void {
   registerRouteWindowBridge(target)
-  target.prksVueDismissTypes = dismissTypes
   registerEarlyRoutePresenter(
     TYPES_FEATURE,
     (request, host) => {

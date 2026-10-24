@@ -150,6 +150,43 @@ class TestStorageBind(unittest.TestCase):
         self.assertEqual(server_module._bound_storage.processing_dir, fallback)
         self.assertFalse(server_module._bound_storage.processing_fallback_allowed)
 
+    def test_processing_fallback_stays_beneath_the_anchored_root(self):
+        # A development-default root reached through a link: once anchored to
+        # the leased target, the inbox fallback must not follow the link.
+        target = self._tmpdir()
+        link = os.path.join(self._tmpdir(), "data")
+        try:
+            os.symlink(target, link)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks unavailable")
+        preferred = paths.PROCESSING_PROD_PREFERRED
+        cfg = StorageConfig(
+            mode="production",
+            configured_root=None,
+            root=link,
+            db_path=os.path.join(link, "prks_data.db"),
+            pdfs_dir=os.path.join(link, "pdfs"),
+            thumbs_dir=os.path.join(link, "thumbs"),
+            people_dir=os.path.join(link, "people"),
+            processing_dir=preferred,
+            index_db_path=os.path.join(link, "prks_text_index.db"),
+            research_index_db_path=os.path.join(link, "prks_research_index.db"),
+            log_file=os.path.join(link, "prks-errors.log"),
+            processing_fallback_allowed=True,
+        ).anchored_to(os.path.realpath(link))
+        real_makedirs = os.makedirs
+
+        def fake_makedirs(path, exist_ok=True):
+            if os.path.normpath(str(path)) == os.path.normpath(preferred):
+                raise OSError("preferred processing dir unavailable")
+            return real_makedirs(path, exist_ok=exist_ok)
+
+        with patch("os.makedirs", fake_makedirs):
+            bound = bind_storage(cfg)
+        expected = os.path.join(os.path.realpath(target), "for_processing")
+        self.assertEqual(bound.processing_dir, expected)
+        self.assertEqual(server_module.processing_dir, expected)
+
     def test_explicit_processing_override_does_not_fall_back(self):
         root = self._tmpdir()
         preferred = paths.PROCESSING_PROD_PREFERRED

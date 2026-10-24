@@ -22,7 +22,8 @@
 
     function live(ctx, state) {
         return ctx && !ctx.destroyed && ctx.generation === state.generation &&
-            ctx.getEntity('work') && ctx.getEntity('work').id === state.workId;
+            ctx.getEntity('work') && ctx.getEntity('work').id === state.workId &&
+            ctx.getResource('workRoleEditor') === state;
     }
     function owns(ctx, state) {
         return live(ctx, state) && root.prksRightPanelOwnedBy(ctx) &&
@@ -89,7 +90,10 @@
              * decision it never saw, so the control stays disabled instead. */
             state.observed = result && result.source !== 'unavailable' && result.value
                 ? result.value : null;
-        } catch (_) { state.observed = null; }
+        } catch (_) {
+            if (!live(ctx, state)) return;
+            state.observed = null;
+        }
     }
 
     /**
@@ -125,6 +129,7 @@
     }
 
     async function paint(ctx, state) {
+        if (!live(ctx, state)) return;
         const paintVersion = state.paintVersion = (state.paintVersion || 0) + 1;
         const rows = await root.prksRefreshPendingWorkRoles();
         if (!live(ctx, state) || paintVersion !== state.paintVersion) return;
@@ -160,33 +165,110 @@
 
     function safePaint(ctx, state) { return paint(ctx, state).catch(() => {}); }
 
+    /**
+     * Warm park drops the non-suspendable editor sessions, and with them the
+     * listeners that copy an acknowledgement onto this tab's Work. The pending
+     * overlay then retires while the entity stays stale, and resume rebuilds
+     * the editor from that stale Work.
+     *
+     * This subscription is owner-scoped: registerCleanup survives warm suspend
+     * and dies with the tab. While an editor session is mounted it owns both
+     * the observed base and the entity, so this path only patches the entity
+     * when that session is absent. It does not paint and it is not a registry
+     * slot.
+     */
+    function applyParkedWorkAcknowledgement(ctx, event) {
+        if (!ctx || ctx.destroyed || (!ctx.mounted && !ctx.suspended)) return;
+        if (!event || !event.acknowledged || !event.operation) return;
+        const ack = event.acknowledged;
+        const op = event.operation;
+        if ((root.PRKS_WORK_ROLE_OPERATION_TYPES || []).indexOf(op) !== -1) {
+            if (ctx.getResource('workRoleEditor')) return;
+            const work = ctx.getEntity('work');
+            if (!work || work.id !== ack.work_id || typeof root.prksPatchWorkDetailRoles !== 'function') return;
+            const patched = root.prksPatchWorkDetailRoles(work, ack);
+            if (patched) ctx.setEntity('work', patched);
+            return;
+        }
+        if (op === 'ADD_WORK_TAG' || op === 'REMOVE_WORK_TAG') {
+            if (ctx.getResource('workTagEditor')) return;
+            if (typeof root.prksApplyWorkTagEntityAck === 'function') root.prksApplyWorkTagEntityAck(ctx, ack);
+            return;
+        }
+        if (op === 'SET_WORK_SOURCE') {
+            if (ctx.getResource('workSourceEditor')) return;
+            if (typeof root.prksApplyWorkSourceEntityAck === 'function') root.prksApplyWorkSourceEntityAck(ctx, ack);
+            return;
+        }
+        if (op === 'SET_WORK_METADATA_FIELD') {
+            if (ctx.getResource('workMetadataEditor')) return;
+            const effective = typeof root.prksEffectiveMetadataAck === 'function'
+                ? root.prksEffectiveMetadataAck(ack, event.op)
+                : ack;
+            if (typeof root.prksApplyWorkMetadataEntityAck === 'function') {
+                root.prksApplyWorkMetadataEntityAck(ctx, effective);
+            }
+        }
+    }
+
+    function bindOwnerWorkAcknowledgement(ctx) {
+        if (!ctx || ctx.destroyed || ctx.__prksWorkEntityAck) return;
+        if (typeof ctx.registerCleanup !== 'function') return;
+        if (!root.prksSync || typeof root.prksSync.subscribe !== 'function') return;
+        const stop = root.prksSync.subscribe(function (event) {
+            applyParkedWorkAcknowledgement(ctx, event);
+        });
+        ctx.__prksWorkEntityAck = true;
+        ctx.registerCleanup(function () {
+            ctx.__prksWorkEntityAck = false;
+            if (typeof stop === 'function') stop();
+        });
+    }
+
     function mount(ctx, workId, options) {
         if (!ctx || !root.prksSync) return;
         let state = ctx.getResource('workRoleEditor');
         if (!state || state.workId !== workId || state.generation !== ctx.generation) {
-            state = { workId, generation: ctx.generation, operations: [], observed: null,
+            /* Capture the ticket before subscriptions or async prepare.
+             * setResource would mint a later ticket. A rejected registration
+             * does not subscribe, paint, prepare, or mutate this owner. */
+            const ticket = typeof ctx.resourceTicket === 'function' ? ctx.resourceTicket() : null;
+            const next = { workId, generation: ctx.generation, operations: [], observed: null,
                 error: null, editable: !!(options && options.editable) };
-            const stopSync = root.prksSync.subscribe(event => {
+            const stops = { sync: null, connectivity: null };
+            const attached = typeof ctx.registerResource === 'function'
+                ? ctx.registerResource(ticket, {
+                    kind: 'workRoleEditor',
+                    value: next,
+                    suspendable: false,
+                    dispose: function () {
+                        if (stops.sync) stops.sync();
+                        if (stops.connectivity) stops.connectivity();
+                    },
+                })
+                : 'rejected';
+            if (attached === 'rejected') return;
+            stops.sync = root.prksSync.subscribe(event => {
                 if (event && event.operation &&
                     (root.PRKS_WORK_ROLE_OPERATION_TYPES || []).indexOf(event.operation) === -1) {
                     return;
                 }
-                if (event && event.acknowledged) acceptAck(ctx, state, event.acknowledged);
-                void safePaint(ctx, state);
+                if (event && event.acknowledged) acceptAck(ctx, next, event.acknowledged);
+                void safePaint(ctx, next);
             });
-            const stopConnectivity = root.prksOfflineRuntimeSubscribe(() => {
-                if (!state.observed && root.prksOfflineRuntimeState() === 'online') {
-                    void readBase(ctx, state).then(() => safePaint(ctx, state));
+            stops.connectivity = root.prksOfflineRuntimeSubscribe(() => {
+                if (!next.observed && root.prksOfflineRuntimeState() === 'online') {
+                    void readBase(ctx, next).then(() => safePaint(ctx, next));
                     return;
                 }
-                void safePaint(ctx, state);
+                void safePaint(ctx, next);
             });
-            ctx.setResource('workRoleEditor', state, () => { stopSync(); stopConnectivity(); });
-            state.preparing = readBase(ctx, state).then(() => safePaint(ctx, state));
-        } else {
-            state.editable = !!(options && options.editable);
-            void safePaint(ctx, state);
+            bindOwnerWorkAcknowledgement(ctx);
+            next.preparing = readBase(ctx, next).then(() => safePaint(ctx, next));
+            return;
         }
+        state.editable = !!(options && options.editable);
+        void safePaint(ctx, state);
     }
 
     /**
@@ -259,7 +341,7 @@
             if (code === 'dependency_failed') return { code: 'dependency-failed' };
             return { code: 'failed' };
         }
-        if (mounted) {
+        if (mounted && live(ctx, state)) {
             state.error = null;
             await safePaint(ctx, state);
         }
@@ -269,4 +351,5 @@
 
     root.prksMountWorkRoleEditor = mount;
     root.prksSaveWorkPersonRoleDurably = save;
+    root.prksBindOwnerWorkAcknowledgement = bindOwnerWorkAcknowledgement;
 })(typeof window === 'undefined' ? globalThis : window);

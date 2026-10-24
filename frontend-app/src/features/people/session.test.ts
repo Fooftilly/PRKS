@@ -1,8 +1,7 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readRouteSurface } from '../../route-surface/lifecycle'
+import { dismissRouteSurface, readRouteSurface } from '../../route-surface/lifecycle'
 import {
-  dismissPeople,
   PEOPLE_RETAIN_SURFACE_KEY,
   presentPeopleIndex,
   presentPersonDetail,
@@ -14,7 +13,7 @@ afterEach(() => {
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
   delete window.prksVuePresentRoute
-  delete window.prksVueDismissPeople
+  delete window.prksVueDismissRoute
   delete window.openModal
   delete window.prksNavigate
   delete window.openPersonProfileEdit
@@ -26,9 +25,7 @@ afterEach(() => {
   delete window.prksBindPersonProfileDraft
   delete window.prksTabContextIsFocused
   delete window.prksIcon
-  delete window.prksPaintScopeHost
   delete window.prksOpenNewPersonModalFromPeoplePage
-  delete window.prksWorkCardHtml
   sessionStorage.removeItem('prks-people-library-filter')
 })
 
@@ -381,12 +378,6 @@ describe('People route surface', () => {
   })
 
   it('keeps linked work navigation open beside the profile editor', async () => {
-    const cards: { work: Record<string, unknown>; subtitle?: string }[] = []
-    window.prksWorkCardHtml = vi.fn((work, options) => {
-      cards.push({ work: work as Record<string, unknown>, subtitle: options?.subtitle })
-      const id = String((work as { id?: unknown }).id || '')
-      return `<a data-prks-route="#/works/${id}">${String((work as { title?: unknown }).title || '')}</a>`
-    })
     window.prksBindPersonProfileDraft = vi.fn()
     const pane = owner()
     pane.ui.personDetailEditing = true
@@ -417,21 +408,15 @@ describe('People route surface', () => {
     expect(el.querySelectorAll('[data-prks-route^="#/works/"]').length).toBeGreaterThan(0)
     expect(el.querySelector('#prks-person-delete-btn')).toBeNull()
     expect(el.querySelector('.person-profile__card-unlink')).toBeNull()
-    expect(cards[0]?.work).toMatchObject({
-      id: 'W1',
-      file_path: '/api/pdfs/notes.pdf',
-      status: 'read',
-      year: '1843',
-      file_size_bytes: 1200,
-    })
+    const linked = el.querySelector('[data-prks-route="#/works/W1"]')
+    expect(linked).not.toBeNull()
+    expect(linked?.getAttribute('data-work-id')).toBe('W1')
+    expect(linked?.querySelector('.card-title')?.textContent).toBe('Notes')
+    expect(linked?.querySelector('.status-badge')?.textContent).toBe('read')
+    expect(linked?.querySelector('.work-card__file-size')?.textContent).toBe('0.001 MB')
   })
 
   it('names the file and role on each unlinkable relationship', async () => {
-    window.prksWorkCardHtml = vi.fn((work, options) => {
-      const id = String((work as { id?: unknown }).id || '')
-      const subtitle = options?.subtitle || ''
-      return `<a data-prks-route="#/works/${id}"><span class="work-card-subtitle">${subtitle}</span></a>`
-    })
     window.prksBindPersonProfileDraft = vi.fn()
     const pane = owner()
     pane.ui.personDetailEditing = true
@@ -453,7 +438,7 @@ describe('People route surface', () => {
     await flushView()
     expect(el.querySelector('[aria-label="Remove link to Notes (Author)"]')).not.toBeNull()
     expect(el.querySelector('[aria-label="Remove link to Notes (Editor)"]')).not.toBeNull()
-    const subtitles = Array.from(el.querySelectorAll('.work-card-subtitle')).map((node) => node.textContent)
+    const subtitles = Array.from(el.querySelectorAll('.work-card__context')).map((node) => node.textContent)
     expect(subtitles).toEqual(['Author', 'Editor'])
     expect(el.querySelectorAll('[data-prks-route^="#/works/"]').length).toBe(2)
   })
@@ -505,7 +490,7 @@ describe('People route surface', () => {
     cleanups.clear()
     failed.forEach((fn) => fn())
     pane[PEOPLE_RETAIN_SURFACE_KEY] = false
-    dismissPeople(pane)
+    dismissRouteSurface(pane)
     expect(routeHost.querySelector('[data-prks-people-index-view]')).toBeNull()
     expect(readRouteSurface(pane)?.mounted).toBe(false)
     contentDiv.innerHTML = '<p><button type="button" id="prks-route-retry">Retry</button></p>'
@@ -520,7 +505,7 @@ describe('People route surface', () => {
     const bHost = host()
     presentPeopleIndex({ owner: a, host: aHost, items: [ada], generation: 1 })
     presentPersonDetail({ owner: b, host: bHost, person: grace, personId: 'P2', generation: 1 })
-    dismissPeople(a)
+    dismissRouteSurface(a)
     expect(aHost.querySelector('[data-prks-people-index-view]')).toBeNull()
     expect(bHost.textContent).toContain('Grace Hopper')
   })

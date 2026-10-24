@@ -1,5 +1,9 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
+import PrksField from '../../components/PrksField.vue'
+import PrksIconButton from '../../components/PrksIconButton.vue'
+import { WORK_STATUSES } from '../../domain/work-status'
 import type { WorkMetaDraft, WorkMetaField } from './metadata-draft'
 import type { WorkMetadataChrome, WorkMetadataConflict, WorkMetadataGroupChrome } from './metadata-session'
 
@@ -17,7 +21,6 @@ const emit = defineEmits<{
 }>()
 
 const isVideo = props.sourceKind === 'video'
-const statuses = ['Not Started', 'Planned', 'In Progress', 'Completed', 'Paused']
 const docMenuReady = ref(false)
 
 function group(name: string): WorkMetadataGroupChrome | undefined {
@@ -160,12 +163,12 @@ watch(() => props.draft.doc_type, () => {
   <div class="doc-meta-card form-pane doc-meta-card--editing work-meta-editor">
     <div class="card-heading-row">
       <h3 class="doc-meta-card__accent-title">Edit Metadata</h3>
-      <button type="button" class="prks-icon-btn prks-icon-btn--ghost inline-action-btn inline-action-btn--close" aria-label="Close metadata editor" @click="closeEditor"><span aria-hidden="true">&times;</span></button>
+      <PrksIconButton variant="ghost" class="inline-action-btn inline-action-btn--close" label="Close metadata editor" @click="closeEditor"><span aria-hidden="true">&times;</span></PrksIconButton>
     </div>
 
     <section class="work-meta-editor__section" data-prks-role="work-identity-editor">
       <h4>Identity</h4>
-      <label for="meta-title">Title</label>
+      <PrksField v-slot="{ labelledBy, describedBy }" label="Title" for-id="meta-title" :error="errorText('title')">
       <input
         id="meta-title"
         type="text"
@@ -175,11 +178,12 @@ watch(() => props.draft.doc_type, () => {
         :disabled="fieldOff('title')"
         :title="fieldTitle('title')"
         :aria-invalid="invalid('title') ? 'true' : undefined"
-        aria-describedby="meta-title-error"
+        :aria-labelledby="labelledBy"
+        :aria-describedby="describedBy"
         @focus="onFocus('title')"
         @blur="onBlur('title')"
       >
-      <p id="meta-title-error" class="field-error" aria-live="polite">{{ errorText('title') }}</p>
+      </PrksField>
 
       <label for="meta-doc-type-trigger">Document type (BibLaTeX)</label>
       <div class="prks-doc-type-menu combobox-container">
@@ -200,19 +204,18 @@ watch(() => props.draft.doc_type, () => {
         <div id="meta-doc-type-listbox" class="prks-doc-type-menu__panel hidden" role="listbox"></div>
       </div>
       <div class="prks-form-actions form-actions">
-        <button id="save-work-identity-btn" type="button" class="prks-btn prks-btn--secondary" :disabled="saveDisabled('identity')" @click="saveGroup('identity')">Save identity</button>
+        <PrksButton id="save-work-identity-btn" :disabled="saveDisabled('identity')" @click="saveGroup('identity')">Save identity</PrksButton>
       </div>
       <div class="meta-row" data-prks-role="work-identity-sync" aria-live="polite">
         <span>{{ statusLine('identity') }}</span>
         <div v-for="conflict in conflicts('identity')" :key="conflict.opId" :data-prks-work-field-conflict="conflict.field">
           {{ conflict.text }}
-          <button
+          <PrksButton
             v-for="action in conflict.actions"
             :key="action.label"
-            type="button"
-            class="prks-btn prks-btn--secondary prks-btn--sm"
+            size="sm"
             @click="resolveField(conflict, action.apply)"
-          >{{ action.label }}</button>
+          >{{ action.label }}</PrksButton>
         </div>
       </div>
     </section>
@@ -225,7 +228,7 @@ watch(() => props.draft.doc_type, () => {
           <input id="meta-status" type="hidden" data-prks-work-field="status" :value="draft.status">
           <div class="prks-segmented prks-segmented--status prks-segmented--single-row" role="radiogroup" aria-label="Status">
             <button
-              v-for="label in statuses"
+              v-for="label in WORK_STATUSES"
               :key="label"
               type="button"
               class="prks-segmented__btn"
@@ -245,26 +248,31 @@ watch(() => props.draft.doc_type, () => {
         </div>
       </div>
       <div class="prks-form-actions form-actions">
-        <button id="save-work-status-btn" type="button" class="prks-btn prks-btn--secondary" :disabled="saveDisabled('status')" @click="saveGroup('status')">Save status</button>
+        <PrksButton id="save-work-status-btn" :disabled="saveDisabled('status')" @click="saveGroup('status')">Save status</PrksButton>
       </div>
       <div class="meta-row" data-prks-role="work-status-sync" aria-live="polite">
         <span>{{ statusLine('status') }}</span>
         <div v-for="conflict in conflicts('status')" :key="conflict.opId" :data-prks-work-field-conflict="conflict.field">
           {{ conflict.text }}
-          <button
+          <PrksButton
             v-for="action in conflict.actions"
             :key="action.label"
-            type="button"
-            class="prks-btn prks-btn--secondary prks-btn--sm"
+            size="sm"
             @click="resolveField(conflict, action.apply)"
-          >{{ action.label }}</button>
+          >{{ action.label }}</PrksButton>
         </div>
       </div>
     </section>
 
     <section v-if="isVideo" class="work-meta-editor__section" data-prks-role="work-source-editor">
       <h4>Video source</h4>
-      <label for="meta-video-url">YouTube URL</label>
+      <PrksField
+        v-slot="{ labelledBy, describedBy }"
+        label="YouTube URL"
+        for-id="meta-video-url"
+        :error="errorText('source_url')"
+        help="Replaces which video this file is. Different links to the same video are the same source."
+      >
       <input
         id="meta-video-url"
         type="url"
@@ -275,33 +283,37 @@ watch(() => props.draft.doc_type, () => {
         :disabled="fieldOff('source_url')"
         :title="fieldTitle('source_url')"
         :aria-invalid="invalid('source_url') ? 'true' : undefined"
-        aria-describedby="meta-video-url-error"
+        :aria-labelledby="labelledBy"
+        :aria-describedby="describedBy"
         @focus="onFocus('source_url')"
         @blur="onBlur('source_url')"
       >
-      <p id="meta-video-url-error" class="field-error" aria-live="polite">{{ errorText('source_url') }}</p>
-      <p class="meta-row meta-row--hint">Replaces which video this file is. Different links to the same video are the same source.</p>
+      </PrksField>
       <div class="prks-form-actions form-actions">
-        <button id="save-work-source-btn" type="button" class="prks-btn prks-btn--secondary" :disabled="saveDisabled('source')" @click="saveSource">Save video source</button>
+        <PrksButton id="save-work-source-btn" :disabled="saveDisabled('source')" @click="saveSource">Save video source</PrksButton>
       </div>
       <div class="meta-row" data-prks-role="work-source-sync" aria-live="polite">
         <span>{{ statusLine('source') }}</span>
         <div v-for="conflict in conflicts('source')" :key="conflict.opId" data-prks-work-source-conflict="">
           {{ conflict.text }}
-          <button
+          <PrksButton
             v-for="action in conflict.actions"
             :key="action.label"
-            type="button"
-            class="prks-btn prks-btn--secondary prks-btn--sm"
+            size="sm"
             @click="resolveSource(conflict, action.apply)"
-          >{{ action.label }}</button>
+          >{{ action.label }}</PrksButton>
         </div>
       </div>
     </section>
 
     <section class="work-meta-editor__section" data-prks-role="work-bib-editor">
       <h4>{{ isVideo ? 'Channel' : 'Bibliographic details' }}</h4>
-      <label for="meta-author-text">{{ isVideo ? 'Channel name' : 'Author (text)' }}</label>
+      <PrksField
+        v-slot="{ labelledBy, describedBy }"
+        :label="isVideo ? 'Channel name' : 'Author (text)'"
+        for-id="meta-author-text"
+        :help="isVideo ? undefined : 'Used for the credit line only when no Author is linked to this file. A linked Author always takes precedence; a linked Editor stands in when this is empty.'"
+      >
       <input
         id="meta-author-text"
         type="text"
@@ -311,19 +323,19 @@ watch(() => props.draft.doc_type, () => {
         @input="onInput('author_text', $event)"
         :disabled="fieldOff('author_text')"
         :title="fieldTitle('author_text')"
+        :aria-labelledby="labelledBy"
+        :aria-describedby="describedBy"
         @focus="onFocus('author_text')"
         @blur="onBlur('author_text')"
       >
-      <p v-if="!isVideo" class="meta-row meta-row--hint">Used for the credit line only when no Author is linked to this file. A linked Author always takes precedence; a linked Editor stands in when this is empty.</p>
+      </PrksField>
       <template v-if="!isVideo">
 
       <div class="form-grid-2 form-grid-2--compact">
-        <div>
-          <label for="meta-year">Year</label>
-          <input id="meta-year" type="text" data-prks-work-field="year" :value="draft.year" @input="onInput('year', $event)" :disabled="fieldOff('year')" :title="fieldTitle('year')" @focus="onFocus('year')" @blur="onBlur('year')">
-        </div>
-        <div>
-          <label for="meta-date">Published Date</label>
+        <PrksField v-slot="{ labelledBy, describedBy }" label="Year" for-id="meta-year">
+          <input id="meta-year" type="text" data-prks-work-field="year" :value="draft.year" @input="onInput('year', $event)" :disabled="fieldOff('year')" :title="fieldTitle('year')" :aria-labelledby="labelledBy" :aria-describedby="describedBy" @focus="onFocus('year')" @blur="onBlur('year')">
+        </PrksField>
+        <PrksField v-slot="{ labelledBy, describedBy }" label="Published Date" for-id="meta-date" :error="errorText('published_date')">
           <input
             id="meta-date"
             type="text"
@@ -331,58 +343,68 @@ watch(() => props.draft.doc_type, () => {
             placeholder="dd/mm/yyyy"
             inputmode="numeric"
             autocomplete="off"
-            aria-describedby="meta-date-error"
             :value="draft.published_date"
             @input="onInput('published_date', $event)"
             :disabled="fieldOff('published_date')"
             :title="fieldTitle('published_date')"
             :aria-invalid="invalid('published_date') ? 'true' : undefined"
+            :aria-labelledby="labelledBy"
+            :aria-describedby="describedBy"
             @focus="onFocus('published_date')"
             @blur="onBlur('published_date')"
           >
-        </div>
+        </PrksField>
       </div>
-      <p id="meta-date-error" class="field-error" aria-live="polite">{{ errorText('published_date') }}</p>
 
-      <label for="meta-publisher">Publisher</label>
-      <input id="meta-publisher" type="text" data-prks-work-field="publisher" :value="draft.publisher" @input="onInput('publisher', $event)" :disabled="fieldOff('publisher')" :title="fieldTitle('publisher')" @focus="onFocus('publisher')" @blur="onBlur('publisher')">
+      <PrksField v-slot="{ labelledBy, describedBy }" label="Publisher" for-id="meta-publisher">
+      <input id="meta-publisher" type="text" data-prks-work-field="publisher" :value="draft.publisher" @input="onInput('publisher', $event)" :disabled="fieldOff('publisher')" :title="fieldTitle('publisher')" :aria-labelledby="labelledBy" :aria-describedby="describedBy" @focus="onFocus('publisher')" @blur="onBlur('publisher')">
+      </PrksField>
 
-      <label for="meta-location">Location (place of publication)</label>
-      <input id="meta-location" type="text" data-prks-work-field="location" placeholder="e.g. Cambridge, UK or Paris; Berlin" autocomplete="off" :value="draft.location" @input="onInput('location', $event)" :disabled="fieldOff('location')" :title="fieldTitle('location')" @focus="onFocus('location')" @blur="onBlur('location')">
-      <p class="meta-row meta-row--hint">Separate multiple places with semicolons; BibLaTeX export joins them with &quot; and &quot;.</p>
+      <PrksField
+        v-slot="{ labelledBy, describedBy }"
+        label="Location (place of publication)"
+        for-id="meta-location"
+        help="Separate multiple places with semicolons; BibLaTeX export joins them with &quot; and &quot;."
+      >
+      <input id="meta-location" type="text" data-prks-work-field="location" placeholder="e.g. Cambridge, UK or Paris; Berlin" autocomplete="off" :value="draft.location" @input="onInput('location', $event)" :disabled="fieldOff('location')" :title="fieldTitle('location')" :aria-labelledby="labelledBy" :aria-describedby="describedBy" @focus="onFocus('location')" @blur="onBlur('location')">
+      </PrksField>
 
-      <label for="meta-edition">Edition</label>
-      <input id="meta-edition" type="text" data-prks-work-field="edition" placeholder="e.g. 2 or revised" autocomplete="off" :value="draft.edition" @input="onInput('edition', $event)" :disabled="fieldOff('edition')" :title="fieldTitle('edition')" @focus="onFocus('edition')" @blur="onBlur('edition')">
+      <PrksField v-slot="{ labelledBy, describedBy }" label="Edition" for-id="meta-edition">
+      <input id="meta-edition" type="text" data-prks-work-field="edition" placeholder="e.g. 2 or revised" autocomplete="off" :value="draft.edition" @input="onInput('edition', $event)" :disabled="fieldOff('edition')" :title="fieldTitle('edition')" :aria-labelledby="labelledBy" :aria-describedby="describedBy" @focus="onFocus('edition')" @blur="onBlur('edition')">
+      </PrksField>
 
-      <label for="meta-journal">Journal</label>
-      <input id="meta-journal" type="text" data-prks-work-field="journal" :value="draft.journal" @input="onInput('journal', $event)" :disabled="fieldOff('journal')" :title="fieldTitle('journal')" @focus="onFocus('journal')" @blur="onBlur('journal')">
+      <PrksField v-slot="{ labelledBy, describedBy }" label="Journal" for-id="meta-journal">
+      <input id="meta-journal" type="text" data-prks-work-field="journal" :value="draft.journal" @input="onInput('journal', $event)" :disabled="fieldOff('journal')" :title="fieldTitle('journal')" :aria-labelledby="labelledBy" :aria-describedby="describedBy" @focus="onFocus('journal')" @blur="onBlur('journal')">
+      </PrksField>
 
       <div class="form-grid-2 form-grid-2--compact">
-        <div>
-          <label for="meta-volume">Volume</label>
-          <input id="meta-volume" type="text" data-prks-work-field="volume" :value="draft.volume" @input="onInput('volume', $event)" :disabled="fieldOff('volume')" :title="fieldTitle('volume')" @focus="onFocus('volume')" @blur="onBlur('volume')">
-        </div>
-        <div>
-          <label for="meta-issue">Issue</label>
-          <input id="meta-issue" type="text" data-prks-work-field="issue" :value="draft.issue" @input="onInput('issue', $event)" :disabled="fieldOff('issue')" :title="fieldTitle('issue')" @focus="onFocus('issue')" @blur="onBlur('issue')">
-        </div>
+        <PrksField v-slot="{ labelledBy, describedBy }" label="Volume" for-id="meta-volume">
+          <input id="meta-volume" type="text" data-prks-work-field="volume" :value="draft.volume" @input="onInput('volume', $event)" :disabled="fieldOff('volume')" :title="fieldTitle('volume')" :aria-labelledby="labelledBy" :aria-describedby="describedBy" @focus="onFocus('volume')" @blur="onBlur('volume')">
+        </PrksField>
+        <PrksField v-slot="{ labelledBy, describedBy }" label="Issue" for-id="meta-issue">
+          <input id="meta-issue" type="text" data-prks-work-field="issue" :value="draft.issue" @input="onInput('issue', $event)" :disabled="fieldOff('issue')" :title="fieldTitle('issue')" :aria-labelledby="labelledBy" :aria-describedby="describedBy" @focus="onFocus('issue')" @blur="onBlur('issue')">
+        </PrksField>
       </div>
 
       <div class="form-grid-2 form-grid-2--compact">
-        <div>
-          <label for="meta-pages">Pages</label>
-          <input id="meta-pages" type="text" data-prks-work-field="pages" :value="draft.pages" @input="onInput('pages', $event)" :disabled="fieldOff('pages')" :title="fieldTitle('pages')" @focus="onFocus('pages')" @blur="onBlur('pages')">
-        </div>
-        <div>
-          <label for="meta-isbn">ISBN</label>
-          <input id="meta-isbn" type="text" data-prks-work-field="isbn" :value="draft.isbn" @input="onInput('isbn', $event)" :disabled="fieldOff('isbn')" :title="fieldTitle('isbn')" @focus="onFocus('isbn')" @blur="onBlur('isbn')">
-        </div>
+        <PrksField v-slot="{ labelledBy, describedBy }" label="Pages" for-id="meta-pages">
+          <input id="meta-pages" type="text" data-prks-work-field="pages" :value="draft.pages" @input="onInput('pages', $event)" :disabled="fieldOff('pages')" :title="fieldTitle('pages')" :aria-labelledby="labelledBy" :aria-describedby="describedBy" @focus="onFocus('pages')" @blur="onBlur('pages')">
+        </PrksField>
+        <PrksField v-slot="{ labelledBy, describedBy }" label="ISBN" for-id="meta-isbn">
+          <input id="meta-isbn" type="text" data-prks-work-field="isbn" :value="draft.isbn" @input="onInput('isbn', $event)" :disabled="fieldOff('isbn')" :title="fieldTitle('isbn')" :aria-labelledby="labelledBy" :aria-describedby="describedBy" @focus="onFocus('isbn')" @blur="onBlur('isbn')">
+        </PrksField>
       </div>
 
-      <label for="meta-doi">DOI</label>
-      <input id="meta-doi" type="text" data-prks-work-field="doi" :value="draft.doi" @input="onInput('doi', $event)" :disabled="fieldOff('doi')" :title="fieldTitle('doi')" @focus="onFocus('doi')" @blur="onBlur('doi')">
+      <PrksField v-slot="{ labelledBy, describedBy }" label="DOI" for-id="meta-doi">
+      <input id="meta-doi" type="text" data-prks-work-field="doi" :value="draft.doi" @input="onInput('doi', $event)" :disabled="fieldOff('doi')" :title="fieldTitle('doi')" :aria-labelledby="labelledBy" :aria-describedby="describedBy" @focus="onFocus('doi')" @blur="onBlur('doi')">
+      </PrksField>
 
-      <label for="meta-source-url">Original URL (optional)</label>
+      <PrksField
+        v-slot="{ labelledBy, describedBy }"
+        label="Original URL (optional)"
+        for-id="meta-source-url"
+        help="Online location if this file was converted or downloaded from the web. This is provenance only: it does not change what kind of file PRKS treats this as."
+      >
       <input
         id="meta-source-url"
         type="url"
@@ -393,12 +415,14 @@ watch(() => props.draft.doc_type, () => {
         @input="onInput('source_url', $event)"
         :disabled="fieldOff('source_url')"
         :title="fieldTitle('source_url')"
+        :aria-labelledby="labelledBy"
+        :aria-describedby="describedBy"
         @focus="onFocus('source_url')"
         @blur="onBlur('source_url')"
       >
-      <p class="meta-row meta-row--hint">Online location if this file was converted or downloaded from the web. This is provenance only: it does not change what kind of file PRKS treats this as.</p>
+      </PrksField>
 
-      <label for="meta-abstract">Abstract</label>
+      <PrksField v-slot="{ labelledBy, describedBy }" label="Abstract" for-id="meta-abstract">
       <textarea
         id="meta-abstract"
         class="textarea-md"
@@ -407,11 +431,20 @@ watch(() => props.draft.doc_type, () => {
         @input="onInput('abstract', $event)"
         :disabled="fieldOff('abstract')"
         :title="fieldTitle('abstract')"
+        :aria-labelledby="labelledBy"
+        :aria-describedby="describedBy"
         @focus="onFocus('abstract')"
         @blur="onBlur('abstract')"
       ></textarea>
+      </PrksField>
 
-      <label for="meta-thumb-page">Thumbnail page</label>
+      <PrksField
+        v-slot="{ labelledBy, describedBy }"
+        label="Thumbnail page"
+        for-id="meta-thumb-page"
+        :error="errorText('thumb_page')"
+        help="Which page of the PDF to use as the card image. Leave empty for page 1."
+      >
       <input
         id="meta-thumb-page"
         type="number"
@@ -420,39 +453,38 @@ watch(() => props.draft.doc_type, () => {
         step="1"
         inputmode="numeric"
         placeholder="1"
-        aria-describedby="meta-thumb-page-error"
         :value="draft.thumb_page"
         @input="onInput('thumb_page', $event)"
         :disabled="fieldOff('thumb_page')"
         :title="fieldTitle('thumb_page')"
         :aria-invalid="invalid('thumb_page') ? 'true' : undefined"
+        :aria-labelledby="labelledBy"
+        :aria-describedby="describedBy"
         @focus="onFocus('thumb_page')"
         @blur="onBlur('thumb_page')"
       >
-      <p id="meta-thumb-page-error" class="field-error" aria-live="polite">{{ errorText('thumb_page') }}</p>
-      <p class="meta-row meta-row--hint">Which page of the PDF to use as the card image. Leave empty for page 1.</p>
+      </PrksField>
       </template>
 
       <div class="prks-form-actions form-actions">
-        <button id="save-work-bib-btn" type="button" class="prks-btn prks-btn--secondary" :disabled="saveDisabled('bib')" @click="saveGroup('bib')">{{ isVideo ? 'Save channel name' : 'Save bibliographic details' }}</button>
+        <PrksButton id="save-work-bib-btn" :disabled="saveDisabled('bib')" @click="saveGroup('bib')">{{ isVideo ? 'Save channel name' : 'Save bibliographic details' }}</PrksButton>
       </div>
       <div class="meta-row" data-prks-role="work-bib-sync" aria-live="polite">
         <span>{{ statusLine('bib') }}</span>
         <div v-for="conflict in conflicts('bib')" :key="conflict.opId" :data-prks-work-field-conflict="conflict.field">
           {{ conflict.text }}
-          <button
+          <PrksButton
             v-for="action in conflict.actions"
             :key="action.label"
-            type="button"
-            class="prks-btn prks-btn--secondary prks-btn--sm"
+            size="sm"
             @click="resolveField(conflict, action.apply)"
-          >{{ action.label }}</button>
+          >{{ action.label }}</PrksButton>
         </div>
       </div>
     </section>
 
     <div class="prks-form-actions prks-form-actions--split form-actions work-meta-editor__sticky-actions">
-      <button type="button" class="prks-btn prks-btn--secondary" @click="closeEditor">Close</button>
+      <PrksButton @click="closeEditor">Close</PrksButton>
     </div>
   </div>
 </template>

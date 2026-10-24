@@ -1,4 +1,13 @@
-import type { PublishersResume } from './projection'
+import { MutationObserver, type QueryClient } from '@tanstack/vue-query'
+import { PRKS_API_FALLBACK_ERROR, PrksApiError } from '../../api/http'
+import {
+  addPublisherAlias,
+  createPublisher,
+  deletePublisher,
+  removePublisherAlias,
+} from '../../api/publishers'
+import { prksQueryClient } from '../../query/client'
+import { prksQueryKeys } from '../../query/keys'
 
 /** Owning TabContext fields Publisher intents need. Not a second route model. */
 export interface PublishersIntentOwner {
@@ -13,15 +22,6 @@ export type PublishersActionOutcome =
   | { status: 'quiet' }
   | { status: 'error'; message: string }
 
-export interface PublishersIntentOptions {
-  /**
-   * The alias dialog this pane has open right now.
-   * Null means the user closed it. A different id means they switched publishers.
-   * Absent means the caller has no live dialog to preserve.
-   */
-  currentDialog?: () => PublishersResume | null
-}
-
 export interface PublishersIntents {
   openPublisher(name: string): void
   create(name: string): Promise<PublishersActionOutcome>
@@ -34,6 +34,7 @@ const CREATE_FAILURE = 'Could not add publisher.'
 const ADD_FAILURE = 'Could not add alias.'
 const REMOVE_ALIAS_FAILURE = 'Could not remove alias.'
 const DELETE_FAILURE = 'Could not delete publisher.'
+const OFFLINE_MESSAGE = 'Publishers require a connection to PRKS.'
 
 function quiet(): PublishersActionOutcome {
   return { status: 'quiet' }
@@ -47,9 +48,17 @@ function failure(message: string): PublishersActionOutcome {
   return { status: 'error', message }
 }
 
+/** The server's refusal text when it sent one; otherwise the action's own failure. */
 function actionMessage(err: unknown, fallback: string): string {
-  if (err instanceof Error && err.message.trim()) return err.message.trim()
+  if (err instanceof PrksApiError && err.message.trim() && err.message !== PRKS_API_FALLBACK_ERROR) {
+    return err.message.trim()
+  }
   return fallback
+}
+
+/** True when the offline runtime refused the write and already told the user. */
+function offlineBlocked(): boolean {
+  return window.prksOfflineGuardMutation?.(OFFLINE_MESSAGE) === true
 }
 
 export function ownsPublishers(
@@ -61,40 +70,41 @@ export function ownsPublishers(
   return !!route && route.name === 'publishers'
 }
 
-function dialogResume(
-  options: PublishersIntentOptions | undefined,
-  fallback: PublishersResume | null,
-): PublishersResume | null {
-  if (typeof options?.currentDialog === 'function') return options.currentDialog()
-  return fallback
-}
-
-async function reloadIfCurrent(
-  owner: PublishersIntentOwner | null,
-  generation: number,
-  resume: PublishersResume | null,
-): Promise<PublishersActionOutcome> {
-  if (!owner || !ownsPublishers(owner, generation)) return quiet()
-  const reload = window.prksReloadPublishersPage
-  if (typeof reload !== 'function') return quiet()
-  await reload(owner, generation, resume)
-  if (!ownsPublishers(owner, generation)) return quiet()
-  // The write landed. A failed refresh keeps the current list and reports
-  // itself; it is not a failed create, alias change, or delete.
-  return success()
-}
-
 /**
- * Publisher writes stay on the classic online wrappers. There is no durable
- * publisher queue. `still` is this owner's generation: a confirm that outlives
- * the pane does not write, and a write that finishes late does not repaint a
- * replaced owner.
+ * Publisher writes go through the typed client. Publishers are online-only:
+ * there is no durable publisher queue and nothing is retried. `generation` is
+ * this owner's: a confirm that outlives the pane does not write, and a write
+ * that finishes late reports nothing to a replaced owner. Every write that was
+ * sent, failed or not, invalidates every Publishers read, whichever pane it
+ * came from.
  */
 export function browserPublishersIntents(
   owner: PublishersIntentOwner | null,
   generation: number,
-  options?: PublishersIntentOptions,
+  queryClient: QueryClient = prksQueryClient(),
 ): PublishersIntents {
+  async function write(run: () => Promise<unknown>, fallback: string): Promise<PublishersActionOutcome> {
+    if (offlineBlocked()) return quiet()
+    // A mutation, not a bare call, so the client's mutation defaults (no
+    // retry) and its transport-failure reporting apply.
+    const mutation = new MutationObserver(queryClient, { mutationFn: run })
+    let outcome: PublishersActionOutcome
+    try {
+      await mutation.mutate()
+      outcome = success()
+    } catch (err) {
+      outcome = failure(actionMessage(err, fallback))
+    } finally {
+      mutation.reset()
+    }
+    // Once a write was sent, a failure cannot prove the server did not commit
+    // it (a malformed or lost reply looks the same), so every attempt marks
+    // Publishers stale. A failed refetch keeps the list on screen and shows on
+    // the page; it does not change this write's outcome.
+    await queryClient.invalidateQueries({ queryKey: prksQueryKeys.publishers.all() })
+    return ownsPublishers(owner, generation) ? outcome : quiet()
+  }
+
   return {
     openPublisher(name) {
       if (!ownsPublishers(owner, generation)) return
@@ -107,45 +117,18 @@ export function browserPublishersIntents(
     async create(name) {
       const next = String(name || '').trim()
       if (!ownsPublishers(owner, generation) || !next) return quiet()
-      const create = window.prksPublishersCreate
-      if (typeof create !== 'function') return quiet()
-      try {
-        const outcome = await create(next)
-        if (!outcome || !outcome.ok) return quiet()
-      } catch (err) {
-        if (!ownsPublishers(owner, generation)) return quiet()
-        return failure(actionMessage(err, CREATE_FAILURE))
-      }
-      return reloadIfCurrent(owner, generation, dialogResume(options, null))
+      return write(() => createPublisher(next), CREATE_FAILURE)
     },
 
     async addAlias(publisherId, alias) {
       const next = String(alias || '').trim()
       if (!ownsPublishers(owner, generation) || !publisherId || !next) return quiet()
-      const add = window.prksPublishersAddAlias
-      if (typeof add !== 'function') return quiet()
-      try {
-        const outcome = await add(publisherId, next)
-        if (!outcome || !outcome.ok) return quiet()
-      } catch (err) {
-        if (!ownsPublishers(owner, generation)) return quiet()
-        return failure(actionMessage(err, ADD_FAILURE))
-      }
-      return reloadIfCurrent(owner, generation, dialogResume(options, { aliasPublisherId: publisherId }))
+      return write(() => addPublisherAlias(publisherId, next), ADD_FAILURE)
     },
 
     async removeAlias(publisherId, alias) {
-      if (!ownsPublishers(owner, generation) || !publisherId || alias == null) return quiet()
-      const remove = window.prksPublishersRemoveAlias
-      if (typeof remove !== 'function') return quiet()
-      try {
-        const outcome = await remove(publisherId, alias)
-        if (!outcome || !outcome.ok) return quiet()
-      } catch (err) {
-        if (!ownsPublishers(owner, generation)) return quiet()
-        return failure(actionMessage(err, REMOVE_ALIAS_FAILURE))
-      }
-      return reloadIfCurrent(owner, generation, dialogResume(options, { aliasPublisherId: publisherId }))
+      if (!ownsPublishers(owner, generation) || !publisherId || !alias) return quiet()
+      return write(() => removePublisherAlias(publisherId, alias), REMOVE_ALIAS_FAILURE)
     },
 
     async remove(publisherId, name) {
@@ -159,17 +142,7 @@ export function browserPublishersIntents(
         confirmLabel: 'Delete publisher',
       })
       if (!confirmed || !ownsPublishers(owner, generation)) return quiet()
-      const remove = window.prksPublishersDelete
-      if (typeof remove !== 'function') return quiet()
-      try {
-        const outcome = await remove(publisherId)
-        if (!outcome || !outcome.ok) return quiet()
-      } catch (err) {
-        if (!ownsPublishers(owner, generation)) return quiet()
-        return failure(actionMessage(err, DELETE_FAILURE))
-      }
-      if (!ownsPublishers(owner, generation)) return quiet()
-      return reloadIfCurrent(owner, generation, dialogResume(options, null))
+      return write(() => deletePublisher(publisherId), DELETE_FAILURE)
     },
   }
 }

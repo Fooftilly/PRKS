@@ -1,5 +1,43 @@
 /*
- * PRKS stylesheet. Authority: DESIGN.md.
+ * PRKS stylesheet. Authority: DESIGN.md "CSS organization".
+ *
+ * Selector/consumer contract wins. Physical section comments are not a
+ * deletion boundary. B5 deletion follows proven selector consumers, never
+ * section number. Unlisted is not a license to purge; 01-15 are classified.
+ * Not every family in a section is a B4 Vue primitive. Do not copy shared
+ * rules into SFCs. Do not split this file in B4.
+ *
+ * Keep (app-wide): 01 tokens, 02 reset, 03 a11y, 04 layout primitives.
+ * 15 reduced motion is permanent global accessibility, not B5 cleanup.
+ * 14 responsive/container rules are cross-cutting: ownership follows the
+ * selectors/features they modify.
+ *
+ * Shared / retained (keep until the last Vue or classic consumer is gone).
+ * Physical placement may differ from the semantic section:
+ *   .prks-btn, .prks-icon-btn — B4 Vue primitives; canonical rules in 05;
+ *     .prks-btn--quiet-danger is physically in 12.
+ *   .prks-field — B4 Vue primitive; 06. Combobox/EasyMDE stay specialized.
+ *   .prks-tab, .prks-tabs — shared/retained; Vue Arguments + Folder Library
+ *     and classic callers. Canonical rules in 07. Not dead, not classic-only.
+ *   .prks-list-row — shared; 08. Work cards stay B5 feature CSS.
+ *   .prks-research-row — shared primitive; physically in 12.
+ *   .prks-state — shared; 09.
+ *   .prks-inline-message — shared; base rule physically in 12.
+ *   .prks-scope-line, .prks-rel-summary — shared; physically in 08.
+ *   .prks-dialog — canonical shared structural contract; 10. Classic
+ *     research picker in works.js remains; B5 retire/audit that caller.
+ *
+ * Specialized canonical control family (NOT a B4 Vue primitive):
+ *   .prks-segmented — Vue + classic; physically in 12.
+ * There is no generic .prks-disclosure family in 05. PrksDisclosureButton
+ * uses the button contract; classic graph JS still owns live expanded state.
+ * .nav-disclosure is sidebar shell (11), classic-owned.
+ *
+ * B5 feature/shell (do not delete wholesale): 11 application shell,
+ * 12 feature layouts (work cards, PDF, ribbon, folder tree, processing,
+ * graph canvas) except shared/specialized selectors that live there,
+ * 13 third-party, remaining innerHTML hosts.
+ *
  * 01 Tokens
  * 02 Reset / base
  * 03 Accessibility
@@ -977,12 +1015,6 @@ body {
     font-weight: var(--weight-semibold);
     letter-spacing: 0.02em;
     text-transform: uppercase;
-}
-
-.prks-workspace-menu__sep {
-    height: 1px;
-    margin: var(--space-xs) 0;
-    background: var(--border);
 }
 
 .prks-workspace-menu__overflow-row {
@@ -2196,6 +2228,10 @@ body.prks-workspace-dragging * {
 
 .prks-inline-message--error {
     color: var(--text-danger);
+}
+
+.prks-inline-message--warning {
+    color: var(--text-warning);
 }
 
 /* Reserved PWA/workspace operational markers (visual contract only). */
@@ -4158,6 +4194,18 @@ a.tag {
     overflow: hidden;
 }
 
+/* Vue route-surface host must participate in the Work detail flex chain.
+ * The PDF pane and Research Notes share this column. */
+.prks-tab-root > [data-prks-vue-route-host]:has(.work-detail) {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-self: stretch;
+}
+
 .prks-nav-back-row {
     margin: 0 0 var(--space-sm);
 }
@@ -4283,6 +4331,25 @@ a.tag {
     flex-direction: column;
     padding: var(--space-md);
     gap: var(--space-sm);
+}
+
+.project-card--work-card > .work-card__link {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: inherit;
+    align-items: inherit;
+    gap: inherit;
+    min-width: 0;
+    min-height: 0;
+    width: 100%;
+    color: inherit;
+    text-decoration: none;
+}
+
+.project-card--work-card > .work-card__link:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+    border-radius: inherit;
 }
 
 .work-browse-collection--list .project-card--work-card {
@@ -4612,43 +4679,12 @@ a.tag {
     stroke-width: 2.2;
 }
 
-.project-card:not(.project-card--work):not(.project-card--work-card) .status-badge {
+.project-card:not(.project-card--work-card) .status-badge {
     position: absolute;
     top: 16px;
     right: 16px;
 }
 
-/* Work file rows: title + meta left; status then doc type stacked on the right */
-.project-card--work {
-    display: flex;
-    flex-direction: row;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: var(--space-md);
-}
-
-.project-card--work .project-card__body {
-    flex: 1;
-    min-width: 0;
-}
-
-.project-card--work .project-card__rail {
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: var(--space-sm);
-    text-align: right;
-    max-width: 42%;
-}
-
-.project-card--work .card-title {
-    padding-right: 0;
-}
-
-.project-card--work .status-badge {
-    position: static;
-}
 .status-badge.Not.Started { background-color: var(--status-not-started); color: var(--status-not-started-text); }
 .status-badge.Planned { background-color: var(--status-planned); color: var(--status-planned-text); }
 .status-badge.In.Progress { background-color: var(--status-progress); color: var(--status-progress-text); }
@@ -4692,10 +4728,6 @@ a.tag {
 
 .list-view .project-card {
     padding-right: 140px;
-}
-
-.list-view .project-card--work {
-    padding-right: 18px;
 }
 
 /* Processing inbox: no work rail — avoid global list-view right gutter */
@@ -9342,8 +9374,8 @@ textarea[data-prks-autosize="1"] {
     container-name: prks-work-main;
 }
 
-/* Video HTML from renderVideoViewerPane, the relationship summary, and other
- * injected HTML stay flex/header children. The slot itself is not a box. */
+/* Video HTML from renderVideoViewerPane and other injected HTML stay
+ * flex/header children. The slot itself is not a box. */
 .document-view--work .work-viewer-host,
 .work-html-slot {
     display: contents;
@@ -9550,6 +9582,246 @@ textarea[data-prks-autosize="1"] {
     font-weight: var(--weight-semibold);
     margin: 0;
     color: var(--text-primary);
+}
+
+/* Editor recovery notice (#466): one compact in-flow row under the notes
+ * header. Hidden with the editor when the notes pane is collapsed. */
+.document-view--work .editor-recovery-notice {
+    flex-shrink: 0;
+    padding: 0 var(--space-sm);
+    border-bottom: 1px solid var(--border);
+}
+
+.editor-recovery-notice__row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-xs) var(--space-sm);
+}
+
+.editor-recovery-notice__message.prks-inline-message {
+    flex: 1 1 16rem;
+    margin: 0;
+    padding: var(--space-xs) 0;
+    font-size: var(--text-sm);
+}
+
+.document-view--work .work-workspace--notes-collapsed .editor-recovery-notice {
+    display: none;
+}
+
+/* Editor recovery Review (#466): the shared modal family, sized for two
+ * columns of text, never a full-screen layout. */
+.modal.editor-recovery-review {
+    width: 880px;
+    max-width: 95vw;
+}
+
+.editor-recovery-review__body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+    padding: var(--space-lg) var(--space-2xl);
+}
+
+.editor-recovery-review__identity {
+    margin: 0;
+}
+
+.editor-recovery-review__leftover {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-sm);
+}
+
+.editor-recovery-review__layout {
+    display: grid;
+    grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr);
+    gap: var(--space-lg);
+    align-items: start;
+}
+
+.editor-recovery-review__list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    min-width: 0;
+}
+
+.editor-recovery-review__legend {
+    padding: 0 0 var(--space-xs);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-semibold);
+    color: var(--text-secondary);
+}
+
+.editor-recovery-review__item {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-sm);
+    padding: var(--space-xs) var(--space-sm);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+
+.editor-recovery-review__item:hover {
+    background: var(--hover-overlay);
+}
+
+.editor-recovery-review__item--selected {
+    border-color: var(--border-strong);
+    background: var(--surface-selected);
+}
+
+.editor-recovery-review__item input {
+    margin-top: 3px;
+}
+
+.editor-recovery-review__item-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.editor-recovery-review__item-title {
+    font-size: var(--text-sm);
+    color: var(--text-primary);
+}
+
+.editor-recovery-review__item-meta {
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+}
+
+.editor-recovery-review__detail {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+    min-width: 0;
+}
+
+.editor-recovery-review__facts {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 2px var(--space-md);
+    margin: 0;
+    font-size: var(--text-sm);
+}
+
+.editor-recovery-review__facts dt {
+    color: var(--text-secondary);
+}
+
+.editor-recovery-review__facts dd {
+    margin: 0;
+    color: var(--text-primary);
+}
+
+.editor-recovery-review__compare {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-md);
+}
+
+.editor-recovery-review__column {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+    min-width: 0;
+}
+
+.editor-recovery-review__column-label {
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+}
+
+.editor-recovery-review__text.prks-input {
+    width: 100%;
+    min-height: 12rem;
+    max-height: 40vh;
+    resize: vertical;
+    font-size: var(--text-sm);
+    line-height: var(--line-normal);
+}
+
+.editor-recovery-review__close {
+    margin-left: auto;
+}
+
+@media (max-width: 720px) {
+    .editor-recovery-review__layout,
+    .editor-recovery-review__compare {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+/* Settings → Diagnostics editor recovery drafts (#466 slice 5): dense flat
+ * rows, one per draft, separated by rules like the sync rows above them. */
+.editor-recovery-diag__list {
+    display: flex;
+    flex-direction: column;
+    margin: 0 0 var(--space-sm);
+    padding: 0;
+    list-style: none;
+}
+
+.editor-recovery-diag__row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+    padding: var(--space-sm) 0;
+    border-top: 1px solid var(--border);
+    min-width: 0;
+}
+
+.editor-recovery-diag__title,
+.editor-recovery-diag__meta {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+.editor-recovery-diag__title {
+    font-size: var(--text-sm);
+    color: var(--text-primary);
+}
+
+.editor-recovery-diag__title a {
+    color: var(--accent);
+}
+
+.editor-recovery-diag__title a:hover {
+    color: var(--accent-hover);
+}
+
+.editor-recovery-diag__meta {
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+}
+
+.editor-recovery-diag__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-xs);
+}
+
+.editor-recovery-diag__text-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+}
+
+.editor-recovery-diag__text.prks-input {
+    width: 100%;
+    min-height: 8rem;
+    max-height: 40vh;
+    resize: vertical;
+    font-size: var(--text-sm);
+    line-height: var(--line-normal);
 }
 
 .document-view--work .work-notes-pane-header-actions {
@@ -11195,34 +11467,6 @@ button.prks-research-row {
     color: var(--text-tertiary);
 }
 
-.person-profile__role-block {
-    min-width: 0;
-}
-
-.person-profile__role-block + .person-profile__role-block {
-    margin-top: var(--space-lg);
-}
-
-.person-profile__role-heading {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: var(--space-sm);
-    width: 100%;
-    margin: 0 0 var(--space-sm);
-    padding: 0 0 var(--space-xs);
-    border-bottom: 1px solid var(--border);
-    font-size: var(--text-sm);
-    font-weight: var(--weight-semibold);
-    color: var(--text-secondary);
-}
-
-.person-profile__role-count {
-    font-size: var(--text-xs);
-    font-weight: var(--weight-medium);
-    color: var(--text-tertiary);
-}
-
 /* 13 Third-party integrations */
 /* EasyMDE: work detail only (single block, flush in notes pane) */
 .document-view--work .work-notes-editor-wrap .EasyMDEContainer {
@@ -11716,11 +11960,6 @@ button.prks-research-row {
         padding: 7px 9px;
         gap: 0;
     }
-
-    /* Make cards and rails wrap better on narrow widths. */
-    .project-card--work .project-card__rail {
-        max-width: 48%;
-    }
 }
 
 /* Same shell as @media (max-width: 900px) when Settings → Force mobile layout is on. */
@@ -11860,10 +12099,6 @@ html.prks-force-mobile .top-ribbon__center::-webkit-scrollbar {
 html.prks-force-mobile .top-ribbon .ribbon-btn {
     padding: 7px 9px;
     gap: 0;
-}
-
-html.prks-force-mobile .project-card--work .project-card__rail {
-    max-width: 48%;
 }
 
 @media (max-width: 600px) {

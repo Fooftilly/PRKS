@@ -182,6 +182,17 @@ class AnnotationConfirmStructureTests(unittest.TestCase):
         self.assertIn("window.prksFlashButtonLabel = prksFlashButtonLabel;", ui)
         self.assertIn("window.prksConfirmDeletePdfAnnotation = prksConfirmDeletePdfAnnotation;", ui)
 
+    def test_clipboard_helper_is_published_once_from_ui_js(self):
+        # works-pdf.js is an ES module: a top-level function there is not a
+        # window property, so Vue recovery Copy could never reach it (#532).
+        ui = _read(_UI)
+        self.assertIn("async function prksCopyTextToClipboard(", ui)
+        self.assertIn("window.prksCopyTextToClipboard = prksCopyTextToClipboard;", ui)
+        self.assertIn("document.execCommand('copy')", ui)
+        pdf = _read(_PDF)
+        self.assertNotIn("function prksCopyTextToClipboard", pdf)
+        self.assertIn("await window.prksCopyTextToClipboard(wikiLink)", pdf)
+
     def test_annotation_delete_entry_points_use_shared_confirm_not_native(self):
         # Both entry points must call the shared prksConfirmDeletePdfAnnotation
         # as their primary path. A native window.confirm may still appear as a
@@ -204,16 +215,15 @@ class AnnotationConfirmStructureTests(unittest.TestCase):
         self.assertIn("await prksConfirmDeletePdfAnnotation()", list_delete)
 
     def test_pending_sync_leave_guard_still_uses_native_confirm(self):
+        pdf = _read(os.path.join(_ROOT, "frontend", "js", "pdf-work-runtime.js"))
+        message = "PDF annotation sync still running. Leave page before all changes save to server?"
+        self.assertEqual(pdf.count(message), 1)
+        assess = _extract(pdf, "function prksAssessPendingPdfSyncLeave(ctx, nextHash) {", "function prksInstallPdfLeaveProbe")
+        self.assertIn("window.confirm", assess)
+        self.assertIn("rejected-pending-pdf-sync", assess)
         app = _read(_APP)
-        # Both call sites of the synchronous pending-annotation-sync guard must
-        # remain window.confirm -- this is an intentional exception (see
-        # AGENTS.md / DESIGN.md), not an oversight to "fix" in a later pass.
-        self.assertEqual(
-            app.count("PDF annotation sync still running. Leave page before all changes save to server?"),
-            2,
-        )
-        guard = _extract(app, "function prksCanLeaveTabContext(ctx, nextHash) {", "\nfunction ")
-        self.assertIn("window.confirm(", guard)
+        self.assertEqual(app.count(message), 0)
+        self.assertNotIn("window.confirm(", app.split("async function prksRenderTabRoute", 1)[1].split("async function prksCommitTabRouteRender", 1)[0])
 
     def test_copy_link_uses_shared_flash_helper(self):
         drawer = _read(

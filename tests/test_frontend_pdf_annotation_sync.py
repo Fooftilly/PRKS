@@ -43,6 +43,18 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("checks passed", proc.stdout)
 
+    def test_comment_save_selftests(self):
+        """#401: every comment edit records an intent; failures are reported."""
+        proc = subprocess.run(
+            ["node", str(ROOT / "tests" / "browser" / "run_pdf_annotation_comment_save_selftest.js")],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("checks passed", proc.stdout)
+
     def test_cow_remount_retry_selftests(self):
         """Behavioral: failed staged remount retries despite live shared viewer."""
         proc = subprocess.run(
@@ -306,10 +318,16 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertNotIn("requestFlush('materialize')", save_tail)
         self.assertNotIn("pendingMaterializationRevision =", save_tail)
         # Materialization flush from catch-up after gate release (plus optional
-        # handoff-retry flush if gate acquire fails — same string).
+        # handoff-retry flush if gate acquire fails — same string), and the
+        # release of a claim held while an unsaved annotation was on the page
+        # (#401), which only re-runs an already-claimed generation.
         only_flush = works_pdf.count("void requestFlush('materialize')")
         self.assertGreaterEqual(only_flush, 1)
-        self.assertLessEqual(only_flush, 2)
+        self.assertLessEqual(only_flush, 3)
+        release = works_pdf[works_pdf.index("function releaseHeldMaterialization()"):]
+        release = release[:release.index("\n    }\n")]
+        self.assertIn("Number.isSafeInteger(runtime.pendingMaterializationRevision)", release)
+        self.assertIn("void requestFlush('materialize');", release)
         self.assertIn("void requestFlush('materialize');", catch_up_body)
         # 6. SENT successor rebased against actual ACK server_revision
         self.assertIn("rebasePdfAnnotationDependents", store)

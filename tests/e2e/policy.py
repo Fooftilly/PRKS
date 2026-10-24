@@ -26,6 +26,8 @@ FAILURE_DIAGNOSTICS_PATH = Path(".tests") / "e2e-failure-diagnostics.json"
 # runner reads the same names to decide whether a run may train history.
 PROFILE_ENV = "PRKS_E2E_PROFILE"
 SEED_CACHE_ENV = "PRKS_E2E_SEED_CACHE"
+# Opt-in experiment: identical catch-all interception with a cheaper local URL fast path.
+ROUTE_FASTPATH_ENV = "PRKS_E2E_ROUTE_FASTPATH"
 
 FALSE_ENV_VALUES = frozenset({"0", "false", "no", "off"})
 
@@ -53,6 +55,8 @@ def benchmark_modes(environ=None) -> tuple:
         modes.append("profile")
     if not env_flag_enabled(SEED_CACHE_ENV, default=True, environ=environ):
         modes.append("no-seed-cache")
+    if env_flag_enabled(ROUTE_FASTPATH_ENV, environ=environ):
+        modes.append("route-fastpath")
     return tuple(modes)
 
 
@@ -255,7 +259,7 @@ FEATURES = {
     },
     "notes": {
         "description": "Research Notes / Reminders offline (Work note aggregates)",
-        "selectors": ("tests.e2e.test_work_notes_offline",),
+        "selectors": ("tests.e2e.test_work_notes_offline", "tests.e2e.test_folder_reminders"),
     },
     "pdf-annotations": {
         "description": (
@@ -264,6 +268,7 @@ FEATURES = {
         ),
         "selectors": (
             "tests.e2e.test_app.PdfPersistenceTests",
+            "tests.e2e.test_app.PdfAnnotationCommentEditTests",
             "tests.e2e.test_offline.OfflineFoundationTests",
         ),
     },
@@ -303,6 +308,7 @@ FEATURES = {
         "selectors": (
             "tests.e2e.test_folders_offline",
             "tests.e2e.test_folders_durable",
+            "tests.e2e.test_folder_reminders",
             "tests.e2e.test_library_nav_folders",
             "tests.e2e.test_folder_library_route_surface",
         ),
@@ -337,6 +343,7 @@ FEATURES = {
         "selectors": (
             "tests.e2e.test_offline.OfflineFoundationTests",
             "tests.e2e.test_local_store_durability",
+            "tests.e2e.test_editor_recovery_store",
         ),
     },
     "sync": {
@@ -369,6 +376,7 @@ AFFECTED_RULES = (
             "tests/e2e/sharding.py",
             "tests/e2e/policy.py",
             "tests/e2e/install_browser.py",
+            "scripts/ci/install_pinned_python.py",
             "tests/e2e/fixtures.py",
             "tests/e2e/timing-baseline.json",
             "tests/e2e/__init__.py",
@@ -514,6 +522,7 @@ AFFECTED_RULES = (
         "name": "notes",
         "paths": (
             "frontend/js/work-notes-state.js",
+            "frontend/js/work-note-recovery.js",
             "backend/work_note_sync.py",
         ),
         "features": ("notes",),
@@ -549,8 +558,25 @@ AFFECTED_RULES = (
             "frontend/js/workspace-tabs.js",
             "frontend/js/workspace-persistence.js",
             "frontend/js/workspace-tab-menu.js",
+            "frontend/js/tab-leave.js",
+            "frontend/js/owner-resource.js",
+            "frontend/js/editor-recovery.js",
+            "frontend-app/src/lifecycle/**",
         ),
         "features": ("tabs", "workspace-persistence"),
+    },
+    {
+        # Overlaps workspace-tabs: its browser tests live in the offline feature.
+        "name": "editor-recovery",
+        "paths": (
+            "frontend/js/editor-recovery.js",
+            "frontend/js/work-note-recovery.js",
+            "frontend-app/src/lifecycle/editor-recovery/**",
+            "frontend-app/src/lifecycle/editor-recovery-entry.ts",
+            "frontend-app/src/features/editor-recovery/**",
+            "frontend-app/scripts/build-editor-recovery.mjs",
+        ),
+        "features": ("offline",),
     },
     {
         "name": "workspace-tiling",
@@ -609,6 +635,7 @@ AFFECTED_RULES = (
             "frontend/js/components/recent.js",
             "frontend/js/components/work-cards.js",
             "frontend/js/saved-views.js",
+            "frontend/js/search-query-codec.js",
         ),
         "features": ("browse",),
     },
@@ -864,6 +891,36 @@ AFFECTED_RULES = (
         "features": (),
         "skip": True,
         "note": "Non-E2E tests → no browser E2E selection",
+    },
+    # The schema files and the snapshot tooling aren't imported by the served
+    # app. The opt-in PRKS_AUTH start loads backend/db/__init__.py and the pool
+    # lazily (L-ID-1 PR 5/5), and its embedded job worker runs the schema check
+    # of backend/db/migrate.py (L-J-1 PR 3/3), so neither of those is exempt
+    # any more. Do not exempt shared backend/domain/__init__.py
+    # either: it can gain runtime imports or side effects unrelated to isolated
+    # migration plumbing. These files are tested by the PostgreSQL Test Gate,
+    # not by Chromium. Keep this allowlist narrow: unknown backend/db files
+    # still require full E2E. tests/test_e2e_policy.py fails when a skipped
+    # Python file becomes reachable from the served app, lazily or not.
+    {
+        "name": "postgres-migration-infrastructure",
+        "paths": (
+            "backend/db/schema/*.sql",
+            "backend/db/schema/snapshot.json",
+            "backend/db/schema_snapshot.py",
+        ),
+        "features": (),
+        "skip": True,
+        "note": "Isolated PostgreSQL schema/migrations → PostgreSQL tests, no browser E2E",
+    },
+    # This will eventually become shared login/identity logic; do not blanket
+    # skip it. Smoke is the small browser boundary; SQL/Python parity tests
+    # remain the authoritative normalization coverage.
+    {
+        "name": "postgres-text-identity",
+        "paths": ("backend/domain/text_identity.py",),
+        "features": ("smoke",),
+        "note": "Text identity helper → smoke; PostgreSQL parity checked separately",
     },
     # Storybook is a maintainer catalog. It is not the Vue app and must not
     # explain a rebuilt frontend/vue bundle or select a feature suite.
@@ -1360,6 +1417,36 @@ def _is_mapped_vue_feature_source(rel: str, classified: dict) -> bool:
     if classified.get("skip") or classified.get("unmapped") or classified.get("ci_full"):
         return False
     return bool(classified.get("features"))
+
+
+def frontend_browser_change_requires_full_ci(changed_paths) -> bool:
+    """True if a PR can change the shipped browser or its frontend build.
+
+    Keep documentation, Storybook-only, and frontend unit/spec changes eligible
+    for the ordinary CI selection. Maintainer-only PDF viewer tooling does not
+    ship as the PRKS browser application. Backend and E2E harness high-risk
+    decisions remain handled by the existing CI policy.
+    """
+    for path in changed_paths:
+        rel = _posix(path)
+        name = rel.rsplit("/", 1)[-1]
+        if name.endswith(".md") or name == "AGENTS.md":
+            continue
+        if rel.startswith(("tools/frontend-vendor/", "tools/research-graph/")):
+            return True
+        if rel.startswith("frontend/"):
+            return True
+        if rel.startswith("frontend-app/"):
+            if rel.startswith(("frontend-app/.storybook/", "frontend-app/storybook-static/")):
+                continue
+            if any(
+                name.endswith(f".{kind}.{ext}")
+                for kind in ("test", "spec", "stories")
+                for ext in ("js", "jsx", "ts", "tsx", "vue")
+            ):
+                continue
+            return True
+    return False
 
 
 def plan_ci_e2e(changed_paths, *, force_full: bool = False, path_diffs=None):

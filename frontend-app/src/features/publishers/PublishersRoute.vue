@@ -1,40 +1,36 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import PrksIconButton from '../../components/PrksIconButton.vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
+import PrksState from '../../components/PrksState.vue'
 import { usePendingAction } from '../../route-surface/pending-action'
 import { registerPublishersAliasCloser } from './closers'
 import type { PublishersIntents } from './intents'
-import type { PublisherRow, PublishersProjection } from './projection'
-import type { PublishersDialogState, PublishersRefreshSink } from './session'
+import type { PublisherRow } from './projection'
+import { usePublishersCatalog } from './usePublishersCatalog'
 
 const props = defineProps<{
-  projection: PublishersProjection
   intents: PublishersIntents
-  dialogState?: PublishersDialogState
-  refreshSink?: PublishersRefreshSink
 }>()
+
+const { rows, loaded, loading, loadError, refreshError, retry } = usePublishersCatalog()
 
 const { actionBusy, actionBlocked, withBusy } = usePendingAction()
 const rootEl = ref<HTMLElement | null>(null)
 const draftName = ref('')
-const aliasPublisherId = ref<string | null>(props.projection.openAliasPublisherId)
+const aliasPublisherId = ref<string | null>(null)
 const aliasDraft = ref('')
 const aliasTrigger = ref<HTMLElement | null>(null)
 const createError = ref('')
 const aliasAddError = ref('')
 const aliasRemoveError = ref('')
 const aliasDeleteError = ref('')
-const refreshError = ref('')
-const rows = computed(() => props.projection.rows)
 const aliasPublisher = computed(() => rows.value.find((row) => row.id === aliasPublisherId.value) ?? null)
 const plusIcon = computed(() => window.prksTagPlusIconHtml?.() ?? '')
 const buildingIcon = computed(() => window.prksIcon?.('building-2', { size: 'sm' }) ?? '')
 
 let unregisterAlias: (() => void) | null = null
-
-function showRefreshFailure(message: string): void {
-  refreshError.value = message
-}
 
 function aliasEditButton(publisherId: string): HTMLElement | null {
   const root = rootEl.value
@@ -53,12 +49,6 @@ function restoreFocus(trigger: HTMLElement | null, fallback: HTMLElement | null)
   } catch {
     /* The control may already be gone. */
   }
-}
-
-function publishDialog(): void {
-  const state = props.dialogState
-  if (!state) return
-  state.aliasPublisherId = aliasPublisherId.value
 }
 
 function closeAlias(): void {
@@ -145,20 +135,26 @@ function removePublisher(): void {
 }
 
 watch(aliasPublisherId, (id) => {
-  publishDialog()
   clearAliasActionErrors()
   if (!id) return
   void nextTick(() => focusAliasInput())
-}, { immediate: true })
+})
+
+// Rows arrive after mount; their row icons are placeholders until refreshed.
+watch(rows, () => window.prksRefreshIcons?.(rootEl.value), { flush: 'post' })
+
+// A publisher deleted here or in another pane closes its alias dialog.
+watch(rows, (next) => {
+  const id = aliasPublisherId.value
+  if (id && !next.some((row) => row.id === id)) closeAlias()
+})
 
 onMounted(() => {
   window.prksRefreshIcons?.(rootEl.value)
-  if (props.refreshSink) props.refreshSink.set = showRefreshFailure
   unregisterAlias = registerPublishersAliasCloser(closeAlias)
 })
 
 onUnmounted(() => {
-  if (props.refreshSink?.set === showRefreshFailure) props.refreshSink.set = null
   unregisterAlias?.()
   unregisterAlias = null
 })
@@ -209,26 +205,25 @@ onUnmounted(() => {
             Add
           </PrksButton>
         </div>
-        <p
+        <PrksInlineMessage
           v-if="createError"
           id="publishers-page-create-error"
-          class="prks-inline-message prks-inline-message--error"
-          role="status"
+          tone="error"
+          status
           data-publishers-create-error
         >
           {{ createError }}
-        </p>
+        </PrksInlineMessage>
       </div>
     </div>
-    <p
-      v-if="refreshError"
-      class="prks-inline-message prks-inline-message--error"
-      role="status"
-      data-publishers-refresh-error
-    >
+    <PrksInlineMessage v-if="refreshError" tone="error" status data-publishers-refresh-error>
       {{ refreshError }}
-    </p>
-    <div id="publishers-page-cloud" class="list-view publishers-page__list">
+    </PrksInlineMessage>
+    <PrksState v-if="loading" kind="loading" message="Loading publishers…" data-publishers-loading />
+    <PrksState v-else-if="loadError" kind="error" :message="loadError" data-publishers-load-error>
+      <PrksButton variant="secondary" size="sm" @click="retry">Try again</PrksButton>
+    </PrksState>
+    <div v-if="loaded" id="publishers-page-cloud" class="list-view publishers-page__list">
       <p v-if="!rows.length" class="tags-page__empty publishers-page__empty">
         No publisher groups yet. Add a canonical name below, then add alternate spellings that appear on your files (⋯).
       </p>
@@ -254,16 +249,16 @@ onUnmounted(() => {
           <p class="meta-row publishers-page__list-stats">{{ row.stats }}</p>
         </div>
         <div class="publishers-page__list-actions">
-          <button
-            type="button"
-            class="prks-btn prks-btn--secondary prks-btn--sm publishers-page__alias-btn"
+          <PrksButton
+            size="sm"
+            class="publishers-page__alias-btn"
             :data-publisher-alias-edit="row.id"
             title="Aliases"
             :aria-label="`Edit aliases for ${row.name}`"
             @click.stop="openAlias(row, $event)"
           >
             ⋯<span>Aliases</span>
-          </button>
+          </PrksButton>
         </div>
       </div>
     </div>
@@ -285,15 +280,14 @@ onUnmounted(() => {
       >
         <div class="modal-header">
           <h3 id="publishers-page-alias-heading">Publisher aliases</h3>
-          <button
+          <PrksIconButton
             id="publishers-page-alias-modal-close"
-            type="button"
-            class="prks-icon-btn close-btn"
-            aria-label="Close"
+            class="close-btn"
+            label="Close"
             @click="closeAlias"
           >
             ×
-          </button>
+          </PrksIconButton>
         </div>
         <div class="modal-body tags-page-alias-modal__body">
           <p class="modal-helper">
@@ -323,15 +317,15 @@ onUnmounted(() => {
               </button>
             </li>
           </ul>
-          <p
+          <PrksInlineMessage
             v-if="aliasRemoveError"
             id="publishers-page-alias-remove-error"
-            class="prks-inline-message prks-inline-message--error"
-            role="status"
+            tone="error"
+            status
             data-publishers-alias-remove-error
           >
             {{ aliasRemoveError }}
-          </p>
+          </PrksInlineMessage>
           <div class="tags-page-alias-add">
             <input
               id="publishers-page-alias-input"
@@ -358,15 +352,15 @@ onUnmounted(() => {
               Add alias
             </PrksButton>
           </div>
-          <p
+          <PrksInlineMessage
             v-if="aliasAddError"
             id="publishers-page-alias-add-error"
-            class="prks-inline-message prks-inline-message--error"
-            role="status"
+            tone="error"
+            status
             data-publishers-alias-add-error
           >
             {{ aliasAddError }}
-          </p>
+          </PrksInlineMessage>
           <div class="tags-page-alias-delete">
             <PrksButton
               id="publishers-page-delete-btn"
@@ -378,15 +372,15 @@ onUnmounted(() => {
             >
               Delete publisher
             </PrksButton>
-            <p
+            <PrksInlineMessage
               v-if="aliasDeleteError"
               id="publishers-page-delete-error"
-              class="prks-inline-message prks-inline-message--error"
-              role="status"
+              tone="error"
+              status
               data-publishers-delete-error
             >
               {{ aliasDeleteError }}
-            </p>
+            </PrksInlineMessage>
           </div>
         </div>
       </div>

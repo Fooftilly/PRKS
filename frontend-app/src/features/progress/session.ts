@@ -1,6 +1,5 @@
 import { createVNode } from 'vue'
 import {
-  dismissRouteSurface,
   presentRouteSurface,
   registerEarlyRoutePresenter,
   registerRouteWindowBridge,
@@ -69,18 +68,12 @@ export function presentProgress(input: ProgressPresentInput): void {
   })
 }
 
-/** Drop the Vue Progress tree owned by this pane. Other owners stay mounted. */
-export function dismissProgress(owner: object | null | undefined): void {
-  dismissRouteSurface(owner)
-}
-
 export function resetProgressSessionForTests(): void {
   resetRouteSurfaceForTests()
 }
 
 export function registerProgressBridge(target: Window = window): void {
   registerRouteWindowBridge(target)
-  target.prksVueDismissProgress = dismissProgress
   registerEarlyRoutePresenter(
     PROGRESS_FEATURE,
     (request, host) => {

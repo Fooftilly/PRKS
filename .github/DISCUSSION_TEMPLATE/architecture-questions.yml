@@ -1,0 +1,44 @@
+title: "[Architecture Q] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ask a bounded architecture question before agents design or change a cross-cutting boundary.
+        An answer, even when marked accepted, is not implementation approval. Record confirmed
+        decisions in canonical documentation and link an authorized implementation issue.
+        Do not post secrets, personal research content, or suspected vulnerability details.
+  - type: input
+    id: question
+    attributes:
+      label: Exact question
+      placeholder: "Which canonical identity should ... use?"
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Current implementation and evidence
+      description: Name relevant files, contracts, tests, or issues. Distinguish confirmed facts from hypotheses.
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Required invariants
+      description: Privacy, data preservation, compatibility, offline behavior, performance, and migration boundaries.
+    validations:
+      required: false
+  - type: textarea
+    id: candidate_answers
+    attributes:
+      label: Possible answers and trade-offs
+      description: Present known options and why the choice matters.
+    validations:
+      required: false
+  - type: textarea
+    id: related
+    attributes:
+      label: Related work / affected issues
+      description: Link roadmap issues, active PRs, decision records, and possible blockers.
+    validations:
+      required: false
