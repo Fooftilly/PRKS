@@ -60,6 +60,26 @@ Treat viewer source and built/vendor artifacts according to the repository guida
 
 Installation/remediation commands shown to users should account for the platform/package-management context. In particular, PEP 668 distributions must not be instructed to bypass their package manager with unsafe global pip flags.
 
+## Maintainer dependency-update helpers
+
+CI installs Python dependencies through `python scripts/ci/install_pinned_python.py PROFILE`
+(`runtime`, `unit`, `postgres`, `plan`, or `e2e`). The helper reads only exact
+`name==version` declarations in `requirements.txt` and `requirements-dev.txt`,
+selects the intended subset, and installs those pins with an argument-list
+subprocess and binary-only policy. The workflow files must never maintain
+second copies of those version strings.
+
+For an npm dependency PR, rebuild the affected island with
+`bash scripts/refresh_dependency_artifacts.sh frontend-app`,
+`frontend-vendor`, `research-graph`, or `pdf-viewer` as the argument.
+This installs the directory's locked dependencies, executes its existing
+deterministic build, and runs the offline repository dependency gate. Review
+and commit the resulting bundle, dependency manifest, service-worker revision,
+and licensing notices; do not suppress the build-consistency checks.
+
+This is a maintainer-only operation, never part of application startup or
+a blanket automatic write to untrusted pull-request branches.
+
 ## Update discipline
 
 A dependency update is complete only when:

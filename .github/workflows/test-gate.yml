@@ -36,7 +36,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
           cache: pip
@@ -53,10 +53,7 @@ jobs:
         # Sonar githubactions:S8541 / S8544; -r alone is treated as an unlocked
         # install by those rules. --isolated ignores PIP_* env / user config
         # (PIP_REQUIREMENT, PIP_EDITABLE, …).
-        run: >-
-          python -m pip install --isolated --disable-pip-version-check
-          "--only-binary=:all:" "PyMuPDF==1.28.2" "Pillow==12.3.0" "pydantic==2.13.5"
-          "openapi-core==0.23.1"
+        run: python scripts/ci/install_pinned_python.py unit
 
       - name: Run PRKS unit, API, structural, and Node tests
         id: tests
@@ -118,7 +115,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
           cache: pip
@@ -127,11 +124,7 @@ jobs:
         # Runtime pins from requirements.txt plus the psycopg (#623) and
         # argon2-cffi (#626) pins from requirements-dev.txt. Explicit
         # package== pins plus --only-binary, as in the unit job above.
-        run: >-
-          python -m pip install --isolated --disable-pip-version-check
-          "--only-binary=:all:" "PyMuPDF==1.28.2" "Pillow==12.3.0" "pydantic==2.13.5"
-          "psycopg==3.3.6" "psycopg-binary==3.3.6" "psycopg-pool==3.3.3"
-          "argon2-cffi==25.1.0"
+        run: python scripts/ci/install_pinned_python.py postgres
 
       - name: Run PostgreSQL helper and harness tests
         env:
@@ -171,7 +164,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
           cache: pip
@@ -179,11 +172,7 @@ jobs:
       - name: Install pinned runtime and PostgreSQL dependencies for parity
         # Same pins as the PostgreSQL helper job: requirements.txt plus the
         # psycopg and argon2-cffi pins from requirements-dev.txt.
-        run: >-
-          python -m pip install --isolated --disable-pip-version-check
-          "--only-binary=:all:" "PyMuPDF==1.28.2" "Pillow==12.3.0" "pydantic==2.13.5"
-          "psycopg==3.3.6" "psycopg-binary==3.3.6" "psycopg-pool==3.3.3"
-          "argon2-cffi==25.1.0"
+        run: python scripts/ci/install_pinned_python.py postgres
 
       - name: Run SQLite and PostgreSQL backend parity legs
         # Fails on any failure in either leg; skipped (unported) PostgreSQL
