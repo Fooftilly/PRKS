@@ -376,6 +376,7 @@ AFFECTED_RULES = (
             "tests/e2e/sharding.py",
             "tests/e2e/policy.py",
             "tests/e2e/install_browser.py",
+            "scripts/ci/install_pinned_python.py",
             "tests/e2e/fixtures.py",
             "tests/e2e/timing-baseline.json",
             "tests/e2e/__init__.py",
@@ -891,10 +892,11 @@ AFFECTED_RULES = (
         "skip": True,
         "note": "Non-E2E tests → no browser E2E selection",
     },
-    # The schema runner and its files aren't imported by the served app, not
-    # even by the opt-in PRKS_AUTH start (L-ID-1 PR 5/5), which loads
-    # backend/db/__init__.py and the pool lazily: that package initializer is
-    # therefore no longer exempt. Do not exempt shared backend/domain/__init__.py
+    # The schema files and the snapshot tooling aren't imported by the served
+    # app. The opt-in PRKS_AUTH start loads backend/db/__init__.py and the pool
+    # lazily (L-ID-1 PR 5/5), and its embedded job worker runs the schema check
+    # of backend/db/migrate.py (L-J-1 PR 3/3), so neither of those is exempt
+    # any more. Do not exempt shared backend/domain/__init__.py
     # either: it can gain runtime imports or side effects unrelated to isolated
     # migration plumbing. These files are tested by the PostgreSQL Test Gate,
     # not by Chromium. Keep this allowlist narrow: unknown backend/db files
@@ -903,7 +905,6 @@ AFFECTED_RULES = (
     {
         "name": "postgres-migration-infrastructure",
         "paths": (
-            "backend/db/migrate.py",
             "backend/db/schema/*.sql",
             "backend/db/schema/snapshot.json",
             "backend/db/schema_snapshot.py",
