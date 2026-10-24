@@ -94,7 +94,7 @@ jobs:
               --output "$response" http://127.0.0.1:18080/api/works 2>/dev/null; then
               # Fresh temporary production storage must expose an empty works
               # catalogue. A static page or error JSON is NOT sufficient.
-              python scripts/ci/check_runtime_smoke.py "$response"
+              python scripts/ci/check_runtime_smoke.py < "$response"
               ready=1
               break
             fi
