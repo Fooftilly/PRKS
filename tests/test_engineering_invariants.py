@@ -1352,6 +1352,10 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/domain/identity/root_pairing.py",
                 "backend/domain/identity/admin.py",
                 "backend/api/session.py",
+                "backend/work_identity.py",
+                "backend/work_projection.py",
+                "backend/work_metadata_sync.py",
+                "backend/work_role_sync.py",
                 "backend/domain/works/__init__.py",
                 "backend/domain/works/integrity.py",
                 "backend/domain/works/projection.py",
@@ -1489,11 +1493,8 @@ class EngineeringInvariantTests(unittest.TestCase):
     def test_pyright_typed_slice_rejects_missing_scope_on_disk(self):
         """Pyright exits 0 for a missing include path, so the checker must not."""
         for rel in (
-            "backend/entity_ids.py",
-            "backend/concurrency.py",
-            "backend/research_markup.py",
-            "backend/pdf_linearize.py",
-            "backend/derived_cache_publish.py",
+            scope for scope in checker.PYRIGHT_TYPED_SLICE_SCOPES
+            if scope.endswith(".py")
         ):
             with self.subTest(rel=rel), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
@@ -1504,8 +1505,13 @@ class EngineeringInvariantTests(unittest.TestCase):
                 self.assertIn(rel, findings[0].message)
 
     def test_pyright_typed_slice_rejects_suppression_of_new_scopes(self):
+        protected_files = [
+            scope for scope in checker.PYRIGHT_TYPED_SLICE_SCOPES
+            if scope.endswith(".py")
+        ]
         cases = {
             "ignore": [
+                *protected_files,
                 "backend/entity_ids.py",
                 "backend/concurrency.py",
                 "backend/*.py",
@@ -1516,6 +1522,7 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/research_*.py",
             ],
             "exclude": [
+                *protected_files,
                 "backend/entity_ids.py",
                 "./backend/concurrency.py",
                 "backend/*_ids.py",
