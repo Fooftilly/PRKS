@@ -87,7 +87,7 @@ jobs:
           ready=0
           for attempt in $(seq 1 60); do
             if ! docker inspect --format '{{.State.Running}}' "$container" | grep -qx true; then
-              echo "::error::Production container exited before API readiness."
+              echo "::error::Production container exited before API readiness on attempt ${attempt}/60."
               exit 1
             fi
             if curl --silent --show-error --fail --max-time 2 \
