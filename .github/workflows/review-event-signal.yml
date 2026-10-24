@@ -19,7 +19,8 @@ jobs:
 
     steps:
       # This workflow deliberately checks out and executes no pull-request code.
-      # Its completed workflow_run is the trusted hand-off used by the cleanup
-      # workflow on the default branch.
+      # Its completed workflow_run is the trusted hand-off used by the
+      # default-branch "Minimize noisy review bot comments" workflow, which
+      # re-fetches the review by these numeric IDs and classifies it there.
       - name: Record review event
         run: ':'

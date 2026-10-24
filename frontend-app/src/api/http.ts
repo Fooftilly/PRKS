@@ -60,6 +60,9 @@ function readErrorEnvelope(payload: unknown): { error: string; code: string | nu
 
 const API_PATH_ERROR = 'PRKS API paths must be same-origin /api/ paths without a query.'
 
+/** Message when a failed response carries no PRKS error envelope. */
+export const PRKS_API_FALLBACK_ERROR = 'PRKS could not complete the request.'
+
 function resolvePrksApiPath(path: string): string {
   let url: URL
   try {
@@ -79,13 +82,16 @@ export async function prksApiRequest(
     method?: string
     body?: string
     signal?: AbortSignal
+    /** Query parameters. The path itself never carries a query. */
+    query?: Record<string, string>
   } = {},
 ): Promise<unknown> {
   const apiPath = resolvePrksApiPath(path)
+  const search = init.query ? new URLSearchParams(init.query).toString() : ''
   const method = init.method ?? 'GET'
   let response: Response
   try {
-    response = await fetch(apiPath, {
+    response = await fetch(search ? `${apiPath}?${search}` : apiPath, {
       method,
       body: init.body,
       signal: init.signal,
@@ -115,7 +121,7 @@ export async function prksApiRequest(
   if (!response.ok) {
     const envelope = readErrorEnvelope(payload)
     throw new PrksApiError(
-      envelope?.error ?? 'PRKS could not complete the request.',
+      envelope?.error ?? PRKS_API_FALLBACK_ERROR,
       response.status,
       envelope?.code ?? null,
     )

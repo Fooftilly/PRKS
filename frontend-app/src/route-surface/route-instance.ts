@@ -1,20 +1,18 @@
+import type { PrksRouteName } from '../routing/route-model'
+
 /**
- * Minimum identity the shared Vue surface records for one mounted owner.
+ * Fields every mounted route instance shares.
  *
- * The legacy PRKS router remains canonical (`prksParseRoute`, canonical hashes,
- * TabContext, Main/Secondary ownership, workspace tab routing). This is the
- * typed bridge into Vue, not a second parser. Feature modules narrow `name`
- * and add params (Progress does). A future discriminated union should import
- * those feature types. Do not copy the legacy route table into TypeScript.
+ * `name` is a registry name from the typed route model (`../routing/route-model`),
+ * which owns the hash parser, canonical hashes, and the route registry.
+ * TabContext, Main/Secondary ownership, and workspace tab routing stay with
+ * the classic runtime. Feature modules narrow `name` and add `params`.
+ * `PrksRouteInstance` in `./routes` is the discriminated union of those
+ * features.
  */
 export interface PrksRouteInstanceBase {
-  readonly name: string
+  readonly name: PrksRouteName
   readonly canonicalHash: string
   readonly ownsMainShell: boolean
   readonly generation: number
-}
-
-/** Present input. Generation is filled from this owner when the caller omits it. */
-export type RouteInstanceInput = Omit<PrksRouteInstanceBase, 'generation'> & {
-  readonly generation?: number
 }

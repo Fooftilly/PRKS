@@ -1,133 +1,84 @@
-function prksTypesEsc(s) {
-    if (s == null || s === '') return '';
-    return String(s)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
+/**
+ * File types browse model.
+ *
+ * Index and type detail share the coordinator's effective works-browse rows.
+ * This module groups and filters those rows. It does not fetch, read the
+ * durable queue, or paint. Vue paints the model.
+ */
+
+function prksTypesNormalize(raw) {
+    if (typeof prksNormalizeDocType === 'function') return prksNormalizeDocType(raw);
+    if (raw == null || String(raw).trim() === '') return 'misc';
+    return String(raw).trim().toLowerCase();
 }
 
-function prksDocTypeLabel(value) {
+function prksTypesDocTypeLabel(value) {
     if (typeof prksDocTypeMeta === 'function') {
-        return prksDocTypeMeta(value).label || value || 'Misc';
+        const meta = prksDocTypeMeta(value);
+        return (meta && meta.label) || value || 'Misc';
     }
     return value || 'misc';
 }
 
-function renderTypesIndex(works, container) {
+function prksTypesCatalogValues(counts) {
+    if (typeof PRKS_DOC_TYPES !== 'undefined' && Array.isArray(PRKS_DOC_TYPES)) {
+        return PRKS_DOC_TYPES.map((d) => d.value);
+    }
+    return Object.keys(counts).sort();
+}
+
+/**
+ * Types with at least one file, count descending, then label.
+ * Unknown and blank document types collapse to misc. Zero counts are omitted.
+ * @param {unknown} works
+ * @returns {{ rows: { value: string, label: string, count: number }[], typeCount: number, totalFiles: number }}
+ */
+function prksTypesIndexModel(works) {
     const list = Array.isArray(works) ? works : [];
     const counts = Object.create(null);
     for (const w of list) {
-        const dt = typeof prksNormalizeDocType === 'function' ? prksNormalizeDocType(w?.doc_type) : (w?.doc_type || 'misc');
+        const dt = prksTypesNormalize(w && w.doc_type);
         counts[dt] = (counts[dt] || 0) + 1;
     }
-
-    const types = typeof PRKS_DOC_TYPES !== 'undefined' && Array.isArray(PRKS_DOC_TYPES)
-        ? PRKS_DOC_TYPES.map((d) => d.value)
-        : Object.keys(counts).sort();
-
-    const rows = types
+    const rows = prksTypesCatalogValues(counts)
         .map((t) => ({
             value: t,
-            label: prksDocTypeLabel(t),
+            label: prksTypesDocTypeLabel(t),
             count: counts[t] || 0,
         }))
         .filter((r) => r.count > 0)
         .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
-
-    const totals = rows.map((r) => Number(r.count) || 0);
-    const totalFiles = totals.reduce((acc, n) => acc + n, 0);
-
-    const _tctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
-    if (_tctx) _tctx.routeSidebar = { typeCount: rows.length, totalFiles };
-
-    const rowsHtml = rows.length
-        ? rows
-              .map((r) => {
-                  const count = Number(r.count) || 0;
-                  const typePath = '#/types/' + encodeURIComponent(r.value);
-                  const badge =
-                      typeof prksDocTypeBadgeHtml === 'function'
-                          ? prksDocTypeBadgeHtml(r.value)
-                          : `<span class="status-badge Planned">${prksTypesEsc(r.label)}</span>`;
-                  return (
-                      `<div class="project-card types-page__list-item" data-prks-route="${typePath}" data-prks-middleclick-nav="1">` +
-                      `<div class="types-page__list-main">` +
-                      `${badge}` +
-                      `<p class="meta-row types-page__list-stats">${count} file${count === 1 ? '' : 's'}</p>` +
-                      `</div>` +
-                      `<span class="types-page__list-arrow" aria-hidden="true">${typeof prksIcon === 'function' ? prksIcon('chevronRight', { size: 'sm' }) : '→'}</span>` +
-                      `</div>`
-                  );
-              })
-              .join('')
-        : '<p class="tags-page__empty types-page__empty">No files in library yet. Add file to start grouping by BibTeX type.</p>';
-
-    container.innerHTML = `
-        <div class="types-page">
-            <div class="prks-page-header page-header tags-page__header">
-                <h2 class="prks-page-title">File types</h2>
-                <p class="tags-page__sub types-page__sub">Browse files by BibTeX document type. Click row to open matching files.</p>
-            </div>
-            <div class="list-view types-page__list">
-                ${rowsHtml}
-            </div>
-        </div>
-    `;
-    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
+    const totalFiles = rows.reduce((acc, r) => acc + (Number(r.count) || 0), 0);
+    return {
+        rows: rows,
+        typeCount: rows.length,
+        totalFiles: totalFiles,
+    };
 }
 
-function renderWorksByDocType(works, docType, container, options = {}) {
-    const offlineCached = !!(options && options.offlineCached);
-    const dt = typeof prksNormalizeDocType === 'function' ? prksNormalizeDocType(docType) : (docType || 'misc');
-    const label = prksDocTypeLabel(dt);
+/**
+ * Files of one BibTeX type, title order. The type is normalized first, so an
+ * unknown route segment is misc.
+ * @param {unknown} works
+ * @param {unknown} docType
+ * @returns {{ docType: string, label: string, works: object[], workCount: number }}
+ */
+function prksTypesDetailModel(works, docType) {
+    const dt = prksTypesNormalize(docType);
+    const label = prksTypesDocTypeLabel(dt);
     const all = Array.isArray(works) ? works : [];
     const filtered = all
-        .filter((w) => (typeof prksNormalizeDocType === 'function' ? prksNormalizeDocType(w?.doc_type) : w?.doc_type) === dt)
-        .sort((a, b) => String(a?.title || '').localeCompare(String(b?.title || ''), undefined, { sensitivity: 'base' }));
-
-    const _tdctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
-    if (_tdctx) _tdctx.routeSidebar = { docType: dt, docTypeLabel: label, workCount: filtered.length };
-    const typeBadge =
-        typeof prksDocTypeBadgeHtml === 'function'
-            ? prksDocTypeBadgeHtml(dt)
-            : `<span class="status-badge Planned">${prksTypesEsc(label)}</span>`;
-
-    const browseClass =
-        typeof prksWorkBrowseCollectionClass === 'function'
-            ? prksWorkBrowseCollectionClass('types-page__detail-grid')
-            : 'card-grid types-page__detail-grid';
-    const modeToggle =
-        typeof prksWorkBrowseModeToggleHtml === 'function'
-            ? prksWorkBrowseModeToggleHtml('prks-work-browse-mode-types')
-            : '';
-
-    container.innerHTML = `
-        <div class="types-page types-page--detail">
-            <div class="prks-page-header page-header types-page__detail-header page-header--split">
-                <div class="page-header__title-row">
-                    <h2 class="prks-page-title">Files</h2>
-                    <div class="types-page__detail-type">${typeBadge}</div>
-                    ${modeToggle}
-                </div>
-            </div>
-        <div class="${browseClass}">
-            ${
-                filtered.length
-                    ? filtered
-                          .map((w) => {
-                              const cardOpts = { hideDocTypeBadge: true };
-                              if (offlineCached) cardOpts.suppressThumbnail = true;
-                              return typeof prksWorkCardHtml === 'function' ? prksWorkCardHtml(w, cardOpts) : '';
-                          })
-                          .join('')
-                    : `<p class="tags-page__empty types-page__empty">No files in this type yet.</p>`
-            }
-        </div>
-        </div>
-    `;
-    if (!offlineCached && typeof prksInitLazyWorkThumbs === 'function') prksInitLazyWorkThumbs(container);
-    if (typeof prksBindWorkBrowseMode === 'function') prksBindWorkBrowseMode(container);
-    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
+        .filter((w) => prksTypesNormalize(w && w.doc_type) === dt)
+        .sort((a, b) => String((a && a.title) || '').localeCompare(String((b && b.title) || ''), undefined, { sensitivity: 'base' }));
+    return {
+        docType: dt,
+        label: label,
+        works: filtered,
+        workCount: filtered.length,
+    };
 }
 
+if (typeof window !== 'undefined') {
+    window.prksTypesIndexModel = prksTypesIndexModel;
+    window.prksTypesDetailModel = prksTypesDetailModel;
+}

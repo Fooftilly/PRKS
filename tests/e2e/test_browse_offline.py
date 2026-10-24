@@ -70,14 +70,71 @@ class BrowseOfflineTests(unittest.TestCase):
         page.evaluate("() => prksSwitchFolderLibraryTab('recently-added')")
 
     def cache_all(self, page, ids):
-        """Warms all three browse projections plus the Folder hierarchy."""
+        """Warm independent browse projections from stable canonical state.
+
+        Opening a Work queues MARK_WORK_OPENED asynchronously. Its ACK changes
+        Recent's coherence generation and can invalidate a GET/cache write
+        already in progress. The Recent snapshot must therefore be fetched
+        AFTER that ACK has retired, not raced against it on a repeated subtest.
+        """
         self.progress(page)
         o._wait_list_cached(page, 'works-browse:index')
-        # Recent is empty until something has been opened.
-        o._open_work_from_home(page, WORK_A_TITLE)
+
+        with page.expect_response(
+            lambda response: (
+                urlparse(response.url).path == '/api/sync/operations'
+                and response.request.method == 'POST'
+                and (response.request.post_data_json or {}).get('operation') == 'MARK_WORK_OPENED'
+                and (response.request.post_data_json or {}).get('entity_id') == ids['work_a']
+            ),
+        ) as opened:
+            o._open_work_from_home(page, WORK_A_TITLE)
+        self.assertEqual(
+            opened.value.status, 200,
+            'Work-open sync returned HTTP %d before Recent warm-up' % opened.value.status,
+        )
+        self.assertEqual(opened.value.json().get('code'), 'ACKNOWLEDGED',
+                         'Work-open event must be acknowledged before Recent warm-up')
         o._wait_entity_cached(page, 'work', ids['work_a'])
-        self.recent(page)
-        o._wait_list_cached(page, 'recent:index')
+        o._drain_durable(page, message='Work-open operation did not retire before Recent warm-up')
+
+        # Separate route/presentation, network and IndexedDB stages. A failed
+        # cache publication is not repaired by simply raising the timeout.
+        with page.expect_response(
+            lambda response: (
+                response.request.method == 'GET'
+                and urlparse(response.url).path == '/api/recent'
+            ),
+        ) as recent:
+            self.recent(page)
+        page.wait_for_function(
+            "() => location.hash === '#/recent' && !!window.prksGetFocusedTabContext()"
+        )
+        self.assertTrue(recent.value.ok,
+                        'Recent projection GET returned HTTP %d' % recent.value.status)
+        try:
+            o._wait_list_cached(page, 'recent:index')
+        except AssertionError as error:
+            stage = page.evaluate(
+                """async () => {
+                    const rows = await createPrksOfflineStore().getList('recent:index');
+                    const pending = await prksSync.store.listOperations();
+                    return {
+                        route: location.hash,
+                        recentGeneration: prksOfflineDomainGeneration('recent'),
+                        recentBlocked: prksOfflineIsDomainBlocked('recent'),
+                        indexedDbHasRecent: !!rows,
+                        outstandingOperations: pending.map(op => ({
+                            operation: op.operation, status: op.status
+                        })),
+                    };
+                }"""
+            )
+            raise AssertionError(
+                'Recent GET returned HTTP %d but cache publication failed: %r' %
+                (recent.value.status, stage)
+            ) from error
+
         page.evaluate("() => prksNavigate('#/folders')")
         o._wait_list_cached(page, 'folders:index')
         self.recently_added(page)

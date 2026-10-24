@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+# Run the PostgreSQL helper tests (tests/pg, #623) against a disposable
+# PostgreSQL 18 server. Never points at a real PRKS database: the harness only
+# uses the server's `postgres` maintenance database to create and drop its own
+# prks_test_* databases (docs/postgresql-architecture.md §13.1).
+#
+# Server, in order:
+#   1. PRKS_TEST_DATABASE_URL, when set (CI service container, or a disposable
+#      server you started yourself). It must name the `postgres` database.
+#   2. Docker: postgres:18.6 with the builtin locale on a random loopback port,
+#      removed afterwards.
+#   3. Local PostgreSQL 18+ binaries (PRKS_PG_BINDIR, `pg_config --bindir`, or
+#      /usr/lib/postgresql/<major>/bin): a throwaway cluster in a temp dir on a
+#      Unix socket, removed afterwards.
+#
+# Usage:
+#   scripts/test-postgres                      # all tests in tests/pg
+#   scripts/test-postgres tests.pg.test_harness [more unittest ids]
+#   scripts/test-postgres --parity [--json PATH]
+#       the SQLite/PostgreSQL backend parity leg and its coverage report
+#       (#625, scripts/run_backend_parity.py)
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+PY="${PYTHON:-python3}"
+PG_IMAGE="postgres:18.6@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336"
+MIN_MAJOR=18
+
+CLEANUP=()
+cleanup() {
+  local i
+  for ((i = ${#CLEANUP[@]} - 1; i >= 0; i--)); do
+    eval "${CLEANUP[$i]}" >/dev/null 2>&1 || true
+  done
+}
+trap cleanup EXIT
+
+free_port() {
+  "$PY" -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
+}
+
+# start_docker and start_local run inside `! … && ! …`, where set -e is off,
+# so each step that can fail returns 1 itself and the next server is tried.
+start_docker() {
+  command -v docker >/dev/null 2>&1 || return 1
+  docker info >/dev/null 2>&1 || return 1
+  local name="prks-test-postgres-$$-$RANDOM"
+  echo "test-postgres: starting ${PG_IMAGE%%@*} in Docker" >&2
+  docker run -d --rm --name "$name" \
+    -e POSTGRES_HOST_AUTH_METHOD=trust \
+    -e POSTGRES_INITDB_ARGS="--locale-provider=builtin --builtin-locale=C.UTF-8" \
+    -p 127.0.0.1::5432 "$PG_IMAGE" >/dev/null || {
+    echo "test-postgres: could not start the Docker server" >&2
+    return 1
+  }
+  CLEANUP+=("docker rm -f $name")
+  local i
+  for ((i = 0; i < 60; i++)); do
+    if docker exec "$name" pg_isready -U postgres -h 127.0.0.1 >/dev/null 2>&1; then
+      local port=""
+      port="$(docker port "$name" 5432/tcp 2>/dev/null | head -n1 | sed 's/.*://')"
+      if [[ ! "$port" =~ ^[0-9]+$ ]]; then
+        echo "test-postgres: could not read the Docker server's port" >&2
+        docker rm -f "$name" >/dev/null 2>&1 || true
+        return 1
+      fi
+      export PRKS_TEST_DATABASE_URL="postgresql://postgres@127.0.0.1:${port}/postgres"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "test-postgres: the Docker server did not become ready" >&2
+  docker rm -f "$name" >/dev/null 2>&1 || true
+  return 1
+}
+
+find_bindir() {
+  local dir major
+  if [[ -n "${PRKS_PG_BINDIR:-}" ]]; then
+    echo "$PRKS_PG_BINDIR"
+    return 0
+  fi
+  if command -v pg_config >/dev/null 2>&1; then
+    dir="$(pg_config --bindir)"
+    major="$("$dir/postgres" --version 2>/dev/null | sed -E 's/[^0-9]*([0-9]+).*/\1/')"
+    if [[ -n "$major" && "$major" -ge "$MIN_MAJOR" ]]; then
+      echo "$dir"
+      return 0
+    fi
+  fi
+  for dir in $(ls -d /usr/lib/postgresql/*/bin 2>/dev/null | sort -t/ -k5 -n -r); do
+    major="$(basename "$(dirname "$dir")")"
+    if [[ "$major" =~ ^[0-9]+$ && "$major" -ge "$MIN_MAJOR" && -x "$dir/initdb" ]]; then
+      echo "$dir"
+      return 0
+    fi
+  done
+  return 1
+}
+
+start_local() {
+  local bindir
+  bindir="$(find_bindir)" || return 1
+  local major
+  major="$("$bindir/postgres" --version | sed -E 's/[^0-9]*([0-9]+).*/\1/')"
+  if [[ "$major" -lt "$MIN_MAJOR" ]]; then
+    echo "test-postgres: $bindir is PostgreSQL $major; $MIN_MAJOR or newer is required" >&2
+    return 1
+  fi
+  local base port as=()
+  base="$(mktemp -d -t prks-test-postgres.XXXXXX)"
+  CLEANUP+=("rm -rf '$base'")
+  # initdb and postgres refuse to run as root.
+  if [[ "$(id -u)" -eq 0 ]]; then
+    if ! id postgres >/dev/null 2>&1; then
+      echo "test-postgres: running as root needs a 'postgres' user for the local server" >&2
+      return 1
+    fi
+    chown postgres "$base"
+    as=(runuser -u postgres --)
+  fi
+  port="$(free_port)"
+  echo "test-postgres: starting a throwaway PostgreSQL $major cluster" >&2
+  "${as[@]}" "$bindir/initdb" -D "$base/data" -U postgres --auth=trust \
+    --locale-provider=builtin --builtin-locale=C.UTF-8 --encoding=UTF8 >/dev/null || {
+    echo "test-postgres: initdb failed" >&2
+    return 1
+  }
+  "${as[@]}" "$bindir/pg_ctl" -D "$base/data" -l "$base/server.log" -w \
+    -o "-c listen_addresses='' -k $base -p $port -c fsync=off" start >/dev/null || {
+    echo "test-postgres: the local server did not start" >&2
+    return 1
+  }
+  CLEANUP+=("${as[*]} '$bindir/pg_ctl' -D '$base/data' -m immediate stop")
+  export PRKS_TEST_DATABASE_URL="postgresql://postgres@/postgres?host=${base}&port=${port}"
+}
+
+if [[ -n "${PRKS_TEST_DATABASE_URL:-}" ]]; then
+  echo "test-postgres: using PRKS_TEST_DATABASE_URL" >&2
+elif ! start_docker && ! start_local; then
+  cat >&2 <<'EOF'
+test-postgres: no PostgreSQL 18 server available.
+Set PRKS_TEST_DATABASE_URL to a disposable server's `postgres` database,
+start Docker, or install PostgreSQL 18 (or point PRKS_PG_BINDIR at its bin/).
+EOF
+  exit 2
+fi
+
+"$PY" -c 'import psycopg, psycopg_pool' 2>/dev/null || {
+  echo "test-postgres: psycopg is not installed; install the pins in requirements-dev.txt" >&2
+  exit 2
+}
+
+if [[ "${1:-}" == "--parity" ]]; then
+  shift
+  "$PY" scripts/run_backend_parity.py "$@"
+elif [[ $# -gt 0 ]]; then
+  "$PY" -m unittest -v "$@"
+else
+  "$PY" -m unittest discover -v -s tests/pg -t .
+fi

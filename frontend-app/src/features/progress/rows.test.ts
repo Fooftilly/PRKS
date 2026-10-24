@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { progressWorkCardOptions } from './legacy-work-card'
+import { workCardThumbOptions } from '../../components/work-card'
 import {
   acceptEffectiveRows,
   progressCardSubtitle,
@@ -7,7 +7,8 @@ import {
   progressRowsForStatus,
   progressVisibleRows,
 } from './rows'
-import { PROGRESS_STATUSES, type ProgressStatus } from './status'
+import { WORK_STATUSES } from '../../domain/work-status'
+import type { ProgressStatus } from './status'
 
 describe('Progress effective rows', () => {
   const catalog = [
@@ -20,7 +21,7 @@ describe('Progress effective rows', () => {
   it('filters each canonical status without mutating the handed rows', () => {
     const frozen = catalog.map((row) => Object.freeze({ ...row }))
     const snapshot = Object.freeze(frozen.slice())
-    for (const status of PROGRESS_STATUSES as readonly ProgressStatus[]) {
+    for (const status of WORK_STATUSES as readonly ProgressStatus[]) {
       const visible = progressVisibleRows(snapshot, status)
       expect(visible.every((row) => row.status === status)).toBe(true)
       expect(snapshot.map((row) => row.id)).toEqual(['c', 'a', 'b', 'd'])
@@ -76,7 +77,7 @@ describe('Progress effective rows', () => {
     expect(acceptEffectiveRows([{ id: 'ok', status: 'Planned' }, null, 'no', []])).toEqual([
       { id: 'ok', status: 'Planned' },
     ])
-    expect(progressWorkCardOptions(true, 'sub')).toEqual({ subtitle: 'sub', suppressThumbnail: true })
-    expect(progressWorkCardOptions(false, 'sub')).toEqual({ subtitle: 'sub' })
+    expect(workCardThumbOptions(true, { subtitle: 'sub' })).toEqual({ subtitle: 'sub', suppressThumbnail: true })
+    expect(workCardThumbOptions(false, { subtitle: 'sub' })).toEqual({ subtitle: 'sub' })
   })
 })

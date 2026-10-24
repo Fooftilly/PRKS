@@ -3,6 +3,7 @@ import {
   dismissRouteSurface,
   presentRouteSurface,
   registerEarlyRoutePresenter,
+  registerRouteWindowBridge,
   resetRouteSurfaceForTests,
   type RouteSurfaceOwner,
 } from '../../route-surface/lifecycle'
@@ -48,7 +49,7 @@ function armArgumentsOwnerCleanup(owner: ArgumentsOwner): void {
       armArgumentsOwnerCleanup(owner)
       return
     }
-    dismissArguments(owner)
+    dismissRouteSurface(owner)
   })
 }
 
@@ -153,11 +154,6 @@ export function presentArgumentDetail(input: ArgumentDetailPresentInput): void {
   armArgumentsOwnerCleanup(input.owner)
 }
 
-/** Drop the Vue Arguments tree owned by this pane. Other owners stay mounted. */
-export function dismissArguments(owner: object | null | undefined): void {
-  dismissRouteSurface(owner)
-}
-
 export function resetArgumentsSessionForTests(): void {
   resetRouteSurfaceForTests()
 }
@@ -179,9 +175,7 @@ function isArgumentDetailEarlyRequest(
 }
 
 export function registerArgumentsBridge(target: Window = window): void {
-  target.prksVuePresentArgumentsIndex = presentArgumentsIndex
-  target.prksVuePresentArgumentDetail = presentArgumentDetail
-  target.prksVueDismissArguments = dismissArguments
+  registerRouteWindowBridge(target)
   registerEarlyRoutePresenter(
     ARGUMENTS_FEATURE,
     (request, host) => {

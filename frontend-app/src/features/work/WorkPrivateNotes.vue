@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import EditorRecoveryNotice from '../editor-recovery/EditorRecoveryNotice.vue'
 import type { WorkPrivateNoteOwner } from './private-note-session'
+import { openPrivateNotesRecoveryReview, privateNotesRecoveryView } from './private-notes-recovery'
 
 const props = defineProps<{
   workId: string
@@ -9,6 +11,8 @@ const props = defineProps<{
 }>()
 
 const field = ref<HTMLTextAreaElement | null>(null)
+/* Browser-local drafts of these Reminders (#474), from the owner's recovery adapter. */
+const recoveryView = privateNotesRecoveryView(props.owner)
 
 onMounted(() => {
   if (field.value) field.value.value = props.initialText
@@ -29,6 +33,11 @@ onMounted(() => {
         aria-controls="prks-hint-popover"
       >?</button>
     </h3>
+    <EditorRecoveryNotice
+      :view="recoveryView"
+      subject="Reminders"
+      @review="(opener) => openPrivateNotesRecoveryReview(owner, opener)"
+    />
     <textarea
       :id="`prks-private-notes-work-${workId}`"
       ref="field"

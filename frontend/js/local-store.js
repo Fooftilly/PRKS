@@ -984,16 +984,6 @@
             });
         }
 
-        function readMetadata(key) {
-            return runTransaction(STORE_METADATA, 'readonly', function (request, setResult) {
-                return request(STORE_METADATA, function (store) {
-                    return store.get(key);
-                }).then(function (row) {
-                    setResult(row ? row.value : null);
-                });
-            });
-        }
-
         /**
          * Stable per-device identity, created once and persisted durably.
          *
@@ -2297,10 +2287,28 @@
                 });
         }
 
-        /** One Save, however many of a folder's fields it touched. */
-        function saveFolderFields(folderId, changes, base) {
+        /**
+         * One Save, however many of a folder's fields it touched.
+         *
+         * `expected` (optional) names, per field, the unsettled row the caller
+         * owns: its op id, or null for none. A field it names may replace only
+         * that row; any other unsettled row of the field is someone else's
+         * intent and makes the save `scope_busy` (`prksBusyForeign`), checked
+         * in this transaction so no read before it can race. Fields it does
+         * not name keep coalescing over a never-sent row as before.
+         */
+        function saveFolderFields(folderId, changes, base, expected) {
             if (!isNonBlankString(folderId) || !isPlainObject(changes) || !isPlainObject(base)) {
                 return Promise.reject(localStoreError('invalid_envelope', 'Invalid folder save.'));
+            }
+            if (expected !== undefined && !isPlainObject(expected)) {
+                return Promise.reject(localStoreError('invalid_envelope', 'Invalid folder save.'));
+            }
+            const owns = expected || {};
+            for (const field of Object.keys(owns)) {
+                if (owns[field] !== null && !isNonBlankString(owns[field])) {
+                    return Promise.reject(localStoreError('invalid_envelope', 'Invalid folder save.'));
+                }
             }
             for (const field of Object.keys(changes)) {
                 const observed = base[field];
@@ -2329,9 +2337,18 @@
                             r.entity_type === 'folder' && r.entity_id === folderId &&
                             r.payload.field === field && r.status !== STATUS_ACKNOWLEDGED);
                         if (existing) {
-                            if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
-                                throw localStoreError('scope_busy',
-                                    'This field is syncing or needs resolution.');
+                            const foreign = Object.prototype.hasOwnProperty.call(owns, field) &&
+                                owns[field] !== existing.op_id;
+                            if (foreign || existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
+                                /* Names the row holding the field, so a caller can
+                                 * tell one in flight from one that needs resolution,
+                                 * and its own row from someone else's. */
+                                throw Object.assign(localStoreError('scope_busy',
+                                    'This field is syncing or needs resolution.'), {
+                                    prksBusyOpId: existing.op_id,
+                                    prksBusyStatus: existing.status,
+                                    prksBusyForeign: foreign,
+                                });
                             }
                             if (existing.payload.value === desired) {
                                 written.push(existing);
@@ -2618,11 +2635,29 @@
                 });
         }
 
-        /** The definition, and only the definition. */
-        function saveConceptFields(conceptId, changes, base) {
+        /**
+         * The definition, and only the definition.
+         *
+         * `expected`, when given, names per field the unsettled row the caller's
+         * text came from (null: none). Any other unsettled row on that field was
+         * queued by someone else -- another tab sharing this queue -- and is
+         * never coalesced over (#568).
+         */
+        function saveConceptFields(conceptId, changes, base, expected) {
             if (!isNonBlankString(conceptId) || !isPlainObject(changes) || !isPlainObject(base)) {
                 return Promise.reject(localStoreError('invalid_envelope',
                     'Invalid concept save.'));
+            }
+            if (expected !== undefined && !isPlainObject(expected)) {
+                return Promise.reject(localStoreError('invalid_envelope',
+                    'Invalid concept save.'));
+            }
+            const owns = expected || {};
+            for (const field of Object.keys(owns)) {
+                if (owns[field] !== null && !isNonBlankString(owns[field])) {
+                    return Promise.reject(localStoreError('invalid_envelope',
+                        'Invalid concept save.'));
+                }
             }
             for (const field of Object.keys(changes)) {
                 const observed = base[field];
@@ -2651,9 +2686,16 @@
                             r.entity_type === 'concept' && r.entity_id === conceptId &&
                             r.payload.field === field && r.status !== STATUS_ACKNOWLEDGED);
                         if (existing) {
-                            if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
-                                throw localStoreError('scope_busy',
-                                    'This field is syncing or needs resolution.');
+                            const foreign = Object.prototype.hasOwnProperty.call(owns, field) &&
+                                owns[field] !== existing.op_id;
+                            if (foreign || existing.status !== STATUS_PENDING ||
+                                existing.attempt_count > 0) {
+                                throw Object.assign(localStoreError('scope_busy',
+                                    'This field is syncing or needs resolution.'), {
+                                    prksBusyOpId: existing.op_id,
+                                    prksBusyStatus: existing.status,
+                                    prksBusyForeign: foreign,
+                                });
                             }
                             if (existing.payload.value === desired) {
                                 written.push(existing);
@@ -3860,7 +3902,7 @@
          * one is the user's to resolve; either way it stays immutable and this
          * refuses with `scope_busy` rather than guessing.
          */
-        function saveWorkNote(workId, operation, text, observed) {
+        function saveWorkNote(workId, operation, text, observed, options) {
             if (!isNonBlankString(workId) || (operation !== 'SET_WORK_RESEARCH_NOTE' && operation !== 'SET_WORK_PRIVATE_NOTE')) {
                 return Promise.reject(localStoreError('invalid_envelope', 'Invalid note save.'));
             }
@@ -3871,6 +3913,15 @@
             }
             const limit = operation === 'SET_WORK_RESEARCH_NOTE' ? WORK_RESEARCH_NOTE_BYTES : WORK_PRIVATE_NOTE_BYTES;
             if (utf8ByteLength(text) > limit) return Promise.reject(localStoreError('payload_too_large', 'Note exceeds byte limit.'));
+            /* Reverting a carried Work reminder to its pre-save value may be
+             * an actual change after acknowledgement. Only treat it as a
+             * cancellation if the original unsent row is still present.
+             * This check and deletion must happen in the same transaction. */
+            const cancelOnly = options && Object.prototype.hasOwnProperty.call(options, 'cancelPendingText');
+            if (cancelOnly && (operation !== 'SET_WORK_PRIVATE_NOTE' ||
+                typeof options.cancelPendingText !== 'string' || text !== observed.value)) {
+                return Promise.reject(localStoreError('invalid_envelope', 'Invalid carried reminder cancellation.'));
+            }
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
                 const rows = await request(STORE_OPERATIONS, s => s.getAll());
                 assertWorkIsNotBeingDeleted(rows, workId, 'edited');
@@ -3881,6 +3932,10 @@
                     throw localStoreError('scope_busy', 'Note has ' + active.length + ' unsynchronized changes; let them finish.');
                 }
                 const existing = active[0];
+                if (cancelOnly && (!existing || !existing.payload ||
+                    existing.payload.text !== options.cancelPendingText)) {
+                    throw localStoreError('stale_handoff', 'The original reminder save is no longer cancelable.');
+                }
                 if (existing) {
                     if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
                         throw localStoreError('scope_busy', 'Note is syncing or needs resolution.');

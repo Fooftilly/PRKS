@@ -1,9 +1,8 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readRouteSurface } from '../../route-surface/lifecycle'
+import { dismissRouteSurface, readRouteSurface } from '../../route-surface/lifecycle'
 import {
   CONCEPTS_RETAIN_SURFACE_KEY,
-  dismissConcepts,
   presentConceptDetail,
   presentConceptsIndex,
   registerConceptsBridge,
@@ -14,18 +13,13 @@ afterEach(() => {
   resetConceptsSessionForTests()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
-  delete window.prksVuePresentConceptsIndex
-  delete window.prksVuePresentConceptDetail
-  delete window.prksVueDismissConcepts
+  delete window.prksVuePresentRoute
+  delete window.prksVueDismissRoute
   delete window.prksCreateConceptFlow
   delete window.prksResearchMarkdownHtml
   delete window.prksPageHeaderIconHtml
   delete window.prksIcon
-  delete window.prksPaintScopeHost
   delete window.prksRefreshIcons
-  delete window.prksRelSummaryHtml
-  delete window.prksResearchSectionHeadHtml
-  delete window.prksResearchIndexRowHtml
 })
 
 function host(): HTMLElement {
@@ -42,7 +36,6 @@ describe('Concepts route bridge', () => {
   it('renders independent Main and Secondary index owners', () => {
     window.prksPageHeaderIconHtml = () => ''
     window.prksIcon = () => ''
-    window.prksPaintScopeHost = () => {}
     window.prksRefreshIcons = () => {}
     const main = owner('main')
     const secondary = owner('side')
@@ -79,7 +72,6 @@ describe('Concepts route bridge', () => {
     vi.stubGlobal('fetch', fetchMock)
     window.prksPageHeaderIconHtml = () => ''
     window.prksIcon = () => ''
-    window.prksPaintScopeHost = () => {}
     window.prksRefreshIcons = () => {}
     const pane = owner()
     const el = host()
@@ -90,7 +82,7 @@ describe('Concepts route bridge', () => {
       generation: 2,
     })
     expect(fetchMock).not.toHaveBeenCalled()
-    dismissConcepts(pane)
+    dismissRouteSurface(pane)
     expect(el.querySelector('[data-prks-concepts-index-view]')).toBeNull()
     presentConceptsIndex({
       owner: pane,
@@ -114,25 +106,6 @@ describe('Concepts route bridge', () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
     window.prksResearchMarkdownHtml = (text) => `<p>${text || ''}</p>`
-    window.prksRelSummaryHtml = () => '<p class="prks-rel-summary"></p>'
-    window.prksResearchSectionHeadHtml = (title, opts) => {
-      const o = opts || {}
-      const action = o.actionId
-        ? `<button type="button" id="${o.actionId}" data-prks-role="${o.actionRole || ''}">${
-            o.actionLabel || 'Edit'
-          }</button>`
-        : ''
-      const count =
-        o.count != null ? `<span class="research-entity__section-count">${o.count}</span>` : ''
-      return (
-        `<div class="research-entity__section-head"><h3 id="${o.headingId || ''}">${title}</h3>` +
-        (action || count
-          ? `<div class="research-entity__section-head-actions">${count}${action}</div>`
-          : '') +
-        `</div>` +
-        (o.sub ? `<p class="research-entity__section-sub meta-row">${o.sub}</p>` : '')
-      )
-    }
     window.prksRefreshIcons = () => {}
     const pane = owner()
     const el = host()
@@ -155,7 +128,7 @@ describe('Concepts route bridge', () => {
     expect(el.querySelector('#prks-concept-view-graph')).not.toBeNull()
     expect(el.querySelector('#prks-concept-delete')?.className).toContain('prks-btn--quiet-danger')
     expect(el.querySelector('.research-entity__section-head')).not.toBeNull()
-    dismissConcepts(pane)
+    dismissRouteSurface(pane)
     presentConceptDetail({
       owner: pane,
       host: el,
@@ -176,7 +149,6 @@ describe('Concepts route bridge', () => {
   it('registers bridges and applies host-local early requests', () => {
     window.prksPageHeaderIconHtml = () => ''
     window.prksIcon = () => ''
-    window.prksPaintScopeHost = () => {}
     window.prksRefreshIcons = () => {}
     const el = host()
     const decoy = host()
@@ -192,22 +164,14 @@ describe('Concepts route bridge', () => {
       shell: true,
     }
     registerConceptsBridge(window)
-    expect(window.prksVuePresentConceptsIndex).toBeTypeOf('function')
-    expect(window.prksVuePresentConceptDetail).toBeTypeOf('function')
+    expect(window.prksVuePresentRoute).toBeTypeOf('function')
     expect(el.textContent).toContain('Early')
     expect(decoy.textContent).not.toContain('Early')
   })
 
   it('repaints the relation summary when parents/mentions change in place', async () => {
     window.prksResearchMarkdownHtml = (text) => `<p>${text || ''}</p>`
-    window.prksResearchSectionHeadHtml = () => '<div class="research-entity__section-head"></div>'
     window.prksRefreshIcons = () => {}
-    const summaries: string[] = []
-    window.prksRelSummaryHtml = (opts) => {
-      const text = (opts.parts || []).filter(Boolean).join(' · ')
-      summaries.push(text)
-      return `<p class="prks-rel-summary" data-summary="${text}"></p>`
-    }
     const pane = owner()
     const el = host()
     presentConceptDetail({
@@ -225,7 +189,7 @@ describe('Concepts route bridge', () => {
       },
       generation: 7,
     })
-    expect(el.querySelector('[data-summary]')?.getAttribute('data-summary') || '').toBe('')
+    expect(el.querySelector('.prks-rel-summary')).toBeNull()
     presentConceptDetail({
       owner: pane,
       host: el,
@@ -242,19 +206,14 @@ describe('Concepts route bridge', () => {
       generation: 7,
     })
     await nextTick()
-    expect(el.querySelector('[data-summary]')?.getAttribute('data-summary')).toContain('1 parent')
-    expect(el.querySelector('[data-summary]')?.getAttribute('data-summary')).toContain(
-      '3 note mentions',
-    )
-    expect(summaries.some((s) => s.includes('1 parent') && s.includes('3 note mentions'))).toBe(
-      true,
-    )
+    const summary = el.querySelector('.prks-rel-summary')?.textContent || ''
+    expect(summary).toContain('1 parent')
+    expect(summary).toContain('3 note mentions')
   })
 
   it('keeps index searchQuery across same-generation in-place projection updates', async () => {
     window.prksPageHeaderIconHtml = () => ''
     window.prksIcon = () => ''
-    window.prksPaintScopeHost = () => {}
     window.prksRefreshIcons = () => {}
     const pane = owner('stable')
     const el = host()
@@ -296,7 +255,6 @@ describe('Concepts route bridge', () => {
     // generation — without wiping contentDiv / minting a replacement host.
     window.prksPageHeaderIconHtml = () => ''
     window.prksIcon = () => ''
-    window.prksPaintScopeHost = () => {}
     window.prksRefreshIcons = () => {}
     const cleanups = new Set<() => void>()
     const pane: {
@@ -375,7 +333,6 @@ describe('Concepts route bridge', () => {
     // not-found (see coordinator E2E). Vue present must not wipe contentDiv.
     window.prksPageHeaderIconHtml = () => ''
     window.prksIcon = () => ''
-    window.prksPaintScopeHost = () => {}
     window.prksRefreshIcons = () => {}
     const pane = owner('banner-sibling')
     const contentDiv = document.createElement('div')
@@ -402,7 +359,6 @@ describe('Concepts route bridge', () => {
   it('unmounts on dismiss without affecting another owner', () => {
     window.prksPageHeaderIconHtml = () => ''
     window.prksIcon = () => ''
-    window.prksPaintScopeHost = () => {}
     window.prksRefreshIcons = () => {}
     const a = owner('a')
     const b = owner('b')
@@ -420,7 +376,7 @@ describe('Concepts route bridge', () => {
       items: [{ id: '2', name: 'Beta' }],
       generation: 1,
     })
-    dismissConcepts(a)
+    dismissRouteSurface(a)
     expect(aHost.querySelector('[data-prks-concepts-index-view]')).toBeNull()
     expect(bHost.textContent).toContain('Beta')
   })

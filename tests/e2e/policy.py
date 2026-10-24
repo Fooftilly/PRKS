@@ -26,6 +26,8 @@ FAILURE_DIAGNOSTICS_PATH = Path(".tests") / "e2e-failure-diagnostics.json"
 # runner reads the same names to decide whether a run may train history.
 PROFILE_ENV = "PRKS_E2E_PROFILE"
 SEED_CACHE_ENV = "PRKS_E2E_SEED_CACHE"
+# Opt-in experiment: identical catch-all interception with a cheaper local URL fast path.
+ROUTE_FASTPATH_ENV = "PRKS_E2E_ROUTE_FASTPATH"
 
 FALSE_ENV_VALUES = frozenset({"0", "false", "no", "off"})
 
@@ -53,6 +55,8 @@ def benchmark_modes(environ=None) -> tuple:
         modes.append("profile")
     if not env_flag_enabled(SEED_CACHE_ENV, default=True, environ=environ):
         modes.append("no-seed-cache")
+    if env_flag_enabled(ROUTE_FASTPATH_ENV, environ=environ):
+        modes.append("route-fastpath")
     return tuple(modes)
 
 
@@ -255,7 +259,7 @@ FEATURES = {
     },
     "notes": {
         "description": "Research Notes / Reminders offline (Work note aggregates)",
-        "selectors": ("tests.e2e.test_work_notes_offline",),
+        "selectors": ("tests.e2e.test_work_notes_offline", "tests.e2e.test_folder_reminders"),
     },
     "pdf-annotations": {
         "description": (
@@ -264,6 +268,7 @@ FEATURES = {
         ),
         "selectors": (
             "tests.e2e.test_app.PdfPersistenceTests",
+            "tests.e2e.test_app.PdfAnnotationCommentEditTests",
             "tests.e2e.test_offline.OfflineFoundationTests",
         ),
     },
@@ -303,6 +308,7 @@ FEATURES = {
         "selectors": (
             "tests.e2e.test_folders_offline",
             "tests.e2e.test_folders_durable",
+            "tests.e2e.test_folder_reminders",
             "tests.e2e.test_library_nav_folders",
             "tests.e2e.test_folder_library_route_surface",
         ),
@@ -321,13 +327,23 @@ FEATURES = {
             "tests.e2e.test_browse_offline",
             "tests.e2e.test_work_browsing",
             "tests.e2e.test_progress_route_surface",
+            "tests.e2e.test_search_saved_views_route_surface",
         ),
+    },
+    "publishers": {
+        "description": "Publishers vocabulary Vue route surface",
+        "selectors": ("tests.e2e.test_publishers_route_surface",),
+    },
+    "processing": {
+        "description": "Processing Files inbox Vue route surface",
+        "selectors": ("tests.e2e.test_processing_route_surface",),
     },
     "offline": {
         "description": "Offline foundation + broad offline coherence (Work cache)",
         "selectors": (
             "tests.e2e.test_offline.OfflineFoundationTests",
             "tests.e2e.test_local_store_durability",
+            "tests.e2e.test_editor_recovery_store",
         ),
     },
     "sync": {
@@ -427,8 +443,15 @@ AFFECTED_RULES = (
         "name": "graph",
         "paths": (
             "frontend/js/components/research-graph.js",
+            "frontend-app/src/features/research-graph/**",
             "backend/research_graph.py",
             "tools/research-graph/**",
+        ),
+        "exclude_paths": (
+            "frontend-app/**/*.stories.ts",
+            "frontend-app/**/*.stories.tsx",
+            "frontend-app/**/*.stories.vue",
+            "frontend-app/**/*.stories.js",
         ),
         "features": ("graph",),
     },
@@ -498,6 +521,7 @@ AFFECTED_RULES = (
         "name": "notes",
         "paths": (
             "frontend/js/work-notes-state.js",
+            "frontend/js/work-note-recovery.js",
             "backend/work_note_sync.py",
         ),
         "features": ("notes",),
@@ -533,8 +557,25 @@ AFFECTED_RULES = (
             "frontend/js/workspace-tabs.js",
             "frontend/js/workspace-persistence.js",
             "frontend/js/workspace-tab-menu.js",
+            "frontend/js/tab-leave.js",
+            "frontend/js/owner-resource.js",
+            "frontend/js/editor-recovery.js",
+            "frontend-app/src/lifecycle/**",
         ),
         "features": ("tabs", "workspace-persistence"),
+    },
+    {
+        # Overlaps workspace-tabs: its browser tests live in the offline feature.
+        "name": "editor-recovery",
+        "paths": (
+            "frontend/js/editor-recovery.js",
+            "frontend/js/work-note-recovery.js",
+            "frontend-app/src/lifecycle/editor-recovery/**",
+            "frontend-app/src/lifecycle/editor-recovery-entry.ts",
+            "frontend-app/src/features/editor-recovery/**",
+            "frontend-app/scripts/build-editor-recovery.mjs",
+        ),
+        "features": ("offline",),
     },
     {
         "name": "workspace-tiling",
@@ -591,8 +632,9 @@ AFFECTED_RULES = (
         "paths": (
             "frontend/js/components/types.js",
             "frontend/js/components/recent.js",
-            "frontend/js/components/search.js",
             "frontend/js/components/work-cards.js",
+            "frontend/js/saved-views.js",
+            "frontend/js/search-query-codec.js",
         ),
         "features": ("browse",),
     },
@@ -610,6 +652,69 @@ AFFECTED_RULES = (
         ),
         "features": ("browse",),
         "note": "Vue Progress route (#248) → browse. Stories stay catalog-only. Shared Vue infrastructure stays unmapped.",
+    },
+    {
+        "name": "search-saved-views-vue",
+        "paths": (
+            "frontend-app/src/features/search/**",
+            "frontend-app/src/features/saved-views/**",
+        ),
+        "exclude_paths": (
+            "frontend-app/**/*.stories.ts",
+            "frontend-app/**/*.stories.tsx",
+            "frontend-app/**/*.stories.vue",
+            "frontend-app/**/*.stories.js",
+        ),
+        "features": ("browse",),
+        "note": "Vue Search + Saved View detail (#302 R2) → browse. Shared route-surface stays unmapped (CI full).",
+    },
+    {
+        "name": "types-vue",
+        "paths": ("frontend-app/src/features/types/**",),
+        "exclude_paths": (
+            "frontend-app/**/*.stories.ts",
+            "frontend-app/**/*.stories.tsx",
+            "frontend-app/**/*.stories.vue",
+            "frontend-app/**/*.stories.js",
+        ),
+        "features": ("browse",),
+        "note": "Vue File types index/detail (#302 R3) → browse. Shared route-surface stays unmapped (CI full).",
+    },
+    {
+        "name": "tags-vue",
+        "paths": ("frontend-app/src/features/tags/**",),
+        "exclude_paths": (
+            "frontend-app/**/*.stories.ts",
+            "frontend-app/**/*.stories.tsx",
+            "frontend-app/**/*.stories.vue",
+            "frontend-app/**/*.stories.js",
+        ),
+        "features": ("folders",),
+        "note": "Vue Tags vocabulary page (#302 R3) → folders, because test_folders_offline covers #/tags. Shared route-surface stays unmapped (CI full).",
+    },
+    {
+        "name": "publishers-vue",
+        "paths": ("frontend-app/src/features/publishers/**",),
+        "exclude_paths": (
+            "frontend-app/**/*.stories.ts",
+            "frontend-app/**/*.stories.tsx",
+            "frontend-app/**/*.stories.vue",
+            "frontend-app/**/*.stories.js",
+        ),
+        "features": ("publishers",),
+        "note": "Vue Publishers page (#302 R3) → publishers, because test_publishers_route_surface opens #/publishers. Shared route-surface stays unmapped (CI full).",
+    },
+    {
+        "name": "processing-vue",
+        "paths": ("frontend-app/src/features/processing/**",),
+        "exclude_paths": (
+            "frontend-app/**/*.stories.ts",
+            "frontend-app/**/*.stories.tsx",
+            "frontend-app/**/*.stories.vue",
+            "frontend-app/**/*.stories.js",
+        ),
+        "features": ("processing",),
+        "note": "Vue Processing Files inbox (#302 R3) → processing, because test_processing_route_surface opens #/processing-files. Shared route-surface stays unmapped (CI full).",
     },
     {
         "name": "concepts-vue",
@@ -785,6 +890,36 @@ AFFECTED_RULES = (
         "features": (),
         "skip": True,
         "note": "Non-E2E tests → no browser E2E selection",
+    },
+    # The schema files and the snapshot tooling aren't imported by the served
+    # app. The opt-in PRKS_AUTH start loads backend/db/__init__.py and the pool
+    # lazily (L-ID-1 PR 5/5), and its embedded job worker runs the schema check
+    # of backend/db/migrate.py (L-J-1 PR 3/3), so neither of those is exempt
+    # any more. Do not exempt shared backend/domain/__init__.py
+    # either: it can gain runtime imports or side effects unrelated to isolated
+    # migration plumbing. These files are tested by the PostgreSQL Test Gate,
+    # not by Chromium. Keep this allowlist narrow: unknown backend/db files
+    # still require full E2E. tests/test_e2e_policy.py fails when a skipped
+    # Python file becomes reachable from the served app, lazily or not.
+    {
+        "name": "postgres-migration-infrastructure",
+        "paths": (
+            "backend/db/schema/*.sql",
+            "backend/db/schema/snapshot.json",
+            "backend/db/schema_snapshot.py",
+        ),
+        "features": (),
+        "skip": True,
+        "note": "Isolated PostgreSQL schema/migrations → PostgreSQL tests, no browser E2E",
+    },
+    # This will eventually become shared login/identity logic; do not blanket
+    # skip it. Smoke is the small browser boundary; SQL/Python parity tests
+    # remain the authoritative normalization coverage.
+    {
+        "name": "postgres-text-identity",
+        "paths": ("backend/domain/text_identity.py",),
+        "features": ("smoke",),
+        "note": "Text identity helper → smoke; PostgreSQL parity checked separately",
     },
     # Storybook is a maintainer catalog. It is not the Vue app and must not
     # explain a rebuilt frontend/vue bundle or select a feature suite.

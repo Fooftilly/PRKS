@@ -19,7 +19,8 @@
 
     function live(ctx, state) {
         return ctx && !ctx.destroyed && ctx.generation === state.generation &&
-            ctx.getEntity('work') && ctx.getEntity('work').id === state.workId;
+            ctx.getEntity('work') && ctx.getEntity('work').id === state.workId &&
+            ctx.getResource('workSourceEditor') === state;
     }
     function owns(ctx, state) {
         return live(ctx, state) && root.prksRightPanelOwnedBy(ctx) && root.prksOwnerTabIsFocused(ctx);
@@ -37,6 +38,7 @@
     }
 
     async function paint(ctx, state) {
+        if (!live(ctx, state)) return;
         const paintVersion = state.paintVersion = (state.paintVersion || 0) + 1;
         const rows = await root.prksRefreshPendingWorkSources();
         if (!live(ctx, state) || paintVersion !== state.paintVersion) return;
@@ -143,6 +145,7 @@
     }
 
     async function resolveSource(ctx, state, op, apply) {
+        if (!live(ctx, state)) return;
         const session = ctx.ui && typeof ctx.ui.workMetaEditSession === 'number' ? ctx.ui.workMetaEditSession : 0;
         const still = () => typeof root.prksWorkMetaSessionStill !== 'function' ||
             root.prksWorkMetaSessionStill(ctx, state.workId, session);
@@ -158,13 +161,13 @@
                  * authoritatively. Dropping only the Work left the cached
                  * source REVISION at its pre-conflict value, which is the
                  * base the next save would have been measured against. */
-                if (still()) state.observed = null;
+                if (still() && live(ctx, state)) state.observed = null;
                 root.prksOfflineMarkEntityChanged('work', state.workId);
                 root.prksOfflineMarkEntityChanged('work-source-state', state.workId);
             }
             await root.prksSync.store.resolveConflict(op.op_id, apply);
             root.prksSync.changed();
-            if (still()) {
+            if (still() && live(ctx, state)) {
                 state.error = null;
                 if (apply) {
                     /* The replacement operation was created against the
@@ -180,7 +183,7 @@
                 }
             }
         } catch (_) {
-            if (!still()) return;
+            if (!still() || !live(ctx, state)) return;
             state.error = 'Could not save that resolution locally. Please retry.';
             await safePaint(ctx, state);
             return;
@@ -190,7 +193,7 @@
          * null and the editor stays explicitly unavailable rather than
          * falling back to the stale pre-conflict Work. A session that ended
          * during the resolution must not adopt that re-read. */
-        if (!apply && still()) {
+        if (!apply && still() && live(ctx, state)) {
             const settled = await readBase(ctx, state, { adopt: true, still: still });
             if (!settled) return;
         }
@@ -244,6 +247,14 @@
          * and stored nothing of ours; showing what we asked for would claim a
          * value the server does not have. */
         writeInput(ctx, state, ack.source_url);
+    }
+
+    /** Entity-only source acknowledgement for a parked owner. No observed base, no paint. */
+    function applyWorkSourceEntityAck(ctx, ack) {
+        if (!ctx || !ack || typeof root.prksAcknowledgedWorkSource !== 'function') return;
+        const work = ctx.getEntity('work');
+        if (!work || work.id !== ack.work_id) return;
+        ctx.setEntity('work', Object.assign({}, work, root.prksAcknowledgedWorkSource(ack)));
     }
 
     function sourceStateShape(workId) {
@@ -330,29 +341,49 @@
         if (!ctx || !root.prksSync) return;
         let state = ctx.getResource('workSourceEditor');
         if (!state || state.workId !== workId || state.generation !== ctx.generation) {
-            state = { workId, generation: ctx.generation, operations: [], observed: undefined,
+            /* Capture the ticket before subscriptions or async prepare.
+             * setResource would mint a later ticket. A rejected registration
+             * does not subscribe, paint, prepare, or mutate this owner. */
+            const ticket = typeof ctx.resourceTicket === 'function' ? ctx.resourceTicket() : null;
+            const next = { workId, generation: ctx.generation, operations: [], observed: undefined,
                 error: null };
-            const stopSync = root.prksSync.subscribe(event => {
+            const stops = { sync: null, connectivity: null };
+            const attached = typeof ctx.registerResource === 'function'
+                ? ctx.registerResource(ticket, {
+                    kind: 'workSourceEditor',
+                    value: next,
+                    suspendable: false,
+                    dispose: function () {
+                        if (stops.sync) stops.sync();
+                        if (stops.connectivity) stops.connectivity();
+                    },
+                })
+                : 'rejected';
+            if (attached === 'rejected') return;
+            if (typeof root.prksBindOwnerWorkAcknowledgement === 'function') {
+                root.prksBindOwnerWorkAcknowledgement(ctx);
+            }
+            stops.sync = root.prksSync.subscribe(event => {
                 if (event && event.operation && event.operation !== 'SET_WORK_SOURCE') return;
-                if (event && event.acknowledged) acceptAck(ctx, state, event.acknowledged);
-                void safePaint(ctx, state);
+                if (event && event.acknowledged) acceptAck(ctx, next, event.acknowledged);
+                void safePaint(ctx, next);
             });
-            const stopConnectivity = root.prksOfflineRuntimeSubscribe(() => {
+            stops.connectivity = root.prksOfflineRuntimeSubscribe(() => {
                 /* A base that could not be established is not a permanent
                  * state. "Use server" while unreachable leaves the editor
                  * deliberately unavailable rather than falling back to the
                  * source the user just rejected -- so when the server comes
                  * back, the editor has to go and get it, or the control stays
                  * dead until the user navigates away and returns. */
-                if (!state.observed && root.prksOfflineRuntimeState() === 'online') {
-                    void readBase(ctx, state, { adopt: true }).then(settled => {
-                        if (settled) void safePaint(ctx, state);
+                if (!next.observed && root.prksOfflineRuntimeState() === 'online') {
+                    void readBase(ctx, next, { adopt: true }).then(settled => {
+                        if (settled) void safePaint(ctx, next);
                     });
                     return;
                 }
-                void safePaint(ctx, state);
+                void safePaint(ctx, next);
             });
-            ctx.setResource('workSourceEditor', state, () => { stopSync(); stopConnectivity(); });
+            state = next;
         }
         void safePaint(ctx, state);
         if (options && options.editing) state.preparing = prepare(ctx, state);
@@ -422,6 +453,7 @@
              * B and then C must leave ONE operation naming C, and returning to
              * the acknowledged video must leave none. */
             if (!still()) return;
+            if (!live(ctx, state)) return;
             await root.prksSync.store.saveWorkSource(workId, {
                 kind: 'video',
                 url: source.source_url,
@@ -429,6 +461,7 @@
             }, state.observed);
             root.prksSync.changed();
             if (!still()) return;
+            if (!live(ctx, state)) return;
             if (typeof root.prksCommitWorkMetaBaseline === 'function') {
                 root.prksCommitWorkMetaBaseline(ctx, workId, session, { source_url: typed }, ['source_url']);
             }
@@ -436,6 +469,7 @@
             await safePaint(ctx, state);
         } catch (error_) {
             if (!still()) return;
+            if (!live(ctx, state)) return;
             state.error = error_ && error_.prksLocalStoreCode === 'scope_busy'
                 ? 'This source is still syncing or needs a decision below.'
                 : 'Could not save the video source locally. Please retry.';
@@ -458,4 +492,5 @@
     };
     root.prksMountWorkSourceEditor = mount;
     root.prksSaveWorkSource = save;
+    root.prksApplyWorkSourceEntityAck = applyWorkSourceEntityAck;
 })(typeof window === 'undefined' ? globalThis : window);

@@ -27,6 +27,7 @@ type ReadyApi = {
     createAnnotation: (pageIndex: number, annotation: Record<string, unknown>) => void;
     deleteAnnotation: (id: string) => Promise<void>;
     selectAnnotation: (id: string) => void;
+    deselectAnnotation: () => void;
     saveCopy: () => Promise<ArrayBuffer>;
     getDocumentId: () => string | null;
     isSelecting: () => boolean;
@@ -67,6 +68,8 @@ export class ViewerController {
         setQuery: () => {},
         applySettlement: () => {},
     };
+    private drawerOpen = false;
+    private drawerChrome: { setOpen: (open: boolean) => void } = { setOpen: () => {} };
     /**
      * Synchronous user-mutation gate. Updated immediately by setMutationEnabled
      * — do not rely only on React mode rerender for create/update/delete.
@@ -115,6 +118,16 @@ export class ViewerController {
 
     bindSearchChrome(chrome: SearchChrome) {
         this.searchChrome = chrome;
+    }
+
+    bindAnnotationDrawerChrome(chrome: { setOpen: (open: boolean) => void }) {
+        this.drawerChrome = chrome;
+        chrome.setOpen(this.drawerOpen);
+    }
+
+    setAnnotationDrawerOpen(open: boolean) {
+        this.drawerOpen = !!open;
+        this.drawerChrome.setOpen(this.drawerOpen);
     }
 
     presentSearch() {
@@ -224,6 +237,7 @@ export class ViewerController {
             createAnnotation: (pageIndex, annotation) => need().createAnnotation(pageIndex, annotation),
             deleteAnnotation: (id) => need().deleteAnnotation(id),
             selectAnnotation: (id) => need().selectAnnotation(id),
+            deselectAnnotation: () => need().deselectAnnotation(),
             onAnnotationEvent: (callback) => {
                 this.annotationListeners.add(callback);
                 return () => this.annotationListeners.delete(callback);
@@ -253,6 +267,10 @@ export class ViewerController {
             searchPrevious: () => (this.api && !this.destroyed ? this.api.searchPrevious() : -1),
             setSearchDriver: (driver) => {
                 this.setSearchDriver(driver);
+            },
+            setAnnotationDrawerOpen: (open: boolean) => {
+                if (this.destroyed) return;
+                this.setAnnotationDrawerOpen(open);
             },
         };
     }

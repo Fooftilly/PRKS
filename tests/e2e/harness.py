@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import random
 import shutil
@@ -19,6 +20,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -33,6 +35,7 @@ from tests.e2e.install_browser import (
 )
 from tests.e2e.policy import (
     PROFILE_ENV,
+    ROUTE_FASTPATH_ENV,
     SEED_CACHE_ENV,
     env_flag_enabled,
 )
@@ -43,6 +46,9 @@ READY_TIMEOUT_S = 25.0
 STOP_TIMEOUT_S = 8.0
 
 _ACTIVE_PROFILE = None
+# These are event counters, not durations. The serial benchmark exports them
+# separately from phase_seconds so partial telemetry cannot look complete.
+NAV_TIMING_COUNT_KEYS = frozenset(("nav_timing_attempts", "nav_timing_samples"))
 _SEED_CACHE_TMP = None
 _SEED_SNAPSHOTS = {}
 
@@ -79,6 +85,50 @@ def _profile_phase(name: str, seconds: float) -> None:
         return
     phases = profile["phases"]
     phases[name] = phases.get(name, 0.0) + max(0.0, float(seconds))
+
+
+def record_e2e_phase_seconds(name: str, seconds: float) -> None:
+    """Record an externally timed phase (e.g. browser performance.now).
+
+    Only opt-in profiles retain the sample. Reject non-finite or negative
+    values rather than producing a convincing but invalid speed measurement.
+    """
+    value = float(seconds)
+    if not math.isfinite(value) or value < 0:
+        raise ValueError("E2E phase seconds must be finite and non-negative")
+    _profile_phase(name, value)
+
+
+@contextmanager
+def profile_e2e_phase(name: str):
+    """Time an opt-in test-specific phase without changing regular E2E work.
+
+    These inclusive navigation/interaction diagnostics overlap with existing
+    async_wait and infrastructure phases, so ranking must not add them twice.
+    Record failed intervals separately; never mask the original exception.
+    """
+    if _ACTIVE_PROFILE is None:
+        yield
+        return
+    started = time.perf_counter()
+    try:
+        yield
+    except BaseException:
+        _profile_phase(name + "_failed", time.perf_counter() - started)
+        raise
+    else:
+        _profile_phase(name, time.perf_counter() - started)
+
+
+def _profile_nav_count(name: str) -> None:
+    """Count attempted/valid browser navigation samples, never elapsed seconds."""
+    profile = _ACTIVE_PROFILE
+    if profile is None:
+        return
+    if name not in NAV_TIMING_COUNT_KEYS:
+        raise ValueError("unknown navigation timing counter")
+    phases = profile["phases"]
+    phases[name] = phases.get(name, 0) + 1
 
 
 def finish_test_profile(test_id: str) -> dict:
@@ -835,6 +885,8 @@ class PageCollector:
         self.failed_requests = []
         self.http_5xx = []
         self.external = []
+        # Same-origin fast-path is opt-in; all requests remain intercepted.
+        self._fast_local_route = _env_enabled(ROUTE_FASTPATH_ENV)
         self._pdf_posts = []
         self._ann_posts = []
         self._save_confirms = []
@@ -916,20 +968,41 @@ class PageCollector:
     def _on_route(self, route):
         started = time.perf_counter()
         url = route.request.url
+        blocked_external = False
         try:
             if url.startswith("blob:") or url.startswith("data:") or url.startswith("about:"):
+                route.continue_()
+                return
+            # This prefix has an authority/path boundary, so an attacker-controlled
+            # host such as 127.0.0.1:<port>.evil.test cannot match. Aliases and
+            # unusual URL forms still use the original parsed-origin validator.
+            # Critically, page.route("**/*") is retained, preserving the
+            # interception patterns and redirect behavior of the default path.
+            if self._fast_local_route and (
+                url == self.origin
+                or url.startswith(self.origin + "/")
+                or url.startswith(self.origin + "?")
+            ):
+                _profile_phase("routing_decision", time.perf_counter() - started)
                 route.continue_()
                 return
             parsed = urlparse(url)
             if parsed.scheme in ("http", "https"):
                 if self._allowed_http_origin(url):
+                    _profile_phase("routing_decision", time.perf_counter() - started)
                     route.continue_()
                     return
                 self.external.append(url)
+                blocked_external = True
+                _profile_phase("routing_decision", time.perf_counter() - started)
                 route.abort()
                 return
             route.continue_()
         except Exception:
+            if blocked_external:
+                # An abort error must never turn into an external request.
+                # Let the scenario fail rather than accidentally fail open.
+                raise
             try:
                 route.continue_()
             except Exception:
@@ -1006,13 +1079,17 @@ class AppServer:
 
     def __init__(self, seed_fn=None, extra_env=None):
         self._tmpdir = tempfile.TemporaryDirectory(prefix="prks-e2e-")
-        self.storage_root = self._tmpdir.name
+        # The storage root is a fresh, empty child directory so PRKS treats it
+        # as a new root (storage-architecture §7.1); server output lives beside
+        # it, never inside it, because a root holding unrelated files is refused.
+        self.storage_root = os.path.join(self._tmpdir.name, "storage")
+        os.mkdir(self.storage_root)
         self.port = find_free_port()
         self.origin = "http://%s:%s" % (HOST, self.port)
         self.ids = {}
         self.proc = None
-        self._stdout_path = os.path.join(self.storage_root, "server.stdout")
-        self._stderr_path = os.path.join(self.storage_root, "server.stderr")
+        self._stdout_path = os.path.join(self._tmpdir.name, "server.stdout")
+        self._stderr_path = os.path.join(self._tmpdir.name, "server.stderr")
         self._stdout = None
         self._stderr = None
         self._seed_fn = seed_fn
@@ -1037,15 +1114,25 @@ class AppServer:
         env.update(self._extra_env)
         for attempt in range(SERVER_START_ATTEMPTS):
             started = time.perf_counter()
-            self._spawn(env)
+            profiled = _ACTIVE_PROFILE is not None
+            try:
+                self._spawn(env)
+            except Exception:
+                if profiled:
+                    _profile_phase("server_spawn_failed", time.perf_counter() - started)
+                raise
+            # Do not sample extra clocks during ordinary (unprofiled) E2E.
+            spawned = time.perf_counter() if profiled else None
             try:
                 wait_http(self.origin + "/api/works")
-                _profile_phase("server_start", time.perf_counter() - started)
-                e2e_heartbeat("SERVER_READY")
-                return self
             except Exception:
+                # Keep failed/retried probes separate from the successful
+                # attempt's inclusive server_start and its two detail phases.
+                if profiled:
+                    _profile_phase("server_spawn_failed", spawned - started)
+                    _profile_phase("server_http_ready_failed", time.perf_counter() - spawned)
                 # Read the captured output *before* teardown: the log files live
-                # inside storage_root, which cleanup deletes.
+                # in the server's temporary directory, which cleanup deletes.
                 out = _read_file(self._stdout_path)
                 err = _read_file(self._stderr_path)
                 self._release_process()
@@ -1061,6 +1148,14 @@ class AppServer:
                     "PRKS E2E server failed to start on %s\nstdout:\n%s\nstderr:\n%s"
                     % (self.origin, out[-4000:], err[-4000:])
                 ) from None
+            ready = time.perf_counter()
+            # Only successful attempts train the historical inclusive phase.
+            if profiled:
+                _profile_phase("server_spawn", spawned - started)
+                _profile_phase("server_http_ready", ready - spawned)
+            _profile_phase("server_start", ready - started)
+            e2e_heartbeat("SERVER_READY")
+            return self
         raise RuntimeError("PRKS E2E server could not obtain a free port")
 
     def _spawn(self, env):
@@ -1184,6 +1279,56 @@ class FixtureServer:
             self.proc = None
 
 
+def _profile_browser_navigation(page) -> None:
+    """Capture opt-in Chromium navigation details without gating app readiness.
+
+    These are browser PerformanceNavigationTiming durations, not another
+    partition of the Python app_ready timer (which includes Playwright RPC).
+    A missing/unsupported entry must never turn a passing E2E into a failure.
+    """
+    if _ACTIVE_PROFILE is None:
+        return
+    # Every successful open_app_page enters here once. Even exceptions,
+    # unsupported entries and invalid ordering must count as missing samples.
+    _profile_nav_count("nav_timing_attempts")
+    try:
+        timing = page.evaluate("""() => {
+            const entry = performance.getEntriesByType('navigation')[0];
+            if (!entry) return null;
+            return {
+                fetchStart: entry.fetchStart,
+                responseStart: entry.responseStart,
+                responseEnd: entry.responseEnd,
+                domInteractive: entry.domInteractive,
+                domContentLoadedEventStart: entry.domContentLoadedEventStart,
+                domContentLoadedEventEnd: entry.domContentLoadedEventEnd
+            };
+        }""")
+    except Exception:
+        return
+    if not isinstance(timing, dict):
+        return
+    keys = (
+        "fetchStart", "responseStart", "responseEnd", "domInteractive",
+        "domContentLoadedEventStart", "domContentLoadedEventEnd",
+    )
+    values = [timing.get(key) for key in keys]
+    if not all(type(value) in (int, float) and math.isfinite(value) for value in values):
+        return
+    fetch, response_start, response_end, interactive, dcl_start, dcl_end = values
+    if not 0 <= fetch <= response_start <= response_end <= interactive <= dcl_start <= dcl_end:
+        return
+    _profile_phase("nav_response_wait", (response_start - fetch) / 1000)
+    _profile_phase("nav_response_body", (response_end - response_start) / 1000)
+    _profile_phase("nav_dom_content_loaded", (dcl_end - response_end) / 1000)
+    # Browser event milestones partition post-response DCL time, but cannot
+    # distinguish parser work from synchronous JavaScript and resource stalls.
+    _profile_phase("nav_until_interactive", (interactive - response_end) / 1000)
+    _profile_phase("nav_interactive_to_dcl", (dcl_start - interactive) / 1000)
+    _profile_phase("nav_dcl_handlers", (dcl_end - dcl_start) / 1000)
+    _profile_nav_count("nav_timing_samples")
+
+
 def open_app_page(browser, origin: str, service_workers: str = "block"):
     started = time.perf_counter()
     # Prefer-reduced-motion is opt-in (`PRKS_E2E_REDUCED_MOTION=1`). Emulating
@@ -1206,12 +1351,56 @@ def open_app_page(browser, origin: str, service_workers: str = "block"):
     # mounts .prks-folder-library with location.hash === '#/folders', so the old
     # Folders nav click was a pure re-navigation (~45ms median measured waste).
     # Do not invent fake init state — wait on the real shell + Folders surface.
-    page.goto(origin + "/#/folders", wait_until="domcontentloaded")
-    page.wait_for_selector("#sidebar")
-    page.wait_for_selector(".prks-folder-library")
-    page.wait_for_function("() => location.hash === '#/folders'")
-    _profile_phase("app_ready", time.perf_counter() - started)
+    profiled = _ACTIVE_PROFILE is not None
+    # Stage details are held locally until this page opens successfully. If a
+    # later step fails, all elapsed stages of THIS attempt use *_failed names,
+    # so a prior successful app_ready in the same test cannot mask their cost.
+    stages = {} if profiled else None
+    stage_start = started
+    stage = "app_navigation"
+    try:
+        page.goto(origin + "/#/folders", wait_until="domcontentloaded")
+        if profiled:
+            now = time.perf_counter()
+            stages[stage] = now - stage_start
+            stage_start = now
+
+        stage = "app_sidebar_wait"
+        page.wait_for_selector("#sidebar")
+        if profiled:
+            now = time.perf_counter()
+            stages[stage] = now - stage_start
+            stage_start = now
+
+        stage = "app_folder_wait"
+        page.wait_for_selector(".prks-folder-library")
+        if profiled:
+            now = time.perf_counter()
+            stages[stage] = now - stage_start
+            stage_start = now
+
+        stage = "app_route_wait"
+        page.wait_for_function("() => location.hash === '#/folders'")
+    except Exception:
+        if profiled:
+            stages[stage] = time.perf_counter() - stage_start
+            for name, seconds in stages.items():
+                _profile_phase(name + "_failed", seconds)
+        raise
+
+    ready = time.perf_counter()
+    if profiled:
+        stages[stage] = ready - stage_start
+        for name, seconds in stages.items():
+            _profile_phase(name, seconds)
+    # Real readiness failures still propagate; this inclusive phase is for
+    # successfully completed navigation and all three original checks only.
+    _profile_phase("app_ready", ready - started)
     e2e_heartbeat("APP_READY")
+    # Profiling only: read browser-native milestones after the existing checks.
+    # Never let telemetry exceptions relax or add to readiness assertions.
+    if profiled:
+        _profile_browser_navigation(page)
     return page, context, collector
 
 

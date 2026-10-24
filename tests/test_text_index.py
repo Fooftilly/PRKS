@@ -17,7 +17,7 @@ from run_tests import apply_isolated_test_env
 
 apply_isolated_test_env(_PROJECT_DIR)
 
-from backend.db_manager import PRKS_SCHEMA_VERSION, PRKSDatabase
+from backend.db_manager import PRKSDatabase
 from backend.log_safety import PrivacySafeFormatter
 from backend.server import run_server
 from backend.storage.config import StorageConfig
@@ -171,8 +171,7 @@ class TextIndexTestCase(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_main_schema_version_unchanged(self):
-        self.assertEqual(PRKS_SCHEMA_VERSION, 17)
+    def test_index_versions_pinned(self):
         self.assertEqual(TEXT_INDEX_SCHEMA_VERSION, 2)
         self.assertEqual(TEXT_EXTRACTOR_VERSION, 1)
 

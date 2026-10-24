@@ -12,26 +12,31 @@ FRONTEND_APP = ROOT / "frontend-app" / "src" / "features" / "folder-library"
 class FolderLibraryVueContracts(unittest.TestCase):
     def test_coordinator_presents_vue_folder_library(self):
         app = (FRONTEND / "app.js").read_text()
-        self.assertIn("function prksPresentVueFolderLibrary", app)
-        self.assertIn("prksVuePresentFolderLibrary", app)
+        self.assertNotIn("function prksPresentVueFolderLibrary", app)
+        self.assertIn("prksDeliverVueRoute", app)
+        self.assertNotIn("prksVuePresentFolderLibrary", app)
         self.assertIn("sameFolderLibraryWorkspace", app)
         self.assertIn("__prksRetainFolderLibrarySurface", app)
         folders_case = app[app.index("case 'folders': {"): app.index("case 'playlists': {")]
-        self.assertIn("prksPresentVueFolderLibrary", folders_case)
+        self.assertIn("prksPresentVueRoute(ctx, contentDiv, 'folder-library'", folders_case)
         self.assertNotIn("renderDashboard(", folders_case)
         self.assertIn("skipPageEnter: sameFolderLibraryWorkspace", folders_case)
         # Retained surfaces must still dismiss on same-route error after retain.
         self.assertIn(
-            "sameFolderLibraryWorkspace && typeof window.prksVueDismissFolderLibrary",
+            "retainedRouteSurface && typeof window.prksVueDismissRoute",
+            app,
+        )
+        self.assertIn(
+            "sameFolderLibraryWorkspace ||",
             app,
         )
 
     def test_folder_library_route_reuses_host_on_in_place_refresh(self):
         app = (FRONTEND / "app.js").read_text()
+        retained = app[app.index("const PRKS_RETAINED_VUE_ROUTE_FEATURES") : app.index("function prksPresentVueRoute(")]
+        self.assertIn("'folder-library',", retained)
         present = app[
-            app.index("function prksPresentVueFolderLibrary") : app.index(
-                "function prksPresentVueConcepts"
-            )
+            app.index("function prksPresentVueRoute(") : app.index("async function prksReloadTagsVocabulary")
         ]
         self.assertIn(":scope > [data-prks-vue-route-host]", present)
         self.assertIn("contentDiv.innerHTML = '';", present)
@@ -53,15 +58,21 @@ class FolderLibraryVueContracts(unittest.TestCase):
         # Scoped release only — global hide would dismiss another pane's preview.
         self.assertNotIn("prksHideWorkThumbPreview()", lifecycle)
         pane = (FRONTEND_APP / "RecentlyAddedPane.vue").read_text()
-        self.assertIn("releaseWorkThumbResources", pane)
-        self.assertIn("initLazyWorkThumbs", pane)
+        self.assertIn("useWorkCardCollection", pane)
+        self.assertIn("workCardCollectionFingerprint", pane)
+        collection = (
+            ROOT / "frontend-app" / "src" / "components" / "use-work-card-collection.ts"
+        ).read_text()
+        self.assertIn("prksReleaseWorkThumbPreview", collection)
+        self.assertIn("prksReleaseLazyWorkThumbs", collection)
+        self.assertIn("prksInitLazyWorkThumbs", collection)
         self.assertIn("overlayRevision", pane)
         # Cached paints must still init so IntersectionObserver prune runs (#170).
         self.assertNotIn("if (!props.offlineCached)", pane)
+        self.assertNotIn("initWhen:", pane)
         folders = (FRONTEND / "components" / "folders.js").read_text()
         self.assertIn("prksToggleFolderNodeInHost", folders)
         self.assertIn("prksToggleAllFolderNodesInHost", folders)
-        self.assertIn("st.vueOwned", folders)
         self.assertIn("delegateToggle", folders)
         tree = (FRONTEND_APP / "FolderTree.vue").read_text()
         self.assertIn("delegateToggle: true", tree)
@@ -69,7 +80,6 @@ class FolderLibraryVueContracts(unittest.TestCase):
         switch = folders[folders.index("function prksSwitchFolderLibraryTab") :]
         switch = switch[: switch.index("\nfunction prksFolderLibraryCatalogGlanceParts")]
         self.assertIn("st.switchTab", switch)
-        self.assertIn("vueOwned", switch)
         route = (FRONTEND_APP / "FolderLibraryRoute.vue").read_text()
         self.assertIn("switchTab: (tab: string) =>", route)
         self.assertIn("Re-entering Recently Added always awaits load", route)
@@ -96,11 +106,8 @@ class FolderLibraryVueContracts(unittest.TestCase):
         self.assertIn("prksPublishFolderDashboardState", sync)
         self.assertIn("scheduleOwnerGlance", route)
         folders = (FRONTEND / "components" / "folders.js").read_text()
-        rerender = folders[
-            folders.index("function prksRerenderFolderLibraryRecentlyAddedOnly") :
-        ]
-        rerender = rerender[: rerender.index("\nfunction prksApplyFolderLibraryFilesSearchFilter")]
-        self.assertIn("if (st.vueOwned) return;", rerender)
+        self.assertNotIn("function prksRerenderFolderLibraryRecentlyAddedOnly", folders)
+        self.assertNotIn("function renderDashboard", folders)
         self.assertIn("function prksPublishFolderDashboardState", folders)
         self.assertIn("function prksUnpublishFolderDashboardState", folders)
         self.assertIn("prksFolderDashboardStateForRoot", folders)
@@ -108,7 +115,7 @@ class FolderLibraryVueContracts(unittest.TestCase):
         glance = glance[: glance.index("\nasync function prksScheduleFolderLibraryGlance")]
         self.assertIn("opts.recentlyAddedWorks", glance)
         schedule = folders[folders.index("async function prksScheduleFolderLibraryGlance") :]
-        schedule = schedule[: schedule.index("\nfunction renderDashboard")]
+        schedule = schedule[: schedule.index("\nconst PRKS_FOLDER_DETAIL_NARROW_PX")]
         self.assertIn("opts.folders", schedule)
         self.assertIn("recentlyAddedWorks", schedule)
 

@@ -91,6 +91,7 @@ _STATIC_API_PATHS = frozenset(
         "/api/client-errors",
         "/api/diagnostics/performance",
         "/api/diagnostics/performance/reset",
+        "/api/diagnostics/jobs",
         "/api/roles",
         "/api/arguments",
         "/api/argument-verdicts",
@@ -99,6 +100,10 @@ _STATIC_API_PATHS = frozenset(
         "/api/openapi.json",
         "/api/openapi/positions.json",
         "/api/openapi/performance-diagnostics.json",
+        "/api/openapi/job-diagnostics.json",
+        "/api/openapi/publishers.json",
+        "/api/openapi/saved-views.json",
+        "/api/openapi/processing-files.json",
         "/api/research-graph",
     }
 )

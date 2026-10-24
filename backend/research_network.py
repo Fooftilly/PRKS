@@ -134,9 +134,7 @@ def list_concepts(db: PRKSDatabase) -> List[dict]:
         rows = _fetchall(
             conn,
             """
-            SELECT c.id, c.name, c.description, c.created_at, c.updated_at,
-                   (SELECT COUNT(*) FROM concept_parents p WHERE p.parent_concept_id = c.id)
-                       AS subconcept_count
+            SELECT c.id, c.name, c.description, c.created_at, c.updated_at
             FROM concepts c
             ORDER BY LOWER(c.name) ASC, c.id ASC
             """,
@@ -158,18 +156,24 @@ def list_concepts(db: PRKSDatabase) -> List[dict]:
             ORDER BY LOWER(alias) ASC
             """,
         )
+    # One pass over the hierarchy relation yields both projections: each
+    # child's ordered ``parents`` list and each parent's direct child count.
     parents: Dict[str, List[dict]] = {}
+    child_counts: Dict[str, int] = {}
     for r in parent_rows:
         parents.setdefault(r["child_id"], []).append({"id": r["id"], "name": r["name"]})
+        child_counts[r["id"]] = child_counts.get(r["id"], 0) + 1
     aliases: Dict[str, List[str]] = {}
     for r in alias_rows:
         aliases.setdefault(r["concept_id"], []).append(r["alias"])
     out = []
     for r in rows:
         item = _row(r)
+        # Key order is part of the serialized /api/concepts body: the count
+        # keeps the position it had as a selected column (before parents).
+        item["subconcept_count"] = child_counts.get(r["id"], 0)
         item["parents"] = parents.get(r["id"], [])
         item["aliases"] = aliases.get(r["id"], [])
-        item["subconcept_count"] = int(r["subconcept_count"] or 0)
         out.append(item)
     return out
 

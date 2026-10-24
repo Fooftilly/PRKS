@@ -168,6 +168,37 @@ GRAPH_UNRELATED_ARGUMENT = "Unrelated Argument"
 GRAPH_SOURCED_ARGUMENT = "Sourced Argument"
 
 
+IMPORTED_HIGHLIGHT_COMMENT = "Imported highlight comment"
+
+
+def seed_imported_highlight_library(storage_root: str) -> dict:
+    """The default library, but Work B's PDF carries a highlight made elsewhere.
+
+    The highlight lives only in the PDF bytes, the way a file annotated in
+    another reader arrives. Tests that need it to have no canonical row
+    until the user edits it stop the open-time adoption from finding it.
+    """
+    import pymupdf
+
+    ids = seed_library(storage_root)
+    cfg = StorageConfig.for_testing(storage_root)
+    pdf_path = os.path.join(cfg.pdfs_dir, "e2e-related.pdf")
+    doc = pymupdf.open(pdf_path)
+    try:
+        page = doc[0]
+        quads = page.search_for("Hello page one", quads=True)
+        if not quads:
+            raise RuntimeError("fixture text missing from minimal.pdf")
+        annot = page.add_highlight_annot(quads)
+        annot.set_info(content=IMPORTED_HIGHLIGHT_COMMENT)
+        annot.update()
+        doc.saveIncr()
+    finally:
+        doc.close()
+    ids["imported_highlight_comment"] = IMPORTED_HIGHLIGHT_COMMENT
+    return ids
+
+
 def seed_graph_context_library(storage_root: str) -> dict:
     ids = seed_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)

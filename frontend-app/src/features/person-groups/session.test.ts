@@ -1,8 +1,8 @@
 import { nextTick } from 'vue'
+import { dismissRouteSurface } from '../../route-surface/lifecycle'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   PERSON_GROUPS_RETAIN_SURFACE_KEY,
-  dismissPersonGroups,
   presentPersonGroupDetail,
   presentPersonGroupsIndex,
   resetPersonGroupsSessionForTests,
@@ -193,7 +193,7 @@ describe('Person Groups session', () => {
     const remove = paneHost.querySelector('#gd-delete-btn')
     expect(remove).toBeInstanceOf(HTMLButtonElement)
     expect(remove?.textContent).toContain('Delete group')
-    dismissPersonGroups(pane)
+    dismissRouteSurface(pane)
     expect(paneHost.querySelector('.group-sidebar-pane--edit')).toBeNull()
   })
 

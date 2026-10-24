@@ -127,13 +127,33 @@ jobs:
         with:
           node-version: "24"
 
+      # The typed slice includes PostgreSQL and identity login (#69).
+      # Resolve psycopg and argon2 imports rather than suppressing diagnostics.
+      # Install only pinned type imports from requirements-dev.txt.
+      - name: Set up Python for PostgreSQL and identity type imports
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned PostgreSQL and identity type dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t pg_pins < <(grep -E '^psycopg(-binary|-pool)?==[^[:space:]]+$' requirements-dev.txt)
+          mapfile -t argon_pins < <(grep -E '^argon2-cffi==[^[:space:]]+$' requirements-dev.txt)
+          if [[ "${#pg_pins[@]}" -ne 3 || "${#argon_pins[@]}" -ne 1 ]]; then
+            echo "Expected three pinned PostgreSQL packages and one argon2-cffi package in requirements-dev.txt" >&2
+            exit 1
+          fi
+          python -m pip install --disable-pip-version-check --only-binary=:all: "${pg_pins[@]}" "${argon_pins[@]}"
+
       # Narrow diagnostics across prks_app.py + backend (typeCheckingMode: off).
       - name: Run Pyright data-flow checks
         run: npm exec --yes --ignore-scripts --package="pyright@${PYRIGHT_VERSION}" -- pyright --project pyrightconfig.json
 
       # Genuine basic type checking for the #69 typed slice (scopes pinned in
       # scripts/check_invariants.py PYRIGHT_TYPED_SLICE_SCOPES).
-      - name: Run Pyright typed slice (backend/storage, entity_ids, concurrency; basic)
+      - name: Run Pyright typed slice (backend/storage + backend utility modules; basic)
         run: npm exec --yes --ignore-scripts --package="pyright@${PYRIGHT_VERSION}" -- pyright --project pyrightconfig.typed-slice.json
 
   eslint:
@@ -180,6 +200,12 @@ jobs:
       - name: Install Vue toolchain from the lockfile
         run: npm ci --ignore-scripts --prefix frontend-app
 
+      - name: OpenAPI TypeScript types match checked-in artifacts
+        run: npm run openapi:check --prefix frontend-app
+
+      - name: Vue/TypeScript ESLint
+        run: npm run lint --prefix frontend-app
+
       - name: Typecheck
         run: npm run typecheck --prefix frontend-app
 
@@ -190,10 +216,10 @@ jobs:
         run: |
           set -euo pipefail
           npm run build --prefix frontend-app
-          git diff --exit-code -- frontend/vue frontend/js/workspace-model.js frontend/vendor/DEPENDENCY-MANIFEST.json frontend/sw.js
-          if [[ -n "$(git status --porcelain -- frontend/vue frontend/js/workspace-model.js frontend/vendor/DEPENDENCY-MANIFEST.json frontend/sw.js)" ]]; then
+          git diff --exit-code -- frontend/vue frontend/js/workspace-model.js frontend/js/work-route-projection.js frontend/js/search-query-codec.js frontend/js/tab-leave.js frontend/js/owner-resource.js frontend/js/editor-recovery.js frontend/js/route-model.js frontend/vendor/DEPENDENCY-MANIFEST.json frontend/sw.js
+          if [[ -n "$(git status --porcelain -- frontend/vue frontend/js/workspace-model.js frontend/js/work-route-projection.js frontend/js/search-query-codec.js frontend/js/tab-leave.js frontend/js/owner-resource.js frontend/js/editor-recovery.js frontend/js/route-model.js frontend/vendor/DEPENDENCY-MANIFEST.json frontend/sw.js)" ]]; then
             echo "Vue production build changed committed assets" >&2
-            git status --porcelain -- frontend/vue frontend/js/workspace-model.js frontend/vendor/DEPENDENCY-MANIFEST.json frontend/sw.js >&2
+            git status --porcelain -- frontend/vue frontend/js/workspace-model.js frontend/js/work-route-projection.js frontend/js/search-query-codec.js frontend/js/tab-leave.js frontend/js/owner-resource.js frontend/js/editor-recovery.js frontend/js/route-model.js frontend/vendor/DEPENDENCY-MANIFEST.json frontend/sw.js >&2
             exit 1
           fi
 

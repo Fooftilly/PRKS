@@ -122,7 +122,7 @@ This leaf contains current Work metadata/source/open/tag durable-operation rules
   Each group reads its own fields from the DOM and reports only its own
   conflicts.
 - **Server-backed Search and Saved View results are overlaid too**
-  (`prksEffectiveWorksSync()` inside `prksSearchResultCardsHtml()`). They are
+  (`prksEffectiveWorksSync()` inside `prksEffectiveSearchResults()`). They are
   fetched fresh, so without it a card shows the acknowledged Status seconds
   after the user changed it everywhere else. It covers every synchronized
   field, not Status alone.
@@ -135,7 +135,7 @@ This leaf contains current Work metadata/source/open/tag durable-operation rules
   sees. That is the existing composition; synchronization must not take it
   over.
 - **Order: overlay, then compose.** `acknowledged row -> effective row ->
-  prksWorkCardCreditLine() -> HTML`. Never patch `author_text` onto rendered
+  workCardCreditText() -> PrksWorkCard`. Never patch `author_text` onto rendered
   credit: with a linked Author the patch must do nothing, and with the field
   cleared it must reveal a different person. The command palette had this
   ordering bug -- it read the credit off the acknowledged row and the overlay

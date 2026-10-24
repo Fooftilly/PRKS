@@ -37,6 +37,7 @@ if str(REPO) not in sys.path:
 os.environ["PRKS_E2E"] = "1"
 
 from tests.e2e.harness import (
+    NAV_TIMING_COUNT_KEYS,
     apply_e2e_playwright_env,
     clear_e2e_heartbeat,
     e2e_heartbeat,
@@ -76,6 +77,7 @@ from tests.e2e.policy import (
     select_smoke,
     service_worker_diff_for_plan,
 )
+from tests.junit_reporting import JUnitResultMixin, try_write_junit_report
 from tests.e2e.sharding import (
     BASELINE_TIMINGS_PATH,
     TIMINGS_PATH,
@@ -103,19 +105,24 @@ _E2E_TEST_ID_LINE = re.compile(
 )
 _E2E_DIAG_LINE = re.compile(r"^\[e2e-diag\]\s+(\S+)(?:\s+(\S+))?\s*$")
 
-E2E_MODULES = (
+DEFAULT_E2E_MODULES = (
     "tests.e2e.test_app",
     "tests.e2e.test_offline",
     "tests.e2e.test_browse_offline",
     "tests.e2e.test_work_browsing",
     "tests.e2e.test_progress_route_surface",
+    "tests.e2e.test_publishers_route_surface",
+    "tests.e2e.test_processing_route_surface",
+    "tests.e2e.test_search_saved_views_route_surface",
     "tests.e2e.test_concepts_route_surface",
     "tests.e2e.test_positions_route_surface",
     "tests.e2e.test_arguments_route_surface",
     "tests.e2e.test_folder_library_route_surface",
     "tests.e2e.test_local_store_durability",
+    "tests.e2e.test_editor_recovery_store",
     "tests.e2e.test_folders_offline",
     "tests.e2e.test_folders_durable",
+    "tests.e2e.test_folder_reminders",
     "tests.e2e.test_library_nav_folders",
     "tests.e2e.test_person_groups_offline",
     "tests.e2e.test_person_groups_durable",
@@ -137,6 +144,15 @@ E2E_MODULES = (
     "tests.e2e.test_modal_lifecycle",
     "tests.e2e.test_wait_for_async",
 )
+
+# Release-transition checks manipulate two distribution versions at one origin.
+# They require the *unbundled source* and are intentionally excluded from the
+# normal full/affected/published-distribution inventories. Still use this runner
+# to get named test IDs, last-failed data, timing and targeted reproduction.
+OPT_IN_E2E_MODULES = ("tests.e2e.test_classic_sw_transitions",)
+E2E_MODULES = DEFAULT_E2E_MODULES
+if os.environ.get("PRKS_E2E_CLASSIC_SW_TRANSITIONS") == "1":
+    E2E_MODULES += OPT_IN_E2E_MODULES
 
 SLOWEST_LIMIT = 25
 WORKER_POLL_S = 0.25
@@ -318,7 +334,7 @@ def _executed_ids_from_observation(observed, failed_ids) -> list:
     return executed
 
 
-class _TimingResult(unittest.TextTestResult):
+class _TimingResult(JUnitResultMixin, unittest.TextTestResult):
     """TextTestResult that also records wall-clock duration per test ID."""
 
     def __init__(self, *args, **kwargs):
@@ -807,6 +823,13 @@ def run_worker(
         report["phase_timings"] = result.phase_timings
         report["detail"] = _failure_detail(result)
         rc = 0 if result.wasSuccessful() else 1
+        junit_dir = os.environ.get("PRKS_JUNIT_REPORT_DIR")
+        if junit_dir:
+            try_write_junit_report(
+                result,
+                Path(junit_dir) / f"e2e-worker-{index}.xml",
+                suite_name="PRKS E2E",
+            )
     except BaseException as exc:  # noqa: BLE001 - must still report, then re-raise nothing
         report["errors"] = (report["errors"] or 0) + 1
         report["detail"] = "worker %d raised %s: %s" % (index, type(exc).__name__, exc)
@@ -1325,7 +1348,85 @@ def _print_worker_failure(worker, jobs, report):
     sys.stderr.flush()
 
 
+def _profile_infrastructure_total(phases: dict) -> float:
+    """Rank profiled tests without counting detail phases inside their parents.
+
+    The inclusive labels remain visible in each test's phase details, but an
+    additive ranking must count either an inclusive parent or its children,
+    never both. Preserve the old result for profiles without detail phases.
+    """
+    nested = set()
+    if "server_start" in phases:
+        nested.update(("server_spawn", "server_http_ready"))
+    if "app_ready" in phases:
+        nested.update((
+            "app_navigation", "app_sidebar_wait", "app_folder_wait", "app_route_wait"
+        ))
+    # Browser-native navigation timings overlap the inclusive Playwright page
+    # navigation; they explain its cost rather than add new infrastructure work.
+    if "app_navigation" in phases or "app_ready" in phases:
+        nested.update((
+            "nav_response_wait", "nav_response_body", "nav_dom_content_loaded",
+            "nav_until_interactive", "nav_interactive_to_dcl", "nav_dcl_handlers",
+        ))
+    elif "nav_dom_content_loaded" in phases:
+        # These three browser milestones partition the inclusive DCL interval.
+        nested.update((
+            "nav_until_interactive", "nav_interactive_to_dcl", "nav_dcl_handlers",
+        ))
+    if "request_routing" in phases:
+        nested.add("routing_decision")
+    nested.update(NAV_TIMING_COUNT_KEYS)
+    # Inclusive test-specific Graph and Argument propagation diagnostics
+    # overlap existing app, routing, and async_wait phases. Show them in
+    # per-test details, not as extra additive infrastructure work.
+    return sum(
+        float(seconds)
+        for name, seconds in phases.items()
+        if name not in nested
+        and not name.startswith(("graph_nav_", "arg_overlay_"))
+    )
+
+
 # --- serial parent -------------------------------------------------------
+
+
+# Machine-readable manual A/B reporting is independent of console formatting.
+# Absent this env var, normal E2E runs make no extra writes.
+BENCHMARK_RESULT_ENV = "PRKS_E2E_BENCHMARK_RESULT"
+
+
+def _write_serial_benchmark_result(result, wall_seconds: float) -> None:
+    """Write the opt-in, privacy-safe benchmark summary after a serial test run."""
+    destination = os.environ.get(BENCHMARK_RESULT_ENV)
+    if not destination:
+        return
+    modes = benchmark_modes()
+    if "profile" not in modes:
+        raise ValueError("%s requires E2E profiling" % BENCHMARK_RESULT_ENV)
+    totals = {}
+    navigation_counts = {"attempted": 0, "captured": 0}
+    for phases in result.phase_timings.values():
+        for name, seconds in phases.items():
+            if name in NAV_TIMING_COUNT_KEYS:
+                key = "attempted" if name == "nav_timing_attempts" else "captured"
+                navigation_counts[key] += int(seconds)
+            else:
+                totals[name] = totals.get(name, 0.0) + float(seconds)
+    payload = {
+        "schema_version": 2,
+        "navigation_samples": navigation_counts,
+        "benchmark_modes": list(modes),
+        "workers": 1,
+        "tests": result.testsRun,
+        "failures": len(result.failures),
+        "errors": len(result.errors),
+        "skipped": len(result.skipped),
+        "wall_seconds": round(wall_seconds, 3),
+        "phase_seconds": {name: round(seconds, 6) for name, seconds in totals.items()},
+    }
+    # Contains aggregate synthetic-test metrics only; no IDs, URLs or fixtures.
+    Path(destination).write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def run_serial(
@@ -1347,6 +1448,14 @@ def run_serial(
     finally:
         clear_e2e_heartbeat()
     wall = time.perf_counter() - started
+    junit_dir = os.environ.get("PRKS_JUNIT_REPORT_DIR")
+    if junit_dir:
+        try_write_junit_report(
+            result,
+            Path(junit_dir) / "e2e-serial.xml",
+            suite_name="PRKS E2E",
+        )
+    _write_serial_benchmark_result(result, wall)
     print("")
     print(
         "E2E workers=1 tests=%d failures=%d errors=%d skipped=%d in %.1fs"
@@ -2036,18 +2145,28 @@ def _main(argv=None) -> int:
 
     if "profile" in active_benchmark_modes and phase_timings:
         totals = {}
+        navigation_counts = {"attempted": 0, "captured": 0}
         for phases in phase_timings.values():
             for name, seconds in phases.items():
-                totals[name] = totals.get(name, 0.0) + float(seconds)
+                if name in NAV_TIMING_COUNT_KEYS:
+                    key = "attempted" if name == "nav_timing_attempts" else "captured"
+                    navigation_counts[key] += int(seconds)
+                else:
+                    totals[name] = totals.get(name, 0.0) + float(seconds)
         print("")
         print("E2E infrastructure profile (sum across selected tests):")
         for name, seconds in sorted(totals.items(), key=lambda item: (-item[1], item[0])):
             print("  %-18s %8.2fs" % (name, seconds))
+        if navigation_counts["attempted"]:
+            print(
+                "  browser navigation samples: %d/%d"
+                % (navigation_counts["captured"], navigation_counts["attempted"])
+            )
         print("")
         print("Slowest profiled tests:")
         ranked = sorted(
             (
-                (sum(float(v) for v in phases.values()), test_id, phases)
+                (_profile_infrastructure_total(phases), test_id, phases)
                 for test_id, phases in phase_timings.items()
             ),
             reverse=True,
@@ -2058,6 +2177,7 @@ def _main(argv=None) -> int:
                 for name, value in sorted(
                     phases.items(), key=lambda item: (-float(item[1]), item[0])
                 )
+                if name not in NAV_TIMING_COUNT_KEYS
             )
             print("  %7.2fs  %s  [%s]" % (infra_seconds, test_id, detail))
 

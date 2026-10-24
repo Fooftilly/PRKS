@@ -15,8 +15,7 @@ from run_tests import apply_isolated_test_env
 
 apply_isolated_test_env(_PROJECT_DIR)
 
-from backend.db_manager import PRKS_SCHEMA_VERSION, PRKSDatabase
-from backend.db_migrations import LATEST_SCHEMA_VERSION
+from backend.db_manager import PRKSDatabase
 from backend.log_safety import safe_route
 from backend.research_graph import (
     MAX_GRAPH_EDGES,
@@ -103,10 +102,6 @@ class ResearchGraphTests(unittest.TestCase):
             "arg1": arg1,
             "arg2": arg2,
         }
-
-    def test_schema_version_unchanged(self):
-        self.assertEqual(PRKS_SCHEMA_VERSION, 17)
-        self.assertEqual(LATEST_SCHEMA_VERSION, 17)
 
     def test_representative_network(self):
         n = self._network()

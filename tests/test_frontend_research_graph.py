@@ -33,8 +33,13 @@ _VENDOR = os.path.join(_FRONTEND, "vendor", "cytoscape")
 _CSS = os.path.join(_FRONTEND, "css", "style.css")
 _WIKI_RESEARCH = os.path.join(_PROJECT_DIR, "docs", "wiki", "Research-Network.md")
 _AGENTS = os.path.join(_PROJECT_DIR, "frontend", "AGENTS.md")
-_SCHEMA = os.path.join(_PROJECT_DIR, "backend", "db_migrations.py")
 _RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_research_graph_selftest.js")
+_GRAPH_VUE = os.path.join(
+    _PROJECT_DIR, "frontend-app", "src", "features", "research-graph", "ResearchGraphRoute.vue"
+)
+_GRAPH_SESSION = os.path.join(
+    _PROJECT_DIR, "frontend-app", "src", "features", "research-graph", "session.ts"
+)
 
 
 def _read(path: str) -> str:
@@ -103,11 +108,13 @@ class FrontendResearchGraphTests(unittest.TestCase):
         nav = _read(_NAV)
         app = _read(_APP)
         graph = _read(_GRAPH)
-        self.assertIn("research-graph", nav)
-        self.assertIn("navHref: '#/graph'", nav)
-        self.assertIn("prksParseGraphFocus", nav)
-        self.assertIn("prksGraphCanonical", nav)
-        self.assertIn("person):[A-Za-z0-9]", nav)
+        model = _read(os.path.join(_PROJECT_DIR, "frontend-app", "src", "routing", "route-model.ts"))
+        self.assertIn("'research-graph'", model)
+        self.assertIn("navHref: '#/graph'", model)
+        self.assertIn("export function parseGraphFocus", model)
+        self.assertIn("function graphCanonical", model)
+        self.assertIn("person):[A-Za-z0-9]", model)
+        self.assertIn("const prksParseGraphFocus = prksRouteModel.parseGraphFocus;", nav)
         self.assertIn("case 'research-graph':", app)
         self.assertNotIn("route.name === 'graph' || route.canonicalize", app)
         self.assertIn("destroyResearchGraph", graph)
@@ -130,7 +137,7 @@ class FrontendResearchGraphTests(unittest.TestCase):
     def test_person_profile_hierarchy(self):
         people = _read(_PEOPLE)
         sidebar = people.split("function renderPersonProfileDetailsSidebarHtml", 1)[1].split(
-            "function renderPersonProfileEditFormHtml", 1
+            "const PRKS_PERSON_PROFILE_FIELDS", 1
         )[0]
         self.assertNotIn("Biography, portrait, and external links are in the main column.", sidebar)
         self.assertIn("prks-btn--primary", sidebar)
@@ -145,6 +152,9 @@ class FrontendResearchGraphTests(unittest.TestCase):
         vue = _read(os.path.join(
             _PROJECT_DIR, "frontend-app", "src", "features", "people", "PersonDetailRoute.vue"
         ))
+        index = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "people", "PeopleIndexRoute.vue"
+        ))
         self.assertIn("person-profile__summary", vue)
         self.assertIn("person-profile__about", vue)
         self.assertIn("person-profile__works-head", vue)
@@ -152,9 +162,8 @@ class FrontendResearchGraphTests(unittest.TestCase):
         self.assertIn("prksPersonWorkRolesById", detail)
         self.assertIn("worksEditing ? (person.works || []) : prksUniquePersonWorks(person)", detail)
         self.assertNotIn("acc[role].push(w)", detail)
-        self.assertIn("prks-people-list__lifespan", people)
-        self.assertNotIn("/api/persons/", people.split("function buildPersonListRowHtml", 1)[1].split("window.buildPersonListRowHtml", 1)[0])
-        self.assertIn("LATEST_SCHEMA_VERSION = 17", _read(_SCHEMA))
+        self.assertIn("prks-people-list__lifespan", index)
+        self.assertNotIn("/api/persons/", index)
 
     def test_docs(self):
         wiki = _read(_WIKI_RESEARCH)
@@ -178,9 +187,10 @@ class FrontendResearchGraphTests(unittest.TestCase):
         self.assertIn("canvasLabel", graph)
         self.assertIn("graph-dim", graph)
         self.assertIn("nodeDimensionsIncludeLabels: true", graph)
-        self.assertIn('data-prks-role="graph-fit">Fit', graph)
-        self.assertIn("legendIcon", graph)
-        self.assertIn("legendIcon('network'", graph)
+        vue = _read(_GRAPH_VUE)
+        self.assertIn('data-prks-role="graph-fit">Fit', vue)
+        self.assertIn("function legendIcon", vue)
+        self.assertIn("legendIcon('network'", vue)
         self.assertIn("prksLucideSvgDataUri", graph)
         self.assertIn("background-image", graph)
         self.assertIn("background-clip", graph)
@@ -200,20 +210,24 @@ class FrontendResearchGraphTests(unittest.TestCase):
 
     def test_compact_toolbar_and_disclosure_panels(self):
         graph = _read(_GRAPH)
-        # Permanent primary toolbar: Find, Fit, Reset layout, Filters, Legend toggles.
-        self.assertIn('data-prks-role="graph-find"', graph)
-        self.assertIn('data-prks-role="graph-fit">Fit', graph)
-        self.assertIn('data-prks-role="graph-reset">Reset layout', graph)
-        self.assertIn('data-prks-role="graph-filters-toggle"', graph)
-        self.assertIn('data-prks-role="graph-legend-toggle"', graph)
-        self.assertIn(">Filters</button>", graph)
-        self.assertIn(">Legend</button>", graph)
+        vue = _read(_GRAPH_VUE)
+        # Permanent primary toolbar lives in the Vue shell: Find, Fit, Reset, Filters, Legend.
+        self.assertIn('data-prks-role="graph-find"', vue)
+        self.assertIn('data-prks-role="graph-fit">Fit', vue)
+        self.assertIn('data-prks-role="graph-reset">Reset layout', vue)
+        self.assertIn('data-prks-role="graph-filters-toggle"', vue)
+        self.assertIn('data-prks-role="graph-legend-toggle"', vue)
+        self.assertIn(">Filters</PrksDisclosureButton>", vue)
+        self.assertIn(">Legend</PrksDisclosureButton>", vue)
         # Filters/legend are real disclosure buttons, not a floating popover.
-        self.assertIn("aria-expanded=\"false\"", graph)
-        self.assertIn("aria-controls=", graph)
+        # Vue starts collapsed; classic graph JS mutates the live aria-expanded.
+        self.assertIn(':expanded="false"', vue)
+        self.assertIn(':controls="chrome?.filtersPanelId"', vue)
+        self.assertIn(':controls="chrome?.legendPanelId"', vue)
         # Filter checkboxes and legend content are disclosed, hidden by default.
-        self.assertIn('data-prks-role="graph-filters-panel" hidden', graph)
-        self.assertIn('data-prks-role="graph-legend-panel"', graph)
+        filters = vue.split('data-prks-role="graph-filters-panel"', 1)[1][:120]
+        self.assertIn("hidden", filters)
+        self.assertIn('data-prks-role="graph-legend-panel"', vue)
         self.assertIn("toggleAuxPanel", graph)
         self.assertIn("setAuxPanelOpen", graph)
         self.assertIn("Escape", graph)
@@ -234,7 +248,8 @@ class FrontendResearchGraphTests(unittest.TestCase):
         self.assertIn("Clear selection", graph)
         self.assertIn("prks-btn--ghost", graph)
         # Status messages live in a dedicated graph-local region, not the inspector.
-        self.assertIn('data-prks-role="graph-status"', graph)
+        vue = _read(_GRAPH_VUE)
+        self.assertIn('data-prks-role="graph-status"', vue)
         self.assertIn("renderStatusMessage", graph)
         # Selection changes resync right-panel visibility without forcing fit()/layout.
         self.assertIn("syncInspectorVisibility", graph)
@@ -250,6 +265,60 @@ class FrontendResearchGraphTests(unittest.TestCase):
         )[0]
         self.assertNotIn("if (isResearchGraphHash(h)) return true;", actionable)
         self.assertIn("isResearchGraphHash(h)", actionable)
+
+    def test_vue_graph_resource_lifetime(self):
+        app = _read(_APP)
+        graph = _read(_GRAPH)
+        vue = _read(_GRAPH_VUE)
+        session = _read(_GRAPH_SESSION)
+        agents = _read(_AGENTS)
+        self.assertIn("function prksPresentVueResearchGraph", app)
+        self.assertIn("prksDeliverVueRoute", app)
+        self.assertNotIn("prksVuePresentResearchGraph", app)
+        self.assertIn("ctx.resourceRegistry.dispose('researchGraph')", app)
+        self.assertIn("data-prks-research-graph", vue)
+        self.assertIn('data-prks-role="graph-canvas"', vue)
+        self.assertIn("prksReleaseResearchGraph", vue)
+        self.assertNotIn("fetch(", vue)
+        self.assertNotIn("fetch(", session)
+        self.assertNotIn("vue-router", session)
+        self.assertNotIn("pinia", session)
+        self.assertIn("presentRouteSurface", session)
+        self.assertIn("renderResearchGraph", session)
+        self.assertIn("retainLiveGraph", graph)
+        self.assertIn("releaseLiveGraph", graph)
+        self.assertIn("disconnectResizeObserver", graph)
+        self.assertIn("cancelAnimationFrame", graph)
+        self.assertIn("function prksReleaseResearchGraph", graph)
+        self.assertIn("suspendable: false", graph)
+        self.assertIn("data-prks-research-graph", graph)
+        self.assertNotIn("shellHtml", graph)
+        self.assertNotIn("__prksResearchGraphLiveCount = 1", graph)
+        self.assertNotIn("__prksResearchGraphLiveCount = 0", graph)
+        self.assertIn("owner-resource registry", agents)
+        self.assertIn("not warm-suspendable", agents)
+        self.assertIn("shellHtml", agents)
+
+    def test_vue_graph_host_fills_the_pane_and_refreshes_icons(self):
+        css = _read(_CSS)
+        host = css.split(
+            ".prks-tab-root > [data-prks-vue-route-host]:has(.research-graph)", 1
+        )[1].split("}", 1)[0]
+        self.assertIn("flex: 1 1 auto", host)
+        self.assertIn("min-height: 0", host)
+        self.assertIn("display: flex", host)
+        self.assertIn("flex-direction: column", host)
+        body = css.split('.research-graph > [data-prks-role="graph-body"]', 1)[1].split("}", 1)[0]
+        self.assertIn("flex: 1 1 auto", body)
+        self.assertIn("min-height: 0", body)
+        self.assertIn("display: flex", body)
+        self.assertIn("flex-direction: column", body)
+        vue = _read(_GRAPH_VUE)
+        self.assertIn("onMounted", vue)
+        self.assertIn("prksRefreshIcons", vue)
+        self.assertIn('data-prks-role="graph-body"', vue)
+        self.assertIn('data-prks-role="graph-legend-panel"', vue)
+        self.assertIn("Graph UI unavailable.", vue)
 
     def test_node_selftest(self):
         node = shutil.which("node")

@@ -1,9 +1,8 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readRouteSurface } from '../../route-surface/lifecycle'
+import { dismissRouteSurface, readRouteSurface } from '../../route-surface/lifecycle'
 import {
   FOLDER_LIBRARY_RETAIN_SURFACE_KEY,
-  dismissFolderLibrary,
   presentFolderLibrary,
   registerFolderLibraryBridge,
   resetFolderLibrarySessionForTests,
@@ -13,8 +12,8 @@ afterEach(() => {
   resetFolderLibrarySessionForTests()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
-  delete window.prksVuePresentFolderLibrary
-  delete window.prksVueDismissFolderLibrary
+  delete window.prksVuePresentRoute
+  delete window.prksVueDismissRoute
   delete window.prksFolderLibraryTreeInnerHtml
   delete window.prksFolderLibraryCatalogGlanceParts
   delete window.prksPaintFolderLibraryGlance
@@ -97,7 +96,7 @@ describe('Folder Library route bridge', () => {
       shell: true,
     }
     registerFolderLibraryBridge(window)
-    expect(window.prksVuePresentFolderLibrary).toBeTypeOf('function')
+    expect(window.prksVuePresentRoute).toBeTypeOf('function')
     expect(el.textContent).toContain('Folder Library')
   })
 
@@ -223,7 +222,7 @@ describe('Folder Library route bridge', () => {
       folders: [{ id: 'F2', title: 'B', parent_id: null, work_count: 0, child_count: 0 }],
       generation: 1,
     })
-    dismissFolderLibrary(a)
+    dismissRouteSurface(a)
     expect(aHost.querySelector('[data-prks-folder-library-view]')).toBeNull()
     expect(bHost.querySelector('[data-prks-folder-library-view]')).not.toBeNull()
   })

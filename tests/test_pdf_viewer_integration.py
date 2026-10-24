@@ -545,7 +545,18 @@ console.log('ok');
     def test_notes_and_argument_insert_do_not_remount_pdf(self):
         works = _read(os.path.join(_FRONTEND, "js", "components", "works.js"))
         args = _read(os.path.join(_FRONTEND, "js", "components", "arguments.js"))
-        self.assertIn("initPdfViewerForWork", works)
+        lifecycle = _read(
+            os.path.join(
+                _PROJECT_DIR,
+                "frontend-app",
+                "src",
+                "features",
+                "work",
+                "detail-lifecycle.ts",
+            )
+        )
+        self.assertIn("pdfModule.initPdfViewerForWork", lifecycle)
+        self.assertIn("initPdf(ctx, current)", lifecycle)
         save_block = works.split("function prksEnqueueWorkResearchNotesSave", 1)[1].split(
             "function prksFlushPendingWorkResearchNotes", 1
         )[0]

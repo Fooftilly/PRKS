@@ -7,6 +7,7 @@ import { useAnnotation } from '@embedpdf/plugin-annotation/react';
 import { useHistoryCapability } from '@embedpdf/plugin-history/react';
 import { useInteractionManager } from '@embedpdf/plugin-interaction-manager/react';
 import type { ViewerMode } from './types';
+import type { ViewerController } from './controller';
 import { Icon, ICONS } from './icons';
 
 const ZOOM_PRESETS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3] as const;
@@ -43,6 +44,32 @@ function MarkupTools({
                 <Icon d={ICONS.underline} />
             </button>
         </>
+    );
+}
+
+function AnnotationDrawerButton({
+    controller,
+    onToggle,
+}: {
+    controller: ViewerController;
+    onToggle: () => void;
+}) {
+    const [open, setOpen] = useState(false);
+    useEffect(() => {
+        controller.bindAnnotationDrawerChrome({ setOpen });
+        return () => controller.bindAnnotationDrawerChrome({ setOpen: () => {} });
+    }, [controller]);
+    return (
+        <button
+            type="button"
+            className={open ? 'is-active' : ''}
+            title="Annotations"
+            aria-label="Annotations"
+            aria-pressed={open}
+            onClick={onToggle}
+        >
+            <Icon d={ICONS.list} />
+        </button>
     );
 }
 
@@ -164,6 +191,8 @@ export function Toolbar({
     documentTypeLabel,
     documentTypeColor,
     documentTypeBorder,
+    controller,
+    onAnnotationDrawerToggle,
 }: {
     documentId: string;
     mode: ViewerMode;
@@ -171,6 +200,8 @@ export function Toolbar({
     documentTypeLabel?: string;
     documentTypeColor?: string;
     documentTypeBorder?: string;
+    controller: ViewerController;
+    onAnnotationDrawerToggle?: () => void;
 }) {
     const { provides: zoom, state: zoomState } = useZoom(documentId);
     const { provides: scroll, state: scrollState } = useScroll(documentId);
@@ -390,6 +421,14 @@ export function Toolbar({
                     <Icon d={ICONS.plus} />
                 </button>
             </div>
+            {onAnnotationDrawerToggle ? (
+                <>
+                    <span className="prks-pdf-toolbar__sep" />
+                    <div className="prks-pdf-toolbar__group">
+                        <AnnotationDrawerButton controller={controller} onToggle={onAnnotationDrawerToggle} />
+                    </div>
+                </>
+            ) : null}
             {work ? (
                 <>
                     <span className="prks-pdf-toolbar__sep prks-pdf-toolbar__sep--secondary" />

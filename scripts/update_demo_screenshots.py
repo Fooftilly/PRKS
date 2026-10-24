@@ -88,6 +88,10 @@ def _start_isolated_server(runtime: Path) -> tuple[subprocess.Popen, str, Path, 
     """Spawn --testing PRKS on a free port; retry only genuine bind conflicts."""
     stdout_path = runtime / "server.stdout"
     stderr_path = runtime / "server.stderr"
+    # An empty child keeps server output out of the storage root, which PRKS
+    # refuses when it holds unrelated files (storage-architecture §7.1).
+    storage = runtime / "storage"
+    storage.mkdir(exist_ok=True)
     last_error: Exception | None = None
 
     for attempt in range(SERVER_START_ATTEMPTS):
@@ -97,9 +101,9 @@ def _start_isolated_server(runtime: Path) -> tuple[subprocess.Popen, str, Path, 
         origin = origin.rstrip("/")
         env = os.environ.copy()
         env["PRKS_TESTING"] = "1"
-        env["PRKS_STORAGE"] = str(runtime)
+        env["PRKS_STORAGE"] = str(storage)
         env.pop("PRKS_FOR_PROCESSING_DIR", None)
-        env["PRKS_LOG_FILE"] = str(runtime / "prks-errors.log")
+        env["PRKS_LOG_FILE"] = str(storage / "prks-errors.log")
         env["PYTHONUNBUFFERED"] = "1"
 
         stdout_handle = open(stdout_path, "w", encoding="utf-8")

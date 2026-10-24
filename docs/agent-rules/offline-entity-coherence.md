@@ -2,7 +2,7 @@
 
 This leaf contains the current cross-entity/cache-coherence rules for People, Person Groups, Playlists, Concepts, Positions, Arguments/Stances, PDF annotations, and adjacent entity projections. Read `offline-foundations.md` first.
 
-The shared `prksOfflineMarkDomainChanged` generation/block/sweep and domain-independence contract lives in `offline-foundations.md` and applies to every coherence domain below.
+The shared `markDomainChanged` generation/block/sweep and domain-independence contract lives in `offline-foundations.md` and applies to every coherence domain below. Each domain is invalidated through its named `prksOfflineMark*Changed()` wrapper.
 
 ### Entity coherence domains
 

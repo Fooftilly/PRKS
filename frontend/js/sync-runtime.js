@@ -12,6 +12,8 @@
  *   terminal(data, op)  {conflict: <bounded structured result>} for an outcome
  *                       the user must resolve, or {discard: <code>} for one
  *                       with no resolution worth offering.
+ *   failDependentsOnConflict  true when any conflict in this family means its
+ *                       prerequisites can never succeed (e.g. refused CREATE_FOLDER).
  */
 (function (root) {
     'use strict';
@@ -87,6 +89,11 @@
             if (outcome.conflict) {
                 await store.updateOperationSyncState(op.op_id, {
                     status: 'conflict', server_result: outcome.conflict, last_error: null });
+                // A terminal construction refusal cannot satisfy its
+                // dependents. The family's policy also drives crash recovery.
+                if (handlers[op.operation].failDependentsOnConflict === true) {
+                    await blockDependents(op.op_id);
+                }
                 emit();
                 return;
             }
@@ -140,10 +147,48 @@
         async function blockDependents(opId) {
             try {
                 await store.markDependentsFailed(opId);
-            } catch (_) { /* a row that changed underneath is re-read next drain */ }
+            } catch (_) {
+                // The parent was already durably settled. Never revert it to
+                // pending or silently abandon dependents on a failed IDB write.
+                schedule(5000);
+            }
+        }
+        /* A crash or failed IDB transaction can interrupt the dependent walk
+         * after its parent is durably refused. Repair those pending descendants
+         * on each wake (even offline), including consumed/acknowledged refusals.
+         * A terminal DEPENDENCY_FAILED descendant is also a repair root.
+         *
+         * Only open a readwrite transaction when a direct dependent remains
+         * unsettled; settled conflicts otherwise cost nothing on every wake.
+         * Failure is isolated per root: one broken/quota-limited write must not
+         * starve unrelated operations or acknowledgements that free storage. */
+        async function repairTerminalConflictDependents() {
+            const all = await store.listOperations();
+            const waitingOn = new Set();
+            all.forEach(op => {
+                if (!op || (op.status !== 'pending' && op.status !== 'syncing')) return;
+                (op.depends_on || []).forEach(id => waitingOn.add(id));
+            });
+            for (const op of all) {
+                if (!op || !waitingOn.has(op.op_id)) continue;
+                const terminalConflict = op.status === 'conflict' && (
+                    (supported(op) && handlers[op.operation].failDependentsOnConflict === true) ||
+                    (op.server_result && op.server_result.code === 'DEPENDENCY_FAILED'));
+                const consumedRefusal = op.status === 'acknowledged' && !!op.server_result;
+                if (!terminalConflict && !consumedRefusal) continue;
+                try {
+                    const marked = await store.markDependentsFailed(op.op_id);
+                    if (marked.length) emit();
+                } catch (_) {
+                    // Keep trying after durable write failures without blocking
+                    // unrelated pending work in the send loop below.
+                    schedule(5000);
+                }
+            }
         }
         async function drain() {
             if (!recovered) await recover();
+            await repairTerminalConflictDependents();
             while (deps.online()) {
                 const all = (await store.listOperations()).filter(supported);
                 const pending = all.filter(op => op.status === 'pending');

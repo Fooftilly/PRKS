@@ -10,14 +10,12 @@ const { createPrksOfflineRuntime } = require('../../frontend/js/offline-runtime.
 require('../../frontend/js/work-role-state.js');
 require('../../frontend/js/work-metadata-state.js');
 require('../../frontend/js/person-metadata-state.js');
-/* The REAL credit helper, loaded from the shipped card module. It is a browser
- * script that assigns to `window` at load, so the global is provided rather
- * than the precedence rule being restated here -- a test that reimplemented
- * the rule could not catch the overlay feeding it the wrong input. */
+/* The REAL credit helper: the shipped `PrksWorkCard` module, loaded through
+ * Node's TypeScript stripping rather than the precedence rule being restated
+ * here -- a test that reimplemented the rule could not catch the overlay
+ * feeding it the wrong input. */
 globalThis.window = globalThis;
-(0, eval)(require('fs').readFileSync(
-    require('path').join(__dirname, '../../frontend/js/components/work-cards.js'), 'utf8'));
-const creditLine = globalThis.prksWorkCardCreditLine;
+const { workCardCreditText: creditLine } = require('../../frontend-app/src/components/work-card.ts');
 strict.equal(typeof creditLine, 'function', 'the shipped credit helper must be loadable');
 
 let sequence = 0;

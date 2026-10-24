@@ -69,6 +69,12 @@ class WorkBrowsingV1Tests(unittest.TestCase):
             f"{scope} .work-browse-collection--cards", timeout=5000
         )
 
+    def focus_work_card_link(self, card):
+        """Keyboard target is the native work href, not the bulk-selection container."""
+        link = card.locator("a.work-card__link").first
+        self.assertEqual(link.count(), 1)
+        link.focus()
+
     def test_folder_list_preview_open_nav_mode_coherent(self):
         """Acceptance: Folder A list → preview → open → Folder B → mode sticks → cards."""
         server, page, ids = self.start()
@@ -100,8 +106,8 @@ class WorkBrowsingV1Tests(unittest.TestCase):
         thumb = card.locator(".work-card__thumb[data-prks-thumb-preview-kind]").first
         self.assertEqual(thumb.count(), 1)
 
-        # Keyboard preview on focused card (P); Escape dismisses.
-        card.focus()
+        # Keyboard preview on focused Work link (P); Escape dismisses.
+        self.focus_work_card_link(card)
         page.keyboard.press("p")
         page.wait_for_selector(
             "#prks-work-thumb-preview.work-card-preview--visible", timeout=5000
@@ -128,7 +134,7 @@ class WorkBrowsingV1Tests(unittest.TestCase):
         )
 
         # Same thumb again: hide must not leave a blank frame (WeakMap/src contract).
-        card.focus()
+        self.focus_work_card_link(card)
         page.keyboard.press("p")
         page.wait_for_selector(
             "#prks-work-thumb-preview.work-card-preview--visible", timeout=5000
@@ -156,7 +162,7 @@ class WorkBrowsingV1Tests(unittest.TestCase):
         )
 
         # P then navigate away (no Escape): route paint must dismiss preview.
-        card.focus()
+        self.focus_work_card_link(card)
         page.keyboard.press("p")
         page.wait_for_selector(
             "#prks-work-thumb-preview.work-card-preview--visible", timeout=5000
@@ -185,7 +191,7 @@ class WorkBrowsingV1Tests(unittest.TestCase):
         card = page.locator(
             f".prks-tile--main .project-card--work-card[data-work-id='{ids['work_a']}']"
         ).first
-        card.focus()
+        self.focus_work_card_link(card)
         page.keyboard.press("p")
         page.wait_for_selector(
             "#prks-work-thumb-preview.work-card-preview--visible", timeout=5000
@@ -244,7 +250,7 @@ class WorkBrowsingV1Tests(unittest.TestCase):
         card = page.locator(
             f".prks-tile--main .project-card--work-card[data-work-id='{ids['work_a']}']"
         ).first
-        card.focus()
+        self.focus_work_card_link(card)
         page.keyboard.press("p")
         page.wait_for_selector(
             "#prks-work-thumb-preview.work-card-preview--visible", timeout=5000
@@ -278,8 +284,8 @@ class WorkBrowsingV1Tests(unittest.TestCase):
             f".prks-tile--main .project-card--work-card[data-work-id='{ids['work_a']}']"
         ).first
 
-        # Open Work via Enter — preview must not replace navigation.
-        card.focus()
+        # Open Work via Enter — native href; preview must not replace navigation.
+        self.focus_work_card_link(card)
         page.keyboard.press("Enter")
         page.wait_for_function(
             "id => location.hash === '#/works/' + encodeURIComponent(id)",

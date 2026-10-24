@@ -99,6 +99,17 @@
         return pendingRows;
     }
 
+    /** Fail-closed read for recovery decisions: the rows, or null when they could not be read. */
+    async function readPendingSnapshot() {
+        if (!root.prksSync || !root.prksSync.store || typeof root.prksSync.store.listOperations !== 'function') return null;
+        try {
+            const rows = await root.prksSync.store.listOperations();
+            return Array.isArray(rows) ? rows : null;
+        } catch (_e) {
+            return null;
+        }
+    }
+
     function pendingText(workId, kind, fallback) {
         const ops = noteOperations(pendingRows, workId, kind);
         if (!ops.length) return fallback;
@@ -124,27 +135,46 @@
         return out;
     }
 
-    function canonicalFrom(work) {
+    /* Where each body came from: 'server' only when the Work itself was read
+     * from the server (or a body is an acknowledgement's text). A body read
+     * from cache can be older than the notes-state revision it is joined to. */
+    function bodySources(work, source) {
+        if (typeof source === 'string') return { research: source, private: source };
+        const known = work && work.sources;
+        return {
+            research: known && typeof known.research === 'string' ? known.research : 'unknown',
+            private: known && typeof known.private === 'string' ? known.private : 'unknown',
+        };
+    }
+
+    function canonicalFrom(work, source) {
         if (!work || typeof work.id !== 'string') return null;
         return {
             id: work.id,
             text_content: typeof work.text_content === 'string' ? work.text_content : '',
             private_notes: work.private_notes == null ? '' : String(work.private_notes),
+            sources: bodySources(work, source),
         };
     }
 
     /**
      * Snapshot acknowledged note bodies before any overlay mutates the Work
      * object. Revisions arrive from notes-state (ensureBase). The two are
-     * joined only at save time.
+     * joined only at save time. `source` is where the Work was read from.
      */
-    function rememberCanonical(ctx, work) {
+    function rememberCanonical(ctx, work, source) {
         if (!ctx || typeof ctx.setResource !== 'function') return null;
         const existing = ctx.getResource('workNotesCanonical');
         if (existing && existing.id === work.id) return existing;
-        const canonical = canonicalFrom(work);
+        const canonical = canonicalFrom(work, source);
         ctx.setResource('workNotesCanonical', canonical);
         return canonical;
+    }
+
+    /* A base is server-verified only when its body and its revision both are. */
+    function baseSource(stateSource, bodySource) {
+        if (stateSource === 'server' && bodySource === 'server') return 'server';
+        return stateSource === 'server' || stateSource === 'cache' ? 'cache' : stateSource;
     }
 
     async function ensureBase(ctx, work, options) {
@@ -160,21 +190,31 @@
         /* A pending CREATE_WORK has no server row yet. Hitting notes-state
          * would 404 and trip harness console gates; seed revision 0 locally. */
         let state = null;
+        let source = 'unknown';
         if (options && options.pendingCreate) {
             state = {
                 work_id: work.id,
                 research_note_revision: 0,
                 private_note_revision: 0,
             };
+            source = 'pending-create';
         } else {
             const result = await readState(work.id);
             state = result && result.value;
+            if (result && (result.source === 'server' || result.source === 'cache')) source = result.source;
         }
         const base = acknowledgedNoteBase({
             id: work.id,
             text_content: canonical.text_content,
             private_notes: canonical.private_notes,
         }, state);
+        /* Where the revisions and bodies came from. Editor recovery (#466)
+         * restores or clears automatically only against a base whose body and
+         * revision were both read from the server. */
+        if (base) {
+            base.research.source = baseSource(source, canonical.sources.research);
+            base.private.source = baseSource(source, canonical.sources.private);
+        }
         if (!deferPublish && typeof ctx.setResource === 'function') {
             ctx.setResource('workNotesObserved', base);
         }
@@ -205,10 +245,16 @@
             if (refs && typeof refs === 'object' && !Array.isArray(refs)) {
                 work.research_refs = refs;
             }
-            if (canonical && canonical.id === op.entity_id) canonical.text_content = text;
+            if (canonical && canonical.id === op.entity_id) {
+                canonical.text_content = text;
+                if (canonical.sources) canonical.sources.research = 'server';
+            }
         } else {
             work.private_notes = text;
-            if (canonical && canonical.id === op.entity_id) canonical.private_notes = text;
+            if (canonical && canonical.id === op.entity_id) {
+                canonical.private_notes = text;
+                if (canonical.sources) canonical.sources.private = 'server';
+            }
         }
         const base = ctx.getResource && ctx.getResource('workNotesObserved');
         if (base) {
@@ -216,23 +262,76 @@
             if (slot) {
                 slot.value = text;
                 slot.revision = rev;
+                slot.source = 'server';
             }
         }
     }
 
+    /**
+     * One acknowledgement subscription per owner route. It patches the
+     * owner's Work entity, canonical bodies, and observed base whether or not
+     * a notes editor is mounted, so it is not an editor session and not a
+     * registry slot. registerCleanup ties it to the route: beginRoute, cold
+     * park, and destroy stop it; warm park keeps it, so an acknowledgement
+     * received while parked is on the entity at resume.
+     */
+    /* A Work route's sync subscriber is removed on cold park. Keep a small,
+     * memory-only record of the exact successfully ACKed private-note op so a
+     * later route generation can edit its carried text against that ACK's
+     * revision, rather than conflicting with its own save. Never infer an ACK
+     * from route body/revision, and never retain private-note text here. */
+    const privateNoteAcks = new Map();
+    let privateNoteAcksBound = false;
+
+    function rememberPrivateNoteAck(event) {
+        const op = event && event.op;
+        const ack = event && event.acknowledged;
+        if (!op || !ack || op.operation !== PRIVATE_OP ||
+            ack.code !== 'ACKNOWLEDGED' || ack.note_kind !== PRIVATE_KIND ||
+            ack.work_id !== op.entity_id ||
+            typeof op.op_id !== 'string' ||
+            !Number.isSafeInteger(op.base_revision) || op.base_revision < 0 ||
+            !Number.isSafeInteger(ack.server_revision) ||
+            ack.server_revision < op.base_revision) return;
+        privateNoteAcks.delete(op.op_id);
+        privateNoteAcks.set(op.op_id, {
+            entityId: String(op.entity_id),
+            baseRevision: op.base_revision,
+            revision: ack.server_revision,
+        });
+        if (privateNoteAcks.size > 64) {
+            privateNoteAcks.delete(privateNoteAcks.keys().next().value);
+        }
+    }
+
+    function acknowledgedPrivateNote(opId) {
+        const ack = privateNoteAcks.get(opId);
+        return ack ? Object.assign({}, ack) : null;
+    }
+
+    const syncBoundOwners = new WeakSet();
+
     function bindSync(ctx) {
-        if (!ctx || typeof ctx.setResource !== 'function') return;
-        if (ctx.getResource('workNotesSyncBound')) return;
+        if (!ctx || ctx.destroyed || typeof ctx.registerCleanup !== 'function') return;
+        if (syncBoundOwners.has(ctx)) return;
         if (!root.prksSync || typeof root.prksSync.subscribe !== 'function') return;
+        if (!privateNoteAcksBound) {
+            root.prksSync.subscribe(rememberPrivateNoteAck);
+            privateNoteAcksBound = true;
+        }
         const stop = root.prksSync.subscribe(function (event) {
             if (event && event.acknowledged) acceptAck(ctx, event);
             void refreshPending();
         });
-        ctx.setResource('workNotesSyncBound', { stop: stop }, function () { stop(); });
+        syncBoundOwners.add(ctx);
+        ctx.registerCleanup(function () {
+            syncBoundOwners.delete(ctx);
+            if (typeof stop === 'function') stop();
+        });
     }
 
     /* ---- save boundary ---- */
-    async function saveWorkNote(workId, kind, text, observed) {
+    async function saveWorkNote(workId, kind, text, observed, options) {
         if (!root.prksSync || !root.prksSync.store) return { code: 'unavailable' };
         const op = kind === RESEARCH_KIND ? RESEARCH_OP : PRIVATE_OP;
         if (!workId || typeof text !== 'string') return { code: 'invalid_envelope' };
@@ -242,14 +341,17 @@
             !Number.isSafeInteger(observed.revision) || observed.revision < 0) {
             return { code: 'unknown_base' };
         }
+        let row;
         try {
-            await root.prksSync.store.saveWorkNote(workId, op, text, observed);
+            row = await root.prksSync.store.saveWorkNote(workId, op, text, observed, options);
         } catch (e) {
             return { code: (e && e.prksLocalStoreCode) || 'failed',
                 error: (e && e.message) || 'Store refused write.' };
         }
         root.prksSync.changed();
-        return { code: 'saved' };
+        /* opId: the queued row holding exactly this body, or null when the
+         * body equals the acknowledged base and nothing was queued. */
+        return { code: 'saved', opId: row && typeof row.op_id === 'string' ? row.op_id : null };
     }
 
     /* ---- sync handler (compact; server guarantees value_omitted) ---- */
@@ -310,12 +412,14 @@
         prksEffectiveNoteWork: effectiveNoteWork,
         prksWorkNoteOperations: noteOperations,
         prksRefreshPendingWorkNotes: refreshPending,
+        prksReadPendingWorkNotesSnapshot: readPendingSnapshot,
         prksPendingWorkNoteText: pendingText,
         prksApplyPendingWorkNotes: function (work) { return effectiveNoteWork(work, pendingRows); },
         prksRememberWorkNotesCanonical: rememberCanonical,
         prksEnsureWorkNotesBase: ensureBase,
         prksWorkNoteObserved: observed,
         prksBindWorkNotesSync: bindSync,
+        prksAcknowledgedWorkPrivateNote: acknowledgedPrivateNote,
         prksSaveWorkNoteDurably: saveWorkNote,
         prksNoteSyncHandler: handler,
     });

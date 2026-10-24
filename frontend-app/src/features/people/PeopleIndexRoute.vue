@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import { computed, inject, onMounted, onUpdated, ref, watch } from 'vue'
+import { computed, inject, ref, watch } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
+import PrksScopeLine from '../../components/PrksScopeLine.vue'
 import { peopleIntentsKey } from './intents'
 import type { PeopleIndexProjection } from './projection'
 import type { PersonIndexItem } from './types'
@@ -11,7 +14,6 @@ const props = defineProps<{
 }>()
 
 const intents = inject(peopleIntentsKey)
-const rootEl = ref<HTMLElement | null>(null)
 const query = ref(readFilter())
 
 const unavailable = computed(() => props.projection.availability === 'unavailable')
@@ -103,52 +105,42 @@ watch(query, (value) => {
     /* ignore */
   }
 })
-
-function paintScope(): void {
-  const paint = window.prksPaintScopeHost
-  if (typeof paint !== 'function' || !rolePeople.value.length) return
-  paint(rootEl.value, {
-    shown: shown.value.length,
-    total: rolePeople.value.length,
-    filter: query.value.trim(),
-    label: roleFilter.value || 'People',
-  })
-}
-
-onMounted(paintScope)
-onUpdated(paintScope)
 </script>
 
 <template>
-  <div ref="rootEl" data-prks-people-index-view>
+  <div data-prks-people-index-view>
     <template v-if="unavailable">
       <div class="prks-page-header page-header">
         <h2 class="prks-page-title">People not available offline</h2>
       </div>
-      <p class="prks-inline-message" data-prks-role="offline-unavailable">
+      <PrksInlineMessage data-prks-role="offline-unavailable">
         This list has not been cached on this device.
-      </p>
+      </PrksInlineMessage>
     </template>
     <template v-else-if="unknownRole">
       <div class="prks-page-header page-header">
         <h2 class="prks-page-title">People</h2>
       </div>
-      <p class="prks-inline-message">Unknown role filter.</p>
+      <PrksInlineMessage>Unknown role filter.</PrksInlineMessage>
     </template>
     <div v-else class="prks-people-library">
       <div class="prks-page-header page-header prks-people-library__header">
         <h2 class="prks-page-title">{{ title }}</h2>
-        <button
+        <PrksButton
           id="prks-people-header-new"
-          type="button"
-          class="prks-btn"
-          :class="collectionEmpty ? 'prks-btn--secondary' : 'prks-btn--primary'"
+          :variant="collectionEmpty ? 'secondary' : 'primary'"
           :data-prks-role="collectionEmpty ? undefined : 'person-create-control'"
           @click="onCreate"
         >
           New Person
-        </button>
-        <div v-if="rolePeople.length" data-prks-role="index-scope-host"></div>
+        </PrksButton>
+        <PrksScopeLine
+          v-if="rolePeople.length"
+          :shown="shown.length"
+          :total="rolePeople.length"
+          :filter="query.trim()"
+          :label="roleFilter || 'People'"
+        />
       </div>
       <div v-if="rolePeople.length" class="prks-people-library__toolbar">
         <div class="tag-add-shell tag-add-shell--flush prks-people-library__search">
@@ -234,22 +226,21 @@ onUpdated(paintScope)
       </div>
       <div v-else class="prks-people-library__empty">
         <div v-if="collectionEmpty" class="prks-people-list__empty-state">
-          <p class="prks-inline-message prks-people-list__empty">No people yet.</p>
-          <button
+          <PrksInlineMessage class="prks-people-list__empty">No people yet.</PrksInlineMessage>
+          <PrksButton
             id="prks-people-empty-new"
-            type="button"
-            class="prks-btn prks-btn--primary"
+            variant="primary"
             data-prks-role="person-create-control"
             @click="onCreate"
           >
             New Person
-          </button>
+          </PrksButton>
         </div>
-        <p v-else-if="roleEmpty" class="prks-inline-message prks-people-list__empty">
+        <PrksInlineMessage v-else-if="roleEmpty" class="prks-people-list__empty">
           No people with the <strong>{{ roleFilter }}</strong> role yet. Use
           <strong>Link Person to Work</strong> in the ribbon to assign roles.
-        </p>
-        <p v-else-if="searchMiss" class="prks-inline-message prks-people-list__empty">No people match your search.</p>
+        </PrksInlineMessage>
+        <PrksInlineMessage v-else-if="searchMiss" class="prks-people-list__empty">No people match your search.</PrksInlineMessage>
       </div>
     </div>
   </div>

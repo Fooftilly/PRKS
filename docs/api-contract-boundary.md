@@ -94,9 +94,26 @@ Route extraction (#67) is a separate track; typed models do not require it.
    python -c "import json; from backend.api_contract.openapi import positions_openapi_document as d; print(json.dumps(d(), indent=2))" > docs/api/openapi-positions.json
    ```
 
+   Performance diagnostics uses the same checked-in fragment,
+   `docs/api/openapi-performance-diagnostics.json`, from
+   `performance_diagnostics_openapi_document()`. `GET /api/openapi/performance-diagnostics.json`
+   still serves that function. The type generator reads the file, not the server.
+   Do not fold these fragments into a combined document here.
+
    `test_checked_in_openapi_artifact_matches_generator` only detects drift
    against the generator; it does not rewrite the file.
-7. Add unit tests that (a) exercise happy-path HTTP behavior unchanged,
+7. For a family whose Vue client already owns typed transport DTOs, regenerate
+   compile-time TypeScript from that checked-in artifact and replace the
+   duplicated hand-written wire types with aliases of the generated schema.
+   Generation is offline (`frontend-app` `npm run openapi:types`); it reads
+   `docs/api/openapi-<family>.json` and writes
+   `frontend-app/src/api/generated/<family>.ts`. One module per family. Do not
+   generate fetch clients, TanStack Query hooks, or domain services. Keep
+   `prksApiRequest`, the hand-written service, and the runtime response
+   parsers. `npm run openapi:check` fails when the committed types drift.
+   When #45 has a real combined document, point the family list at it; do not
+   invent that document in the type generator.
+8. Add unit tests that (a) exercise happy-path HTTP behavior unchanged,
    (b) assert live responses validate through openapi-core
    (`validate_request` / `validate_response`) and response DTOs
    (`PositionDetail.model_validate`, …), and (c) cover wrong-type

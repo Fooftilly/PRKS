@@ -1274,8 +1274,10 @@ class EngineeringInvariantTests(unittest.TestCase):
 
     def _write_valid_pyright_tree(self, root: Path) -> None:
         (root / "backend" / "storage").mkdir(parents=True)
-        (root / "backend" / "entity_ids.py").write_text("", encoding="utf-8")
-        (root / "backend" / "concurrency.py").write_text("", encoding="utf-8")
+        for scope in checker.PYRIGHT_TYPED_SLICE_SCOPES:
+            if scope.endswith(".py"):
+                (root / scope).parent.mkdir(parents=True, exist_ok=True)
+                (root / scope).write_text("", encoding="utf-8")
         (root / ".github" / "workflows").mkdir(parents=True)
         (root / "pyrightconfig.json").write_text(
             json.dumps(
@@ -1292,11 +1294,7 @@ class EngineeringInvariantTests(unittest.TestCase):
         (root / "pyrightconfig.typed-slice.json").write_text(
             json.dumps(
                 {
-                    "include": [
-                        "backend/storage",
-                        "backend/entity_ids.py",
-                        "backend/concurrency.py",
-                    ],
+                    "include": list(checker.PYRIGHT_TYPED_SLICE_SCOPES),
                     "exclude": ["**/__pycache__"],
                     "typeCheckingMode": "basic",
                     "reportUndefinedVariable": "error",
@@ -1326,7 +1324,92 @@ class EngineeringInvariantTests(unittest.TestCase):
     def test_pyright_typed_slice_scopes_are_pinned(self):
         self.assertEqual(
             checker.PYRIGHT_TYPED_SLICE_SCOPES,
-            ("backend/storage", "backend/entity_ids.py", "backend/concurrency.py"),
+            (
+                "backend/storage",
+                "backend/entity_ids.py",
+                "backend/concurrency.py",
+                "backend/research_markup.py",
+                "backend/pdf_linearize.py",
+                "backend/derived_cache_publish.py",
+                "backend/domain/text_identity.py",
+                "backend/pdf_byte_mentions.py",
+                "backend/fs_durability.py",
+                "backend/db/config.py",
+                "backend/db/errors.py",
+                "backend/db/database.py",
+                "backend/domain/identity/secret_tokens.py",
+                "backend/domain/identity/login_names.py",
+                "backend/domain/identity/errors.py",
+                "backend/domain/identity/passwords.py",
+                "backend/domain/identity/login_limiter.py",
+                "backend/domain/identity/bootstrap_tokens.py",
+                "backend/domain/identity/login.py",
+                "backend/domain/identity/authorization.py",
+                "backend/domain/identity/library_scope.py",
+                "backend/domain/identity/request_context.py",
+                "backend/domain/identity/sessions.py",
+                "backend/domain/identity/web_start.py",
+                "backend/domain/identity/root_pairing.py",
+                "backend/domain/identity/admin.py",
+                "backend/api/session.py",
+                "backend/work_identity.py",
+                "backend/work_projection.py",
+                "backend/work_metadata_sync.py",
+                "backend/work_role_sync.py",
+                "backend/domain/works/__init__.py",
+                "backend/domain/works/integrity.py",
+                "backend/domain/works/projection.py",
+                "backend/domain/works/queries.py",
+                "backend/domain/works/commands.py",
+                "backend/domain/works/revisions.py",
+                "backend/domain/works/metadata.py",
+                "backend/domain/works/notes.py",
+                "backend/domain/works/source.py",
+                "backend/domain/works/bulk.py",
+                "backend/domain/works/citation.py",
+                "backend/domain/works/lifecycle.py",
+                "backend/domain/works/merge.py",
+                "backend/domain/works/wiki_links.py",
+                "backend/domain/people/__init__.py",
+                "backend/domain/people/persons.py",
+                "backend/domain/people/groups.py",
+                "backend/domain/people/publishers.py",
+                "backend/domain/people/queries.py",
+                "backend/domain/people/roles.py",
+                "backend/domain/organization/__init__.py",
+                "backend/domain/organization/folders.py",
+                "backend/domain/organization/lifecycle.py",
+                "backend/domain/organization/links.py",
+                "backend/domain/organization/playlists.py",
+                "backend/domain/organization/tags.py",
+                "backend/domain/saved_views/__init__.py",
+                "backend/domain/saved_views/views.py",
+                "backend/domain/settings/__init__.py",
+                "backend/domain/settings/app_settings.py",
+                "backend/jobs/queue.py",
+                "backend/jobs/handlers.py",
+                "backend/jobs/runner.py",
+                "backend/jobs/diagnostics.py",
+                "backend/jobs/prune.py",
+                "backend/jobs/worker.py",
+                "backend/jobs/embedded.py",
+                "backend/sync/__init__.py",
+                "backend/sync/families.py",
+                "backend/sync/protocol.py",
+                "backend/sync/handlers/__init__.py",
+                "backend/sync/handlers/folder.py",
+                "backend/sync/handlers/person.py",
+                "backend/sync/handlers/person_group.py",
+                "backend/sync/handlers/playlist.py",
+                "backend/sync/handlers/tag.py",
+                "backend/sync/handlers/tag_link.py",
+                "backend/sync/handlers/work_lifecycle.py",
+                "backend/sync/handlers/work_metadata.py",
+                "backend/sync/handlers/work_notes.py",
+                "backend/sync/handlers/work_open.py",
+                "backend/sync/handlers/work_role.py",
+                "backend/sync/handlers/work_source.py",
+            ),
         )
 
     def test_pyright_typed_slice_include_order_is_irrelevant(self):
@@ -1334,7 +1417,10 @@ class EngineeringInvariantTests(unittest.TestCase):
             root = Path(tmp)
             self._write_valid_pyright_tree(root)
             typed = json.loads((root / "pyrightconfig.typed-slice.json").read_text())
-            typed["include"] = ["backend/concurrency.py", "backend/storage/", "backend/entity_ids.py"]
+            typed["include"] = [
+                scope if scope.endswith(".py") else scope + "/"
+                for scope in reversed(checker.PYRIGHT_TYPED_SLICE_SCOPES)
+            ]
             (root / "pyrightconfig.typed-slice.json").write_text(
                 json.dumps(typed), encoding="utf-8"
             )
@@ -1369,6 +1455,29 @@ class EngineeringInvariantTests(unittest.TestCase):
             self.assertIn("backend/entity_ids.py", findings[0].message)
             self.assertIn("backend/concurrency.py", findings[0].message)
 
+    def test_pyright_typed_slice_rejects_second_slice_include(self):
+        """Reverting to the second-slice include loses the third-slice scopes."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_valid_pyright_tree(root)
+            typed = json.loads((root / "pyrightconfig.typed-slice.json").read_text())
+            typed["include"] = [
+                "backend/storage",
+                "backend/entity_ids.py",
+                "backend/concurrency.py",
+            ]
+            (root / "pyrightconfig.typed-slice.json").write_text(
+                json.dumps(typed), encoding="utf-8"
+            )
+            findings = checker.check_pyright_configs(root)
+            self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-002"])
+            for scope in (
+                "backend/research_markup.py",
+                "backend/pdf_linearize.py",
+                "backend/derived_cache_publish.py",
+            ):
+                self.assertIn(f"{scope!r}", findings[0].message.split("missing", 1)[1])
+
     def test_pyright_typed_slice_rejects_unreviewed_extra_scope(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1383,7 +1492,10 @@ class EngineeringInvariantTests(unittest.TestCase):
 
     def test_pyright_typed_slice_rejects_missing_scope_on_disk(self):
         """Pyright exits 0 for a missing include path, so the checker must not."""
-        for rel in ("backend/entity_ids.py", "backend/concurrency.py"):
+        for rel in (
+            scope for scope in checker.PYRIGHT_TYPED_SLICE_SCOPES
+            if scope.endswith(".py")
+        ):
             with self.subTest(rel=rel), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 self._write_valid_pyright_tree(root)
@@ -1393,9 +1505,32 @@ class EngineeringInvariantTests(unittest.TestCase):
                 self.assertIn(rel, findings[0].message)
 
     def test_pyright_typed_slice_rejects_suppression_of_new_scopes(self):
+        protected_files = [
+            scope for scope in checker.PYRIGHT_TYPED_SLICE_SCOPES
+            if scope.endswith(".py")
+        ]
         cases = {
-            "ignore": ["backend/entity_ids.py", "backend/concurrency.py", "backend/*.py", "**/concurrency.py"],
-            "exclude": ["backend/entity_ids.py", "./backend/concurrency.py", "backend/*_ids.py"],
+            "ignore": [
+                *protected_files,
+                "backend/entity_ids.py",
+                "backend/concurrency.py",
+                "backend/*.py",
+                "**/concurrency.py",
+                "backend/research_markup.py",
+                "backend/pdf_linearize.py",
+                "**/derived_cache_publish.py",
+                "backend/research_*.py",
+            ],
+            "exclude": [
+                *protected_files,
+                "backend/entity_ids.py",
+                "./backend/concurrency.py",
+                "backend/*_ids.py",
+                "backend/research_markup.py",
+                "./backend/pdf_linearize.py",
+                "backend/derived_cache_*.py",
+                "backend/pdf_*.py",
+            ],
         }
         for key, patterns in cases.items():
             for pattern in patterns:
@@ -4315,6 +4450,97 @@ class HttpAdapterBoundaryTests(unittest.TestCase):
             )
             codes = sorted(f.code for f in checker.check_repo(root))
             self.assertEqual(codes, ["INV-ADAPTER-001", "INV-ADAPTER-002"])
+
+
+def _schema_codes(source: str, relpath: str = "tests/test_new_feature.py") -> list[str]:
+    return [f.code for f in checker.check_test_schema_snapshots(source, relpath)]
+
+
+# Fixture sources that contain a schema-version *assignment* are concatenated
+# from two literals so this module does not itself trip INV-TESTS-001.
+_SOURCE_TEXT_SNAPSHOT = (
+    'self.assertIn("LATEST_SCHEMA_VERSION = ' + '17", _read(_SCHEMA))\n'
+)
+
+
+class SchemaVersionSnapshotTests(unittest.TestCase):
+    """INV-TESTS-001 (#103): unrelated tests must not pin the current schema."""
+
+    def test_blocks_assert_equal_pins(self):
+        for source in (
+            "self.assertEqual(PRKS_SCHEMA_VERSION, 17)\n",
+            "self.assertEqual(LATEST_SCHEMA_VERSION, 17)\n",
+            "self.assertEqual(17, LATEST_SCHEMA_VERSION)\n",
+            "self.assertEquals(PRKS_SCHEMA_VERSION, 3)\n",
+            "self.assertEqual(db_migrations.LATEST_SCHEMA_VERSION, 17)\n",
+            "assertEqual(PRKS_SCHEMA_VERSION, 17, 'msg')\n",
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(_schema_codes(source), ["INV-TESTS-001"])
+
+    def test_blocks_bare_assert_pins(self):
+        for source in (
+            "assert PRKS_SCHEMA_VERSION == 17\n",
+            "assert 17 == LATEST_SCHEMA_VERSION\n",
+            "assert x == db_manager.PRKS_SCHEMA_VERSION == 17\n",
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(_schema_codes(source), ["INV-TESTS-001"])
+
+    def test_blocks_source_text_snapshot(self):
+        self.assertEqual(_schema_codes(_SOURCE_TEXT_SNAPSHOT), ["INV-TESTS-001"])
+        annotated = 'pattern = "LATEST_SCHEMA_VERSION: int = ' + '17"\n'
+        self.assertEqual(_schema_codes(annotated), ["INV-TESTS-001"])
+
+    def test_allows_consistency_and_relative_uses(self):
+        for source in (
+            "self.assertEqual(PRKS_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)\n",
+            "self.assertEqual(_version(path), LATEST_SCHEMA_VERSION)\n",
+            "ahead = PRKS_SCHEMA_VERSION + 1\n",
+            "self.assertEqual(TEXT_INDEX_SCHEMA_VERSION, 2)\n",
+            "self.assertGreaterEqual(LATEST_SCHEMA_VERSION, 17)\n",
+            "conn.execute('UPDATE schema_version SET version = 12')\n",
+            "assert PRKS_SCHEMA_VERSION != 0\n",
+            "f'LATEST_SCHEMA_VERSION = {version}\\n'\n",
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(_schema_codes(source), [])
+
+    def test_migration_focused_allowlist_is_narrow(self):
+        self.assertEqual(
+            checker.SCHEMA_VERSION_SNAPSHOT_ALLOWLIST,
+            {"tests/test_db_migrations.py", "tests/test_schema_change_gate.py"},
+        )
+        source = "self.assertEqual(LATEST_SCHEMA_VERSION, 17)\n"
+        for relpath in checker.SCHEMA_VERSION_SNAPSHOT_ALLOWLIST:
+            with self.subTest(relpath=relpath):
+                self.assertEqual(_schema_codes(source, relpath), [])
+
+    def test_repo_scan_reports_new_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "tests" / "e2e").mkdir(parents=True)
+            (root / "tests" / "test_feature.py").write_text(
+                "self.assertEqual(PRKS_SCHEMA_VERSION, 17)\n", encoding="utf-8"
+            )
+            (root / "tests" / "e2e" / "test_ui.py").write_text(
+                _SOURCE_TEXT_SNAPSHOT, encoding="utf-8"
+            )
+            (root / "tests" / "test_db_migrations.py").write_text(
+                "self.assertEqual(LATEST_SCHEMA_VERSION, 17)\n", encoding="utf-8"
+            )
+            findings = checker.check_test_schema_snapshots_repo(root)
+        self.assertEqual(
+            sorted((f.code, f.path) for f in findings),
+            [
+                ("INV-TESTS-001", "tests/e2e/test_ui.py"),
+                ("INV-TESTS-001", "tests/test_feature.py"),
+            ],
+        )
+
+    def test_current_repo_tests_pass(self):
+        findings = checker.check_test_schema_snapshots_repo(_ROOT)
+        self.assertEqual(findings, [], "\n".join(f.render() for f in findings))
 
 
 if __name__ == "__main__":

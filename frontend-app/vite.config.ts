@@ -37,6 +37,6 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
-    include: ['src/**/*.test.ts', 'css-inject.integration.test.mjs'],
+    include: ['src/**/*.test.ts', 'css-inject.integration.test.mjs', 'openapi-types.integration.test.mjs'],
   },
 })

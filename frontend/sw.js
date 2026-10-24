@@ -17,10 +17,15 @@
     // DEPENDENCY_REVISION is derived from frontend/vendor/DEPENDENCY-MANIFEST.json
     // (sha256 prefix). scripts/dependency_gate.py --write-manifest keeps it in sync;
     // --repo fails if it drifts. Changing manifest bytes (vendor files, the
-    // committed Vue bundle, frontend/js/workspace-model.js, or
-    // frontend/js/work-route-projection.js) retires old
+    // committed Vue bundle, frontend/js/workspace-model.js,
+    // frontend/js/work-route-projection.js,
+    // frontend/js/search-query-codec.js,
+    // frontend/js/tab-leave.js,
+    // frontend/js/owner-resource.js,
+    // frontend/js/editor-recovery.js, or
+    // frontend/js/route-model.js) retires old
     // shell/static caches.
-    const DEPENDENCY_REVISION = 'e59baec20b8e';
+    const DEPENDENCY_REVISION = '5726ec91906c';
     const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
     const PDF_CACHE = 'prks-pdf-v1';
@@ -94,24 +99,28 @@
         '/vendor/lucide/lucide.min.js',
         '/js/icons.js',
         '/js/date-format.js',
+        '/js/route-model.js',
         '/js/navigation.js',
         '/js/workspace-hosts.js',
         '/js/workspace-model.js',
         '/js/workspace-tree.js',
         '/js/workspace-persistence.js',
         '/js/workspace-tabs.js',
+        '/js/owner-resource.js',
         '/js/tab-context.js',
         '/js/workspace-tiling.js',
         '/js/workspace-split.js',
         '/js/workspace-tab-menu.js',
         '/js/workspace-drag.js',
         '/js/workspace-overview.js',
+        '/js/tab-leave.js',
         '/js/pdf-work-runtime.js',
         '/js/request-coordinator.js',
         '/vendor/idb/idb.min.js',
         '/js/offline-store.js',
         '/js/offline-runtime.js',
         '/js/local-store.js',
+        '/js/editor-recovery.js',
         '/js/work-tag-state.js',
         '/js/folder-tag-state.js',
         '/js/work-lifecycle-state.js',
@@ -125,6 +134,7 @@
         '/js/work-metadata-state.js',
         '/js/work-source-state.js',
         '/js/work-notes-state.js',
+        '/js/work-note-recovery.js',
         '/js/work-role-state.js',
     '/js/work-role-editor.js',
     '/js/person-state.js',
@@ -161,12 +171,11 @@
         '/js/components/playlists.js',
         '/js/components/people.js',
         '/js/components/people-groups.js',
-        '/js/components/search.js',
-        '/js/components/publishers.js',
         '/js/components/tags.js',
         '/js/components/types.js',
         '/js/components/processing-files.js',
         '/js/work-selection.js',
+        '/js/search-query-codec.js',
         '/js/saved-views.js',
         '/js/command-palette.js',
         '/js/work-route-projection.js',

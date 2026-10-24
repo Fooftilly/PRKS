@@ -22,7 +22,10 @@ from typing import Any, Callable, Iterable, Sequence
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # #69 Pyright typed slice: genuine basic type checking for the protected
-# scopes below (backend/storage first, then small backend utility modules).
+# scopes below (backend/storage first, then small backend utility modules:
+# entity_ids, concurrency, research_markup, pdf_linearize, derived_cache_publish,
+# text_identity, pdf_byte_mentions, fs_durability, db/config, db/errors,
+# and db/database).
 # Kept next to the AST invariants so Fast Static Analysis fails if the typed
 # slice silently reverts to effectively-off mode or loses a protected scope.
 PYRIGHT_DATAFLOW_CONFIG = "pyrightconfig.json"
@@ -35,6 +38,87 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/storage",
     "backend/entity_ids.py",
     "backend/concurrency.py",
+    "backend/research_markup.py",
+    "backend/pdf_linearize.py",
+    "backend/derived_cache_publish.py",
+    "backend/domain/text_identity.py",
+    "backend/pdf_byte_mentions.py",
+    "backend/fs_durability.py",
+    "backend/db/config.py",
+    "backend/db/errors.py",
+    "backend/db/database.py",
+    "backend/domain/identity/secret_tokens.py",
+    "backend/domain/identity/login_names.py",
+    "backend/domain/identity/errors.py",
+    "backend/domain/identity/passwords.py",
+    "backend/domain/identity/login_limiter.py",
+    "backend/domain/identity/bootstrap_tokens.py",
+    "backend/domain/identity/login.py",
+    "backend/domain/identity/authorization.py",
+    "backend/domain/identity/library_scope.py",
+    "backend/domain/identity/request_context.py",
+    "backend/domain/identity/sessions.py",
+    "backend/domain/identity/web_start.py",
+    "backend/domain/identity/root_pairing.py",
+    "backend/domain/identity/admin.py",
+    "backend/api/session.py",
+    "backend/work_identity.py",
+    "backend/work_projection.py",
+    "backend/work_metadata_sync.py",
+    "backend/work_role_sync.py",
+    "backend/domain/works/__init__.py",
+    "backend/domain/works/integrity.py",
+    "backend/domain/works/projection.py",
+    "backend/domain/works/queries.py",
+    "backend/domain/works/commands.py",
+    "backend/domain/works/revisions.py",
+    "backend/domain/works/metadata.py",
+    "backend/domain/works/notes.py",
+    "backend/domain/works/source.py",
+    "backend/domain/works/bulk.py",
+    "backend/domain/works/citation.py",
+    "backend/domain/works/lifecycle.py",
+    "backend/domain/works/merge.py",
+    "backend/domain/works/wiki_links.py",
+    "backend/domain/people/__init__.py",
+    "backend/domain/people/persons.py",
+    "backend/domain/people/groups.py",
+    "backend/domain/people/publishers.py",
+    "backend/domain/people/queries.py",
+    "backend/domain/people/roles.py",
+    "backend/domain/organization/__init__.py",
+    "backend/domain/organization/folders.py",
+    "backend/domain/organization/lifecycle.py",
+    "backend/domain/organization/links.py",
+    "backend/domain/organization/playlists.py",
+    "backend/domain/organization/tags.py",
+    "backend/domain/saved_views/__init__.py",
+    "backend/domain/saved_views/views.py",
+    "backend/domain/settings/__init__.py",
+    "backend/domain/settings/app_settings.py",
+    "backend/jobs/queue.py",
+    "backend/jobs/handlers.py",
+    "backend/jobs/runner.py",
+    "backend/jobs/diagnostics.py",
+    "backend/jobs/prune.py",
+    "backend/jobs/worker.py",
+    "backend/jobs/embedded.py",
+    "backend/sync/__init__.py",
+    "backend/sync/families.py",
+    "backend/sync/protocol.py",
+    "backend/sync/handlers/__init__.py",
+    "backend/sync/handlers/folder.py",
+    "backend/sync/handlers/person.py",
+    "backend/sync/handlers/person_group.py",
+    "backend/sync/handlers/playlist.py",
+    "backend/sync/handlers/tag.py",
+    "backend/sync/handlers/tag_link.py",
+    "backend/sync/handlers/work_lifecycle.py",
+    "backend/sync/handlers/work_metadata.py",
+    "backend/sync/handlers/work_notes.py",
+    "backend/sync/handlers/work_open.py",
+    "backend/sync/handlers/work_role.py",
+    "backend/sync/handlers/work_source.py",
 )
 PYRIGHT_TYPED_SLICE_INCLUDE = PYRIGHT_TYPED_SLICE_SCOPES
 PYRIGHT_TYPED_SLICE_MODES = frozenset({"basic", "standard", "strict"})
@@ -81,6 +165,13 @@ OS_REPLACE_ALLOWLIST = {
     "backend/fs_durability.py",
     "backend/pdf_linearize.py",
     "backend/services/work_pdf_replace.py",
+    # The StorageBackend's local publication boundary (storage-architecture
+    # §10.3): put_new/replace are fs_durability's fsync-before/sync-after
+    # contract, the same one work_pdf_replace implements today.
+    "backend/storage/objects.py",
+    # The V6 capability probe must exercise os.replace itself; it renames only
+    # its own probe files inside .prks-maintenance/preflight/.
+    "backend/storage/preflight.py",
 }
 # Bare os.fsync belongs only in fs_durability. Managed-PDF code must use
 # fsync_open_file / fsync_directory — work_pdf_replace is not an fsync island.
@@ -3874,6 +3965,124 @@ def check_pyright_configs(root: Path = REPO_ROOT) -> list[Finding]:
     return findings
 
 
+# --- Current-schema snapshots in tests (INV-TESTS-001, #103) ---------------
+#
+# A test that pins the repository-wide schema counter to an integer
+# (``assertEqual(PRKS_SCHEMA_VERSION, 17)``, ``assert LATEST_SCHEMA_VERSION ==
+# 17``) or greps ``db_migrations.py`` for ``"LATEST_SCHEMA_VERSION = 17"`` fails
+# on every legitimate future migration, whatever feature it covers. Feature
+# tests assert the columns/tables they need instead; consistency tests compare
+# the two constants with each other.
+#
+# Only the version constants are matched (by lexical name, so module-qualified
+# ``db_migrations.LATEST_SCHEMA_VERSION`` counts too). Other numeric versions
+# (``UPDATE schema_version SET version = 12`` fixtures, derived-index versions)
+# are untouched. The allowlist is the migration-focused tests, where the
+# number itself is the contract; keep it that narrow.
+CURRENT_SCHEMA_VERSION_NAMES = frozenset({"LATEST_SCHEMA_VERSION", "PRKS_SCHEMA_VERSION"})
+SCHEMA_VERSION_SNAPSHOT_ALLOWLIST = {
+    # Migration registry contract: pins the latest version a migration targets.
+    "tests/test_db_migrations.py",
+    # Schema-change gate: synthetic repositories with fabricated versions.
+    "tests/test_schema_change_gate.py",
+}
+_EQUALITY_ASSERTS = frozenset({"assertEqual", "assertEquals"})
+_SCHEMA_VERSION_SOURCE_RE = re.compile(
+    r"\b(?:LATEST|PRKS)_SCHEMA_VERSION\s*(?::\s*\w+\s*)?=\s*\d"
+)
+
+
+def _is_current_schema_version_ref(node: ast.expr) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id in CURRENT_SCHEMA_VERSION_NAMES
+    if isinstance(node, ast.Attribute):
+        return node.attr in CURRENT_SCHEMA_VERSION_NAMES
+    return False
+
+
+def _is_int_literal(node: ast.expr) -> bool:
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        node = node.operand
+    return (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, int)
+        and not isinstance(node.value, bool)
+    )
+
+
+def _pins_current_schema(left: ast.expr, right: ast.expr) -> bool:
+    return (_is_current_schema_version_ref(left) and _is_int_literal(right)) or (
+        _is_current_schema_version_ref(right) and _is_int_literal(left)
+    )
+
+
+def check_test_schema_snapshots(source: str, relpath: str) -> list[Finding]:
+    """INV-TESTS-001 findings for one test module (see the block comment above)."""
+    if relpath in SCHEMA_VERSION_SNAPSHOT_ALLOWLIST:
+        return []
+    try:
+        tree = ast.parse(source, filename=relpath)
+    except SyntaxError:
+        return []
+    findings: list[Finding] = []
+    hint = (
+        "assert the feature's columns/tables, compare PRKS_SCHEMA_VERSION with "
+        "LATEST_SCHEMA_VERSION, or drop an obsolete no-schema-bump guard"
+    )
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+            if name in _EQUALITY_ASSERTS and len(node.args) >= 2 and _pins_current_schema(
+                node.args[0], node.args[1]
+            ):
+                findings.append(
+                    Finding(
+                        "INV-TESTS-001",
+                        relpath,
+                        node.lineno,
+                        f"test pins the current schema version to an integer; {hint}",
+                    )
+                )
+        elif isinstance(node, ast.Compare):
+            operands = [node.left, *node.comparators]
+            for op, left, right in zip(node.ops, operands, operands[1:]):
+                if isinstance(op, ast.Eq) and _pins_current_schema(left, right):
+                    findings.append(
+                        Finding(
+                            "INV-TESTS-001",
+                            relpath,
+                            node.lineno,
+                            f"test pins the current schema version to an integer; {hint}",
+                        )
+                    )
+        elif (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and _SCHEMA_VERSION_SOURCE_RE.search(node.value)
+        ):
+            findings.append(
+                Finding(
+                    "INV-TESTS-001",
+                    relpath,
+                    node.lineno,
+                    f"test matches a current schema-version assignment in source text; {hint}",
+                )
+            )
+    return findings
+
+
+def check_test_schema_snapshots_repo(root: Path = REPO_ROOT) -> list[Finding]:
+    findings: list[Finding] = []
+    tests_dir = root / "tests"
+    if not tests_dir.is_dir():
+        return findings
+    for path in sorted(tests_dir.rglob("*.py")):
+        rel = path.relative_to(root).as_posix()
+        findings.extend(check_test_schema_snapshots(path.read_text(encoding="utf-8"), rel))
+    return findings
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -3886,6 +4095,7 @@ def main(argv: list[str] | None = None) -> int:
 
     findings = check_repo(args.root.resolve())
     findings.extend(check_pyright_configs(args.root.resolve()))
+    findings.extend(check_test_schema_snapshots_repo(args.root.resolve()))
     if findings:
         for finding in findings:
             print(finding.render())

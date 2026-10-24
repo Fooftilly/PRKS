@@ -3,7 +3,6 @@ export interface ClientRequestSnapshot {
     started: number
     dedupeJoins: number
     burstCacheHits: number
-    coalescedMutations: number
     retries: number
     aborted: number
   }
@@ -43,7 +42,6 @@ export function readClientRequestSnapshot(): ClientRequestSnapshot | null {
       started: num(counts.started),
       dedupeJoins: num(counts.dedupeJoins),
       burstCacheHits: num(counts.burstCacheHits),
-      coalescedMutations: num(counts.coalescedMutations),
       retries: num(counts.retries),
       aborted: num(counts.aborted),
     },

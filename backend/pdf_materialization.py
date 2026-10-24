@@ -26,6 +26,18 @@ from typing import Any, Optional
 STALE_CODE = "ANNOTATION_MATERIALIZATION_STALE"
 
 
+def _require_integer_revision(value: Any) -> int:
+    """Reject lossy coercions (bool, float, string) of generation identifiers.
+
+    JSON integer revisions arrive as Python ints. In particular int(True)
+    and int(1.9) both produce 1, which must not acknowledge a different
+    materialization generation.
+    """
+    if type(value) is not int:
+        raise ValueError(STALE_CODE)
+    return value
+
+
 def get_materialization_on_conn(conn, work_id: str) -> Optional[dict[str, Any]]:
     row = conn.execute(
         """
@@ -80,12 +92,7 @@ def accept_materialization_revision_on_conn(
     if status is None:
         raise LookupError("ENTITY_NOT_FOUND")
     canonical = int(status["canonical_annotation_set_revision"] or 0)
-    if claimed_revision is None:
-        raise ValueError(STALE_CODE)
-    try:
-        claimed = int(claimed_revision)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(STALE_CODE) from exc
+    claimed = _require_integer_revision(claimed_revision)
     if claimed != canonical:
         raise ValueError(STALE_CODE)
     return canonical
@@ -108,10 +115,7 @@ def mark_pdf_materialized_on_conn(
     if at_revision is None:
         at_revision = canonical
     else:
-        try:
-            at_revision = int(at_revision)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(STALE_CODE) from exc
+        at_revision = _require_integer_revision(at_revision)
         if at_revision < 0 or at_revision > canonical:
             raise ValueError(STALE_CODE)
     conn.execute(

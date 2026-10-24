@@ -176,7 +176,7 @@ export function browserFolderLibraryIntents(
         typeof window.prksPendingWorkMetadataGeneration === 'function'
           ? window.prksPendingWorkMetadataGeneration()
           : null
-      const shouldForce = !!force || window.__prksRecentlyAddedDirty === true
+      const shouldForce = !!force
       const memoryStale = cache.generation !== domainGen
       const overlayStale = cache.pendingGeneration !== pendingGeneration
 
@@ -240,7 +240,6 @@ export function browserFolderLibraryIntents(
       }
       const offlineCached = !!(offlineRecentlyAdded && offlineRecentlyAdded.source === 'cache')
       const rows = normalizeWorks(works)
-      window.__prksRecentlyAddedDirty = false
       return {
         works: rows,
         offlineCached,

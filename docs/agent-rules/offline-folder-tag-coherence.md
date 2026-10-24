@@ -39,7 +39,7 @@ what the renderers dereference: `id`/`title`/`description`/`parent_id` plus
 non-negative integer `work_count`/`child_count` on hierarchy rows, and on a
 detail additionally `private_notes`, a null-or-valid `parent` summary, and
 `children`/`works`/`tags` arrays. Because Folder detail feeds `folder.works[]`
-straight to `prksWorkCardHtml()`, `prksIsWorkCardRowShape()` validates that
+straight to `PrksWorkCard`, `prksIsWorkCardRowShape()` validates that
 card's row contract — `title`, `year`, `published_date`, `status`, `doc_type`,
 `file_path`, `author_text`, `linked_authors`, `primary_author`,
 `primary_editor`, `thumb_url` and a non-negative `file_size_bytes`. Validating
@@ -84,8 +84,9 @@ successful Work creation invalidates Folders, unconditionally: unlike Playlist
 membership, folder membership is not optional — the create endpoint files every
 new Work into the requested folder or into the default "Uncategorized" one, so
 a `work_count` always changes. Do not make this conditional on an explicit
-`folder_id`. `importProcessingFile()` is the same canonical shape and owes the
-same hooks. Second, **Editor** counts alongside Author, because a Work card's
+`folder_id`. A Files for Processing import is the same canonical shape and owes
+the same hooks (`prksMarkProcessingImportChanged()`, called by the Processing
+records service after every import that was sent). Second, **Editor** counts alongside Author, because a Work card's
 credit line is `linked_authors` → `author_text` → `primary_editor`; other roles
 (Reviewer, Translator, Mentioned) are not rendered there and deliberately leave
 Folders eligible.

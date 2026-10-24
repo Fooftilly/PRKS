@@ -22,10 +22,12 @@ env/
 tools/pdf-viewer/node_modules/
 tools/research-graph/node_modules/
 tools/frontend-vendor/node_modules/
-frontend-app/node_modules/
+frontend-app/node_modules
 frontend-app/storybook-static/
 frontend-app/.workspace-model-build/
 frontend-app/.work-route-build/
+frontend-app/.search-codec-build/
+frontend-app/.route-model-build/
 frontend-app/debug-storybook.log
 frontend/vendor/prks-pdf-viewer/esbuild-meta.json
 
@@ -40,6 +42,8 @@ pip-wheel-metadata/
 .playwright-browsers/
 
 # --- Testing / coverage ---
+# Local JUnit reports exported to Mergify by CI
+/test-reports/
 # E2E per-test timing history (runner metadata; machine-specific)
 /.tests/
 .pytest_cache/

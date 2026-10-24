@@ -1,7 +1,9 @@
 """Unit coverage for tests.e2e.policy — no Chromium."""
 from __future__ import annotations
 
+import ast
 import contextlib
+import fnmatch
 import io
 import json
 import os
@@ -40,6 +42,158 @@ FAKE_IDS = [
     "tests.e2e.test_app.WorkCreateWorkflowTests.test_unified_create_control_and_menu",
     "tests.e2e.test_app.SettingsCategoryWorkflowTests.test_keyboard_category_navigation",
 ]
+
+
+class _RuntimeImports(ast.NodeVisitor):
+    """Static imports and literal importlib calls from one Python module."""
+
+    def __init__(self, *, path: Path, package: str):
+        self.path = path
+        self.package = package
+        self.imports: set[str] = set()
+        # Imports inside a function body run only when it is called, not when
+        # the module loads (the opt-in PRKS_AUTH start, for example).
+        self.deferred: set[str] = set()
+        self._function_depth = 0
+        self.import_module_aliases = {"__import__", "import_module"}
+
+    def _add(self, *names: str) -> None:
+        (self.deferred if self._function_depth else self.imports).update(names)
+
+    def visit_FunctionDef(self, node):
+        self._function_depth += 1
+        self.generic_visit(node)
+        self._function_depth -= 1
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+    visit_Lambda = visit_FunctionDef
+
+    def visit_If(self, node):
+        # Type-only imports do not activate a persistence backend.
+        if (
+            isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING"
+            or isinstance(node.test, ast.Attribute)
+            and node.test.attr == "TYPE_CHECKING"
+            and isinstance(node.test.value, ast.Name)
+            and node.test.value.id == "typing"
+        ):
+            for child in node.orelse:
+                self.visit(child)
+            return
+        self.generic_visit(node)
+
+    def visit_Import(self, node):
+        self._add(*(alias.name for alias in node.names))
+
+    def visit_ImportFrom(self, node):
+        if node.level == 0 and node.module == "importlib":
+            self.import_module_aliases.update(
+                alias.asname or alias.name
+                for alias in node.names if alias.name == "import_module"
+            )
+        if node.level:
+            parts = self.package.split(".")
+            if node.level > len(parts):
+                raise AssertionError(f"invalid relative import in {self.path}")
+            base = ".".join(parts[:len(parts) - node.level + 1])
+            if node.module:
+                base += "." + node.module
+        else:
+            base = node.module or ""
+        if base:
+            self._add(base, *(
+                base + "." + alias.name
+                for alias in node.names if alias.name != "*"
+            ))
+
+    def visit_Call(self, node):
+        # Literal dynamic imports are checked. Computed module names still
+        # require manual review when the PostgreSQL cutover is approved.
+        func = node.func
+        if (
+            node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
+            if isinstance(func, ast.Name) and func.id in self.import_module_aliases:
+                self._add(node.args[0].value)
+            elif isinstance(func, ast.Attribute) and func.attr == "import_module":
+                self._add(node.args[0].value)
+        self.generic_visit(node)
+
+
+def _runtime_postgres_imports(root: Path, *, deferred: bool = False) -> list[str]:
+    """Conservatively trace local static imports from the shipped server entries.
+
+    Staged PostgreSQL modules may import each other without being served yet.
+    Follow the actual runtime graph rather than flagging every backend module.
+    Direct Python imports, relative imports and literal dynamic imports are
+    included; nonliteral dynamic loading needs a deliberate policy review.
+    By default only what loads with the modules is followed (what the SQLite
+    runtime imports); ``deferred=True`` also follows imports inside function
+    bodies, which run only on a code path such as the PRKS_AUTH start.
+    """
+    return _trace_served_modules(root, deferred=deferred)[1]
+
+
+def _served_modules(root: Path) -> set[str]:
+    """Every local module the served app can import, deferred imports included."""
+    return _trace_served_modules(root, deferred=True)[0]
+
+
+def _local_sources(root: Path) -> dict[str, Path]:
+    sources = {"prks_app": root / "prks_app.py"}
+    for path in (root / "backend").rglob("*.py"):
+        rel = path.relative_to(root).with_suffix("")
+        parts = rel.parts[:-1] if path.name == "__init__.py" else rel.parts
+        sources[".".join(parts)] = path
+    return sources
+
+
+def _module_imports(module: str, path: Path, *, deferred: bool) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    package = module if path.name == "__init__.py" else module.rpartition(".")[0]
+    scanner = _RuntimeImports(path=path, package=package)
+    scanner.visit(tree)
+    return scanner.imports | scanner.deferred if deferred else scanner.imports
+
+
+def _trace_served_modules(root: Path, *, deferred: bool) -> tuple[set[str], list[str]]:
+    sources = _local_sources(root)
+    pending = ["prks_app", "backend.server"]
+    visited = set()
+    offenders = []
+    # These are the first staged PostgreSQL boundaries. Importing the facade
+    # from the served application is itself a cutover signal, even when the
+    # facade relies only on lazy/TYPE_CHECKING database references.
+    pg_prefixes = (
+        "backend.db",
+        "backend.pg_facade",
+        "backend.domain.identity",
+        "backend.domain.text_identity",
+    )
+
+    while pending:
+        module = pending.pop()
+        if module in visited:
+            continue
+        visited.add(module)
+        path = sources.get(module)
+        if path is None:
+            if module in ("prks_app", "backend.server"):
+                raise AssertionError(f"missing served entry: {module}")
+            continue
+
+        for target in sorted(_module_imports(module, path, deferred=deferred)):
+            if any(target == prefix or target.startswith(prefix + ".") for prefix in pg_prefixes):
+                offenders.append(f"{module} imports {target}")
+            # Include package __init__.py side effects in the reachable graph.
+            parts = target.split(".")
+            for index in range(1, len(parts) + 1):
+                candidate = ".".join(parts[:index])
+                if candidate in sources and candidate not in visited:
+                    pending.append(candidate)
+    return visited, sorted(set(offenders))
 
 
 class SmokeSelectionTests(unittest.TestCase):
@@ -204,7 +358,6 @@ class AffectedMappingTests(unittest.TestCase):
             "frontend-app/src/features/progress/ProgressView.vue",
             "frontend-app/src/features/progress/session.ts",
             "frontend-app/src/features/progress/rows.ts",
-            "frontend-app/src/features/progress/legacy-work-card.ts",
             "frontend-app/src/features/progress/status.ts",
             "frontend-app/src/features/progress/ProgressView.test.ts",
         )
@@ -688,6 +841,25 @@ class AffectedMappingTests(unittest.TestCase):
                 self.assertFalse(skip)
                 self.assertTrue(feats)
 
+    def test_editor_recovery_paths_select_their_offline_browser_tests(self):
+        for path in (
+            "frontend/js/editor-recovery.js",
+            "frontend-app/src/lifecycle/editor-recovery/writer.ts",
+            "frontend-app/src/lifecycle/editor-recovery-entry.ts",
+        ):
+            with self.subTest(path=path):
+                features = policy.classify_affected_path(path)["features"]
+                self.assertIn("offline", features)
+                self.assertIn("tabs", features)
+        self.assertIn("tests.e2e.test_editor_recovery_store", policy.FEATURES["offline"]["selectors"])
+
+    def test_shared_note_recovery_paths_select_offline_and_notes_tests(self):
+        features = policy.classify_affected_path("frontend/js/work-note-recovery.js")["features"]
+        self.assertIn("offline", features)
+        self.assertIn("notes", features)
+        presenter = "frontend-app/src/features/editor-recovery/recovery-presenter.ts"
+        self.assertIn("offline", policy.classify_affected_path(presenter)["features"])
+
     def test_select_affected_unions_features_and_explains(self):
         plan = policy.select_affected(
             FAKE_IDS,
@@ -782,6 +954,147 @@ class AffectedMappingTests(unittest.TestCase):
         self.assertEqual(plan["mode"], "affected")
         for name in ("folders", "browse", "playlists", "smoke"):
             self.assertIn(name, plan["features"])
+
+    def test_postgres_schema_and_migration_only_diff_skips_browser_ci(self):
+        paths = [
+            "backend/db/schema/000_extensions.sql",
+            "backend/db/schema/010_instance.sql",
+            "backend/db/schema/020_identity.sql",
+            "backend/db/schema/030_jobs.sql",
+            "backend/db/schema/040_sync.sql",
+            "backend/db/schema/snapshot.json",
+            "backend/db/schema_snapshot.py",
+            "tests/pg/test_migrate.py",
+            "tests/pg/test_schema_snapshot.py",
+            "backend/AGENTS.md",
+        ]
+        for path in paths[:7]:
+            with self.subTest(path=path):
+                classified = policy.classify_affected_path(path)
+                self.assertEqual(classified["rules"], ["postgres-migration-infrastructure"])
+                self.assertTrue(classified["skip"])
+        # A newly added executable under schema/, a shared domain package
+        # initializer, or the schema runner (the embedded worker's schema
+        # check is served) must not get the SQL/migration exemption.
+        for runtime in (
+            "backend/db/schema/new_helper.py", "backend/domain/__init__.py", "backend/db/migrate.py",
+        ):
+            with self.subTest(runtime=runtime):
+                self.assertEqual(policy.plan_ci_e2e([runtime])["mode"], "full")
+                self.assertEqual(policy.plan_ci_e2e(paths + [runtime])["mode"], "full")
+        plan = policy.plan_ci_e2e(paths)
+        self.assertEqual(plan["mode"], "skip")
+        self.assertFalse(plan["run"])
+
+    def test_postgres_text_identity_helper_runs_smoke_not_full(self):
+        path = "backend/domain/text_identity.py"
+        classified = policy.classify_affected_path(path)
+        self.assertEqual(classified["rules"], ["postgres-text-identity"])
+        self.assertFalse(classified["skip"])
+        self.assertFalse(classified["unmapped"])
+        self.assertEqual(classified["features"], ["smoke"])
+        plan = policy.plan_ci_e2e([
+            path, "backend/db/schema/020_identity.sql",
+            "tests/pg/test_text_identity.py", "tests/test_text_identity.py",
+        ])
+        self.assertEqual(plan["mode"], "affected")
+        self.assertTrue(plan["run"])
+        self.assertEqual(plan["features"], ["smoke"])
+        self.assertFalse(plan["pointer_capture"])
+
+    def test_postgres_exemption_does_not_hide_runtime_or_unknown_changes(self):
+        pg_paths = ["backend/db/schema_snapshot.py", "backend/db/schema/040_sync.sql"]
+        for runtime in (
+            "prks_app.py", "backend/server.py", "backend/db_manager.py",
+            "backend/db/__init__.py", "backend/db/database.py",
+            "backend/db/new_unknown_module.py", "backend/api/session.py",
+            "backend/domain/identity/web_start.py",
+            "frontend/js/app.js", "tests/e2e/policy.py",
+        ):
+            with self.subTest(runtime=runtime):
+                self.assertEqual(policy.plan_ci_e2e(pg_paths + [runtime])["mode"], "full")
+        self.assertEqual(
+            policy.plan_ci_e2e(pg_paths + ["frontend/js/components/folders.js"])["mode"],
+            "affected",
+        )
+        self.assertEqual(policy.plan_ci_e2e(pg_paths, force_full=True)["mode"], "full")
+
+    def test_postgres_exemption_requires_no_runtime_imports(self):
+        # PG feature code can be built and tested before cutover; only imports
+        # reachable from the served application activate the browser boundary.
+        # The SQLite runtime loads no PostgreSQL module; the opt-in PRKS_AUTH
+        # start (L-ID-1) imports identity and the pool inside functions.
+        self.assertEqual(_runtime_postgres_imports(Path(_PROJECT_DIR)), [])
+
+    def test_no_e2e_skipped_python_file_is_reachable_from_the_served_app(self):
+        root = Path(_PROJECT_DIR)
+        served = _served_modules(root)
+        skipped = [
+            pattern
+            for rule in policy.AFFECTED_RULES if rule.get("skip")
+            for pattern in rule["paths"] if pattern.startswith("backend/")
+        ]
+        self.assertIn("backend/db/schema_snapshot.py", skipped)
+        for path in sorted(root.glob("backend/**/*.py")):
+            rel = path.relative_to(root).as_posix()
+            if not any(fnmatch.fnmatchcase(rel, pattern) for pattern in skipped):
+                continue
+            parts = path.relative_to(root).with_suffix("").parts
+            module = ".".join(parts[:-1] if path.name == "__init__.py" else parts)
+            with self.subTest(path=rel):
+                self.assertNotIn(module, served, f"{rel} is served but skips browser E2E")
+
+    def test_postgres_import_guard_ignores_unserved_staging_but_detects_cutover(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "backend" / "domain" / "identity").mkdir(parents=True)
+            (root / "backend" / "db").mkdir(parents=True)
+            (root / "prks_app.py").write_text("from backend import server\n", encoding="utf-8")
+            served = root / "backend" / "server.py"
+            served.write_text("from . import active\n", encoding="utf-8")
+            active = root / "backend" / "active.py"
+            active.write_text("import json\n", encoding="utf-8")
+            (root / "backend" / "domain" / "identity" / "root_pairing.py").write_text(
+                "from backend.db.database import Database\n", encoding="utf-8",
+            )
+            (root / "backend" / "pg_facade").mkdir()
+            (root / "backend" / "pg_facade" / "__init__.py").write_text(
+                "# Facade can lazily receive database state; no static db import\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(_runtime_postgres_imports(root), [])
+            # An import inside a function is not loaded with the module, but
+            # the deferred trace still sees it.
+            active.write_text(
+                "def start():\n    from backend.domain.identity import root_pairing\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(_runtime_postgres_imports(root), [])
+            self.assertTrue(any(
+                "backend.domain.identity" in entry
+                for entry in _runtime_postgres_imports(root, deferred=True)
+            ))
+            self.assertIn("backend.domain.identity.root_pairing", _served_modules(root))
+            active.write_text("from backend.pg_facade import PostgresLibrary\n", encoding="utf-8")
+            self.assertTrue(any("backend.pg_facade" in entry for entry in _runtime_postgres_imports(root)))
+            active.write_text("from backend.domain.identity import root_pairing\n", encoding="utf-8")
+            self.assertTrue(any("backend.domain.identity" in entry for entry in _runtime_postgres_imports(root)))
+            active.write_text("from backend.domain import text_identity\n", encoding="utf-8")
+            self.assertTrue(any("text_identity" in entry for entry in _runtime_postgres_imports(root)))
+            active.write_text("import backend.db.database\n", encoding="utf-8")
+            self.assertTrue(any("backend.db" in entry for entry in _runtime_postgres_imports(root)))
+            active.write_text("import importlib\nimportlib.import_module('backend.db.migrate')\n", encoding="utf-8")
+            self.assertTrue(any("backend.db" in entry for entry in _runtime_postgres_imports(root)))
+            active.write_text(
+                "from importlib import import_module\nimport_module('backend.db.migrate')\n",
+                encoding="utf-8",
+            )
+            self.assertTrue(any("backend.db" in entry for entry in _runtime_postgres_imports(root)))
+            active.write_text(
+                "from importlib import import_module as load_pg\nload_pg('backend.db.migrate')\n",
+                encoding="utf-8",
+            )
+            self.assertTrue(any("backend.db" in entry for entry in _runtime_postgres_imports(root)))
 
     def test_unmapped_e2e_support_module_is_ci_full(self):
         # inventory.py / doctor.py / etc. must not skip the browser gate.
@@ -1594,6 +1907,19 @@ class BenchmarkModeTests(unittest.TestCase):
             ("profile", "no-seed-cache"),
         )
 
+    def test_fastpath_is_opt_in_and_never_trains_timing_history(self):
+        self.assertEqual(policy.benchmark_modes({"PRKS_E2E_ROUTE_FASTPATH": "0"}), ())
+        self.assertEqual(
+            policy.benchmark_modes({"PRKS_E2E_ROUTE_FASTPATH": "1"}),
+            ("route-fastpath",),
+        )
+        self.assertEqual(
+            policy.benchmark_modes(
+                {"PRKS_E2E_PROFILE": "1", "PRKS_E2E_ROUTE_FASTPATH": "yes"}
+            ),
+            ("profile", "route-fastpath"),
+        )
+
     def test_env_truthiness_is_shared_with_the_harness(self):
         """One definition decides how the harness reads a switch and how the
         runner judges the same switch."""
@@ -2315,6 +2641,329 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             )
         return code, print_slow
 
+    def test_serial_benchmark_json_reports_real_metrics_and_modes(self):
+        """The A/B workflow consumes structured output, never console formatting."""
+        from tests.e2e import run as runner
+
+        result = mock.Mock()
+        result.testsRun = 2
+        result.failures = []
+        result.errors = []
+        result.skipped = []
+        result.phase_timings = {
+            "case.one": {
+                "routing_decision": 0.015, "app_ready": 0.20,
+                "nav_timing_attempts": 2.0, "nav_timing_samples": 2.0,
+                "nav_response_wait": 0.01,
+            },
+            "case.two": {
+                "routing_decision": 0.025, "app_ready": 0.30,
+                "nav_timing_attempts": 1.0,
+            },
+        }
+        with tempfile.TemporaryDirectory() as raw:
+            destination = Path(raw) / "benchmark.json"
+            for fastpath in ("0", "1"):
+                destination.unlink(missing_ok=True)
+                with mock.patch.dict(
+                    os.environ,
+                    {
+                        "PRKS_E2E_BENCHMARK_RESULT": str(destination),
+                        "PRKS_E2E_PROFILE": "1",
+                        "PRKS_E2E_ROUTE_FASTPATH": fastpath,
+                        "PRKS_E2E_SEED_CACHE": "1",
+                    },
+                ):
+                    runner._write_serial_benchmark_result(result, 4.5678)
+                data = json.loads(destination.read_text(encoding="utf-8"))
+                self.assertEqual(data["schema_version"], 2)
+                self.assertEqual(data["navigation_samples"], {
+                    "attempted": 3, "captured": 2,
+                })
+                self.assertNotIn("nav_timing_attempts", data["phase_seconds"])
+                self.assertNotIn("nav_timing_samples", data["phase_seconds"])
+                self.assertEqual(data["phase_seconds"]["nav_response_wait"], 0.01)
+                self.assertEqual(data["benchmark_modes"], (
+                    ["profile", "route-fastpath"] if fastpath == "1" else ["profile"]
+                ))
+                self.assertEqual(data["workers"], 1)
+                self.assertEqual(data["tests"], 2)
+                self.assertEqual(data["failures"], 0)
+                self.assertEqual(data["errors"], 0)
+                self.assertEqual(data["skipped"], 0)
+                self.assertEqual(data["wall_seconds"], 4.568)
+                self.assertAlmostEqual(data["phase_seconds"]["routing_decision"], 0.04)
+                self.assertAlmostEqual(data["phase_seconds"]["app_ready"], 0.5)
+
+    def test_serial_benchmark_json_is_opt_in_and_rejects_unprofiled_runs(self):
+        from tests.e2e import run as runner
+
+        result = mock.Mock()
+        result.phase_timings = {}
+        with tempfile.TemporaryDirectory() as raw:
+            destination = Path(raw) / "benchmark.json"
+            with mock.patch.dict(os.environ, {
+                "PRKS_E2E_BENCHMARK_RESULT": "",
+                "PRKS_E2E_PROFILE": "1",
+            }):
+                runner._write_serial_benchmark_result(result, 1.0)
+            self.assertFalse(destination.exists())
+            with mock.patch.dict(os.environ, {
+                "PRKS_E2E_BENCHMARK_RESULT": str(destination),
+                "PRKS_E2E_PROFILE": "0",
+                "PRKS_E2E_SEED_CACHE": "1",
+                "PRKS_E2E_ROUTE_FASTPATH": "0",
+            }):
+                with self.assertRaisesRegex(ValueError, "requires E2E profiling"):
+                    runner._write_serial_benchmark_result(result, 1.0)
+            self.assertFalse(destination.exists())
+
+    def test_manual_route_benchmark_warms_up_before_measuring(self):
+        """Do not charge one-time runner startup against the baseline arm."""
+        script = Path(".github/workflows/e2e-routing-benchmark.yml").read_text(
+            encoding="utf-8"
+        )
+        warmup = script.index("::group::Unmeasured baseline warm-up")
+        trials = script.index("for trial in 1 2 3 4; do")
+        self.assertLess(warmup, trials)
+        warmup_block = script[warmup:trials]
+        self.assertIn('PRKS_E2E_BENCHMARK_RESULT=""', warmup_block)
+        self.assertIn("PRKS_E2E_ROUTE_FASTPATH=0", warmup_block)
+        self.assertIn("--jobs 1 --no-pointer-capture --profile", warmup_block)
+        # The warm-up and measured runs must use identical selections.
+        self.assertEqual(script.count("--feature shell --feature work-create"), 2)
+        self.assertEqual(script.count("--jobs 1 --no-pointer-capture --profile"), 2)
+        self.assertIn("1|4) mode=baseline; flag=0", script)
+        self.assertIn("2|3) mode=fastpath; flag=1", script)
+
+    def test_manual_route_benchmark_summarizes_startup_phases(self):
+        """Benchmark summary must report complete, nonduplicated setup costs."""
+        script = Path(".github/workflows/e2e-routing-benchmark.yml").read_text(
+            encoding="utf-8"
+        )
+        for name in (
+            "server_start",
+            "server_spawn",
+            "server_http_ready",
+            "app_ready",
+            "app_navigation",
+            "app_sidebar_wait",
+            "app_folder_wait",
+            "app_route_wait",
+        ):
+            with self.subTest(phase=name):
+                self.assertIn(f'"{name}"', script)
+        self.assertIn('phase_rows.append((mode, startup))', script)
+        self.assertIn('math.isclose(', script)
+        self.assertIn('abs_tol=0.01', script)
+        self.assertIn('baseline_phase = statistics.median(', script)
+        self.assertIn('fastpath_phase = statistics.median(', script)
+        self.assertIn('Nested rows partition their inclusive parent', script)
+        self.assertIn('missing/invalid {key} metric', script)
+
+    def test_manual_route_benchmark_phase_summary_executes_and_rejects_bad_data(self):
+        """Exercise embedded report code on fixture JSON, not only its source text."""
+        script = Path(".github/workflows/e2e-routing-benchmark.yml").read_text(
+            encoding="utf-8"
+        )
+        python_block = script.split("          python - <<'PY'\n", 1)[1].split(
+            "\n          PY", 1
+        )[0]
+        code = "\n".join(line[10:] for line in python_block.splitlines()) + "\n"
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            summary_file = root / "step-summary.md"
+            env = os.environ.copy()
+            env.update({
+                "RUNNER_TEMP": raw,
+                "GITHUB_STEP_SUMMARY": str(summary_file),
+                "GITHUB_SHA": "a" * 40,
+            })
+            metric = {
+                "routing_decision": 0.19,
+                "server_start": 17.0,
+                "server_spawn": 7.0,
+                "server_http_ready": 10.0,
+                "app_ready": 20.0,
+                "app_navigation": 12.0,
+                "app_sidebar_wait": 3.0,
+                "app_folder_wait": 4.0,
+                "app_route_wait": 1.0,
+                "nav_response_wait": 3.0,
+                "nav_response_body": 0.4,
+                "nav_dom_content_loaded": 4.0,
+                "nav_until_interactive": 2.5,
+                "nav_interactive_to_dcl": 1.0,
+                "nav_dcl_handlers": 0.5,
+            }
+            for trial, mode in enumerate(
+                ("baseline", "fastpath", "fastpath", "baseline"), 1
+            ):
+                phases = dict(metric)
+                if mode == "fastpath":
+                    phases["routing_decision"] = 0.04
+                    # Keep the inclusive sum consistent but make the A/B
+                    # medians observably different; a mislabeled column fails.
+                    phases["app_navigation"] = 9.0
+                    phases["app_ready"] = 17.0
+                    phases["nav_response_wait"] = 2.0
+                result = {
+                    "schema_version": 2,
+                    "navigation_samples": {"attempted": 40, "captured": 40},
+                    "benchmark_modes": (
+                        ["profile"] if mode == "baseline"
+                        else ["profile", "route-fastpath"]
+                    ),
+                    "workers": 1,
+                    "tests": 40,
+                    "failures": 0,
+                    "errors": 0,
+                    "skipped": 0,
+                    "wall_seconds": 60.0,
+                    "phase_seconds": phases,
+                }
+                (root / f"e2e-routing-ab-{trial}.json").write_text(
+                    json.dumps(result), encoding="utf-8"
+                )
+
+            def run_summary():
+                return subprocess.run(
+                    [sys.executable, "-c", code],
+                    env=env, capture_output=True, text=True, check=False,
+                )
+
+            ok = run_summary()
+            self.assertEqual(ok.returncode, 0, ok.stderr)
+            body = summary_file.read_text(encoding="utf-8")
+            self.assertIn("Server startup (inclusive)", body)
+            self.assertIn("HTTP /api/works readiness", body)
+            self.assertIn("Canonical route wait", body)
+            self.assertIn("| ↳ Page navigation | 12.00s | 9.00s |", body)
+            self.assertIn("| App readiness (inclusive) | 20.00s | 17.00s |", body)
+            self.assertIn("| ↳ Python process spawn | 7.00s | 7.00s |", body)
+            self.assertIn("### Browser Navigation Timing (opt-in, diagnostic)", body)
+            self.assertIn("| Response wait / first byte | 3.00s | 2.00s |", body)
+            self.assertIn("| Response body transfer | 0.40s | 0.40s |", body)
+            self.assertIn(
+                "| Response-end → DOMContentLoaded (inclusive) | 4.00s | 4.00s |", body
+            )
+            self.assertIn("| ↳ Response-end → DOM interactive | 2.50s | 2.50s |", body)
+            self.assertIn("| ↳ DOM interactive → DCL event start | 1.00s | 1.00s |", body)
+            self.assertIn("| ↳ DCL event handlers | 0.50s | 0.50s |", body)
+
+            bad = root / "e2e-routing-ab-2.json"
+            original = json.loads(bad.read_text(encoding="utf-8"))
+
+            # The partition guard rejects an inconsistent parent/child sum.
+            payload = json.loads(json.dumps(original))
+            payload["phase_seconds"]["app_route_wait"] = 2.0
+            bad.write_text(json.dumps(payload), encoding="utf-8")
+            failed = run_summary()
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertIn("app_ready does not match", failed.stderr)
+
+            # The value guard must reject negative phases EVEN IF the parent
+            # exactly matches its children; a partition check alone would pass.
+            payload = json.loads(json.dumps(original))
+            payload["phase_seconds"]["server_spawn"] = -1.0
+            payload["phase_seconds"]["server_http_ready"] = 18.0
+            bad.write_text(json.dumps(payload), encoding="utf-8")
+            failed = run_summary()
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertIn("missing/invalid server_spawn metric", failed.stderr)
+
+            # Non-finite metrics likewise fail before summary generation.
+            payload = json.loads(json.dumps(original))
+            payload["phase_seconds"]["server_spawn"] = float("nan")
+            bad.write_text(json.dumps(payload), encoding="utf-8")
+            failed = run_summary()
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertIn("missing/invalid server_spawn metric", failed.stderr)
+
+            # Invalid optional telemetry is rejected rather than shown in
+            # medians; missing optional entries still allow the old A/B report.
+            payload = json.loads(json.dumps(original))
+            payload["phase_seconds"]["nav_response_wait"] = -1
+            bad.write_text(json.dumps(payload), encoding="utf-8")
+            failed = run_summary()
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertIn("invalid nav_response_wait metric", failed.stderr)
+
+            # In complete-capture trials, the nested browser milestones
+            # must exactly partition responseEnd -> DCL, within rounding.
+            payload = json.loads(json.dumps(original))
+            payload["phase_seconds"]["nav_dcl_handlers"] = 1.5
+            bad.write_text(json.dumps(payload), encoding="utf-8")
+            inconsistent_dom = run_summary()
+            self.assertNotEqual(inconsistent_dom.returncode, 0)
+            self.assertIn("browser DOM milestone totals disagree", inconsistent_dom.stderr)
+
+            # Zero-valued nested intervals may be filtered by the recorder.
+            payload = json.loads(json.dumps(original))
+            payload["phase_seconds"]["nav_until_interactive"] = 4.0
+            payload["phase_seconds"]["nav_interactive_to_dcl"] = 0.0
+            payload["phase_seconds"]["nav_dcl_handlers"] = 0.0
+            bad.write_text(json.dumps(payload), encoding="utf-8")
+            zero_details = run_summary()
+            self.assertEqual(zero_details.returncode, 0, zero_details.stderr)
+            self.assertIn("| ↳ DCL event handlers |", zero_details.stdout)
+
+            # Partial capture must suppress all browser medians even though
+            # every sum key is present from other successful page opens.
+            payload = json.loads(json.dumps(original))
+            payload["navigation_samples"]["captured"] = 39
+            bad.write_text(json.dumps(payload), encoding="utf-8")
+            partial = run_summary()
+            self.assertEqual(partial.returncode, 0, partial.stderr)
+            self.assertIn("trial 2: 39/40", partial.stdout)
+            self.assertIn("Navigation Timing incomplete or uneven", partial.stdout)
+            self.assertNotIn("| Response wait / first byte |", partial.stdout)
+
+            # Valid zero-duration totals are filtered out of phase_seconds,
+            # but captured=attempted proves that the missing key means zero.
+            for trial in (2, 3):
+                zero = json.loads(json.dumps(original))
+                del zero["phase_seconds"]["nav_response_body"]
+                (root / f"e2e-routing-ab-{trial}.json").write_text(
+                    json.dumps(zero), encoding="utf-8"
+                )
+            complete_zero = run_summary()
+            self.assertEqual(complete_zero.returncode, 0, complete_zero.stderr)
+            self.assertIn("| Response body transfer | 0.40s | 0.00s |", complete_zero.stdout)
+
+            # Uneven numbers of attempted navigations must not be compared
+            # even if both trials report 100% valid samples.
+            mismatch = json.loads(json.dumps(original))
+            mismatch["navigation_samples"] = {"attempted": 39, "captured": 39}
+            bad.write_text(json.dumps(mismatch), encoding="utf-8")
+            uneven = run_summary()
+            self.assertEqual(uneven.returncode, 0, uneven.stderr)
+            self.assertIn("Navigation Timing incomplete or uneven", uneven.stdout)
+
+            # Invalid count metadata must fail closed.
+            mismatch["navigation_samples"] = {"attempted": 39, "captured": 40}
+            bad.write_text(json.dumps(mismatch), encoding="utf-8")
+            invalid = run_summary()
+            self.assertNotEqual(invalid.returncode, 0)
+            self.assertIn("invalid navigation sample counts", invalid.stderr)
+
+    def test_watchdog_does_not_touch_last_failed_in_profile_mode(self):
+        """Even watchdog os._exit paths must preserve benchmark history."""
+        from tests.e2e import run as runner
+
+        test_id = "tests.e2e.fake.BenchTests.test_hung"
+        for environment in (
+            {"PRKS_E2E_PROFILE": "1", "PRKS_E2E_ROUTE_FASTPATH": "0"},
+            {"PRKS_E2E_PROFILE": "1", "PRKS_E2E_ROUTE_FASTPATH": "1"},
+        ):
+            with self.subTest(environment=environment):
+                with mock.patch.dict(os.environ, environment, clear=True):
+                    with mock.patch.object(runner, "save_last_failed") as save:
+                        with mock.patch.object(runner, "load_last_failed") as load:
+                            runner._persist_watchdog_last_failed(test_id)
+                save.assert_not_called()
+                load.assert_not_called()
+
     def test_env_only_benchmark_modes_do_not_persist_history(self):
         """PRKS_E2E_PROFILE / PRKS_E2E_SEED_CACHE=0 are benchmark runs without a flag."""
         from tests.e2e.sharding import load_timings, save_timings
@@ -2340,6 +2989,7 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                 with mock.patch.dict(os.environ, {"PRKS_E2E": "1"}, clear=False):
                     os.environ.pop("PRKS_E2E_PROFILE", None)
                     os.environ.pop("PRKS_E2E_SEED_CACHE", None)
+                    os.environ.pop("PRKS_E2E_ROUTE_FASTPATH", None)
                     os.environ.update(env)
                     return self._invoke_runner_history_case(
                         repo,
@@ -2353,6 +3003,7 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                 {"PRKS_E2E_PROFILE": "1"},
                 {"PRKS_E2E_SEED_CACHE": "0"},
                 {"PRKS_E2E_PROFILE": "1", "PRKS_E2E_SEED_CACHE": "0"},
+                {"PRKS_E2E_ROUTE_FASTPATH": "1"},
             ):
                 code, print_slow = _run(env)
                 self.assertEqual(code, 0)

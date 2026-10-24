@@ -37,4 +37,5 @@ export const ICONS = {
     highlight: 'M15 5l4 4-9.5 9.5H5.5v-4L15 5zM13.2 6.8l4 4M4 20h8',
     underline: 'M6 4v7a6 6 0 0 0 12 0V4M4 20h16',
     copy: 'M8 8h12v12H8zM4 16V4h12',
+    list: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
 } as const;

@@ -1,7 +1,12 @@
-import type { ProgressBrowseRow } from './legacy-work-card'
 import { canonicalProgressStatus, type ProgressStatus } from './status'
 
-export type { ProgressBrowseRow }
+export interface ProgressBrowseRow {
+  id?: unknown
+  title?: unknown
+  status?: unknown
+  abstract_excerpt?: unknown
+  abstract?: unknown
+}
 
 function prksAbstractExcerpt(value: unknown): string {
   const fn = window.prksAbstractExcerpt

@@ -4,6 +4,7 @@
  */
 import { h, render } from 'vue'
 import WorkPrivateNotes from './WorkPrivateNotes.vue'
+import { forgetPrivateNotesRecovery } from './private-notes-recovery'
 
 export interface WorkPrivateNoteOwner {
   tabId?: unknown
@@ -40,6 +41,8 @@ function panelElement(): HTMLElement | null {
 
 export function dismissWorkPrivateNotes(): void {
   const anchor = mounted?.anchor
+  // Review belongs to the Reminders field it was opened for.
+  if (mounted) forgetPrivateNotesRecovery({ tabId: mounted.tabId })
   mounted = null
   if (anchor) render(null, anchor)
 }

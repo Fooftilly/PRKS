@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import PrksRelSummary from '../../components/PrksRelSummary.vue'
+import type { RelSummaryPart } from '../../components/relSummary'
 
 const props = defineProps<{
   showHeader: boolean
   title: string
   docTypeHtml: string
-  relSummaryHtml: string
+  relSummaryParts: readonly RelSummaryPart[]
   workId: string
   kind: 'pdf' | 'video' | 'empty'
   hasFile: boolean
@@ -23,13 +25,14 @@ const notesEditorId = computed(() => `${props.editorRegionId}-field`)
         <h2 class="page-header--work-title">{{ title }}</h2>
         <span data-prks-role="work-header-doc-type-slot" v-html="docTypeHtml"></span>
       </div>
-      <div v-if="relSummaryHtml" class="work-html-slot" v-html="relSummaryHtml"></div>
+      <PrksRelSummary :parts="relSummaryParts" />
     </div>
     <div class="document-view document-view--work">
       <div class="work-main-column">
         <div class="work-workspace" :data-work-id="workId">
           <div v-if="kind === 'pdf' && hasFile" class="work-pdf-pane">
             <div data-prks-role="pdf-viewer"></div>
+            <div data-prks-role="pdf-annotation-popup-host"></div>
           </div>
           <div v-else-if="kind === 'pdf'" class="work-pdf-pane work-pdf-pane--empty">
             <p class="work-pdf-empty">No PDF file attached.</p>

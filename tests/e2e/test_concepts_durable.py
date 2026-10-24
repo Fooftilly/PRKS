@@ -9,8 +9,10 @@ Every durable-queue gate here allows a generous timeout. A save offline first
 reads the base it measures the edit against, and offline that read has to let a
 doomed request fail before the cache answers.
 """
+import json
 import os
 import unittest
+import urllib.request
 
 from backend.db_manager import PRKSDatabase
 from backend.research_network import get_concept
@@ -21,7 +23,13 @@ from tests.e2e.fixtures import (
     CONCEPT_PARENT_NAME,
     seed_concepts_library,
 )
-from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
+from tests.e2e.harness import (
+    AppServer,
+    PageCollector,
+    open_app_page,
+    require_chromium,
+    wait_for_async,
+)
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -309,6 +317,35 @@ class DurableConceptTests(unittest.TestCase):
     # `theParentSetCancelGoesThroughApiWrapper` (production putConceptParents)
     # in run_concept_sync_selftest.js.
 
+    def test_opening_concept_online_rewarms_invalidated_hierarchy_catalogue(self):
+        """A detail visited online must prepare names for later offline reparenting.
+
+        Saving Research Notes or mutating Concepts invalidates concepts:index.
+        Opening the Concept detail without visiting the index must refresh
+        that list before disconnecting; otherwise an offline SET_CONCEPT_PARENTS
+        cannot name the new parent and hides the user's pending change.
+        """
+        server, page, context = self.start()
+        child = server.ids['concept_child']
+        unvisited = server.ids['concept_unvisited']
+        self.prepare(page, child)
+        self.prepare(page, unvisited)
+
+        # Mimic a real domain invalidation (only the catalogue), after both
+        # detail caches are ready. No #/concepts navigation may refill it.
+        page.evaluate("() => prksOfflineInvalidateList('concepts:index')")
+        o._wait_list_uncached(page, 'concepts:index')
+        self.detail(page, child)
+        o._wait_list_cached(page, 'concepts:index')
+
+        self.offline(page, context)
+        page.evaluate("([cid, pid]) => putConceptParents(cid, [pid])", [child, unvisited])
+        self.wait_for_family(page, 'SET_CONCEPT_PARENTS')
+        self.detail(page, child)
+        o._wait_content_contains(page, server.ids['concept_unvisited_name'])
+        self.detail(page, unvisited)
+        o._wait_content_contains(page, CONCEPT_CHILD_NAME)
+
     def test_a_cycle_comes_back_as_a_named_refusal(self):
         server, page, context = self.start()
         child = server.ids['concept_child']
@@ -409,6 +446,223 @@ class DurableConceptTests(unittest.TestCase):
         self.reconnect(page, context)
         self.settled(page)
         self.assertNotIn('Offline Mistake', self.concepts_in_db(server))
+
+
+class ConceptDefinitionTwoTabTests(unittest.TestCase):
+    """#568: two tabs of one browser editing one Concept's Definition.
+
+    Both pages share one context, so they share the durable queue, the offline
+    cache and the device id, exactly like two tabs of one browser profile.
+    """
+
+    def start(self):
+        server = AppServer(seed_fn=seed_concepts_library)
+        self.addCleanup(server.stop)
+        server.start()
+        page_a, context, collector = open_app_page(_BROWSER, server.origin,
+                                                   service_workers='allow')
+        self.addCleanup(context.close)
+        self.addCleanup(lambda: self.assertEqual(collector.pageerrors, []))
+        o._wait_sw_active(page_a)
+        page_b = context.new_page()
+        collector_b = PageCollector(page_b, server.origin)
+        self.addCleanup(lambda: self.assertEqual(collector_b.pageerrors, []))
+        page_b.goto(server.origin + '/#/folders', wait_until='domcontentloaded')
+        page_b.wait_for_selector('#sidebar')
+        self._pages = [page_a, page_b]
+        return server, context, page_a, page_b
+
+    def open_concept(self, page, concept_id, needle):
+        page.evaluate("id => prksNavigate('#/concepts/' + id)", concept_id)
+        o._wait_content_contains(page, needle)
+
+    def open_definition(self, page):
+        page.locator('#prks-concept-edit-def:visible').click()
+        return self.dialog_field(page)
+
+    def dialog_field(self, page):
+        field = page.locator('#prks-modal-confirm .prks-modal-prompt__input')
+        field.wait_for(state='visible')
+        return field
+
+    def save_dialog(self, page):
+        page.locator('#prks-modal-confirm-ok').click()
+
+    def server_json(self, server, path):
+        """What the server holds, over HTTP: polling the database file from the
+        test process would contend with the server for its locks."""
+        with urllib.request.urlopen(server.origin + path, timeout=10) as response:
+            return json.loads(response.read().decode('utf-8'))
+
+    def definition_in_db(self, server, concept_id):
+        return self.server_json(server, '/api/concepts/' + concept_id)['description']
+
+    def wait_for_definition(self, server, concept_id, expected, timeout=40000):
+        """Polls the server from a page: the harness routes every browser
+        request through this test process, so a test thread blocked in a
+        Python sleep would hold the very save it is waiting for."""
+        wait_for_async(
+            self._pages[0],
+            """([path, want]) => fetch(path, { cache: 'no-store' })
+                .then(r => r.json()).then(c => c.description === want)""",
+            arg=['/api/concepts/' + concept_id, expected], timeout=timeout,
+            message='the server never had %r' % expected)
+
+    def definition_writes(self, page):
+        """Every SET_CONCEPT_FIELD this page sends, as sent."""
+        sent = []
+
+        def record(request):
+            if request.method != 'POST' or not request.url.endswith('/api/sync/operations'):
+                return
+            body = request.post_data_json or {}
+            if body.get('operation') == 'SET_CONCEPT_FIELD':
+                sent.append(body)
+        page.on('request', record)
+        return sent
+
+    def queued_definitions(self, page):
+        return page.evaluate("""() => prksSync.store.listOperations().then(rows => rows
+            .filter(r => r.operation === 'SET_CONCEPT_FIELD')
+            .map(r => ({ value: r.payload.value, base: r.base_revision, status: r.status })))""")
+
+    def revision_in_db(self, server, concept_id):
+        state = self.server_json(server, '/api/concepts/%s/sync-state' % concept_id)
+        return state['fields']['description']['revision']
+
+    def test_an_older_draft_does_not_overwrite_another_tabs_save(self):
+        server, _context, page_a, page_b = self.start()
+        concept_id = server.ids['concept_parent']
+        original = 'Parent concept definition.'
+        opened_on = self.revision_in_db(server, concept_id)
+        self.open_concept(page_a, concept_id, original)
+        self.open_concept(page_b, concept_id, original)
+        sent_b = self.definition_writes(page_b)
+
+        # Both tabs start editing the same revision.
+        field_a = self.open_definition(page_a)
+        field_b = self.open_definition(page_b)
+        self.assertEqual(field_a.input_value(), original)
+        self.assertEqual(field_b.input_value(), original)
+        field_a.fill('Def A')
+        field_b.fill('Def B')
+
+        # Tab A saves first, and lands.
+        self.save_dialog(page_a)
+        self.wait_for_definition(server, concept_id, 'Def A')
+        after_a = self.revision_in_db(server, concept_id)
+        self.assertGreater(after_a, opened_on)
+
+        # Tab B saves its older draft: refused here, not sent, draft kept.
+        self.save_dialog(page_b)
+        page_b.wait_for_function("""() => {
+            const hint = document.querySelector('#prks-modal-confirm .prks-modal-prompt__hint');
+            return !!hint && hint.textContent.indexOf('changed in another tab') !== -1;
+        }""")
+        hint = page_b.locator('#prks-modal-confirm .prks-modal-prompt__hint').inner_text()
+        self.assertIn('Def A', hint, 'the stale notice shows what PRKS has now')
+        self.assertEqual(self.dialog_field(page_b).input_value(), 'Def B',
+                         "B's draft is still in the editor")
+        self.assertEqual(self.queued_definitions(page_b), [])
+        self.assertEqual(sent_b, [], "B's older draft never reaches the server")
+        self.assertEqual(self.definition_in_db(server, concept_id), 'Def A')
+
+        # Recovery: B saves again with A's text in view, a deliberate replace,
+        # measured against the revision A's save produced.
+        self.save_dialog(page_b)
+        self.wait_for_definition(server, concept_id, 'Def B')
+        self.assertEqual(len(sent_b), 1)
+        self.assertEqual(sent_b[0]['base_revision'], after_a)
+        o._wait_content_contains(page_b, 'Def B')
+
+        # Tab A was still painting its own text; returning to it catches up.
+        page_a.bring_to_front()
+        page_a.evaluate("() => window.dispatchEvent(new Event('focus'))")
+        o._wait_content_contains(page_a, 'Def B')
+
+    def test_cancelling_after_a_stale_save_keeps_the_other_tabs_text(self):
+        server, _context, page_a, page_b = self.start()
+        concept_id = server.ids['concept_parent']
+        original = 'Parent concept definition.'
+        self.open_concept(page_a, concept_id, original)
+        self.open_concept(page_b, concept_id, original)
+        field_b = self.open_definition(page_b)
+        field_b.fill('Def B')
+
+        field_a = self.open_definition(page_a)
+        field_a.fill('Def A')
+        self.save_dialog(page_a)
+        self.wait_for_definition(server, concept_id, 'Def A')
+
+        self.save_dialog(page_b)
+        self.dialog_field(page_b)
+        page_b.wait_for_function("""() => {
+            const hint = document.querySelector('#prks-modal-confirm .prks-modal-prompt__hint');
+            return !!hint && hint.textContent.indexOf('changed in another tab') !== -1;
+        }""")
+        page_b.locator('#prks-modal-confirm-cancel').click()
+        # B now shows A's text rather than the original it was painting.
+        o._wait_content_contains(page_b, 'Def A')
+        self.assertEqual(self.queued_definitions(page_b), [])
+        self.assertEqual(self.definition_in_db(server, concept_id), 'Def A')
+
+    def test_a_tab_whose_page_is_stale_edits_from_the_current_text(self):
+        server, _context, page_a, page_b = self.start()
+        concept_id = server.ids['concept_parent']
+        original = 'Parent concept definition.'
+        self.open_concept(page_a, concept_id, original)
+        self.open_concept(page_b, concept_id, original)
+
+        self.open_definition(page_a).fill('Def A')
+        self.save_dialog(page_a)
+        self.wait_for_definition(server, concept_id, 'Def A')
+
+        # B still paints the original text, but its editor opens on Def A and
+        # its save is measured against the revision Def A has.
+        after_a = self.revision_in_db(server, concept_id)
+        sent_b = self.definition_writes(page_b)
+        field_b = self.open_definition(page_b)
+        self.assertEqual(field_b.input_value(), 'Def A')
+        field_b.fill('Def A, extended by B')
+        self.save_dialog(page_b)
+        self.wait_for_definition(server, concept_id, 'Def A, extended by B')
+        self.assertEqual(sent_b[0]['base_revision'], after_a)
+
+    def test_a_single_tab_edit_queues_offline_and_lands(self):
+        server, context, page_a, _page_b = self.start()
+        concept_id = server.ids['concept_child']
+        self.open_concept(page_a, concept_id, CONCEPT_CHILD_NAME)
+        o._wait_entity_cached(page_a, 'concept', concept_id)
+        page_a.evaluate("id => { void Promise.resolve(prksReadConceptState(id)).catch(() => {}); }",
+                        concept_id)
+        o._wait_entity_cached(page_a, 'concept-state', concept_id)
+        opened_on = self.revision_in_db(server, concept_id)
+
+        context.set_offline(True)
+        page_a.evaluate('() => prksOfflineNoteRequestFailure()')
+        page_a.wait_for_function("() => prksOfflineRuntimeState() !== 'online'")
+        self.open_definition(page_a).fill('Edited offline in one tab.')
+        self.save_dialog(page_a)
+        wait_for_async(page_a, """() => prksSync.store.listOperations().then(rows =>
+            rows.some(r => r.operation === 'SET_CONCEPT_FIELD'))""", timeout=60000,
+            message='the offline Definition edit was never queued')
+        queued = self.queued_definitions(page_a)
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(queued[0]['base'], opened_on)
+        o._wait_content_contains(page_a, 'Edited offline in one tab.')
+
+        # Editing again before it is sent coalesces into the same row.
+        self.open_definition(page_a).fill('Edited offline twice.')
+        self.save_dialog(page_a)
+        wait_for_async(page_a, """() => prksSync.store.listOperations().then(rows =>
+            rows.some(r => r.operation === 'SET_CONCEPT_FIELD' &&
+                           r.payload.value === 'Edited offline twice.'))""", timeout=60000)
+        self.assertEqual(len(self.queued_definitions(page_a)), 1)
+
+        context.set_offline(False)
+        page_a.evaluate("() => window.dispatchEvent(new Event('online'))")
+        page_a.wait_for_function("() => prksOfflineRuntimeState() === 'online'")
+        self.wait_for_definition(server, concept_id, 'Edited offline twice.')
 
 
 if __name__ == '__main__':

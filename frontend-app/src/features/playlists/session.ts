@@ -3,6 +3,7 @@ import {
   dismissRouteSurface,
   presentRouteSurface,
   registerEarlyRoutePresenter,
+  registerRouteWindowBridge,
   resetRouteSurfaceForTests,
   type RouteSurfaceOwner,
 } from '../../route-surface/lifecycle'
@@ -47,7 +48,7 @@ function armPlaylistsOwnerCleanup(owner: PlaylistsOwner): void {
       armPlaylistsOwnerCleanup(owner)
       return
     }
-    dismissPlaylists(owner)
+    dismissRouteSurface(owner)
   })
 }
 
@@ -151,10 +152,6 @@ export function presentPlaylistDetail(input: PlaylistDetailPresentInput): void {
   armPlaylistsOwnerCleanup(input.owner)
 }
 
-export function dismissPlaylists(owner: object | null | undefined): void {
-  dismissRouteSurface(owner)
-}
-
 export function resetPlaylistsSessionForTests(): void {
   resetRouteSurfaceForTests()
 }
@@ -176,9 +173,7 @@ function isDetailEarlyRequest(
 }
 
 export function registerPlaylistsBridge(target: Window = window): void {
-  target.prksVuePresentPlaylistsIndex = presentPlaylistsIndex
-  target.prksVuePresentPlaylistDetail = presentPlaylistDetail
-  target.prksVueDismissPlaylists = dismissPlaylists
+  registerRouteWindowBridge(target)
   registerEarlyRoutePresenter(
     PLAYLISTS_FEATURE,
     (request, host) => {

@@ -423,14 +423,20 @@
         }
         let state = null;
         try {
-            const result = await readArgumentState(argumentId);
+            const result = await readArgumentState(argumentId, {
+                preferCacheWhenOffline: true,
+                domain: root.PRKS_OFFLINE_DOMAIN_ARGUMENTS,
+            });
             state = result && result.value;
         } catch (_e) { state = null; }
         if (!state) return null;
         let argument = null;
         try {
             const cached = await root.prksOfflineReadEntity('argument', argumentId,
-                '/api/arguments/' + encodeURIComponent(argumentId), {});
+                '/api/arguments/' + encodeURIComponent(argumentId), {
+                    preferCacheWhenOffline: true,
+                    domain: root.PRKS_OFFLINE_DOMAIN_ARGUMENTS,
+                });
             argument = cached && cached.value;
         } catch (_e) { argument = null; }
         if (!argument) return null;

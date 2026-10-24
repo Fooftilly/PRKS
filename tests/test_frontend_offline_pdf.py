@@ -42,13 +42,24 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
     def test_initial_mount_uses_desired_mode(self):
         src = _read(_WORKS_PDF)
         init_start = src.index("export function initPdfViewerForWork")
-        init_body = src[init_start : init_start + 3000]
+        init_end = len(src)
+        for marker in (
+            "\nexport function ",
+            "\nexport async function ",
+            "\nfunction ",
+            "\nasync function ",
+        ):
+            at = src.find(marker, init_start + 1)
+            if at != -1 and at < init_end:
+                init_end = at
+        init_body = src[init_start:init_end]
         # Always start EmbedPDF in preview; capability + durable bridge enable
         # mutations only after hydrate (never mutation-capable during startup).
         self.assertIn(
             "prksMountPdfViewer(ctx, work, runtime, targetNode, lastPage.initialPage, 'preview')",
             init_body,
         )
+        self.assertNotIn("init_start + 3000", init_body)
         self.assertIn("annotationDurableBridgeReady = false", src)
 
     def test_annotation_persistence_only_installed_in_work_mode(self):
@@ -173,11 +184,118 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         drain_body = src[drain_start:drain_end]
         self.assertIn("worker && worker.paused", drain_body)
 
+    def test_empty_durable_pass_does_not_claim_pdf_updated(self):
+        """#401: "Saved · PDF updated <time>" only after bytes were persisted."""
+        src = _read(_WORKS_PDF)
+        drain = src[src.index("async function drainFlushQueue"):src.index("function requestFlush(")]
+        self.assertIn("const persisted = await runWorkAnnotationAndPdfPersistencePass(saveToken);", drain)
+        guard = drain.index("if (persisted === true) {")
+        self.assertLess(guard, drain.index("syncState.lastSuccessAt = Date.now();"))
+
+    def test_pdf_export_that_writes_nothing_is_not_reported_persisted(self):
+        """#401: a detached viewer / empty copy keeps the claim and is not success."""
+        src = _read(_WORKS_PDF)
+        export = src[src.index("async function exportAndPersistPdfCopy"):src.index("async function restoreEffectiveViewerAnnotations")]
+        self.assertTrue(export.rstrip().endswith("return true;\n    }"))
+        self.assertEqual(export.count("return true;"), 1)
+        pass_src = src[src.index("async function runWorkAnnotationAndPdfPersistencePass"):src.index("async function drainFlushQueue")]
+        durable = pass_src.index("const persisted = await exportAndPersistPdfCopy(saveToken, claimed);")
+        no_bytes = pass_src.index("if (persisted !== true) {", durable)
+        self.assertLess(no_bytes, pass_src.index("runtime.materializedPdfAnnotationRevision = claimed;"))
+        # Nothing else is guaranteed to come back for a retained claim.
+        no_bytes_branch = pass_src[no_bytes:pass_src.index("return PDF_PASS_NOT_WRITTEN;", no_bytes)]
+        self.assertIn("worker.scheduleRetry();", no_bytes_branch)
+        # The flush stays pending, so a resume after an offline pause (which
+        # cancels the retry timer) asks for it again.
+        drain = src[src.index("async function drainFlushQueue"):]
+        self.assertIn("syncState.pendingChanges = queueRequested || persisted === PDF_PASS_NOT_WRITTEN;", drain)
+        self.assertIn("const persisted = await exportAndPersistPdfCopy(saveToken, replaceGen);\n        return persisted === true;", pass_src)
+
+    def test_a_failed_local_edit_is_kept_until_saved_or_abandoned(self):
+        """#401: no flush (durable or legacy) clears 'local_save_failed'; the
+        failed annotation's own recorded write or closing its popup does."""
+        src = _read(_WORKS_PDF)
+        keeps = src[src.index("function keepsLocalSaveFailure()"):src.index("function clearFlushError()")]
+        self.assertIn("return syncState.lastError === 'local_save_failed';", keeps)
+        self.assertIn("runtime._onAnnotationPopupClosed = function (annId)", src)
+        self.assertIn("if (forgetLocalSaveFailure(annId)) renderSyncIndicator();", src)
+        legacy = src[src.index("// Legacy: the viewer took this edit"):src.index("void requestFlush('annotation-event');")]
+        self.assertIn("settleLocalSaveFailure(", legacy)
+        # The event may carry only the id: read the comment from the viewer.
+        self.assertIn("prksFindViewerAnnotation(liveAnnotationViewer(), legacyAnnId)", legacy)
+        # Materialization never exports an annotation that failed to save;
+        # it keeps the claim inside the locked section until that settles.
+        pass_src = src[src.index("async function runWorkAnnotationAndPdfPersistencePass"):src.index("async function drainFlushQueue")]
+        gate = pass_src.index("prksBeginAnnotationMaterializationGate(runtime)")
+        held = pass_src.index("if (viewerHoldsUnsavedAnnotation()) {")
+        self.assertLess(gate, held)
+        self.assertLess(held, pass_src.index("const persisted = await exportAndPersistPdfCopy(saveToken, claimed);"))
+        self.assertIn("releaseHeldMaterialization();", src[src.index("function forgetLocalSaveFailureId("):src.index("function forgetLocalSaveFailure(annId)")])
+        runtime_src = _read(os.path.join(_FRONTEND, "js", "pdf-work-runtime.js"))
+        close = runtime_src[runtime_src.index("runtime.closeAnnotationPopup = function"):runtime_src.index("runtime.captureAnnotationPopupTicket")]
+        self.assertIn("runtime._onAnnotationPopupClosed(closedAnnId);", close)
+        guard = runtime_src[runtime_src.index("runtime.hasPendingSync = function"):runtime_src.index("runtime.flushAnnotations = async function")]
+        self.assertIn("st.pendingChanges || st.inFlight || st.lastError === 'local_save_failed'", guard)
+
+    def test_comment_save_never_rewrites_the_acknowledged_cache(self):
+        """#401: the acknowledged cache is the base a SET intent is measured against."""
+        src = _read(_WORKS_PDF)
+        self.assertNotIn("prksPatchAnnotationListCacheAfterCommentSave", src)
+        at = src.index("window.savePdfAnnotationComment = async function")
+        body = src[at:src.index("function prksReportPdfAnnotationEditNotSaved", at)]
+        self.assertNotIn("annotationCache", body)
+        self.assertNotIn("catch (_e) {}", body)
+        self.assertIn("prksReportPdfAnnotationEditNotSaved(pdf, ticket.annId, val)", body)
+        self.assertLess(
+            body.index("pdf.noteAnnotationEditAttempt(ticket.annId, val)"),
+            body.index("viewer.updateAnnotation(ticket.annId, patch)"),
+        )
+        # Every failure is tracked by its own id with the comment it has to
+        # save; one whose annotation is gone from the viewer is dropped.
+        self.assertIn("await rollbackFailedDurableAnnotation(\n                        intent.id,", src)
+        self.assertIn("settleLocalSaveFailure(intent.id, durableIntentComment(intent));", src)
+        # An imported annotation's first save is a create, whatever the event.
+        self.assertIn("intent.desired && !(intent.observed && intent.observed.present)", src)
+        self.assertIn("!hasEffectiveAnnotationRow(intent.id)", src)
+        # A newer queued write is not overwritten by this write's projection.
+        self.assertIn("await restoreEffectiveViewerAnnotations({\n                        holdIds: newerEditIds(intent.id),", src)
+        rollback_src = src[src.index("async function rollbackFailedDurableAnnotation"):src.index("function onAnnotationEvent(evt)")]
+        self.assertIn("await restoreEffectiveViewerAnnotations({ holdIds: holdIds });", rollback_src)
+        # Only annotations with a newer edit are held, not the whole Work.
+        newer = src[src.index("function newerEditIds(runningId)"):src.index("function enqueueDurableAnnotationWrite(")]
+        self.assertIn("new Set(uncommittedEdits.keys())", newer)
+        self.assertIn("if (n > (id === runningId ? 1 : 0)) ids.add(id);", newer)
+        # Held rows reach the viewer only; the list sets the acknowledged
+        # cache and stays on stored state.
+        restore = src[src.index("async function restoreEffectiveViewerAnnotations("):src.index("const PDF_PASS_NOT_WRITTEN")]
+        self.assertIn("const holdIds = (opts && opts.holdIds) || newerEditIds();", restore)
+        self.assertIn("window.prksReconcileViewerAnnotations(activeViewer, projected, {", restore)
+        self.assertIn("renderAnnotationFallbackList(\n            effective,", restore)
+        # An edit whose commit never comes (a failed engine write) is
+        # reported after a bound, not left pending for the session.
+        note = src[src.index("function noteUncommittedEdit("):src.index("function forgetUncommittedEdit(")]
+        self.assertIn("setTimeout(", note)
+        self.assertIn("runtime.reportAnnotationEditNotSaved(id, comment);", note)
+        self.assertIn("forgetUncommittedEdit(String(evt.annotationId));", src)
+        # A failure whose popup already closed has no draft to wait on.
+        note = src[src.index("function noteLocalSaveFailure("):src.index("function noteLocalSaveAttempt(")]
+        self.assertIn("if (id !== '*' && !created && !annotationPopupOpenFor(id)) id = '*';", note)
+        rollback = src[src.index("async function rollbackFailedDurableAnnotation"):src.index("function onAnnotationEvent(evt)")]
+        self.assertIn("pruneLocalSaveFailuresGoneFromViewer();", rollback)
+        durable = src[src.index("const recorded = await window.prksSavePdfAnnotationDurably("):]
+        self.assertLess(
+            durable.index("pruneLocalSaveFailuresGoneFromViewer();"),
+            durable.index("settleLocalSaveFailure(intent.id, durableIntentComment(intent));"),
+        )
+
     def test_annotation_mutation_entry_points_are_guarded(self):
         src = _read(_WORKS_PDF)
         self.assertIn("function prksPdfUserMutationStillAllowed(pdf)", src)
         self.assertIn("annotationMutationAllowed === false", src)
-        for fn_name in ("window.deletePdfAnnotationFromEditor = async function () {", "window.savePdfAnnotationComment = async function () {"):
+        for fn_name in (
+            "window.deletePdfAnnotationFromEditor = async function (ctx, captured) {",
+            "window.savePdfAnnotationComment = async function (ctx, text, captured) {",
+        ):
             at = src.index(fn_name)
             snippet = src[at : at + 2500]
             self.assertIn(
@@ -189,9 +307,8 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
 
     def test_sidebar_row_delete_is_guarded(self):
         src = _read(_WORKS_PDF)
-        at = src.index(".annotation-row__delete")
-        handler_at = src.index("annotation-row__delete", at + 1)
-        snippet = src[handler_at : handler_at + 2500]
+        at = src.index("window.deletePdfAnnotationFromList = async function")
+        snippet = src[at : at + 2500]
         self.assertIn("prksPdfUserMutationStillAllowed", snippet)
         self.assertIn("prksOfflineGuardMutation", snippet)
 
@@ -253,14 +370,22 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         save_check = save_body.index("prksPdfUserMutationStillAllowed", save_wait)
         self.assertLess(save_wait, save_check)
         self.assertNotIn("prksViewerProgrammaticUpdate", save_body)
-        # Sidebar row Delete: confirm first, then wait before capability refuse.
-        row_at = works.index(".annotation-row__delete")
-        row_body = works[row_at:row_at + 2400]
+        # Drawer Delete captures the viewer before confirm, then waits,
+        # then deletes only through that same viewer.
+        row_at = works.index("window.deletePdfAnnotationFromList = async function")
+        row_body = works[row_at:works.index("function prksAnnotationPopupGenerationCurrent", row_at)]
+        row_ticket = row_body.index("captureAnnotationPopupTicket")
         row_confirm = row_body.index("prksConfirmDeletePdfAnnotation")
         row_wait = row_body.index("await prksWaitOutAnnotationMaterialization")
+        row_still = row_body.index("annotationPopupWriteStill", row_wait)
         row_check = row_body.index("prksPdfUserMutationStillAllowed", row_wait)
+        self.assertLess(row_ticket, row_confirm)
         self.assertLess(row_confirm, row_wait)
-        self.assertLess(row_wait, row_check)
+        self.assertLess(row_wait, row_still)
+        self.assertLess(row_still, row_check)
+        self.assertIn("const viewer = ticket.viewer", row_body)
+        self.assertIn("pdf.viewer === viewer", row_body)
+        self.assertNotIn("prksPdfViewer(owner)", row_body)
 
     def test_set_mutation_enabled_clears_active_tool_before_preview(self):
         """setMutationEnabled(false) must synchronously return the annotation

@@ -110,7 +110,7 @@ People index rows prioritize identity, lifespan, short biography, roles, and Per
 
 Person profile editing survives global right-panel ownership changes while its Person TabContext remains live. Its draft and selected Groups belong only to that TabContext; another Person context can never read or mutate them.
 
-Person profile and Work metadata drafts are runtime-only TabContext state, never workspace persistence. Focus changes between simultaneously mounted contexts preserve those drafts and do not prompt. Route replacement, unmount, parking, and destruction preflight dirty drafts through `prksCanLeaveTabContext`; rejected leave preserves route, tab order, Main/Secondary topology, focus, draft state, and editor DOM as one atomic no-op. Batch lifecycle operations finish every affected preflight before changing workspace state.
+Person profile and Work metadata drafts are runtime-only TabContext state, never workspace persistence. Focus changes between simultaneously mounted contexts preserve those drafts and do not prompt. Route replacement, unmount, parking, and destruction preflight dirty drafts through `prksTabLeave`; rejected leave preserves route, tab order, Main/Secondary topology, focus, draft state, and editor DOM as one atomic no-op. Batch lifecycle operations finish every affected preflight before changing workspace state. Focusing a visible pane does not.
 
 Person Groups are classification entities. Group detail presents description, hierarchy, and membership as primary content. Metadata editing and membership management are separate modes; add/remove membership belongs in Members, while the normal right panel remains summary plus actions. A filtered Group tree is automatically expanded for hierarchy context and exposes no misleading collapse controls. Group-library live runtime belongs to its rendered root, never a `window` singleton.
 
@@ -399,6 +399,7 @@ If a layout is specific to one real component, give that component a meaningful 
 .prks-btn--secondary
 .prks-btn--ghost
 .prks-btn--danger
+.prks-btn--quiet-danger
 .prks-btn--sm
 .prks-btn--md
 .prks-btn--lg
@@ -411,6 +412,7 @@ If a layout is specific to one real component, give that component a meaningful 
 | Secondary | Normal explicit action |
 | Ghost | Low-priority / chrome action |
 | Danger | Destructive action |
+| Quiet danger | Destructive action that stays visually subordinate to everyday actions |
 
 Rules:
 
@@ -466,6 +468,8 @@ Preserve specialized EasyMDE, combobox, and segmented controls; their outer visu
 
 `.prks-field__label` is `text-xs` / 600. Do not uppercase it.
 
+Migrated Vue forms wrap ordinary labeled native `input` / `select` / `textarea` in `PrksField`. The native control binds slot props `labelledBy` and `describedBy`: the label id, then help and error ids composed in that order (not replaced). Comboboxes, segmented status, EasyMDE, and search-advanced rows stay specialized and do not go through `PrksField`. Compact Argument target-row Verdict stays a direct flex child of `.prks-arg-row` (label + select), not `PrksField`, so `.prks-arg-row select { flex: 1 1 8rem; }` still applies. `PrksField` has no `required` prop; `.prks-field__required` remains the CSS marker for surfaces that actually mark required (Work create).
+
 `.prks-field__required` is the required marker: the word `Required` in `text-2xs` tertiary text after a label (or a section title when the whole section is required). Required is never communicated by color, an asterisk, or placeholder text alone. Pair it with `aria-required="true"` on a native control; when the marker sits inside a `<label>`, mark the span `aria-hidden="true"` so the accessible name stays the field name. Optional groups use the matching `Optional` wording on their disclosure.
 
 `.prks-form-actions--split` is an optional layout modifier: secondary `flex: 1`, primary `flex: 2`. Use it only when a form genuinely needs that ratio. It must not change control height, type, border, or color.
@@ -519,8 +523,8 @@ Orientation belongs in the main column when it matters — not only in the right
 | Class / helper | Role |
 | --- | --- |
 | `.prks-page-summary` / `prksPageSummaryHtml` | Optional page-header summary under the title (library glance, entity counts). |
-| `.prks-scope-line` / `prksScopeLineHtml` | Collection filter/result scope (“12 of 48 matching”, “128 People”). |
-| `.prks-rel-summary` / `prksRelSummaryHtml` | Relationship strip near entity identity (folder · people · tags · parents). |
+| `.prks-scope-line` / Vue `PrksScopeLine` | Collection filter/result scope (“12 of 48 matching”, “128 People”). |
+| `.prks-rel-summary` / Vue `PrksRelSummary` on research details and the Work header (same-app links only) | Relationship strip near entity identity (folder · people · tags · parents). |
 | `.prks-state-summary` / `prksStateSummaryHtml` | Compact Details/state strip (status · type · N tags) before card stacks. |
 | `.prks-nav-attention` / `prksNavAttentionBadgeHtml` | Restrained nav attention count (Processing inbox, queued sync). Icon or label context + count; color alone is never enough. |
 
@@ -544,13 +548,15 @@ Both share surface, border, selection, hover, focus, and metadata hierarchy. Wor
 
 ### Work-card metadata hierarchy
 
-`prksWorkCardHtml()` (`frontend/js/components/work-cards.js`) is the single shared Work-card renderer across Recent, Progress, Search, Person profiles, and the Folder Library. Do not fork it into per-context components; vary presentation through its `options` (`subtitle`, `thumbPage`, `hideDocTypeBadge`, `suppressThumbnail`).
+`PrksWorkCard` (`frontend-app/src/components/PrksWorkCard.vue`) is the single shared Work-card renderer across Recent, Progress, Search, Saved View detail, Person profiles, Type detail, Folder detail, and Folder Library Recently Added. Do not fork it into per-context components; vary presentation through its `options` (`subtitle`, `thumbPage`, `hideDocTypeBadge`, `suppressThumbnail`). Classic `work-cards.js` keeps shared thumbnail, preview, and browse-mode helpers used by that Vue card.
 
 **Work browse density** is one global client preference (`localStorage` `prks.ui.workBrowseMode`: `cards` | `list`, default `cards`). Collection chrome hosts a compact Cards | List segmented control. Layout switches via a parent class on `.work-browse-collection` (`--cards` / `--list`) — never a per-route card fork, and never a refetch. Cards remain the default for visual ID; list mode is a dense research-library row (small thumb, fuller title/meta).
 
 **Thumbnail lifecycle** on the shared thumb slot: `loading` (skeleton) → `ready` | `error` (Unavailable) | `empty` (no applicable preview / offline suppress). Do not treat a white PDF page as unavailable. PDF thumbs stay `object-fit: contain`; video stays `cover`.
 
-**Quick preview:** hover (fine pointer) or keyboard `P` on a focused Work card shows a larger copy of the same thumb asset (viewport-safe, Escape dismisses). Preview never replaces open/navigation; click/Enter still opens the Work.
+**Navigation:** card content is a real internal `<a class="work-card__link" href="#/works/:id">`. `.project-card--work-card` stays the bulk-selection container; the injected checkbox is a card child **outside** that anchor. While bulk selection is active, Enter/Space on the card or its Work link toggle selection instead of navigating.
+
+**Quick preview:** hover (fine pointer) or keyboard `P` on a focused Work card (or its Work link) shows a larger copy of the same thumb asset (viewport-safe, Escape dismisses). Preview never replaces open/navigation; click/Enter still opens the Work.
 
 Bibliographic identity precedes contextual metadata. The card reads, top to bottom:
 
@@ -561,7 +567,7 @@ Bibliographic identity precedes contextual metadata. The card reads, top to bott
 
 Thumbnails carry a source class (`work-card__thumb--pdf` or `work-card__thumb--video`) from already-known `source_kind`/`file_path` data — no extra request to determine it. PDF thumbnails get a neutral padded frame (`object-fit: contain`, page visually separated from the frame) so a bright page doesn't read as a full-bleed photo in dark mode; video thumbnails stay `object-fit: cover`, full-bleed. Empty/broken thumbnails fall back to a source-appropriate label ("PDF"/"VIDEO"), never a blanket "PDF". Thumbnail `alt` stays empty — the card title is the semantic identity, not the image.
 
-Work cards are navigation surfaces, not control panels: no per-card `…` menu, favorite, quick delete/edit, or status buttons. Clicking the card remains the one action; existing bulk-selection behavior is unaffected.
+Work cards are navigation surfaces, not control panels: no per-card `…` menu, favorite, quick delete/edit, or status buttons. Clicking the Work link remains the one action; existing bulk-selection behavior is unaffected.
 
 ### Panels
 
@@ -678,6 +684,8 @@ Do not add a third in-pane title row. Right-panel Details may still show the Tit
 
 **PDF viewer in tiles:** Inside a tiled Work pane, the viewer must honor the pane’s height (`min-height: 0` on `.prks-pdf-viewer`). A large vendor min-height must not force Secondary panes to clip or waste chrome.
 
+**Annotation drawer:** The PDF toolbar Annotations control opens the list on the PDF pane. Work Details stays the metadata panel. While that tiled panel is open, the toolbar control stays at the start of Secondary PDF toolbars so it remains in the part of the pane the panel does not cover. Overlay is absolutely positioned inside `.work-pdf-pane` and does not change the viewer’s width, zoom, or reading position, and does not recreate the viewer. Pin, on a wide pane, places the list in the pane’s row so the viewer box actually narrows; Fit Width and Fit Page recompute from that box, and an explicit zoom percentage stays. The list width is resizable and remembered on this device. A narrow pane stays overlay. A phone-width window, or Force mobile layout, uses a full-pane sheet. Pin and unpin do not recreate the viewer.
+
 ### Research Notes presentation
 
 Research Notes remain TabContext-owned (drafts, sync, EasyMDE). Presentation only:
@@ -700,6 +708,22 @@ Tiling:
 - a thin `.prks-splitter` divider separates every pair of adjacent tiles/regions (root and nested alike); no heavy card shadow around any tile
 - stacked mode has no visible tile chrome, and no separator
 - at most 4 TabContexts are ever mounted at once (1 Main + 3 Secondary); the cap is enforced predictably (see below), not silently
+
+### Research Notes recovery
+
+Browser recovery copies of Research Notes (#466) surface through two pieces, both inside the Work's Notes pane and both built from existing primitives:
+
+- **Recovery notice** (`.editor-recovery-notice`): one compact row above the editor. `PrksInlineMessage` text plus a secondary `Review` button and a quiet `Hide` button. It counts unsaved drafts from other tabs or sessions, says how many are incomplete, and says when changes are waiting to sync. It never says “saved” and never shows the text of an editor that is still open elsewhere. Hiding it is per mount and never discards; it comes back on the next mount while drafts remain. It is hidden while the Notes pane is collapsed.
+- **Not protected warning**: the same row in `--warning` tone, “Not protected if the browser closes: …”, naming why, when this tab cannot write its recovery copy (storage full or unavailable). The leave prompt stays active until the text reaches the server.
+- **Review dialog** (`#editor-recovery-review-modal`, `.editor-recovery-review`): a standard modal (shared scrim, header close, Escape through the modal lifecycle). A list of drafts on the left, details on the right; single column on narrow widths. Each draft shows Work, last typed time, origin, complete or incomplete, length, why it was not restored automatically, the current server state, and pending sync. Actions: `Restore for editing` (primary, only when the draft can be adopted), `Compare with current note` (shows the current note and an editable “Text to keep”; applying it is an explicit confirmed `Replace note with this text`, a danger button because it replaces the current note), `Copy text`, `Discard draft` (quiet danger, destructive confirm with Cancel focused; for a draft whose owning tab could not be proven gone, the confirmation says that tab may still be open and its unsaved changes could be lost, and ownership is checked again before deleting), and `Close`. Once the text to keep has been edited, `Close`, `Back`, Escape and the backdrop ask before dropping it (`Discard text` / `Keep editing`), and a refused Replace keeps it while the draft can still be compared; when the refresh ends the comparison, a warning row keeps the edited text copyable until Review closes. If the editor itself goes away (browser Back, a route or pane change), a Review holding edited text stays open but disconnected: nothing in it can act, the edited text stays copyable, and closing still asks; any other Review closes with its editor. There is no “Save” action: restoring only puts text back in the editor, and the normal save path sends it.
+
+Incomplete drafts are labelled “Incomplete” and offer only Copy and Discard. A stale action (another tab took the draft, or the note changed) is refused with an inline message and the dialog refreshes.
+
+Work Reminders (#474) use the same notice and Review dialog, configured with the subject “Reminders”. The notice sits in the Reminders card between its heading and the field, with the same dense row and tones; Review names Reminders in its title and texts. Only one Review is open per page, whichever editor opened it. Folder Reminders have no recovery notice (#534).
+
+**Settings → Diagnostics → Editor recovery drafts** (#466 slice 5, `.editor-recovery-diag`, Vue at `#prks-settings-recovery-root`) is its own section after the offline cache, separate from the unsynchronized-changes list and labelled as recovery copies kept on this device, not changes waiting to sync. It loads with the first activation of Diagnostics and on `Refresh drafts`. One dense flat row per draft (rules between rows, no cards): kind (Research Notes, Work Reminders, Folder Reminders) and a link to its Work or Folder by id, then last typed time, length, origin, complete or incomplete, what its save was doing, the revision it was typed on, and flags (`A newer version is already on the server`, `Its Work was deleted from this browser`, `Not changed for over 30 days`). Records PRKS cannot read and emergency copies outside recovery storage are rows too. Actions are small secondary `View text` (read-only textarea, first 200,000 characters), `Copy text`, `Download` (a `.txt` file), and quiet-danger `Discard draft` for a stored draft no editor holds. Discard uses the destructive confirm (Cancel focused); for an owner that could not be proven gone the message is the same as Review's. A draft open in an editor shows “It is open in an editor now. Continue there.” and no text or discard. Unreadable records and emergency copies are copy-only (`Copy raw data` for an unparsable emergency copy). Unavailable storage, refused local storage, and more than 256 MB in total each show a warning row; nothing is removed automatically. There is no Restore here: restoring stays in the editor's notice and Review.
+
+Deleting a Work (#533) uses the ordinary destructive confirm (`Delete file?`, `Delete file`, Cancel non-destructive). Its message says the deletion is permanent and cannot be undone, and that once the deletion is confirmed, unsaved Research Notes and Reminders drafts kept for that file in this browser are removed too. It never says they are already removed: a delete that is only queued keeps them, and they stay reviewable if the delete fails.
 
 ### Main/Secondary divider
 
@@ -857,7 +881,7 @@ Rules:
 
 An empty state contains at most: optional icon, short heading, short explanation, one primary or secondary action. Avoid giant illustration-driven empty pages. Keep them compact.
 
-`.prks-inline-message` remains valid for compact in-flow messages (form feedback, “not found”). Prefer `.prks-state` when the message *is* the page content.
+`.prks-inline-message` remains valid for compact in-flow messages (form feedback, “not found”). Prefer `.prks-state` when the message *is* the page content. Tones: neutral (default), `--error` (danger text), and `--warning` (warning text) for a calm in-flow caution such as Research Notes “Not protected if the browser closes”. `PrksInlineMessage` exposes these as `tone`.
 
 ### Dialogs
 
@@ -909,7 +933,7 @@ Settings is task-grouped, not one long scrolling page. `#settings-modal` shows a
 
 **Maintenance** groups PDF text index rebuild and PDF linearization behind a short "these tools are normally unnecessary" intro and ordinary secondary-button styling — no danger treatment, no additional maintenance tools beyond what already existed.
 
-**Diagnostics** holds all performance instrumentation (summary, route table, spans, thumbnail metrics, client request coordinator, Refresh/Reset/Copy). The performance block is the Vue surface mounted at `#prks-settings-perf-root`. Opening Settings does not fetch it. The first activation of the Diagnostics category triggers exactly one `GET /api/diagnostics/performance`; switching away and back reuses the TanStack Query snapshot without an automatic re-fetch; Refresh invalidates that query and fetches again. Reset clears the in-process window and then invalidates the same query. The offline-cache section in this category is a separate read.
+**Diagnostics** holds all performance instrumentation (summary, route table, spans, thumbnail metrics, client request coordinator, Refresh/Reset/Copy). The performance block is the Vue surface mounted at `#prks-settings-perf-root`. Opening Settings does not fetch it. The first activation of the Diagnostics category triggers exactly one `GET /api/diagnostics/performance`; switching away and back reuses the TanStack Query snapshot without an automatic re-fetch; Refresh invalidates that query and fetches again. Reset clears the in-process window and then invalidates the same query. The offline-cache section in this category is a separate read, and so is the editor recovery drafts section after it (see Research Notes recovery). A small **About PRKS** legal-notice section follows diagnostics, with no additional category tab: it displays the AGPL-3.0-only license, no-warranty notice, upstream source-code link, and license-text link. Modified deployments must point users to their matching Corresponding Source; the default link identifies only the upstream project.
 
 **Storage-scope badges** (`Library-wide` / `This device`) sit next to Annotation author, BibTeX export fields, Appearance, and Show help hints so persistence scope is scannable without a paragraph per row. `Library-wide` means stored server-side in the PRKS library, not cloud sync. Backup, Maintenance, and Diagnostics are actions, not persisted preferences, and carry no scope badge.
 
@@ -1006,7 +1030,7 @@ Established by the Usability Polish 10 pass. Governs how async mutations, destru
 - **Errors stay near the action when there's a local surface for them.** Prefer an inline field/status message over a modal alert for recoverable async failures. Reserve `prksAlertDialog`/`prksConfirmDestructive` (`frontend/js/ui.js`) for cases with no local surface, duplicate-entry conflicts, or explanatory content that needs acknowledgement.
 - **Successful saves do not require acknowledgement.** A normal save updates the UI (and usually closes the editor) rather than leaving a permanent "Saved!" banner or popping a confirmation dialog. A temporary inline "Saved" status is fine when the surface doesn't otherwise visibly change. Autosave (Research Notes, private/reminder notes) stays deliberately quiet — no new animation, no visual promotion beyond its existing tertiary status line.
 - **Destructive confirmations name the destructive action.** The confirm button reads `Delete Person`, `Delete annotation`, `Remove from group`, `Unlink person`, etc. — never a bare `Confirm`/`Yes`/`OK` when a concrete verb is available. `Delete` destroys the entity itself; `Remove` ends a membership/relationship; `Unlink` ends a relationship between two records. `Cancel` stays `Cancel`.
-- **Native dialogs are avoided except for one documented, intentional exception.** `window.confirm` is reserved for the synchronous pending-annotation-sync route-leave guard in `frontend/js/app.js` (`prksCanLeaveTabContext` and the mirrored check inside `prksRenderTabRoute`). See `AGENTS.md` for why this one stays synchronous. Person profile and Work metadata dirty-route guards use the styled `prksConfirmUnsavedRouteLeave` Promise, with `Keep editing` as the safe action; workspace leave operations await it before mutation. Every other confirmation — including both PDF annotation-delete entry points — goes through the styled confirmation system.
+- **Native dialogs are avoided except for one documented, intentional exception.** `window.confirm` is reserved for the synchronous pending-annotation-sync leave probe in `frontend/js/pdf-work-runtime.js` (`pdf-sync` on `prksTabLeave`). See `AGENTS.md` for why this one stays synchronous. Person profile and Work metadata dirty-route guards use the styled `prksConfirmUnsavedRouteLeave` Promise, with `Keep editing` as the safe action; the leave preflight awaits it before mutation. An approved preflight is not asked again when the route renders. Every other confirmation — including both PDF annotation-delete entry points — goes through the styled confirmation system.
 - **Copy feedback reflects the actual Clipboard promise.** Never show "Copied" until the clipboard write has resolved; show a distinct failure state ("Copy failed") when it rejects, then restore the idle label/icon after a short interval. `prksFlashInlineCopyButton` (icon-only buttons) and `prksFlashButtonLabel` (textual buttons, e.g. annotation "Copy link") are the two shared helpers — prefer one of them over a new one-off timeout.
 - **No new notification framework.** Toasts, a notification center, and progress overlays are explicitly out of scope. Inline status regions, inline field errors, temporary button feedback, and the existing confirm/alert modal cover this app's needs.
 - **Focus-visible and reduced motion are application-wide, not per-feature.** New interaction states must render through `:focus-visible` (never suppress focus without a replacement) and must not add motion outside what `prefers-reduced-motion: reduce` already accounts for.
@@ -1106,6 +1130,31 @@ introduce canonical primitive
 
 Do not delete a legacy rule first and then repair every broken page.
 
+B4/B5 CSS ownership (Vue class application for primitives lives in `frontend-app/src/components/`; rules stay here).
+
+**B5 deletion follows proven selector consumers, never section number alone.** Physical `/* 0N */` placement is migration-era and is not a purge boundary. A selector that is unlisted in an older draft of this table is not safe to delete; this table is exhaustive for sections 01–15. Not every family in a section has a Vue primitive: §05 is not “all controls are now B4 Vue-owned.”
+
+| Section | Semantic / shared families | Ownership | Physical placement now (not a delete boundary) |
+| --- | --- | --- | --- |
+| 01–04 | tokens, reset, a11y, layout primitives | Keep. App-wide | Canonical sections |
+| 05 | `.prks-btn`, `.prks-icon-btn` | B4 Vue primitives (`PrksButton`, `PrksLinkButton`, `PrksIconButton`) plus remaining classic callers. Other controls in this numbered section are not automatically Vue primitives. There is no generic `.prks-disclosure` family. Research Graph uses `PrksDisclosureButton` on the button contract; classic graph JS still owns live expanded state. | Canonical button rules in §05. `.prks-btn--quiet-danger` is physically in §12. `.prks-tab:focus-visible` is grouped with §05 focus-visible rules; the tab family itself is §07. |
+| 06 | `.prks-field` + form-pane | B4 Vue primitive (`PrksField`) for ordinary labeled native controls, plus remaining classic form-pane callers. Combobox, EasyMDE, and search-advanced stay specialized. | Canonical field rules in §06. Segmented is **not** a §06 Vue primitive; see specialized families. |
+| 07 | `.prks-tab`, `.prks-tabs` | Shared/retained. Used by current Vue routes (Arguments, Folder Library) **and** classic callers. Not dead. Not classic-only. No B4 Vue tab primitive. | Canonical tab rules in §07 |
+| 08 | `.prks-list-row` | B4 shared list-row contract. Work cards stay B5 feature CSS. | `.prks-list-row` in §08. `.prks-research-row` is a shared primitive but physically in §12. `.prks-scope-line` / `.prks-rel-summary` are physically in §08; semantically they belong with status/summary. |
+| 09 | `.prks-state`, `.prks-inline-message` | B4 Vue primitives (`PrksState`, `PrksInlineMessage`) plus remaining classic callers. Classic Work-card summaries stay. | `.prks-state` in §09. Base `.prks-inline-message` (and `--empty` / duplicate `--error`) are physically in §12; a `--error` color rule also sits in §09. |
+| 10 | `.prks-dialog` | Canonical shared structural contract (header/body/actions). Not a B4 Vue dialog primitive. Remaining classic caller: research picker in `frontend/js/components/works.js`, kept with the Research Notes product owner by the B5 audit; do not delete the family while it has consumers. | Canonical rules in §10 |
+| 11 | application shell, sidebar `.nav-disclosure` | B5 shell/feature. `.nav-disclosure` is sidebar navigation, not `PrksDisclosureButton`. | Canonical section |
+| 12 | feature layouts (work cards, PDF, ribbon, folder tree, processing, graph canvas) | B5 feature CSS **except** any shared/specialized selector that currently lives here. Deleting “all of §12” is forbidden. | Shared/specialized selectors physically here include `.prks-research-row`, base `.prks-inline-message`, `.prks-segmented*`, `.prks-btn--quiet-danger` |
+| 13 | third-party integrations | B5. Keep while those integrations exist. | Canonical section |
+| 14 | responsive / container rules | Cross-cutting. Ownership follows the selectors/features they modify. A media query wrapping a shared primitive is still that primitive’s CSS. | Canonical section |
+| 15 | reduced motion | Permanent global accessibility behavior. Not B5 cleanup. | Canonical section |
+
+Specialized canonical control family (used by Vue and classic; **not** a B4 Vue primitive):
+
+- `.prks-segmented` — physically in §12. Keep the existing family (normal / status / icon). B5 may later wrap or migrate callers; do not treat it as a B4 primitive family and do not purge it as “§12 feature CSS.”
+
+B4 does not split `style.css` into multiple HTTP files. Dead-rule deletion waits until B5 can prove no classic (or Vue) caller of that **selector**.
+
 ---
 
 ## Research entities
@@ -1123,9 +1172,9 @@ Research insertion pickers use canonical dialog / field / list / action primitiv
 
 Argument/Stance detail is read-first. Relationships are named rows, not raw ids. Edit uses the same research picker as note insertion.
 
-Concepts, Positions, and Arguments/Stances share one scanning/search language, not three independent implementations. Each index route filters its own already-loaded array locally (Concepts Vue index owns local search state with the same name/alias/parent match semantics; Positions/Arguments still use `prksBindResearchIndexSearch` from `concepts.js`); typing never issues a network request, and the Argument kind filter (`?kind=`) stays the canonical route/query state that search narrows within, never a client-only replacement for it. Search state itself is runtime-only — never written to the URL, `localStorage`, `/api/settings`, or workspace persistence. An index distinguishes a genuinely empty dataset (creation action front and center) from a nonempty dataset with no query match (a "no matches" message plus a clear-search action) — the two states never share the same copy or actions.
+Concepts, Positions, and Arguments/Stances share one scanning/search language, not three independent implementations. Each index route filters its own already-loaded array locally through `useResearchIndexList` plus a feature `match.ts` (same name/alias/parent or kind semantics). Typing never issues a network request, and the Argument kind filter (`?kind=`) stays the canonical route/query state that search narrows within, never a client-only replacement for it. Search state itself is runtime-only — never written to the URL, `localStorage`, `/api/settings`, or workspace persistence. An index distinguishes a genuinely empty dataset (creation action front and center) from a nonempty dataset with no query match (a "no matches" message plus a clear-search action) — the two states never share the same copy or actions.
 
-Research detail pages (Concept, Position, Argument) share one section hierarchy: `.research-entity` containing `.research-entity__section` blocks, each opening with a `research-entity__section-head` (title, optional count, optional section-local action button) built from the one shared `prksResearchSectionHeadHtml` helper. A section's edit action lives in that section's own head, never floating in a trailing paragraph below unrelated content. Relationships (Concept parents/subconcepts, Position's targeting Arguments/Stances, Argument targets/sources/responses/mentions) render as real anchors via `prksResearchIndexRowHtml`, never clickable `<div>`s or bare `<li><a>` lists — this preserves keyboard activation, context menu, Ctrl/Cmd-click, and workspace tile interception for free. Argument detail is the reference structure other research entities are brought toward, not a page redesigned to match them.
+Research detail pages (Concept, Position, Argument) share one section hierarchy: `.research-entity` containing `.research-entity__section` blocks, each opening with a `research-entity__section-head` (title, optional count, optional section-local action button) from `PrksResearchSectionHead`. A section's edit action lives in that section's own head, never floating in a trailing paragraph below unrelated content. Relationships (Concept parents/subconcepts, Position's targeting Arguments/Stances, Argument targets/sources/responses/mentions) render as real anchors via `PrksResearchRow`, never clickable `<div>`s or bare `<li><a>` lists — this preserves keyboard activation, context menu, Ctrl/Cmd-click, and workspace tile interception for free. Argument detail is the reference structure other research entities are brought toward, not a page redesigned to match them.
 
 Destructive page-header actions (Concept Delete, Argument Delete) are visually subordinate to frequent actions (View in graph, Edit, Rename, New response) via a quiet `.prks-btn--quiet-danger` treatment (transparent until hover/focus, then red) plus a small leading margin — never hidden behind a menu built solely for this, and never styled as prominently as the actions used every day.
 

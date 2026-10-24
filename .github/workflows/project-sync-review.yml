@@ -1,0 +1,31 @@
+name: Project sync review signal
+
+# Relays a changes-requested or approving review, or a dismissal, to
+# project-sync (#441). A pull_request_review run uses the PR's own copy of
+# this file and gets no write access, so it holds no secret, checks nothing
+# out and writes nothing. Its completion triggers the workflow_run job in
+# project-sync.yml, which runs from the default branch, re-reads the PR and
+# decides on its own.
+# The job condition only saves runs (comment reviews are frequent): a run for
+# another review state may still conclude as success, and project-sync then
+# reconciles from the review history (each reviewer's latest review and later
+# re-requests). It sets Changes requested only while such a review is
+# unanswered, and moves the PR out of Changes requested only after a change
+# request was dismissed or withdrawn by the same reviewer's approval.
+on:
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions: {}
+
+jobs:
+  signal:
+    if: >-
+      github.event.action == 'dismissed' ||
+      github.event.review.state == 'changes_requested' ||
+      github.event.review.state == 'approved'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      - name: Record the review
+        run: echo "A review was submitted or dismissed; project-sync re-reads the PR."
