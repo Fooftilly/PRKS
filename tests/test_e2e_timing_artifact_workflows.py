@@ -13,7 +13,7 @@ PACKAGED = ROOT / ".github/workflows/e2e-classic-distribution-gate.yml"
 
 def job_source(workflow: str, job: str) -> str:
     match = re.search(
-        r"(?ms)^  " + re.escape(job) + r":\\n(.*?)(?=^  [a-z][a-z-]*:\\n|\\Z)",
+        r"(?ms)^  " + re.escape(job) + r":\n(.*?)(?=^  [a-z][a-z-]*:\n|\Z)",
         workflow,
     )
     if match is None:
@@ -36,7 +36,7 @@ class E2ETimingArtifactWorkflowTests(unittest.TestCase):
         self.assertIn("path: .tests/e2e-timings.json", shard)
         self.assertIn("if-no-files-found: error", shard)
         self.assertEqual(shard.count("path: .tests/e2e-timings.json"), 1)
-        self.assertNotIn("path: .tests/\\n", shard)
+        self.assertNotIn("path: .tests/\n", shard)
 
     def test_manual_packaged_full_not_smoke_or_pr(self):
         workflow = PACKAGED.read_text(encoding="utf-8")
@@ -47,7 +47,7 @@ class E2ETimingArtifactWorkflowTests(unittest.TestCase):
         self.assertIn("path: .tests/e2e-timings.json", shard)
         self.assertIn("if-no-files-found: error", shard)
         self.assertEqual(shard.count("path: .tests/e2e-timings.json"), 1)
-        self.assertNotIn("path: .tests/\\n", shard)
+        self.assertNotIn("path: .tests/\n", shard)
         manual_smoke = job_source(workflow, "packaged-smoke")
         self.assertNotIn("e2e-timings.json", manual_smoke)
 
