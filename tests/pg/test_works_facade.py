@@ -286,13 +286,11 @@ class CreateTests(WorksFacadeTestCase):
         self.assertEqual((self.core(without)["text_content"], self.core(without)["private_notes"]),
                          ("", None))
 
-    def test_a_work_with_a_research_note_needs_the_wiki_link_resolver(self) -> None:
-        from backend.pg_facade import NotPortedError
-
+    def test_a_research_note_renders_its_wiki_links(self) -> None:
         work_id = self.library.add_work("Linked", text_content="See [[Other]]")
-        with self.assertRaises(NotPortedError) as caught:
-            self.library.get_work(work_id)
-        self.assertEqual(caught.exception.method, "resolve_wiki_links")
+        self.assertEqual(self.library.get_work(work_id)["html_content"],
+                         'See <span class="wiki-link-unresolved" style="color:#ef4444;">[[Other]]</span>')
+        self.assertNotIn("html_content", self.library.get_work(self.library.add_work("Plain")))
 
     def test_concurrent_creates_all_commit(self) -> None:
         errors: list[BaseException] = []

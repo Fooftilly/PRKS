@@ -276,8 +276,7 @@ def is_valid_field_value(field, value):
         codec = codec_for(field)
         # A codec field is validated by its codec: a page number is not long
         # or short, it is a page number or it is not one.
-        return (codec.is_valid_input(value) if hasattr(codec, "is_valid_input")
-                else codec.is_valid_wire(value))
+        return codec.is_valid_input(value)
     if SYNCED_FIELDS[field] is None:
         return True
     return within_limit(field, value)
@@ -345,6 +344,11 @@ class _IdentityCodec:
     @staticmethod
     def is_valid_wire(wire):
         return isinstance(wire, str)
+
+    @staticmethod
+    def is_valid_input(value):
+        # Identity fields use the same validation for native and wire input.
+        return _IdentityCodec.is_valid_wire(value)
 
 
 class _ThumbPageCodec:
