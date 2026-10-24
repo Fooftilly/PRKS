@@ -47,6 +47,7 @@ _TEST_GATE_APPROVED_OPTIONS = frozenset(
     {
         "--isolated",
         "--disable-pip-version-check",
+        "--no-input",
         "--only-binary=:all:",
     }
 )
@@ -1144,64 +1145,82 @@ class RepoGateLiveTests(unittest.TestCase):
         )
 
     def test_test_gate_workflow_pins_match_requirements(self):
-        """CI install must name runtime == pins plus openapi-core (Sonar
-        rejects unlocked `-r` installs; keep the sources equal).
+        """Test the exact authorized CI helper command and its real pip argv.
 
-        Assert against the install step's executable `run` args only — a pin
-        or `--only-binary` mention in a comment must not satisfy the check.
-        Package pins collected from that argv must equal requirements.txt
-        union the openapi-core pin from requirements-dev.txt (Positions
-        contract validation is non-optional in this job); bare names,
-        ``-r``/``-e``, wheels, and URL/VCS sources are refused.
-        A literal Install body must be exactly one non-comment command — the
-        approved ``python -m pip install``.
-        Invert policy: exactly two ``run:`` steps (Install + ``run_tests.py``);
-        any additional ``run:`` is refused without enumerating pip spellings.
-        Install argv must include ``--isolated``; job/step ``PIP_REQUIREMENT``
-        (and similar) env is refused.
+        Invert policy still forbids extra run steps and pip-injection env; the
+        helper is invoked as a single non-shell command. Mock only pip execution
+        while checking profiles against requirements files and approved options.
         """
-        pins = parse_requirements_pins((_PROJECT / "requirements.txt").read_text())
-        dev_pins = parse_requirements_pins(
-            (_PROJECT / "requirements-dev.txt").read_text()
-        )
-        # Unit/API/contract job installs runtime pins plus openapi-core so
-        # OpenAPI request/response validation cannot skipTest in CI (#180).
-        self.assertIn("openapi-core", dev_pins)
-        expected_pins = dict(pins)
-        expected_pins["openapi-core"] = dev_pins["openapi-core"]
+        from unittest.mock import patch
+        from scripts.ci.install_pinned_python import install, pins_for_profile
+
+        runtime = parse_requirements_pins((_PROJECT / "requirements.txt").read_text())
+        dev = parse_requirements_pins((_PROJECT / "requirements-dev.txt").read_text())
+        self.assertIn("openapi-core", dev)
+        expected_unit = dict(runtime, **{"openapi-core": dev["openapi-core"]})
+        expected_pg = dict(runtime)
+        for name in _TEST_GATE_PG_DEV_PINS:
+            expected_pg[name] = dev[name]
+
         workflow = (_PROJECT / ".github" / "workflows" / "test-gate.yml").read_text(
             encoding="utf-8"
         )
         assert_test_gate_run_steps_allowlisted(workflow)
-        # Validate the sole approved Install step's run body.
-        scalar_style, body = unique_test_gate_install_step(workflow)
-        body_lines = [line.strip() for line in body.splitlines() if line.strip()]
-        # Inline run: treat as a single folded command.
-        style_for_parse = scalar_style if scalar_style else ">"
-        pip_args = test_gate_install_argv_from_run_body(style_for_parse, body_lines)
-        self.assertIn("--isolated", pip_args)
-        self.assertIn("--only-binary=:all:", pip_args)
-        # Two-way equality via fail-closed operand walk: every argv token after
-        # install is an approved option or an exact name==version pin.
-        install_pins = parse_test_gate_pip_install_pins(pip_args)
-        self.assertEqual(install_pins, expected_pins)
-        # PostgreSQL helper job (#623): runtime pins plus the psycopg pins.
-        # The backend parity job (#625) installs the same pins.
-        expected_pg_pins = dict(pins)
-        for name in _TEST_GATE_PG_DEV_PINS:
-            expected_pg_pins[name] = dev_pins[name]
+        unit_style, unit_body = unique_test_gate_install_step(workflow)
+        profiles = [("unit", unit_style, unit_body, expected_unit)]
         for label, pg_steps in (
             ("PostgreSQL helper tests", unique_test_gate_pg_steps(workflow)),
             ("backend parity legs", unique_test_gate_parity_steps(workflow)),
         ):
-            with self.subTest(job=label):
-                if pg_steps is None:
-                    self.fail(f"test-gate.yml must run the {label}")
-                pg_style, pg_body = pg_steps[0]
-                pg_lines = [line.strip() for line in pg_body.splitlines() if line.strip()]
-                pg_args = test_gate_install_argv_from_run_body(pg_style or ">", pg_lines)
-                self.assertIn("--only-binary=:all:", pg_args)
-                self.assertEqual(parse_test_gate_pip_install_pins(pg_args), expected_pg_pins)
+            if pg_steps is None:
+                self.fail(f"test-gate.yml must run the {label}")
+            pg_style, pg_body = pg_steps[0]
+            profiles.append(("postgres", pg_style, pg_body, expected_pg))
+
+        for profile, style, body, expected in profiles:
+            with self.subTest(profile=profile):
+                lines = [line.strip() for line in body.splitlines() if line.strip()]
+                if style == "|":
+                    self.assertEqual(len(lines), 1)
+                argv = shlex.split(" ".join(lines))
+                self.assertEqual(
+                    argv,
+                    ["python", "scripts/ci/install_pinned_python.py", profile],
+                    "CI must use only the approved exact-pin helper invocation",
+                )
+                self.assertEqual(
+                    {pin.split("==", 1)[0]: pin.split("==", 1)[1]
+                     for pin in pins_for_profile(_PROJECT, profile)},
+                    expected,
+                )
+                with patch("scripts.ci.install_pinned_python.subprocess.run") as run:
+                    install(_PROJECT, profile)
+                pip_argv = run.call_args.args[0]
+                self.assertEqual(pip_argv[0], sys.executable)
+                self.assertEqual(
+                    parse_test_gate_pip_install_pins(["python", *pip_argv[1:]]),
+                    expected,
+                )
+                self.assertIn("--only-binary=:all:", pip_argv)
+                self.assertIn("--isolated", pip_argv)
+                self.assertEqual(run.call_args.kwargs["cwd"], _PROJECT)
+                self.assertTrue(run.call_args.kwargs["check"])
+
+    def test_test_gate_rejects_modified_ci_install_helper_invocation(self):
+        workflow = (_PROJECT / ".github" / "workflows" / "test-gate.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("python scripts/ci/install_pinned_python.py unit", workflow)
+        # A shell suffix must not be accepted as part of the reviewed command.
+        altered = workflow.replace(
+            "python scripts/ci/install_pinned_python.py unit",
+            "python scripts/ci/install_pinned_python.py unit && pip install requests",
+        )
+        _style, body = unique_test_gate_install_step(altered)
+        argv = shlex.split(body.strip())
+        self.assertNotEqual(
+            argv, ["python", "scripts/ci/install_pinned_python.py", "unit"]
+        )
 
     def _minimal_allowlisted_workflow(self, extra_step: str = "") -> str:
         """Install + run_tests skeleton; optional extra YAML step(s) appended."""
