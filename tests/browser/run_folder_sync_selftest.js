@@ -97,6 +97,237 @@ async function aFolderIsAValidDestinationImmediately() {
     assert.equal((await store.listOperations()).length, 0, "and both retire");
 }
 
+async function refusedCreateStaysInDiagnosticsButNotTheFolderLibrary() {
+    const store = newStore();
+    const created = await store.createFolder({ title: "Already taken" });
+    const pending = await store.listOperations();
+    assert.deepEqual(globalThis.prksEffectiveFolders([], pending).map(row => row.id),
+        [created.entity_id], "an unsent offline create is immediately visible");
+    const runtime = runtimeFor(store, async () => ({
+        ok: false, status: 409,
+        json: async () => ({ code: "TITLE_TAKEN", folder_id: created.entity_id }),
+    }));
+    await runtime.wake();
+    await settle();
+    runtime.stop();
+    const rows = await store.listOperations();
+    assert.equal(rows.length, 1, "the conflict is retained for explicit Diagnostics resolution");
+    assert.equal(rows[0].status, "conflict");
+    assert.equal(rows[0].server_result.code, "TITLE_TAKEN");
+    assert.deepEqual(globalThis.prksEffectiveFolders([], rows), [],
+        "terminally refused creation cannot appear as a real folder");
+    assert.deepEqual(globalThis.prksEffectiveFolders([{ id: "F-real", title: "Already taken" }], rows)
+        .map(row => row.id), ["F-real"],
+        "the acknowledged server folder remains; no phantom duplicate");
+    assert.equal((await store.stats()).byStatus.conflict, 1,
+        "the operation is not silently discarded");
+}
+
+async function aRefusedFolderCreateDoesNotStrandTheWorksFolderProjection() {
+    const store = newStore();
+    const created = await store.createFolder({ title: "Already taken" });
+    const filing = await store.setWorkFolder("W-1", created.entity_id,
+        { folder_id: "F-old", revision: 2 });
+    assert.deepEqual(filing.depends_on, [created.op_id],
+        "a Work filing waits for the folder create it references");
+
+    const previous = { id: "W-1", folder_id: "F-old", folder_title: "Existing" };
+    const catalogue = [{ id: "F-old", title: "Existing" }];
+    const pending = await store.listOperations();
+    assert.equal(globalThis.prksEffectiveWorkFolder(previous, pending,
+        globalThis.prksEffectiveFolders(catalogue, pending)).folder_id, created.entity_id,
+    "the optimistic filing is visible before the server refuses its destination");
+
+    const runtime = runtimeFor(store, async (_path, options) => {
+        const body = JSON.parse(options.body);
+        assert.equal(body.operation, "CREATE_FOLDER",
+            "dependent filing must never be sent after refused creation");
+        return { ok: false, status: 409,
+            json: async () => ({ code: "TITLE_TAKEN", folder_id: created.entity_id }) };
+    });
+    await runtime.wake();
+    await settle();
+    runtime.stop();
+
+    const ops = await store.listOperations();
+    assert.equal(ops.length, 2, "both operations remain available in Diagnostics");
+    assert.equal(ops.find(op => op.op_id === created.op_id).status, "conflict");
+    const dependent = ops.find(op => op.op_id === filing.op_id);
+    assert.equal(dependent.status, "conflict");
+    assert.equal(dependent.server_result.code, "DEPENDENCY_FAILED");
+
+    assert.deepEqual(globalThis.prksEffectiveFolders(catalogue, ops), catalogue,
+        "the refused folder is absent from the catalogue");
+    assert.equal(globalThis.prksPendingWorkFolders(ops).size, 0,
+        "the refused dependent filing does not override the server state");
+    assert.deepEqual(globalThis.prksEffectiveWorkFolder(previous, ops, catalogue), previous,
+        "Work detail falls back to its acknowledged folder and name");
+    assert.deepEqual(globalThis.prksEffectiveWorkFolderRows([previous], ops, catalogue), [previous],
+        "Work lists use the same acknowledged fallback");
+    assert.equal(globalThis.prksSetPendingWorkFolders(ops, catalogue), 0);
+    assert.deepEqual(globalThis.prksApplyPendingWorkFolders([previous]), [previous],
+        "synchronous Work cards do not retain the ghost destination");
+    assert.deepEqual(globalThis.prksEffectiveFolderDetail({
+        id: "F-old", title: "Existing", works: [{ id: "W-1" }]
+    }, ops, []).works.map(row => row.id), ["W-1"],
+    "the Work remains visible in its acknowledged Folder detail");
+    assert.equal((await store.stats()).byStatus.conflict, 2,
+        "neither rejected operation is silently discarded");
+}
+
+async function failedDependencyWriteRecoversWithoutResendingCreate() {
+    // The terminal create is already committed before the dependent walk.
+    // If the local transaction aborts, only a fresh drain/restart can repair
+    // the pending Work filing; the server must never see the create twice.
+    for (const restart of [false, true]) {
+        const store = newStore();
+        const created = await store.createFolder({ title: "Refused locally" });
+        const filing = await store.setWorkFolder("W-1", created.entity_id,
+            { folder_id: "F-old", revision: 2 });
+        const original = store.markDependentsFailed.bind(store);
+        let failedOnce = false;
+        store.markDependentsFailed = async (...args) => {
+            if (!failedOnce) {
+                failedOnce = true;
+                throw new Error("simulated IndexedDB transaction failure");
+            }
+            return original(...args);
+        };
+        let sent = 0;
+        const respond = async () => {
+            sent += 1;
+            return { ok: false, status: 409,
+                json: async () => ({ code: "TITLE_TAKEN", folder_id: created.entity_id }) };
+        };
+        const first = runtimeFor(store, respond);
+        await first.wake();
+        const unfinished = await store.listOperations();
+        assert.equal(unfinished.find(op => op.op_id === created.op_id).status, "conflict",
+            "the terminal parent remains durably settled despite a dependent write failure");
+        assert.equal(unfinished.find(op => op.op_id === filing.op_id).status, "pending",
+            "the failed IndexedDB write leaves a dependent requiring recovery");
+        assert.equal(sent, 1, "the refused construction reached the server once");
+
+        // Restart uses the same durable store but a new coordinator. The
+        // same-runtime case exercises the scheduled wake's recovery logic.
+        if (restart) first.stop();
+        const recovered = restart ? runtimeFor(store, respond) : first;
+        await recovered.wake();
+        const ops = await store.listOperations();
+        assert.equal(ops.find(op => op.op_id === created.op_id).status, "conflict");
+        assert.equal(ops.find(op => op.op_id === filing.op_id).status, "conflict");
+        assert.equal(ops.find(op => op.op_id === filing.op_id).server_result.code,
+            "DEPENDENCY_FAILED");
+        assert.equal(sent, 1, "recovery never resends a rejected construction");
+        assert.equal((await store.stats()).byStatus.conflict, 2,
+            "the operation and dependent remain in Diagnostics");
+        recovered.stop();
+    }
+}
+
+async function failedRecoveryDoesNotStarveUnrelatedFolderCreates() {
+    const store = newStore();
+    const refused = await store.createFolder({ title: "Taken" });
+    const dependent = await store.setWorkFolder("W-1", refused.entity_id,
+        { folder_id: "F-old", revision: 1 });
+    const original = store.markDependentsFailed.bind(store);
+    store.markDependentsFailed = async () => {
+        throw new Error("persistent IndexedDB failure during descendant walk");
+    };
+    const sent = [];
+    const runtime = runtimeFor(store, async (_path, options) => {
+        const op = JSON.parse(options.body);
+        sent.push(op.entity_id);
+        if (op.entity_id === refused.entity_id) {
+            return { ok: false, status: 409,
+                json: async () => ({ code: "TITLE_TAKEN", folder_id: op.entity_id }) };
+        }
+        return { ok: true, status: 200, json: async () => folderAck(op) };
+    });
+    await runtime.wake();
+    assert.equal((await store.listOperations()).find(op => op.op_id === dependent.op_id).status,
+        "pending", "a persistent failure leaves dependent intents unpropagated");
+    const healthy = await store.createFolder({ title: "Unrelated" });
+    await runtime.wake();
+    assert.deepEqual(sent, [refused.entity_id, healthy.entity_id],
+        "recovery write failures must not block an unrelated durable operation");
+    assert.equal((await store.listOperations()).some(op => op.op_id === healthy.op_id), false,
+        "the unrelated acknowledgement must retire normally");
+
+    store.markDependentsFailed = original;
+    await runtime.wake();
+    const settled = await store.listOperations();
+    assert.equal(settled.find(op => op.op_id === dependent.op_id).status, "conflict",
+        "a later successful wake repairs the original pending descendant");
+    let repairCalls = 0;
+    store.markDependentsFailed = async (...args) => {
+        repairCalls += 1;
+        return original(...args);
+    };
+    await runtime.wake();
+    assert.equal(repairCalls, 0,
+        "settled terminal conflicts do not open unnecessary readwrite transactions");
+    runtime.stop();
+}
+
+async function consumedFailureRecoversDependentsAfterRestart() {
+    const store = newStore();
+    const created = await store.createFolder({ title: "Never acknowledged" });
+    const dependent = await store.setWorkFolder("W-1", created.entity_id,
+        { folder_id: "F-old", revision: 1 });
+    // A crash after the discard's acknowledged state was written but before
+    // the dependent walk must be repairable without resending the operation.
+    await store.updateOperationSyncState(created.op_id, {
+        status: "acknowledged", server_result: { code: "INVALID_ENVELOPE" },
+    });
+    let sent = 0;
+    const runtime = runtimeFor(store, async () => { sent += 1; throw Error("no send expected"); });
+    await runtime.wake();
+    const rows = await store.listOperations();
+    assert.equal(rows.find(op => op.op_id === dependent.op_id).status, "conflict");
+    assert.equal(rows.find(op => op.op_id === dependent.op_id).server_result.code,
+        "DEPENDENCY_FAILED");
+    assert.equal(sent, 0, "recovery must not retry an already-consumed refusal");
+    runtime.stop();
+}
+
+async function aRefusedParentCreationDoesNotHideExistingSubfolders() {
+    const store = newStore();
+    const created = await store.createFolder({ title: "Refused destination" });
+    const [move] = await store.saveFolderFields("F-existing",
+        { parent_id: created.entity_id },
+        baseAt({ parent_id: 2 }, { parent_id: "F-old" }));
+    assert.deepEqual(move.depends_on, [created.op_id]);
+    const originals = [
+        { id: "F-old", title: "Original parent", parent_id: null },
+        { id: "F-existing", title: "Existing subtree", parent_id: "F-old" },
+    ];
+    const optimistic = globalThis.prksEffectiveFolders(originals, await store.listOperations());
+    assert.equal(optimistic.find(row => row.id === "F-existing").parent_id,
+        created.entity_id, "the pending move is visible before rejection");
+    const runtime = runtimeFor(store, async (_path, options) => {
+        const op = JSON.parse(options.body);
+        assert.equal(op.operation, "CREATE_FOLDER",
+            "the rejected parent must prevent sending the dependent move");
+        return { ok: false, status: 409,
+            json: async () => ({ code: "TITLE_TAKEN", folder_id: created.entity_id }) };
+    });
+    await runtime.wake();
+    const operations = await store.listOperations();
+    assert.equal(operations.find(op => op.op_id === move.op_id).status, "conflict");
+    assert.equal(operations.find(op => op.op_id === move.op_id).server_result.code,
+        "DEPENDENCY_FAILED");
+    const restored = globalThis.prksEffectiveFolders(originals, operations);
+    assert.deepEqual(new Map(restored.map(row => [row.id, row])),
+        new Map(originals.map(row => [row.id, row])),
+        "a failed move restores the existing folder and its acknowledged tree");
+    assert.equal(globalThis.prksEffectiveFolderDetail(originals[1], operations, []).parent_id,
+        "F-old", "Folder detail must also use the acknowledged parent");
+    assert.equal((await store.stats()).byStatus.conflict, 2,
+        "both refused intents remain in Diagnostics");
+    runtime.stop();
+}
+
 async function anEmptyTitleBecomesThePlaceholder() {
     const store = newStore();
     const created = await store.createFolder({ title: "   " });
@@ -307,6 +538,12 @@ async function theBaseIsAcknowledgedAndNeverGuessed() {
 
 async function main() {
     await aFolderIsAValidDestinationImmediately();
+    await refusedCreateStaysInDiagnosticsButNotTheFolderLibrary();
+    await aRefusedFolderCreateDoesNotStrandTheWorksFolderProjection();
+    await failedDependencyWriteRecoversWithoutResendingCreate();
+    await failedRecoveryDoesNotStarveUnrelatedFolderCreates();
+    await consumedFailureRecoversDependentsAfterRestart();
+    await aRefusedParentCreationDoesNotHideExistingSubfolders();
     await anEmptyTitleBecomesThePlaceholder();
     await aFolderInsideALocalFolderWaitsForIt();
     await fieldEditsCoalesceAndCancel();

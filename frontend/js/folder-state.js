@@ -51,7 +51,12 @@
     }
 
     function pendingCreates(operations) {
-        return unsettled(operations, 'CREATE_FOLDER', null);
+        // A terminally refused create remains in the durable queue for the
+        // user's Diagnostics decision, but it is not a real Folder. Showing
+        // its optimistic row after TITLE_TAKEN, PARENT_NOT_FOUND, etc. leaves
+        // a phantom folder in the Library and makes the queue look applied.
+        return unsettled(operations, 'CREATE_FOLDER', null)
+            .filter(op => op.status !== 'conflict' && op.status !== 'discarded');
     }
 
     /* A refused deletion stops hiding its entity: see
@@ -71,6 +76,12 @@
     function pendingFieldValues(operations, folderId) {
         const values = new Map();
         unsettled(operations, 'SET_FOLDER_FIELD', folderId)
+            // Failed parent moves must not orphan an acknowledged Folder when
+            // their newly created destination was refused. Other conflicted
+            // fields remain visible until the user resolves their edit.
+            .filter(op => op.status !== 'discarded' &&
+                (!op.server_result || op.server_result.code !== 'DEPENDENCY_FAILED') &&
+                !(op.status === 'conflict' && op.payload && op.payload.field === 'parent_id'))
             .slice()
             .sort((a, b) => (a.sequence || 0) - (b.sequence || 0))
             .forEach(function (op) {
@@ -98,8 +109,11 @@
     function pendingWorkFolders(operations) {
         const values = new Map();
         (operations || [])
+            // Terminally refused filings cannot replace the acknowledged
+            // Work folder. Keep their rows in Diagnostics for resolution.
             .filter(op => op && op.operation === 'SET_WORK_FOLDER' &&
-                op.entity_type === 'work' && op.status !== 'acknowledged')
+                op.entity_type === 'work' && op.status !== 'acknowledged' &&
+                op.status !== 'conflict' && op.status !== 'discarded')
             .slice()
             .sort((a, b) => (a.sequence || 0) - (b.sequence || 0))
             .forEach(function (op) {
@@ -896,6 +910,10 @@
             return data.code === 'ACKNOWLEDGED' && typeof data.changed === 'boolean' &&
                 !!data.folder && data.folder.id === data.folder_id;
         },
+        // CREATE_FOLDER conflicts are terminal: the refused Folder will
+        // never exist, so anything waiting on this create must be failed.
+        // The runtime uses the same policy when recovering after a restart.
+        failDependentsOnConflict: true,
         terminal: data => ({ conflict: { code: data.code } }),
         reconcile: data => root.prksOfflineReconcileCreatedFolder(data),
     };
