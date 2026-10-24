@@ -105,11 +105,18 @@ describe('fast-check workspace invariant pilot', () => {
             tree = normalizeTree(removedTree)
             expect(collectLeafTabIds(tree).sort()).toEqual([...expected].sort())
           }
-          for (const remaining of expected) {
+          // Clean up in a snapshot order, checking that *each* deletion
+          // preserves all other leaves. An unrelated leaf lost during this
+          // phase must fail immediately, not be hidden by the final null.
+          for (const remaining of [...expected]) {
             const removedTree = removeLeaf(tree, remaining)
+            expected.delete(remaining)
             expect(validateTree(removedTree).errors).toEqual([])
+            expect(collectLeafTabIds(removedTree).sort()).toEqual([...expected].sort())
             tree = normalizeTree(removedTree)
+            expect(collectLeafTabIds(tree).sort()).toEqual([...expected].sort())
           }
+          expect(expected.size).toBe(0)
           expect(tree).toBeNull()
         },
       ),
