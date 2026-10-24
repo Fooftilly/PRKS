@@ -6,14 +6,39 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "01:10"
+      timezone: "Europe/Podgorica"
+    open-pull-requests-limit: 4
+    # Routine versions only; security patches are not delayed.
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "build(deps)"
+    # Coordinate the PostgreSQL driver and pool family only. All three move
+    # into production together; never combine these with unrelated packages.
+    # Argon2id, API validation, runtime imaging and Playwright stay separate.
+    groups:
+      psycopg-stack:
+        applies-to: version-updates
+        patterns:
+          - "psycopg"
+          - "psycopg-binary"
+          - "psycopg-pool"
+        update-types: ["minor", "patch"]
 
   # Maintainer-only EmbedPDF build dependencies.
   - package-ecosystem: "npm"
     directory: "/tools/pdf-viewer"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "01:30"
+      timezone: "Europe/Podgorica"
+    open-pull-requests-limit: 3
+    # Routine versions only; security patches are not delayed.
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "build(deps)"
     # React 19 needs a coordinated react + react-dom + types migration
@@ -37,12 +62,30 @@ updates:
           - "react-dom"
           - "@types/react"
           - "@types/react-dom"
+      pdf-viewer-routine:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "@embedpdf/*"
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
+        update-types: ["minor", "patch"]
 
   # Maintainer-only Cytoscape.js research-graph build dependency.
   - package-ecosystem: "npm"
     directory: "/tools/research-graph"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "01:50"
+      timezone: "Europe/Podgorica"
+    open-pull-requests-limit: 3
+    # Routine versions only; security patches are not delayed.
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "build(deps)"
 
@@ -51,6 +94,13 @@ updates:
     directory: "/tools/frontend-vendor"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "02:10"
+      timezone: "Europe/Podgorica"
+    open-pull-requests-limit: 3
+    # Routine versions only; security patches are not delayed.
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "build(deps)"
     # PRKS consumes CodeMirror 5 (lib/codemirror.js + hint addons / global
@@ -59,20 +109,86 @@ updates:
     ignore:
       - dependency-name: "codemirror"
         update-types: ["version-update:semver-major"]
+    groups:
+      frontend-vendor-routine:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        # Keep the security-sensitive HTML sanitizer independently reviewable.
+        exclude-patterns:
+          - "dompurify"
+        update-types: ["minor", "patch"]
 
   # Maintainer-only Vue 3 + Vite application build. Not a PRKS runtime dependency.
   - package-ecosystem: "npm"
     directory: "/frontend-app"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "02:30"
+      timezone: "Europe/Podgorica"
+    open-pull-requests-limit: 3
+    # Routine versions only; security patches are not delayed.
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "build(deps)"
+    # Keep Storybook peer packages compatible in the same minor/patch update.
+    groups:
+      storybook-stack:
+        applies-to: version-updates
+        patterns:
+          - "storybook"
+          - "@storybook/*"
+        # Include majors atomically, but leave them for explicit compatibility review.
+      vitest-stack:
+        applies-to: version-updates
+        patterns:
+          - "vitest"
+          - "@vitest/*"
+        # @vitest/coverage-v8 has an exact Vitest peer; all versions must move together.
+      vite-toolchain:
+        applies-to: version-updates
+        patterns:
+          - "vite"
+          - "@vitejs/plugin-vue"
+          - "vue-tsc"
+        update-types: ["minor", "patch"]
+      vue-core:
+        applies-to: version-updates
+        patterns:
+          - "vue"
+          - "@vue/*"
+        update-types: ["minor", "patch"]
+      frontend-routine:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        # These have their own atomic peer-compatible update groups above.
+        exclude-patterns:
+          - "storybook"
+          - "@storybook/*"
+          - "vitest"
+          - "@vitest/*"
+          - "vite"
+          - "@vitejs/plugin-vue"
+          - "vue-tsc"
+          - "vue"
+          - "@vue/*"
+        update-types: ["minor", "patch"]
 
   # Keep the Python base image in the root Dockerfile visible to Dependabot.
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "02:50"
+      timezone: "Europe/Podgorica"
+    open-pull-requests-limit: 2
+    # Routine versions only; security patches are not delayed.
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "build(deps)"
 
@@ -81,5 +197,27 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "03:10"
+      timezone: "Europe/Podgorica"
+    open-pull-requests-limit: 4
+    # Routine versions only; security patches are not delayed.
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "build(deps)"
+    groups:
+      codeql-action:
+        applies-to: version-updates
+        patterns:
+          - "github/codeql-action/*"
+      codeql-security:
+        applies-to: security-updates
+        patterns:
+          - "github/codeql-action/*"
+      actions-routine:
+        applies-to: version-updates
+        patterns:
+          - "actions/*"
+        # Keep all action major upgrades independent for breaking-change review.
+        update-types: ["minor", "patch"]

@@ -1,9 +1,14 @@
 """Organization lane (L-O-1, #633; ``docs/postgresql-architecture.md`` §6.5, §7.1, §8.1).
 
-Tags, their aliases and lifecycle, and Work and Folder tags on PostgreSQL
-(this slice); Folders, Playlists, Saved Views and settings come in later
-slices. The schema is ``backend/db/schema/120_organization.sql``. The sync
-handlers are ``backend/sync/handlers/tag.py`` and ``tag_link.py``.
+Tags, their aliases and lifecycle, Work and Folder tags (``tags``,
+``lifecycle``, ``links``), Folders, their hierarchy and fields and the
+Folder a Work is in (``folders``), and Playlists, their fields, order and
+the Playlist a Work is in (``playlists``) on PostgreSQL; Saved Views are
+``backend.domain.saved_views`` and the application settings
+``backend.domain.settings``. The schema is
+``backend/db/schema/120_organization.sql``. The sync handlers are
+``backend/sync/handlers/tag.py``, ``tag_link.py``, ``folder.py`` and
+``playlist.py``.
 
 Nothing in the running application imports this package yet: SQLite stays
 the only backend until the cutover slices (§15.3).
@@ -27,7 +32,11 @@ a link's scope without holding the Work could wait on that link while the
 Work delete waits on the scope.
 
 The Works lane's order (the Work row first, then its scopes) composes with
-this one, and no People command locks a Tag.
+this one, and no People command locks a Tag. The Folder commands' own order
+(the Work row, the folder hierarchy lock, Folder rows, scopes) is in
+``folders``, and the Playlist commands' (the Work row, Playlist rows by id,
+scopes) in ``playlists``; neither locks a Tag, and no Playlist command locks
+a Folder.
 
 A row is locked in its own statement before it is read for a decision,
 because under READ COMMITTED a statement that waited for a row returns that
@@ -47,3 +56,10 @@ from backend.db import register_constraint
 # link is SERIALIZABLE, which turns the same race into a ``40001`` retry.
 register_constraint("work_tags_tag_fkey", "TAG_HAS_LINKS")
 register_constraint("folder_tags_tag_fkey", "TAG_HAS_LINKS")
+# A Folder title is unique per parent; the index decides a race between two
+# writers of one title, and the loser decides again (``folders.TITLE_KEY``).
+register_constraint("folders_library_id_parent_id_title_key_key", "TITLE_TAKEN")
+# The Work delete takes the Work out of its Playlist first
+# (``playlists.release_work``), and every other writer of the item waits for
+# the Work's lock; the item's key is the backstop.
+register_constraint("playlist_items_work_fkey", "WORK_IN_PLAYLIST")

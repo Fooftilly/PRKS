@@ -1352,6 +1352,10 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/domain/identity/root_pairing.py",
                 "backend/domain/identity/admin.py",
                 "backend/api/session.py",
+                "backend/work_identity.py",
+                "backend/work_projection.py",
+                "backend/work_metadata_sync.py",
+                "backend/work_role_sync.py",
                 "backend/domain/works/__init__.py",
                 "backend/domain/works/integrity.py",
                 "backend/domain/works/projection.py",
@@ -1361,6 +1365,11 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/domain/works/metadata.py",
                 "backend/domain/works/notes.py",
                 "backend/domain/works/source.py",
+                "backend/domain/works/bulk.py",
+                "backend/domain/works/citation.py",
+                "backend/domain/works/lifecycle.py",
+                "backend/domain/works/merge.py",
+                "backend/domain/works/wiki_links.py",
                 "backend/domain/people/__init__.py",
                 "backend/domain/people/persons.py",
                 "backend/domain/people/groups.py",
@@ -1368,9 +1377,15 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/domain/people/queries.py",
                 "backend/domain/people/roles.py",
                 "backend/domain/organization/__init__.py",
+                "backend/domain/organization/folders.py",
                 "backend/domain/organization/lifecycle.py",
                 "backend/domain/organization/links.py",
+                "backend/domain/organization/playlists.py",
                 "backend/domain/organization/tags.py",
+                "backend/domain/saved_views/__init__.py",
+                "backend/domain/saved_views/views.py",
+                "backend/domain/settings/__init__.py",
+                "backend/domain/settings/app_settings.py",
                 "backend/jobs/queue.py",
                 "backend/jobs/handlers.py",
                 "backend/jobs/runner.py",
@@ -1382,8 +1397,10 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/sync/families.py",
                 "backend/sync/protocol.py",
                 "backend/sync/handlers/__init__.py",
+                "backend/sync/handlers/folder.py",
                 "backend/sync/handlers/person.py",
                 "backend/sync/handlers/person_group.py",
+                "backend/sync/handlers/playlist.py",
                 "backend/sync/handlers/tag.py",
                 "backend/sync/handlers/tag_link.py",
                 "backend/sync/handlers/work_lifecycle.py",
@@ -1476,11 +1493,8 @@ class EngineeringInvariantTests(unittest.TestCase):
     def test_pyright_typed_slice_rejects_missing_scope_on_disk(self):
         """Pyright exits 0 for a missing include path, so the checker must not."""
         for rel in (
-            "backend/entity_ids.py",
-            "backend/concurrency.py",
-            "backend/research_markup.py",
-            "backend/pdf_linearize.py",
-            "backend/derived_cache_publish.py",
+            scope for scope in checker.PYRIGHT_TYPED_SLICE_SCOPES
+            if scope.endswith(".py")
         ):
             with self.subTest(rel=rel), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
@@ -1491,8 +1505,13 @@ class EngineeringInvariantTests(unittest.TestCase):
                 self.assertIn(rel, findings[0].message)
 
     def test_pyright_typed_slice_rejects_suppression_of_new_scopes(self):
+        protected_files = [
+            scope for scope in checker.PYRIGHT_TYPED_SLICE_SCOPES
+            if scope.endswith(".py")
+        ]
         cases = {
             "ignore": [
+                *protected_files,
                 "backend/entity_ids.py",
                 "backend/concurrency.py",
                 "backend/*.py",
@@ -1503,6 +1522,7 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/research_*.py",
             ],
             "exclude": [
+                *protected_files,
                 "backend/entity_ids.py",
                 "./backend/concurrency.py",
                 "backend/*_ids.py",

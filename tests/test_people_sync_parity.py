@@ -7,8 +7,9 @@ the People and their revision states are compared. Client-minted ids are
 the same on both sides, and inputs avoid the documented differences
 (``backend/pg_facade/people.py``): a revision state is not compared where a
 delete left a tombstone SQLite does not. ``CREATE_WORK``'s role filing composes with the
-Organization lane's folder filing, which is not ported yet; its PostgreSQL
-tests are in ``tests/pg/test_people_sync.py``.
+Organization lane's folder filing (``tests/test_folders_parity.py``); its
+PostgreSQL tests are in ``tests/pg/test_people_sync.py`` and
+``tests/pg/test_folders_sync.py``.
 """
 
 from __future__ import annotations

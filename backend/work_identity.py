@@ -158,15 +158,16 @@ def refresh_inferred_video_url(conn: sqlite3.Connection, work_id: str) -> None:
     stored = conn.execute(
         "SELECT source_url FROM legacy_inferred_video_urls WHERE work_id = ?", (work_id,)
     ).fetchone()
+    current_url = row[1] if row is not None else None
     wanted = row is not None and is_parseable_inferred_video(row[0], row[1], row[2])
-    if wanted and stored is not None and stored[0] == row[1]:
+    if wanted and stored is not None and stored[0] == current_url:
         return
     if stored is not None:
         conn.execute("DELETE FROM legacy_inferred_video_urls WHERE work_id = ?", (work_id,))
     if wanted:
         conn.execute(
             "INSERT INTO legacy_inferred_video_urls (work_id, source_url) VALUES (?, ?)",
-            (work_id, row[1]),
+            (work_id, current_url),
         )
 
 

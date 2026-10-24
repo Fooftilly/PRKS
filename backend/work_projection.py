@@ -176,6 +176,21 @@ def citation_target(conn: sqlite3.Connection, work_id: str) -> Optional[str]:
     return None if row is None else row[0]
 
 
+def citation_is_stream(conn: sqlite3.Connection, manifestation_id: str) -> bool:
+    """True when the Manifestation's primary Asset is an external stream: a video.
+
+    The Asset, not ``works.source_kind``: legacy rows keep a NULL or oddly
+    cased kind, and the Asset backfill already classified them by the
+    stored provider identity or a parsed video URL.
+    """
+    row = conn.execute(
+        "SELECT a.kind FROM manifestations m JOIN assets a "
+        "ON a.id = m.primary_asset_id AND a.manifestation_id = m.id WHERE m.id = ?",
+        (manifestation_id,),
+    ).fetchone()
+    return row is not None and row[0] == "external_stream"
+
+
 def citation_record(conn: sqlite3.Connection, manifestation_id: str) -> Optional[dict]:
     """Return a Work-shaped citation record for an explicit Manifestation."""
     m = conn.execute(

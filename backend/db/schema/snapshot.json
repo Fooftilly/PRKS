@@ -2628,6 +2628,7 @@
         "works_library_created": "CREATE INDEX works_library_created ON prks.works USING btree (library_id, created_at DESC, id)",
         "works_library_id_id_key": "CREATE UNIQUE INDEX works_library_id_id_key ON prks.works USING btree (library_id, id)",
         "works_library_last_opened": "CREATE INDEX works_library_last_opened ON prks.works USING btree (library_id, last_opened_at DESC, id) WHERE (last_opened_at IS NOT NULL)",
+        "works_library_title_md5": "CREATE INDEX works_library_title_md5 ON prks.works USING btree (library_id, md5(title))",
         "works_pkey": "CREATE UNIQUE INDEX works_pkey ON prks.works USING btree (id)",
         "works_primary_manifestation": "CREATE INDEX works_primary_manifestation ON prks.works USING btree (library_id, primary_manifestation_id, id)"
       }

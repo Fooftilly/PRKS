@@ -61,6 +61,10 @@ CREATE TABLE prks.works (
 CREATE INDEX works_library_created ON prks.works (library_id, created_at DESC, id);
 CREATE INDEX works_library_last_opened ON prks.works (library_id, last_opened_at DESC, id)
   WHERE last_opened_at IS NOT NULL;
+-- Wiki links find a Work by its exact title within its Library
+-- (backend/domain/works/wiki_links.py). The key is the title's digest: a title
+-- has no length bound and a B-tree entry does.
+CREATE INDEX works_library_title_md5 ON prks.works (library_id, md5(title));
 
 -- One citeable form of a Work (UI "Version"). NULL `title`/`abstract`
 -- inherit the Work's; an empty override is refused.
