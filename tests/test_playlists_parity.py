@@ -154,7 +154,14 @@ class PlaylistSyncParityTests(SyncParityTestCase):
         return playlist_id
 
     def same_catalog(self) -> None:
-        self.same_pair("get_all_playlists")
+        # Playlists created within the same second may tie on catalog order.
+        # Their generated IDs can then sort differently across databases.
+        # Compare the complete normalized rows without requiring an order.
+        mine, theirs = (
+            sorted(side.normal(side.db.get_all_playlists()), key=repr)
+            for side in self.sides()
+        )
+        self.assertEqual(mine, theirs, "get_all_playlists")
 
     def test_create_playlist(self) -> None:
         playlist_id = self.new_id("PL", "Course")
