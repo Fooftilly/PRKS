@@ -1,80 +1,109 @@
-"""Guard the mandatory full E2E workflow without changing local affected selection."""
+"""Regress CI E2E coverage for frontend-impacting PRs without overtesting docs."""
 
 from __future__ import annotations
 
-import re
+import io
+import json
+import os
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 from tests.e2e import policy
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW = REPO_ROOT / ".github/workflows/e2e-gate.yml"
+ROOT = Path(__file__).resolve().parents[1]
+WORKFLOW = ROOT / ".github/workflows/e2e-gate.yml"
 
 
-class MandatoryFullE2EWorkflowTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.source = WORKFLOW.read_text(encoding="utf-8")
-
-    def test_every_master_pr_triggers_without_path_filters(self):
-        self.assertRegex(
-            self.source, r"(?m)^  pull_request:\n    branches:\n      - master\s*$"
-        )
-        event = self.source.split("  pull_request:\n", 1)[1].split(
-            "\n  workflow_dispatch:", 1
-        )[0]
-        self.assertNotIn("paths:", event)
-        self.assertNotIn("paths-ignore:", event)
-
-    def test_required_ci_forces_full_regardless_of_diff(self):
-        plan_step = self.source.split("      - name: Decide E2E gate mode\n", 1)[1].split(
-            "\n  e2e:", 1
-        )[0]
-        self.assertIn('PRKS_E2E_CI_FORCE_FULL: "1"', plan_step)
-        self.assertIn('plan="$(python tests/e2e/run.py --ci-plan)"', plan_step)
-        self.assertNotIn("--ci-plan --base", plan_step)
-        self.assertNotIn("steps.base.outputs", plan_step)
-        self.assertNotRegex(plan_step, r"(?m)^\s+if: ")
-        self.assertIn('if mode != "full" or plan["run"] is not True:', plan_step)
-        self.assertIn('if plan["pointer_capture"] is not True:', plan_step)
-        self.assertIn('if include != ci_matrix_include(FULL_GATE_EXTERNAL_SHARDS, 1):', plan_step)
-
-    def test_full_plan_has_all_six_shards_and_pointer_for_all_pr_types(self):
-        # The existing local affected/skip planner remains useful. Required
-        # CI must force a full plan even for those normally skipped paths.
-        for paths in (
-            ["README.md"],
-            [".github/dependabot.yml"],
-            [".github/workflows/codeql.yml"],
-            ["frontend-app/package-lock.json"],
-            ["requirements-dev.txt"],
-            ["tests/test_e2e_policy.py"],
-            [],
+class FrontendCISelectionTests(unittest.TestCase):
+    def test_full_for_browser_source_and_frontend_build_dependencies(self):
+        for changed in (
+            "frontend/js/components/folders.js",
+            "frontend/js/app.js",
+            "frontend/sw.js",
+            "frontend/vue/BUILD-MANIFEST.json",
+            "frontend-app/src/features/works/WorkDetails.vue",
+            "frontend-app/package-lock.json",
+            "frontend-app/vite.config.ts",
+            "tools/frontend-vendor/package-lock.json",
+            "tools/research-graph/package-lock.json",
         ):
-            with self.subTest(paths=paths):
-                plan = policy.plan_ci_e2e(paths, force_full=True)
-                self.assertTrue(plan["run"])
-                self.assertEqual(plan["mode"], "full")
-                self.assertEqual(plan["features"], [])
-                self.assertTrue(plan["pointer_capture"])
-                self.assertEqual(
-                    policy.ci_matrix_include(plan["external_shards"], plan["local_jobs"]),
-                    policy.ci_matrix_include(policy.FULL_GATE_EXTERNAL_SHARDS, 1),
-                )
+            with self.subTest(changed=changed):
+                self.assertTrue(policy.frontend_browser_change_requires_full_ci([changed]))
 
-    def test_local_affected_selection_remains_available(self):
-        self.assertEqual(policy.plan_ci_e2e(["README.md"])["mode"], "skip")
+    def test_unrelated_and_maintainer_only_paths_do_not_force_full(self):
+        for changed in (
+            "README.md",
+            "docs/wiki/testing.md",
+            ".github/workflows/codeql.yml",
+            ".github/dependabot.yml",
+            "backend/db/schema/snapshot.json",
+            "requirements.txt",
+            "tests/test_e2e_policy.py",
+            "frontend/AGENTS.md",
+            "frontend/vue/THIRD_PARTY_LICENSES.md",
+            "frontend-app/.storybook/main.ts",
+            "frontend-app/src/features/works/WorkDetails.stories.ts",
+            "frontend-app/src/features/works/WorkDetails.test.ts",
+            "tools/pdf-viewer/package-lock.json",
+        ):
+            with self.subTest(changed=changed):
+                self.assertFalse(policy.frontend_browser_change_requires_full_ci([changed]))
+
+    def test_workflow_keeps_diff_selection_but_requests_full_for_frontend(self):
+        source = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn('PRKS_E2E_CI_FRONTEND_FULL: "1"', source)
+        self.assertIn('plan="$(python tests/e2e/run.py --ci-plan --base "$base")"', source)
+        self.assertIn('if [[ "${{ steps.base.outputs.force }}" == "1" ]]; then', source)
+        self.assertIn("needs: [e2e-plan, e2e, e2e-pointer]", source)
+
+    @staticmethod
+    def _plan(paths: list[str]) -> dict:
+        # The production workflow provides this flag only to its plan job.
+        from tests.e2e import run as runner
+
+        output = io.StringIO()
+        with mock.patch.dict(
+            os.environ,
+            {
+                "PRKS_E2E_CI_FRONTEND_FULL": "1",
+                "PRKS_E2E_CI_FORCE_FULL": "",
+                "PRKS_E2E": "1",
+            },
+        ):
+            with mock.patch.object(runner, "list_changed_paths", return_value=paths):
+                with redirect_stdout(output):
+                    result = runner.main(["--ci-plan", "--base", "origin/master"])
+        if result != 0:
+            raise AssertionError(f"CI planning failed: {result}")
+        return json.loads(output.getvalue().strip())
+
+    def test_frontend_feature_change_uses_all_six_shards_and_pointer(self):
+        # Previously this mapped feature was affected-only; CI now forces full.
+        plan = self._plan(["frontend/js/components/folders.js"])
+        self.assertEqual(plan["mode"], "full")
+        self.assertTrue(plan["run"])
+        self.assertTrue(plan["pointer_capture"])
+        self.assertEqual(
+            plan["matrix"]["include"],
+            policy.ci_matrix_include(policy.FULL_GATE_EXTERNAL_SHARDS, 1),
+        )
+        self.assertIn("frontend-affecting", plan["reason"])
+
+    def test_docs_and_unrelated_workflows_can_still_skip(self):
+        for changed in ("docs/wiki/testing.md", ".github/workflows/codeql.yml"):
+            with self.subTest(changed=changed):
+                plan = self._plan([changed])
+                self.assertEqual(plan["mode"], "skip")
+                self.assertFalse(plan["run"])
+
+    def test_same_change_without_ci_flag_still_uses_affected_mode(self):
         self.assertEqual(
             policy.plan_ci_e2e(["frontend/js/components/folders.js"])["mode"],
             "affected",
         )
-
-    def test_aggregate_still_requires_every_shard_and_pointer(self):
-        aggregator = self.source.split("\n  e2e-result:", 1)[1]
-        self.assertIn("needs: [e2e-plan, e2e, e2e-pointer]", aggregator)
-        self.assertIn("python tests/e2e/run.py --ci-aggregate", aggregator)
 
 
 if __name__ == "__main__":

@@ -54,40 +54,64 @@ jobs:
         # Chromium itself is not downloaded here.
         run: python scripts/ci/install_pinned_python.py plan
 
+      - name: Resolve comparison base
+        id: base
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+            echo "ref=origin/${{ github.base_ref }}" >> "$GITHUB_OUTPUT"
+            echo "force=0" >> "$GITHUB_OUTPUT"
+          else
+            # master push + workflow_dispatch always run the complete Full E2E suite.
+            echo "ref=" >> "$GITHUB_OUTPUT"
+            echo "force=1" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Decide E2E gate mode
         id: plan
         shell: bash
         env:
           PRKS_E2E: "1"
-          PRKS_E2E_CI_FORCE_FULL: "1"
+          # Full E2E for shipped frontend changes, not unrelated PRs.
+          PRKS_E2E_CI_FRONTEND_FULL: "1"
         run: |
           set -euo pipefail
-          # Every PR, master push and manual run exercises the complete suite.
-          # Keep affected selection available locally, never for required CI.
-          plan="$(python tests/e2e/run.py --ci-plan)"
+          if [[ "${{ steps.base.outputs.force }}" == "1" ]]; then
+            export PRKS_E2E_CI_FORCE_FULL=1
+            plan="$(python tests/e2e/run.py --ci-plan)"
+          else
+            base="${{ steps.base.outputs.ref }}"
+            plan="$(python tests/e2e/run.py --ci-plan --base "$base")"
+          fi
           echo "$plan"
           export PLAN_JSON="$plan"
           python <<'PY'
           import json
           import os
-          from tests.e2e.policy import FULL_GATE_EXTERNAL_SHARDS, ci_matrix_include
 
           plan = json.loads(os.environ["PLAN_JSON"])
-          required = ("run", "mode", "features", "reason", "pointer_capture", "matrix")
+          required = ("run", "mode", "features", "reason")
           missing = [k for k in required if k not in plan]
           if missing:
               raise SystemExit("malformed ci-plan missing keys: %s" % ", ".join(missing))
           mode = plan["mode"]
-          if mode != "full" or plan["run"] is not True:
-              raise SystemExit("required E2E CI must run the complete suite")
-          if plan["pointer_capture"] is not True:
-              raise SystemExit("required E2E CI must include pointer capture")
-          if plan["features"] != []:
-              raise SystemExit("full E2E CI must not select a feature subset")
+          if mode not in ("skip", "affected", "full"):
+              raise SystemExit("malformed ci-plan mode: %r" % mode)
+          if mode == "affected":
+              features = plan.get("features") or []
+              if not features:
+                  raise SystemExit("affected plan must list features (fail closed)")
+              count = plan.get("test_count")
+              if not count:
+                  raise SystemExit(
+                      "affected plan selected zero/unknown tests (fail closed)"
+                  )
           matrix = plan.get("matrix") or {}
           include = matrix.get("include") or []
-          if include != ci_matrix_include(FULL_GATE_EXTERNAL_SHARDS, 1):
-              raise SystemExit("required E2E CI must schedule every full-suite shard")
+          if plan.get("run") and mode != "skip" and not include:
+              raise SystemExit("runnable plan missing matrix.include (fail closed)")
           run = "true" if plan.get("run") else "false"
           pointer = "true" if plan.get("pointer_capture") else "false"
           features_json = json.dumps(list(plan.get("features") or []), separators=(",", ":"))
