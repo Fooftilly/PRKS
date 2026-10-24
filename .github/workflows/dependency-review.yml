@@ -47,3 +47,22 @@ jobs:
           warn-only: true
           license-check: false
           show-patched-versions: true
+
+  dependency-impact:
+    # Advisory summary only; never skips/overrides any required PRKS check.
+    name: Dependency impact summary (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout PR merge candidate and comparison base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Summarize affected dependency validation lanes
+        env:
+          PRKS_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python scripts/dependency_pr_report.py --base "$PRKS_BASE_SHA"
