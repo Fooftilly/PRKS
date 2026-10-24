@@ -33,7 +33,7 @@ class ImpactReportTests(unittest.TestCase):
 
     @patch("scripts.dependency_pr_report.subprocess.run")
     def test_git_diff_is_argv_not_shell(self, run) -> None:
-        run.return_value.stdout = b"requirements.txt\\0frontend-app/package.json\\0"
+        run.return_value.stdout = b"requirements.txt\0frontend-app/package.json\0"
         result = changed_paths("a" * 40)
         self.assertEqual(result, {"requirements.txt", "frontend-app/package.json"})
         self.assertEqual(run.call_args.args[0][:4], ["git", "diff", "--name-only", "-z"])
