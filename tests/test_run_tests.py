@@ -109,7 +109,7 @@ class TestRunTests(unittest.TestCase):
         self.assertIn("run_e2e_tests", src)
         self.assertIn("dependency_preflight", src)
         self.assertIn("run_unit_contract_gate", src)
-        self.assertIn("unit contract: openapi-core", src)
+        self.assertIn("unit contract: openapi-core + Hypothesis", src)
         self.assertIn("tests", src)
         self.assertIn("e2e", src)
         self.assertIn("run.py", src)
