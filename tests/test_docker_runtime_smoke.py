@@ -14,7 +14,7 @@ WORKFLOW = ROOT / ".github/workflows/docker-runtime-smoke.yml"
 
 class DockerRuntimeSmokeTests(unittest.TestCase):
     def test_response_parser_only_accepts_empty_json_list(self):
-        for valid in ("[]", " [ ]\\n"):
+        for valid in ("[]", " [ ]\n"):
             with self.subTest(valid=valid):
                 self.assertTrue(valid_initial_works_catalog(valid))
         for invalid in (
@@ -43,8 +43,8 @@ class DockerRuntimeSmokeTests(unittest.TestCase):
 
     def test_workflow_is_nonrequired_and_narrowly_triggered(self):
         source = WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("  pull_request:\\n    paths:\\n", source)
-        self.assertIn("  push:\\n    branches:\\n      - master\\n    paths:\\n", source)
+        self.assertIn("  pull_request:\n    paths:\n", source)
+        self.assertIn("  push:\n    branches:\n      - master\n    paths:\n", source)
         self.assertIn("  workflow_dispatch:", source)
         self.assertIn("      - requirements.txt", source)
         self.assertIn("      - Dockerfile", source)
