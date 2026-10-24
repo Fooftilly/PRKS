@@ -63,7 +63,7 @@ def parse_mode(argv=None):
 def dependency_preflight(project_dir: str, mode: str) -> int:
     """Fail before the suite when accepted dependency pins diverge.
 
-    unit/all: repo consistency + runtime Python pins + openapi-core
+    unit/all: repo consistency + runtime Python pins + openapi-core + Hypothesis
     (unit-contract; no Playwright required).
     e2e: runtime + Playwright pins (and other requirements-dev pins).
     """
@@ -86,7 +86,7 @@ def dependency_preflight(project_dir: str, mode: str) -> int:
         if not runtime_result.ok:
             print(format_gate_report(runtime_result), file=sys.stderr)
             return 1
-        print("Dependency preflight (unit contract: openapi-core)...")
+        print("Dependency preflight (unit contract: openapi-core + Hypothesis)...")
         contract_result = run_unit_contract_gate(repo_root=root)
         if not contract_result.ok:
             print(format_gate_report(contract_result), file=sys.stderr)
