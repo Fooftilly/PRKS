@@ -98,11 +98,18 @@ describe('fast-check workspace invariant pilot', () => {
           for (const index of removals) {
             const removed = all[index % all.length]
             expected.delete(removed)
-            tree = normalizeTree(removeLeaf(tree, removed))
-            expect(validateTree(tree).errors).toEqual([])
+            const removedTree = removeLeaf(tree, removed)
+            // Validate *before* normalization; it must not conceal a broken
+            // collapse in removeLeaf (e.g. a split with a missing child).
+            expect(validateTree(removedTree).errors).toEqual([])
+            tree = normalizeTree(removedTree)
             expect(collectLeafTabIds(tree).sort()).toEqual([...expected].sort())
           }
-          for (const remaining of expected) tree = normalizeTree(removeLeaf(tree, remaining))
+          for (const remaining of expected) {
+            const removedTree = removeLeaf(tree, remaining)
+            expect(validateTree(removedTree).errors).toEqual([])
+            tree = normalizeTree(removedTree)
+          }
           expect(tree).toBeNull()
         },
       ),
