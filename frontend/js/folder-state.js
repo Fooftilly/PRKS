@@ -904,7 +904,9 @@
             return data.code === 'ACKNOWLEDGED' && typeof data.changed === 'boolean' &&
                 !!data.folder && data.folder.id === data.folder_id;
         },
-        terminal: data => ({ conflict: { code: data.code } }),
+        // A refused creation cannot be reapplied; its dependent filings
+        // must also become visible conflicts instead of waiting forever.
+        terminal: data => ({ conflict: { code: data.code }, failDependents: true }),
         reconcile: data => root.prksOfflineReconcileCreatedFolder(data),
     };
 
