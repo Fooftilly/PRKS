@@ -1,0 +1,112 @@
+name: Docker runtime startup smoke
+
+# Non-required, dependency/runtime-scoped production image test (#339).
+# The repository's required PR checks remain unchanged.
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - docker-entrypoint.sh
+      - docker-compose.yml
+      - requirements.txt
+      - dependency-inventory.json
+      - backend/dependency_gate.py
+      - backend/storage/config.py
+      - backend/storage/resolver.py
+      - backend/storage/root_binding.py
+      - prks_app.py
+      - .github/workflows/docker-runtime-smoke.yml
+  push:
+    branches:
+      - master
+    paths:
+      - Dockerfile
+      - docker-entrypoint.sh
+      - docker-compose.yml
+      - requirements.txt
+      - dependency-inventory.json
+      - backend/dependency_gate.py
+      - backend/storage/config.py
+      - backend/storage/resolver.py
+      - backend/storage/root_binding.py
+      - prks_app.py
+      - .github/workflows/docker-runtime-smoke.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-runtime-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runtime:
+    name: Docker runtime startup and API smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build production runtime image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --tag prks-ci-runtime-smoke:latest .
+
+      - name: Start production image and validate application API
+        shell: bash
+        run: |
+          set -euo pipefail
+          container="prks-runtime-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          response="$(mktemp)"
+          html="$(mktemp)"
+          cleanup() {
+            rc=$?
+            if [[ "$rc" -ne 0 ]]; then
+              echo "::error::Production runtime startup / API smoke failed (exit ${rc})."
+              docker logs --tail 120 "$container" 2>&1 || true
+              docker inspect --format 'Container status: {{.State.Status}}; exit code: {{.State.ExitCode}}' "$container" 2>&1 || true
+            fi
+            docker rm -f "$container" >/dev/null 2>&1 || true
+            rm -f "$response" "$html"
+          }
+          trap cleanup EXIT
+
+          # Volatile isolated data; no host-mounted database or persistent secrets.
+          # Publish only to loopback on the isolated GitHub-hosted runner.
+          docker run -d --name "$container" --publish 127.0.0.1:18080:8080 \
+            --tmpfs /data:rw,size=128m --env PRKS_STORAGE=/data \
+            prks-ci-runtime-smoke:latest
+
+          ready=0
+          for attempt in $(seq 1 60); do
+            if ! docker inspect --format '{{.State.Running}}' "$container" | grep -qx true; then
+              echo "::error::Production container exited before API readiness."
+              exit 1
+            fi
+            if curl --silent --show-error --fail --max-time 2 \
+              --output "$response" http://127.0.0.1:18080/api/works 2>/dev/null; then
+              # Fresh temporary production storage must expose an empty works
+              # catalogue. A static page or error JSON is NOT sufficient.
+              python -c 'import json,sys; body=json.load(open(sys.argv[1],encoding="utf-8")); assert body == [], "fresh works catalog is not empty"' "$response"
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$ready" -ne 1 ]]; then
+            echo "::error::Production API did not become ready in 60 attempts."
+            exit 1
+          fi
+
+          # Verify the real production server also serves generated frontend,
+          # rather than passing from an unrelated container or static mock.
+          curl --fail --silent --show-error --max-time 5 \
+            --output "$html" http://127.0.0.1:18080/index.html
+          grep -q 'prks-classic-head.bundle.js' "$html"
+          grep -q 'prks-classic-body.bundle.js' "$html"
+          echo "Production Docker startup, works API and packaged browser shell: PASS"
