@@ -7,6 +7,7 @@
 import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
 import { validateWorkspace } from './invariants'
+import { workspaceSnapshot } from './snapshot'
 import { planReorder } from './transitions'
 import {
   collectLeafTabIds,
@@ -58,6 +59,13 @@ function tab(number: number): WorkspaceTab {
   const id = asTabId('tab-' + number)
   const route = '#/works/W-' + number
   return { id, route, title: 'Work ' + number, icon: 'file', history: [route], historyIndex: 0 }
+}
+
+/** Every tree node must be copied, not only the root. */
+function treeReferences(node: WorkspacePaneNode | null): object[] {
+  if (!node) return []
+  if (node.type === 'leaf') return [node]
+  return [node, ...treeReferences(node.first), ...treeReferences(node.second)]
 }
 
 describe('fast-check workspace invariant pilot', () => {
@@ -179,4 +187,61 @@ describe('fast-check workspace invariant pilot', () => {
       LIMIT,
     )
   })
+  it('snapshots detach tab histories and every Secondary tree node', () => {
+    fc.assert(
+      fc.property(
+        distinctIds,
+        fc.array(fc.string({ maxLength: 20 }), { minLength: 1, maxLength: 4 }),
+        fc.boolean(),
+        (numbers, extraHistory, tiled) => {
+          const tabs = numbers.map((number) => {
+            const item = tab(number)
+            return { ...item, history: [item.route, ...extraHistory], historyIndex: 0 }
+          })
+          const tree = buildTree(numbers.slice(1, 4), idsFactory())
+          const original: WorkspaceState = {
+            version: 1,
+            mode: tiled ? 'tiled' : 'stacked',
+            tabs,
+            mainTabId: tabs[0].id,
+            focusedTabId: tiled ? tabs[1].id : tabs[0].id,
+            secondaryTree: tree,
+            mainSplitRatio: 0.58,
+          }
+          expect(validateWorkspace(original).errors).toEqual([])
+          const originalJson = JSON.stringify(original)
+          const copy = workspaceSnapshot(original)
+          expect(copy).toEqual(original)
+          expect(copy).not.toBe(original)
+          expect(copy.tabs).not.toBe(original.tabs)
+          for (let i = 0; i < tabs.length; i++) {
+            expect(copy.tabs[i]).not.toBe(original.tabs[i])
+            expect(copy.tabs[i].history).not.toBe(original.tabs[i].history)
+          }
+          const originalNodes = new Set(treeReferences(original.secondaryTree))
+          const copiedNodes = treeReferences(copy.secondaryTree)
+          expect(copiedNodes).toHaveLength(originalNodes.size)
+          for (const node of copiedNodes) expect(originalNodes.has(node)).toBe(false)
+
+          // Repeated snapshots preserve canonical values without sharing state.
+          const again = workspaceSnapshot(copy)
+          expect(again).toEqual(original)
+          expect(again.tabs[0].history).not.toBe(copy.tabs[0].history)
+          expect(again.secondaryTree).not.toBe(copy.secondaryTree)
+
+          // Mutating the exported snapshot must not affect the live workspace.
+          ;(copy.tabs[0].history as string[]).push('#/detached-snapshot')
+          if (copy.secondaryTree?.type === 'split') {
+            (copy.secondaryTree as { ratio: number }).ratio = 0.123
+          } else if (copy.secondaryTree?.type === 'leaf') {
+            (copy.secondaryTree as { tabId: string }).tabId = 'tab-detached-snapshot'
+          }
+          expect(JSON.stringify(original)).toBe(originalJson)
+          expect(workspaceSnapshot(original)).toEqual(original)
+        },
+      ),
+      LIMIT,
+    )
+  })
+
 })
