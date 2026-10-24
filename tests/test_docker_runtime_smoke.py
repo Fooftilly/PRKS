@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import tempfile
+import io
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from scripts.ci.check_runtime_smoke import main, valid_initial_works_catalog
 
@@ -32,14 +33,17 @@ class DockerRuntimeSmokeTests(unittest.TestCase):
                 self.assertFalse(valid_initial_works_catalog(invalid))
 
     def test_response_cli_is_fail_closed(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "response.json"
-            path.write_text("[]", encoding="utf-8")
-            self.assertEqual(main([str(path)]), 0)
-            path.write_text('{"error": "database not ready"}', encoding="utf-8")
-            self.assertEqual(main([str(path)]), 1)
-            self.assertEqual(main([str(path) + "-missing"]), 1)
-            self.assertEqual(main([]), 2)
+        for body, expected in (
+            ("[]", 0),
+            ('{"error": "database not ready"}', 1),
+            ("<html>not an API</html>", 1),
+            ("x" * 65537, 1),
+        ):
+            with self.subTest(body=body[:40]):
+                with mock.patch("sys.stdin", io.StringIO(body)):
+                    self.assertEqual(main([]), expected)
+        # Caller-supplied file paths and other arguments are not supported.
+        self.assertEqual(main(["/etc/passwd"]), 2)
 
     def test_workflow_is_nonrequired_and_narrowly_triggered(self):
         source = WORKFLOW.read_text(encoding="utf-8")
@@ -61,7 +65,7 @@ class DockerRuntimeSmokeTests(unittest.TestCase):
             "--tmpfs /data:rw,size=128m",
             "--env PRKS_STORAGE=/data",
             "http://127.0.0.1:18080/api/works",
-            'python scripts/ci/check_runtime_smoke.py "$response"',
+            'python scripts/ci/check_runtime_smoke.py < "$response"',
             "http://127.0.0.1:18080/index.html",
             "prks-classic-head.bundle.js",
             "prks-classic-body.bundle.js",
