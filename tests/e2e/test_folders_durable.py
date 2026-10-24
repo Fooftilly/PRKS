@@ -187,6 +187,16 @@ class DurableFolderTests(unittest.TestCase):
             const btn = document.getElementById('save-folder-btn');
             return [btn.disabled, btn.getAttribute('aria-busy'), btn.textContent.trim()];
         }"""), [True, 'true', 'Creating…'])
+        # Validation may fire while the save is pending; it must not reenable Save.
+        page.evaluate("""() => {
+            const title = document.getElementById('folder-title');
+            title.value = 'Opening A renamed';
+            title.dispatchEvent(new Event('input', { bubbles: true }));
+        }""")
+        self.assertEqual(page.evaluate("""() => {
+            const btn = document.getElementById('save-folder-btn');
+            return [btn.disabled, btn.getAttribute('aria-busy'), btn.textContent.trim()];
+        }"""), [True, 'true', 'Creating…'])
         page.evaluate("""() => {
             // Reopen the same DOM modal while old creation remains in-flight.
             closeModals();
