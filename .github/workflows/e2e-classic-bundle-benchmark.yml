@@ -44,10 +44,7 @@ jobs:
             playwright-${{ runner.os }}-
 
       - name: Install runtime and E2E dependencies
-        run: >-
-          python -m pip install --isolated --disable-pip-version-check
-          "--only-binary=:all:" "PyMuPDF==1.28.2" "Pillow==12.3.0" "pydantic==2.13.5"
-          "playwright==1.63.0"
+        run: python scripts/ci/install_pinned_python.py e2e
 
       - name: Ensure Chromium in repo cache
         run: python tests/e2e/install_browser.py
