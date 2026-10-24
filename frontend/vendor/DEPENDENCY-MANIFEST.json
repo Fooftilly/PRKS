@@ -87,11 +87,11 @@
       "runtime_files": [
         {
           "path": "/vendor/lucide/lucide.min.js",
-          "sha256": "c3291ea757ff3da0fc45a41d3ff60d61da9b257314962c5cdded94ca0df05d7a"
+          "sha256": "89520d7fe5af181b5d32ecee6a41e5c2c01a45540536c322f4970626b7267633"
         }
       ],
       "source_category": "npm:tools/frontend-vendor",
-      "version": "1.47.0"
+      "version": "1.59.0"
     },
     {
       "name": "prks-editor-recovery",
