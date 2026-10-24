@@ -376,6 +376,7 @@ AFFECTED_RULES = (
             "tests/e2e/sharding.py",
             "tests/e2e/policy.py",
             "tests/e2e/install_browser.py",
+            "scripts/ci/install_pinned_python.py",
             "tests/e2e/fixtures.py",
             "tests/e2e/timing-baseline.json",
             "tests/e2e/__init__.py",
