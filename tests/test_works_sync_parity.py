@@ -7,8 +7,9 @@ the Works and their revision state are compared. The ledger rules shared by
 every family (replay, ``OP_ID_REUSE``, dependencies, validation before the
 ledger) are covered here too, through the Works operations.
 
-``CREATE_WORK`` files the Work in a folder, which is not ported yet; its
-PostgreSQL tests are in ``tests/pg/test_works_sync.py``.
+``CREATE_WORK`` files the Work in a folder: its parity tests are in
+``tests/test_folders_parity.py`` and its PostgreSQL tests in
+``tests/pg/test_works_sync.py`` and ``tests/pg/test_folders_sync.py``.
 """
 
 from __future__ import annotations

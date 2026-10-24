@@ -47,7 +47,7 @@ Conservative list of the installed lockfile production graph (which includes som
 | `postcss` | `8.5.28` | `MIT` |
 | `raf-schd` | `4.0.3` | `MIT` |
 | `remove-accents` | `0.5.0` | `MIT` |
-| `source-map-js` | `1.2.1` | `BSD-3-Clause` |
+| `source-map-js` | `1.2.2` | `BSD-3-Clause` |
 | `typescript` | `5.9.2` | `Apache-2.0` |
 | `vue` | `3.5.43` | `MIT` |
 | `vue-demi` | `0.14.10` | `MIT` |

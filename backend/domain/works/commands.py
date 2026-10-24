@@ -25,8 +25,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import LiteralString, Optional
 
-from backend import work_metadata_sync, work_note_sync, work_source_sync
+from backend import folder_sync, playlist_sync, work_metadata_sync, work_note_sync, work_source_sync
 from backend.domain.identity.library_scope import LibraryScope
+from backend.domain.organization import folders, playlists
 from backend.domain.people import roles
 from backend.domain.works import metadata, revisions
 
@@ -123,7 +124,7 @@ _INSERT_WORK_IF_ABSENT: LiteralString = """
 INSERT INTO prks.works (library_id, id, title, abstract, status, author_text, primary_manifestation_id)
 VALUES (%(library_id)s, %(work_id)s, %(title)s, %(abstract)s, %(status)s, %(author_text)s,
         %(manifestation_id)s)
-ON CONFLICT (id) DO NOTHING
+ON CONFLICT DO NOTHING
 RETURNING id
 """
 
@@ -135,7 +136,9 @@ def create_work(scope: LibraryScope, new: NewWork, *, if_absent: bool = False) -
     with that id already exists nothing is inserted and None is returned.
     A Work a concurrent transaction committed is not visible to this
     SERIALIZABLE one, so PostgreSQL refuses the insert as a serialization
-    failure, and the retry sees the Work.
+    failure, and the retry sees the Work. Every unique index arbitrates
+    (no conflict target): with ``(id)`` alone, a race lost on
+    ``works_library_id_id_key`` raised a unique violation instead.
     """
     if (new.asset is None) != (new.asset_id is None):
         raise ValueError("an Asset needs an id, and an id needs an Asset")
@@ -261,7 +264,7 @@ class DeletedWork:
 
 
 def work_scopes(work_id: str) -> list[tuple[str, str]]:
-    """Every fixed revision scope of a Work: each synchronized field, the source, both notes.
+    """Every fixed revision scope of a Work: each synchronized field, the source, both notes, its Folder, its Playlist.
 
     Pair scopes (a Work's roles) are open-ended, so a delete tombstones the
     ones the Work ever held (``tombstone_work_scopes``), as a Person delete
@@ -272,16 +275,20 @@ def work_scopes(work_id: str) -> list[tuple[str, str]]:
     return [*fields,
             (work_source_sync.SCOPE_TYPE, work_source_sync.scope_key(work_id)),
             (work_note_sync.RESEARCH_SCOPE_TYPE, work_id),
-            (work_note_sync.PRIVATE_SCOPE_TYPE, work_id)]
+            (work_note_sync.PRIVATE_SCOPE_TYPE, work_id),
+            (folder_sync.WORK_SCOPE_TYPE, work_id),
+            (playlist_sync.WORK_SCOPE_TYPE, work_id)]
 
 
 def delete_work(scope: LibraryScope, work_id: str) -> Optional[DeletedWork]:
     """Delete a Work and everything it owns; None when there is no such Work.
 
-    The Work row is locked first (the order every Works command uses), its
-    roles (``roles.drop_work_roles``, which tombstones their Manifestation
-    scopes), notes, Assets, Manifestations and the Work are deleted level by
-    level (relations and identifiers go with their Manifestation), and every
+    The Work row is locked first (the order every Works command uses), the
+    Work leaves its Folder and its Playlist (``folders.release_work``,
+    ``playlists.release_work``, which advances the Playlist's order), its roles
+    (``roles.drop_work_roles``, which tombstones their Manifestation scopes),
+    notes, Assets, Manifestations and the Work are deleted level by level
+    (relations and identifiers go with their Manifestation), and every
     revision scope of the Work is tombstoned (§5.2): each one this Work ever
     advanced, and every fixed scope (``work_scopes``) even if never edited, so
     a base taken before the delete is stale on a Work recreated under the id.
@@ -296,6 +303,11 @@ def delete_work(scope: LibraryScope, work_id: str) -> Optional[DeletedWork]:
     if row is None:
         return None
     locator = row["storage_locator"] if row["asset_kind"] == "managed_file" else None
+    # Filing is construction (no `work-folder` or `work-playlist` row need
+    # exist), so the Folder and Playlist rows go here and the scopes are
+    # tombstoned with the fixed ones below.
+    folders.release_work(scope, work_id)
+    playlists.release_work(scope, work_id)
     # Roles first: a Manifestation-scoped role holds its Manifestation (§5.2).
     roles.drop_work_roles(scope, work_id)
     for statement in _DELETE_WORK_LEVELS:

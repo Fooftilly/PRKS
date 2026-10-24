@@ -2,6 +2,7 @@ import sqlite3
 import os
 import posixpath
 import re
+import unicodedata
 import uuid
 import json
 import hashlib
@@ -12,7 +13,7 @@ from contextlib import contextmanager
 from urllib.parse import unquote, urlparse
 from datetime import datetime
 from dataclasses import dataclass
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Callable, Dict, Iterator, List, Any, Optional, Tuple
 from pathlib import Path
 from backend import (folder_sync, folder_tag_sync, person_group_sync, person_metadata_sync,
                      person_sync, playlist_sync, tag_sync, work_metadata_sync, work_open_sync,
@@ -90,6 +91,91 @@ class BulkWorkError(ValueError):
     def __init__(self, message: str, http_status: int = 400):
         super().__init__(message)
         self.http_status = http_status
+
+
+BULK_WORKS_MISSING = "One or more selected files no longer exist."
+BULK_FOLDER_MISSING = "Folder not found."
+BULK_TAGS_MISSING = "One or more selected tags no longer exist."
+
+
+@dataclass(frozen=True)
+class BulkWorkRequest:
+    """A validated ``POST /api/works/bulk`` body: ids stripped, deduplicated, in request order."""
+
+    action: str
+    work_ids: List[str]
+    status: Optional[str] = None
+    folder_id: Optional[str] = None  # None or "" clears the Folder (move_folder only)
+    tag_ids: Tuple[str, ...] = ()
+
+    def result(self) -> Dict[str, Any]:
+        return {
+            "status": "updated",
+            "action": self.action,
+            "requested": len(self.work_ids),
+            "updated": len(self.work_ids),
+            "target_count": len(self.tag_ids) if self.tag_ids else 1,
+        }
+
+
+def _normalize_bulk_ids(raw, *, kind: str) -> List[str]:
+    if not isinstance(raw, list):
+        raise BulkWorkError(f"{kind}_ids must be a JSON array.")
+    if not raw:
+        raise BulkWorkError("No files selected." if kind == "work" else "No tags selected.")
+    if len(raw) > PRKS_BULK_WORK_MAX:
+        raise BulkWorkError(
+            "Too many files selected." if kind == "work" else "Too many tags selected."
+        )
+    out: List[str] = []
+    seen = set()
+    for item in raw:
+        if not isinstance(item, str):
+            raise BulkWorkError(f"{kind} IDs must be strings.")
+        nid = item.strip()
+        if not nid:
+            raise BulkWorkError(f"{kind} IDs must be non-empty.")
+        if nid in seen:
+            continue
+        seen.add(nid)
+        out.append(nid)
+    if not out:
+        raise BulkWorkError("No files selected." if kind == "work" else "No tags selected.")
+    return out
+
+
+def parse_bulk_work_request(data: Any) -> BulkWorkRequest:
+    """Validate a bulk body before any database is touched (both backends).
+
+    Raises ``BulkWorkError`` (400) with the message the API returns.
+    """
+    if not isinstance(data, dict):
+        raise BulkWorkError("JSON object body required")
+    action = data.get("action")
+    if not isinstance(action, str) or action not in PRKS_BULK_WORK_ACTIONS:
+        raise BulkWorkError("Unknown bulk action.")
+    work_ids = _normalize_bulk_ids(data.get("work_ids"), kind="work")
+
+    if action == "set_status":
+        raw_status = data.get("status")
+        if not isinstance(raw_status, str) or \
+                not work_metadata_sync.is_valid_field_value("status", raw_status):
+            raise BulkWorkError("Invalid status.")
+        return BulkWorkRequest(action, work_ids, status=raw_status)
+    if action == "move_folder":
+        if "folder_id" not in data:
+            raise BulkWorkError("folder_id is required.")
+        raw_folder = data.get("folder_id")
+        if raw_folder is None:
+            return BulkWorkRequest(action, work_ids, folder_id=None)
+        if not isinstance(raw_folder, str):
+            raise BulkWorkError("folder_id must be a string or null.")
+        stripped = raw_folder.strip()
+        if not stripped:
+            raise BulkWorkError("folder_id is invalid.")
+        return BulkWorkRequest(action, work_ids, folder_id=stripped)
+    tag_ids = _normalize_bulk_ids(data.get("tag_ids"), kind="tag")
+    return BulkWorkRequest(action, work_ids, tag_ids=tuple(tag_ids))
 
 
 class SavedViewError(ValueError):
@@ -436,6 +522,80 @@ def _prks_fts_prefix_clause(tokens: List[str]) -> str:
             continue
         parts.append(f'"{safe}"*')
     return " ".join(parts)
+
+
+# Characters a BibTeX entry key may keep: Unicode word characters, "-", "."
+# and ":". Everything else either ends the key or is read as entry structure.
+_CITE_KEY_UNSAFE_RE = re.compile(r"[^\w\-.:]")
+
+
+def wiki_link_spans(text: str) -> Iterator[Tuple[int, int, str]]:
+    r"""``(start, end, inner)`` of each ``[[inner]]``, left to right.
+
+    Exactly the matches of ``re.finditer(r'\[\[(.*?)\]\]', text)``: a marker
+    opens at the first ``[[``, closes at the first ``]]`` after it, and holds
+    no newline. That pattern retries from every ``[[`` it cannot close, so a
+    note of many unclosed ``[[`` took quadratic time on every Work detail
+    read; this scan finds the same spans in one pass.
+    """
+    pos = 0
+    close = -1
+    while True:
+        start = text.find("[[", pos)
+        if start < 0:
+            return
+        if close < start + 2:
+            close = text.find("]]", start + 2)
+            if close < 0:
+                return
+        newline = text.find("\n", start + 2, close)
+        if newline >= 0:
+            # No ``[[`` before this newline closes either.
+            pos = newline + 1
+            continue
+        yield start, close + 2, text[start + 2:close]
+        pos = close + 2
+
+
+def render_wiki_links(
+    text: str,
+    resolve: Callable[[List[str]], Dict[str, Tuple[str, Any, Any]]],
+) -> str:
+    """``text`` with each ``[[target]]`` rendered as a link or an unresolved marker.
+
+    Shared by both backends. ``resolve`` maps the distinct, trimmed targets
+    (in first-occurrence order) to ``(kind, id, name)`` for those it found,
+    ``kind`` being ``"works"`` or ``"people"``; it is not called when the
+    text has no marker. Each distinct target is looked up once, so the cost
+    follows the number of different targets, not of markers.
+    """
+    if not text:
+        return ""
+    spans = list(wiki_link_spans(text))
+    targets = list(dict.fromkeys(inner.strip() for _, _, inner in spans))
+    if not targets:
+        return text
+    resolved = resolve(targets)
+
+    def replacement(inner: str) -> str:
+        raw = inner.strip()
+        hit = resolved.get(raw)
+        if hit:
+            kind, target_id, name = hit
+            safe_name = html.escape(str(name or ""), quote=True)
+            safe_id = html.escape(str(target_id or ""), quote=True)
+            return f'<a href="#/{kind}/{safe_id}" class="wiki-link" style="color:var(--accent); text-decoration:none;">{safe_name}</a>'
+        safe_raw = html.escape(raw, quote=True)
+        return f'<span class="wiki-link-unresolved" style="color:#ef4444;">[[{safe_raw}]]</span>'
+
+    out: List[str] = []
+    last = 0
+    for start, end, inner in spans:
+        out.append(text[last:start])
+        out.append(replacement(inner))
+        last = end
+    out.append(text[last:])
+    return "".join(out)
 
 
 # The source kinds a Work may be created with. `source_kind` is not free text:
@@ -3663,26 +3823,11 @@ class PRKSDatabase:
         return resolved
 
     def resolve_wiki_links(self, text: str) -> str:
-        if not text: return ""
-        pattern = re.compile(r'\[\[(.*?)\]\]')
-        # Resolve each distinct target once, then replace from the map: the
-        # cost follows the number of different targets, not of markers.
-        targets = list(dict.fromkeys(m.group(1).strip() for m in pattern.finditer(text)))
-        if not targets:
-            return text
-        resolved = self._resolve_wiki_link_targets(targets)
+        def resolve(targets: List[str]) -> Dict[str, Tuple[str, Any, Any]]:
+            return {target: (kind, row["id"], row["name"])
+                    for target, (kind, row) in self._resolve_wiki_link_targets(targets).items()}
 
-        def replacer(match):
-            raw = match.group(1).strip()
-            hit = resolved.get(raw)
-            if hit:
-                kind, row = hit
-                safe_name = html.escape(str(row["name"] or ""), quote=True)
-                safe_id = html.escape(str(row["id"] or ""), quote=True)
-                return f'<a href="#/{kind}/{safe_id}" class="wiki-link" style="color:var(--accent); text-decoration:none;">{safe_name}</a>'
-            safe_raw = html.escape(raw, quote=True)
-            return f'<span class="wiki-link-unresolved" style="color:#ef4444;">[[{safe_raw}]]</span>'
-        return pattern.sub(replacer, text)
+        return render_wiki_links(text, resolve)
 
     # --- Folders ---
     def _folder_descendant_ids(self, folder_id: str) -> set:
@@ -3953,31 +4098,6 @@ class PRKSDatabase:
             folder_sync.set_work_folder_on_conn(
                 conn, wid, "" if folder_id is None else str(folder_id))
 
-    def _normalize_bulk_ids(self, raw, *, kind: str) -> List[str]:
-        if not isinstance(raw, list):
-            raise BulkWorkError(f"{kind}_ids must be a JSON array.")
-        if not raw:
-            raise BulkWorkError("No files selected." if kind == "work" else "No tags selected.")
-        if len(raw) > PRKS_BULK_WORK_MAX:
-            raise BulkWorkError(
-                "Too many files selected." if kind == "work" else "Too many tags selected."
-            )
-        out: List[str] = []
-        seen = set()
-        for item in raw:
-            if not isinstance(item, str):
-                raise BulkWorkError(f"{kind} IDs must be strings.")
-            nid = item.strip()
-            if not nid:
-                raise BulkWorkError(f"{kind} IDs must be non-empty.")
-            if nid in seen:
-                continue
-            seen.add(nid)
-            out.append(nid)
-        if not out:
-            raise BulkWorkError("No files selected." if kind == "work" else "No tags selected.")
-        return out
-
     def _bulk_ids_exist(self, conn, table: str, ids: List[str]) -> bool:
         placeholders = ",".join("?" for _ in ids)
         rows = conn.execute(
@@ -3993,80 +4113,44 @@ class PRKSDatabase:
         ``updated`` is the number of selected works processed, not relationship
         rows inserted or deleted. Tag add/remove are idempotent.
         """
-        if not isinstance(data, dict):
-            raise BulkWorkError("JSON object body required")
-        action = data.get("action")
-        if not isinstance(action, str) or action not in PRKS_BULK_WORK_ACTIONS:
-            raise BulkWorkError("Unknown bulk action.")
-        work_ids = self._normalize_bulk_ids(data.get("work_ids"), kind="work")
-
-        status: Optional[str] = None
-        folder_id: Optional[str] = None
-        tag_ids: List[str] = []
-        target_count = 1
-
-        if action == "set_status":
-            raw_status = data.get("status")
-            if not isinstance(raw_status, str) or \
-                    not work_metadata_sync.is_valid_field_value("status", raw_status):
-                raise BulkWorkError("Invalid status.")
-            status = raw_status
-        elif action == "move_folder":
-            if "folder_id" not in data:
-                raise BulkWorkError("folder_id is required.")
-            raw_folder = data.get("folder_id")
-            if raw_folder is None:
-                folder_id = None
-            elif isinstance(raw_folder, str):
-                stripped = raw_folder.strip()
-                if not stripped:
-                    raise BulkWorkError("folder_id is invalid.")
-                folder_id = stripped
-            else:
-                raise BulkWorkError("folder_id must be a string or null.")
-        else:
-            tag_ids = self._normalize_bulk_ids(data.get("tag_ids"), kind="tag")
-            target_count = len(tag_ids)
+        request = parse_bulk_work_request(data)
+        action, work_ids = request.action, request.work_ids
 
         conn = self.get_connection()
         try:
             conn.isolation_level = None
             conn.execute("BEGIN IMMEDIATE")
             if not self._bulk_ids_exist(conn, "works", work_ids):
-                raise BulkWorkError("One or more selected files no longer exist.", 404)
-            if action == "move_folder" and folder_id:
-                row = conn.execute("SELECT id FROM folders WHERE id = ?", (folder_id,)).fetchone()
+                raise BulkWorkError(BULK_WORKS_MISSING, 404)
+            if action == "move_folder" and request.folder_id:
+                row = conn.execute("SELECT id FROM folders WHERE id = ?", (request.folder_id,)).fetchone()
                 if not row:
-                    raise BulkWorkError("Folder not found.", 404)
+                    raise BulkWorkError(BULK_FOLDER_MISSING, 404)
             if action in ("add_tags", "remove_tags"):
-                if not self._bulk_ids_exist(conn, "tags", tag_ids):
-                    raise BulkWorkError("One or more selected tags no longer exist.", 404)
+                if not self._bulk_ids_exist(conn, "tags", request.tag_ids):
+                    raise BulkWorkError(BULK_TAGS_MISSING, 404)
 
             if action == "set_status":
                 # The SAME revision-aware boundary PATCH and the sync handler
-                # use, inside this transaction -- exactly like the Tag branch
-                # below. A bulk action that wrote the column directly would
-                # change the value while leaving the revision where it was, so
-                # a device holding the pre-bulk Status would reconnect,
-                # compare equal revisions, believe itself current and
-                # overwrite the newer value. Revisions record CANONICAL
+                # use, inside this transaction -- exactly like the Folder and
+                # Tag branches below. A bulk action that wrote the column
+                # directly would change the value while leaving the revision
+                # where it was, so a device holding the pre-bulk Status would
+                # reconnect, compare equal revisions, believe itself current
+                # and overwrite the newer value. Revisions record CANONICAL
                 # history; there is no such thing as a mutation path exempt
                 # from it. Only Works whose Status actually changes advance.
                 for wid in work_ids:
-                    work_metadata_sync.set_field_on_conn(conn, wid, "status", status)
+                    work_metadata_sync.set_field_on_conn(conn, wid, "status", request.status)
             elif action == "move_folder":
-                conn.executemany(
-                    "DELETE FROM folder_files WHERE work_id = ?",
-                    [(wid,) for wid in work_ids],
-                )
-                if folder_id:
-                    conn.executemany(
-                        "INSERT INTO folder_files (folder_id, work_id) VALUES (?, ?)",
-                        [(folder_id, wid) for wid in work_ids],
-                    )
+                # SET_WORK_FOLDER's boundary: a Work that moves advances its
+                # `work-folder` revision and its updated_at; one already there
+                # changes nothing.
+                for wid in work_ids:
+                    folder_sync.set_work_folder_on_conn(conn, wid, request.folder_id or "")
             else:
                 for wid in work_ids:
-                    for tid in tag_ids:
+                    for tid in request.tag_ids:
                         work_tag_sync.set_state(conn, wid, tid, action == "add_tags")
 
             conn.commit()
@@ -4079,13 +4163,7 @@ class PRKSDatabase:
         finally:
             conn.close()
 
-        return {
-            "status": "updated",
-            "action": action,
-            "requested": len(work_ids),
-            "updated": len(work_ids),
-            "target_count": target_count,
-        }
+        return request.result()
 
     def get_related_folders_for_work(self, work_id: str) -> List[dict]:
         # Find folders containing ANY work that shares an Author/Reviewer/etc. with THIS work
@@ -5337,26 +5415,52 @@ class PRKSDatabase:
         return None
 
     @staticmethod
-    def _biblatex_cite_key_part_from_person(p: dict) -> str:
-        """First segment for cite key: prefer family name, else given / mononym."""
-        ln = str(p.get("last_name") or "").strip()
-        fn = str(p.get("first_name") or "").strip()
-        if ln:
-            return ln.split()[0] if ln.split() else ln
-        if fn:
-            return fn.split()[0] if fn.split() else fn
-        return "Unknown"
+    def _bibtex_cite_key_part(text: Any) -> str:
+        """``text`` with every character an entry key cannot safely hold removed.
 
-    def _biblatex_names_for_role(self, roles: List[dict], role_type: str) -> List[str]:
+        A key ends at whitespace or a comma, braces and quotes delimit the
+        entry, and ``\\ # % ' ( ) = @ ~`` are read as structure by BibTeX,
+        Biber or ``\\cite``. Unicode letters and digits (NFC, so a
+        decomposed accent is kept), ``_``, ``-``, ``.`` and ``:`` remain.
+        """
+        return _CITE_KEY_UNSAFE_RE.sub("", unicodedata.normalize("NFC", str(text or "")))
+
+    @classmethod
+    def _cite_key_part_from_credit(cls, credit: str) -> str:
+        """Key part of one free-text Person credit: the family name of
+        ``Family, Given``, else the last word of ``Given Family``; "" for none."""
+        if "," in credit:
+            words = credit.split(",", 1)[0].split()
+            return cls._bibtex_cite_key_part(words[0]) if words else ""
+        words = credit.split()
+        return cls._bibtex_cite_key_part(words[-1]) if words else ""
+
+    @classmethod
+    def _biblatex_cite_key_part_from_person(cls, p: dict) -> str:
+        """First segment for cite key: prefer family name, else given / mononym, else
+        the credit name the role exports under; "" when none is usable."""
+        for name in (p.get("last_name"), p.get("first_name")):
+            words = str(name or "").split()
+            part = cls._bibtex_cite_key_part(words[0]) if words else ""
+            if part:
+                return part
+        return cls._cite_key_part_from_credit(str(p.get("credit_name") or "").strip())
+
+    @classmethod
+    def _biblatex_role_name(cls, p: dict) -> str:
+        """The name a role row exports: its credit name, else the Person's; "" for none."""
+        credit = (p.get("credit_name") or "").strip()
+        if credit:
+            return credit
+        return cls._format_biblatex_person_name(p.get("last_name"), p.get("first_name")) or ""
+
+    @classmethod
+    def _biblatex_names_for_role(cls, roles: List[dict], role_type: str) -> List[str]:
         out: List[str] = []
         for p in roles:
             if p.get("role_type") != role_type:
                 continue
-            credit = (p.get("credit_name") or "").strip()
-            if credit:
-                out.append(credit)
-                continue
-            nm = self._format_biblatex_person_name(p.get("last_name"), p.get("first_name"))
+            nm = cls._biblatex_role_name(p)
             if nm:
                 out.append(nm)
         return out
@@ -5367,9 +5471,30 @@ class PRKSDatabase:
         s = str(value) if value is not None else ""
         # Percent signs introduce BibTeX comments inside fields; braces must be balanced.
         s = s.replace('%', r'\%')
-        s = s.replace('{', r'\{')
-        s = s.replace('}', r'\}')
-        return s
+        # BibTeX counts a brace whatever precedes it, so \{ and \} are only
+        # safe in pairs: a lone "}" would end the field and a lone "{" swallow
+        # the rest of the entry. A brace without its partner is written as the
+        # LaTeX symbol, whose own braces balance.
+        opened: List[int] = []
+        unpaired: set[int] = set()
+        for index, char in enumerate(s):
+            if char == "{":
+                opened.append(index)
+            elif char == "}":
+                if opened:
+                    opened.pop()
+                else:
+                    unpaired.add(index)
+        unpaired.update(opened)
+        out: List[str] = []
+        for index, char in enumerate(s):
+            if char not in "{}":
+                out.append(char)
+            elif index in unpaired:
+                out.append(r"{\textbraceleft}" if char == "{" else r"{\textbraceright}")
+            else:
+                out.append("\\" + char)
+        return "".join(out)
 
     def generate_bibtex(self, work_id: str) -> str:
         with self.connection() as conn:
@@ -5380,29 +5505,65 @@ class PRKSDatabase:
                 return ""
             # Credits follow the citation Manifestation, not every Work role.
             roles = self._roles_for_manifestation_on_conn(conn, work_id, target)
-        # Roles sorted by order_index, then rowid (stable order when order_index ties).
-        linked_authors = self._biblatex_names_for_role(roles, "Author")
-        editors = self._biblatex_names_for_role(roles, "Editor")
-        translators = self._biblatex_names_for_role(roles, "Translator")
-        introductions = self._biblatex_names_for_role(roles, "Introduction")
-        forewords = self._biblatex_names_for_role(roles, "Foreword")
-        afterwords = self._biblatex_names_for_role(roles, "Afterword")
+            video = work_projection.citation_is_stream(conn, target)
+        return self.format_bibtex(work, roles, self._get_bibtex_export_profile(), video=video)
 
-        if linked_authors:
-            author_str = " and ".join(linked_authors)
-        else:
-            author_str = None
+    @classmethod
+    def format_bibtex(cls, work: dict, roles: List[dict], export_fields: Dict[str, bool],
+                      *, video: bool) -> str:
+        """One BibLaTeX entry from a citation record, its credits and the export profile.
+
+        Database-independent, so both backends export byte-identical text:
+        ``work`` is the Work-shaped citation record (``citation_record``),
+        ``roles`` the citation Manifestation's credits as Person rows with
+        ``role_type`` and ``credit_name``, in role order, and
+        ``export_fields`` the Library's ``bibtex_export_fields`` profile.
+
+        ``video`` is True when the citation Manifestation's primary Asset is
+        an external stream: the stored source identity, not an inference from
+        ``source_kind``, ``source_url`` or ``file_path``. A PDF's
+        ``source_url`` is provenance, and a fileless PDF reads back on
+        PostgreSQL with no ``source_kind`` at all, so neither may make a Work
+        a video here (#690).
+        """
+        # Roles sorted by order_index, then rowid (stable order when order_index ties).
+        linked_authors = cls._biblatex_names_for_role(roles, "Author")
+        editors = cls._biblatex_names_for_role(roles, "Editor")
+        translators = cls._biblatex_names_for_role(roles, "Translator")
+        introductions = cls._biblatex_names_for_role(roles, "Introduction")
+        forewords = cls._biblatex_names_for_role(roles, "Foreword")
+        afterwords = cls._biblatex_names_for_role(roles, "Afterword")
+
+        # The visible Work credit line falls back to Author (text) when no
+        # linked Author exists. Preserve that credit in copied citations too.
+        text_credit = str(work.get("author_text") or "").strip()
+        # On a video, Author (text) is a channel/organization name, not
+        # semicolon-delimited Person names. BibLaTeX needs it braced as one.
+        corporate_credit = bool(text_credit) and not linked_authors and video
+        text_authors = (
+            [text_credit] if corporate_credit
+            else [name.strip() for name in text_credit.split(";") if name.strip()]
+        )
+        author_names = linked_authors or text_authors
 
         # Year: prefer dedicated year field, fall back to published_date prefix
         year = work.get('year') or (work.get('published_date', '')[:4] if work.get('published_date') else None)
 
-        first_author_person = next((p for p in roles if p["role_type"] == "Author"), None)
-        first_author_last = (
-            self._biblatex_cite_key_part_from_person(first_author_person)
-            if first_author_person
-            else "Unknown"
-        )
-        cite_key = f"{first_author_last}{year or 'UnknownYear'}"
+        # The key follows the first credit the author field shows: an Author
+        # row that renders no name is skipped there, so it is skipped here,
+        # and with none left both fall back to Author (text).
+        first_author_person = next(
+            (p for p in roles if p["role_type"] == "Author" and cls._biblatex_role_name(p)), None)
+        if first_author_person:
+            first_author_last = cls._biblatex_cite_key_part_from_person(first_author_person) or "Unknown"
+        elif text_authors:
+            first_author_last = (
+                cls._bibtex_cite_key_part(text_authors[0].split()[0]) if corporate_credit
+                else cls._cite_key_part_from_credit(text_authors[0])
+            ) or "Unknown"
+        else:
+            first_author_last = "Unknown"
+        cite_key = first_author_last + (cls._bibtex_cite_key_part(year) or "UnknownYear")
 
         raw_dt = work.get("doc_type")
         if raw_dt is not None and str(raw_dt).strip() != "":
@@ -5416,31 +5577,39 @@ class PRKSDatabase:
                 else "misc"
             )
 
-        esc = self._bibtex_escape_field
-        bf = self._get_bibtex_export_profile()
+        esc = cls._bibtex_escape_field
+
+        def names(people: List[str]) -> str:
+            # Each name on its own, so a brace in one cannot pair with a brace
+            # in the next and hide the "and" between them.
+            return " and ".join(esc(name) for name in people)
+        bf = export_fields
 
         def _export(key: str) -> bool:
             return bool(bf.get(key, True))
 
         bibtex = f"@{entry_type}{{{cite_key},\n"
         bibtex += f"  title = {{{esc(work['title'])}}},\n"
-        if author_str and _export("author"):
-            bibtex += f"  author = {{{esc(author_str)}}},\n"
+        if author_names and _export("author"):
+            author_value = names(author_names)
+            if corporate_credit:
+                author_value = "{" + author_value + "}"  # BibLaTeX corporate name
+            bibtex += f"  author = {{{author_value}}},\n"
         if editors and _export("editor"):
-            bibtex += f"  editor = {{{esc(' and '.join(editors))}}},\n"
+            bibtex += f"  editor = {{{names(editors)}}},\n"
         if translators and _export("translator"):
-            bibtex += f"  translator = {{{esc(' and '.join(translators))}}},\n"
+            bibtex += f"  translator = {{{names(translators)}}},\n"
         if introductions and _export("introduction"):
-            bibtex += f"  introduction = {{{esc(' and '.join(introductions))}}},\n"
+            bibtex += f"  introduction = {{{names(introductions)}}},\n"
         if forewords and _export("foreword"):
-            bibtex += f"  foreword = {{{esc(' and '.join(forewords))}}},\n"
+            bibtex += f"  foreword = {{{names(forewords)}}},\n"
         if afterwords and _export("afterword"):
-            bibtex += f"  afterword = {{{esc(' and '.join(afterwords))}}},\n"
+            bibtex += f"  afterword = {{{names(afterwords)}}},\n"
         if year and _export("year"):
             bibtex += f"  year = {{{esc(year)}}},\n"
         if work.get('publisher') and _export("publisher"):
             bibtex += f"  publisher = {{{esc(work['publisher'])}}},\n"
-        loc_fmt = self._format_biblatex_location(work.get("location"))
+        loc_fmt = cls._format_biblatex_location(work.get("location"))
         if loc_fmt and _export("location"):
             bibtex += f"  location = {{{esc(loc_fmt)}}},\n"
         if work.get('edition') and _export("edition"):

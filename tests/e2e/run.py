@@ -62,6 +62,7 @@ from tests.e2e.policy import (
     format_feature_catalog,
     aggregate_ci_gate_outcome,
     full_gate_timeout_s,
+    frontend_browser_change_requires_full_ci,
     list_changed_paths,
     load_failure_diagnostics,
     load_last_failed,
@@ -1912,7 +1913,17 @@ def _main(argv=None) -> int:
             path_diffs = {
                 "frontend/sw.js": service_worker_diff_for_plan(REPO, args.base),
             }
+        # Required CI: full coverage for frontend-impacting changes, while
+        # unrelated PRs keep the existing skip/affected/full plan.
+        frontend_full = bool(
+            (os.environ.get("PRKS_E2E_CI_FRONTEND_FULL") or "").strip()
+            in ("1", "true", "yes", "on")
+            and frontend_browser_change_requires_full_ci(paths)
+        )
+        force_full = force_full or frontend_full
         plan = plan_ci_e2e(paths, force_full=force_full, path_diffs=path_diffs)
+        if frontend_full:
+            plan["reason"] = "frontend-affecting PR change — complete E2E required"
         if plan["mode"] == "affected":
             # Resolve feature → IDs so empty/broken mappings fail closed to full
             # and so the workflow can size shards from test_count.

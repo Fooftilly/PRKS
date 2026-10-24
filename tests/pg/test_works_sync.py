@@ -25,6 +25,7 @@ from backend.db_manager import PRKSDatabase
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.identity.request_context import RequestContext
+from backend.domain.organization import playlists
 from backend.domain.works import commands, notes
 from backend.entity_ids import generate
 from backend.pg_facade import NotPortedError
@@ -160,18 +161,23 @@ class LedgerTests(SyncTestCase):
         self.assertEqual(self.ledger(), [])
 
     def test_an_exception_rolls_the_claim_back(self) -> None:
-        unported = Environment(pdfs_dir=self.storage.pdfs_dir)  # the default filing refuses
-        data = self.envelope("CREATE_WORK", "W-" + uuid.uuid4().hex.upper(), create_payload())
-        with self.assertRaises(NotPortedError):
-            protocol.process_operation(self.db, self.actor.context, data, unported)
-        self.assertEqual((self.ledger(), self.count("works")), ([], 0))
+        # The default filing fails at the playlist, after it created the root
+        # "Uncategorized" folder in the same transaction.
+        default = Environment(pdfs_dir=self.storage.pdfs_dir)
+        data = self.envelope("CREATE_WORK", "W-" + uuid.uuid4().hex.upper(),
+                             create_payload(playlist_id="PL-" + "0" * 32))
+        with mock.patch.object(playlists, "lock", side_effect=RuntimeError("boom")), \
+                self.assertRaises(RuntimeError):
+            protocol.process_operation(self.db, self.actor.context, data, default)
+        self.assertEqual((self.ledger(), self.count("works"), self.count("folders")), ([], 0, 0))
         # The op_id was not burnt.
         self.assertEqual(self.send(data)[1]["changed"], True)
 
     def test_families_without_a_handler_are_not_ported(self) -> None:
         work_id = self.library.add_work("Work")
         with self.assertRaises(NotPortedError):
-            self.send(self.envelope("SET_WORK_FOLDER", work_id, {"folder_id": None}, 0))
+            self.send(self.envelope("DELETE_CONCEPT", "C-" + uuid.uuid4().hex.upper(), {},
+                                    entity_type="concept"))
         self.assertEqual(self.send(self.envelope("NO_SUCH_OPERATION", work_id, {})),
                          (400, {"code": "INVALID_ENVELOPE"}))
         self.assertEqual(self.ledger(), [])
