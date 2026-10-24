@@ -76,6 +76,12 @@
     function pendingFieldValues(operations, folderId) {
         const values = new Map();
         unsettled(operations, 'SET_FOLDER_FIELD', folderId)
+            // Failed parent moves must not orphan an acknowledged Folder when
+            // their newly created destination was refused. Other conflicted
+            // fields remain visible until the user resolves their edit.
+            .filter(op => op.status !== 'discarded' &&
+                (!op.server_result || op.server_result.code !== 'DEPENDENCY_FAILED') &&
+                !(op.status === 'conflict' && op.payload && op.payload.field === 'parent_id'))
             .slice()
             .sort((a, b) => (a.sequence || 0) - (b.sequence || 0))
             .forEach(function (op) {
