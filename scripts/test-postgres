@@ -32,6 +32,7 @@ MIN_MAJOR=18
 # pg_stat_statements touches server-wide shared statistics. Never profile a
 # caller-supplied server, even one accepted by the ordinary test harness.
 PROFILE=false
+PROFILE_NONCE=""
 if [[ "${1:-}" == "--profile" ]]; then
   PROFILE=true
   shift
@@ -39,6 +40,9 @@ if [[ "${1:-}" == "--profile" ]]; then
     echo "test-postgres: --profile refuses PRKS_TEST_DATABASE_URL; use a disposable server" >&2
     exit 2
   fi
+  # A fresh, unpredictable cluster marker allows the profiler to verify
+  # that it reached THIS wrapper-created server before resetting statistics.
+  PROFILE_NONCE="$("$PY" -c 'import secrets; print(secrets.token_hex(16))')"
 fi
 
 CLEANUP=()
@@ -63,7 +67,7 @@ start_docker() {
   echo "test-postgres: starting ${PG_IMAGE%%@*} in Docker" >&2
   local server_args=()
   if [[ "$PROFILE" == true ]]; then
-    server_args=(postgres -c shared_preload_libraries=pg_stat_statements -c compute_query_id=on)
+    server_args=(postgres -c shared_preload_libraries=pg_stat_statements -c compute_query_id=on -c "cluster_name=prks-profile-${PROFILE_NONCE}")
   fi
   docker run -d --rm --name "$name" \
     -e POSTGRES_HOST_AUTH_METHOD=trust \
@@ -147,7 +151,7 @@ start_local() {
   }
   local profile_opts=""
   if [[ "$PROFILE" == true ]]; then
-    profile_opts=" -c shared_preload_libraries=pg_stat_statements -c compute_query_id=on"
+    profile_opts=" -c shared_preload_libraries=pg_stat_statements -c compute_query_id=on -c cluster_name=prks-profile-${PROFILE_NONCE}"
   fi
   "${as[@]}" "$bindir/pg_ctl" -D "$base/data" -l "$base/server.log" -w \
     -o "-c listen_addresses='' -k $base -p $port -c fsync=off${profile_opts}" start >/dev/null || {
@@ -175,7 +179,7 @@ fi
 }
 
 if [[ "$PROFILE" == true ]]; then
-  PRKS_PG_PROFILE_DISPOSABLE_SERVER=1 "$PY" -m scripts.pg_stat_profile "$@"
+  PRKS_PG_PROFILE_NONCE="$PROFILE_NONCE" "$PY" -m scripts.pg_stat_profile "$@"
 elif [[ "${1:-}" == "--parity" ]]; then
   shift
   "$PY" scripts/run_backend_parity.py "$@"
