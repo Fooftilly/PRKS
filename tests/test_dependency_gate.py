@@ -1214,13 +1214,13 @@ class RepoGateLiveTests(unittest.TestCase):
         # Pyright's separate import-resolution install must use the same
         # production pins, not the now-empty development selection.
         static = (_PROJECT / ".github" / "workflows" / "static-analysis.yml").read_text()
-        install = static.split(
+        static_install = static.split(
             "- name: Install pinned PostgreSQL and identity type dependencies", 1
         )[1].split("- name: Run Pyright data-flow checks", 1)[0]
-        self.assertIn("psycopg(-binary|-pool)?==", install)
-        self.assertIn("argon2-cffi==", install)
-        self.assertEqual(install.count("requirements.txt"), 3)
-        self.assertNotIn("requirements-dev.txt", install)
+        self.assertIn("psycopg(-binary|-pool)?==", static_install)
+        self.assertIn("argon2-cffi==", static_install)
+        self.assertEqual(static_install.count("requirements.txt"), 3)
+        self.assertNotIn("requirements-dev.txt", static_install)
         expected_unit = dict(runtime, **{
             name: dev[name]
             for name in ("openapi-core", "hypothesis", "markdown-it-py", "mdurl")
