@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import io
-import shutil
-import subprocess
 import sys
 import unittest
 from contextlib import redirect_stderr
@@ -11,7 +9,7 @@ from types import ModuleType
 from unittest.mock import MagicMock, Mock, patch
 
 from scripts.ci.cross_browser_smoke import (
-    CHECKS, ENGINES, SmokeFailure, _SMOKE_ERROR_PROBE, check_browser_errors, close_preserving_failure, collector_failure_categories, probe_error_summary,
+    CHECKS, ENGINES, SmokeFailure, close_preserving_failure, collector_failure_categories,
     main, run, smoke,
     verify_isolation, verify_report,
 )
@@ -82,7 +80,7 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
             with self.subTest(stage=expected_stage):
                 page = Mock()
                 context = Mock()
-                collector = Mock(unsafe=True)
+                collector = Mock()
 
                 def locator(selector, **_kwargs):
                     if selector == failed_selector:
@@ -106,7 +104,7 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
                 context.close.assert_called_once()
 
     def test_error_bucket_diagnostics_omit_sensitive_browser_details(self):
-        collector = Mock(unsafe=True)
+        collector = Mock()
         collector.pageerrors = ["private-document-title", "secret-content"]
         collector.pageerror_names = ["TypeError", "ReferenceError"]
         collector.console_errors = ["credential=private"]
@@ -124,81 +122,86 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
         collector = PageCollector.__new__(PageCollector)
         collector.pageerrors = []
         collector.pageerror_names = []
-        collector.pageerror_sites = []
 
         class SyntheticError:
             name = "TypeError"
-            stack = (
-                "TypeError: secret-research-note-in-exception\\n"
-                "    at handler (http://127.0.0.1:51243/js/components/works.js:331:18)"
-            )
 
             def __str__(self):
                 return "secret-research-note-in-exception"
 
         collector._on_page_error(SyntheticError())
         self.assertEqual(collector.pageerror_names, ["TypeError"])
-        self.assertEqual(collector.pageerror_sites, ["js/components/works.js:331"])
         self.assertEqual(collector.pageerrors, ["secret-research-note-in-exception"])
         collector.console_errors = []
         collector.failed_requests = []
         collector.http_5xx = []
         collector.external = []
         self.assertEqual(
-            collector_failure_categories(collector),
-            "page-1_kinds-typeerror_sites-js-components-works.js-331",
+            collector_failure_categories(collector), "page-1_kinds-typeerror"
         )
         self.assertNotIn("secret", collector_failure_categories(collector))
 
-    def test_early_errors_fail_closed_with_stage_and_safe_source(self):
-        collector = Mock(unsafe=True)
-        collector.pageerrors = ["private-document-body"]
-        collector.pageerror_names = ["ReferenceError"]
-        collector.pageerror_sites = ["js/reader.js:42"]
-        collector.console_errors = []
-        collector.failed_requests = []
-        collector.http_5xx = []
-        collector.external = []
-        collector.assert_clean.side_effect = AssertionError("private-document-body")
-        with self.assertRaises(SmokeFailure) as caught:
-            check_browser_errors(collector, engine="webkit", phase="after_pdf")
-        self.assertIn("webkit/browser_errors_after_pdf_", str(caught.exception))
-        self.assertIn("sites-js-reader.js-42", str(caught.exception))
-        self.assertNotIn("private-document-body", str(caught.exception))
+    def test_resize_loop_notice_is_bounded_and_webkit_only(self):
+        from tests.e2e.harness import PageCollector
 
-    def test_injected_browser_probe_is_valid_javascript(self):
-        # Catch malformed inline probes before downloading the browser engines.
-        # No browser, network, fixture document or private data is involved.
-        node = shutil.which("node")
-        if node is None:
-            self.skipTest("Node is unavailable; real browser CI exercises the probe")
-        result = subprocess.run(
-            [node, "--check", "-"], input=_SMOKE_ERROR_PROBE,
-            capture_output=True, text=True, timeout=5, check=False,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
+        class BrowserError:
+            name = ""
+            stack = ""
 
-    def test_page_probe_reports_only_allowlisted_metadata(self):
-        page = Mock()
-        page.evaluate.return_value = [
-            {"kind": "window", "name": "TypeError", "source": "vue-prks-vue.js-42",
-             "shape": "object", "family": "property"},
-            {"kind": "promise", "name": "AbortError", "source": "unknown",
-             "shape": "missing", "family": "none"},
-            {"kind": "window", "name": "SecretBody", "source": "untrusted"},
-            {"kind": "window", "name": "Error",
-             "source": "https://example.invalid/private?token=sensitive",
-             "shape": "object", "family": "fetch"},
-        ]
-        label = probe_error_summary(page)
-        self.assertEqual(
-            label,
-            "window-typeerror-vue-prks-vue.js-42-object-property"
-            "_promise-aborterror-unknown-missing-none"
-            "_window-error-unknown-object-fetch",
-        )
-        self.assertNotIn("sensitive", label)
-        self.assertNotIn("SecretBody", label)
+            def __init__(self, message):
+                self.message = message
+
+            def __str__(self):
+                return self.message
+
+        def collector(allow):
+            instance = PageCollector.__new__(PageCollector)
+            instance._allow_webkit_resize_notices = allow
+            instance._webkit_resize_notices = 0
+            instance.pageerrors = []
+            instance.pageerror_names = []
+            return instance
+
+        notice = "ResizeObserver loop completed with undelivered notifications."
+        webkit = collector(True)
+        for _ in range(3):
+            webkit._on_page_error(BrowserError(notice))
+        self.assertEqual(webkit.pageerrors, [])
+        self.assertEqual(webkit._webkit_resize_notices, 3)
+
+        # Repeating every paint is a genuine loop: fail, never silently clear.
+        webkit._on_page_error(BrowserError(notice))
+        self.assertEqual(webkit.pageerrors, [notice])
+        self.assertEqual(webkit._webkit_resize_notices, 4)
+
+        # Another browser cannot opt in by accident.
+        firefox = collector(False)
+        firefox._on_page_error(BrowserError(notice))
+        self.assertEqual(firefox.pageerrors, [notice])
+
+        # Only the browser-defined literal is accepted, not related errors.
+        variant = collector(True)
+        variant._on_page_error(BrowserError(notice + " private"))
+        self.assertEqual(variant.pageerrors, [notice + " private"])
+
+        # Real script exceptions (with source or JS exception type) still fail.
+        script = BrowserError(notice)
+        script.stack = "at handler (http://127.0.0.1:1234/js/app.js:1:1)"
+        sourced = collector(True)
+        sourced._on_page_error(script)
+        self.assertEqual(sourced.pageerrors, [notice])
+
+        typed = BrowserError(notice)
+        typed.name = "TypeError"
+        typed_collector = collector(True)
+        typed_collector._on_page_error(typed)
+        self.assertEqual(typed_collector.pageerrors, [notice])
+
+        # WebKit's older exact browser string uses the same bounded contract.
+        older = collector(True)
+        older._on_page_error(BrowserError("ResizeObserver loop limit exceeded"))
+        self.assertEqual(older.pageerrors, [])
+        self.assertEqual(older._webkit_resize_notices, 1)
 
     def test_notes_commit_and_reload_check_is_required(self):
         self.assertIn("notes_save_reload", CHECKS)
@@ -258,7 +261,7 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
             verify_report(data, ENGINES)
 
     def test_pdf_render_failure_is_attributed_without_leaking_details(self):
-        page, context, collector = Mock(), Mock(), Mock(unsafe=True)
+        page, context, collector = Mock(), Mock(), Mock()
         page.evaluate.return_value = True
         with (
             patch("scripts.ci.cross_browser_smoke.open_app_page",
@@ -275,7 +278,7 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
         context.close.assert_called_once()
 
     def test_split_failure_is_attributed_without_leaking_details(self):
-        page, context, collector = Mock(), Mock(), Mock(unsafe=True)
+        page, context, collector = Mock(), Mock(), Mock()
         page.evaluate.return_value = True
         def fail_split_only(js, **_kwargs):
             if "s.mode === 'tiled'" in js:
