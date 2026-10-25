@@ -161,6 +161,9 @@ async function run() {
         e.entities.set(people,{value:{...snapshot,meta:{...snapshot.meta,people_included:true}},cachedAt:1});
         e.setSweep(async()=>false);
         await (variant?e.ctx.prksMarkResearchGraphPeopleChanged():e.ctx.prksMarkResearchGraphCoreChanged());
+        // The fast-cache candidate must not resurrect a blocked Graph snapshot
+        // even when the browser has already confirmed it is offline.
+        e.ctx.prksOfflineNoteRequestFailure();
         e.setRequest(async()=>{throw new Error('offline');});
         assert.equal((await e.ctx.prksOfflineResearchGraphFetch(variant)).source,'unavailable');
         if(variant)assert.equal((await e.ctx.prksOfflineResearchGraphFetch(false)).source,'cache');
