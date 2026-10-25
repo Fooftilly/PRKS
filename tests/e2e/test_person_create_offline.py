@@ -94,22 +94,29 @@ class OfflinePersonCreateTests(unittest.TestCase):
         return {(p['first_name'], p['last_name']) for p in self.db_for(server).get_all_persons()}
 
     def link_as_author(self, page, work_title, person_display):
-        o._open_work_from_home(page, work_title)
-        o._open_details_drawer_if_tiled(page)
-        page.wait_for_selector('.work-detail')
-        page.evaluate("() => { void prksSetWorkDetailsMode('people'); }")
-        page.wait_for_function(
-            "() => { const b = document.querySelector('.work-link-person-btn');"
-            "        return !!b && !b.disabled; }")
-        page.locator('.work-link-person-btn').click()
-        page.wait_for_selector('#role-modal:not(.hidden)')
-        page.wait_for_function(
-            "() => typeof document.getElementById('role-person-search').oninput === 'function'")
-        page.locator('#role-person-search').fill(person_display)
-        result = page.locator('#role-person-results .result-item--person-pick').first
-        result.wait_for(state='visible')
-        result.click()
-        page.locator('#save-role-btn').click()
+        # Nested diagnosis inside person_create_role_link. These timings
+        # explain the parent's cost and must not be added to it.
+        with profile_e2e_phase("person_create_link_nav"):
+            o._open_work_from_home(page, work_title)
+        with profile_e2e_phase("person_create_link_panel"):
+            o._open_details_drawer_if_tiled(page)
+            page.wait_for_selector('.work-detail')
+            page.evaluate("() => { void prksSetWorkDetailsMode('people'); }")
+            page.wait_for_function(
+                "() => { const b = document.querySelector('.work-link-person-btn');"
+                "        return !!b && !b.disabled; }")
+        with profile_e2e_phase("person_create_link_modal"):
+            page.locator('.work-link-person-btn').click()
+            page.wait_for_selector('#role-modal:not(.hidden)')
+            page.wait_for_function(
+                "() => typeof document.getElementById('role-person-search').oninput === 'function'")
+        with profile_e2e_phase("person_create_link_search"):
+            page.locator('#role-person-search').fill(person_display)
+            result = page.locator('#role-person-results .result-item--person-pick').first
+            result.wait_for(state='visible')
+            result.click()
+        with profile_e2e_phase("person_create_link_save"):
+            page.locator('#save-role-btn').click()
 
     # ---- the slice ----------------------------------------------------------
 
