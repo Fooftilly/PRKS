@@ -913,11 +913,12 @@ class PageCollector:
         message = str(err)
         stack = str(getattr(err, "stack", "") or "")
         if (
-            self._allow_webkit_resize_notices
+            getattr(self, "_allow_webkit_resize_notices", False)
             and message.strip() in _TRANSIENT_WEBKIT_RESIZE_NOTICES
             and "http://" not in stack and "https://" not in stack
-            and getattr(err, "name", None) not in
-                {"TypeError", "ReferenceError", "SyntaxError", "RangeError"}
+            and getattr(err, "name", None) not in {
+                "TypeError", "ReferenceError", "SyntaxError", "RangeError"
+            }
         ):
             self._webkit_resize_notices += 1
             if self._webkit_resize_notices <= 3:
