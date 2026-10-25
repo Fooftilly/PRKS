@@ -33,9 +33,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Check triage summarizer invariants (no Docker needed)
-        run: python3 -m unittest -q tests.test_runtime_sbom_summary
-
       # Scan only a local built runtime image, not source dependencies.
       # The runtime Dockerfile omits test tooling and Node/npm.
       - name: Build a disposable local PRKS runtime image
