@@ -9,7 +9,7 @@ from pathlib import Path
 
 from backend.api_contract.openapi import publishers_openapi_document
 from scripts.ci.schemathesis_pilot import (
-    FRAGMENT, MAX_EXAMPLES, MAX_SECONDS, METHOD, OPERATION, ROUTE,
+    CLI_TIMEOUT, FRAGMENT, MAX_EXAMPLES, METHOD, OPERATION, ROUTE,
     command, read_json, scoped_contract,
 )
 
@@ -48,11 +48,14 @@ class SchemathesisPilotContracts(unittest.TestCase):
             self.assertEqual(args[args.index("--include-operation-id") + 1], OPERATION)
             self.assertEqual(args[args.index("--include-method") + 1], METHOD)
             self.assertEqual(args[args.index("--max-examples") + 1], str(MAX_EXAMPLES))
-            self.assertEqual(args[args.index("--max-time") + 1], str(MAX_SECONDS))
+            self.assertNotIn("--max-time", args)
+            self.assertEqual(args[args.index("--phases") + 1], "examples,fuzzing")
+            self.assertLessEqual(MAX_EXAMPLES, 25)
+            self.assertLessEqual(CLI_TIMEOUT, 90)
             self.assertIn("--max-failures", args)
             self.assertIn("--max-redirects", args)
             self.assertIn("--seed", args)
-            for forbidden in ("POST", "PATCH", "DELETE", "stateful"):
+            for forbidden in ("POST", "PATCH", "DELETE", "stateful", "coverage"):
                 self.assertNotIn(forbidden, args)
             with self.assertRaisesRegex(ValueError, "loopback"):
                 command(path, "https://localhost:9000", "st")
