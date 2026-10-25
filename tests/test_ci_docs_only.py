@@ -33,6 +33,7 @@ def _repo(root: Path) -> str:
     _git(root, "config", "user.name", "CI test")
     _write(root, "README.md", "# Welcome\n")
     _write(root, "docs/guide.md", "# Guide\n")
+    _write(root, "docs/wiki/Home.md", "# Home\n")
     _write(root, "backend/app.py", "print('ok')\n")
     _write(root, "AGENTS.md", "Rules\n")
     _git(root, "add", ".")
@@ -42,9 +43,12 @@ def _repo(root: Path) -> str:
 
 class DocsOnlyCIClassifierTests(unittest.TestCase):
     def test_approved_paths_only(self):
-        approved = ("README.md", "CONTRIBUTING.md", "docs/guide.md", "docs/wiki/One.md")
+        approved = ("docs/wiki/Home.md", "docs/wiki/One.md")
         rejected = (
-            "AGENTS.md", "docs/AGENTS.md", "DESIGN.md", "backend/notes.md",
+            "AGENTS.md", "docs/AGENTS.md", "DESIGN.md", "README.md",
+            "CONTRIBUTING.md", "SECURITY.md", "docs/agent-rules/offline-pwa.md",
+            "docs/local-first-rollout-status.md", "docs/guide.md",
+            "backend/notes.md",
             ".github/workflows/test-gate.yml", "requirements.txt",
             "tests/a.py", "docs/diagram.png", "docs/../backend/a.md", "../README.md",
         )
@@ -57,9 +61,11 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
 
     def test_actual_git_changes_fail_closed(self):
         cases = (
-            ("root docs", {"README.md": "# Changed\n"}, True),
-            ("docs folder", {"docs/guide.md": "# Updated\n"}, True),
-            ("new docs", {"docs/new.md": "# New\n"}, True),
+            ("root docs test fixture", {"README.md": "# Changed\n"}, False),
+            ("implementation docs", {"docs/guide.md": "# Updated\n"}, False),
+            ("wiki docs", {"docs/wiki/Home.md": "# Updated\n"}, True),
+            ("new wiki docs", {"docs/wiki/New.md": "# New\n"}, True),
+            ("agent rule fixture", {"docs/agent-rules/offline-pwa.md": "# New\n"}, False),
             ("mixed", {"README.md": "# Changed\n", "backend/app.py": "print('new')\n"}, False),
             ("code only", {"backend/app.py": "print('new')\n"}, False),
             ("AGENTS", {"AGENTS.md": "New policy\n"}, False),
@@ -85,9 +91,9 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
                 root = Path(folder)
                 base = _repo(root)
                 if kind == "delete":
-                    _git(root, "rm", "docs/guide.md")
+                    _git(root, "rm", "docs/wiki/Home.md")
                 else:
-                    _git(root, "mv", "docs/guide.md", "docs/other.md")
+                    _git(root, "mv", "docs/wiki/Home.md", "docs/wiki/Other.md")
                 _git(root, "commit", "-qm", "change")
                 self.assertIsNone(changed_documentation(root, base))
 
