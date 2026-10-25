@@ -7,6 +7,7 @@ rendered heading content follow Markdown semantics.
 
 from __future__ import annotations
 
+from html.parser import HTMLParser
 import argparse
 import re
 from pathlib import Path
@@ -19,9 +20,37 @@ from scripts.ci.docs_only import changed_documentation
 _MARKDOWN = MarkdownIt("commonmark").enable("table")
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 _PUNCT = re.compile(r"[^\w\- ]", re.UNICODE)
-_HTML_TAG = re.compile(r"<([a-z][\w:-]*)\b([^>]*)>", re.I)
-_HTML_ID = re.compile(r"""(?:^|\s)id\s*=\s*["']([^"']+)["']""", re.I)
-_HTML_NAME = re.compile(r"""(?:^|\s)name\s*=\s*["']([^"']+)["']""", re.I)
+class _HTMLScan(HTMLParser):
+    """Collect only real HTML anchors and local link candidates, not comments."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.anchors: set[str] = set()
+        self.links: list[str] = []
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        attributes = dict(attrs)
+        anchor = attributes.get("id")
+        if anchor is not None:
+            self.anchors.add(anchor)
+        if tag == "a":
+            named = attributes.get("name")
+            if named is not None:
+                self.anchors.add(named)
+            href = attributes.get("href")
+            if href:
+                self.links.append(href)
+        elif tag == "img":
+            src = attributes.get("src")
+            if src:
+                self.links.append(src)
+
+    def handle_startendtag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        self.handle_starttag(tag, attrs)
 
 
 def _slug(text: str) -> str:
@@ -83,10 +112,9 @@ def _anchors(content: str) -> set[str]:
                 if token.type == "inline" else [token.content]
             )
             for fragment in fragments:
-                for tag, attrs in _HTML_TAG.findall(fragment):
-                    anchors.update(_HTML_ID.findall(attrs))
-                    if tag.lower() == "a":
-                        anchors.update(_HTML_NAME.findall(attrs))
+                html = _HTMLScan()
+                html.feed(fragment)
+                anchors.update(html.anchors)
     return anchors
 
 
@@ -129,15 +157,27 @@ def check_markdown(root: Path, relative: str) -> list[str]:
     errors: list[str] = []
     cache: dict[Path, set[str]] = {}
     for token in _MARKDOWN.parse(content):
-        if token.type != "inline":
+        if token.type not in ("inline", "html_block"):
             continue
         number = (token.map or [0])[0] + 1
-        for child in token.children or []:
-            if child.type in ("link_open", "image"):
-                attr = "href" if child.type == "link_open" else "src"
-                href = child.attrGet(attr)
-                if not href:
-                    continue
+        html_fragments: list[str] = []
+        if token.type == "inline":
+            for child in token.children or []:
+                if child.type in ("link_open", "image"):
+                    attr = "href" if child.type == "link_open" else "src"
+                    href = child.attrGet(attr)
+                    if href:
+                        error = _check_link(root, current, relative, number, href, cache)
+                        if error:
+                            errors.append(error)
+                elif child.type == "html_inline":
+                    html_fragments.append(child.content)
+        else:
+            html_fragments.append(token.content)
+        for fragment in html_fragments:
+            html = _HTMLScan()
+            html.feed(fragment)
+            for href in html.links:
                 error = _check_link(root, current, relative, number, href, cache)
                 if error:
                     errors.append(error)
