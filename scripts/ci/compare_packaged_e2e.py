@@ -147,9 +147,9 @@ def _github_connection() -> HTTPSConnection:
 
     # http.client tunnels via CONNECT before validating api.github.com's
     # certificate. No redirects or user-selected destination are accepted.
-    parsed = urlsplit(proxy if "://" in proxy else f"http://{proxy}")
+    parsed = urlsplit(proxy if "://" in proxy else f"//{proxy}")
     if (
-        parsed.scheme != "http"
+        parsed.scheme not in ("", "http")
         or not parsed.hostname
         or parsed.username is not None
         or parsed.password is not None
