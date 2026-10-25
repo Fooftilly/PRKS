@@ -92,6 +92,7 @@ def sanitized_report(label: str, raw: dict) -> dict:
         "rules_passed": raw["passes"],
         "rules_incomplete": raw["incomplete"],
         "violating_rules": len(violations),
+        "total_violation_nodes": sum(item["nodes"] for item in violations),
         "violations": violations[:MAX_RULES],
         "truncated_rules": max(0, len(violations) - MAX_RULES),
     }
@@ -120,7 +121,7 @@ def write_report(surfaces: list[dict], path: Path) -> None:
 def short_summary(surfaces: list[dict]) -> str:
     return "\n".join(
         f"{s['surface']}: {s['violating_rules']} violating rules, "
-        f"{sum(v['nodes'] for v in s['violations'])} sampled rule-node matches, "
+        f"{s['total_violation_nodes']} total violating nodes, "
         f"{s['rules_incomplete']} incomplete checks"
         for s in surfaces
     )
