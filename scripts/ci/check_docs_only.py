@@ -28,12 +28,35 @@ def _slug(heading: str) -> str:
     return _SPACES.sub("-", _PUNCT.sub("", title.lower()).strip())
 
 
+def _visible_lines(content: str) -> tuple[list[tuple[int, str]], str]:
+    """Ignore fenced code; return (line number, text) and any open fence."""
+    visible = []
+    fence_char = ""
+    fence_width = 0
+    for number, line in enumerate(content.splitlines(), start=1):
+        marker = _FENCE.match(line)
+        if marker:
+            fence = marker.group(1)
+            if not fence_char:
+                fence_char, fence_width = fence[0], len(fence)
+            elif (
+                fence[0] == fence_char
+                and len(fence) >= fence_width
+                and not line[marker.end():].strip()
+            ):
+                fence_char, fence_width = "", 0
+            continue
+        if not fence_char:
+            visible.append((number, line))
+    return visible, fence_char * fence_width
+
+
 def _anchors(content: str) -> set[str]:
     anchors: set[str] = set()
     counts: dict[str, int] = {}
-    for line in content.splitlines():
-        for anchor in _HTML_ANCHOR.findall(line):
-            anchors.add(anchor)
+    visible, _open_fence = _visible_lines(content)
+    for _number, line in visible:
+        anchors.update(_HTML_ANCHOR.findall(line))
         match = _HEADING.match(line)
         if match:
             anchor = _slug(match.group(1))
@@ -43,63 +66,58 @@ def _anchors(content: str) -> set[str]:
     return anchors
 
 
+def _check_link(
+    root: Path, current: Path, relative: str, number: int, raw: str,
+    anchor_cache: dict[Path, set[str]],
+) -> str | None:
+    try:
+        parsed = urlsplit(raw)
+    except ValueError:
+        return f"{relative}:{number}: malformed link"
+    if parsed.scheme or parsed.netloc or raw.startswith("//"):
+        return None
+    path, anchor = unquote(parsed.path), unquote(parsed.fragment)
+    if not (path or anchor) or path.startswith("/"):
+        # Website-root paths address app routes, not repository documents.
+        return None
+    target = (current.parent / path).resolve() if path else current.resolve()
+    if not target.is_relative_to(root.resolve()) or not target.exists():
+        return f"{relative}:{number}: missing relative target {raw}"
+    if anchor and target.suffix.lower() == ".md":
+        if target not in anchor_cache:
+            try:
+                anchor_cache[target] = _anchors(target.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError):
+                anchor_cache[target] = set()
+        if anchor not in anchor_cache[target]:
+            return f"{relative}:{number}: missing anchor #{anchor} in {path or relative}"
+    return None
+
+
 def check_markdown(root: Path, relative: str) -> list[str]:
     current = root / relative
     try:
-        # Never allow changed Markdown symlinks to escape the repository.
+        # A changed Markdown symlink must never escape this checkout.
         if not current.resolve().is_relative_to(root.resolve()):
             return [f"{relative}: path escapes checkout"]
         content = current.read_text(encoding="utf-8")
     except (OSError, UnicodeError):
         return [f"{relative}: unreadable Markdown"]
     errors = []
-    fence_char = ""
-    fence_width = 0
-    cached_anchors: dict[Path, set[str]] = {}
-    for number, line in enumerate(content.splitlines(), start=1):
-        marker = _FENCE.match(line)
-        if marker:
-            value = marker.group(1)
-            if not fence_char:
-                fence_char, fence_width = value[0], len(value)
-                continue
-            if value[0] == fence_char and len(value) >= fence_width and not line[marker.end():].strip():
-                fence_char, fence_width = "", 0
-            continue
-        if fence_char:
-            continue
-        # Ignore inline code literals, which may intentionally show bad links.
-        scan = re.sub(r"`[^`\n]+`", "", line)
-        for link in _LINK.finditer(scan):
-            raw = link.group(1).strip("<>")
-            try:
-                parsed = urlsplit(raw)
-            except ValueError:
-                errors.append(f"{relative}:{number}: malformed link")
-                continue
-            if parsed.scheme or parsed.netloc or raw.startswith("//"):
-                continue
-            path = unquote(parsed.path)
-            anchor = unquote(parsed.fragment)
-            if not path and not anchor:
-                continue
-            # Website-root paths are app routes, not repo-relative documents.
-            if path.startswith("/"):
-                continue
-            target = (current.parent / path).resolve() if path else current.resolve()
-            if not target.is_relative_to(root.resolve()) or not target.exists():
-                errors.append(f"{relative}:{number}: missing relative target {raw}")
-                continue
-            if anchor and target.suffix.lower() == ".md":
-                if target not in cached_anchors:
-                    try:
-                        cached_anchors[target] = _anchors(target.read_text(encoding="utf-8"))
-                    except (OSError, UnicodeError):
-                        cached_anchors[target] = set()
-                if anchor not in cached_anchors[target]:
-                    errors.append(f"{relative}:{number}: missing anchor #{anchor} in {path or relative}")
-    if fence_char:
-        errors.append(f"{relative}: unclosed {fence_char * fence_width} fence")
+    anchor_cache: dict[Path, set[str]] = {}
+    visible, open_fence = _visible_lines(content)
+    for number, line in visible:
+        # Ignore inline code examples, which can contain invalid links.
+        scan = re.sub(r"\x60[^\x60\n]+\x60", "", line)
+        for match in _LINK.finditer(scan):
+            error = _check_link(
+                root, current, relative, number, match.group(1).strip("<>"),
+                anchor_cache,
+            )
+            if error:
+                errors.append(error)
+    if open_fence:
+        errors.append(f"{relative}: unclosed {open_fence} fence")
     return errors
 
 
