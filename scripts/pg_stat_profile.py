@@ -12,17 +12,18 @@ import argparse
 import json
 import math
 import os
+import re
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 # Only expose numeric aggregates and opaque (run-local) query fingerprints.
-# Never select pg_stat_statements.query: normalized SQL may retain literals.
+# Always request showtext=false: never make PostgreSQL load representative SQL.
 _SNAPSHOT_SQL = """
 SELECT queryid, calls, total_exec_time, mean_exec_time, rows,
        shared_blks_hit, shared_blks_read, temp_blks_read, temp_blks_written
-FROM public.pg_stat_statements
+FROM public.pg_stat_statements(false)
 WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
   AND userid = (SELECT usesysid FROM pg_user WHERE usename = current_user)
   AND queryid IS NOT NULL AND calls > 0
@@ -105,7 +106,8 @@ def benchmark(stats: Any, operation: Any, repetitions: int) -> dict[str, Any]:
 
 
 def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
-    if not os.environ.get("PRKS_PG_PROFILE_DISPOSABLE_SERVER"):
+    nonce = os.environ.get("PRKS_PG_PROFILE_NONCE", "")
+    if re.fullmatch(r"[0-9a-f]{32}", nonce) is None:
         raise RuntimeError("run through scripts/test-postgres --profile only")
 
     import psycopg
@@ -128,6 +130,12 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
         with psycopg.connect(harness.conninfo(dbname), autocommit=True,
                              options="-c pg_stat_statements.track=none",
                              row_factory=dict_row) as stats:
+            # Prove the wrapper-created cluster identity before installing an
+            # extension or resetting server-shared statistics. Caller-controlled
+            # environment flags are insufficient to authorize the reset.
+            cluster = stats.execute("SHOW cluster_name").fetchone()["cluster_name"]
+            if cluster != f"prks-profile-{nonce}":
+                raise RuntimeError("database server is not this disposable profile cluster")
             preload = stats.execute(
                 "SELECT current_setting('shared_preload_libraries') AS loaded"
             ).fetchone()["loaded"]
