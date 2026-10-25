@@ -64,8 +64,9 @@ jobs:
           lines = [
               "## Firefox / WebKit portability smoke",
               "",
-              "Advisory, fixture-only, isolated loopback app. PostgreSQL auth and PDF "
-              "rendering are not covered. Chromium full E2E remains authoritative.",
+              "Advisory, fixture-only, isolated loopback app. PDF page render and "
+              "dual-pane mounts are checked; PostgreSQL auth and annotation "
+              "durability are not. Chromium full E2E remains authoritative.",
               "",
           ]
           if path.is_file():
