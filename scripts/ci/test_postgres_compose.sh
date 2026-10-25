@@ -57,7 +57,7 @@ if [[ "$major" != 18 ]]; then
 fi
 # Cluster creation locale is persistent; a restart will NOT apply changed
 # POSTGRES_INITDB_ARGS to an existing PostgreSQL volume.
-locale=$(query "SELECT datlocprovider || '|' || datlocale FROM pg_database WHERE datname = current_database()")
+locale=$(query "SELECT datlocprovider::text || '|' || datlocale FROM pg_database WHERE datname = current_database()")
 if [[ "$locale" != "b|PG_UNICODE_FAST" ]]; then
   echo "PostgreSQL database does not use builtin PG_UNICODE_FAST locale" >&2
   exit 1
