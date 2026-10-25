@@ -17,10 +17,11 @@ MAX_RULES = 18
 MAX_TARGETS = 2
 MAX_SELECTOR = 100
 VALID_RULE = re.compile(r"[a-z][a-z0-9-]{0,63}\Z")
-VALID_IMPACT = frozenset(("critical", "serious", "moderate", "minor", "unknown"))
+IMPACT_RANK = ("critical", "serious", "moderate", "minor", "unknown")
+VALID_IMPACT = frozenset(IMPACT_RANK)
 # Simple public selectors only. Reject attribute values, URLs and arbitrary
 # content-bearing strings rather than publishing synthetic library text.
-VALID_SELECTOR = re.compile(r"[A-Za-z0-9#.>_:\[\] -]{1,100}\Z")
+VALID_SELECTOR = re.compile(r"[A-Za-z0-9#.>_:\[\]() -]{1,100}\Z")
 
 AXE_QUERY = """async (selector) => {
     const root = document.querySelector(selector);
@@ -72,17 +73,19 @@ def sanitized_report(label: str, raw: dict) -> dict:
         selectors = value.get("selectors")
         if not isinstance(selectors, list):
             raise AssertionError("invalid axe target collection")
+        permitted = [
+            target for target in selectors[:MAX_TARGETS]
+            if isinstance(target, str) and VALID_SELECTOR.fullmatch(target)
+            and len(target) <= MAX_SELECTOR
+        ]
         violations.append({
             "rule": rule_id,
             "impact": impact,
             "nodes": count,
-            "sample_targets": [
-                target for target in selectors[:MAX_TARGETS]
-                if isinstance(target, str) and VALID_SELECTOR.fullmatch(target)
-                and len(target) <= MAX_SELECTOR
-            ],
+            "sample_targets": permitted,
+            "suppressed_targets": min(len(selectors), MAX_TARGETS) - len(permitted),
         })
-    violations.sort(key=lambda v: (v["rule"], v["impact"]))
+    violations.sort(key=lambda v: (IMPACT_RANK.index(v["impact"]), v["rule"]))
     return {
         "surface": label,
         "axe": AXE_PIN,
