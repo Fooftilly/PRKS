@@ -16,6 +16,7 @@ import requests
 WORKFLOW = ".github/workflows/e2e-classic-distribution-gate.yml"
 FULL_JOB = re.compile(r"Packaged classic bundles \(([1-6])/6\)\Z")
 SMOKE_JOB = "Packaged classic smoke (manual pilot)"
+SKIPPED_FULL_MATRIX = "Packaged classic bundles (${{ matrix.shard }}/6)"
 SHARED_JOBS = (
     "Docker classic bundle and rollback build smoke",
     "Classic bundle SW upgrade and rollback (real Chromium)",
@@ -39,6 +40,8 @@ def _seconds(start: str, end: str) -> float:
 
 
 def _validate_run(run: dict, expected_mode: str) -> None:
+    if not isinstance(run, dict):
+        raise InvalidBenchmark("Workflow run must be a JSON object")
     if expected_mode not in ("full", "smoke"):
         raise InvalidBenchmark("Unknown requested comparison mode")
     if run.get("event") != "workflow_dispatch" or run.get("conclusion") != "success":
@@ -50,8 +53,10 @@ def _validate_run(run: dict, expected_mode: str) -> None:
 
 
 def _successful_jobs(jobs: list[dict]) -> list[dict]:
-    if not jobs:
+    if not isinstance(jobs, list) or not jobs:
         raise InvalidBenchmark("No workflow jobs returned")
+    if any(not isinstance(job, dict) for job in jobs):
+        raise InvalidBenchmark("Workflow jobs must be JSON objects")
     active = []
     for job in jobs:
         conclusion = job.get("conclusion")
@@ -80,7 +85,7 @@ def _browser_jobs(active: list[dict], jobs: list[dict], mode: str) -> list[dict]
         return shards
     if shards or len(smoke) != 1:
         raise InvalidBenchmark("Smoke run must have one passing pilot and no full shard")
-    if not any(name.startswith("Packaged classic bundles (") for name in skipped):
+    if skipped.count(SKIPPED_FULL_MATRIX) != 1 or any(FULL_JOB.fullmatch(name) for name in skipped):
         raise InvalidBenchmark("Smoke run is missing its skipped full matrix")
     return smoke
 

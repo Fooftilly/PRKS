@@ -6,7 +6,14 @@ import unittest
 from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 
-from scripts.ci.compare_packaged_e2e import InvalidBenchmark, _get_json, compare, fetch_run, summarize
+from scripts.ci.compare_packaged_e2e import (
+    SKIPPED_FULL_MATRIX,
+    InvalidBenchmark,
+    _get_json,
+    compare,
+    fetch_run,
+    summarize,
+)
 
 SHA = "9" * 40
 START = datetime(2026, 10, 17, 21, 0, tzinfo=timezone.utc)
@@ -47,7 +54,7 @@ def smoke_jobs() -> list[dict]:
         job("Docker classic bundle and rollback build smoke", 18),
         job("Classic bundle SW upgrade and rollback (real Chromium)", 21),
         job("Packaged classic smoke (manual pilot)", 53),
-        job("Packaged classic bundles (" + "$" + "{{ matrix.shard }}/6)", 0, "skipped"),
+        job(SKIPPED_FULL_MATRIX, 0, "skipped"),
     ]
 
 
@@ -121,6 +128,27 @@ class PackagedCostComparisonTests(unittest.TestCase):
         with self.assertRaises(InvalidBenchmark):
             summarize(run(2), selected, "smoke")
 
+    def test_smoke_rejects_renamed_or_partial_skipped_full_matrix(self):
+        for fake_name in ("Packaged classic bundles (renamed/6)",
+                          "Packaged classic bundles (1/6)"):
+            with self.subTest(fake_name=fake_name):
+                incomplete = smoke_jobs()
+                incomplete[-1]["name"] = fake_name
+                with self.assertRaisesRegex(InvalidBenchmark, "skipped full matrix"):
+                    summarize(run(1), incomplete, "smoke")
+        duplicated = smoke_jobs()
+        duplicated.append(dict(duplicated[-1]))
+        with self.assertRaisesRegex(InvalidBenchmark, "skipped full matrix"):
+            summarize(run(1), duplicated, "smoke")
+
+    def test_malformed_jobs_fail_with_explanation(self):
+        for invalid in ([None], ["not a job"], [smoke_jobs()[0], None]):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(InvalidBenchmark, "must be JSON objects"):
+                    summarize(run(1), invalid, "smoke")
+        with self.assertRaisesRegex(InvalidBenchmark, "Workflow run must be a JSON object"):
+            summarize(None, smoke_jobs(), "smoke")
+
     def test_refuses_rerun_attempts_and_unknown_attempts(self):
         for attempt in (2, None):
             with self.subTest(attempt=attempt):
@@ -172,6 +200,24 @@ class PackagedCostComparisonTests(unittest.TestCase):
                 timeout=30, verify=True, allow_redirects=False,
             )
             self.assertNotIn("proxies", request.call_args.kwargs)
+
+    def test_auth_token_only_sent_to_fixed_github_origin(self):
+        with patch("scripts.ci.compare_packaged_e2e.requests.get") as request:
+            request.return_value.status_code = 200
+            request.return_value.json.return_value = {"id": 11}
+            self.assertEqual(
+                _get_json("/repos/Fooftilly/PRKS/actions/runs/11", "test-token"),
+                {"id": 11},
+            )
+            request.assert_called_once_with(
+                "https://api.github.com/repos/Fooftilly/PRKS/actions/runs/11",
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "PRKS-E2E-benchmark",
+                    "Authorization": "Bearer test-token",
+                },
+                timeout=30, verify=True, allow_redirects=False,
+            )
 
     def test_refuses_github_http_errors_and_non_object_responses(self):
         with patch("scripts.ci.compare_packaged_e2e.requests.get") as request:
