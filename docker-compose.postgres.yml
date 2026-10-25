@@ -1,0 +1,37 @@
+# PostgreSQL 18 preview (#630). Combine with docker-compose.yml explicitly:
+# docker compose -f docker-compose.yml -f docker-compose.postgres.yml --profile postgres up -d db
+# Do not use as the canonical PRKS app backend until PG-C1 / L-D-1 cutover.
+services:
+  # Opt-in PostgreSQL 18 infrastructure preview (#630). This is NOT the
+  # canonical PRKS runtime: the existing 'prks' service still uses SQLite.
+  # Enable with both Compose files (see command above); never enable by default.
+  db:
+    profiles: ["postgres"]
+    # Match scripts/test-postgres and CI parity tests; update together after validation.
+    image: postgres:18.6@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+    environment:
+      POSTGRES_DB: prks
+      POSTGRES_USER: prks
+      POSTGRES_PASSWORD_FILE: /run/secrets/prks_db_password
+      POSTGRES_INITDB_ARGS: "--locale-provider=builtin --builtin-locale=PG_UNICODE_FAST"
+    secrets:
+      - prks_db_password
+    volumes:
+      # PostgreSQL 18 uses versioned PGDATA under /var/lib/postgresql.
+      # Do not mount at /var/lib/postgresql/data (pre-18 layout).
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U prks -d prks"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+
+volumes:
+  pgdata:
+
+secrets:
+  prks_db_password:
+    file: "${PRKS_DB_PASSWORD_FILE:-./secrets/db_password}"

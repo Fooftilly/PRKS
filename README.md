@@ -89,6 +89,41 @@ PRKS_PUBLISH_HOST=0.0.0.0 docker compose up -d
 
 Use that override only on a network you already trust, or behind an access layer you control.
 
+### PostgreSQL database container (opt-in, not the active application backend)
+
+The PostgreSQL 18 infrastructure preview for [deployment issue #630](https://github.com/Fooftilly/PRKS/issues/630) is **disabled by default**. Normal `docker compose up -d` still runs the existing SQLite-backed web application. The `db` service does not publish a host port, does not open a PRKS storage root and does **not** migrate or switch the PRKS application to PostgreSQL. It only prepares an internal PostgreSQL service for the later, reviewed cutover.
+
+Create a private password file outside version control and start only the database:
+
+```bash
+install -d -m 700 secrets
+umask 077
+# Refuse symlinks (including dangling ones) and non-regular password paths.
+if [ -L secrets/db_password ] || { [ -e secrets/db_password ] && [ ! -f secrets/db_password ]; }; then
+  echo "secrets/db_password must be a regular, non-symlink file" >&2
+  exit 1
+fi
+if [ ! -e secrets/db_password ]; then
+  # noclobber also refuses to overwrite a file inserted after the check.
+  ( set -C; openssl rand -hex 32 > secrets/db_password ) || exit 1
+fi
+chmod 600 secrets/db_password
+test -f secrets/db_password && test -s secrets/db_password || {
+  echo "Missing or empty database password file" >&2
+  exit 1
+}
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml --profile postgres up -d db
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml --profile postgres ps db
+```
+
+**Do not regenerate or overwrite an existing `secrets/db_password`:** PostgreSQL uses the password file only during first-time database initialization. Changing this file on an initialized volume does not change the `prks` role password; coordinate password rotation using an authenticated `ALTER ROLE` and update the secret together, without deleting the database volume.
+
+**Always supply both `-f` files for PostgreSQL lifecycle commands**, including `stop`, `down` and `down -v`. Plain `docker compose down` reads only the SQLite default file and will not manage the opt-in PostgreSQL service or its volume.
+
+The database reads that password through `POSTGRES_PASSWORD_FILE` as a Compose secret; `PRKS_DB_PASSWORD_FILE` can specify another secret-file path. Treat the password and future database URL as credentials: never commit them, embed them in an image or print them to logs. The `secrets/` directory is ignored by Git. Docker Compose's named volume `pgdata` is mounted at `/var/lib/postgresql`, the required PostgreSQL 18 location. Use `docker compose -f docker-compose.yml -f docker-compose.postgres.yml --profile postgres stop db` to stop only the database while preserving its volume. **`docker compose -f docker-compose.yml -f docker-compose.postgres.yml --profile postgres down` stops every service in this Compose project**, including the existing SQLite `prks` web service; `down` (without `-v`) preserves the database volume, while **`down -v` deletes it**. Take an appropriate backup before any destructive operation.
+
+**Do not run two PostgreSQL database copies against the same PRKS data root.** Root/database pairing, generation fencing, bootstrap, migration orchestration and readiness are not yet connected to this container. In particular, restoring or duplicating a PostgreSQL volume and pointing it at the same root could permanently delete files after the future cutover (approved risk R20). A database snapshot taken while PRKS is serving is not a safe rollback against its original root. The future cutover must document the offline root+database recovery pair and retire the old database copy after upgrade; reverting an image tag alone is not a rollback.
+
 ## Configuration and data layout
 
 | Variable | Purpose |

@@ -18,6 +18,8 @@ test_*.py
 prks_data.db
 data/
 data_testing/
+# Never send a local Compose password into a Docker build context or remote builder.
+secrets/
 
 *.md
 # License notices must accompany both source and built Docker distributions.

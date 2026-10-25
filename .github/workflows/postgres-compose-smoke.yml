@@ -1,0 +1,44 @@
+name: PostgreSQL Compose database volume smoke
+
+# Non-required, narrowly scoped L-D-1 database infrastructure test (#630).
+# This runs only the optional PostgreSQL service; it never starts PRKS web.
+on:
+  pull_request:
+    paths:
+      - docker-compose.yml
+      - docker-compose.postgres.yml
+      - .dockerignore
+      - scripts/ci/test_postgres_compose.sh
+      - .github/workflows/postgres-compose-smoke.yml
+  push:
+    branches:
+      - master
+    paths:
+      - docker-compose.yml
+      - docker-compose.postgres.yml
+      - .dockerignore
+      - scripts/ci/test_postgres_compose.sh
+      - .github/workflows/postgres-compose-smoke.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: postgres-compose-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  postgres-volume:
+    name: PostgreSQL 18 volume persistence
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check optional PostgreSQL service and persisted volume
+        shell: bash
+        run: bash scripts/ci/test_postgres_compose.sh
