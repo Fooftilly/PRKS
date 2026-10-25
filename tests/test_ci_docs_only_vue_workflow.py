@@ -22,15 +22,32 @@ VUE_HEAVY_STEPS = (
 )
 
 
+def _step_items(job: str) -> list[tuple[str | None, str]]:
+    """Split at every top-level YAML list item, including unnamed steps.
+
+    Embedded shell comments and strings must not count as YAML metadata.
+    """
+    starts = list(re.finditer(r"(?m)^      - ", job))
+    items: list[tuple[str | None, str]] = []
+    for index, match in enumerate(starts):
+        end = starts[index + 1].start() if index + 1 < len(starts) else len(job)
+        block = job[match.end():end]
+        first = block.split("\n", 1)[0]
+        name = re.fullmatch(r"name: ([^\n]+)", first)
+        items.append((name.group(1) if name else None, block))
+    return items
+
+
 def _named_step(job: str, name: str) -> str:
-    match = re.search(
-        r"(?ms)^      - name: " + re.escape(name) + r"\n"
-        r"(.*?)(?=^      - name: |\Z)",
-        job,
-    )
-    if match is None:
-        raise AssertionError(f"Missing Vue step: {name}")
-    return match.group(1)
+    matches = [body for actual, body in _step_items(job) if actual == name]
+    if len(matches) != 1:
+        raise AssertionError(f"Expected one Vue step named {name!r}")
+    return matches[0]
+
+
+def _step_guards(step: str) -> list[str]:
+    """Read only real step-level if fields, never comments or run text."""
+    return re.findall(r"(?m)^        if: ([^\n]+)$", step)
 
 
 class DocsOnlyVueGateTests(unittest.TestCase):
@@ -44,17 +61,17 @@ class DocsOnlyVueGateTests(unittest.TestCase):
         self.assertIn("  pull_request:", workflow)
         self.assertIn("  workflow_dispatch:", workflow)
 
-        self.assertNotIn("if:", _named_step(job, "Checkout repository"))
+        self.assertEqual(_step_guards(_named_step(job, "Checkout repository")), [])
+        self.assertEqual(
+            _step_guards(_named_step(job, "Classify documentation-only PR (fail closed)")),
+            [],
+        )
         for name in VUE_HEAVY_STEPS:
             with self.subTest(name=name):
-                self.assertIn(
-                    "if: steps.docs-scope.outputs.docs_only != 'true'",
-                    _named_step(job, name),
+                self.assertEqual(
+                    _step_guards(_named_step(job, name)),
+                    ["steps.docs-scope.outputs.docs_only != 'true'"],
                 )
-        self.assertEqual(
-            job.count("if: steps.docs-scope.outputs.docs_only != 'true'"),
-            len(VUE_HEAVY_STEPS),
-        )
 
     def test_classifier_uses_exact_same_reviewed_base_sha_selection(self):
         static = STATIC.read_text(encoding="utf-8")
@@ -78,15 +95,39 @@ class DocsOnlyVueGateTests(unittest.TestCase):
     def test_every_vue_step_is_explicitly_expected(self):
         static = STATIC.read_text(encoding="utf-8")
         job = static.split("\n  vue:\n", 1)[1]
-        found = re.findall(r"(?m)^      - name: ([^\n]+)$", job)
+        expected = [
+            "Checkout repository",
+            "Classify documentation-only PR (fail closed)",
+            *VUE_HEAVY_STEPS,
+        ]
+        # Count EVERY YAML step, including unnamed runs/uses.
+        self.assertEqual([name for name, _body in _step_items(job)], expected)
+
+    def test_guard_must_be_yaml_field_not_comment_or_shell_string(self):
+        job = STATIC.read_text(encoding="utf-8").split("\n  vue:\n", 1)[1]
+        guard = "        if: steps.docs-scope.outputs.docs_only != 'true'"
+        sample = _named_step(job, "Vitest")
         self.assertEqual(
-            found,
-            [
-                "Checkout repository",
-                "Classify documentation-only PR (fail closed)",
-                *VUE_HEAVY_STEPS,
-            ],
+            _step_guards(sample),
+            ["steps.docs-scope.outputs.docs_only != 'true'"],
         )
+        self.assertEqual(
+            _step_guards(sample.replace(guard, "        # " + guard.strip())), []
+        )
+        self.assertEqual(
+            _step_guards(sample.replace(guard, "          " + guard.strip())), []
+        )
+
+    def test_unnamed_run_and_uses_steps_are_not_hidden(self):
+        job = STATIC.read_text(encoding="utf-8").split("\n  vue:\n", 1)[1]
+        for extra in (
+            "      - run: npm run typecheck --prefix frontend-app\n",
+            "      - uses: actions/setup-node@untrusted\n",
+        ):
+            with self.subTest(extra=extra.strip()):
+                items = _step_items(job + extra)
+                self.assertIsNone(items[-1][0])
+                self.assertEqual(len(items), len(VUE_HEAVY_STEPS) + 3)
 
 
 if __name__ == "__main__":
