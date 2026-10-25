@@ -69,7 +69,11 @@ def _unclosed_fences(content: str, tokens: list) -> list[str]:
         # fence has an additional closing line. This respects indentation
         # and parent list/quote containers without guessing from raw text.
         span = token.map[1] - token.map[0]
-        content_lines = len(token.content.splitlines())
+        # Markdown-it's source maps count LF-delimited lines; Python
+        # splitlines() also splits Unicode line separators inside code.
+        content_lines = token.content.count("\n") + int(
+            bool(token.content) and not token.content.endswith("\n")
+        )
         if span < content_lines + 2:
             missing.append(token.markup)
     return missing
