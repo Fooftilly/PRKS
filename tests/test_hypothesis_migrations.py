@@ -114,6 +114,14 @@ class MigrationReentryProperties(unittest.TestCase):
                 self.assertEqual(len(legacy["folders"]), 1)
                 self.assertEqual(len(legacy["work_tags"]), len(work_cases))
                 self.assertEqual(len(legacy["folder_files"]), len(work_cases))
+                self.assertEqual(
+                    legacy["work_tags"],
+                    sorted((work, tag) for work, _, _, _ in work_cases),
+                )
+                self.assertEqual(
+                    legacy["folder_files"],
+                    sorted((folder, work) for work, _, _, _ in work_cases),
+                )
                 self.assertEqual(len(legacy["roles"]), len(work_cases))
                 self.assertEqual(
                     len(legacy["annotations"]),
