@@ -448,10 +448,18 @@ class ResearchGraphOfflineTests(unittest.TestCase):
                         o._wait_offline_banner(page)
                         o._open_details_drawer_if_tiled(page)
                     with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_to_graph'):
-                        page.locator('#prks-' + selector + '-view-graph').click()
-                        self.mounted(page)
-                        self.selected(page, kind + ':' + rid)
-                        o._wait_offline_banner(page)
+                        # Split only the existing Graph-opening stage so the
+                        # manual profiler can distinguish click/actionability,
+                        # Cytoscape mount, focus and offline provenance.
+                        # All original browser interactions/checks remain.
+                        with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_graph_click'):
+                            page.locator('#prks-' + selector + '-view-graph').click()
+                        with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_graph_mount'):
+                            self.mounted(page)
+                        with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_graph_focus'):
+                            self.selected(page, kind + ':' + rid)
+                        with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_graph_banner'):
+                            o._wait_offline_banner(page)
                     # Browser-side timestamps avoid attributing Playwright
                     # protocol latency to individual Person route awaits.
                     # Only profile-mode runs wrap these functions; normal
