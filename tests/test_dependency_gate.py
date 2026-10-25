@@ -1211,6 +1211,16 @@ class RepoGateLiveTests(unittest.TestCase):
         postgres_runtime = {"psycopg", "psycopg-binary", "psycopg-pool", "argon2-cffi"}
         self.assertTrue(postgres_runtime.issubset(runtime))
         self.assertTrue(postgres_runtime.isdisjoint(dev))
+        # Pyright's separate import-resolution install must use the same
+        # production pins, not the now-empty development selection.
+        static = (_PROJECT / ".github" / "workflows" / "static-analysis.yml").read_text()
+        install = static.split(
+            "- name: Install pinned PostgreSQL and identity type dependencies", 1
+        )[1].split("- name: Run Pyright data-flow checks", 1)[0]
+        self.assertIn("psycopg(-binary|-pool)?==", install)
+        self.assertIn("argon2-cffi==", install)
+        self.assertEqual(install.count("requirements.txt"), 3)
+        self.assertNotIn("requirements-dev.txt", install)
         expected_unit = dict(runtime, **{
             name: dev[name]
             for name in ("openapi-core", "hypothesis", "markdown-it-py", "mdurl")
