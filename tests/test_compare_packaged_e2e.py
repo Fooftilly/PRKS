@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 
-from scripts.ci.compare_packaged_e2e import InvalidBenchmark, compare, fetch_run, summarize
+from scripts.ci.compare_packaged_e2e import InvalidBenchmark, _get_json, compare, fetch_run, summarize
 
 SHA = "9" * 40
 START = datetime(2026, 10, 17, 21, 0, tzinfo=timezone.utc)
@@ -150,6 +150,29 @@ class PackagedCostComparisonTests(unittest.TestCase):
             summarize(fetched_smoke, fetched_smoke_jobs, "smoke"),
         )
         self.assertIn("98.2%", report)
+
+    def test_refuses_non_api_paths_without_issuing_network_requests(self):
+        with patch("scripts.ci.compare_packaged_e2e.HTTPSConnection") as connection:
+            for path in ("file:///etc/passwd", "https://example.org", "//example.org"):
+                with self.subTest(path=path):
+                    with self.assertRaisesRegex(InvalidBenchmark, "Unexpected GitHub API path"):
+                        _get_json(path, None)
+            connection.assert_not_called()
+
+    def test_fixed_host_connection_rejects_non_object_response(self):
+        with patch("scripts.ci.compare_packaged_e2e.HTTPSConnection") as connection:
+            response = connection.return_value.getresponse.return_value.__enter__.return_value
+            response.status = 200
+            with patch("scripts.ci.compare_packaged_e2e.json.load", return_value=[]):
+                with self.assertRaisesRegex(InvalidBenchmark, "JSON object"):
+                    _get_json("/repos/Fooftilly/PRKS/actions/runs/11", None)
+            connection.assert_called_once_with("api.github.com", timeout=30)
+            connection.return_value.request.assert_called_once_with(
+                "GET", "/repos/Fooftilly/PRKS/actions/runs/11",
+                headers={"Accept": "application/vnd.github+json",
+                         "User-Agent": "PRKS-E2E-benchmark"},
+            )
+            connection.return_value.close.assert_called_once()
 
     def test_distinct_same_commit_is_required(self):
         full = summarize(run(1), full_jobs(), "full")
