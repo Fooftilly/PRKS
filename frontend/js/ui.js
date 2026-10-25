@@ -4784,12 +4784,9 @@ function renderPlaylistSummarySidebarHtml(pl, editing) {
     const title = escapeHtml(pl.title || 'Playlist');
     const desc = escapeHtml(pl.description || '').trim();
     const originalUrl = String(pl.original_url || '').trim();
-    const originalUrlHref = prksSafeHttpUrl(originalUrl);
-    const originalUrlHtml = !originalUrl
-        ? '<p class="meta-row meta-row--compact meta-row--muted-italic">No original playlist URL.</p>'
-        : originalUrlHref
-            ? `<p class="meta-row meta-row--compact"><strong>Original playlist URL:</strong> <a href="${escapeHtml(originalUrlHref)}" target="_blank" rel="noopener noreferrer">${escapeHtml(originalUrl)}</a></p>`
-            : `<p class="meta-row meta-row--compact"><strong>Original playlist URL:</strong> ${escapeHtml(originalUrl)}</p>`;
+    const originalUrlHtml = originalUrl
+        ? prksOriginalUrlRowHtml('Original playlist URL', originalUrl, { compact: true })
+        : '<p class="meta-row meta-row--compact meta-row--muted-italic">No original playlist URL.</p>';
     const count = Array.isArray(pl.items) ? pl.items.length : 0;
     const editLabel = editing ? 'Done' : 'Edit';
     return `
@@ -5416,12 +5413,9 @@ function prksWorkPanelViewShellHtml(work, parts) {
     const publishedRow = parts && parts.showPublishedDate && work.published_date
         ? `<p class="meta-row"><strong>Published:</strong> ${escapeHtml(typeof prksFormatPublishedForDisplay === 'function' ? prksFormatPublishedForDisplay(work.published_date) : work.published_date)}</p>`
         : '';
-    const originalUrlHref = parts && prksSafeHttpUrl(parts.originalUrlPdf);
-    const originalUrl = originalUrlHref
-        ? `<p class="meta-row"><strong>Original URL:</strong> <a href="${escapeHtml(originalUrlHref)}" target="_blank" rel="noopener noreferrer">${escapeHtml(originalUrlHref)}</a></p>`
-        : parts && parts.originalUrlPdf
-            ? `<p class="meta-row"><strong>Original URL:</strong> ${escapeHtml(parts.originalUrlPdf)}</p>`
-            : '';
+    const originalUrl = parts && parts.originalUrlPdf
+        ? prksOriginalUrlRowHtml('Original URL', parts.originalUrlPdf)
+        : '';
     const abstractRow = work.abstract
         ? `<p class="meta-row"><strong>Abstract:</strong> ${escapeHtml(work.abstract)}</p>`
         : '';
@@ -5585,13 +5579,7 @@ function renderWorkMetaTab(work, mode = 'view') {
             ${renderRow('Year', work.year)}
             ${showPublishedDate ? renderRow('Published', typeof prksFormatPublishedForDisplay === 'function' ? prksFormatPublishedForDisplay(work.published_date) : work.published_date) : ''}
             <div id="work-bib-rows" data-prks-role="work-bib-rows">${prksWorkBibRowsHtml(work)}</div>
-            ${
-                originalUrlPdf
-                    ? (prksSafeHttpUrl(originalUrlPdf)
-                        ? `<p class="meta-row"><strong>Original URL:</strong> <a href="${escapeHtml(prksSafeHttpUrl(originalUrlPdf))}" target="_blank" rel="noopener noreferrer">${escapeHtml(originalUrlPdf)}</a></p>`
-                        : `<p class="meta-row"><strong>Original URL:</strong> ${escapeHtml(originalUrlPdf)}</p>`)
-                    : ''
-            }
+            ${prksOriginalUrlRowHtml('Original URL', originalUrlPdf)}
             ${renderRow('Abstract', work.abstract)}
             ${!hasMetadata ? '<p class="meta-row meta-row--muted-italic" data-prks-role="work-meta-empty">No metadata available.</p>' : ''}
             <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm copy-bibtex-btn" aria-live="polite">${typeof prksIcon === 'function' ? prksIcon('copy', { size: 'sm' }) : ''} Copy BibTeX</button>
@@ -5778,6 +5766,19 @@ function prksSafeHttpUrl(value) {
     }
     if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return url;
     return '';
+}
+
+/* One "<label>: <value-or-link>" meta row for original_url/source_url. The
+ * value only becomes a link when prksSafeHttpUrl accepts its scheme. */
+function prksOriginalUrlRowHtml(label, rawUrl, opts) {
+    const value = String(rawUrl || '').trim();
+    if (!value) return '';
+    const cls = opts && opts.compact ? 'meta-row meta-row--compact' : 'meta-row';
+    const href = prksSafeHttpUrl(value);
+    const rendered = href
+        ? `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(value)}</a>`
+        : escapeHtml(value);
+    return `<p class="${cls}"><strong>${escapeHtml(label)}:</strong> ${rendered}</p>`;
 }
 
 function prksEscapeAttr(s) {
