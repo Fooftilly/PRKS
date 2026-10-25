@@ -55,8 +55,8 @@ def _check_run(run: dict, mode: str) -> None:
         raise InvalidBenchmark(f"Expected a completed {mode} E2E workflow")
     if run.get("conclusion") != "success" or run.get("run_attempt") != 1:
         raise InvalidBenchmark("Only successful first-attempt workflow runs are comparable")
-    if run.get("event") not in ("pull_request", "workflow_dispatch"):
-        raise InvalidBenchmark("Only pull-request or explicit manual runs are comparable")
+    if run.get("event") != "pull_request":
+        raise InvalidBenchmark("Only uninstrumented pull-request runs are comparable")
     if not run.get("head_sha") or not isinstance(run.get("id"), int):
         raise InvalidBenchmark("Missing workflow run identity")
 
@@ -129,25 +129,12 @@ def summarize(
     }
 
 
-def verify_source_full_plan(repo: str, jobs: list[dict], token: str | None) -> None:
-    """Require the E2E plan job's actual emitted full-mode selection record.
+def _read_source_plan_log(repo: str, job_id: int, token: str) -> str:
+    """Download the public plan job log with credentials scoped to GitHub API.
 
-    GitHub job names and matrix width cannot distinguish full from a 6-shard
-    affected subset. GitHub requires authentication to issue the signed log
-    URL. Never forward the API bearer token to the signed download host.
+    GitHub issues a signed HTTPS blob URL. Never include the bearer token in
+    the subsequent request, even if the redirect host happens to be GitHub.
     """
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
-        raise InvalidBenchmark("Invalid GitHub repository")
-    if not token:
-        raise InvalidBenchmark("GH_TOKEN or GITHUB_TOKEN required to read E2E planner logs")
-    if not isinstance(jobs, list) or any(not isinstance(j, dict) for j in jobs):
-        raise InvalidBenchmark("Malformed E2E planner job metadata")
-    plans = [j for j in jobs if j.get("name") == "E2E plan"]
-    if len(plans) != 1 or plans[0].get("conclusion") != "success":
-        raise InvalidBenchmark("Missing or unsuccessful E2E planner")
-    job_id = plans[0].get("id")
-    if not isinstance(job_id, int) or job_id <= 0:
-        raise InvalidBenchmark("Missing E2E planner job ID")
     response = requests.get(
         f"https://api.github.com/repos/{repo}/actions/jobs/{job_id}/logs",
         headers={
@@ -173,7 +160,24 @@ def verify_source_full_plan(repo: str, jobs: list[dict], token: str | None) -> N
     log = download.text
     if not isinstance(log, str) or len(log) > 256_000:
         raise InvalidBenchmark("Missing or unexpectedly large E2E planner log")
-    found = PLAN_SUMMARY.findall(log)
+    return log
+
+
+def verify_source_full_plan(repo: str, jobs: list[dict], token: str | None) -> None:
+    """Prove full source selection using its successful E2E plan job log."""
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+        raise InvalidBenchmark("Invalid GitHub repository")
+    if not token:
+        raise InvalidBenchmark("GH_TOKEN or GITHUB_TOKEN required to read E2E planner logs")
+    if not isinstance(jobs, list) or any(not isinstance(j, dict) for j in jobs):
+        raise InvalidBenchmark("Malformed E2E planner job metadata")
+    plans = [j for j in jobs if j.get("name") == "E2E plan"]
+    if len(plans) != 1 or plans[0].get("conclusion") != "success":
+        raise InvalidBenchmark("Missing or unsuccessful E2E planner")
+    job_id = plans[0].get("id")
+    if not isinstance(job_id, int) or job_id <= 0:
+        raise InvalidBenchmark("Missing E2E planner job ID")
+    found = PLAN_SUMMARY.findall(_read_source_plan_log(repo, job_id, token))
     if len(found) != 1 or found[0] != ("full", "true", "6", "true"):
         raise InvalidBenchmark("E2E planner did not prove a complete six-shard full suite")
 
