@@ -359,10 +359,30 @@ class BrowseOfflineTests(unittest.TestCase):
                     await fetchWorkDetails(wid);
                 }""", ['work_b', 'playlist_b']),
         )
+        # A single acknowledged foreground Work-open establishes the Recent
+        # snapshot before any internal refresh. Reopening the Work before each
+        # subtest creates extra MARK_WORK_OPENED intents and can conceal a
+        # stale/evicted Recent snapshot caused by an earlier mutation.
+        self.cache_all(page, ids)
+        initial_recent = o._cached_list(page, 'recent:index')
+        self.assertIsNotNone(initial_recent)
+        baseline = [
+            (row['id'], row['last_opened_at'])
+            for row in initial_recent['value']
+        ]
         for label, script, keys in cases:
             with self.subTest(case=label):
-                self.cache_all(page, ids)
                 before = self.generations(page)
+                preexisting = o._cached_list(page, 'recent:index')
+                self.assertIsNotNone(
+                    preexisting,
+                    '%s evicted Recent before the next internal refresh' % label,
+                )
+                self.assertEqual(
+                    [(row['id'], row['last_opened_at']) for row in preexisting['value']],
+                    baseline,
+                    '%s started with an unexpectedly replaced Recent snapshot' % label,
+                )
                 arg = [ids.get(keys[0]), tag_id if keys[1] is None else ids.get(keys[1])]
                 page.evaluate(script, arg)
                 page.wait_for_timeout(400)
@@ -375,6 +395,11 @@ class BrowseOfflineTests(unittest.TestCase):
                 envelope = o._cached_list(page, 'recent:index')
                 self.assertIsNotNone(envelope, label)
                 cached = envelope['value']
+                self.assertEqual(
+                    [(row['id'], row['last_opened_at']) for row in cached],
+                    baseline,
+                    '%s altered the original cached Recent rows' % label,
+                )
                 fresh = page.evaluate(
                     """async () => {
                         const res = await prksRequest('/api/recent');
