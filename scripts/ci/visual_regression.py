@@ -130,7 +130,6 @@ def prove_mutation_detection(sample: dict) -> None:
     changed = sample.copy()
     # Real image source is quantized RGB; the synthetic mutation is a different
     # screenshot with inverted colors. No need to change PRKS production CSS.
-    from tests.visual.compare import SAMPLE_SIZE
     import base64
     import zlib
     rgb = zlib.decompress(base64.b64decode(sample["rgb48x30_zlib"]))
