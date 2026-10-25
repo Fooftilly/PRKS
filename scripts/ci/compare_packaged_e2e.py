@@ -47,6 +47,8 @@ def summarize(run: dict, jobs: list[dict], expected_mode: str) -> dict:
         raise InvalidBenchmark("Expected a successful manual workflow_dispatch run")
     if run.get("path") != WORKFLOW or not run.get("head_sha"):
         raise InvalidBenchmark("Not a verified packaged E2E workflow run")
+    if run.get("run_attempt") != 1:
+        raise InvalidBenchmark("Re-run attempts are not comparable: prior job cost is omitted")
     if not jobs:
         raise InvalidBenchmark("No workflow jobs returned")
 
