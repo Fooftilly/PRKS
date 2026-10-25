@@ -362,6 +362,20 @@ def origin_matches_request(
     return origin_port == request_port
 
 
+def _get_route_mutates(parsed_path) -> bool:
+    """True when a GET route has mutation side effects, so admission applies
+    the Origin check even without ``PRKS_AUTH``.
+
+    ``GET /api/processing-files?rescan=1`` reconciles the inbox folder on disk
+    and INSERT/UPDATE/DELETEs ``processing_files`` rows; left as a plain GET any
+    cross-origin page could trigger it.
+    """
+    if parsed_path.path != "/api/processing-files":
+        return False
+    rescan_raw = (parse_qs(parsed_path.query).get("rescan") or [""])[0]
+    return str(rescan_raw).strip().lower() in ("1", "true", "yes")
+
+
 def json_content_type_allowed(header_value: str) -> bool:
     msg = Message()
     msg["content-type"] = header_value
@@ -842,7 +856,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         method = (getattr(self, "command", "") or "").upper()
         auth = getattr(self.server, "prks_auth", None)
         if auth is None:
-            return method in ("GET", "HEAD") or self._validate_mutation_origin()
+            if method in ("GET", "HEAD") and not _get_route_mutates(parsed_path):
+                return True
+            return self._validate_mutation_origin()
         # Only an authenticated (PostgreSQL) process imports the identity code.
         from backend.api import session as session_api
 
