@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 from scripts.ci.compare_packaged_e2e import (
     SKIPPED_FULL_MATRIX,
+    SMOKE_JOB,
     InvalidBenchmark,
     _get_json,
     compare,
@@ -141,13 +142,15 @@ class PackagedCostComparisonTests(unittest.TestCase):
 
     def test_paired_cli_fetches_one_run_and_renders_comparison(self):
         valid = [*full_jobs()[:-1], job(SMOKE_JOB, 75)]
-        with patch("scripts.ci.compare_packaged_e2e.fetch_run",
-                   return_value=(run(777), valid)) as fetch, \\
-             patch("scripts.ci.compare_packaged_e2e.os.environ.get",
-                   return_value=None), \\
-             patch("scripts.ci.compare_packaged_e2e.sys.argv",
-                   ["compare_packaged_e2e.py", "--paired-run", "777"]), \\
-             patch("builtins.print") as output:
+        with (
+            patch("scripts.ci.compare_packaged_e2e.fetch_run",
+                  return_value=(run(777), valid)) as fetch,
+            patch("scripts.ci.compare_packaged_e2e.os.environ.get",
+                  return_value=None),
+            patch("scripts.ci.compare_packaged_e2e.sys.argv",
+                  ["compare_packaged_e2e.py", "--paired-run", "777"]),
+            patch("builtins.print") as output,
+        ):
             self.assertEqual(main(), 0)
         fetch.assert_called_once_with("Fooftilly/PRKS", 777, None)
         self.assertIn("GitHub run #777", output.call_args.args[0])
