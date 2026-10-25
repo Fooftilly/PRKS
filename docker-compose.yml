@@ -32,7 +32,7 @@ services:
       # Do not mount at /var/lib/postgresql/data (pre-18 layout).
       - pgdata:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U prks -d prks"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U prks -d prks"]
       interval: 5s
       timeout: 3s
       retries: 20
