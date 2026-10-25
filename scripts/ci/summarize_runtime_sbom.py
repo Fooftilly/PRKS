@@ -157,7 +157,12 @@ def tally_matches(matches: list[Any]) -> dict[str, Any]:
             }
             for group, bucket in sorted(ecosystems.items())
         },
-        "triage_examples": [entry[-1] for entry in sorted(candidates)[:TOP_LIMIT]],
+        "triage_examples": [
+            entry[-1] for entry in sorted(
+                candidates,
+                key=lambda entry: (*entry[:-1], entry[-1]["installed"], entry[-1]["fixed_versions"]),
+            )[:TOP_LIMIT]
+        ],
     }
 
 
