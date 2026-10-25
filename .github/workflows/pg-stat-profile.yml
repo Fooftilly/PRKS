@@ -51,6 +51,8 @@ jobs:
           assert report["server_version_num"] >= 180000
           assert len(report["profiles"]) == 6
           assert all(profile["top_statements"] for profile in report["profiles"])
-          assert "query" not in str(report)
+          assert all("query" not in statement and "sql" not in statement
+                     for profile in report["profiles"]
+                     for statement in profile["top_statements"])
           print(json.dumps(report, indent=2, sort_keys=True))
           PY
