@@ -108,7 +108,7 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
         context.close.side_effect = RuntimeError("secret-context-path")
         with patch(
             "scripts.ci.cross_browser_smoke.open_app_page",
-            return_value=(page, context, Mock()),
+            return_value=(page, context, Mock(unsafe=True)),
         ):
             with self.assertRaises(SmokeFailure) as caught:
                 smoke(object(), "http://127.0.0.1:1", "synthetic", engine="webkit")
