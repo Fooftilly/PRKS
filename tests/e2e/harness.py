@@ -1329,7 +1329,7 @@ def _profile_browser_navigation(page) -> None:
     _profile_nav_count("nav_timing_samples")
 
 
-def open_app_page(browser, origin: str, service_workers: str = "block"):
+def open_app_page(browser, origin: str, service_workers: str = "block", *, install_clock: bool = False):
     started = time.perf_counter()
     # Prefer-reduced-motion is opt-in (`PRKS_E2E_REDUCED_MOTION=1`). Emulating
     # it by default breaks layout/scroll assertions that measure real overflow
@@ -1342,6 +1342,10 @@ def open_app_page(browser, origin: str, service_workers: str = "block"):
         context_kwargs["reduced_motion"] = "reduce"
     context = browser.new_context(**context_kwargs)
     page = context.new_page()
+    # Time-sensitive browser tests opt in before application scripts register
+    # timers; installing after navigation can invalidate existing timer IDs.
+    if install_clock:
+        page.clock.install()
     collector = PageCollector(page, origin)
     _profile_phase("browser_context", time.perf_counter() - started)
     e2e_heartbeat("CONTEXT_READY")

@@ -211,6 +211,24 @@ class StartupReadinessProfileTests(unittest.TestCase):
                 finally:
                     server.stop()
 
+    def test_virtual_clock_opt_in_is_installed_before_app_navigation(self):
+        # Mock Playwright so the ordering contract runs without Chromium.
+        for enabled in (False, True):
+            browser = mock.Mock()
+            page = browser.new_context.return_value.new_page.return_value
+            calls = []
+            page.clock.install.side_effect = lambda log=calls: log.append("install")
+            page.goto.side_effect = lambda *args, log=calls, **kwargs: log.append("goto")
+            with mock.patch.dict(os.environ, {"PRKS_E2E_PROFILE": "0"}):
+                harness.open_app_page(
+                    browser, "http://127.0.0.1:42002", install_clock=enabled,
+                )
+            self.assertEqual(calls, ["install", "goto"] if enabled else ["goto"])
+            self.assertEqual(page.clock.install.call_count, int(enabled))
+            page.goto.assert_called_once_with(
+                "http://127.0.0.1:42002/#/folders", wait_until="domcontentloaded",
+            )
+
     def test_app_subphases_preserve_real_navigation_and_all_three_waits(self):
         browser = mock.Mock()
         context = browser.new_context.return_value
