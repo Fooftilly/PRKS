@@ -14,7 +14,6 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -227,24 +226,17 @@ def _discover_complete_e2e_ids() -> list[str]:
 
 
 def _untracked_frontend_app_paths(repo: Path) -> list[str]:
-    """Include new Vue files absent from the shared E2E git-discovery prefixes.
+    """Include new Vue files absent from shared E2E untracked prefixes.
 
-    The shared source planner discovers untracked frontend/ paths, but its
-    untracked prefix set does not yet include frontend-app/. Do not change the
-    live source E2E policy for an inactive packaged experiment.
+    Reuse the E2E policy's existing read-only, fail-closed Git runner rather
+    than introducing another subprocess implementation.
     """
-    command = [
-        "git", "-C", str(repo), "ls-files", "--others",
-        "--exclude-standard", "-z", "--", "frontend-app/",
-    ]
-    try:
-        proc = subprocess.run(command, capture_output=True, check=False)
-    except OSError as exc:
-        raise policy.ChangeDiscoveryError("untracked Vue discovery unavailable") from exc
-    if proc.returncode:
-        raise policy.ChangeDiscoveryError("untracked Vue discovery failed")
-    return [path for path in proc.stdout.decode("utf-8").split("\0") if path]
-
+    output = policy._git_stdout(
+        repo,
+        ["ls-files", "--others", "--exclude-standard", "-z", "--", "frontend-app/"],
+        "untracked Vue discovery",
+    )
+    return [path for path in output.split("\0") if path]
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)

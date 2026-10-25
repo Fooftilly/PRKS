@@ -5,18 +5,16 @@ from __future__ import annotations
 import io
 import json
 import re
-import subprocess
+import runpy
 import sys
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from scripts.ci.plan_packaged_e2e import (
     EXTRA_PACKAGED_SMOKE_IDS,
     MAX_SMOKE_AFFECTED_TESTS,
-    SAFE_VUE_VIEWS,
     plan_packaged_e2e as _actual_plan_packaged_e2e,
     _untracked_frontend_app_paths,
     main,
@@ -72,12 +70,14 @@ def plan_packaged_e2e(paths, *, known_test_ids=None, **options):
 class PackagedSelectionPolicyTests(unittest.TestCase):
     def test_cli_direct_help_imports_policy_from_repo_root(self):
         script = ROOT / "scripts/ci/plan_packaged_e2e.py"
-        result = subprocess.run(
-            [sys.executable, str(script), "--help"],
-            cwd=ROOT, check=False, capture_output=True, text=True,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("--base", result.stdout)
+        with (
+            patch.object(sys, "argv", [str(script), "--help"]),
+            redirect_stdout(io.StringIO()) as output,
+            self.assertRaises(SystemExit) as exit_result,
+        ):
+            runpy.run_path(str(script), run_name="__main__")
+        self.assertEqual(exit_result.exception.code, 0)
+        self.assertIn("--base", output.getvalue())
 
     def test_activation_is_impossible_through_this_planner(self):
         proposal = plan_packaged_e2e(
@@ -161,10 +161,10 @@ class PackagedSelectionPolicyTests(unittest.TestCase):
         self.assertIn("affected feature", result["reason"])
 
     def test_local_cli_fails_full_on_new_untracked_vue_file(self):
-        missing = b"frontend-app/src/features/progress/NewComponent.vue\0"
+        missing = "frontend-app/src/features/progress/NewComponent.vue\0"
         with patch(
-            "scripts.ci.plan_packaged_e2e.subprocess.run",
-            return_value=SimpleNamespace(returncode=0, stdout=missing),
+            "scripts.ci.plan_packaged_e2e.policy._git_stdout",
+            return_value=missing,
         ):
             self.assertEqual(
                 _untracked_frontend_app_paths(ROOT),
