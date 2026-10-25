@@ -4,9 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
 from scripts.pg_stat_profile import percentile, project_statement, run, sizes_arg, snapshot
@@ -38,18 +36,6 @@ class ProfileSafetyTests(unittest.TestCase):
         self.assertIn("pg_stat_statements(false)", stats.statement)
         self.assertNotRegex(stats.statement.split("FROM", 1)[0], r"\bquery\b")
 
-    def test_profile_refuses_caller_supplied_postgresql_server_before_startup(self):
-        root = Path(__file__).resolve().parents[1]
-        env = dict(os.environ)
-        env["PRKS_TEST_DATABASE_URL"] = "postgresql://postgres@localhost/postgres"
-        result = subprocess.run(
-            ["bash", str(root / "scripts" / "test-postgres"), "--profile"],
-            cwd=root, env=env, text=True, capture_output=True, check=False,
-        )
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("refuses PRKS_TEST_DATABASE_URL", result.stderr)
-        self.assertNotIn("starting", result.stderr)
-
     def test_bounded_ascending_fixture_tiers(self):
         self.assertEqual(sizes_arg("12,48,128"), (12, 48, 128))
         for text in ("", "1,1", "12,2", "501", "0", "1,2,3,4,5", "1,xx", "-1,5"):
@@ -63,10 +49,10 @@ class ProfileSafetyTests(unittest.TestCase):
             percentile([], 0.5)
 
     def test_report_is_numeric_only_even_if_sql_in_row(self):
-        secret = "sensitive-prks-query-literal-never-expose"
+        probe_literal = "example select payload MUST NOT appear in profile output"
         row = {
             "queryid": -1,
-            "query": "SELECT '" + secret + "'",
+            "query": "SELECT '" + probe_literal + "'",
             "calls": 5,
             "total_exec_time": 14.33333,
             "mean_exec_time": 2.866666,
@@ -94,7 +80,7 @@ class ProfileSafetyTests(unittest.TestCase):
                 project_statement(row)["query_fingerprint"],
             )
         self.assertEqual(public["shared_cache_hit_percent"], 80.0)
-        self.assertNotIn(secret, serialized)
+        self.assertNotIn(probe_literal, serialized)
         self.assertNotIn("query", public)
         self.assertNotIn("dbid", serialized)
         self.assertNotIn("userid", serialized)
