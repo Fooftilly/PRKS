@@ -30,7 +30,7 @@ def fixture() -> dict:
                 "repetitions": 4, "completed_samples": 4,
                 "correctness_checks": 7, "warmup_calls": 2,
                 "first_observed_call_ms": 3.2,
-                "first_call_context": "after_fixture_seed_not_cold_start",
+                "first_call_context": "first_call_of_operation_not_cold_start",
                 "call_wall_p50_ms": 1.7, "call_wall_p95_ms": 2.2,
                 "top_statements": [dict(_STAT)],
             })
@@ -55,7 +55,7 @@ class PGProfileSummaryTests(unittest.TestCase):
         report = render(data)
         self.assertIn("| 48 | works_browse |", report)
         self.assertIn("not authenticated HTTP/API", report)
-        self.assertIn("not a process or cache cold start", report)
+        self.assertIn("none is a process/DB cold start", report)
         self.assertNotIn("abcdef0123456789", report)
         self.assertNotIn("postgresql://", report)
         self.assertNotIn("SELECT", report)
