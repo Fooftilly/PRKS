@@ -1041,7 +1041,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         Compose readiness is a separate /readyz endpoint in the PostgreSQL
         deployment lane (#630). A live process is not necessarily ready.
         """
-        body = b"ok\\n"
+        body = b"ok"
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
