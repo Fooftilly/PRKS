@@ -6,6 +6,7 @@ import io
 import json
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -40,6 +41,33 @@ class LocalVisualBaselineTests(unittest.TestCase):
         self.assertFalse(changed["passed"])
         self.assertGreater(changed["mean_delta"], 9)
         self.assertGreater(changed["hot_fraction"], 0.06)
+
+    def test_subtle_global_shift_fails_on_mean_without_hot_cells(self):
+        base = fingerprint(png_sample())
+        # All sampled pixels shift by 16/256, below the 35-channel hot limit
+        # but above the 9-channel mean limit.
+        from tests.visual.compare import SAMPLE_SIZE
+        raw = bytes((80, 80, 80)) * (SAMPLE_SIZE[0] * SAMPLE_SIZE[1])
+        shifted = bytes((96, 96, 96)) * (SAMPLE_SIZE[0] * SAMPLE_SIZE[1])
+        before = {**base, "rgb48x30_zlib": base64.b64encode(zlib.compress(raw)).decode()}
+        after = {**base, "rgb48x30_zlib": base64.b64encode(zlib.compress(shifted)).decode()}
+        result = compare(after, before)
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["hot_fraction"], 0)
+        self.assertGreater(result["mean_delta"], 9)
+
+    def test_small_high_contrast_region_fails_on_hot_without_mean(self):
+        from tests.visual.compare import SAMPLE_SIZE
+        base = fingerprint(png_sample())
+        count = SAMPLE_SIZE[0] * SAMPLE_SIZE[1]
+        original = bytes((80, 80, 80)) * count
+        altered = bytes((120, 120, 120)) * 150 + bytes((80, 80, 80)) * (count - 150)
+        before = {**base, "rgb48x30_zlib": base64.b64encode(zlib.compress(original)).decode()}
+        after = {**base, "rgb48x30_zlib": base64.b64encode(zlib.compress(altered)).decode()}
+        result = compare(after, before)
+        self.assertFalse(result["passed"])
+        self.assertLess(result["mean_delta"], 9)
+        self.assertGreater(result["hot_fraction"], 0.06)
 
     def test_dimensions_are_exact_even_when_mean_sample_matches(self):
         identical = fingerprint(png_sample())
