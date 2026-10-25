@@ -7,7 +7,6 @@ Only whitelisted metadata and vetted public package/advisory labels are emitted.
 """
 from __future__ import annotations
 
-import argparse
 import collections
 import json
 import re
@@ -249,20 +248,19 @@ def markdown(report: dict[str, Any]) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--sbom", type=Path, required=True)
-    parser.add_argument("--grype", type=Path, required=True)
-    parser.add_argument("--image-id-file", type=Path, required=True)
-    parser.add_argument("--json-output", type=Path, required=True)
-    parser.add_argument("--markdown-output", type=Path, required=True)
-    opts = parser.parse_args()
+    # Operate on fixed artifact basenames in the caller's working directory.
+    # No user-supplied read/write paths: the workflow runs in RUNNER_TEMP.
+    root = Path.cwd()
     start = time.perf_counter()
     report = summarize(
-        read_json(opts.sbom), read_json(opts.grype),
-        opts.image_id_file.read_text(encoding="utf-8").strip(),
+        read_json(root / "prks-runtime.spdx.json"),
+        read_json(root / "prks-runtime.grype.json"),
+        (root / "prks-runtime-image-id.txt").read_text(encoding="utf-8").strip(),
     )
-    opts.json_output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    opts.markdown_output.write_text(markdown(report), encoding="utf-8")
+    (root / "prks-runtime-triage.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    (root / "prks-runtime-triage.md").write_text(markdown(report), encoding="utf-8")
     print(f"Runtime SBOM triage: {report['match_count']} scanner matches; "
           f"{report['unique_advisory_ids']} unique IDs; "
           f"summary time {time.perf_counter() - start:.3f}s")
