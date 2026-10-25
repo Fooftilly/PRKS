@@ -107,14 +107,14 @@ Never use a real personal research library to generate documentation or UX-audit
 
 ## Optional PostgreSQL query-cost profile (#858)
 
-Run the **manual**, synthetic-only PostgreSQL 18 query profiler:
+Run the **manual**, synthetic-only PostgreSQL query profiler:
 
 ```bash
 scripts/test-postgres --profile
 scripts/test-postgres --profile --sizes 12,48,128 --repetitions 8
 ```
 
-The wrapper starts a new disposable Docker PostgreSQL 18 server (or local temporary PostgreSQL 18+ cluster)
+The wrapper starts a disposable Docker PostgreSQL 18.6 server (digest-pinned in `scripts/test-postgres`) or a temporary local PostgreSQL 18+ cluster
 with `shared_preload_libraries=pg_stat_statements` and `compute_query_id=on`,
 creates a harness-owned migrated database and extension, seeds synthetic Works,
 then deletes the database and server. The profiler **refuses**
