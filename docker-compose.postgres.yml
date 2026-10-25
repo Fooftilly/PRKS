@@ -4,7 +4,7 @@
 services:
   # Opt-in PostgreSQL 18 infrastructure preview (#630). This is NOT the
   # canonical PRKS runtime: the existing 'prks' service still uses SQLite.
-  # Enable explicitly with: docker compose --profile postgres up -d db
+  # Enable with both Compose files (see command above); never enable by default.
   db:
     profiles: ["postgres"]
     image: postgres:18
