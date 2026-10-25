@@ -7,7 +7,8 @@ import os
 import unittest
 from unittest.mock import patch
 
-from scripts.pg_stat_profile import percentile, project_statement, run, sizes_arg, snapshot
+from scripts.pg_stat_profile import (assert_work_detail, assert_works_count, benchmark,
+                                     percentile, project_statement, run, sizes_arg, snapshot)
 
 
 class ProfileSafetyTests(unittest.TestCase):
@@ -47,6 +48,48 @@ class ProfileSafetyTests(unittest.TestCase):
         self.assertEqual(percentile([9, 1, 5, 3], 0.95), 9)
         with self.assertRaises(ValueError):
             percentile([], 0.5)
+
+    def test_facade_readiness_rejects_wrong_count_and_details(self):
+        fixtures = [{"id": "WORK-A"}, {"id": "WORK-B"}]
+        assert_works_count(fixtures, 2)
+        assert_work_detail(fixtures[0], "WORK-A")
+        for value, count in ((fixtures, 3), ({}, 2), ([{"id": 7}], 1)):
+            with self.subTest(value=value), self.assertRaisesRegex(RuntimeError, "catalog"):
+                assert_works_count(value, count)
+        with self.assertRaisesRegex(RuntimeError, "detail"):
+            assert_work_detail(None, "WORK-A")
+        with self.assertRaisesRegex(RuntimeError, "detail"):
+            assert_work_detail(fixtures[1], "WORK-A")
+
+    def test_first_observed_and_warm_samples_require_validated_reads(self):
+        calls = []
+        class Dummy:
+            def execute(self, query):
+                calls.append("reset")
+        results = [{"query_fingerprint": "unit-fingerprint", "calls": 5}]
+        counter = []
+        def operation():
+            counter.append(1)
+            return [{"id": "WORK-A"}]
+        with patch("scripts.pg_stat_profile.snapshot", side_effect=[[], results]):
+            outcome = benchmark(Dummy(), operation, 4, lambda x: assert_works_count(x, 1))
+        self.assertEqual(len(counter), 7)
+        self.assertEqual(calls, ["reset"])
+        self.assertEqual(outcome["repetitions"], 4)
+        self.assertEqual(outcome["completed_samples"], 4)
+        self.assertEqual(outcome["correctness_checks"], 7)
+        self.assertEqual(outcome["warmup_calls"], 2)
+        self.assertEqual(outcome["first_call_context"], "first_call_of_operation_not_cold_start")
+        self.assertGreaterEqual(outcome["first_observed_call_ms"], 0)
+        self.assertTrue(outcome["top_statements"])
+        bad = []
+        def invalid():
+            bad.append(1)
+            return []
+        with self.assertRaisesRegex(RuntimeError, "catalog"):
+            benchmark(Dummy(), invalid, 4, lambda x: assert_works_count(x, 1))
+        self.assertEqual(len(bad), 1)
+        self.assertEqual(calls, ["reset"], "a failing first call must not reset SQL stats")
 
     def test_report_is_numeric_only_even_if_sql_in_row(self):
         probe_literal = "example select payload MUST NOT appear in profile output"
