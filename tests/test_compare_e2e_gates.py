@@ -69,7 +69,7 @@ def jobs(mode: str) -> list[dict]:
 
 class CompareFullE2EGatesTests(unittest.TestCase):
     def test_successful_six_shards_measure_test_and_non_test_spans(self):
-        source = summarize(run("source"), jobs("source"), "source", source_full_verified=True)
+        source = summarize(run("source"), jobs("source"), "source", source_plan=("full", "true", "6", "true"))
         packaged = summarize(run("packaged", 12), jobs("packaged"), "packaged")
         self.assertEqual(source["shards"], 6)
         self.assertAlmostEqual(source["runner_minutes"], 60)
@@ -89,7 +89,7 @@ class CompareFullE2EGatesTests(unittest.TestCase):
         self.assertIn("not establish equivalence", report)
 
     def test_reject_mismatched_sha_or_event(self):
-        source = summarize(run("source"), jobs("source"), "source", source_full_verified=True)
+        source = summarize(run("source"), jobs("source"), "source", source_plan=("full", "true", "6", "true"))
         p = run("packaged", 12)
         p["head_sha"] = "b" * 40
         with self.assertRaisesRegex(InvalidBenchmark, "share SHA"):
@@ -109,7 +109,7 @@ class CompareFullE2EGatesTests(unittest.TestCase):
                 payload = run("source")
                 payload[key] = value
                 with self.assertRaises(InvalidBenchmark):
-                    summarize(payload, jobs("source"), "source", source_full_verified=True)
+                    summarize(payload, jobs("source"), "source", source_plan=("full", "true", "6", "true"))
 
     def test_six_shards_distinct_required_and_guarded(self):
         for mode in ("source", "packaged"):
@@ -122,16 +122,16 @@ class CompareFullE2EGatesTests(unittest.TestCase):
             ):
                 with self.subTest(mode=mode, names=[j["name"] for j in modified]):
                     with self.assertRaises(InvalidBenchmark):
-                        summarize(run(mode), modified, mode, source_full_verified=mode == "source")
+                        summarize(run(mode), modified, mode, source_plan=("full", "true", "6", "true") if mode == "source" else None)
 
     def test_reject_failed_guard_or_malformed_jobs(self):
         for mode in ("source", "packaged"):
             broken = jobs(mode)
             broken[0]["conclusion"] = "failure"
             with self.assertRaises(InvalidBenchmark):
-                summarize(run(mode), broken, mode, source_full_verified=mode == "source")
+                summarize(run(mode), broken, mode, source_plan=("full", "true", "6", "true") if mode == "source" else None)
             with self.assertRaisesRegex(InvalidBenchmark, "malformed"):
-                summarize(run(mode), jobs(mode) + [None], mode, source_full_verified=mode == "source")
+                summarize(run(mode), jobs(mode) + [None], mode, source_plan=("full", "true", "6", "true") if mode == "source" else None)
 
     def test_test_step_is_mandatory_and_within_own_job(self):
         for mode in ("source", "packaged"):
@@ -139,7 +139,7 @@ class CompareFullE2EGatesTests(unittest.TestCase):
             no_step = [dict(j) for j in normal]
             no_step[-1] = dict(no_step[-1], steps=[])
             with self.assertRaisesRegex(InvalidBenchmark, "Missing or unsuccessful"):
-                summarize(run(mode), no_step, mode, source_full_verified=mode == "source")
+                summarize(run(mode), no_step, mode, source_plan=("full", "true", "6", "true") if mode == "source" else None)
             invalid = [dict(j) for j in normal]
             last = dict(invalid[-1])
             step = dict(last["steps"][0])
@@ -147,7 +147,7 @@ class CompareFullE2EGatesTests(unittest.TestCase):
             last["steps"] = [step]
             invalid[-1] = last
             with self.assertRaisesRegex(InvalidBenchmark, "outside its job"):
-                summarize(run(mode), invalid, mode, source_full_verified=mode == "source")
+                summarize(run(mode), invalid, mode, source_plan=("full", "true", "6", "true") if mode == "source" else None)
 
     def test_source_full_mode_requires_verified_planner(self):
         with self.assertRaisesRegex(InvalidBenchmark, "was not verified"):
@@ -165,7 +165,10 @@ class CompareFullE2EGatesTests(unittest.TestCase):
         )
         with patch("scripts.ci.compare_e2e_gates.requests.get") as request:
             request.side_effect = [api, download]
-            verify_source_full_plan("Fooftilly/PRKS", plan_jobs, "test-token")
+            self.assertEqual(
+                verify_source_full_plan("Fooftilly/PRKS", plan_jobs, "test-token"),
+                ("full", "true", "6", "true"),
+            )
             self.assertEqual(request.call_args_list, [
                 call(
                     "https://api.github.com/repos/Fooftilly/PRKS/actions/jobs/122/logs",
@@ -220,6 +223,7 @@ class CompareFullE2EGatesTests(unittest.TestCase):
         """No further remote requests occur during local reporting."""
         with patch("scripts.ci.compare_e2e_gates.fetch_run") as fetch, \
              patch("scripts.ci.compare_e2e_gates.verify_source_full_plan") as verify:
+            verify.return_value = ("full", "true", "6", "true")
             fetch.side_effect = [
                 (run("source"), jobs("source")),
                 (run("packaged", 12), jobs("packaged")),
