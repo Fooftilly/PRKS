@@ -10,7 +10,6 @@ import copy
 import json
 import math
 import os
-import re
 import random
 import shutil
 import socket
@@ -876,14 +875,25 @@ def _address_in_use(text: str) -> bool:
     return any(marker in text for marker in _ADDRESS_IN_USE_MARKERS)
 
 
+_TRANSIENT_WEBKIT_RESIZE_NOTICES = frozenset({
+    "ResizeObserver loop completed with undelivered notifications.",
+    "ResizeObserver loop limit exceeded",
+})
+
+
 class PageCollector:
     """Fail the scenario on unexpected page errors, console errors, 5xx, and off-origin HTTP."""
 
-    def __init__(self, page, origin: str):
+    def __init__(self, page, origin: str, *, allow_webkit_resize_notices: bool = False):
         self.origin = origin.rstrip("/")
         self.pageerrors = []
         self.pageerror_names = []
-        self.pageerror_sites = []
+        # WebKit may emit a spec-defined ResizeObserver notification when a
+        # transient layout cycle is deferred to the next paint. Only the
+        # explicitly opted-in synthetic WebKit pilot can tolerate <=3 exact
+        # notifications; continuous loops and all other errors still fail.
+        self._allow_webkit_resize_notices = allow_webkit_resize_notices
+        self._webkit_resize_notices = 0
         self.console_errors = []
         self.failed_requests = []
         self.http_5xx = []
@@ -900,25 +910,23 @@ class PageCollector:
         page.route("**/*", self._on_route)
 
     def _on_page_error(self, err):
-        self.pageerrors.append(str(err))
-        # Keep browser-provided exception metadata separate from messages,
-        # which may contain private document text or URLs. Diagnostics can
-        # report only strictly validated static source locations.
-        self.pageerror_names.append(getattr(err, "name", None))
+        message = str(err)
         stack = str(getattr(err, "stack", "") or "")
-        # Static scripts only, with a loopback origin. Never retain arbitrary
-        # URLs, query strings, script content, or stack frames in CI reports.
-        site = None
-        for match in re.finditer(
-            r"https?://(?:127\.0\.0\.1|localhost):[0-9]+/"
-            r"((?:js|assets|vue|vendor)/[A-Za-z0-9_./-]+\.js):([0-9]{1,6}):([0-9]{1,5})",
-            stack,
+        if (
+            self._allow_webkit_resize_notices
+            and message.strip() in _TRANSIENT_WEBKIT_RESIZE_NOTICES
+            and "http://" not in stack and "https://" not in stack
+            and getattr(err, "name", None) not in
+                {"TypeError", "ReferenceError", "SyntaxError", "RangeError"}
         ):
-            path, line, _column = match.groups()
-            if ".." not in path.split("/") and len(path) <= 110:
-                site = f"{path}:{line}"
-                break
-        self.pageerror_sites.append(site)
+            self._webkit_resize_notices += 1
+            if self._webkit_resize_notices <= 3:
+                return
+        self.pageerrors.append(message)
+        # Keep browser-provided exception names separate from their messages,
+        # which may contain private document text or URLs. Callers may report
+        # only strict allow-listed names; never expose raw error strings.
+        self.pageerror_names.append(getattr(err, "name", None))
 
     def _on_console(self, msg):
         if msg.type != "error":
@@ -1353,7 +1361,7 @@ def _profile_browser_navigation(page) -> None:
     _profile_nav_count("nav_timing_samples")
 
 
-def open_app_page(browser, origin: str, service_workers: str = "block", *, install_clock: bool = False, init_script: str | None = None):
+def open_app_page(browser, origin: str, service_workers: str = "block", *, install_clock: bool = False, allow_webkit_resize_notices: bool = False):
     started = time.perf_counter()
     # Prefer-reduced-motion is opt-in (`PRKS_E2E_REDUCED_MOTION=1`). Emulating
     # it by default breaks layout/scroll assertions that measure real overflow
@@ -1365,16 +1373,14 @@ def open_app_page(browser, origin: str, service_workers: str = "block", *, insta
     if _env_enabled("PRKS_E2E_REDUCED_MOTION"):
         context_kwargs["reduced_motion"] = "reduce"
     context = browser.new_context(**context_kwargs)
-    # Install synthetic diagnostic listeners before the first navigation.
-    # Default is unchanged for every existing E2E caller.
-    if init_script is not None:
-        context.add_init_script(init_script)
     page = context.new_page()
     # Time-sensitive browser tests opt in before application scripts register
     # timers; installing after navigation can invalidate existing timer IDs.
     if install_clock:
         page.clock.install()
-    collector = PageCollector(page, origin)
+    collector = PageCollector(
+        page, origin, allow_webkit_resize_notices=allow_webkit_resize_notices,
+    )
     _profile_phase("browser_context", time.perf_counter() - started)
     e2e_heartbeat("CONTEXT_READY")
 
