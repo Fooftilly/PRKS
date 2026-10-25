@@ -13,6 +13,8 @@ import re
 import sys
 from datetime import datetime
 from http.client import HTTPException, HTTPSConnection
+from urllib.parse import urlsplit
+from urllib.request import getproxies, proxy_bypass
 
 WORKFLOW = ".github/workflows/e2e-classic-distribution-gate.yml"
 FULL_JOB = re.compile(r"Packaged classic bundles \(([1-6])/6\)\Z")
@@ -137,6 +139,34 @@ def compare(full: dict, smoke: dict) -> str:
     ))
 
 
+def _github_connection() -> HTTPSConnection:
+    """Use a fixed GitHub TLS origin, optionally tunneled through an HTTP proxy."""
+    proxy = getproxies().get("https") or getproxies().get("all")
+    if not proxy or proxy_bypass("api.github.com"):
+        return HTTPSConnection("api.github.com", timeout=30)
+
+    # http.client tunnels via CONNECT before validating api.github.com's
+    # certificate. No redirects or user-selected destination are accepted.
+    parsed = urlsplit(proxy if "://" in proxy else f"http://{proxy}")
+    if (
+        parsed.scheme != "http"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise InvalidBenchmark("Only unauthenticated HTTP CONNECT proxies are supported")
+    try:
+        port = parsed.port or 80
+    except ValueError as exc:
+        raise InvalidBenchmark("Invalid HTTPS proxy port") from exc
+    connection = HTTPSConnection(parsed.hostname, port, timeout=30)
+    connection.set_tunnel("api.github.com", 443)
+    return connection
+
+
 def _get_json(path: str, token: str | None) -> dict:
     # Never let user input choose a URL scheme or destination host. The caller
     # validates repository and run IDs before constructing this API path.
@@ -145,7 +175,7 @@ def _get_json(path: str, token: str | None) -> dict:
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "PRKS-E2E-benchmark"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    connection = HTTPSConnection("api.github.com", timeout=30)
+    connection = _github_connection()
     try:
         connection.request("GET", path, headers=headers)
         with connection.getresponse() as response:
