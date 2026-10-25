@@ -67,6 +67,29 @@ class HealthProbeTests(unittest.TestCase):
                 self.assertEqual(headers.get("Content-Length"), "9")
                 self.assertEqual(headers.get("Cache-Control"), "no-store")
 
+    def test_normalized_probe_urls_never_fall_through_to_spa(self):
+        # The SPA fallback returns 200 for unknown routes. Both GET and HEAD
+        # must still recognize slash-terminated and percent-encoded probes.
+        cases = (
+            ("/readyz/", 503, b"not ready"),
+            ("/readyz///?check=1", 503, b"not ready"),
+            ("/%72eadyz", 503, b"not ready"),
+            ("/%72eadyz/", 503, b"not ready"),
+            ("/healthz/", 200, b"ok"),
+            ("/%68ealthz?check=1", 200, b"ok"),
+            ("/healthz///", 200, b"ok"),
+        )
+        with patch.object(PRKSHandler, "_prks_admit", side_effect=AssertionError("API auth invoked")):
+            for method in ("GET", "HEAD"):
+                for path, expected_status, expected_body in cases:
+                    with self.subTest(method=method, path=path):
+                        status, body, headers = self.request(method, path)
+                        self.assertEqual(status, expected_status)
+                        self.assertEqual(body, expected_body if method == "GET" else b"")
+                        self.assertEqual(headers.get("Content-Length"), str(len(expected_body)))
+                        self.assertEqual(headers.get("Cache-Control"), "no-store")
+                        self.assertEqual(headers.get("Content-Type"), "text/plain; charset=utf-8")
+
     def test_untrusted_host_is_rejected_before_any_probe(self):
         for path in ("/healthz", "/readyz"):
             with self.subTest(path=path):
