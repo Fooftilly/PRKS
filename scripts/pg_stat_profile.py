@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+"""Opt-in, disposable PostgreSQL pg_stat_statements workload profiler (#858).
+
+Run ONLY through scripts/test-postgres --profile. That wrapper starts its own
+throwaway PostgreSQL 18 server with the extension preloaded, never a live
+database. No representative SQL text, identifiers from research libraries,
+database connection strings, or fixture payloads are emitted.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import tempfile
+import time
+from collections.abc import Mapping, Sequence
+from typing import Any
+
+# Only expose numeric aggregates and opaque (run-local) query fingerprints.
+# Never select pg_stat_statements.query: normalized SQL may retain literals.
+_SNAPSHOT_SQL = """
+SELECT queryid, calls, total_exec_time, mean_exec_time, rows,
+       shared_blks_hit, shared_blks_read, temp_blks_read, temp_blks_written
+FROM public.pg_stat_statements
+WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
+  AND userid = (SELECT usesysid FROM pg_user WHERE usename = current_user)
+  AND queryid IS NOT NULL AND calls > 0
+ORDER BY total_exec_time DESC, calls DESC
+LIMIT 5
+"""
+_RESET_SQL = """
+SELECT public.pg_stat_statements_reset(
+    0::oid, (SELECT oid FROM pg_database WHERE datname = current_database()), 0::bigint
+)
+"""
+
+
+def sizes_arg(value: str) -> tuple[int, ...]:
+    """A bounded ascending fixture progression, not arbitrary SQL/data input."""
+    try:
+        sizes = tuple(int(part) for part in value.split(","))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("sizes must be comma-separated integers") from exc
+    if not sizes or len(sizes) > 4 or any(n < 1 or n > 500 for n in sizes):
+        raise argparse.ArgumentTypeError("use 1-4 sizes between 1 and 500")
+    if tuple(sorted(set(sizes))) != sizes:
+        raise argparse.ArgumentTypeError("sizes must be strictly ascending")
+    return sizes
+
+
+def percentile(values: Sequence[float], fraction: float) -> float:
+    if not values:
+        raise ValueError("cannot summarize an empty sample")
+    ordered = sorted(values)
+    return round(ordered[max(0, math.ceil(fraction * len(ordered)) - 1)], 3)
+
+
+def project_statement(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Whitelist numeric metrics; never expose PostgreSQL's representative SQL."""
+    hits = int(row["shared_blks_hit"])
+    reads = int(row["shared_blks_read"])
+    return {
+        # queryid is an opaque fingerprint, not a portable stable SQL ID.
+        "query_fingerprint": f"{int(row['queryid']) & ((1 << 64) - 1):016x}",
+        "calls": int(row["calls"]),
+        "total_exec_ms": round(float(row["total_exec_time"]), 3),
+        "mean_exec_ms": round(float(row["mean_exec_time"]), 3),
+        "rows": int(row["rows"]),
+        "shared_blks_hit": hits,
+        "shared_blks_read": reads,
+        "shared_cache_hit_percent": round(100 * hits / (hits + reads), 2)
+        if hits + reads else None,
+        "temp_blks_read": int(row["temp_blks_read"]),
+        "temp_blks_written": int(row["temp_blks_written"]),
+    }
+
+
+def snapshot(stats: Any) -> list[dict[str, Any]]:
+    return [project_statement(row) for row in stats.execute(_SNAPSHOT_SQL).fetchall()]
+
+
+def benchmark(stats: Any, operation: Any, repetitions: int) -> dict[str, Any]:
+    # Warm-only measurement: connection pools, prepared queries and caches are
+    # already active; never imply this is a cold-start or E2E HTTP latency.
+    for _ in range(2):
+        operation()
+    stats.execute(_RESET_SQL)
+    durations = []
+    for _ in range(repetitions):
+        start = time.perf_counter()
+        operation()
+        durations.append((time.perf_counter() - start) * 1000)
+    return {
+        "repetitions": repetitions,
+        "warmup_calls": 2,
+        "call_wall_p50_ms": percentile(durations, 0.5),
+        "call_wall_p95_ms": percentile(durations, 0.95),
+        "top_statements": snapshot(stats),
+    }
+
+
+def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
+    if not os.environ.get("PRKS_PG_PROFILE_DISPOSABLE_SERVER"):
+        raise RuntimeError("run through scripts/test-postgres --profile only")
+
+    import psycopg
+    from psycopg.rows import dict_row
+
+    from backend.db.config import DatabaseConfig
+    from backend.db.database import Database
+    from backend.pg_facade import PostgresLibrary
+    from backend.pg_facade import context as facade_context
+    from backend.storage.config import StorageConfig
+    from tests.pg.facade_context import provision_actor
+    from tests.pg.harness import get_harness
+
+    harness = get_harness()
+    dbname = harness.create_database("profile")
+    try:
+        with psycopg.connect(harness.conninfo(dbname), autocommit=True,
+                             row_factory=dict_row) as stats:
+            preload = stats.execute(
+                "SELECT current_setting('shared_preload_libraries') AS loaded"
+            ).fetchone()["loaded"]
+            if "pg_stat_statements" not in preload.split(","):
+                raise RuntimeError("pg_stat_statements is not preloaded on the disposable server")
+            stats.execute("CREATE EXTENSION pg_stat_statements WITH SCHEMA public")
+            version = stats.execute("SHOW server_version_num").fetchone()["server_version_num"]
+            with Database(DatabaseConfig(conninfo=harness.conninfo(dbname), role="test",
+                                         pool_min=0, pool_max=4)) as database:
+                actor = provision_actor(database)
+                with tempfile.TemporaryDirectory(prefix="prks-profile-root-") as temp:
+                    storage = StorageConfig.for_testing(temp)
+                    os.makedirs(storage.pdfs_dir, exist_ok=True)
+                    library = PostgresLibrary(database, storage=storage)
+                    fixture_ids: list[str] = []
+                    output = []
+                    with facade_context.acting_as(actor.context):
+                        for size in sizes:
+                            for i in range(len(fixture_ids), size):
+                                fixture_ids.append(library.add_work(f"Fixture Work {i:04d}"))
+                            # These are real PG facade read paths. The fixture is
+                            # deterministic, isolated, synthetic and disposable.
+                            workloads = (
+                                ("works_list", library.get_all_works),
+                                ("works_browse", library.get_works_browse_catalog),
+                                ("work_detail", lambda: library.get_work(fixture_ids[-1])),
+                            )
+                            for label, operation in workloads:
+                                result = benchmark(stats, operation, repetitions)
+                                output.append({"fixture_works": size, "operation": label, **result})
+                    return {
+                        "tool": "pg_stat_statements",
+                        "server_version_num": int(version),
+                        "fixture": "synthetic_works_only",
+                        "measurement": "warm_facade_calls_not_http",
+                        "query_fingerprints": "run_local_only; no SQL text is collected",
+                        "profiles": output,
+                    }
+    finally:
+        # The pool/connection close before the harness forcibly drops its own
+        # database; no user database name is supplied anywhere by the CLI.
+        harness.drop_database(dbname)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--sizes", type=sizes_arg, default=(12, 48, 128))
+    parser.add_argument("--repetitions", type=int, default=8)
+    args = parser.parse_args(argv)
+    if not 2 <= args.repetitions <= 30:
+        parser.error("--repetitions must be between 2 and 30")
+    try:
+        report = run(args.sizes, args.repetitions)
+    except Exception as exc:
+        # Fail closed without printing connection strings, query text, or data.
+        print(f"Disposable PostgreSQL profiler failed ({type(exc).__name__}).", file=__import__("sys").stderr)
+        return 1
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
