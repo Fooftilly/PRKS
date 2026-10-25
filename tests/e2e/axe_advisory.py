@@ -24,7 +24,16 @@ VALID_IMPACT = frozenset(IMPACT_RANK)
 VALID_SELECTOR = re.compile(r"[A-Za-z0-9#.>_:\[\]() -]{1,100}\Z")
 
 AXE_QUERY = """async (selector) => {
-    const root = document.querySelector(selector);
+    // Analyze the full document chrome (including html/title/skip-link checks)
+    // while excluding the routed content. #page-content sits inside <main>;
+    // unlike excluding all of <main>, this retains workspace tabs/ribbon.
+    const shell = selector === '__prks_document_shell__';
+    if (shell && !document.querySelector('#page-content')) {
+        throw new Error('Missing routed app content boundary');
+    }
+    const root = shell
+        ? { exclude: [['#page-content']] }
+        : document.querySelector(selector);
     if (!root) throw new Error('Missing axe target surface');
     if (!window.axe || typeof window.axe.run !== 'function') {
         throw new Error('axe-core engine was not injected');
@@ -32,10 +41,13 @@ AXE_QUERY = """async (selector) => {
     const data = await window.axe.run(root, {
         runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'] },
     });
+    const audited = [...data.passes, ...data.violations, ...data.incomplete];
+    const documentRules = ['html-has-lang', 'html-lang-valid', 'document-title', 'bypass'];
     return {
         engine: window.axe.version,
         passes: data.passes.length,
         incomplete: data.incomplete.length,
+        document_rules_checked: documentRules.filter(id => audited.some(item => item.id === id)),
         violations: data.violations.map(item => ({
             id: item.id, impact: item.impact || 'unknown',
             count: item.nodes.length,
@@ -51,6 +63,15 @@ def sanitized_report(label: str, raw: dict) -> dict:
         raise AssertionError("axe-core is missing or differs from the lockfile pin")
     if not isinstance(raw.get("passes"), int) or not isinstance(raw.get("incomplete"), int):
         raise AssertionError("missing axe rule-evaluation counts")
+    document_rules = raw.get("document_rules_checked", [])
+    accepted_document_rules = frozenset(
+        ("html-has-lang", "html-lang-valid", "document-title", "bypass")
+    )
+    if not isinstance(document_rules, list) or any(
+        not isinstance(rule, str) or rule not in accepted_document_rules
+        for rule in document_rules
+    ):
+        raise AssertionError("invalid document-rule coverage metadata")
     rules = raw.get("violations")
     if not isinstance(rules, list):
         raise AssertionError("axe did not return a violations list")
@@ -91,6 +112,7 @@ def sanitized_report(label: str, raw: dict) -> dict:
         "axe": AXE_PIN,
         "rules_passed": raw["passes"],
         "rules_incomplete": raw["incomplete"],
+        "document_rules_checked": sorted(set(document_rules)),
         "violating_rules": len(violations),
         "rule_node_matches": sum(item["nodes"] for item in violations),
         "violations": violations[:MAX_RULES],
