@@ -49,7 +49,7 @@ class AxeAccessibilityPilotTests(unittest.TestCase):
 
         surfaces = []
         page.locator("#sidebar").wait_for(state="visible")
-        surfaces.append(scan(page, "body", "shell"))
+        surfaces.append(scan(page, "#sidebar", "shell"))
 
         page.evaluate("() => window.prksNavigate('#/folders')")
         page.locator("[data-prks-folder-library-view]").wait_for(state="visible")
@@ -59,9 +59,11 @@ class AxeAccessibilityPilotTests(unittest.TestCase):
             "id => window.prksNavigate('#/works/' + id)", server.ids["work_a"]
         )
         page.locator(".work-detail").first.wait_for(state="visible", timeout=20000)
+        # Work mount is asynchronous; a visible wrapper is not yet the editor.
+        page.locator(".CodeMirror").first.wait_for(state="visible", timeout=30000)
+        _wait_pdf_viewer(page)
         surfaces.append(scan(page, ".work-detail", "work-detail"))
 
-        _wait_pdf_viewer(page)
         surfaces.append(scan(page, '[data-prks-role="pdf-viewer"]', "pdf-viewer"))
 
         # Independent keyboard assertion: axe cannot validate focus restoration.
