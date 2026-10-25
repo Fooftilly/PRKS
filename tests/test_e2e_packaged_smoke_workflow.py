@@ -62,8 +62,18 @@ class PackagedSmokeWorkflowTests(unittest.TestCase):
         smoke = job_source(workflow, "packaged-smoke")
         full = job_source(workflow, "packaged-frontend")
         self.assertIn(
-            "if: github.event_name == 'workflow_dispatch' && inputs.packaged_mode == 'smoke'",
+            "if: >-\n"
+            "      github.event_name == 'workflow_dispatch' &&\n"
+            "      (inputs.packaged_mode == 'smoke' || inputs.packaged_mode == 'compare')",
             smoke,
+        )
+        # The one-run compare pilot must execute smoke alongside the full
+        # matrix, while automatic PRs and manual default retain full only.
+        self.assertIn("          - compare", workflow)
+        self.assertIn("default: full", workflow)
+        self.assertIn(
+            "if: github.event_name != 'workflow_dispatch' || inputs.packaged_mode != 'smoke'",
+            full,
         )
         # This must be the same packaged application, not a faster fake.
         for command in (
