@@ -164,6 +164,18 @@ def scan() -> int:
             # Categorize CLI argument, schema and check failures without
             # printing generated curl commands, HTTP payloads or raw URLs.
             output = (result.stdout + "\\n" + result.stderr).lower()
+            diagnostics = ("failure", "failed", "unexpected", "response", "status",
+                           "exception", "missing", "schema", "error", "checks")
+            selected_errors = [
+                line.strip() for line in result.stdout.splitlines() + result.stderr.splitlines()
+                if len(line.strip()) <= 150 and SAFE_LINE.fullmatch(line.strip())
+                and any(word in line.lower() for word in diagnostics)
+                and not any(word in line.lower() for word in
+                            ("http://", "https://", "curl ", "authorization", "header:",
+                             "cookie", "?used=", "request body", "payload", "traceback"))
+            ]
+            for line in selected_errors[:12]:
+                print("[schemathesis] scanner_diagnostic=" + line)
             for label, marker in (
                 ("cli_option", "no such option"),
                 ("cli_value", "invalid value"),
