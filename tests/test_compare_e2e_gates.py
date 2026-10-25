@@ -1,9 +1,11 @@
 """Offline contract tests for same-SHA source vs packaged E2E cost accounting."""
 from __future__ import annotations
 
-import subprocess
+import runpy
 import sys
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, call, patch
@@ -159,11 +161,10 @@ class CompareFullE2EGatesTests(unittest.TestCase):
         plan_jobs[0]["id"] = 122
         signed = "https://productionresultssa.blob.core.windows.net/actions-results/log.txt"
         api = Mock(status_code=302, headers={"Location": signed})
-        download = Mock(
-            status_code=200,
-            text=("2026-10-24T20:58:29.7819858Z "
-                  "mode=full run=true features=[] test_count=847 shards=6 pointer=true\n"),
-        )
+        log_content = ("2026-10-24T20:58:29.7819858Z "
+                       "mode=full run=true features=[] test_count=847 shards=6 pointer=true\n")
+        download = Mock(status_code=200)
+        download.iter_content.return_value = [log_content.encode("utf-8")]
         with patch("scripts.ci.compare_e2e_gates.requests.get") as request:
             request.side_effect = [api, download]
             self.assertEqual(
@@ -182,9 +183,10 @@ class CompareFullE2EGatesTests(unittest.TestCase):
                 ),
                 call(
                     signed, headers={"User-Agent": "PRKS-E2E-benchmark"},
-                    timeout=30, verify=True, allow_redirects=False,
+                    timeout=30, verify=True, allow_redirects=False, stream=True,
                 ),
             ])
+            download.close.assert_called_once()
 
             for bad in (
                 "mode=affected run=true features=[\"tiling\"] test_count=201 shards=6 pointer=true",
@@ -193,7 +195,9 @@ class CompareFullE2EGatesTests(unittest.TestCase):
                 "unknown planner output",
             ):
                 with self.subTest(bad=bad):
-                    download.text = "2026-10-24T20:58:29.7819858Z " + bad + "\n"
+                    download.iter_content.return_value = [
+                        ("2026-10-24T20:58:29.7819858Z " + bad + "\n").encode("utf-8")
+                    ]
                     request.side_effect = [api, download]
                     with self.assertRaisesRegex(InvalidBenchmark, "did not prove"):
                         verify_source_full_plan("Fooftilly/PRKS", plan_jobs, "test-token")
@@ -211,14 +215,41 @@ class CompareFullE2EGatesTests(unittest.TestCase):
                 verify_source_full_plan("Fooftilly/PRKS", plan_jobs, "test-token")
             request.assert_called_once()
 
+    def test_streaming_log_refuses_oversize_invalid_utf8_and_http_failure(self):
+        plan_jobs = jobs("source")
+        plan_jobs[0]["id"] = 122
+        api = Mock(
+            status_code=302,
+            headers={"Location": "https://example.org/signed-github-log"},
+        )
+        download = Mock(status_code=200)
+        with patch("scripts.ci.compare_e2e_gates.requests.get") as request:
+            request.side_effect = [api, download]
+            download.iter_content.return_value = [b"x" * 200_000, b"y" * 56_001]
+            with self.assertRaisesRegex(InvalidBenchmark, "Unexpectedly large"):
+                verify_source_full_plan("Fooftilly/PRKS", plan_jobs, "test-token")
+            download.close.assert_called_once()
+
+            request.side_effect = [api, download]
+            download.iter_content.return_value = [b"\xff"]
+            with self.assertRaisesRegex(InvalidBenchmark, "Invalid UTF-8"):
+                verify_source_full_plan("Fooftilly/PRKS", plan_jobs, "test-token")
+            self.assertEqual(download.close.call_count, 2)
+
+            request.side_effect = [api, download]
+            download.status_code = 503
+            with self.assertRaisesRegex(InvalidBenchmark, "HTTP 503"):
+                verify_source_full_plan("Fooftilly/PRKS", plan_jobs, "test-token")
+            self.assertEqual(download.close.call_count, 3)
+
     def test_direct_script_help_resolves_package_imports(self):
         script = Path(__file__).resolve().parents[1] / "scripts" / "ci" / "compare_e2e_gates.py"
-        process = subprocess.run(
-            [sys.executable, str(script), "--help"],
-            capture_output=True, text=True, check=False,
-        )
-        self.assertEqual(process.returncode, 0, process.stderr)
-        self.assertIn("--source-run", process.stdout)
+        output = StringIO()
+        with patch.object(sys, "argv", [str(script), "--help"]), redirect_stdout(output):
+            with self.assertRaises(SystemExit) as status:
+                runpy.run_path(str(script), run_name="__main__")
+        self.assertEqual(status.exception.code, 0)
+        self.assertIn("--source-run", output.getvalue())
 
     def test_fetch_api_pair_is_not_needed_for_reporting(self):
         """No further remote requests occur during local reporting."""
