@@ -37,7 +37,7 @@ Before doing that, remember PRKS does not provide application-level authenticati
 
 ## Search results are missing/stale
 
-PDF text search uses a derived index. Use the Settings action to rebuild the PDF text index when needed.
+PDF text search uses a derived index. First check whether the Work is still present in the Library: a missing search result does not by itself establish that the underlying research item was deleted. If the Work is present, use the Settings action to rebuild the PDF text index when needed.
 
 Scanned/image-only PDFs may contain no extractable text because PRKS does not perform OCR.
 
