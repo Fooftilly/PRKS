@@ -1,0 +1,115 @@
+name: Advisory axe-core accessibility smoke
+
+# Nonblocking pilot. Does not add a required check or another full E2E gate.
+# Reuses PRKS's single disposable Chromium Playwright AppServer.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/axe-accessibility-pilot.yml"
+      - "scripts/ci/axe_accessibility_pilot.py"
+      - "tests/test_axe_accessibility_pilot.py"
+      - "frontend-app/package.json"
+      - "frontend-app/package-lock.json"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: axe-accessibility-pilot-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  axe-pilot:
+    name: Synthetic Chromium axe-core accessibility audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
+    steps:
+      - name: Checkout PRKS
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js for already pinned axe-core
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend-app/package-lock.json
+
+      - name: Install existing pinned Python E2E dependencies
+        run: python scripts/ci/install_pinned_python.py e2e
+
+      - name: Install existing pinned axe-core dev dependency
+        run: npm --prefix frontend-app ci --ignore-scripts --no-audit --no-fund
+
+      - name: Validate isolation, canary and report contracts
+        run: python -m unittest -v tests.test_axe_accessibility_pilot
+
+      - name: Install pinned Playwright Chromium (pilot only)
+        run: python -m playwright install --with-deps chromium
+
+      - name: Audit synthetic folders, Work/PDF and Settings modal
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/ci/axe_accessibility_pilot.py \
+            --output "$RUNNER_TEMP/prks-axe-pilot.json"
+
+      - name: Summarize bounded advisory findings
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          target = Path(os.environ["RUNNER_TEMP"]) / "prks-axe-pilot.json"
+          lines = [
+              "## PRKS synthetic axe-core accessibility pilot",
+              "",
+              "Advisory only; existing violations are **not** a new blocking gate. "
+              "All data derives from disposable fixtures. No DOM or selectors retained.",
+              "",
+          ]
+          if target.is_file():
+              from scripts.ci.axe_accessibility_pilot import verify_report
+              result = json.loads(target.read_text(encoding="utf-8"))
+              verify_report(result)
+              lines += [
+                  f"axe-core {result['axe_version']} / Chromium; "
+                  f"keyboard: {', '.join(result['keyboard_checks'])}.",
+                  "",
+                  "| Surface | Rules checked | Incomplete rules | Violations (rule: nodes) |",
+                  "| --- | ---: | ---: | --- |",
+              ]
+              for row in result["surfaces"]:
+                  rules = ", ".join(
+                      f"{v['rule']}: {v['nodes']}" for v in row["violations"]
+                  ) or "none"
+                  lines.append(
+                      f"| {row['surface']} | {row['rules_checked']} | "
+                      f"{row['incomplete']} | {rules} |"
+                  )
+          else:
+              lines.append("**Incomplete:** no validated audit output.")
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as out:
+              out.write("\n".join(lines) + "\n")
+          PY
+
+      - name: Retain synthetic rule counts only
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: synthetic-axe-core-pilot
+          path: ${{ runner.temp }}/prks-axe-pilot.json
+          retention-days: 7
+          if-no-files-found: warn
