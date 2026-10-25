@@ -190,7 +190,40 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Classify documentation-only PR (fail closed)
+        id: docs-scope
+        shell: bash
+        env:
+          PRKS_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PRKS_EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          docs_only=false
+          if [[ "$PRKS_EVENT_NAME" == "pull_request" && "$PRKS_PR_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            if git fetch --no-tags --depth=1 origin "$PRKS_PR_BASE_SHA"; then
+              # The PR checkout is untrusted: use the reviewed classifier from
+              # the immutable base, not the PR's possibly modified selector.
+              if base_classifier="$(mktemp)"; then
+                if git show "$PRKS_PR_BASE_SHA:scripts/ci/docs_only.py" > "$base_classifier"; then
+                  decision="$(python "$base_classifier" --base "$PRKS_PR_BASE_SHA")" || decision=false
+                  if [[ "$decision" == "true" ]]; then
+                    docs_only=true
+                  fi
+                else
+                  echo "::warning::Docs classifier absent from base; running full tests."
+                fi
+                rm -f "$base_classifier"
+              else
+                echo "::warning::Failed to allocate classifier file; running full tests."
+              fi
+            else
+              echo "::warning::Could not fetch immutable PR base; running full tests."
+            fi
+          fi
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
       - name: Set up Node.js
+        if: steps.docs-scope.outputs.docs_only != 'true'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ">=24.15.0 <25"
@@ -198,21 +231,27 @@ jobs:
           cache-dependency-path: frontend-app/package-lock.json
 
       - name: Install Vue toolchain from the lockfile
+        if: steps.docs-scope.outputs.docs_only != 'true'
         run: npm ci --ignore-scripts --prefix frontend-app
 
       - name: OpenAPI TypeScript types match checked-in artifacts
+        if: steps.docs-scope.outputs.docs_only != 'true'
         run: npm run openapi:check --prefix frontend-app
 
       - name: Vue/TypeScript ESLint
+        if: steps.docs-scope.outputs.docs_only != 'true'
         run: npm run lint --prefix frontend-app
 
       - name: Typecheck
+        if: steps.docs-scope.outputs.docs_only != 'true'
         run: npm run typecheck --prefix frontend-app
 
       - name: Vitest
+        if: steps.docs-scope.outputs.docs_only != 'true'
         run: npm test --prefix frontend-app
 
       - name: Production build matches committed assets
+        if: steps.docs-scope.outputs.docs_only != 'true'
         run: |
           set -euo pipefail
           npm run build --prefix frontend-app
@@ -230,6 +269,7 @@ jobs:
       # the step. A readable diff with no matching path is the only skip.
       # workflow_dispatch builds with no diff and does not invent a baseline.
       - name: Storybook build when frontend tooling changes
+        if: steps.docs-scope.outputs.docs_only != 'true'
         shell: bash
         env:
           PRKS_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
