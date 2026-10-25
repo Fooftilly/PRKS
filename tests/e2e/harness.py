@@ -881,6 +881,7 @@ class PageCollector:
     def __init__(self, page, origin: str):
         self.origin = origin.rstrip("/")
         self.pageerrors = []
+        self.pageerror_names = []
         self.console_errors = []
         self.failed_requests = []
         self.http_5xx = []
@@ -890,11 +891,18 @@ class PageCollector:
         self._pdf_posts = []
         self._ann_posts = []
         self._save_confirms = []
-        page.on("pageerror", lambda err: self.pageerrors.append(str(err)))
+        page.on("pageerror", self._on_page_error)
         page.on("console", self._on_console)
         page.on("requestfailed", self._on_failed)
         page.on("response", self._on_response)
         page.route("**/*", self._on_route)
+
+    def _on_page_error(self, err):
+        self.pageerrors.append(str(err))
+        # Keep browser-provided exception names separate from their messages,
+        # which may contain private document text or URLs. Callers may report
+        # only strict allow-listed names; never expose raw error strings.
+        self.pageerror_names.append(getattr(err, "name", None))
 
     def _on_console(self, msg):
         if msg.type != "error":
