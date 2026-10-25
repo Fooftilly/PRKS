@@ -67,6 +67,8 @@ jobs:
       - name: Report visual result and baseline status
         if: ${{ !cancelled() }}
         shell: bash
+        env:
+          PROPOSE: ${{ github.event_name == 'workflow_dispatch' && inputs.propose_baseline && '1' || '0' }}
         run: |
           python - <<'PY'
           import json
@@ -92,10 +94,15 @@ jobs:
                       f"| {scene} | {'PASS' if entry['passed'] else 'DIFF'} | "
                       f"{entry['mean_delta']} | {entry['hot_fraction']} |"
                   )
+          elif approved and os.environ["PROPOSE"] != "1":
+              lines.append(
+                  "**Comparison incomplete:** approved baseline.json exists, but "
+                  "verification did not finish; inspect the failed capture/validation log."
+              )
           elif (path / "prks-visual-candidate.json").is_file():
               lines.append(
-                  "**Candidate only:** no approved baseline comparison was run. "
-                  "Inspect all five generated PNGs and approve baseline.json separately."
+                  "**Candidate only:** this was an explicit baseline proposal or "
+                  "there is no approved baseline. Review all five PNGs before accepting."
               )
           else:
               lines.append("**No candidate:** capture failed; inspect the failing job log.")
