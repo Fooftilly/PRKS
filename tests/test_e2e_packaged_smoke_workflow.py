@@ -58,7 +58,6 @@ class PackagedSmokeWorkflowTests(unittest.TestCase):
     def test_smoke_is_explicit_manual_only_and_stages_real_distribution(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("packaged_mode:", workflow)
-        self.assertIn("default: full", workflow)
         smoke = job_source(workflow, "packaged-smoke")
         full = job_source(workflow, "packaged-frontend")
         self.assertIn(
@@ -69,12 +68,31 @@ class PackagedSmokeWorkflowTests(unittest.TestCase):
         )
         # The one-run compare pilot must execute smoke alongside the full
         # matrix, while automatic PRs and manual default retain full only.
-        self.assertIn("          - compare", workflow)
-        self.assertIn("default: full", workflow)
+        # Bind the full/smoke/compare options to the packaged_mode input,
+        # rather than matching unrelated YAML content elsewhere.
+        self.assertIn(
+            "      packaged_mode:\n"
+            "        description:",
+            workflow,
+        )
+        self.assertIn(
+            "        options:\n"
+            "          - full\n"
+            "          - smoke\n"
+            "          - compare\n"
+            "        default: full",
+            workflow,
+        )
         self.assertIn(
             "if: github.event_name != 'workflow_dispatch' || inputs.packaged_mode != 'smoke'",
             full,
         )
+        # Conditions must be attached to their actual job, not merely
+        # present somewhere in the workflow. Both independent guard jobs
+        # remain unconditional for PRs, full, smoke and paired runs.
+        for guard in ("docker-build-modes", "worker-upgrade-rollback"):
+            guard_body = job_source(workflow, guard)
+            self.assertNotRegex(guard_body, r"(?m)^    if:")
         # This must be the same packaged application, not a faster fake.
         for command in (
             "python -m scripts.build_classic_distribution --root . --output .tests/classic-distribution",

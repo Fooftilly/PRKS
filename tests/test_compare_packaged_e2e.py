@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 
@@ -76,24 +75,6 @@ class PackagedCostComparisonTests(unittest.TestCase):
         self.assertIn("98.2%", report)
         self.assertIn("do not establish equivalent regression coverage", report)
 
-
-    def test_manual_compare_mode_runs_both_full_and_smoke(self):
-        workflow = (
-            Path(__file__).resolve().parents[1]
-            / ".github/workflows/e2e-classic-distribution-gate.yml"
-        ).read_text(encoding="utf-8")
-        self.assertIn("          - compare", workflow)
-        self.assertIn("inputs.packaged_mode != 'smoke'", workflow)
-        self.assertIn(
-            "(inputs.packaged_mode == 'smoke' || inputs.packaged_mode == 'compare')",
-            workflow,
-        )
-        self.assertIn(
-            "(inputs.packaged_mode == 'full' || inputs.packaged_mode == 'compare')",
-            workflow,
-        )
-        # Smoke remains workflow_dispatch-only; normal PRs retain all six shards.
-        self.assertIn("github.event_name != 'workflow_dispatch'", workflow)
 
     def test_single_dispatch_paired_full_and_smoke_includes_shared_guards_once(self):
         combined = [
