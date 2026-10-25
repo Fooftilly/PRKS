@@ -88,28 +88,55 @@ def snapshot(stats: Any) -> list[dict[str, Any]]:
     return [project_statement(row) for row in stats.execute(_SNAPSHOT_SQL).fetchall()]
 
 
-def benchmark(stats: Any, operation: Any, repetitions: int) -> dict[str, Any]:
-    # Warm-only measurement: connection pools, prepared queries and caches are
-    # already active; never imply this is a cold-start or E2E HTTP latency.
+def benchmark(
+    stats: Any, operation: Any, repetitions: int, verify_result: Any
+) -> dict[str, Any]:
+    """Validated facade operation with separate first-observed vs warmed samples.
+
+    The first observed call is NOT a process/DB cold start: seeding has already
+    used the same Database pool. Keep it out of warm p50/p95 and SQL stats.
+    """
+    first = time.perf_counter()
+    verify_result(operation())
+    first_ms = (time.perf_counter() - first) * 1000
     for _ in range(2):
-        operation()
+        verify_result(operation())
     stats.execute(_RESET_SQL)
-    # Maintenance reads and the reset itself must never displace workload SQL.
-    # The statistics connection runs with pg_stat_statements.track=none.
     if snapshot(stats):
         raise RuntimeError("profiler maintenance contaminated workload statistics")
     durations = []
     for _ in range(repetitions):
         start = time.perf_counter()
-        operation()
+        verify_result(operation())
         durations.append((time.perf_counter() - start) * 1000)
+    statements = snapshot(stats)
+    if not statements:
+        raise RuntimeError("profile contained no observed workload SQL")
     return {
         "repetitions": repetitions,
+        "completed_samples": len(durations),
         "warmup_calls": 2,
+        "correctness_checks": repetitions + 3,
+        "first_observed_call_ms": round(first_ms, 3),
+        "first_call_context": "after_fixture_seed_not_cold_start",
         "call_wall_p50_ms": percentile(durations, 0.5),
         "call_wall_p95_ms": percentile(durations, 0.95),
-        "top_statements": snapshot(stats),
+        "top_statements": statements,
     }
+
+
+def assert_works_count(value: Any, expected: int) -> None:
+    """Readiness and correctness before durations are accepted as useful."""
+    if not isinstance(value, list) or len(value) != expected:
+        raise RuntimeError("synthetic Work catalog count does not match fixture")
+    if any(not isinstance(item, dict) or not isinstance(item.get("id"), str) for item in value):
+        raise RuntimeError("synthetic Work catalog returned malformed summaries")
+
+
+def assert_work_detail(value: Any, work_id: str) -> None:
+    if not isinstance(value, dict) or value.get("id") != work_id:
+        raise RuntimeError("synthetic Work detail does not match seeded Work")
+
 
 
 def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
@@ -165,19 +192,27 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
                                 fixture_ids.append(library.add_work(f"Fixture Work {i:04d}"))
                             # These are real PG facade read paths. The fixture is
                             # deterministic, isolated, synthetic and disposable.
+                            work_id = fixture_ids[-1]
                             workloads = (
-                                ("works_list", library.get_all_works),
-                                ("works_browse", library.get_works_browse_catalog),
-                                ("work_detail", lambda: library.get_work(fixture_ids[-1])),
+                                ("works_list", library.get_all_works,
+                                 lambda value: assert_works_count(value, size)),
+                                ("works_browse", library.get_works_browse_catalog,
+                                 lambda value: assert_works_count(value, size)),
+                                ("work_detail", lambda: library.get_work(work_id),
+                                 lambda value: assert_work_detail(value, work_id)),
                             )
-                            for label, operation in workloads:
-                                result = benchmark(stats, operation, repetitions)
+                            for label, operation, verify in workloads:
+                                result = benchmark(stats, operation, repetitions, verify)
                                 output.append({"fixture_works": size, "operation": label, **result})
                     return {
                         "tool": "pg_stat_statements",
                         "server_version_num": int(version),
                         "fixture": "synthetic_works_only",
+                        "fixture_version": "works-v1",
+                        "fixture_tiers": list(sizes),
+                        "backend": "postgresql_facade",
                         "measurement": "warm_facade_calls_not_http",
+                        "readiness": "disposable_pg18_identity_verified",
                         "query_fingerprints": "run_local_only; no SQL text is collected",
                         "profiles": output,
                     }
