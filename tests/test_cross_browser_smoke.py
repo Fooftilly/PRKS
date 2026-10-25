@@ -81,7 +81,7 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
                 context = Mock()
                 collector = Mock()
 
-                def locator(selector):
+                def locator(selector, **_kwargs):
                     if selector == failed_selector:
                         raise TimeoutError("secret-url-private-document-title")
                     return Mock()
@@ -153,7 +153,11 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
     def test_split_failure_is_attributed_without_leaking_details(self):
         page, context, collector = Mock(), Mock(), Mock()
         page.evaluate.return_value = True
-        page.wait_for_function.side_effect = TimeoutError("secret-tab-title")
+        def fail_split_only(js, **_kwargs):
+            if "s.mode === 'tiled'" in js:
+                raise TimeoutError("secret-tab-title")
+            return None
+        page.wait_for_function.side_effect = fail_split_only
         with (
             patch("scripts.ci.cross_browser_smoke.open_app_page",
                   return_value=(page, context, collector)),
