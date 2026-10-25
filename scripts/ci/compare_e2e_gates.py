@@ -122,7 +122,7 @@ def compare(source: dict, packaged: dict) -> str:
     if source["run_id"] == packaged["run_id"]:
         raise InvalidBenchmark("Expected distinct GitHub Actions runs")
     return "\n".join((
-        f"Same-commit source vs packaged E2E: " + chr(96) + source["sha"] + chr(96),
+        "Same-commit source vs packaged E2E: " + chr(96) + source["sha"] + chr(96),
         "",
         "| Six-shard measure | Source checkout | Packaged distribution |",
         "| --- | ---: | ---: |",
