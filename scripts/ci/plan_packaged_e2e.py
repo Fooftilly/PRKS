@@ -141,13 +141,15 @@ def plan_packaged_e2e(
 
     view_paths = []
     for path in paths:
+        # A feature-local .test.ts file can match its feature's production
+        # rule even though it isn't shipped. Recognize harmless companions
+        # before checking the generic take/skip classification.
+        if _safe_nonproduction_companion(path):
+            continue
         classified = policy.classify_affected_path(path)
         if classified["skip"]:
-            # The source planner legitimately skips documentation and unit
-            # tests, but may also skip unfamiliar support paths. Do not let
-            # unknown or CI-relevant changes hide behind a safe view diff.
-            if _safe_nonproduction_companion(path):
-                continue
+            # Unknown paths are not automatically safe just because the
+            # source E2E planner skips them (e.g. Dockerfile/workflows).
             return _result("unrecognized nonproduction companion: " + path)
         if _is_generated_companion(path):
             # Already checked by the source planner: a generated companion
