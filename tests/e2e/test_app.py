@@ -22,6 +22,7 @@ from tests.e2e.harness import (
     AppServer,
     FixtureServer,
     open_app_page,
+    profile_e2e_phase,
     require_chromium,
     wait_for_async,
 )
@@ -3536,93 +3537,98 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
         self.assertIn("committed again", _managed_pdf_annotation_contents(page, server, work_id))
 
     def test_an_uncommitted_edit_does_not_hold_another_annotations_rollback(self):
-        server, page, _collector = self._start_app()
-        work_id = server.ids["work_a"]
-        _open_work_from_home(page, WORK_A_TITLE)
-        _wait_pdf_viewer(page)
-        _wait_pdf_annotation_durable(page)
-        _commit_pdf_highlight(page)
-        a_id = _only_viewer_annotation_id(page)
-        _wait_server_annotation(page, work_id, a_id)
-        _wait_pdf_annotation_ops_drained(page, work_id)
-        _wait_pdf_annotation_durable(page)
-        _close_annotation_popup(page)
-        _commit_pdf_highlight(page, _pdf_text_band_fractions(3, 6))
-        b_id = [i for i in _viewer_annotation_ids(page) if i != a_id][0]
-        _wait_server_annotation(page, work_id, b_id)
-        _wait_pdf_annotation_ops_drained(page, work_id)
-        _wait_pdf_materialized(page, work_id)
-        self._edit_comment_repeatedly(page, server, work_id, a_id, ["stored A"])
-        _close_annotation_popup(page)
-        self._edit_comment_repeatedly(page, server, work_id, b_id, ["stored B"])
-        _close_annotation_popup(page)
-
-        # A's edit never commits (a failed engine write).
-        page.evaluate(
-            """(aId) => {
-                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
-                const handler = pdf._annotationEventHandler;
-                const removeBridge = pdf.viewer.onAnnotationEvent(handler);
-                removeBridge();
-                pdf.viewer.onAnnotationEvent((evt) => {
-                    if (evt && evt.committed === true && String(evt.annotationId) === aId) return;
-                    handler(evt);
-                });
-            }""",
-            a_id,
-        )
-        _wait_pdf_annotation_durable(page)
-        _save_annotation_comment(page, a_id, "uncommitted A")
-        _close_annotation_popup(page)
-
-        # B's next local write fails. B rolls back at once, while A's
-        # uncommitted edit stays in the viewer.
-        page.evaluate(
-            """() => {
-                const store = window.prksSync.store;
-                const real = store.savePdfAnnotation;
-                store.savePdfAnnotation = function () {
-                    store.savePdfAnnotation = real;
-                    return Promise.reject(Object.assign(new Error('disk full'), { code: 'write_failed' }));
+        with profile_e2e_phase("pdf_rollback_setup"):
+            server, page, _collector = self._start_app()
+            work_id = server.ids["work_a"]
+            _open_work_from_home(page, WORK_A_TITLE)
+            _wait_pdf_viewer(page)
+            _wait_pdf_annotation_durable(page)
+        with profile_e2e_phase("pdf_rollback_create_first"):
+            _commit_pdf_highlight(page)
+            a_id = _only_viewer_annotation_id(page)
+            _wait_server_annotation(page, work_id, a_id)
+            _wait_pdf_annotation_ops_drained(page, work_id)
+            _wait_pdf_annotation_durable(page)
+        with profile_e2e_phase("pdf_rollback_create_second"):
+            _close_annotation_popup(page)
+            _commit_pdf_highlight(page, _pdf_text_band_fractions(3, 6))
+            b_id = [i for i in _viewer_annotation_ids(page) if i != a_id][0]
+            _wait_server_annotation(page, work_id, b_id)
+            _wait_pdf_annotation_ops_drained(page, work_id)
+            _wait_pdf_materialized(page, work_id)
+        with profile_e2e_phase("pdf_rollback_seed_committed"):
+            self._edit_comment_repeatedly(page, server, work_id, a_id, ["stored A"])
+            _close_annotation_popup(page)
+            self._edit_comment_repeatedly(page, server, work_id, b_id, ["stored B"])
+            _close_annotation_popup(page)
+        with profile_e2e_phase("pdf_rollback_induce_uncommitted"):
+            # A's edit never commits (a failed engine write).
+            page.evaluate(
+                """(aId) => {
+                    const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                    const handler = pdf._annotationEventHandler;
+                    const removeBridge = pdf.viewer.onAnnotationEvent(handler);
+                    removeBridge();
+                    pdf.viewer.onAnnotationEvent((evt) => {
+                        if (evt && evt.committed === true && String(evt.annotationId) === aId) return;
+                        handler(evt);
+                    });
+                }""",
+                a_id,
+            )
+            _wait_pdf_annotation_durable(page)
+            _save_annotation_comment(page, a_id, "uncommitted A")
+            _close_annotation_popup(page)
+        with profile_e2e_phase("pdf_rollback_fail_other_save"):
+            # B's next local write fails. B rolls back at once, while A's
+            # uncommitted edit stays in the viewer.
+            page.evaluate(
+                """() => {
+                    const store = window.prksSync.store;
+                    const real = store.savePdfAnnotation;
+                    store.savePdfAnnotation = function () {
+                        store.savePdfAnnotation = real;
+                        return Promise.reject(Object.assign(new Error('disk full'), { code: 'write_failed' }));
+                    };
+                }"""
+            )
+            _wait_pdf_annotation_durable(page)
+            _save_annotation_comment(page, b_id, "failed B")
+            page.wait_for_function(
+                """() => {
+                    const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                    const el = ctx && ctx.root && ctx.root.querySelector('.work-annotation-sync-status__label');
+                    return !!el && el.textContent === 'Could not save locally';
+                }""",
+                timeout=5000,
+            )
+        with profile_e2e_phase("pdf_rollback_verify_independent"):
+            viewer_comments = """([aId, bId]) => {
+                const v = %s;
+                const rows = (v.getAnnotations() || []).map(a => (a && a.raw ? a.raw : a));
+                const text = (id) => {
+                    const row = rows.find(r => r && String(r.id) === id);
+                    return row ? row.contents : null;
                 };
-            }"""
-        )
-        _wait_pdf_annotation_durable(page)
-        _save_annotation_comment(page, b_id, "failed B")
-        page.wait_for_function(
-            """() => {
-                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
-                const el = ctx && ctx.root && ctx.root.querySelector('.work-annotation-sync-status__label');
-                return !!el && el.textContent === 'Could not save locally';
-            }""",
-            timeout=5000,
-        )
-        viewer_comments = """([aId, bId]) => {
-            const v = %s;
-            const rows = (v.getAnnotations() || []).map(a => (a && a.raw ? a.raw : a));
-            const text = (id) => {
-                const row = rows.find(r => r && String(r.id) === id);
-                return row ? row.contents : null;
-            };
-            return [text(aId), text(bId)];
-        }""" % _FOCUSED_VIEWER
-        page.wait_for_function(
-            "(ids) => { const [a, b] = (%s)(ids); return a === 'uncommitted A' && b === 'stored B'; }"
-            % viewer_comments,
-            arg=[a_id, b_id],
-            timeout=5000,
-        )
-
-        # A's edit is then reported as not saved and rolled back too.
-        page.wait_for_function(
-            "(ids) => { const [a, b] = (%s)(ids); return a === 'stored A' && b === 'stored B'; }"
-            % viewer_comments,
-            arg=[a_id, b_id],
-            timeout=20000,
-        )
-        self.assertEqual(_server_annotation(page, work_id, a_id)["contents"], "stored A")
-        self.assertEqual(_server_annotation(page, work_id, b_id)["contents"], "stored B")
-        self.assertTrue(_pdf_has_pending_sync(page))
+                return [text(aId), text(bId)];
+            }""" % _FOCUSED_VIEWER
+            page.wait_for_function(
+                "(ids) => { const [a, b] = (%s)(ids); return a === 'uncommitted A' && b === 'stored B'; }"
+                % viewer_comments,
+                arg=[a_id, b_id],
+                timeout=5000,
+            )
+        with profile_e2e_phase("pdf_rollback_verify_late"):
+            # A's edit is then reported as not saved and rolled back too.
+            page.wait_for_function(
+                "(ids) => { const [a, b] = (%s)(ids); return a === 'stored A' && b === 'stored B'; }"
+                % viewer_comments,
+                arg=[a_id, b_id],
+                timeout=20000,
+            )
+            self.assertEqual(_server_annotation(page, work_id, a_id)["contents"], "stored A")
+            self.assertEqual(_server_annotation(page, work_id, b_id)["contents"], "stored B")
+            self.assertTrue(_pdf_has_pending_sync(page))
 
     def test_repeated_comment_edits_on_imported_highlight_persist(self):
         server, page, _collector = self._start_app(seed_fn=seed_imported_highlight_library)
