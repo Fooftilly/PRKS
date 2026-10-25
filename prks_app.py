@@ -95,7 +95,7 @@ def start_identity(args, config, environ=None):
     except ImportError:
         print(
             "PRKS cannot start authentication: PRKS_AUTH needs the PostgreSQL packages "
-            "(psycopg, psycopg-pool and argon2-cffi in requirements-dev.txt).",
+            "(psycopg, psycopg-pool and argon2-cffi in requirements.txt).",
             file=sys.stderr,
         )
         raise SystemExit(2) from None

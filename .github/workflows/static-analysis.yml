@@ -129,7 +129,7 @@ jobs:
 
       # The typed slice includes PostgreSQL and identity login (#69).
       # Resolve psycopg and argon2 imports rather than suppressing diagnostics.
-      # Install only pinned type imports from requirements-dev.txt.
+      # Install only pinned type imports from requirements.txt.
       - name: Set up Python for PostgreSQL and identity type imports
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
@@ -139,10 +139,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t pg_pins < <(grep -E '^psycopg(-binary|-pool)?==[^[:space:]]+$' requirements-dev.txt)
-          mapfile -t argon_pins < <(grep -E '^argon2-cffi==[^[:space:]]+$' requirements-dev.txt)
+          mapfile -t pg_pins < <(grep -E '^psycopg(-binary|-pool)?==[^[:space:]]+$' requirements.txt)
+          mapfile -t argon_pins < <(grep -E '^argon2-cffi==[^[:space:]]+$' requirements.txt)
           if [[ "${#pg_pins[@]}" -ne 3 || "${#argon_pins[@]}" -ne 1 ]]; then
-            echo "Expected three pinned PostgreSQL packages and one argon2-cffi package in requirements-dev.txt" >&2
+            echo "Expected three pinned PostgreSQL packages and one argon2-cffi package in requirements.txt" >&2
             exit 1
           fi
           python -m pip install --disable-pip-version-check --only-binary=:all: "${pg_pins[@]}" "${argon_pins[@]}"

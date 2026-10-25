@@ -147,7 +147,7 @@ EOF
 fi
 
 "$PY" -c 'import psycopg, psycopg_pool' 2>/dev/null || {
-  echo "test-postgres: psycopg is not installed; install the pins in requirements-dev.txt" >&2
+  echo "test-postgres: psycopg is not installed; install the pins in requirements.txt" >&2
   exit 2
 }
 

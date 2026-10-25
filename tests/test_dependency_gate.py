@@ -68,7 +68,7 @@ _TEST_GATE_RUN_TESTS_STEP = "Run PRKS unit, API, structural, and Node tests"
 # ``scripts/test-postgres``. Both steps or neither.
 _TEST_GATE_PG_INSTALL_STEP = "Install pinned runtime and PostgreSQL dependencies"
 _TEST_GATE_PG_RUN_STEP = "Run PostgreSQL helper and harness tests"
-_TEST_GATE_PG_DEV_PINS = ("psycopg", "psycopg-binary", "psycopg-pool", "argon2-cffi")
+# PostgreSQL is a production runtime dependency from #630 onward.
 # The backend parity job (#625): the same pinned install and exactly
 # ``scripts/test-postgres --parity``. Both steps or neither.
 _TEST_GATE_PARITY_INSTALL_STEP = "Install pinned runtime and PostgreSQL dependencies for parity"
@@ -1206,13 +1206,26 @@ class RepoGateLiveTests(unittest.TestCase):
         dev = parse_requirements_pins((_PROJECT / "requirements-dev.txt").read_text())
         self.assertIn("openapi-core", dev)
         self.assertIn("hypothesis", dev)
+        # The Docker image installs only requirements.txt: a PostgreSQL
+        # runtime must never depend on extra wheels from requirements-dev.txt.
+        postgres_runtime = {"psycopg", "psycopg-binary", "psycopg-pool", "argon2-cffi"}
+        self.assertTrue(postgres_runtime.issubset(runtime))
+        self.assertTrue(postgres_runtime.isdisjoint(dev))
+        # Pyright's separate import-resolution install must use the same
+        # production pins, not the now-empty development selection.
+        static = (_PROJECT / ".github" / "workflows" / "static-analysis.yml").read_text()
+        static_install = static.split(
+            "- name: Install pinned PostgreSQL and identity type dependencies", 1
+        )[1].split("- name: Run Pyright data-flow checks", 1)[0]
+        self.assertIn("psycopg(-binary|-pool)?==", static_install)
+        self.assertIn("argon2-cffi==", static_install)
+        self.assertEqual(static_install.count("requirements.txt"), 3)
+        self.assertNotIn("requirements-dev.txt", static_install)
         expected_unit = dict(runtime, **{
             name: dev[name]
             for name in ("openapi-core", "hypothesis", "markdown-it-py", "mdurl")
         })
         expected_pg = dict(runtime)
-        for name in _TEST_GATE_PG_DEV_PINS:
-            expected_pg[name] = dev[name]
 
         workflow = (_PROJECT / ".github" / "workflows" / "test-gate.yml").read_text(
             encoding="utf-8"

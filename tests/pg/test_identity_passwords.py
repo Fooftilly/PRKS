@@ -1,7 +1,7 @@
 """Argon2id password hashes (§9.3; L-ID-1 #626).
 
 Lives beside the PostgreSQL tests because argon2-cffi is installed with the
-psycopg pins (requirements-dev.txt) until the identity lane runs in the app.
+psycopg runtime pins (requirements.txt), also used by the identity lane.
 """
 
 from __future__ import annotations
