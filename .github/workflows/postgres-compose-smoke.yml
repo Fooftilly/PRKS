@@ -6,6 +6,7 @@ on:
   pull_request:
     paths:
       - docker-compose.yml
+      - docker-compose.postgres.yml
       - .dockerignore
       - scripts/ci/test_postgres_compose.sh
       - .github/workflows/postgres-compose-smoke.yml
@@ -14,6 +15,7 @@ on:
       - master
     paths:
       - docker-compose.yml
+      - docker-compose.postgres.yml
       - .dockerignore
       - scripts/ci/test_postgres_compose.sh
       - .github/workflows/postgres-compose-smoke.yml
