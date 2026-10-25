@@ -122,7 +122,40 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Classify documentation-only PR (fail closed)
+        id: docs-scope
+        shell: bash
+        env:
+          PRKS_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PRKS_EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          docs_only=false
+          if [[ "$PRKS_EVENT_NAME" == "pull_request" && "$PRKS_PR_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            if git fetch --no-tags --depth=1 origin "$PRKS_PR_BASE_SHA"; then
+              # The PR checkout is untrusted: use the reviewed classifier from
+              # the immutable base, not the PR's possibly modified selector.
+              if base_classifier="$(mktemp)"; then
+                if git show "$PRKS_PR_BASE_SHA:scripts/ci/docs_only.py" > "$base_classifier"; then
+                  decision="$(python "$base_classifier" --base "$PRKS_PR_BASE_SHA")" || decision=false
+                  if [[ "$decision" == "true" ]]; then
+                    docs_only=true
+                  fi
+                else
+                  echo "::warning::Docs classifier absent from base; running full tests."
+                fi
+                rm -f "$base_classifier"
+              else
+                echo "::warning::Failed to allocate classifier file; running full tests."
+              fi
+            else
+              echo "::warning::Could not fetch immutable PR base; running full tests."
+            fi
+          fi
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
       - name: Set up Node.js
+        if: steps.docs-scope.outputs.docs_only != 'true'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
@@ -131,11 +164,13 @@ jobs:
       # Resolve psycopg and argon2 imports rather than suppressing diagnostics.
       # Install only pinned type imports from requirements-dev.txt.
       - name: Set up Python for PostgreSQL and identity type imports
+        if: steps.docs-scope.outputs.docs_only != 'true'
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
 
       - name: Install pinned PostgreSQL and identity type dependencies
+        if: steps.docs-scope.outputs.docs_only != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -149,11 +184,13 @@ jobs:
 
       # Narrow diagnostics across prks_app.py + backend (typeCheckingMode: off).
       - name: Run Pyright data-flow checks
+        if: steps.docs-scope.outputs.docs_only != 'true'
         run: npm exec --yes --ignore-scripts --package="pyright@${PYRIGHT_VERSION}" -- pyright --project pyrightconfig.json
 
       # Genuine basic type checking for the #69 typed slice (scopes pinned in
       # scripts/check_invariants.py PYRIGHT_TYPED_SLICE_SCOPES).
       - name: Run Pyright typed slice (backend/storage + backend utility modules; basic)
+        if: steps.docs-scope.outputs.docs_only != 'true'
         run: npm exec --yes --ignore-scripts --package="pyright@${PYRIGHT_VERSION}" -- pyright --project pyrightconfig.typed-slice.json
 
   eslint:
@@ -169,12 +206,46 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Classify documentation-only PR (fail closed)
+        id: docs-scope
+        shell: bash
+        env:
+          PRKS_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PRKS_EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          docs_only=false
+          if [[ "$PRKS_EVENT_NAME" == "pull_request" && "$PRKS_PR_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            if git fetch --no-tags --depth=1 origin "$PRKS_PR_BASE_SHA"; then
+              # The PR checkout is untrusted: use the reviewed classifier from
+              # the immutable base, not the PR's possibly modified selector.
+              if base_classifier="$(mktemp)"; then
+                if git show "$PRKS_PR_BASE_SHA:scripts/ci/docs_only.py" > "$base_classifier"; then
+                  decision="$(python "$base_classifier" --base "$PRKS_PR_BASE_SHA")" || decision=false
+                  if [[ "$decision" == "true" ]]; then
+                    docs_only=true
+                  fi
+                else
+                  echo "::warning::Docs classifier absent from base; running full tests."
+                fi
+                rm -f "$base_classifier"
+              else
+                echo "::warning::Failed to allocate classifier file; running full tests."
+              fi
+            else
+              echo "::warning::Could not fetch immutable PR base; running full tests."
+            fi
+          fi
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
       - name: Set up Node.js
+        if: steps.docs-scope.outputs.docs_only != 'true'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
 
       - name: Run high-signal JavaScript checks
+        if: steps.docs-scope.outputs.docs_only != 'true'
         run: npm exec --yes --ignore-scripts --package="eslint@${ESLINT_VERSION}" -- eslint --config eslint.config.mjs frontend tests/browser
 
   vue:
