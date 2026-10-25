@@ -83,3 +83,6 @@ Thumbs.db
 log.txt
 to-do.md
 /prks-latest.zip
+
+# PostgreSQL Compose secret files (never commit credentials)
+/secrets/
