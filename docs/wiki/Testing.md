@@ -144,3 +144,19 @@ This pilot covers OS packages (including `qpdf`) and Python packages actually pr
 
 
 **Triage policy:** The GitHub Dependency Review workflow flags *newly introduced* advisories in supported manifests; the built-image Syft/Grype scan additionally identifies OS packages, native dependencies and interpreter components in the runnable Docker artifact. Python package advisories may appear in both, so do not add or compare their raw totals as independent findings. Check IDs, package/installed version, ecosystem and upstream namespace before classifying overlap. Listed upgrade versions can be incompatible with the pinned runtime (for example a Python-major upgrade); `not-fixed` means a vendor fix is not currently listed; `wont-fix` indicates a vendor does not intend to issue a fix. Neither constitutes PRKS risk acceptance, and the actions differ. Prioritize confirmed, fixable, reachable vulnerabilities separately from unpatched OS packages; document decisions in #861, never auto-suppress findings. Scanner matches are not proof of exploitability, and fixing them can require Docker base updates, Python runtime changes or an upstream release. This remains advisory and does not alter branch protection or upload scan output to third-party SaaS beyond the existing workflow's GitHub Actions artifacts.
+
+
+## Advisory axe-core browser accessibility smoke (#856)
+
+The opt-in [Advisory axe-core accessibility smoke](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/axe-playwright-advisory.yml) GitHub Actions workflow uses **PRKS's existing Python unittest/Playwright Chromium E2E harness and disposable synthetic `--testing` server**. It runs when the pilot workflow/tests change or when manually dispatched; normal full/sharded/affected E2E does **not** discover its additional test without `PRKS_E2E_AXE=1`. It does not create another frontend E2E framework, use an external accessibility SaaS, or alter the required check names.
+
+The workflow installs the existing `frontend-app` npm lockfile's pinned **axe-core 4.13.0** as a *dev-only* tool and injects its local `axe.min.js` into a real browser after application readiness. A five-state, single-server sequence covers document/app shell (with the routed `#page-content` excluded but global language/title and workspace chrome preserved), Vue Folder library, seeded Work detail, synthetic-PDF viewer and Settings dialog. The Work detail subtree includes its PDF viewer, so per-surface rule counts may overlap and must not be summed as independent findings. Axe's WCAG 2 A/AA and WCAG 2.1 A/AA tags report rule IDs, impact, count and a few sanitized public CSS targets; the Playwright scenario separately verifies keyboard Enter opens Settings and Escape restores focus. Axe cannot by itself prove keyboard order, focus trapping or whole-app usability. Existing `@storybook/addon-a11y` remains useful for component inspection and is not replaced.
+
+Run locally with the normal pinned E2E Python/browser environment and `npm ci --ignore-scripts` in `frontend-app`, then at the repository root:
+
+```bash
+PRKS_E2E_AXE=1 python tests/e2e/run.py --jobs 1 --no-pointer-capture \
+  tests.e2e.test_axe_a11y.AxeAccessibilityPilotTests.test_advisory_scans_five_real_fixture_surfaces_and_keyboard_focus
+```
+
+The manual CI run uploads only a bounded JSON report (`synthetic-axe-advisory`, retained seven days) and a compact GitHub Actions summary. No page HTML, document titles, research text, browser screenshots, real user storage or URL queries belong in reports. A scan failure or missing page still fails this **opt-in** job; existing accessibility violations are recorded as *advisory debt*, not ignored or silently made required. Review affected selectors/rules and link established accessibility defects under #616/#745/#830/#425; measure runtime and reproducibility before considering a narrow blocking smoke or extending Firefox/WebKit.
