@@ -11,3 +11,5 @@ hypothesis==6.170.9
 # CI docs profile loads only these wheels; no production runtime dependency.
 markdown-it-py==4.2.0
 mdurl==0.1.2
+# Pinned HTTP client for the read-only GitHub E2E cost comparator (#740).
+requests==2.34.2
