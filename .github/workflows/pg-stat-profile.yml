@@ -15,7 +15,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: pg-profile-${{ github.event.pull_request.number || github.ref }}
+  # Preserve exact-head validation if an older commit is manually rerun.
+  group: pg-profile-${{ github.event.pull_request.number || github.ref }}-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:
