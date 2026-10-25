@@ -114,7 +114,7 @@ scripts/test-postgres --profile
 scripts/test-postgres --profile --sizes 12,48,128 --repetitions 8
 ```
 
-The wrapper starts a new disposable Docker server (or local temporary cluster)
+The wrapper starts a new disposable Docker PostgreSQL 18 server (or local temporary PostgreSQL 18+ cluster)
 with `shared_preload_libraries=pg_stat_statements` and `compute_query_id=on`,
 creates a harness-owned migrated database and extension, seeds synthetic Works,
 then deletes the database and server. The profiler **refuses**
