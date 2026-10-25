@@ -142,15 +142,45 @@ def assert_work_detail(value: Any, work_id: str) -> None:
 
 
 
-def assert_bounded_works(value: Any, fixture_ids: frozenset[str], limit: int) -> None:
-    """A bounded browse result must be complete, unique and from this fixture."""
-    if not isinstance(value, list) or len(value) != limit:
+def expected_recent_work_ids(
+    catalog: Any, fixture_ids: Sequence[str], limit: int
+) -> tuple[str, ...]:
+    """Derive newest IDs independently of the query's returned row order.
+
+    The PostgreSQL path orders by created_at at *second* precision descending,
+    with a byte-wise ID ascending tie-breaker. Inserting fixtures quickly can
+    produce ties: insertion order alone is not a valid expected result.
+    """
+    if not isinstance(catalog, list) or len(catalog) != len(fixture_ids):
+        raise RuntimeError("synthetic Work catalog is incomplete")
+    timestamps: dict[str, str] = {}
+    for row in catalog:
+        if not isinstance(row, dict):
+            raise RuntimeError("synthetic Work catalog contains malformed rows")
+        work_id, created_at = row.get("id"), row.get("created_at")
+        if (
+            not isinstance(work_id, str) or not isinstance(created_at, str)
+            or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2} "
+                                r"[0-9]{2}:[0-9]{2}:[0-9]{2}", created_at)
+            or work_id in timestamps
+        ):
+            raise RuntimeError("synthetic Work catalog has invalid creation metadata")
+        timestamps[work_id] = created_at
+    if set(timestamps) != set(fixture_ids):
+        raise RuntimeError("synthetic Work catalog has unexpected IDs")
+    # Stable sorts implement SQL's descending seconds and ascending ID ties.
+    by_id = sorted(timestamps)
+    newest_first = sorted(by_id, key=lambda wid: timestamps[wid], reverse=True)
+    return tuple(newest_first[:limit])
+
+
+def assert_bounded_works(value: Any, expected_ids: tuple[str, ...]) -> None:
+    """Check the exact newest IDs and order, including timestamp ties."""
+    if not isinstance(value, list) or len(value) != len(expected_ids):
         raise RuntimeError("bounded synthetic Work browse has the wrong count")
-    ids = [item.get("id") if isinstance(item, dict) else None for item in value]
-    if any(not isinstance(wid, str) or wid not in fixture_ids for wid in ids):
-        raise RuntimeError("bounded synthetic Work browse contains an unknown Work")
-    if len(set(ids)) != len(ids):
-        raise RuntimeError("bounded synthetic Work browse contains duplicate IDs")
+    ids = [row.get("id") if isinstance(row, dict) else None for row in value]
+    if ids != list(expected_ids):
+        raise RuntimeError("bounded synthetic Work browse returned wrong newest IDs")
 
 
 def assert_ordered_work_ids(value: Any, expected: tuple[str, ...]) -> None:
@@ -219,8 +249,17 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
                             # T07: only profile read paths already ported to the PG facade.
                             # Search, graph and generic offset pagination are NOT ported.
                             bounded_limit = min(size, 10)
-                            allowed_ids = frozenset(fixture_ids)
-                            batch_ids = tuple(fixture_ids[:bounded_limit])
+                            # Read the synthetic catalog before timing, then independently
+                            # sort its dates/IDs to verify the Recently Added ordering.
+                            expected_recent = expected_recent_work_ids(
+                                library.get_all_works(), fixture_ids, bounded_limit
+                            )
+                            # Deliberately non-natural: neither SQL id order nor
+                            # fixture insertion order should satisfy batch lookup.
+                            by_id = tuple(sorted(fixture_ids[:bounded_limit]))
+                            batch_ids = by_id[::2] + by_id[1::2]
+                            if batch_ids == tuple(fixture_ids[:bounded_limit]):
+                                batch_ids = batch_ids[1:] + batch_ids[:1]
                             workloads = (
                                 ("works_list", library.get_all_works,
                                  lambda value: assert_works_count(value, size)),
@@ -230,7 +269,7 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
                                  lambda value: assert_work_detail(value, work_id)),
                                 ("works_recent_bounded",
                                  lambda: library.get_recently_added_browse(limit=bounded_limit),
-                                 lambda value: assert_bounded_works(value, allowed_ids, bounded_limit)),
+                                 lambda value: assert_bounded_works(value, expected_recent)),
                                 ("works_batch_by_ids",
                                  lambda: library.get_work_summaries_by_ids_ordered(list(batch_ids)),
                                  lambda value: assert_ordered_work_ids(value, batch_ids)),
