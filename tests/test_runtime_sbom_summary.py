@@ -129,6 +129,28 @@ class RuntimeSbomSummaryTests(unittest.TestCase):
         self.assertEqual(output["grype_scan_at"], "2026-10-25T14:46:00Z")
         self.assertEqual(output["by_severity"]["Critical"], 0)
 
+    def test_literal_redacted_is_a_valid_public_package_and_version(self) -> None:
+        item = row("CVE-2026-12345", "redacted", installed="redacted", versions=["redacted"])
+        sbom, scan = fixture(item)
+        output = summarize(sbom, scan, IMAGE)
+        self.assertEqual(output["triage_examples"][0]["package"], "redacted")
+        self.assertEqual(output["triage_examples"][0]["installed"], "redacted")
+        self.assertEqual(output["by_fix_state"]["fix-listed"], 1)
+
+    def test_malformed_spdx_package_entry_is_rejected(self) -> None:
+        sbom, scan = fixture()
+        with self.assertRaisesRegex(ValueError, "malformed SPDX package"):
+            summarize({"spdxVersion": "SPDX-2.3", "packages": [None]}, scan, IMAGE)
+
+    def test_impossible_grype_timestamps_are_not_printed_as_valid(self) -> None:
+        sbom, scan = fixture()
+        scan["descriptor"]["timestamp"] = "2026-99-99T45:80:00Z"
+        scan["descriptor"]["db"]["status"]["built"] = "2026-02-30T13:00:00Z"
+        output = summarize(sbom, scan, IMAGE)
+        self.assertEqual(output["grype_scan_at"], "unknown")
+        self.assertEqual(output["grype_db_built_at"], "unknown")
+        self.assertIsNone(output["grype_db_age_hours"])
+
     def test_bad_scanner_shapes_fail_closed(self) -> None:
         sbom, scan = fixture()
         with self.assertRaisesRegex(ValueError, "invalid built image"):
