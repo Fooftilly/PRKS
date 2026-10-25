@@ -145,6 +145,9 @@ class OfflinePersonProfileWorkflowTargetTests(unittest.TestCase):
         workflow = (
             root / ".github/workflows/e2e-offline-person-profile.yml"
         ).read_text(encoding="utf-8")
+        self.assertIn("workflow_dispatch: {}", workflow)
+        self.assertNotIn("inputs:", workflow)
+        self.assertIn("for SCENARIO in create edit; do", workflow)
         targets = re.findall(
             r"^\s*(create|edit)\) TARGET=(tests\.e2e\.[A-Za-z_0-9.]+) ;;$",
             workflow,
