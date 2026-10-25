@@ -80,7 +80,7 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
             with self.subTest(stage=expected_stage):
                 page = Mock()
                 context = Mock()
-                collector = Mock()
+                collector = Mock(unsafe=True)
 
                 def locator(selector, **_kwargs):
                     if selector == failed_selector:
@@ -104,7 +104,7 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
                 context.close.assert_called_once()
 
     def test_error_bucket_diagnostics_omit_sensitive_browser_details(self):
-        collector = Mock()
+        collector = Mock(unsafe=True)
         collector.pageerrors = ["private-document-title", "secret-content"]
         collector.pageerror_names = ["TypeError", "ReferenceError"]
         collector.console_errors = ["credential=private"]
@@ -122,6 +122,7 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
         collector = PageCollector.__new__(PageCollector)
         collector.pageerrors = []
         collector.pageerror_names = []
+        collector.pageerror_sites = []
 
         class SyntheticError:
             name = "TypeError"
@@ -148,7 +149,7 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
         self.assertNotIn("secret", collector_failure_categories(collector))
 
     def test_early_errors_fail_closed_with_stage_and_safe_source(self):
-        collector = Mock()
+        collector = Mock(unsafe=True)
         collector.pageerrors = ["private-document-body"]
         collector.pageerror_names = ["ReferenceError"]
         collector.pageerror_sites = ["js/reader.js:42"]
@@ -221,7 +222,7 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
             verify_report(data, ENGINES)
 
     def test_pdf_render_failure_is_attributed_without_leaking_details(self):
-        page, context, collector = Mock(), Mock(), Mock()
+        page, context, collector = Mock(), Mock(), Mock(unsafe=True)
         page.evaluate.return_value = True
         with (
             patch("scripts.ci.cross_browser_smoke.open_app_page",
@@ -238,7 +239,7 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
         context.close.assert_called_once()
 
     def test_split_failure_is_attributed_without_leaking_details(self):
-        page, context, collector = Mock(), Mock(), Mock()
+        page, context, collector = Mock(), Mock(), Mock(unsafe=True)
         page.evaluate.return_value = True
         def fail_split_only(js, **_kwargs):
             if "s.mode === 'tiled'" in js:
