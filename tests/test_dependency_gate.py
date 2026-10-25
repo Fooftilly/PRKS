@@ -1206,6 +1206,11 @@ class RepoGateLiveTests(unittest.TestCase):
         dev = parse_requirements_pins((_PROJECT / "requirements-dev.txt").read_text())
         self.assertIn("openapi-core", dev)
         self.assertIn("hypothesis", dev)
+        # The Docker image installs only requirements.txt: a PostgreSQL
+        # runtime must never depend on extra wheels from requirements-dev.txt.
+        postgres_runtime = {"psycopg", "psycopg-binary", "psycopg-pool", "argon2-cffi"}
+        self.assertTrue(postgres_runtime.issubset(runtime))
+        self.assertTrue(postgres_runtime.isdisjoint(dev))
         expected_unit = dict(runtime, **{
             name: dev[name]
             for name in ("openapi-core", "hypothesis", "markdown-it-py", "mdurl")
