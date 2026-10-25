@@ -124,19 +124,28 @@ def project_match(row: Any) -> dict[str, Any]:
 def select_examples(
     candidates: list[tuple[int, int, str, str, str, dict[str, Any]]],
 ) -> list[dict[str, Any]]:
-    """Show fixable upgrades and high-severity non-fixable cases together."""
+    """Retain fix candidates and high-severity no-fix work; fill spare slots."""
     ranked = sorted(
         candidates,
         key=lambda entry: (*entry[:-1], entry[-1]["installed"], entry[-1]["fixed_versions"]),
     )
     fixed = [entry[-1] for entry in ranked if entry[0] == 0]
-    other = [entry[-1] for entry in ranked if entry[0] != 0]
-    # Reserve half the small table for OS/vendor workarounds with no listed fix;
-    # fill unused slots from either category rather than hiding whole groups.
-    primary = fixed[:TOP_LIMIT // 2]
-    secondary = other[:TOP_LIMIT - len(primary)]
-    remaining = TOP_LIMIT - len(primary) - len(secondary)
-    return primary + fixed[len(primary):len(primary) + remaining] + secondary
+    high_other = [
+        entry[-1] for entry in ranked
+        if entry[0] != 0 and entry[-1]["severity"] in ("Critical", "High")
+    ]
+    low_other = [
+        entry[-1] for entry in ranked
+        if entry[0] != 0 and entry[-1]["severity"] not in ("Critical", "High")
+    ]
+    first = fixed[:TOP_LIMIT // 2]
+    high = high_other[:TOP_LIMIT - len(first)]
+    remaining = TOP_LIMIT - len(first) - len(high)
+    extra_fixed = fixed[len(first):len(first) + remaining]
+    remaining -= len(extra_fixed)
+    extra_high = high_other[len(high):len(high) + remaining]
+    remaining -= len(extra_high)
+    return first + extra_fixed + high + extra_high + low_other[:remaining]
 
 
 def tally_matches(matches: list[Any]) -> dict[str, Any]:
