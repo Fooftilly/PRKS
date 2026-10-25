@@ -8,7 +8,10 @@ umask 077
 export PRKS_DB_PASSWORD_FILE="$temp/db_password"
 openssl rand -hex 32 > "$PRKS_DB_PASSWORD_FILE"
 project="prkspg${GITHUB_RUN_ID:-$$}${GITHUB_RUN_ATTEMPT:-1}"
-compose=(docker compose --project-name "$project" --file "$root/docker-compose.yml" --profile postgres)
+# Ensure ordinary SQLite-only Compose startup does not need a PostgreSQL secret.
+env -u PRKS_DB_PASSWORD_FILE docker compose --file "$root/docker-compose.yml" config --quiet
+compose=(docker compose --project-name "$project" --file "$root/docker-compose.yml" \
+  --file "$root/docker-compose.postgres.yml" --profile postgres)
 
 cleanup() {
   status=$?
