@@ -10,6 +10,8 @@ on:
       - "tests/e2e/axe_advisory.py"
       - "tests/e2e/test_axe_a11y.py"
       - "tests/test_axe_advisory.py"
+      - "frontend-app/package.json"
+      - "frontend-app/package-lock.json"
 
 permissions:
   contents: read
@@ -71,7 +73,7 @@ jobs:
           summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
           if not path.is_file():
               with summary.open("a", encoding="utf-8") as out:
-                  out.write("## axe-core pilot\n\nNo report: the test failed before all five surfaces were scanned.\n")
+                  out.write("## axe-core pilot\n\nNo report: one or more surfaces could not be scanned; see the failing test log.\n")
           else:
               data = json.loads(path.read_text(encoding="utf-8"))
               lines = [
