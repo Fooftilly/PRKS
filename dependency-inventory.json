@@ -555,6 +555,18 @@
       "dependabot_monitored": true
     },
     {
+      "name": "axe-core",
+      "scope": "build",
+      "authoritative_source": "frontend-app/package.json -> devDependencies.axe-core",
+      "manifest": "frontend-app/package.json",
+      "lockfile": "frontend-app/package-lock.json",
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true,
+      "notes": "Dev-only axe-core engine injected by opt-in Python Playwright E2E #856. Never included in user runtime or shipped app."
+    },
+    {
       "name": "@storybook/addon-a11y",
       "scope": "build",
       "authoritative_source": "frontend-app/package.json -> devDependencies.@storybook/addon-a11y",
