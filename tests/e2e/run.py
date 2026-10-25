@@ -151,14 +151,17 @@ DEFAULT_E2E_MODULES = (
 # They require the *unbundled source* and are intentionally excluded from the
 # normal full/affected/published-distribution inventories. Still use this runner
 # to get named test IDs, last-failed data, timing and targeted reproduction.
-OPT_IN_E2E_MODULES = ("tests.e2e.test_classic_sw_transitions",)
+CLASSIC_SW_TRANSITIONS_MODULE = "tests.e2e.test_classic_sw_transitions"
+AXE_ACCESSIBILITY_MODULE = "tests.e2e.test_axe_a11y"
+OPT_IN_E2E_MODULES = (CLASSIC_SW_TRANSITIONS_MODULE, AXE_ACCESSIBILITY_MODULE)
 E2E_MODULES = DEFAULT_E2E_MODULES
 if os.environ.get("PRKS_E2E_CLASSIC_SW_TRANSITIONS") == "1":
-    E2E_MODULES += OPT_IN_E2E_MODULES
-# Manual-only accessibility checks reuse this runner; they are deliberately
-# absent from ordinary full/affected/release E2E discovery and timings.
+    E2E_MODULES += (CLASSIC_SW_TRANSITIONS_MODULE,)
+
+# Manual-only accessibility scans reuse this runner, but are excluded from
+# default full/affected/release inventories and the classic-transitions mode.
 if os.environ.get("PRKS_E2E_AXE") == "1":
-    E2E_MODULES += ("tests.e2e.test_axe_a11y",)
+    E2E_MODULES += (AXE_ACCESSIBILITY_MODULE,)
 
 SLOWEST_LIMIT = 25
 WORKER_POLL_S = 0.25
