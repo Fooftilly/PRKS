@@ -18,7 +18,6 @@ from markdown_it import MarkdownIt
 from scripts.ci.docs_only import changed_documentation
 
 _MARKDOWN = MarkdownIt("commonmark").enable("table")
-_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 _PUNCT = re.compile(r"[^\w\- ]", re.UNICODE)
 class _HTMLScan(HTMLParser):
     """Collect only real HTML anchors and local link candidates, not comments."""
@@ -59,27 +58,18 @@ def _slug(text: str) -> str:
     return _PUNCT.sub("", text.lower().strip()).replace(" ", "-")
 
 
-def _visible_lines(content: str) -> tuple[list[tuple[int, str]], str]:
-    """Report visible Markdown source lines and any unclosed fenced block."""
-    visible = []
-    fence_char = ""
-    fence_width = 0
-    for number, line in enumerate(content.splitlines(), start=1):
-        marker = _FENCE.match(line)
-        if marker:
-            value = marker.group(1)
-            if not fence_char:
-                fence_char, fence_width = value[0], len(value)
-            elif (
-                value[0] == fence_char
-                and len(value) >= fence_width
-                and not line[marker.end():].strip()
-            ):
-                fence_char, fence_width = "", 0
+def _unclosed_fences(content: str, tokens: list) -> list[str]:
+    """Use CommonMark's container-aware fence tokens, including list items."""
+    lines = content.splitlines()
+    missing = []
+    for token in tokens:
+        if token.type != "fence" or not token.map:
             continue
-        if not fence_char:
-            visible.append((number, line))
-    return visible, fence_char * fence_width
+        last = lines[token.map[1] - 1].strip()
+        marker = token.markup[0]
+        if not re.fullmatch(rf"{re.escape(marker)}{{{len(token.markup)},}}", last):
+            missing.append(token.markup)
+    return missing
 
 
 def _visible_heading_text(children: list) -> str:
@@ -156,7 +146,8 @@ def check_markdown(root: Path, relative: str) -> list[str]:
         return [f"{relative}: unreadable Markdown"]
     errors: list[str] = []
     cache: dict[Path, set[str]] = {}
-    for token in _MARKDOWN.parse(content):
+    tokens = _MARKDOWN.parse(content)
+    for token in tokens:
         if token.type not in ("inline", "html_block"):
             continue
         number = (token.map or [0])[0] + 1
@@ -181,8 +172,7 @@ def check_markdown(root: Path, relative: str) -> list[str]:
                 error = _check_link(root, current, relative, number, href, cache)
                 if error:
                     errors.append(error)
-    _, open_fence = _visible_lines(content)
-    if open_fence:
+    for open_fence in _unclosed_fences(content, tokens):
         errors.append(f"{relative}: unclosed {open_fence} fence")
     return errors
 
