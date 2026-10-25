@@ -89,6 +89,24 @@ PRKS_PUBLISH_HOST=0.0.0.0 docker compose up -d
 
 Use that override only on a network you already trust, or behind an access layer you control.
 
+### PostgreSQL database container (opt-in, not the active application backend)
+
+The PostgreSQL 18 infrastructure preview for [deployment issue #630](https://github.com/Fooftilly/PRKS/issues/630) is **disabled by default**. Normal `docker compose up -d` still runs the existing SQLite-backed web application. The `db` service does not publish a host port, does not open a PRKS storage root and does **not** migrate or switch the PRKS application to PostgreSQL. It only prepares an internal PostgreSQL service for the later, reviewed cutover.
+
+Create a private password file outside version control and start only the database:
+
+```bash
+install -d -m 700 secrets
+umask 077
+openssl rand -hex 32 > secrets/db_password
+docker compose --profile postgres up -d db
+docker compose --profile postgres ps db
+```
+
+The database reads that password through `POSTGRES_PASSWORD_FILE` as a Compose secret; `PRKS_DB_PASSWORD_FILE` can specify another secret-file path. Treat the password and future database URL as credentials: never commit them, embed them in an image or print them to logs. The `secrets/` directory is ignored by Git. Docker Compose's named volume `pgdata` is mounted at `/var/lib/postgresql`, the required PostgreSQL 18 location. `docker compose --profile postgres down` preserves the volume; **`down -v` deletes it**. Take an appropriate backup before any destructive operation.
+
+**Do not run two PostgreSQL database copies against the same PRKS data root.** Root/database pairing, generation fencing, bootstrap, migration orchestration and readiness are not yet connected to this container. In particular, restoring or duplicating a PostgreSQL volume and pointing it at the same root could permanently delete files after the future cutover (approved risk R20). A database snapshot taken while PRKS is serving is not a safe rollback against its original root. The future cutover must document the offline root+database recovery pair and retire the old database copy after upgrade; reverting an image tag alone is not a rollback.
+
 ## Configuration and data layout
 
 | Variable | Purpose |
