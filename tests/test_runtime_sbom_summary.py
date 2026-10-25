@@ -128,6 +128,7 @@ class RuntimeSbomSummaryTests(unittest.TestCase):
         output = summarize(sbom, scan, IMAGE)
         text = markdown(output) + json.dumps(output)
         self.assertNotIn(probe_label, text)
+        self.assertNotIn("fixture content must never appear in report", text)
         self.assertNotIn("locations", text)
         self.assertNotIn("description", text)
         self.assertEqual(output["match_count"], 1)
