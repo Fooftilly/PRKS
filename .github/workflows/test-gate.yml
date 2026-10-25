@@ -48,21 +48,30 @@ jobs:
             if git fetch --no-tags --depth=1 origin "$PRKS_PR_BASE_SHA"; then
               # The PR checkout is untrusted: use the reviewed classifier from
               # the immutable base, not the PR's possibly modified selector.
-              base_classifier="$(mktemp)"
-              if git show "$PRKS_PR_BASE_SHA:scripts/ci/docs_only.py" > "$base_classifier"; then
-                decision="$(python "$base_classifier" --base "$PRKS_PR_BASE_SHA")" || decision=false
-                if [[ "$decision" == "true" ]]; then
-                  docs_only=true
+              if base_classifier="$(mktemp)"; then
+                if git show "$PRKS_PR_BASE_SHA:scripts/ci/docs_only.py" > "$base_classifier"; then
+                  decision="$(python "$base_classifier" --base "$PRKS_PR_BASE_SHA")" || decision=false
+                  if [[ "$decision" == "true" ]]; then
+                    docs_only=true
+                  fi
+                else
+                  echo "::warning::Docs classifier absent from base; running full tests."
                 fi
+                rm -f "$base_classifier"
               else
-                echo "::warning::Docs classifier absent from base; running full tests."
+                echo "::warning::Failed to allocate classifier file; running full tests."
               fi
-              rm -f "$base_classifier"
             else
               echo "::warning::Could not fetch immutable PR base; running full tests."
             fi
           fi
           echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python for documentation-only PR
+        if: steps.docs-scope.outputs.docs_only == 'true'
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
 
       - name: Install pinned Markdown validator (docs-only PR)
         if: steps.docs-scope.outputs.docs_only == 'true'
