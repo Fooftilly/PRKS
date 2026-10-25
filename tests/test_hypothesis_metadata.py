@@ -167,11 +167,14 @@ class MetadataFieldProperties(unittest.TestCase):
 
                 def apply_sync():
                     result = sync_protocol.process_operation(db, sync_op)
-                    self.assertEqual(
-                        (result[0], result[1]["code"], result[1]["changed"],
-                         result[1]["server_revision"]),
-                        (200, "ACKNOWLEDGED", True, 1),
-                    )
+                    self.assertEqual(result, (200, {
+                        "work_id": work,
+                        "field": secondary,
+                        "code": "ACKNOWLEDGED",
+                        "server_revision": 1,
+                        "changed": True,
+                        "value": sync_value,
+                    }))
                     self.assertEqual(sync_protocol.process_operation(db, sync_op), result)
 
                 if patch_first:
