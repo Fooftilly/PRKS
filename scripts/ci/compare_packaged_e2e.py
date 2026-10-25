@@ -12,8 +12,7 @@ import os
 import re
 import sys
 from datetime import datetime
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from http.client import HTTPException, HTTPSConnection
 
 WORKFLOW = ".github/workflows/e2e-classic-distribution-gate.yml"
 FULL_JOB = re.compile(r"Packaged classic bundles \(([1-6])/6\)\Z")
@@ -40,7 +39,7 @@ def _seconds(start: str, end: str) -> float:
     return span
 
 
-def summarize(run: dict, jobs: list[dict], expected_mode: str) -> dict:
+def _validate_run(run: dict, expected_mode: str) -> None:
     if expected_mode not in ("full", "smoke"):
         raise InvalidBenchmark("Unknown requested comparison mode")
     if run.get("event") != "workflow_dispatch" or run.get("conclusion") != "success":
@@ -49,9 +48,11 @@ def summarize(run: dict, jobs: list[dict], expected_mode: str) -> dict:
         raise InvalidBenchmark("Not a verified packaged E2E workflow run")
     if run.get("run_attempt") != 1:
         raise InvalidBenchmark("Re-run attempts are not comparable: prior job cost is omitted")
+
+
+def _successful_jobs(jobs: list[dict]) -> list[dict]:
     if not jobs:
         raise InvalidBenchmark("No workflow jobs returned")
-
     active = []
     for job in jobs:
         conclusion = job.get("conclusion")
@@ -60,47 +61,48 @@ def summarize(run: dict, jobs: list[dict], expected_mode: str) -> dict:
         if conclusion != "success":
             raise InvalidBenchmark(f"Non-success job: {job.get('name')!r}")
         active.append(job)
-
     names = [job.get("name") for job in active]
     for name in SHARED_JOBS:
         if names.count(name) != 1:
             raise InvalidBenchmark(f"Missing or repeated shared guard: {name}")
+    return active
 
+
+def _browser_jobs(active: list[dict], jobs: list[dict], mode: str) -> list[dict]:
     shards = [job for job in active if FULL_JOB.fullmatch(job.get("name") or "")]
     smoke = [job for job in active if job.get("name") == SMOKE_JOB]
-    if expected_mode == "full":
+    skipped = [job.get("name") or "" for job in jobs if job.get("conclusion") == "skipped"]
+    if mode == "full":
         indices = sorted(int(FULL_JOB.fullmatch(job["name"]).group(1)) for job in shards)
         if indices != list(range(1, 7)) or smoke:
             raise InvalidBenchmark("Full run must have six distinct passing shards and no smoke job")
-        browser_jobs = shards
-    else:
-        if shards or len(smoke) != 1:
-            raise InvalidBenchmark("Smoke run must have one passing pilot and no full shard")
-        browser_jobs = smoke
-
-    # Confirm the omitted jobs really were skipped, rather than missing from
-    # a different workflow definition or a partial API response.
-    skipped = [job.get("name") or "" for job in jobs if job.get("conclusion") == "skipped"]
-    if expected_mode == "full":
         if SMOKE_JOB not in skipped:
             raise InvalidBenchmark("Full run is missing its skipped smoke job")
-    elif not any(name.startswith("Packaged classic bundles (") for name in skipped):
+        return shards
+    if shards or len(smoke) != 1:
+        raise InvalidBenchmark("Smoke run must have one passing pilot and no full shard")
+    if not any(name.startswith("Packaged classic bundles (") for name in skipped):
         raise InvalidBenchmark("Smoke run is missing its skipped full matrix")
+    return smoke
 
-    job_minutes = sum(_seconds(job["started_at"], job["completed_at"]) for job in active) / 60
-    browser_minutes = sum(_seconds(job["started_at"], job["completed_at"]) for job in browser_jobs) / 60
-    shared_minutes = sum(
-        _seconds(job["started_at"], job["completed_at"])
-        for job in active if job.get("name") in SHARED_JOBS
+
+def summarize(run: dict, jobs: list[dict], expected_mode: str) -> dict:
+    _validate_run(run, expected_mode)
+    active = _successful_jobs(jobs)
+    browser_jobs = _browser_jobs(active, jobs, expected_mode)
+    minutes = lambda selected: sum(
+        _seconds(job["started_at"], job["completed_at"]) for job in selected
     ) / 60
     return {
         "sha": run["head_sha"],
         "run_id": run["id"],
         "mode": expected_mode,
         "browser_count": len(browser_jobs),
-        "browser_minutes": browser_minutes,
-        "shared_minutes": shared_minutes,
-        "all_job_minutes": job_minutes,
+        "browser_minutes": minutes(browser_jobs),
+        "shared_minutes": minutes([
+            job for job in active if job.get("name") in SHARED_JOBS
+        ]),
+        "all_job_minutes": minutes(active),
         "longest_browser_minutes": max(
             _seconds(job["started_at"], job["completed_at"]) for job in browser_jobs
         ) / 60,
@@ -134,13 +136,23 @@ def compare(full: dict, smoke: dict) -> str:
     ))
 
 
-def _get_json(url: str, token: str | None) -> dict:
+def _get_json(path: str, token: str | None) -> dict:
+    # Never let user input choose a URL scheme or destination host. The caller
+    # validates repository and run IDs before constructing this API path.
+    if not path.startswith("/repos/"):
+        raise InvalidBenchmark("Unexpected GitHub API path")
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "PRKS-E2E-benchmark"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    request = Request(url, headers=headers)
-    with urlopen(request, timeout=30) as response:  # nosec B310 - fixed HTTPS API origin
-        return json.load(response)
+    connection = HTTPSConnection("api.github.com", timeout=30)
+    try:
+        connection.request("GET", path, headers=headers)
+        with connection.getresponse() as response:
+            if response.status != 200:
+                raise InvalidBenchmark(f"GitHub API returned HTTP {response.status}")
+            return json.load(response)
+    finally:
+        connection.close()
 
 
 def fetch_run(repo: str, run_id: int, token: str | None) -> tuple[dict, list[dict]]:
@@ -148,7 +160,7 @@ def fetch_run(repo: str, run_id: int, token: str | None) -> tuple[dict, list[dic
         raise InvalidBenchmark("Invalid GitHub repository")
     if run_id <= 0:
         raise InvalidBenchmark("Run ID must be positive")
-    base = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}"
+    base = f"/repos/{repo}/actions/runs/{run_id}"
     run = _get_json(base, token)
     jobs: list[dict] = []
     page = 1
@@ -177,7 +189,7 @@ def main() -> int:
         full_run, full_jobs = fetch_run(args.repo, args.full_run, token)
         smoke_run, smoke_jobs = fetch_run(args.repo, args.smoke_run, token)
         print(compare(summarize(full_run, full_jobs, "full"), summarize(smoke_run, smoke_jobs, "smoke")))
-    except (InvalidBenchmark, HTTPError, URLError, TimeoutError, OSError) as exc:
+    except (InvalidBenchmark, HTTPException, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"Packaged E2E comparison refused: {exc}", file=sys.stderr)
         return 1
     return 0
