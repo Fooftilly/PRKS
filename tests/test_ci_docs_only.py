@@ -253,6 +253,27 @@ class DocsOnlyLinkValidationTests(unittest.TestCase):
                 for error in check_markdown(root, "docs/guide.md")
             ))
 
+    def test_blockquoted_fences_and_indented_fake_closers(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            valid = (
+                "> ```bash\n> echo hi\n> ```\n"
+                "\n- item\n\n  > ```\n  > x\n  > ```\n"
+            )
+            _write(root, "docs/guide.md", valid)
+            self.assertEqual(check_markdown(root, "docs/guide.md"), [])
+            for invalid in (
+                "> ```bash\n> echo hi\n",
+                "```bash\n    ```\n",
+                "- item\n\n  > ```\n  > x\n",
+            ):
+                with self.subTest(invalid=invalid):
+                    _write(root, "docs/guide.md", invalid)
+                    self.assertTrue(any(
+                        "unclosed" in error
+                        for error in check_markdown(root, "docs/guide.md")
+                    ))
+
     def test_broken_relative_link_and_anchor_fail(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
