@@ -107,7 +107,7 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
             self.assertEqual(main(["--engines", "webkit"]), 1)
         self.assertEqual(
             output.getvalue(),
-            "Cross-browser smoke failed at webkit/notes_editor (TimeoutError)\\n",
+            "Cross-browser smoke failed at webkit/notes_editor (TimeoutError)\n",
         )
 
     def test_unexpected_preflight_failure_does_not_leak_details(self):
@@ -119,7 +119,7 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
             self.assertEqual(main(["--engines", "firefox"]), 1)
         self.assertEqual(
             output.getvalue(),
-            "Cross-browser smoke failed at setup/preflight (RuntimeError)\\n",
+            "Cross-browser smoke failed at setup/preflight (RuntimeError)\n",
         )
 
 
