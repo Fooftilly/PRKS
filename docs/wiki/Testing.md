@@ -152,6 +152,20 @@ This pilot covers OS packages (including `qpdf`) and Python packages actually pr
 **Triage policy:** The GitHub Dependency Review workflow flags *newly introduced* advisories in supported manifests; the built-image Syft/Grype scan additionally identifies OS packages, native dependencies and interpreter components in the runnable Docker artifact. Python package advisories may appear in both, so do not add or compare their raw totals as independent findings. Check IDs, package/installed version, ecosystem and upstream namespace before classifying overlap. Listed upgrade versions can be incompatible with the pinned runtime (for example a Python-major upgrade); `not-fixed` means a vendor fix is not currently listed; `wont-fix` indicates a vendor does not intend to issue a fix. Neither constitutes PRKS risk acceptance, and the actions differ. Prioritize confirmed, fixable, reachable vulnerabilities separately from unpatched OS packages; document decisions in #861, never auto-suppress findings. Scanner matches are not proof of exploitability, and fixing them can require Docker base updates, Python runtime changes or an upstream release. This remains advisory and does not alter branch protection or upload scan output to third-party SaaS beyond the existing workflow's GitHub Actions artifacts.
 
 
+## Optional axe-core accessibility pilot (#856 / #651 C3)
+
+The [synthetic Chromium accessibility workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/axe-accessibility-pilot.yml) is **manual or limited to changes to its own runner, tests and pinned npm dependencies**. It uses the existing throwaway `AppServer(seed_library)` with Chromium Playwright and the already pinned `axe-core` 4.13.0 from `frontend-app/package.json`. It does **not** add a required status, a second E2E matrix, or new frontend runtime dependencies.
+
+The pilot audits the Folder shell, seeded Work detail/PDF reader and Settings modal. It runs WCAG A/AA 2.0/2.1 axe rules, proves its engine catches a deliberately unlabeled synthetic button, and separately checks Settings Escape restores keyboard focus. Findings are **advisory** until each deterministic violation is triaged; axe cannot prove complete keyboard usability or accessibility conformance. Existing issues [#830](https://github.com/Fooftilly/PRKS/issues/830) (skip link) and [#425](https://github.com/Fooftilly/PRKS/issues/425) (contrast) remain the owning UX records.
+
+The emitted JSON and Actions summary contain only fixture identification, axe version, fixed surface identifiers, rule IDs, impacts, and bounded counts. Never emit axe `html`, `target`, `failureSummary`, screenshots, URLs, or user document contents. Local run from the repository root after installing the pinned E2E Python dependencies and Chromium:
+
+```sh
+npm --prefix frontend-app ci --ignore-scripts --no-audit --no-fund
+python -m unittest -v tests.test_axe_accessibility_pilot
+python scripts/ci/axe_accessibility_pilot.py --output /tmp/prks-axe-pilot.json
+```
+
 ## Optional Firefox/WebKit cross-browser smoke (#651 C2)
 
 The [Firefox/WebKit smoke workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/cross-browser-smoke.yml) is **manual or limited to PRs changing the pilot itself**. It reuses the existing isolated `AppServer(seed_library)`, the pinned Python Playwright package and `open_app_page` with a fresh browser context per engine. The test starts a local `prks_app.py --testing` process with disposable synthetic **SQLite** storage; it refuses inherited PostgreSQL/database/auth configuration and never accepts an external target.
