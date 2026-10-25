@@ -1,0 +1,103 @@
+name: Advisory axe-core accessibility smoke
+
+# Existing Python Playwright/PRKS test harness; no separate full browser suite.
+# Only explicit runs or changes to the pilot itself start this extra job.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/axe-playwright-advisory.yml"
+      - "tests/e2e/axe_advisory.py"
+      - "tests/e2e/test_axe_a11y.py"
+      - "tests/test_axe_advisory.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: axe-advisory-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  axe-smoke:
+    name: Synthetic five-surface axe/Playwright advisory
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout PRKS
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pinned Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Setup build-only Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      - name: Install Python E2E dependencies (existing pin policy)
+        run: python scripts/ci/install_pinned_python.py e2e
+
+      - name: Install lock-pinned axe-core (test tools only)
+        run: npm --prefix frontend-app ci --ignore-scripts --no-audit --no-fund
+
+      - name: Install Chromium using existing E2E helper
+        run: python tests/e2e/install_browser.py
+
+      - name: Five synthetic browser surfaces and keyboard focus
+        env:
+          PRKS_E2E_AXE: "1"
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PRKS_AXE_REPORT_PATH="$RUNNER_TEMP/prks-axe-advisory.json"
+          python tests/e2e/run.py --jobs 1 --no-pointer-capture \
+            tests.e2e.test_axe_a11y.AxeAccessibilityPilotTests.test_advisory_scans_five_real_fixture_surfaces_and_keyboard_focus
+
+      - name: Summarize nonblocking accessibility findings
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["RUNNER_TEMP"]) / "prks-axe-advisory.json"
+          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          if not path.is_file():
+              with summary.open("a", encoding="utf-8") as out:
+                  out.write("## axe-core pilot\n\nNo report: the test failed before all five surfaces were scanned.\n")
+          else:
+              data = json.loads(path.read_text(encoding="utf-8"))
+              lines = [
+                  "## Synthetic axe-core accessibility pilot (advisory)",
+                  "",
+                  "No existing axe violation is automatically accepted or promoted to a required gate.",
+                  "Keyboard focus restoration is separately asserted by Playwright.",
+                  "",
+                  "| Surface | Violating rules | Rule IDs (up to 8) | Incomplete |",
+                  "| --- | ---: | --- | ---: |",
+              ]
+              for scan in data["surfaces"]:
+                  names = ", ".join(rule["rule"] for rule in scan["violations"][:8])
+                  lines.append(
+                      f"| {scan['surface']} | {scan['violating_rules']} | {names} | "
+                      f"{scan['rules_incomplete']} |"
+                  )
+              with summary.open("a", encoding="utf-8") as out:
+                  out.write("\n".join(lines) + "\n")
+          PY
+
+      - name: Retain bounded synthetic a11y evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: synthetic-axe-advisory
+          path: ${{ runner.temp }}/prks-axe-advisory.json
+          retention-days: 7
+          if-no-files-found: warn
