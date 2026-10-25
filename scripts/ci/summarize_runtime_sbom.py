@@ -12,7 +12,7 @@ import collections
 import json
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -91,7 +91,7 @@ def summarize(sbom: dict[str, Any], scan: dict[str, Any], image_id: str) -> dict
     all_pairs: set[tuple[str, str]] = set()
     candidates: list[tuple[int, int, str, str, str, dict[str, Any]]] = []
 
-    for index, row in enumerate(matches):
+    for row in matches:
         if not isinstance(row, dict):
             raise ValueError("malformed Grype match row")
         vuln = row.get("vulnerability")
