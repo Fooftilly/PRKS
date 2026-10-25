@@ -26,6 +26,7 @@ from tests.e2e.harness import (
     require_chromium,
     wait_for_async,
 )
+from tests.e2e.pdf_readiness import _wait_pdf_tab, _wait_pdf_viewer
 from tests.ux_tour.fixtures import TAG_NAMES, seed_ux_tour_library
 
 NOTES = """# E2E Research Note
@@ -2566,28 +2567,6 @@ class ResearchPickerTests(_BrowserE2E):
             }"""
         )
         page.keyboard.press("Escape")
-
-
-def _wait_pdf_viewer(page):
-    page.wait_for_selector('[data-prks-role="pdf-viewer"] .prks-pdf-page', timeout=30000)
-    page.wait_for_selector('[data-prks-role="pdf-viewer"] .prks-pdf-render-image', timeout=30000)
-    page.wait_for_function(
-        """() => {
-            const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
-            const pdf = ctx && ctx.getResource ? ctx.getResource('pdf') : null;
-            const v = pdf && pdf.viewer;
-            return !!(v && v.getPageCount && v.getPageCount() >= 1);
-        }""",
-        timeout=30000,
-    )
-    page.wait_for_function(
-        """() => {
-            const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
-            const pdf = ctx && ctx.getResource ? ctx.getResource('pdf') : null;
-            return !!(pdf && pdf.syncState);
-        }""",
-        timeout=30000,
-    )
 
 
 def _wait_pdf_annotation_gates_idle(page, timeout=20000):
@@ -6157,19 +6136,6 @@ class TabContextHostRootTests(_BrowserE2E):
                 page.unroute("**/api/person-groups/**", hold_then_fail_once)
             except Exception:
                 pass
-
-
-def _wait_pdf_tab(page, tab_id):
-    page.wait_for_function(
-        """(tabId) => {
-            const ctx = window.prksGetTabContext && window.prksGetTabContext(tabId);
-            const pdf = ctx && ctx.getResource ? ctx.getResource('pdf') : null;
-            const v = pdf && pdf.viewer;
-            return !!(v && v.getPageCount && v.getPageCount() >= 1 && pdf.syncState);
-        }""",
-        arg=tab_id,
-        timeout=30000,
-    )
 
 
 def _workspace_ids(page):

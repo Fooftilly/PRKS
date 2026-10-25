@@ -92,7 +92,7 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
                     return_value=(page, context, collector),
                 ):
                     with self.assertRaises(SmokeFailure) as caught:
-                        smoke(object(), "http://127.0.0.1:1", "synthetic", engine="webkit")
+                        smoke(object(), "http://127.0.0.1:1", "synthetic", "related", engine="webkit")
                 error = caught.exception
                 self.assertEqual(
                     (error.engine, error.stage, error.cause_type),
@@ -101,17 +101,63 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
                 self.assertNotIn("secret-url-private-document-title", str(error))
                 context.close.assert_called_once()
 
-    def test_context_cleanup_failure_has_its_own_safe_stage(self):
-        page = Mock()
+    def test_pdf_and_secondary_pane_checks_are_required(self):
+        # These checks run through the same two-engine smoke and are not
+        # implied by seeing the Work wrapper.
+        self.assertEqual(CHECKS[-2:], ("pdf_render", "split_panes"))
+        data = report()
+        data["browsers"][0]["checks"].remove("pdf_render")
+        with self.assertRaises(ValueError):
+            verify_report(data, ENGINES)
+
+    def test_pdf_render_failure_is_attributed_without_leaking_details(self):
+        page, context, collector = Mock(), Mock(), Mock()
         page.evaluate.return_value = True
-        context = Mock()
-        context.close.side_effect = RuntimeError("secret-context-path")
-        with patch(
-            "scripts.ci.cross_browser_smoke.open_app_page",
-            return_value=(page, context, Mock(unsafe=True)),
+        with (
+            patch("scripts.ci.cross_browser_smoke.open_app_page",
+                  return_value=(page, context, collector)),
+            patch("scripts.ci.cross_browser_smoke._wait_pdf_viewer",
+                  side_effect=TimeoutError("private-pdf-content")),
         ):
             with self.assertRaises(SmokeFailure) as caught:
-                smoke(object(), "http://127.0.0.1:1", "synthetic", engine="webkit")
+                smoke(object(), "http://127.0.0.1:1", "synthetic", "related", engine="webkit")
+        self.assertEqual((caught.exception.stage, caught.exception.cause_type),
+                         ("pdf_render", "TimeoutError"))
+        self.assertNotIn("private-pdf-content", str(caught.exception))
+        context.close.assert_called_once()
+
+    def test_split_failure_is_attributed_without_leaking_details(self):
+        page, context, collector = Mock(), Mock(), Mock()
+        page.evaluate.return_value = True
+        page.wait_for_function.side_effect = TimeoutError("secret-tab-title")
+        with (
+            patch("scripts.ci.cross_browser_smoke.open_app_page",
+                  return_value=(page, context, collector)),
+            patch("scripts.ci.cross_browser_smoke._wait_pdf_viewer"),
+        ):
+            with self.assertRaises(SmokeFailure) as caught:
+                smoke(object(), "http://127.0.0.1:1", "synthetic", "related", engine="firefox")
+        self.assertEqual((caught.exception.stage, caught.exception.cause_type),
+                         ("split_panes", "TimeoutError"))
+        self.assertNotIn("secret-tab-title", str(caught.exception))
+        context.close.assert_called_once()
+
+    def test_context_cleanup_failure_has_its_own_safe_stage(self):
+        page = Mock()
+        page.evaluate.side_effect = lambda js, *args: (
+            {"mainTabId": "main", "secondaryTree": {"tabId": "second"}}
+            if js == "() => window.prksWorkspaceSnapshot()" else True
+        )
+        context = Mock()
+        context.close.side_effect = RuntimeError("secret-context-path")
+        with (
+            patch("scripts.ci.cross_browser_smoke.open_app_page",
+                  return_value=(page, context, Mock(unsafe=True))),
+            patch("scripts.ci.cross_browser_smoke._wait_pdf_viewer"),
+            patch("scripts.ci.cross_browser_smoke._wait_pdf_tab"),
+        ):
+            with self.assertRaises(SmokeFailure) as caught:
+                smoke(object(), "http://127.0.0.1:1", "synthetic", "related", engine="webkit")
         self.assertEqual(
             (caught.exception.engine, caught.exception.stage, caught.exception.cause_type),
             ("webkit", "context_close", "RuntimeError"),
@@ -128,7 +174,7 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
             return_value=(failed_page, context, Mock()),
         ):
             with self.assertRaises(SmokeFailure) as caught:
-                smoke(object(), "http://127.0.0.1:1", "synthetic", engine="firefox")
+                smoke(object(), "http://127.0.0.1:1", "synthetic", "related", engine="firefox")
         self.assertEqual(
             (caught.exception.engine, caught.exception.stage, caught.exception.cause_type),
             ("firefox", "folders", "TimeoutError"),
@@ -168,7 +214,7 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
         fake_sync_api = ModuleType("playwright.sync_api")
         fake_sync_api.sync_playwright = Mock(return_value=fake_session)
         server = Mock()
-        server.ids = {"work_a": "synthetic-work"}
+        server.ids = {"work_a": "synthetic-work", "work_b": "synthetic-related"}
         with (
             patch.dict(sys.modules, {
                 "playwright": fake_playwright,

@@ -19,9 +19,10 @@ if str(ROOT) not in sys.path:
 from tests.e2e.fixtures import seed_library  # noqa: E402
 from tests.e2e.harness import AppServer, open_app_page  # noqa: E402
 from tests.e2e.install_browser import apply_playwright_browser_env  # noqa: E402
+from tests.e2e.pdf_readiness import _wait_pdf_tab, _wait_pdf_viewer  # noqa: E402
 
 ENGINES = ("firefox", "webkit")
-CHECKS = ("folders", "work_detail", "notes_editor", "settings_focus")
+CHECKS = ("folders", "work_detail", "notes_editor", "settings_focus", "pdf_render", "split_panes")
 INHERITED_DB_SETTINGS = (
     "PRKS_AUTH", "PRKS_DATABASE_URL", "PRKS_DATABASE_URL_FILE",
     "PRKS_TEST_DATABASE_URL",
@@ -72,7 +73,7 @@ def verify_report(report: dict, requested: tuple[str, ...]) -> None:
             raise ValueError("cross-browser report has invalid browser version")
 
 
-def smoke(browser, origin: str, work_id: str, *, engine: str) -> None:
+def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: str) -> None:
     """One real app session; label each failure without printing page details."""
     stage = "app_open"
     context = None
@@ -103,6 +104,68 @@ def smoke(browser, origin: str, work_id: str, *, engine: str) -> None:
             "document.activeElement.classList.contains('settings-btn'))"
         ):
             raise AssertionError("settings dialog did not restore keyboard focus")
+        stage = "pdf_render"
+        # Existing Chromium E2E readiness contract: a real page image, not
+        # merely a PDF toolbar or a completed HTTP response.
+        _wait_pdf_viewer(page)
+
+        stage = "split_panes"
+        page.evaluate(
+            "id => window.prksNavigate('#/works/' + id, { target: 'tile' })",
+            related_work_id,
+        )
+        page.wait_for_function(
+            """() => {
+                const s = window.prksWorkspaceSnapshot && window.prksWorkspaceSnapshot();
+                return !!(s && s.mode === 'tiled' &&
+                    s.secondaryTree && s.secondaryTree.type === 'leaf' &&
+                    s.mainTabId && s.secondaryTree.tabId &&
+                    s.mainTabId !== s.secondaryTree.tabId);
+            }""",
+            timeout=30000,
+        )
+        snap = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        # Distinct tab IDs alone are insufficient: confirm two separately
+        # owned Work and PDF resources, not two views of the same Work.
+        page.wait_for_function(
+            """({mainTabId, secondaryTabId, mainWorkId, secondaryWorkId}) => {
+                const get = window.prksGetTabContext;
+                const main = get && get(mainTabId);
+                const secondary = get && get(secondaryTabId);
+                const workA = main && main.getEntity && main.getEntity('work');
+                const workB = secondary && secondary.getEntity && secondary.getEntity('work');
+                const pdfA = main && main.getResource && main.getResource('pdf');
+                const pdfB = secondary && secondary.getResource && secondary.getResource('pdf');
+                return !!(workA && workB && pdfA && pdfB &&
+                    String(workA.id) === String(mainWorkId) &&
+                    String(workB.id) === String(secondaryWorkId) &&
+                    String(pdfA.workId) === String(mainWorkId) &&
+                    String(pdfB.workId) === String(secondaryWorkId));
+            }""",
+            arg={
+                "mainTabId": snap["mainTabId"],
+                "secondaryTabId": snap["secondaryTree"]["tabId"],
+                "mainWorkId": work_id,
+                "secondaryWorkId": related_work_id,
+            },
+            timeout=30000,
+        )
+        # Independently wait for both mounted PDFs. Merely seeing two panes
+        # is not evidence that both reading contexts finished loading.
+        _wait_pdf_tab(page, snap["mainTabId"])
+        _wait_pdf_tab(page, snap["secondaryTree"]["tabId"])
+        page.locator(".prks-tile--main .prks-pdf-render-image").first.wait_for(
+            state="visible", timeout=30000,
+        )
+        page.locator(".prks-tile--secondary .work-detail").wait_for(
+            state="visible", timeout=30000,
+        )
+        page.locator(".prks-tile--secondary .CodeMirror").wait_for(
+            state="visible", timeout=30000,
+        )
+        page.locator(".prks-tile--secondary .prks-pdf-render-image").first.wait_for(
+            state="visible", timeout=30000,
+        )
         stage = "browser_errors"
         collector.assert_clean()
     except Exception as exc:
@@ -144,7 +207,10 @@ def run(engines: tuple[str, ...], output: Path | None = None) -> dict:
                 stage = "browser_smoke"
                 failed = False
                 try:
-                    smoke(browser, server.origin, server.ids["work_a"], engine=engine)
+                    smoke(
+                        browser, server.origin, server.ids["work_a"],
+                        server.ids["work_b"], engine=engine,
+                    )
                     stage = "browser_version"
                     report["browsers"].append({
                         "engine": engine,
