@@ -243,11 +243,22 @@ class CompareFullE2EGatesTests(unittest.TestCase):
             self.assertEqual(download.close.call_count, 3)
 
     def test_direct_script_help_resolves_package_imports(self):
-        script = Path(__file__).resolve().parents[1] / "scripts" / "ci" / "compare_e2e_gates.py"
+        root = Path(__file__).resolve().parents[1]
+        script = root / "scripts" / "ci" / "compare_e2e_gates.py"
+        # Emulate a fresh direct-script interpreter without invoking subprocess:
+        # neither cwd nor a previously imported scripts package can mask a
+        # missing repository-root bootstrap in the executable.
+        isolated_path = [p for p in sys.path if Path(p or ".").resolve() != root]
         output = StringIO()
-        with patch.object(sys, "argv", [str(script), "--help"]), redirect_stdout(output):
-            with self.assertRaises(SystemExit) as status:
-                runpy.run_path(str(script), run_name="__main__")
+        with patch.dict(sys.modules), patch.object(sys, "path", isolated_path):
+            for name in (
+                "scripts", "scripts.ci", "scripts.ci.compare_packaged_e2e",
+                "scripts.ci.compare_e2e_gates",
+            ):
+                sys.modules.pop(name, None)
+            with patch.object(sys, "argv", [str(script), "--help"]), redirect_stdout(output):
+                with self.assertRaises(SystemExit) as status:
+                    runpy.run_path(str(script), run_name="__main__")
         self.assertEqual(status.exception.code, 0)
         self.assertIn("--source-run", output.getvalue())
 
