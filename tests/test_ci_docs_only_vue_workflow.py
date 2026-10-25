@@ -27,13 +27,22 @@ def _step_items(job: str) -> list[tuple[str | None, str]]:
 
     Embedded shell comments and strings must not count as YAML metadata.
     """
-    starts = list(re.finditer(r"(?m)^      - ", job))
+    # YAML permits both "- name: ..." and a bare "-" followed by a
+    # more-indented name/run/uses key. Neither may evade the step inventory.
+    starts = list(re.finditer(r"(?m)^      -(?:[ \\t]+|(?=\\r?$))", job))
     items: list[tuple[str | None, str]] = []
     for index, match in enumerate(starts):
         end = starts[index + 1].start() if index + 1 < len(starts) else len(job)
         block = job[match.end():end]
-        first = block.split("\n", 1)[0]
-        name = re.fullmatch(r"name: ([^\n]+)", first)
+        lines = block.splitlines()
+        first = lines[0].strip() if lines else ""
+        if first:
+            name = re.fullmatch(r"name: ([^\\r\\n]+)", first)
+        else:
+            # Bare-dash form: the name key must appear immediately next,
+            # at the YAML step-field indentation, not inside run text.
+            second = lines[1] if len(lines) > 1 else ""
+            name = re.fullmatch(r"        name: ([^\\r\\n]+)", second)
         items.append((name.group(1) if name else None, block))
     return items
 
@@ -123,11 +132,33 @@ class DocsOnlyVueGateTests(unittest.TestCase):
         for extra in (
             "      - run: npm run typecheck --prefix frontend-app\n",
             "      - uses: actions/setup-node@untrusted\n",
+            "      -\n        run: npm run typecheck --prefix frontend-app\n",
+            "      - \n        uses: actions/setup-node@untrusted\n",
+            "      -\n        name: Unexpected check\n        run: echo unsafe\n",
+            "      -  \n        name: Unexpected check\n        run: echo unsafe\n",
         ):
-            with self.subTest(extra=extra.strip()):
+            with self.subTest(extra=extra):
                 items = _step_items(job + extra)
-                self.assertIsNone(items[-1][0])
                 self.assertEqual(len(items), len(VUE_HEAVY_STEPS) + 3)
+                self.assertNotEqual(
+                    [name for name, _body in items],
+                    ["Checkout repository", "Classify documentation-only PR (fail closed)", *VUE_HEAVY_STEPS],
+                )
+
+    def test_bare_dash_named_steps_are_not_misclassified(self):
+        sample = (
+            "      -\n        name: Set up Node.js\n"
+            "        if: steps.docs-scope.outputs.docs_only != 'true'\n"
+            "        uses: actions/setup-node@pinned\n"
+        )
+        self.assertEqual(
+            [name for name, _body in _step_items(sample)],
+            ["Set up Node.js"],
+        )
+        self.assertEqual(
+            _step_guards(_named_step(sample, "Set up Node.js")),
+            ["steps.docs-scope.outputs.docs_only != 'true'"],
+        )
 
 
 if __name__ == "__main__":
