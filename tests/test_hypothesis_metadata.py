@@ -12,7 +12,7 @@ import unittest
 import uuid
 from contextlib import contextmanager
 
-from hypothesis import given, settings, strategies as st
+from hypothesis import example, given, settings, strategies as st
 
 from backend import sync_protocol, work_metadata_sync as meta
 from backend.db_manager import PRKSDatabase
@@ -52,6 +52,14 @@ def operation(work, field, value, base, ordinal):
 class MetadataFieldProperties(unittest.TestCase):
     @settings(max_examples=EXAMPLES, deadline=None, database=None)
     @given(primary=st.sampled_from(FIELDS), tail=st.lists(ACTION, max_size=5))
+    # These explicit examples guarantee every field's PATCH -> sync contract;
+    # 12 random examples alone might miss a primary field entirely.
+    @example(primary="doi", tail=[])
+    @example(primary="isbn", tail=[])
+    @example(primary="journal", tail=[])
+    @example(primary="publisher", tail=[])
+    @example(primary="location", tail=[])
+    @example(primary="edition", tail=[])
     def test_patch_and_sync_interleavings_follow_independent_field_revisions(self, primary, tail):
         """Changing one field never advances another; replay burns no revisions."""
         # Always exercise online PATCH -> offline sync on one field, with an
