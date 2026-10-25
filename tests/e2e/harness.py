@@ -1353,7 +1353,7 @@ def _profile_browser_navigation(page) -> None:
     _profile_nav_count("nav_timing_samples")
 
 
-def open_app_page(browser, origin: str, service_workers: str = "block", *, install_clock: bool = False):
+def open_app_page(browser, origin: str, service_workers: str = "block", *, install_clock: bool = False, init_script: str | None = None):
     started = time.perf_counter()
     # Prefer-reduced-motion is opt-in (`PRKS_E2E_REDUCED_MOTION=1`). Emulating
     # it by default breaks layout/scroll assertions that measure real overflow
@@ -1365,6 +1365,10 @@ def open_app_page(browser, origin: str, service_workers: str = "block", *, insta
     if _env_enabled("PRKS_E2E_REDUCED_MOTION"):
         context_kwargs["reduced_motion"] = "reduce"
     context = browser.new_context(**context_kwargs)
+    # Install synthetic diagnostic listeners before the first navigation.
+    # Default is unchanged for every existing E2E caller.
+    if init_script is not None:
+        context.add_init_script(init_script)
     page = context.new_page()
     # Time-sensitive browser tests opt in before application scripts register
     # timers; installing after navigation can invalidate existing timer IDs.
