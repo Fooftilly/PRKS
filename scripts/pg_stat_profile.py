@@ -142,6 +142,26 @@ def assert_work_detail(value: Any, work_id: str) -> None:
 
 
 
+def assert_bounded_works(value: Any, fixture_ids: frozenset[str], limit: int) -> None:
+    """A bounded browse result must be complete, unique and from this fixture."""
+    if not isinstance(value, list) or len(value) != limit:
+        raise RuntimeError("bounded synthetic Work browse has the wrong count")
+    ids = [item.get("id") if isinstance(item, dict) else None for item in value]
+    if any(not isinstance(wid, str) or wid not in fixture_ids for wid in ids):
+        raise RuntimeError("bounded synthetic Work browse contains an unknown Work")
+    if len(set(ids)) != len(ids):
+        raise RuntimeError("bounded synthetic Work browse contains duplicate IDs")
+
+
+def assert_ordered_work_ids(value: Any, expected: tuple[str, ...]) -> None:
+    """Ordered batch fetch must preserve exactly the requested IDs and shape."""
+    if not isinstance(value, list) or len(value) != len(expected):
+        raise RuntimeError("synthetic batch lookup has the wrong count")
+    ids = [item.get("id") if isinstance(item, dict) else None for item in value]
+    if ids != list(expected):
+        raise RuntimeError("synthetic batch lookup returned wrong or reordered IDs")
+
+
 def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
     nonce = os.environ.get("PRKS_PG_PROFILE_NONCE", "")
     if re.fullmatch(r"[0-9a-f]{32}", nonce) is None:
@@ -196,6 +216,11 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
                             # These are real PG facade read paths. The fixture is
                             # deterministic, isolated, synthetic and disposable.
                             work_id = fixture_ids[-1]
+                            # T07: only profile read paths already ported to the PG facade.
+                            # Search, graph and generic offset pagination are NOT ported.
+                            bounded_limit = min(size, 10)
+                            allowed_ids = frozenset(fixture_ids)
+                            batch_ids = tuple(fixture_ids[:bounded_limit])
                             workloads = (
                                 ("works_list", library.get_all_works,
                                  lambda value: assert_works_count(value, size)),
@@ -203,6 +228,12 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
                                  lambda value: assert_works_count(value, size)),
                                 ("work_detail", lambda: library.get_work(work_id),
                                  lambda value: assert_work_detail(value, work_id)),
+                                ("works_recent_bounded",
+                                 lambda: library.get_recently_added_browse(limit=bounded_limit),
+                                 lambda value: assert_bounded_works(value, allowed_ids, bounded_limit)),
+                                ("works_batch_by_ids",
+                                 lambda: library.get_work_summaries_by_ids_ordered(list(batch_ids)),
+                                 lambda value: assert_ordered_work_ids(value, batch_ids)),
                             )
                             for label, operation, verify in workloads:
                                 result = benchmark(stats, operation, repetitions, verify)
