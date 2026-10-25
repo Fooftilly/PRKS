@@ -15,13 +15,14 @@ class CIPinsTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         (self.root / "requirements.txt").write_text(
-            "PyMuPDF==1.28.2\nPillow==12.3.0\npydantic==2.13.5\n", encoding="utf-8"
+            "PyMuPDF==1.28.2\nPillow==12.3.0\npydantic==2.13.5\n"
+            "psycopg==3.3.6\npsycopg-binary==3.3.6\n"
+            "psycopg-pool==3.3.3\nargon2-cffi==25.1.0\n",
+            encoding="utf-8"
         )
         (self.root / "requirements-dev.txt").write_text(
             "playwright==1.63.0\nopenapi-core==0.23.1\nhypothesis==6.170.9\n"
-            "markdown-it-py==4.2.0\nmdurl==0.1.2\n"
-            "psycopg==3.3.6\npsycopg-binary==3.3.6\n"
-            "psycopg-pool==3.3.3\nargon2-cffi==25.1.0\n",
+            "markdown-it-py==4.2.0\nmdurl==0.1.2\n",
             encoding="utf-8",
         )
 
@@ -35,6 +36,15 @@ class CIPinsTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.assertIn("playwright==1.64.0", pins_for_profile(self.root, "e2e"))
+
+    def test_postgres_profile_uses_production_pins(self) -> None:
+        runtime = pins_for_profile(self.root, "runtime")
+        self.assertEqual(pins_for_profile(self.root, "postgres"), runtime)
+        for pin in (
+            "psycopg==3.3.6", "psycopg-binary==3.3.6",
+            "psycopg-pool==3.3.3", "argon2-cffi==25.1.0",
+        ):
+            self.assertIn(pin, runtime)
 
     def test_plan_is_minimal(self) -> None:
         self.assertEqual(pins_for_profile(self.root, "plan"), ["playwright==1.63.0"])
