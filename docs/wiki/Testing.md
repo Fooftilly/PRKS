@@ -103,3 +103,11 @@ README promotional screenshots use dedicated synthetic/public-domain demo toolin
 - `scripts/capture_demo_screenshots.py`.
 
 Never use a real personal research library to generate documentation or UX-audit screenshots.
+
+## Advisory runtime-image SBOM pilot (#861)
+
+The manual/path-relevant GitHub Actions workflow [Runtime image SBOM and Grype pilot](../../.github/workflows/runtime-sbom-pilot.yml) builds the repository Dockerfile as a disposable local image, then creates a **Syft SPDX JSON SBOM for the built runtime image**, not a source-only Python dependency listing. It runs a pinned Grype scanner against that *same* SBOM without treating unaudited vulnerabilities as build blockers. The workflow runs on explicit dispatch or when the pilot workflow itself changes; it does not scan every PR or upload release assets.
+
+To run after the workflow is available on GitHub Actions: **Actions → Runtime image SBOM and Grype pilot (advisory) → Run workflow**. Inspect the job summary for package counts and vulnerability severity counts, then download the 7-day **prks-runtime-sbom** and **prks-runtime-grype-advisory** artifacts for a per-finding review. Tool versions are pinned in the workflow; the vulnerability database updates independently, so record its generation age before comparing scans across dates. The Dockerfile's base images are currently selected by floating tags, meaning identical Git revisions need not have identical SBOM content: retain the build/image digest for reproducible release scans.
+
+This pilot covers OS packages (including `qpdf`) and Python packages actually present in the packaged runtime, which source-only dependency review can miss. It deliberately has no enforcement threshold, waiver/expiry policy, provenance attestation, automatic release asset, or CycloneDX companion yet. Before any release or required check, triage fixes, false positives, package context, CVE database freshness, and ownership under #861 and the release/supply-chain roadmap. Never include user libraries, local secrets, or private runtime state in an image or exported SBOM.
