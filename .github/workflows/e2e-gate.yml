@@ -264,6 +264,24 @@ jobs:
           job_name: E2E (${{ matrix.shard }}/${{ matrix.total }})
           test_step_outcome: ${{ steps.tests.outcome }}
 
+      # Successful ordinary full CI shards write exact unittest ID → seconds
+      # to this file. Export only on clean, uninstrumented manual full runs:
+      # a complete group of shard artifacts can refresh timing-baseline.json.
+      # Do not upload browser traces, local stores, or the whole .tests tree.
+      - name: Export exact test timings (manual full benchmark only)
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          !inputs.profile && !inputs.route_fastpath &&
+          needs.e2e-plan.outputs.mode == 'full' &&
+          steps.tests.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-timings-${{ matrix.shard }}-of-${{ matrix.total }}
+          path: .tests/e2e-timings.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Upload shard failure log
         if: failure()
         # Pinned upload-artifact supports include-hidden-files (needed because paths live
