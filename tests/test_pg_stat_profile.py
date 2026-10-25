@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from scripts.pg_stat_profile import (
     assert_bounded_works, assert_ordered_work_ids, assert_work_detail,
+    expected_recent_work_ids,
     assert_works_count, benchmark, percentile, project_statement, run, sizes_arg, snapshot,
 )
 
@@ -64,23 +65,40 @@ class ProfileSafetyTests(unittest.TestCase):
             assert_work_detail(fixtures[1], "WORK-A")
 
     def test_ported_bounded_browse_and_batch_lookup_validate_real_results(self):
-        fixture_ids = frozenset(("WORK-A", "WORK-B", "WORK-C"))
-        browse = [{"id": "WORK-C"}, {"id": "WORK-A"}]
-        assert_bounded_works(browse, fixture_ids, 2)
+        # The second-precision SQL order breaks creation-time ties by ID;
+        # the expected newest Works are NOT necessarily last inserted.
+        catalog = [
+            {"id": "WORK-Z", "created_at": "2026-10-25 18:00:00"},
+            {"id": "WORK-C", "created_at": "2026-10-25 18:00:01"},
+            {"id": "WORK-B", "created_at": "2026-10-25 18:00:01"},
+            {"id": "WORK-A", "created_at": "2026-10-25 17:59:59"},
+        ]
+        fixture_ids = ("WORK-A", "WORK-B", "WORK-C", "WORK-Z")
+        expected = expected_recent_work_ids(catalog, fixture_ids, 2)
+        self.assertEqual(expected, ("WORK-B", "WORK-C"))
+        assert_bounded_works([{"id": "WORK-B"}, {"id": "WORK-C"}], expected)
+        for bad in (
+            [{"id": "WORK-Z"}, {"id": "WORK-A"}],  # oldest in fixture
+            [{"id": "WORK-C"}, {"id": "WORK-B"}],  # tie-breaker wrong
+            [{"id": "WORK-B"}, {"id": "WORK-B"}],  # duplicate
+            [{"id": "WORK-B"}, {"id": "WORK-Z"}],  # valid, not newest
+            [{"id": 5}, {"id": "WORK-C"}],        # malformed
+            {"id": "WORK-B"},                    # wrong shape
+        ):
+            with self.subTest(bad=bad), self.assertRaises(RuntimeError):
+                assert_bounded_works(bad, expected)
+        for bad in (
+            catalog[:-1],
+            [catalog[0], catalog[0], catalog[2], catalog[3]],
+            [dict(catalog[0], created_at=None), *catalog[1:]],
+            [dict(catalog[0], id="FOREIGN"), *catalog[1:]],
+        ):
+            with self.subTest(catalog=bad), self.assertRaises(RuntimeError):
+                expected_recent_work_ids(bad, fixture_ids, 2)
         assert_ordered_work_ids([{"id": "WORK-B"}, {"id": "WORK-A"}],
                                 ("WORK-B", "WORK-A"))
-        invalid_browse = (
-            (browse, 3),
-            ([{"id": "WORK-A"}, {"id": "WORK-A"}], 2),
-            ([{"id": "OTHER"}, {"id": "WORK-A"}], 2),
-            ([{"id": 5}, {"id": "WORK-A"}], 2),
-            ({"id": "WORK-A"}, 1),
-        )
-        for value, count in invalid_browse:
-            with self.subTest(value=value), self.assertRaises(RuntimeError):
-                assert_bounded_works(value, fixture_ids, count)
         for value in (
-            [{"id": "WORK-A"}, {"id": "WORK-B"}],
+            [{"id": "WORK-A"}, {"id": "WORK-B"}],  # natural ID order
             [{"id": "WORK-B"}],
             [{"id": "WORK-B"}, {"id": "WORK-B"}],
             [{"id": "WORK-B"}, {"id": None}],
