@@ -36,8 +36,35 @@ class AxeAdvisoryReportTests(unittest.TestCase):
         self.assertEqual(report["axe"], AXE_PIN)
         self.assertEqual(report["violating_rules"], 1)
         self.assertEqual(report["violations"][0]["sample_targets"], ["#button-1"])
-        for forbidden in ("PRIVATE RESEARCH TEXT", "fixture-private", "<svg>", "pageHtml", "html"):
+        for forbidden in (
+            "PRIVATE RESEARCH TEXT", "fixture-private", "<svg>",
+            "pageHtml", "html", "document sample must not be retained",
+        ):
             self.assertNotIn(forbidden, encoded)
+
+    def test_sanitized_selector_count_and_nth_child_are_preserved(self):
+        raw = raw_engine(violations=[{
+            "id": "aria-required-attr",
+            "impact": "serious",
+            "count": 2,
+            "selectors": ["#sidebar > button:nth-child(2)", 'button[title="fixture-path"]'],
+        }])
+        info = sanitized_report("shell", raw)["violations"][0]
+        self.assertEqual(info["sample_targets"], ["#sidebar > button:nth-child(2)"])
+        self.assertEqual(info["suppressed_targets"], 1)
+
+    def test_critical_findings_are_not_truncated_by_minor_rules(self):
+        examples = [
+            {"id": f"minor-{i:02d}", "impact": "minor", "count": 1, "selectors": []}
+            for i in range(25)
+        ]
+        examples.append({
+            "id": "zz-critical", "impact": "critical", "count": 1, "selectors": []
+        })
+        result = sanitized_report("shell", raw_engine(violations=examples))
+        self.assertEqual(result["violating_rules"], 26)
+        self.assertEqual(result["violations"][0]["rule"], "zz-critical")
+        self.assertEqual(result["truncated_rules"], 8)
 
     def test_no_engine_or_no_rules_is_not_a_success(self):
         with self.assertRaisesRegex(AssertionError, "axe-core"):
