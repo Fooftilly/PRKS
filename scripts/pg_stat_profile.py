@@ -249,11 +249,25 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
                             # T07: only profile read paths already ported to the PG facade.
                             # Search, graph and generic offset pagination are NOT ported.
                             bounded_limit = min(size, 10)
-                            # Read the synthetic catalog before timing, then independently
-                            # sort its dates/IDs to verify the Recently Added ordering.
-                            expected_recent = expected_recent_work_ids(
-                                library.get_all_works(), fixture_ids, bounded_limit
-                            )
+                            # Capture the already-timed first list result in its
+                            # verifier: do not pre-read the catalog and turn the
+                            # first-observed list measurement into a second call.
+                            recent_expectation: list[tuple[str, ...]] = []
+
+                            def verify_list(value: Any) -> None:
+                                assert_works_count(value, size)
+                                expected = expected_recent_work_ids(
+                                    value, fixture_ids, bounded_limit
+                                )
+                                if recent_expectation and recent_expectation[0] != expected:
+                                    raise RuntimeError("synthetic catalog changed during profiling")
+                                if not recent_expectation:
+                                    recent_expectation.append(expected)
+
+                            def verify_recent(value: Any) -> None:
+                                if len(recent_expectation) != 1:
+                                    raise RuntimeError("missing validated list baseline")
+                                assert_bounded_works(value, recent_expectation[0])
                             # Deliberately non-natural: neither SQL id order nor
                             # fixture insertion order should satisfy batch lookup.
                             by_id = tuple(sorted(fixture_ids[:bounded_limit]))
@@ -261,15 +275,14 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
                             if batch_ids == tuple(fixture_ids[:bounded_limit]):
                                 batch_ids = batch_ids[1:] + batch_ids[:1]
                             workloads = (
-                                ("works_list", library.get_all_works,
-                                 lambda value: assert_works_count(value, size)),
+                                ("works_list", library.get_all_works, verify_list),
                                 ("works_browse", library.get_works_browse_catalog,
                                  lambda value: assert_works_count(value, size)),
                                 ("work_detail", lambda: library.get_work(work_id),
                                  lambda value: assert_work_detail(value, work_id)),
                                 ("works_recent_bounded",
                                  lambda: library.get_recently_added_browse(limit=bounded_limit),
-                                 lambda value: assert_bounded_works(value, expected_recent)),
+                                 verify_recent),
                                 ("works_batch_by_ids",
                                  lambda: library.get_work_summaries_by_ids_ordered(list(batch_ids)),
                                  lambda value: assert_ordered_work_ids(value, batch_ids)),
