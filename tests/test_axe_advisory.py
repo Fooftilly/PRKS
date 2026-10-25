@@ -5,8 +5,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
-from tests.e2e.axe_advisory import AXE_PIN, sanitized_report, short_summary, write_report
+from tests.e2e.axe_advisory import AXE_PIN, sanitized_report, scan, short_summary, verify_missing_button_name_canary, write_report
 
 
 def raw_engine(**extras) -> dict:
@@ -30,6 +31,36 @@ def raw_engine(**extras) -> dict:
 
 
 class AxeAdvisoryReportTests(unittest.TestCase):
+    def test_canary_requires_detected_synthetic_missing_button_name(self):
+        page = Mock()
+        page.evaluate.return_value = False
+        with self.assertRaisesRegex(AssertionError, "canary"):
+            verify_missing_button_name_canary(page)
+        page.evaluate.return_value = None
+        with self.assertRaisesRegex(AssertionError, "canary"):
+            verify_missing_button_name_canary(page)
+        page.evaluate.return_value = True
+        verify_missing_button_name_canary(page)
+        payload = page.evaluate.call_args.args[0]
+        self.assertIn("'button-name'", payload)
+        self.assertIn("await window.axe.run(button", payload)
+        self.assertIn("finally", payload)
+        self.assertIn("button.remove()", payload)
+
+    def test_canary_runs_on_shell_only_before_actual_axe_scan(self):
+        page = Mock()
+        raw = raw_engine(document_rules_checked=["html-has-lang", "document-title"])
+        with (
+            patch("tests.e2e.axe_advisory.AXE_JS") as axe_file,
+            patch("tests.e2e.axe_advisory.verify_missing_button_name_canary") as canary,
+        ):
+            axe_file.is_file.return_value = True
+            page.evaluate.side_effect = [True, raw, True, raw]
+            self.assertEqual(scan(page, "__prks_document_shell__", "shell")["surface"], "shell")
+            canary.assert_called_once_with(page)
+            self.assertEqual(scan(page, ".work-detail", "work-detail")["surface"], "work-detail")
+            canary.assert_called_once_with(page)
+
     def test_only_public_bounded_rule_metadata_survives(self):
         report = sanitized_report("shell", raw_engine())
         encoded = json.dumps(report)
