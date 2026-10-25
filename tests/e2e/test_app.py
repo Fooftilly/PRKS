@@ -3464,7 +3464,7 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
         self.assertFalse(_pdf_has_pending_sync(page))
 
     def test_an_edit_the_viewer_never_commits_is_reported_and_does_not_stick(self):
-        server, page, _collector = self._start_app()
+        server, page, _collector = self._start_app(install_clock=True)
         work_id = server.ids["work_a"]
         _open_work_from_home(page, WORK_A_TITLE)
         _wait_pdf_viewer(page)
@@ -3495,6 +3495,10 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
         )
         _wait_pdf_annotation_durable(page)
         _save_annotation_comment(page, ann_id, "never committed")
+        # This deliberately dropped engine commit is resolved by the actual
+        # 10s production watchdog. Advance only this test's browser clock,
+        # keeping the real rollback/recovery assertions and server state.
+        page.clock.fast_forward(10_100)
         page.wait_for_function(
             """() => {
                 const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
