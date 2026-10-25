@@ -152,6 +152,23 @@ This pilot covers OS packages (including `qpdf`) and Python packages actually pr
 **Triage policy:** The GitHub Dependency Review workflow flags *newly introduced* advisories in supported manifests; the built-image Syft/Grype scan additionally identifies OS packages, native dependencies and interpreter components in the runnable Docker artifact. Python package advisories may appear in both, so do not add or compare their raw totals as independent findings. Check IDs, package/installed version, ecosystem and upstream namespace before classifying overlap. Listed upgrade versions can be incompatible with the pinned runtime (for example a Python-major upgrade); `not-fixed` means a vendor fix is not currently listed; `wont-fix` indicates a vendor does not intend to issue a fix. Neither constitutes PRKS risk acceptance, and the actions differ. Prioritize confirmed, fixable, reachable vulnerabilities separately from unpatched OS packages; document decisions in #861, never auto-suppress findings. Scanner matches are not proof of exploitability, and fixing them can require Docker base updates, Python runtime changes or an upstream release. This remains advisory and does not alter branch protection or upload scan output to third-party SaaS beyond the existing workflow's GitHub Actions artifacts.
 
 
+## Optional Firefox/WebKit cross-browser smoke (#651 C2)
+
+The [Firefox/WebKit smoke workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/cross-browser-smoke.yml) is **manual or limited to PRs changing the pilot itself**. It reuses the existing isolated `AppServer(seed_library)`, the pinned Python Playwright package and `open_app_page` with a fresh browser context per engine. The test starts a local `prks_app.py --testing` process with disposable synthetic **SQLite** storage; it refuses inherited PostgreSQL/database/auth configuration and never accepts an external target.
+
+Firefox and WebKit independently exercise the folder shell, Work detail and CodeMirror editor readiness, and keyboard opening/dismissal of Settings with restored focus. Unexpected app JavaScript/console errors, off-origin requests, and HTTP 5xx also fail through the existing Playwright collector. Results list only engine versions and completed check identifiers, without screenshots, PDFs, page HTML, titles, or private URLs. **PDF rendering, PostgreSQL authentication, application persistence and every browser feature are not proven by this smoke.** The existing Chromium full E2E remains required and authoritative; this does not add Firefox/WebKit to that gate or claim v1.0 browser support.
+
+Local usage with the existing pinned runtime and dev/test packages:
+
+```bash
+export PLAYWRIGHT_BROWSERS_PATH="$PWD/.playwright-browsers"
+python -m playwright install --with-deps firefox webkit
+python -m unittest -v tests.test_cross_browser_smoke
+python scripts/ci/cross_browser_smoke.py --engines firefox webkit
+```
+
+The browser installation can require Linux system packages. On developer machines where package installation needs elevated privileges, use the platform-supported Playwright install procedure; do not change the PRKS server or relax browser checks to get a green result.
+
 ## Advisory axe-core browser accessibility smoke (#856)
 
 The opt-in [Advisory axe-core accessibility smoke](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/axe-playwright-advisory.yml) GitHub Actions workflow uses **PRKS's existing Python unittest/Playwright Chromium E2E harness and disposable synthetic `--testing` server**. It runs when the pilot workflow/tests change or when manually dispatched; normal full/sharded/affected E2E does **not** discover its additional test without `PRKS_E2E_AXE=1`. It does not create another frontend E2E framework, use an external accessibility SaaS, or alter the required check names.
