@@ -88,8 +88,8 @@ def collector_failure_categories(collector) -> str:
         labels = []
         for error in collector.pageerrors[:5]:
             match = re.search(
-                r"\\b(" + "|".join(allowed) + r")\\s*:",
-                str(error).split("\\n", 1)[0],
+                r"\b(" + "|".join(allowed) + r")\s*:",
+                str(error).split("\n", 1)[0],
             )
             labels.append(match.group(1).lower() if match else "unknown")
         flagged.append("kinds-" + "_".join(labels))
