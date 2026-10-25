@@ -198,7 +198,7 @@ class DocsOnlyLinkValidationTests(unittest.TestCase):
         self.assertTrue({"part", "another", "legacy"}.issubset(anchors))
 
     def test_html_comments_do_not_create_anchors(self):
-        content = '<!-- <div id="ghost"></div> -->\n<div id="real"></div>\n'
+        content = '<!-- <div id="ghost"></div> -->\n<div id="real"></div>\n\n'
         self.assertEqual(_anchors(content), {"real"})
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
