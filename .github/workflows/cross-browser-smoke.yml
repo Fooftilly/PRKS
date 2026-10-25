@@ -1,0 +1,97 @@
+name: Advisory Firefox and WebKit browser smoke
+
+# PRKS still uses Chromium for its required full-E2E gate. This pilot
+# runs only on demand or when its own implementation changes.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/cross-browser-smoke.yml"
+      - "scripts/ci/cross_browser_smoke.py"
+      - "tests/test_cross_browser_smoke.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cross-browser-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  browser-portability:
+    name: Isolated Firefox/WebKit route and keyboard smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
+    steps:
+      - name: Checkout PRKS
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install existing pinned E2E dependencies
+        run: python scripts/ci/install_pinned_python.py e2e
+
+      - name: Validate smoke isolation and completeness contracts
+        run: python -m unittest -v tests.test_cross_browser_smoke
+
+      - name: Install pinned Playwright Firefox and WebKit (pilot only)
+        run: python -m playwright install --with-deps firefox webkit
+
+      - name: Exercise isolated PRKS shell, Work and dialog in both engines
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/ci/cross_browser_smoke.py --engines firefox webkit \
+            --output "$RUNNER_TEMP/prks-cross-browser-smoke.json"
+
+      - name: Summarize engine versions and completed checks
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["RUNNER_TEMP"]) / "prks-cross-browser-smoke.json"
+          lines = [
+              "## Firefox / WebKit portability smoke",
+              "",
+              "Advisory, fixture-only, isolated loopback app. PostgreSQL auth and PDF "
+              "rendering are not covered. Chromium full E2E remains authoritative.",
+              "",
+          ]
+          if path.is_file():
+              from scripts.ci.cross_browser_smoke import ENGINES, verify_report
+
+              result = json.loads(path.read_text(encoding="utf-8"))
+              verify_report(result, ENGINES)
+              lines += [
+                  "| Browser | Playwright version | Completed interactions |",
+                  "| --- | --- | --- |",
+              ]
+              for item in result["browsers"]:
+                  lines.append(
+                      f"| {item['engine']} | {item['version']} | {', '.join(item['checks'])} |"
+                  )
+          else:
+              lines.append("**Incomplete:** no validated result produced; inspect failed job.")
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as out:
+              out.write("\n".join(lines) + "\n")
+          PY
+
+      - name: Retain bounded synthetic status only
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: synthetic-firefox-webkit-smoke
+          path: ${{ runner.temp }}/prks-cross-browser-smoke.json
+          retention-days: 7
+          if-no-files-found: warn
