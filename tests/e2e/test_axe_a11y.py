@@ -49,7 +49,14 @@ class AxeAccessibilityPilotTests(unittest.TestCase):
 
         surfaces = []
         page.locator("#sidebar").wait_for(state="visible")
-        surfaces.append(scan(page, "#sidebar", "shell"))
+        shell = scan(page, "__prks_document_shell__", "shell")
+        for required_rule in ("html-has-lang", "document-title"):
+            self.assertIn(
+                required_rule,
+                shell["document_rules_checked"],
+                "Document-level axe rules must run despite routed-content exclusion",
+            )
+        surfaces.append(shell)
 
         page.evaluate("() => window.prksNavigate('#/folders')")
         page.locator("[data-prks-folder-library-view]").wait_for(state="visible")
