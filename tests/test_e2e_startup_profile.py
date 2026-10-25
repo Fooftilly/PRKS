@@ -89,6 +89,24 @@ class ArgumentOverlayPhaseProfileTests(unittest.TestCase):
         )
 
 
+
+class PdfAnnotationRollbackPhaseProfileTests(unittest.TestCase):
+    def test_detailed_phases_do_not_double_count_infrastructure(self):
+        from tests.e2e import run as runner
+
+        phases = {
+            "server_start": 2.0,
+            "async_wait": 3.0,
+            "pdf_rollback_setup": 4.0,
+            "pdf_rollback_fail_other_save": 2.5,
+            "pdf_rollback_verify_late_failed": 1.0,
+        }
+        # Breakdown remains intact for the manual benchmark/phase report.
+        self.assertEqual(phases["pdf_rollback_fail_other_save"], 2.5)
+        self.assertEqual(runner._profile_infrastructure_total(phases), 5.0)
+
+
+
 class StartupReadinessProfileTests(unittest.TestCase):
     def test_server_subphases_keep_http_readiness_and_inclusive_total(self):
         with mock.patch.dict(os.environ, {"PRKS_E2E_PROFILE": "1"}):
