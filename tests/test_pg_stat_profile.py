@@ -7,8 +7,10 @@ import os
 import unittest
 from unittest.mock import patch
 
-from scripts.pg_stat_profile import (assert_work_detail, assert_works_count, benchmark,
-                                     percentile, project_statement, run, sizes_arg, snapshot)
+from scripts.pg_stat_profile import (
+    assert_bounded_works, assert_ordered_work_ids, assert_work_detail,
+    assert_works_count, benchmark, percentile, project_statement, run, sizes_arg, snapshot,
+)
 
 
 class ProfileSafetyTests(unittest.TestCase):
@@ -60,6 +62,31 @@ class ProfileSafetyTests(unittest.TestCase):
             assert_work_detail(None, "WORK-A")
         with self.assertRaisesRegex(RuntimeError, "detail"):
             assert_work_detail(fixtures[1], "WORK-A")
+
+    def test_ported_bounded_browse_and_batch_lookup_validate_real_results(self):
+        fixture_ids = frozenset(("WORK-A", "WORK-B", "WORK-C"))
+        browse = [{"id": "WORK-C"}, {"id": "WORK-A"}]
+        assert_bounded_works(browse, fixture_ids, 2)
+        assert_ordered_work_ids([{"id": "WORK-B"}, {"id": "WORK-A"}],
+                                ("WORK-B", "WORK-A"))
+        invalid_browse = (
+            (browse, 3),
+            ([{"id": "WORK-A"}, {"id": "WORK-A"}], 2),
+            ([{"id": "OTHER"}, {"id": "WORK-A"}], 2),
+            ([{"id": 5}, {"id": "WORK-A"}], 2),
+            ({"id": "WORK-A"}, 1),
+        )
+        for value, count in invalid_browse:
+            with self.subTest(value=value), self.assertRaises(RuntimeError):
+                assert_bounded_works(value, fixture_ids, count)
+        for value in (
+            [{"id": "WORK-A"}, {"id": "WORK-B"}],
+            [{"id": "WORK-B"}],
+            [{"id": "WORK-B"}, {"id": "WORK-B"}],
+            [{"id": "WORK-B"}, {"id": None}],
+        ):
+            with self.subTest(value=value), self.assertRaises(RuntimeError):
+                assert_ordered_work_ids(value, ("WORK-B", "WORK-A"))
 
     def test_first_observed_and_warm_samples_require_validated_reads(self):
         calls = []
