@@ -1056,8 +1056,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         if not self._validate_request_host():
             return
         parsed_path = urlparse(self.path)
-        if parsed_path.path in ('/healthz', '/readyz'):
-            self._probe(parsed_path.path)
+        probe_path = unquote(parsed_path.path).rstrip('/')
+        if probe_path in ('/healthz', '/readyz'):
+            self._probe(probe_path)
             return
         if parsed_path.path.startswith('/api/'):
             if not self._prks_admit(parsed_path):
@@ -1083,8 +1084,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         if not self._validate_request_host():
             return
         parsed_path = urlparse(self.path)
-        if parsed_path.path in ('/healthz', '/readyz'):
-            self._probe(parsed_path.path, head=True)
+        probe_path = unquote(parsed_path.path).rstrip('/')
+        if probe_path in ('/healthz', '/readyz'):
+            self._probe(probe_path, head=True)
             return
         if parsed_path.path.startswith('/api/'):
             if not self._prks_admit(parsed_path):
