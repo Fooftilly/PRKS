@@ -111,17 +111,63 @@ def _result(
     }
 
 
+def _view_path_rejection(paths: list[str]) -> str | None:
+    """Only explicitly safe view files and harmless companions qualify."""
+    views = 0
+    for path in paths:
+        if _safe_nonproduction_companion(path):
+            continue
+        if policy.classify_affected_path(path)["skip"]:
+            return "unrecognized nonproduction companion: " + path
+        if _is_generated_companion(path):
+            # Source mapping does not prove generated asset reproducibility.
+            return "generated frontend assets require full packaged E2E"
+        if path not in SAFE_VUE_VIEWS:
+            return "outside narrow feature-owned Vue view allowlist: " + path
+        views += 1
+    if not views:
+        return "no recognized feature-owned view change"
+    return None
+
+
+def _candidate_test_ids(features: tuple[str, ...]) -> tuple[tuple[str, ...], str | None]:
+    """Discover the authoritative E2E suite and include every affected feature.
+
+    Never trust a provided inventory or a nonempty smoke-only selection.
+    """
+    ids = _discover_complete_e2e_ids()
+    if not ids or len(set(ids)) != len(ids) or not all(
+        isinstance(tid, str) and tid.startswith("tests.e2e.") for tid in ids
+    ):
+        return (), "invalid or incomplete E2E inventory"
+
+    known = set(ids)
+    expected_smoke = (*policy.SMOKE_TEST_IDS, *EXTRA_PACKAGED_SMOKE_IDS)
+    if any(tid not in known for tid in expected_smoke):
+        return (), "required packaged smoke case missing from E2E inventory"
+
+    # A nonempty combined smoke selection does not prove affected coverage.
+    for feature in features:
+        if feature != "smoke" and not policy.select_features(ids, (feature,)):
+            return (), "no discovered tests for the affected feature: " + feature
+
+    selected = policy.select_features(ids, features)
+    union = tuple(dict.fromkeys((*expected_smoke, *selected)))
+    if len(union) > MAX_SMOKE_AFFECTED_TESTS:
+        return (), "affected selection too broad; keep full packaged shards"
+    return union, None
+
+
 def plan_packaged_e2e(
     changed_paths,
     *,
     path_diffs=None,
     force_full: bool = False,
 ) -> dict:
-    """Propose a reduced packaged leg, but ALWAYS return effective_mode=full.
+    """Stage an inactive packaged E2E proposal, defaulting to full coverage.
 
-    Missing changes, failed current unittest discovery, unknown paths,
-    changed generated Vue assets or ambiguous safety rules fail closed.
-    Discovery must succeed before any reduced-coverage proposal is emitted.
+    Unknown/unsafe changes, generated assets and missing test discovery
+    cannot reduce the six-shard packaged gate.
     """
     if force_full:
         return _result("release, master, manual override or operator requires full")
@@ -132,8 +178,6 @@ def plan_packaged_e2e(
     if not paths or not all(_valid_path(p) for p in paths):
         return _result("empty, malformed or unsafe changed path list")
 
-    # Authoritative CI mapping accounts for Vue-generated bundle provenance,
-    # service-worker revision-only diffs, and shared/unmapped production paths.
     source = policy.plan_ci_e2e(paths, path_diffs=path_diffs)
     if source.get("mode") != "affected":
         return _result(
@@ -141,66 +185,26 @@ def plan_packaged_e2e(
             + str(source.get("reason", "unknown"))
         )
 
-    view_paths = []
-    for path in paths:
-        # A feature-local .test.ts file can match its feature's production
-        # rule even though it isn't shipped. Recognize harmless companions
-        # before checking the generic take/skip classification.
-        if _safe_nonproduction_companion(path):
-            continue
-        classified = policy.classify_affected_path(path)
-        if classified["skip"]:
-            # Unknown paths are not automatically safe just because the
-            # source E2E planner skips them (e.g. Dockerfile/workflows).
-            return _result("unrecognized nonproduction companion: " + path)
-        if _is_generated_companion(path):
-            # The source planner knows whether these outputs accompany a
-            # mapped Vue change, but cannot prove byte-for-byte reproducibility.
-            # Require FULL until an explicit build-proof gate is implemented.
-            return _result("generated frontend assets require full packaged E2E")
-        if path not in SAFE_VUE_VIEWS:
-            return _result("outside narrow feature-owned Vue view allowlist: " + path)
-        view_paths.append(path)
-    if not view_paths:
-        return _result("no recognized feature-owned view change")
+    rejection = _view_path_rejection(paths)
+    if rejection:
+        return _result(rejection)
 
     features = tuple(dict.fromkeys(source.get("features") or ()))
     if not features or "smoke" not in features:
         return _result("missing source-affected feature selection")
-
     try:
-        ids = _discover_complete_e2e_ids()
-        if not ids or len(set(ids)) != len(ids) or not all(
-            isinstance(tid, str) and tid.startswith("tests.e2e.") for tid in ids
-        ):
-            return _result("invalid or incomplete E2E inventory")
-        known = set(ids)
-        expected_smoke = (*policy.SMOKE_TEST_IDS, *EXTRA_PACKAGED_SMOKE_IDS)
-        if any(tid not in known for tid in expected_smoke):
-            return _result("required packaged smoke case missing from E2E inventory")
-        # 'smoke' is always present in the source affected plan, so testing
-        # the combined set alone cannot prove a feature-owned case exists.
-        affected_features = tuple(
-            feature for feature in features if feature != "smoke"
-        )
-        for feature in affected_features:
-            if not policy.select_features(ids, (feature,)):
-                return _result(
-                    "no discovered tests for the affected feature: " + feature
-                )
-        selected = policy.select_features(ids, features)
-        union = tuple(dict.fromkeys((*expected_smoke, *selected)))
-        if len(union) > MAX_SMOKE_AFFECTED_TESTS:
-            return _result("affected selection too broad; keep full packaged shards")
+        ids, error = _candidate_test_ids(features)
     except (TypeError, ValueError, KeyError, ImportError, OSError, RuntimeError) as exc:
         return _result("test selection failed closed: " + type(exc).__name__)
+    if error:
+        return _result(error)
 
     return _result(
         "candidate only: mapped feature-owned views + expanded packaged smoke; "
         "workflow remains full until explicit maintainer approval",
         candidate=True,
         features=features,
-        test_ids=union,
+        test_ids=ids,
     )
 
 
