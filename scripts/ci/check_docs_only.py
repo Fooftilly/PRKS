@@ -60,14 +60,17 @@ def _slug(text: str) -> str:
 
 def _unclosed_fences(content: str, tokens: list) -> list[str]:
     """Use CommonMark's container-aware fence tokens, including list items."""
-    lines = content.splitlines()
     missing = []
     for token in tokens:
         if token.type != "fence" or not token.map:
             continue
-        last = lines[token.map[1] - 1].strip()
-        marker = token.markup[0]
-        if not re.fullmatch(rf"{re.escape(marker)}{{{len(token.markup)},}}", last):
+        # markdown-it excludes the closing line from token.content. An open
+        # fence has only its opener + content lines in token.map; a closed
+        # fence has an additional closing line. This respects indentation
+        # and parent list/quote containers without guessing from raw text.
+        span = token.map[1] - token.map[0]
+        content_lines = len(token.content.splitlines())
+        if span < content_lines + 2:
             missing.append(token.markup)
     return missing
 
