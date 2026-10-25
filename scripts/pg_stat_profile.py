@@ -86,6 +86,10 @@ def benchmark(stats: Any, operation: Any, repetitions: int) -> dict[str, Any]:
     for _ in range(2):
         operation()
     stats.execute(_RESET_SQL)
+    # Maintenance reads and the reset itself must never displace workload SQL.
+    # The statistics connection runs with pg_stat_statements.track=none.
+    if snapshot(stats):
+        raise RuntimeError("profiler maintenance contaminated workload statistics")
     durations = []
     for _ in range(repetitions):
         start = time.perf_counter()
@@ -118,7 +122,11 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
     harness = get_harness()
     dbname = harness.create_database("profile")
     try:
+        # Disable tracking for this administrative connection at startup;
+        # otherwise the reset SELECT is itself recorded after its reset.
+        # The independent facade pool retains its ordinary top-level tracking.
         with psycopg.connect(harness.conninfo(dbname), autocommit=True,
+                             options="-c pg_stat_statements.track=none",
                              row_factory=dict_row) as stats:
             preload = stats.execute(
                 "SELECT current_setting('shared_preload_libraries') AS loaded"
