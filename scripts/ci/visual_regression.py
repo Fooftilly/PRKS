@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tests.e2e.fixtures import seed_library  # noqa: E402
+from tests.e2e.fixtures import seed_folders_library  # noqa: E402
 from tests.e2e.harness import AppServer, PageCollector, require_chromium  # noqa: E402
 from tests.e2e.test_app import _wait_pdf_viewer  # noqa: E402
 from tests.visual.compare import (  # noqa: E402
@@ -52,7 +52,7 @@ def capture(page, name: str, output: Path, selector: str | None = None) -> dict:
 def collect(output: Path) -> dict[str, dict]:
     # Never reads a live library. AppServer creates a fresh temporary PRKS
     # storage directory, binds loopback and deletes it on close.
-    server = AppServer(seed_fn=seed_library)
+    server = AppServer(seed_fn=seed_folders_library)
     browser_api = None
     browser = None
     context = None
