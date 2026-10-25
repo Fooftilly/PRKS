@@ -5770,10 +5770,13 @@ function prksSafeTagColorCss(value) {
 function prksSafeHttpUrl(value) {
     const url = String(value == null ? '' : value).trim();
     if (!url) return '';
+    let parsed = null;
     try {
-        const parsed = new URL(url);
-        if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return url;
-    } catch (_e) {}
+        parsed = new URL(url);
+    } catch (_e) {
+        return '';
+    }
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return url;
     return '';
 }
 
