@@ -70,12 +70,27 @@ def plan_packaged_e2e(paths, *, known_test_ids=None, **options):
 class PackagedSelectionPolicyTests(unittest.TestCase):
     def test_cli_direct_help_imports_policy_from_repo_root(self):
         script = ROOT / "scripts/ci/plan_packaged_e2e.py"
+        # Emulate a fresh direct-script interpreter: neither the repo root
+        # nor any tests.e2e module is preloaded. The script must establish
+        # its own import path before importing the real E2E policy.
+        script_path = str(script.parent)
+        isolated_path = [
+            script_path,
+            *(entry for entry in sys.path
+              if entry and Path(entry).resolve() != ROOT),
+        ]
         with (
+            patch.dict(sys.modules),
+            patch.object(sys, "path", isolated_path),
             patch.object(sys, "argv", [str(script), "--help"]),
             redirect_stdout(io.StringIO()) as output,
             self.assertRaises(SystemExit) as exit_result,
         ):
+            for name in tuple(sys.modules):
+                if name == "tests" or name.startswith("tests.e2e"):
+                    sys.modules.pop(name, None)
             runpy.run_path(str(script), run_name="__main__")
+            self.fail("the --help invocation should exit successfully")
         self.assertEqual(exit_result.exception.code, 0)
         self.assertIn("--base", output.getvalue())
 
