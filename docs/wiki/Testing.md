@@ -119,8 +119,8 @@ with `shared_preload_libraries=pg_stat_statements` and `compute_query_id=on`,
 creates a harness-owned migrated database and extension, seeds synthetic Works,
 then deletes the database and server. The profiler **refuses**
 `PRKS_TEST_DATABASE_URL`; do not enable the extension or reset its shared
-statistics on a real PRKS cluster. A missing preload or extension fails
-clearly. Ordinary `scripts/test-postgres` and production Compose startup
+statistics on a real PRKS cluster. A missing preload or extension causes a nonzero exit without emitting connection
+strings or SQL text. Ordinary `scripts/test-postgres` and production Compose startup
 are unchanged.
 
 Results contain PostgreSQL version, fixture tier, a known facade read operation,
