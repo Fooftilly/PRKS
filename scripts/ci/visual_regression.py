@@ -100,7 +100,7 @@ def collect(output: Path) -> dict[str, dict]:
         page.locator(".prks-tile--secondary .CodeMirror").wait_for(
             state="visible", timeout=30000
         )
-        page.locator(".prks-tile--secondary .prks-pdf-render-image").wait_for(
+        page.locator(".prks-tile--secondary .prks-pdf-render-image").first.wait_for(
             state="visible", timeout=30000
         )
         page.wait_for_function(
