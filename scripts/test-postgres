@@ -16,6 +16,8 @@
 # Usage:
 #   scripts/test-postgres                      # all tests in tests/pg
 #   scripts/test-postgres tests.pg.test_harness [more unittest ids]
+#   scripts/test-postgres --profile [--sizes 12,48,128] [--repetitions 8]
+#       opt-in, synthetic pg_stat_statements profile on a new disposable server
 #   scripts/test-postgres --parity [--json PATH]
 #       the SQLite/PostgreSQL backend parity leg and its coverage report
 #       (#625, scripts/run_backend_parity.py)
@@ -25,6 +27,19 @@ cd "$ROOT"
 PY="${PYTHON:-python3}"
 PG_IMAGE="postgres:18.6@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336"
 MIN_MAJOR=18
+
+# Profiling always starts a fresh disposable server because resetting
+# pg_stat_statements touches server-wide shared statistics. Never profile a
+# caller-supplied server, even one accepted by the ordinary test harness.
+PROFILE=false
+if [[ "${1:-}" == "--profile" ]]; then
+  PROFILE=true
+  shift
+  if [[ -n "${PRKS_TEST_DATABASE_URL:-}" ]]; then
+    echo "test-postgres: --profile refuses PRKS_TEST_DATABASE_URL; use a disposable server" >&2
+    exit 2
+  fi
+fi
 
 CLEANUP=()
 cleanup() {
@@ -46,10 +61,14 @@ start_docker() {
   docker info >/dev/null 2>&1 || return 1
   local name="prks-test-postgres-$$-$RANDOM"
   echo "test-postgres: starting ${PG_IMAGE%%@*} in Docker" >&2
+  local server_args=()
+  if [[ "$PROFILE" == true ]]; then
+    server_args=(postgres -c shared_preload_libraries=pg_stat_statements -c compute_query_id=on)
+  fi
   docker run -d --rm --name "$name" \
     -e POSTGRES_HOST_AUTH_METHOD=trust \
     -e POSTGRES_INITDB_ARGS="--locale-provider=builtin --builtin-locale=C.UTF-8" \
-    -p 127.0.0.1::5432 "$PG_IMAGE" >/dev/null || {
+    -p 127.0.0.1::5432 "$PG_IMAGE" "${server_args[@]}" >/dev/null || {
     echo "test-postgres: could not start the Docker server" >&2
     return 1
   }
@@ -126,8 +145,12 @@ start_local() {
     echo "test-postgres: initdb failed" >&2
     return 1
   }
+  local profile_opts=""
+  if [[ "$PROFILE" == true ]]; then
+    profile_opts=" -c shared_preload_libraries=pg_stat_statements -c compute_query_id=on"
+  fi
   "${as[@]}" "$bindir/pg_ctl" -D "$base/data" -l "$base/server.log" -w \
-    -o "-c listen_addresses='' -k $base -p $port -c fsync=off" start >/dev/null || {
+    -o "-c listen_addresses='' -k $base -p $port -c fsync=off${profile_opts}" start >/dev/null || {
     echo "test-postgres: the local server did not start" >&2
     return 1
   }
@@ -151,7 +174,9 @@ fi
   exit 2
 }
 
-if [[ "${1:-}" == "--parity" ]]; then
+if [[ "$PROFILE" == true ]]; then
+  PRKS_PG_PROFILE_DISPOSABLE_SERVER=1 "$PY" scripts/pg_stat_profile.py "$@"
+elif [[ "${1:-}" == "--parity" ]]; then
   shift
   "$PY" scripts/run_backend_parity.py "$@"
 elif [[ $# -gt 0 ]]; then
