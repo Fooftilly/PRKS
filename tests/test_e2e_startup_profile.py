@@ -217,8 +217,8 @@ class StartupReadinessProfileTests(unittest.TestCase):
             browser = mock.Mock()
             page = browser.new_context.return_value.new_page.return_value
             calls = []
-            page.clock.install.side_effect = lambda: calls.append("install")
-            page.goto.side_effect = lambda *args, **kwargs: calls.append("goto")
+            page.clock.install.side_effect = lambda log=calls: log.append("install")
+            page.goto.side_effect = lambda *args, log=calls, **kwargs: log.append("goto")
             with mock.patch.dict(os.environ, {"PRKS_E2E_PROFILE": "0"}):
                 harness.open_app_page(
                     browser, "http://127.0.0.1:42002", install_clock=enabled,
