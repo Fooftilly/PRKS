@@ -9,7 +9,7 @@ from types import ModuleType
 from unittest.mock import MagicMock, Mock, patch
 
 from scripts.ci.cross_browser_smoke import (
-    CHECKS, ENGINES, SmokeFailure, check_browser_errors, close_preserving_failure, collector_failure_categories,
+    CHECKS, ENGINES, SmokeFailure, check_browser_errors, close_preserving_failure, collector_failure_categories, probe_error_summary,
     main, run, smoke,
     verify_isolation, verify_report,
 )
@@ -163,6 +163,20 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
         self.assertIn("webkit/browser_errors_after_pdf_", str(caught.exception))
         self.assertIn("sites-js-reader.js-42", str(caught.exception))
         self.assertNotIn("private-document-body", str(caught.exception))
+
+    def test_page_probe_reports_only_allowlisted_metadata(self):
+        page = Mock()
+        page.evaluate.return_value = [
+            {"kind": "window", "name": "TypeError", "source": "vue-prks-vue.js-42"},
+            {"kind": "promise", "name": "AbortError", "source": "unknown"},
+            {"kind": "window", "name": "SecretBody", "source": "untrusted"},
+            {"kind": "window", "name": "Error",
+             "source": "https://example.invalid/private?token=sensitive"},
+        ]
+        label = probe_error_summary(page)
+        self.assertEqual(label, "window-typeerror-vue-prks-vue.js-42_promise-aborterror-unknown_window-error-unknown")
+        self.assertNotIn("sensitive", label)
+        self.assertNotIn("SecretBody", label)
 
     def test_notes_commit_and_reload_check_is_required(self):
         self.assertIn("notes_save_reload", CHECKS)
