@@ -51,6 +51,12 @@ Run just the pilot (after installing `requirements.txt` and `requirements-dev.tx
 
 Ordinary CI uses a small fixed maximum number of generated examples and state-machine steps; it is not a replacement for deterministic regression tests. A failure reports a minimized counterexample. Preserve it as an explicit `@example(...)` or a named deterministic regression test for reliable future replay; use a `@reproduce_failure(...)` blob when printed, or record a `@seed(...)` when reproducing a generated run. A plain rerun is not guaranteed to regenerate the same counterexample. Hypothesis' local example database (when enabled) is an accelerator, not a CI prerequisite. The tests deliberately set `database=None` to keep results independent of a developer's cached examples. Avoid hiding flaky failures behind relaxed deadlines or retry loops. Test databases and records are disposable, with no connection to a real research library.
 
+## PostgreSQL error-mapping property checks (#391)
+
+The existing Unit / API / contract Test Gate also runs `tests.test_hypothesis_pg_error_mapping`. It uses **synthetic psycopg error objects, not a database** to generate SQLSTATEs, constraint-name near misses and check-field names. The invariants detect accidental retries outside `40001`/`40P01`, 503-vs-500 misclassification, acceptance of unregistered or prefix/suffix-spoofed constraints, and leakage of database driver messages. The fixtures use bounded deterministic test setup with a Hypothesis example limit and no saved example database; on failure, record the minimized case in a permanent regression test.
+
+Run `python -m unittest tests.test_hypothesis_pg_error_mapping -v` with the existing runtime and unit/test dependency pins. These are **pure mapper tests**, not evidence that PostgreSQL, session authorization, or HTTP translation passed: `tests/pg/test_db_errors.py` remains the real disposable-PostgreSQL integration authority. No extra runner or package is installed.
+
 ## TypeScript property-based workspace tests (#854)
 
 The frontend has a bounded **fast-check + Vitest** pilot for the canonical workspace tree and tab transitions. This checks generated move/remove/reorder sequences for leaf uniqueness, split-tree validity, identity preservation, and unchanged Main/focus. It imports the real pure workspace transitions; it does not implement a second workspace store or exercise the browser.
