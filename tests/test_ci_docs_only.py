@@ -33,8 +33,8 @@ def _repo(root: Path) -> str:
     _git(root, "config", "user.email", "ci@example.invalid")
     _git(root, "config", "user.name", "CI test")
     _write(root, "README.md", "# Welcome\n")
-    _write(root, "docs/guide.md", "# Guide\n")
-    _write(root, "docs/wiki/Home.md", "# Home\n")
+    _write(root, "docs/guide.md", "docs/wiki/Home.md", "docs/wiki/User-Guide.md", "# Guide\n")
+    _write(root, "docs/wiki/Glossary.md", "# Glossary\n")
     _write(root, "backend/app.py", "print('ok')\n")
     _write(root, "AGENTS.md", "Rules\n")
     _git(root, "add", ".")
@@ -44,11 +44,11 @@ def _repo(root: Path) -> str:
 
 class DocsOnlyCIClassifierTests(unittest.TestCase):
     def test_approved_paths_only(self):
-        approved = ("docs/wiki/Home.md", "docs/wiki/One.md")
+        approved = ("docs/wiki/Glossary.md", "docs/wiki/Troubleshooting.md")
         rejected = (
             "AGENTS.md", "docs/AGENTS.md", "DESIGN.md", "README.md",
             "CONTRIBUTING.md", "SECURITY.md", "docs/agent-rules/offline-pwa.md",
-            "docs/local-first-rollout-status.md", "docs/guide.md",
+            "docs/local-first-rollout-status.md", "docs/guide.md", "docs/wiki/Home.md", "docs/wiki/User-Guide.md",
             "backend/notes.md",
             ".github/workflows/test-gate.yml", "requirements.txt",
             "tests/a.py", "docs/diagram.png", "docs/../backend/a.md", "../README.md",
@@ -64,9 +64,10 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
         cases = (
             ("root docs test fixture", {"README.md": "# Changed\n"}, False),
             ("implementation docs", {"docs/guide.md": "# Updated\n"}, False),
-            ("wiki docs", {"docs/wiki/Home.md": "# Updated\n"}, True),
-            ("new wiki docs", {"docs/wiki/New.md": "# New\n"}, True),
+            ("audited wiki docs", {"docs/wiki/Glossary.md": "# Updated\n"}, True),
+            ("new wiki docs", {"docs/wiki/New.md": "# New\n"}, False),
             ("agent rule fixture", {"docs/agent-rules/offline-pwa.md": "# New\n"}, False),
+            ("feature docs fixture", {"docs/wiki/User-Guide.md": "# Edited\n"}, False),
             ("mixed", {"README.md": "# Changed\n", "backend/app.py": "print('new')\n"}, False),
             ("code only", {"backend/app.py": "print('new')\n"}, False),
             ("AGENTS", {"AGENTS.md": "New policy\n"}, False),
@@ -92,9 +93,9 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
                 root = Path(folder)
                 base = _repo(root)
                 if kind == "delete":
-                    _git(root, "rm", "docs/wiki/Home.md")
+                    _git(root, "rm", "docs/wiki/Glossary.md")
                 else:
-                    _git(root, "mv", "docs/wiki/Home.md", "docs/wiki/Other.md")
+                    _git(root, "mv", "docs/wiki/Glossary.md", "docs/wiki/Other.md")
                 _git(root, "commit", "-qm", "change")
                 self.assertIsNone(changed_documentation(root, base))
 
@@ -158,7 +159,7 @@ class DocsOnlyLinkValidationTests(unittest.TestCase):
                 "## my_func\n## Foo & Bar\n"
             ))
             _write(root, "docs/guide(v2).md", "# Contents\n")
-            _write(root, "docs/guide.md", (
+            _write(root, "docs/guide.md", "docs/wiki/Home.md", "docs/wiki/User-Guide.md", (
                 "# [Install](https://example.org/setup.md)\n"
                 "Getting started\n===============\n"
                 "[readme](../README.md#top)\n"
@@ -186,7 +187,7 @@ class DocsOnlyLinkValidationTests(unittest.TestCase):
     def test_broken_references_and_parenthesized_paths_fail(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            _write(root, "docs/guide.md", (
+            _write(root, "docs/guide.md", "docs/wiki/Home.md", "docs/wiki/User-Guide.md", (
                 "[broken][manual]\n[manual]: missing(v2).md\n"
                 "[missing](not-there(v2).md)\n"
             ))
@@ -199,7 +200,7 @@ class DocsOnlyLinkValidationTests(unittest.TestCase):
             root = Path(folder)
             fence = chr(96) * 3
             _write(root, "README.md", "# Present\n")
-            _write(root, "docs/guide.md", (
+            _write(root, "docs/guide.md", "docs/wiki/Home.md", "docs/wiki/User-Guide.md", (
                 "[missing](not-here.md)\n"
                 "[anchor](../README.md#absent)\n"
                 f"{fence}python\nprint('no closing fence')\n"
