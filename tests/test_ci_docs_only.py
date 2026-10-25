@@ -262,7 +262,20 @@ class DocsOnlyLinkValidationTests(unittest.TestCase):
             )
             _write(root, "docs/guide.md", valid)
             self.assertEqual(check_markdown(root, "docs/guide.md"), [])
+            for valid_fence in (
+                "```\na\u2028b\n```\n",
+                "```\na\u2029b\n```\n",
+                "```\na\x0cb\n```\n",
+                "> ```\n> a\u2028b\n> ```\n",
+            ):
+                with self.subTest(valid_fence=repr(valid_fence)):
+                    _write(root, "docs/guide.md", valid_fence)
+                    self.assertEqual(check_markdown(root, "docs/guide.md"), [])
             for invalid in (
+                "```",
+                "```\nx",
+                "```\nx\u2028y",
+
                 "> ```bash\n> echo hi\n",
                 "```bash\n    ```\n",
                 "- item\n\n  > ```\n  > x\n",
