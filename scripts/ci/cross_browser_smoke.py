@@ -28,6 +28,21 @@ INHERITED_DB_SETTINGS = (
     "PRKS_TEST_DATABASE_URL",
 )
 
+_SPLIT_PDF_OWNERS = """({mainTabId, secondaryTabId, mainWorkId, secondaryWorkId}) => {
+    const get = window.prksGetTabContext;
+    const main = get && get(mainTabId);
+    const secondary = get && get(secondaryTabId);
+    const workA = main && main.getEntity && main.getEntity('work');
+    const workB = secondary && secondary.getEntity && secondary.getEntity('work');
+    const pdfA = main && main.getResource && main.getResource('pdf');
+    const pdfB = secondary && secondary.getResource && secondary.getResource('pdf');
+    return !!(workA && workB && pdfA && pdfB &&
+        String(workA.id) === String(mainWorkId) &&
+        String(workB.id) === String(secondaryWorkId) &&
+        String(pdfA.workId) === String(mainWorkId) &&
+        String(pdfB.workId) === String(secondaryWorkId));
+}"""
+
 
 class SmokeFailure(RuntimeError):
     """Only synthetic engine/stage and exception type; no browser diagnostics."""
@@ -186,20 +201,7 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
         # Distinct tab IDs alone are insufficient: confirm two separately
         # owned Work and PDF resources, not two views of the same Work.
         page.wait_for_function(
-            """({mainTabId, secondaryTabId, mainWorkId, secondaryWorkId}) => {
-                const get = window.prksGetTabContext;
-                const main = get && get(mainTabId);
-                const secondary = get && get(secondaryTabId);
-                const workA = main && main.getEntity && main.getEntity('work');
-                const workB = secondary && secondary.getEntity && secondary.getEntity('work');
-                const pdfA = main && main.getResource && main.getResource('pdf');
-                const pdfB = secondary && secondary.getResource && secondary.getResource('pdf');
-                return !!(workA && workB && pdfA && pdfB &&
-                    String(workA.id) === String(mainWorkId) &&
-                    String(workB.id) === String(secondaryWorkId) &&
-                    String(pdfA.workId) === String(mainWorkId) &&
-                    String(pdfB.workId) === String(secondaryWorkId));
-            }""",
+            _SPLIT_PDF_OWNERS,
             arg={
                 "mainTabId": snap["mainTabId"],
                 "secondaryTabId": snap["secondaryTree"]["tabId"],
@@ -225,13 +227,12 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
             state="visible", timeout=30000,
         )
         stage = "split_reload"
-        # The existing Chromium workspace suite uses this explicit flush
-        # boundary so a pending debounce cannot race the reload. It is not a
-        # substitute for asserting restored tab IDs, Work owners, and PDFs.
-        page.evaluate(
-            "() => window.prksFlushWorkspacePersistence && "
-            "window.prksFlushWorkspacePersistence()"
-        )
+        # Check for earlier browser exceptions before attributing any new
+        # ones to remount. This does not clear or excuse collector failures.
+        collector.assert_clean()
+        # Match the existing Chromium E2E _flush_workspace test helper.
+        # Fail closed if the persistence API was removed or renamed.
+        page.evaluate("() => window.prksFlushWorkspacePersistence()")
         page.reload(wait_until="domcontentloaded")
         page.wait_for_function(
             """({mainTabId, secondaryTabId}) => {
@@ -249,15 +250,7 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
             timeout=30000,
         )
         page.wait_for_function(
-            """({mainTabId, secondaryTabId, mainWorkId, secondaryWorkId}) => {
-                const get = window.prksGetTabContext;
-                const main = get && get(mainTabId);
-                const secondary = get && get(secondaryTabId);
-                const a = main && main.getEntity && main.getEntity('work');
-                const b = secondary && secondary.getEntity && secondary.getEntity('work');
-                return !!(a && b && String(a.id) === String(mainWorkId) &&
-                    String(b.id) === String(secondaryWorkId));
-            }""",
+            _SPLIT_PDF_OWNERS,
             arg={
                 "mainTabId": snap["mainTabId"],
                 "secondaryTabId": snap["secondaryTree"]["tabId"],
