@@ -22,7 +22,7 @@ from tests.e2e.install_browser import apply_playwright_browser_env  # noqa: E402
 from tests.e2e.pdf_readiness import _wait_pdf_tab, _wait_pdf_viewer  # noqa: E402
 
 ENGINES = ("firefox", "webkit")
-CHECKS = ("folders", "work_detail", "notes_editor", "notes_save_reload", "settings_focus", "pdf_render", "split_panes")
+CHECKS = ("folders", "work_detail", "notes_editor", "notes_save_reload", "settings_focus", "pdf_render", "split_panes", "split_reload")
 INHERITED_DB_SETTINGS = (
     "PRKS_AUTH", "PRKS_DATABASE_URL", "PRKS_DATABASE_URL_FILE",
     "PRKS_TEST_DATABASE_URL",
@@ -219,6 +219,58 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
             state="visible", timeout=30000,
         )
         page.locator(".prks-tile--secondary .CodeMirror").wait_for(
+            state="visible", timeout=30000,
+        )
+        page.locator(".prks-tile--secondary .prks-pdf-render-image").first.wait_for(
+            state="visible", timeout=30000,
+        )
+        stage = "split_reload"
+        # The existing Chromium workspace suite uses this explicit flush
+        # boundary so a pending debounce cannot race the reload. It is not a
+        # substitute for asserting restored tab IDs, Work owners, and PDFs.
+        page.evaluate(
+            "() => window.prksFlushWorkspacePersistence && "
+            "window.prksFlushWorkspacePersistence()"
+        )
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_function(
+            """({mainTabId, secondaryTabId}) => {
+                if (window.__prksWorkspaceReady !== true) return false;
+                const s = window.prksWorkspaceSnapshot && window.prksWorkspaceSnapshot();
+                return !!(s && s.mode === 'tiled' &&
+                    s.mainTabId === mainTabId &&
+                    s.secondaryTree && s.secondaryTree.type === 'leaf' &&
+                    s.secondaryTree.tabId === secondaryTabId);
+            }""",
+            arg={
+                "mainTabId": snap["mainTabId"],
+                "secondaryTabId": snap["secondaryTree"]["tabId"],
+            },
+            timeout=30000,
+        )
+        page.wait_for_function(
+            """({mainTabId, secondaryTabId, mainWorkId, secondaryWorkId}) => {
+                const get = window.prksGetTabContext;
+                const main = get && get(mainTabId);
+                const secondary = get && get(secondaryTabId);
+                const a = main && main.getEntity && main.getEntity('work');
+                const b = secondary && secondary.getEntity && secondary.getEntity('work');
+                return !!(a && b && String(a.id) === String(mainWorkId) &&
+                    String(b.id) === String(secondaryWorkId));
+            }""",
+            arg={
+                "mainTabId": snap["mainTabId"],
+                "secondaryTabId": snap["secondaryTree"]["tabId"],
+                "mainWorkId": work_id,
+                "secondaryWorkId": related_work_id,
+            },
+            timeout=30000,
+        )
+        # Verify both rendered PDF contexts again after remount. A restored
+        # layout alone can conceal unloaded or incorrectly owned readers.
+        _wait_pdf_tab(page, snap["mainTabId"])
+        _wait_pdf_tab(page, snap["secondaryTree"]["tabId"])
+        page.locator(".prks-tile--main .prks-pdf-render-image").first.wait_for(
             state="visible", timeout=30000,
         )
         page.locator(".prks-tile--secondary .prks-pdf-render-image").first.wait_for(
