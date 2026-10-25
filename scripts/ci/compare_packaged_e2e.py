@@ -10,12 +10,9 @@ import argparse
 import json
 import os
 import re
-import ssl
 import sys
 from datetime import datetime
-from http.client import HTTPException, HTTPSConnection
-from urllib.parse import urlsplit
-from urllib.request import getproxies, proxy_bypass
+import requests
 
 WORKFLOW = ".github/workflows/e2e-classic-distribution-gate.yml"
 FULL_JOB = re.compile(r"Packaged classic bundles \(([1-6])/6\)\Z")
@@ -140,58 +137,31 @@ def compare(full: dict, smoke: dict) -> str:
     ))
 
 
-def _github_connection() -> HTTPSConnection:
-    """Use a fixed GitHub TLS origin, optionally tunneled through an HTTP proxy."""
-    proxy = getproxies().get("https") or getproxies().get("all")
-    if not proxy or proxy_bypass("api.github.com"):
-        return HTTPSConnection(  # nosec B309 - verified TLS context on pinned Python
-            "api.github.com", timeout=30, context=ssl.create_default_context()
-        )
-
-    # http.client tunnels via CONNECT before validating api.github.com's
-    # certificate. No redirects or user-selected destination are accepted.
-    parsed = urlsplit(proxy if "://" in proxy else f"//{proxy}")
-    if (
-        parsed.scheme not in ("", "http")
-        or not parsed.hostname
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.path not in ("", "/")
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise InvalidBenchmark("Only unauthenticated HTTP CONNECT proxies are supported")
-    try:
-        port = parsed.port or 80
-    except ValueError as exc:
-        raise InvalidBenchmark("Invalid HTTPS proxy port") from exc
-    connection = HTTPSConnection(  # nosec B309 - tunnel TLS verifies GitHub certificate
-        parsed.hostname, port, timeout=30, context=ssl.create_default_context()
-    )
-    connection.set_tunnel("api.github.com", 443)
-    return connection
-
-
 def _get_json(path: str, token: str | None) -> dict:
-    # Never let user input choose a URL scheme or destination host. The caller
-    # validates repository and run IDs before constructing this API path.
+    """Fetch one validated GitHub API path with certificate and proxy handling.
+
+    Requests enforces TLS certificate checks and honors HTTPS_PROXY / NO_PROXY
+    without reimplementing CONNECT or depending on version-sensitive stdlib
+    HTTP connection internals. Disable redirects to prevent origin changes.
+    """
     if not path.startswith("/repos/"):
         raise InvalidBenchmark("Unexpected GitHub API path")
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "PRKS-E2E-benchmark"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    connection = _github_connection()
-    try:
-        connection.request("GET", path, headers=headers)
-        with connection.getresponse() as response:
-            if response.status != 200:
-                raise InvalidBenchmark(f"GitHub API returned HTTP {response.status}")
-            payload = json.load(response)
-            if not isinstance(payload, dict):
-                raise InvalidBenchmark("GitHub API response must be a JSON object")
-            return payload
-    finally:
-        connection.close()
+    response = requests.get(
+        f"https://api.github.com{path}",
+        headers=headers,
+        timeout=30,
+        verify=True,
+        allow_redirects=False,
+    )
+    if response.status_code != 200:
+        raise InvalidBenchmark(f"GitHub API returned HTTP {response.status_code}")
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise InvalidBenchmark("GitHub API response must be a JSON object")
+    return payload
 
 
 def fetch_run(repo: str, run_id: int, token: str | None) -> tuple[dict, list[dict]]:
@@ -228,7 +198,7 @@ def main() -> int:
         full_run, full_jobs = fetch_run(args.repo, args.full_run, token)
         smoke_run, smoke_jobs = fetch_run(args.repo, args.smoke_run, token)
         print(compare(summarize(full_run, full_jobs, "full"), summarize(smoke_run, smoke_jobs, "smoke")))
-    except (HTTPException, OSError, ValueError, KeyError) as exc:
+    except (requests.RequestException, OSError, ValueError, KeyError) as exc:
         print(f"Packaged E2E comparison refused: {exc}", file=sys.stderr)
         return 1
     return 0
