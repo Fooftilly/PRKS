@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 
-from scripts.ci.compare_packaged_e2e import InvalidBenchmark, compare, summarize
+from scripts.ci.compare_packaged_e2e import InvalidBenchmark, compare, fetch_run, summarize
 
 SHA = "9" * 40
 START = datetime(2026, 10, 17, 21, 0, tzinfo=timezone.utc)
@@ -23,6 +24,7 @@ def job(name: str, seconds: int, conclusion: str = "success") -> dict:
 def run(run_id: int, sha: str = SHA) -> dict:
     return {
         "id": run_id,
+        "run_attempt": 1,
         "head_sha": sha,
         "event": "workflow_dispatch",
         "conclusion": "success",
@@ -45,7 +47,7 @@ def smoke_jobs() -> list[dict]:
         job("Docker classic bundle and rollback build smoke", 18),
         job("Classic bundle SW upgrade and rollback (real Chromium)", 21),
         job("Packaged classic smoke (manual pilot)", 53),
-        job("Packaged classic bundles (skipped matrix)", 0, "skipped"),
+        job("Packaged classic bundles (" + "$" + "{{ matrix.shard }}/6)", 0, "skipped"),
     ]
 
 
@@ -61,7 +63,7 @@ class PackagedCostComparisonTests(unittest.TestCase):
         self.assertAlmostEqual(smoke["all_job_minutes"], 92 / 60)
         report = compare(full, smoke)
         self.assertIn("98.2%", report)
-        self.assertIn("does not establish equivalent regression coverage", report)
+        self.assertIn("do not establish equivalent regression coverage", report)
 
     def test_missing_or_duplicate_shard_fails_closed(self):
         for altered in (full_jobs()[:-2] + [full_jobs()[-1]],
@@ -118,6 +120,36 @@ class PackagedCostComparisonTests(unittest.TestCase):
         selected[-1]["conclusion"] = "success"
         with self.assertRaises(InvalidBenchmark):
             summarize(run(2), selected, "smoke")
+
+    def test_refuses_rerun_attempts_and_unknown_attempts(self):
+        for attempt in (2, None):
+            with self.subTest(attempt=attempt):
+                payload = run(4)
+                if attempt is None:
+                    del payload["run_attempt"]
+                else:
+                    payload["run_attempt"] = attempt
+                with self.assertRaisesRegex(InvalidBenchmark, "Re-run attempts"):
+                    summarize(payload, full_jobs(), "full")
+
+    def test_fetch_run_jobs_then_summarize_and_compare(self):
+        base = "https://api.github.com/repos/Fooftilly/PRKS/actions/runs/"
+        payloads = {
+            base + "11": run(11),
+            base + "11/jobs?per_page=100&page=1": {"jobs": full_jobs()},
+            base + "12": run(12),
+            base + "12/jobs?per_page=100&page=1": {"jobs": smoke_jobs()},
+        }
+        with patch("scripts.ci.compare_packaged_e2e._get_json",
+                   side_effect=lambda url, _token: payloads[url]) as get_json:
+            fetched_full, fetched_full_jobs = fetch_run("Fooftilly/PRKS", 11, None)
+            fetched_smoke, fetched_smoke_jobs = fetch_run("Fooftilly/PRKS", 12, None)
+        self.assertEqual(get_json.call_count, 4)
+        report = compare(
+            summarize(fetched_full, fetched_full_jobs, "full"),
+            summarize(fetched_smoke, fetched_smoke_jobs, "smoke"),
+        )
+        self.assertIn("98.2%", report)
 
     def test_distinct_same_commit_is_required(self):
         full = summarize(run(1), full_jobs(), "full")
