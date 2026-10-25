@@ -12,6 +12,7 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import requests
 
@@ -128,16 +129,17 @@ def summarize(
     }
 
 
-def verify_source_full_plan(repo: str, jobs: list[dict]) -> None:
-    """Require the successful E2E plan job's actual emitted full-mode record.
+def verify_source_full_plan(repo: str, jobs: list[dict], token: str | None) -> None:
+    """Require the E2E plan job's actual emitted full-mode selection record.
 
     GitHub job names and matrix width cannot distinguish full from a 6-shard
-    affected subset. Only the plan step's emitted record proves selection.
-    The public logs API redirects to a temporary GitHub-hosted download;
-    do NOT forward a bearer token to that redirect.
+    affected subset. GitHub requires authentication to issue the signed log
+    URL. Never forward the API bearer token to the signed download host.
     """
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
         raise InvalidBenchmark("Invalid GitHub repository")
+    if not token:
+        raise InvalidBenchmark("GH_TOKEN or GITHUB_TOKEN required to read E2E planner logs")
     if not isinstance(jobs, list) or any(not isinstance(j, dict) for j in jobs):
         raise InvalidBenchmark("Malformed E2E planner job metadata")
     plans = [j for j in jobs if j.get("name") == "E2E plan"]
@@ -148,13 +150,27 @@ def verify_source_full_plan(repo: str, jobs: list[dict]) -> None:
         raise InvalidBenchmark("Missing E2E planner job ID")
     response = requests.get(
         f"https://api.github.com/repos/{repo}/actions/jobs/{job_id}/logs",
-        headers={"Accept": "application/vnd.github+json",
-                 "User-Agent": "PRKS-E2E-benchmark"},
-        timeout=30, verify=True, allow_redirects=True,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "PRKS-E2E-benchmark",
+            "Authorization": f"Bearer {token}",
+        },
+        timeout=30, verify=True, allow_redirects=False,
     )
-    if response.status_code != 200:
-        raise InvalidBenchmark(f"GitHub planner log returned HTTP {response.status_code}")
-    log = response.text
+    if response.status_code != 302:
+        raise InvalidBenchmark(f"GitHub planner log endpoint returned HTTP {response.status_code}")
+    location = response.headers.get("Location", "")
+    parsed = urlsplit(location)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        raise InvalidBenchmark("Invalid signed GitHub planner log location")
+    download = requests.get(
+        location,
+        headers={"User-Agent": "PRKS-E2E-benchmark"},
+        timeout=30, verify=True, allow_redirects=False,
+    )
+    if download.status_code != 200:
+        raise InvalidBenchmark(f"Signed planner log returned HTTP {download.status_code}")
+    log = download.text
     if not isinstance(log, str) or len(log) > 256_000:
         raise InvalidBenchmark("Missing or unexpectedly large E2E planner log")
     found = PLAN_SUMMARY.findall(log)
@@ -200,7 +216,7 @@ def main() -> int:
         source_run, source_jobs = fetch_run(args.repo, args.source_run, token)
         packaged_run, packaged_jobs = fetch_run(args.repo, args.packaged_run, token)
         _check_run(source_run, "source")
-        verify_source_full_plan(args.repo, source_jobs)
+        verify_source_full_plan(args.repo, source_jobs, token)
         source = summarize(source_run, source_jobs, "source", source_full_verified=True)
         packaged = summarize(packaged_run, packaged_jobs, "packaged")
         print(compare(source, packaged))
