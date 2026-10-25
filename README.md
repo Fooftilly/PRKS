@@ -99,8 +99,8 @@ Create a private password file outside version control and start only the databa
 install -d -m 700 secrets
 umask 077
 openssl rand -hex 32 > secrets/db_password
-docker compose --profile postgres up -d db
-docker compose --profile postgres ps db
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml --profile postgres up -d db
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml --profile postgres ps db
 ```
 
 The database reads that password through `POSTGRES_PASSWORD_FILE` as a Compose secret; `PRKS_DB_PASSWORD_FILE` can specify another secret-file path. Treat the password and future database URL as credentials: never commit them, embed them in an image or print them to logs. The `secrets/` directory is ignored by Git. Docker Compose's named volume `pgdata` is mounted at `/var/lib/postgresql`, the required PostgreSQL 18 location. Use `docker compose --profile postgres stop db` to stop only the database while preserving its volume. **`docker compose --profile postgres down` stops every service in this Compose project**, including the existing SQLite `prks` web service; `down` (without `-v`) preserves the database volume, while **`down -v` deletes it**. Take an appropriate backup before any destructive operation.
