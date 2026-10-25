@@ -176,6 +176,19 @@ def scan() -> int:
             ]
             for line in selected_errors[:12]:
                 print("[schemathesis] scanner_diagnostic=" + line)
+            error_log = Path(server.storage_root) / "prks-errors.log"
+            if error_log.is_file():
+                # Read only the last bounded portion of disposable test logs;
+                # publish safe exception CLASS names, never traceback, IDs,
+                # query values, headers or response bodies.
+                recent = error_log.read_text(encoding="utf-8", errors="replace")[-50000:]
+                classes = sorted(set(re.findall(
+                    r"unhandled_api_error method=GET route=/api/publishers "
+                    r"[^\\n]{0,160}error_type=([A-Za-z][A-Za-z0-9_]{0,48})",
+                    recent,
+                )))
+                for class_name in classes[:5]:
+                    print("[schemathesis] server_exception_type=" + class_name)
             for label, marker in (
                 ("cli_option", "no such option"),
                 ("cli_value", "invalid value"),
