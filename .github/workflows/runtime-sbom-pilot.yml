@@ -81,7 +81,7 @@ jobs:
           if not isinstance(matches, list):
               raise SystemExit("Grype report missing matches list")
           database = scan.get("descriptor", {}).get("db") or {}
-          db_built = database.get("built") or "unavailable (see Grype artifact)"
+          db_built = (database.get("status") or {}).get("built") or "unavailable (see Grype artifact)"
           severities = collections.Counter(
               str(match.get("vulnerability", {}).get("severity", "Unknown"))
               for match in matches
