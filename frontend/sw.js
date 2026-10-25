@@ -396,7 +396,11 @@
         async function handleNavigation(request) {
             try {
                 const res = await fetchImpl(request);
-                if (isCacheableStaticResponse(res)) {
+                /* Only the shell routes may fill the '/' shell entry: a
+                 * navigation to any other 200 path (e.g. an /api/ URL typed in
+                 * the address bar) must not poison offline launch. */
+                const shellPath = pathnameOf(request.url, env.origin || 'http://localhost/');
+                if (isCacheableStaticResponse(res) && (shellPath === '/' || shellPath === '/index.html')) {
                     const cache = await cachesApi.open(SHELL_CACHE);
                     cache.put('/', res.clone()).catch(function () {});
                 }
@@ -633,6 +637,7 @@
         const origin = (scope.location && scope.location.origin) || '';
         const handlers = createHandlers({
             caches: scope.caches,
+            origin: origin,
             fetchImpl: function (request) {
                 return scope.fetch(request);
             },
