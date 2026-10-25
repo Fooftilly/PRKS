@@ -1,8 +1,11 @@
 """Unit contracts for E2E startup/readiness profiling; no Chromium required."""
 from __future__ import annotations
 
+import ast
 import os
+import re
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from tests.e2e import harness
@@ -105,6 +108,35 @@ class PdfAnnotationRollbackPhaseProfileTests(unittest.TestCase):
         self.assertEqual(phases["pdf_rollback_fail_other_save"], 2.5)
         self.assertEqual(runner._profile_infrastructure_total(phases), 5.0)
 
+
+
+class PdfRollbackWorkflowTargetTests(unittest.TestCase):
+    def test_manual_profiler_names_an_existing_browser_test(self):
+        root = Path(__file__).resolve().parents[1]
+        workflow = (
+            root / ".github/workflows/e2e-pdf-annotation-rollback-profile.yml"
+        ).read_text(encoding="utf-8")
+        targets = re.findall(
+            r"^\s*TARGET:\s*(tests\.e2e\.[A-Za-z_0-9.]+)\s*$",
+            workflow,
+            flags=re.MULTILINE,
+        )
+        self.assertEqual(len(targets), 1, "expected exactly one manual profile target")
+        module, class_name, method_name = targets[0].rsplit(".", 2)
+        self.assertTrue(method_name.startswith("test_"))
+        module_path = root.joinpath(*module.split(".")).with_suffix(".py")
+        tree = ast.parse(module_path.read_text(encoding="utf-8"))
+        classes = [
+            node for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == class_name
+        ]
+        self.assertEqual(len(classes), 1, "manual profile class must exist")
+        methods = [
+            node for node in classes[0].body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == method_name
+        ]
+        self.assertEqual(len(methods), 1, "manual profile method must be in that class")
 
 
 class StartupReadinessProfileTests(unittest.TestCase):
