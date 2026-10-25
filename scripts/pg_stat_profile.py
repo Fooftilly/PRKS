@@ -192,6 +192,38 @@ def assert_ordered_work_ids(value: Any, expected: tuple[str, ...]) -> None:
         raise RuntimeError("synthetic batch lookup returned wrong or reordered IDs")
 
 
+def verify_disposable_cluster(stats: Any, nonce: str) -> int:
+    """Refuse an unproven server before profile DDL, resets or test DB creation."""
+    cluster = stats.execute("SHOW cluster_name").fetchone()["cluster_name"]
+    if cluster != f"prks-profile-{nonce}":
+        raise RuntimeError("database server is not this disposable profile cluster")
+    preload = stats.execute(
+        "SELECT current_setting('shared_preload_libraries') AS loaded"
+    ).fetchone()["loaded"]
+    if "pg_stat_statements" not in {str(item).strip() for item in str(preload).split(",")}:
+        raise RuntimeError("pg_stat_statements is not preloaded on the disposable server")
+    version = int(stats.execute("SHOW server_version_num").fetchone()["server_version_num"])
+    if version < 180000:
+        raise RuntimeError("PostgreSQL 18 is required for disposable profiling")
+    return version
+
+
+def create_verified_profile_database(
+    harness: Any, nonce: str, connect: Any, row_factory: Any
+) -> str:
+    """Read-only maintenance preflight MUST succeed before CREATE DATABASE.
+
+    The harness's maintenance URL is validated by get_harness(); using its
+    connection info avoids a second, independently selected server target.
+    """
+    with connect(
+        harness._admin_conninfo, autocommit=True,
+        options="-c pg_stat_statements.track=none", row_factory=row_factory
+    ) as maintenance:
+        verify_disposable_cluster(maintenance, nonce)
+    return harness.create_database("profile")
+
+
 def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
     nonce = os.environ.get("PRKS_PG_PROFILE_NONCE", "")
     if re.fullmatch(r"[0-9a-f]{32}", nonce) is None:
@@ -209,7 +241,9 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
     from tests.pg.harness import get_harness
 
     harness = get_harness()
-    dbname = harness.create_database("profile")
+    # The harness has not created any database yet. Check the cluster identity
+    # read-only on its maintenance connection before migrations/CREATE DATABASE.
+    dbname = create_verified_profile_database(harness, nonce, psycopg.connect, dict_row)
     try:
         # Disable tracking for this administrative connection at startup;
         # otherwise the reset SELECT is itself recorded after its reset.
@@ -217,19 +251,10 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
         with psycopg.connect(harness.conninfo(dbname), autocommit=True,
                              options="-c pg_stat_statements.track=none",
                              row_factory=dict_row) as stats:
-            # Prove the wrapper-created cluster identity before installing an
-            # extension or resetting server-shared statistics. Caller-controlled
-            # environment flags are insufficient to authorize the reset.
-            cluster = stats.execute("SHOW cluster_name").fetchone()["cluster_name"]
-            if cluster != f"prks-profile-{nonce}":
-                raise RuntimeError("database server is not this disposable profile cluster")
-            preload = stats.execute(
-                "SELECT current_setting('shared_preload_libraries') AS loaded"
-            ).fetchone()["loaded"]
-            if "pg_stat_statements" not in preload.split(","):
-                raise RuntimeError("pg_stat_statements is not preloaded on the disposable server")
+            # Recheck on the just-created, harness-owned database before any
+            # extension DDL or server-shared pg_stat_statements reset.
+            version = verify_disposable_cluster(stats, nonce)
             stats.execute("CREATE EXTENSION pg_stat_statements WITH SCHEMA public")
-            version = stats.execute("SHOW server_version_num").fetchone()["server_version_num"]
             with Database(DatabaseConfig(conninfo=harness.conninfo(dbname), role="test",
                                          pool_min=0, pool_max=4)) as database:
                 actor = provision_actor(database)
