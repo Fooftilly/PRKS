@@ -73,6 +73,18 @@
       "dependabot_monitored": true
     },
     {
+      "name": "schemathesis",
+      "scope": "test",
+      "authoritative_source": "requirements-dev.txt",
+      "manifest": "requirements-dev.txt",
+      "lockfile": null,
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": true,
+      "dependabot_monitored": true,
+      "notes": "Manual/path-scoped read-only Schemathesis CLI for published Publishers OpenAPI (#855); no production runtime."
+    },
+    {
       "name": "markdown-it-py",
       "scope": "test",
       "authoritative_source": "requirements-dev.txt",

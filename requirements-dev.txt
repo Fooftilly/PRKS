@@ -13,3 +13,7 @@ markdown-it-py==4.2.0
 mdurl==0.1.2
 # Pinned HTTP client for the read-only GitHub E2E cost comparator (#740).
 requests==2.34.2
+
+# Read-only, manual/path-scoped synthetic OpenAPI fuzz pilot (#855).
+# Installed only by the dedicated Schemathesis workflow.
+schemathesis==4.32.4

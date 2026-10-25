@@ -25,6 +25,7 @@ DEV_PROFILES: dict[str, tuple[str, ...]] = {
     "docs": ("markdown-it-py", "mdurl"),
     "plan": ("playwright",),
     "e2e": ("playwright",),
+    "schemathesis": ("schemathesis",),
     "postgres": (),  # PostgreSQL requirements are now part of the runtime image (#630).
 }
 
