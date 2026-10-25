@@ -35,8 +35,12 @@ def read_json(path: Path) -> dict[str, Any]:
     return result
 
 
+def valid_label(value: Any, pattern: re.Pattern[str]) -> bool:
+    return isinstance(value, str) and pattern.fullmatch(value) is not None
+
+
 def safe(value: Any, pattern: re.Pattern[str], fallback: str = "redacted") -> str:
-    return value if isinstance(value, str) and pattern.fullmatch(value) else fallback
+    return value if valid_label(value, pattern) else fallback
 
 
 def ecosystem(kind: Any) -> str:
@@ -53,7 +57,13 @@ def ecosystem(kind: Any) -> str:
 
 
 def iso(value: Any) -> str:
-    return safe(value, TIMESTAMP, "unknown")
+    if not valid_label(value, TIMESTAMP):
+        return "unknown"
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return "unknown"
+    return value
 
 
 def age_hours(scan_time: str, db_time: str) -> float | None:
@@ -87,7 +97,7 @@ def project_match(row: Any) -> dict[str, Any]:
     if not isinstance(fix, dict):
         fix = {}
     versions = fix.get("versions")
-    valid_versions = [v for v in versions if safe(v, VERSION) != "redacted"] if isinstance(versions, list) else []
+    valid_versions = [v for v in versions if valid_label(v, VERSION)] if isinstance(versions, list) else []
     state = fix.get("state")
     state_bucket = "fix-listed" if state == "fixed" and valid_versions else (
         state if state in ("wont-fix", "not-fixed") else "unknown"
@@ -95,7 +105,7 @@ def project_match(row: Any) -> dict[str, Any]:
     group = ecosystem(art.get("type"))
     name = safe(art.get("name"), PACKAGE)
     example = None
-    if ADVISORY_ID.fullmatch(advisory) and name != "redacted":
+    if ADVISORY_ID.fullmatch(advisory) and valid_label(art.get("name"), PACKAGE):
         example = {
             "advisory": advisory,
             "package": name,
@@ -171,6 +181,8 @@ def summarize(sbom: dict[str, Any], scan: dict[str, Any], image_id: str) -> dict
     packages = sbom.get("packages")
     if not isinstance(packages, list) or not packages:
         raise ValueError("built runtime image SBOM has no packages")
+    if any(not isinstance(package, dict) for package in packages):
+        raise ValueError("malformed SPDX package entry")
     matches = scan.get("matches")
     if not isinstance(matches, list):
         raise ValueError("missing Grype matches list")
