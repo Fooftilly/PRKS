@@ -7,7 +7,6 @@ defect-coverage equivalence or change automatic packaged E2E selection.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import sys
