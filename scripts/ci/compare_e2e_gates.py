@@ -84,11 +84,11 @@ def _check_jobs(jobs: list[dict], mode: str) -> tuple[list[dict], str]:
 
 
 def summarize(
-    run: dict, jobs: list[dict], mode: str, *, source_full_verified: bool = False
+    run: dict, jobs: list[dict], mode: str, *, source_plan: tuple[str, str, str, str] | None = None
 ) -> dict:
     """Require verified source full mode, six complete shards and test steps."""
     _check_run(run, mode)
-    if mode == "source" and source_full_verified is not True:
+    if mode == "source" and source_plan != ("full", "true", "6", "true"):
         raise InvalidBenchmark("Source planner full mode was not verified")
     shards, step_name = _check_jobs(jobs, mode)
     job_seconds = 0.0
@@ -163,7 +163,7 @@ def _read_source_plan_log(repo: str, job_id: int, token: str) -> str:
     return log
 
 
-def verify_source_full_plan(repo: str, jobs: list[dict], token: str | None) -> None:
+def verify_source_full_plan(repo: str, jobs: list[dict], token: str | None) -> tuple[str, str, str, str]:
     """Prove full source selection using its successful E2E plan job log."""
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
         raise InvalidBenchmark("Invalid GitHub repository")
@@ -180,6 +180,7 @@ def verify_source_full_plan(repo: str, jobs: list[dict], token: str | None) -> N
     found = PLAN_SUMMARY.findall(_read_source_plan_log(repo, job_id, token))
     if len(found) != 1 or found[0] != ("full", "true", "6", "true"):
         raise InvalidBenchmark("E2E planner did not prove a complete six-shard full suite")
+    return found[0]
 
 
 def compare(source: dict, packaged: dict) -> str:
@@ -220,8 +221,8 @@ def main() -> int:
         source_run, source_jobs = fetch_run(args.repo, args.source_run, token)
         packaged_run, packaged_jobs = fetch_run(args.repo, args.packaged_run, token)
         _check_run(source_run, "source")
-        verify_source_full_plan(args.repo, source_jobs, token)
-        source = summarize(source_run, source_jobs, "source", source_full_verified=True)
+        plan_record = verify_source_full_plan(args.repo, source_jobs, token)
+        source = summarize(source_run, source_jobs, "source", source_plan=plan_record)
         packaged = summarize(packaged_run, packaged_jobs, "packaged")
         print(compare(source, packaged))
     except (requests.RequestException, ValueError, KeyError, TypeError, AttributeError) as exc:
