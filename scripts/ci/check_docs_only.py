@@ -19,7 +19,9 @@ from scripts.ci.docs_only import changed_documentation
 _MARKDOWN = MarkdownIt("commonmark").enable("table")
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 _PUNCT = re.compile(r"[^\w\- ]", re.UNICODE)
-_HTML_ANCHOR = re.compile(r"<a\s+(?:id|name)=[\"']([^\"']+)[\"']", re.I)
+_HTML_TAG = re.compile(r"<([a-z][\\w:-]*)\\b([^>]*)>", re.I)
+_HTML_ID = re.compile(r"\\bid\\s*=\\s*[\\\"']([^\\\"']+)[\\\"']", re.I)
+_HTML_NAME = re.compile(r"\\bname\\s*=\\s*[\\\"']([^\\\"']+)[\\\"']", re.I)
 
 
 def _slug(text: str) -> str:
@@ -81,7 +83,10 @@ def _anchors(content: str) -> set[str]:
                 if token.type == "inline" else [token.content]
             )
             for fragment in fragments:
-                anchors.update(_HTML_ANCHOR.findall(fragment))
+                for tag, attrs in _HTML_TAG.findall(fragment):
+                    anchors.update(_HTML_ID.findall(attrs))
+                    if tag.lower() == "a":
+                        anchors.update(_HTML_NAME.findall(attrs))
     return anchors
 
 
