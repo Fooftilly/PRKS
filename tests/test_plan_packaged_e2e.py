@@ -5,6 +5,8 @@ from __future__ import annotations
 import io
 import json
 import re
+import subprocess
+import sys
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -47,6 +49,15 @@ PROCESSING_CASE = "tests.e2e.test_processing_route_surface.ProcessingRouteTests.
 
 
 class PackagedSelectionPolicyTests(unittest.TestCase):
+    def test_cli_direct_help_imports_policy_from_repo_root(self):
+        script = ROOT / "scripts/ci/plan_packaged_e2e.py"
+        result = subprocess.run(
+            [sys.executable, str(script), "--help"],
+            cwd=ROOT, check=False, capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--base", result.stdout)
+
     def test_activation_is_impossible_through_this_planner(self):
         proposal = plan_packaged_e2e(
             [PROGRESS], known_test_ids=inventory(BROWSE_CASE)

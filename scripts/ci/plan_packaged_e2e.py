@@ -15,10 +15,14 @@ import argparse
 import json
 from pathlib import Path
 import subprocess
-
-from tests.e2e import policy
+import sys
 
 ROOT = Path(__file__).resolve().parents[2]
+if __package__ in (None, ""):
+    # Support both `python -m scripts.ci.plan_packaged_e2e` and direct CLI.
+    sys.path.insert(0, str(ROOT))
+
+from tests.e2e import policy
 
 # Only isolated, feature-owned Vue view files are potential reduced-coverage
 # candidates. Do not allow feature-wide wildcards: new files, shared helpers,
