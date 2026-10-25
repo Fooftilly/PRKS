@@ -155,6 +155,10 @@ OPT_IN_E2E_MODULES = ("tests.e2e.test_classic_sw_transitions",)
 E2E_MODULES = DEFAULT_E2E_MODULES
 if os.environ.get("PRKS_E2E_CLASSIC_SW_TRANSITIONS") == "1":
     E2E_MODULES += OPT_IN_E2E_MODULES
+# Manual-only accessibility checks reuse this runner; they are deliberately
+# absent from ordinary full/affected/release E2E discovery and timings.
+if os.environ.get("PRKS_E2E_AXE") == "1":
+    E2E_MODULES += ("tests.e2e.test_axe_a11y",)
 
 SLOWEST_LIMIT = 25
 WORKER_POLL_S = 0.25
