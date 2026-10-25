@@ -3534,7 +3534,9 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
         _wait_pdf_materialized(page, work_id)
         _wait_local_save_warning_cleared(page)
         self.assertFalse(_pdf_has_pending_sync(page))
-        self.assertIn("committed again", _managed_pdf_annotation_contents(pa    def test_an_uncommitted_edit_does_not_hold_another_annotations_rollback(self):
+        self.assertIn("committed again", _managed_pdf_annotation_contents(page, server, work_id))
+
+    def test_an_uncommitted_edit_does_not_hold_another_annotations_rollback(self):
         with profile_e2e_phase("pdf_rollback_setup"):
             server, page, _collector = self._start_app()
             work_id = server.ids["work_a"]
