@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 import re
+import ssl
 import sys
 from datetime import datetime
 from http.client import HTTPException, HTTPSConnection
@@ -143,7 +144,9 @@ def _github_connection() -> HTTPSConnection:
     """Use a fixed GitHub TLS origin, optionally tunneled through an HTTP proxy."""
     proxy = getproxies().get("https") or getproxies().get("all")
     if not proxy or proxy_bypass("api.github.com"):
-        return HTTPSConnection("api.github.com", timeout=30)
+        return HTTPSConnection(  # nosec B309 - verified TLS context on pinned Python
+            "api.github.com", timeout=30, context=ssl.create_default_context()
+        )
 
     # http.client tunnels via CONNECT before validating api.github.com's
     # certificate. No redirects or user-selected destination are accepted.
@@ -162,7 +165,9 @@ def _github_connection() -> HTTPSConnection:
         port = parsed.port or 80
     except ValueError as exc:
         raise InvalidBenchmark("Invalid HTTPS proxy port") from exc
-    connection = HTTPSConnection(parsed.hostname, port, timeout=30)
+    connection = HTTPSConnection(  # nosec B309 - tunnel TLS verifies GitHub certificate
+        parsed.hostname, port, timeout=30, context=ssl.create_default_context()
+    )
     connection.set_tunnel("api.github.com", 443)
     return connection
 
