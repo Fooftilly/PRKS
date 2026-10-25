@@ -53,7 +53,7 @@ jobs:
         shell: bash
         env:
           PRKS_E2E_PROFILE: "1"
-          TARGET: tests.e2e.test_app.PdfPersistenceTests.test_an_uncommitted_edit_does_not_hold_another_annotations_rollback
+          TARGET: tests.e2e.test_app.PdfAnnotationCommentEditTests.test_an_uncommitted_edit_does_not_hold_another_annotations_rollback
         run: |
           set -euo pipefail
           # Exclude one identical warm-up. Every invocation owns a fresh
