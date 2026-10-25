@@ -17,12 +17,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tests.e2e.fixtures import seed_library  # noqa: E402
-from tests.e2e.harness import AppServer, open_app_page  # noqa: E402
+from tests.e2e.harness import AppServer, open_app_page, wait_for_async  # noqa: E402
 from tests.e2e.install_browser import apply_playwright_browser_env  # noqa: E402
 from tests.e2e.pdf_readiness import _wait_pdf_tab, _wait_pdf_viewer  # noqa: E402
 
 ENGINES = ("firefox", "webkit")
-CHECKS = ("folders", "work_detail", "notes_editor", "settings_focus", "pdf_render", "split_panes")
+CHECKS = ("folders", "work_detail", "notes_editor", "notes_save_reload", "settings_focus", "pdf_render", "split_panes")
 INHERITED_DB_SETTINGS = (
     "PRKS_AUTH", "PRKS_DATABASE_URL", "PRKS_DATABASE_URL_FILE",
     "PRKS_TEST_DATABASE_URL",
@@ -46,6 +46,23 @@ def close_preserving_failure(resource, *, engine: str, stage: str, failed: bool)
     except Exception as exc:
         if not failed:
             raise SmokeFailure(engine, stage, type(exc).__name__) from None
+
+
+def collector_failure_categories(collector) -> str:
+    """Only fixed category names/counts, never URLs, exceptions or page text."""
+    categories = (
+        ("pageerrors", "page"),
+        ("console_errors", "console"),
+        ("failed_requests", "request"),
+        ("http_5xx", "http5xx"),
+        ("external", "external"),
+    )
+    flagged = []
+    for attr, label in categories:
+        values = getattr(collector, attr, None)
+        if isinstance(values, list) and values:
+            flagged.append(f"{label}-{min(len(values), 99)}")
+    return "_".join(flagged) or "unknown"
 
 
 def verify_isolation(environ: dict[str, str]) -> None:
@@ -90,6 +107,47 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
         stage = "notes_editor"
         # A visible wrapper alone does not mean the async editor has mounted.
         page.locator(".CodeMirror").first.wait_for(state="visible", timeout=30000)
+        stage = "notes_save_reload"
+        # Real keyboard edit, not a programmatic value assignment. Use a
+        # different synthetic value per browser so an unchanged backend body
+        # cannot pass the second run against the shared disposable server.
+        note_text = f"PRKS cross-browser synthetic notes ({engine})"
+        page.locator(".work-notes-editor-wrap .CodeMirror").first.click()
+        page.keyboard.press("Control+A")
+        page.keyboard.insert_text(note_text)
+        # A green UI label is insufficient: require independent server state.
+        page.locator(
+            '[data-prks-role="editor-status"]', has_text="All changes saved"
+        ).wait_for(state="visible", timeout=30000)
+        wait_for_async(
+            page,
+            """async ({id, text}) => {
+                const response = await fetch('/api/works/' + encodeURIComponent(id),
+                                             { cache: 'no-store' });
+                if (!response.ok) return false;
+                const work = await response.json();
+                return !!(work && work.text_content === text);
+            }""",
+            arg={"id": work_id, "text": note_text},
+            timeout=30000,
+        )
+        # A fresh document must load the committed value, not merely keep an
+        # unsaved draft in the current CodeMirror instance.
+        page.reload(wait_until="domcontentloaded")
+        page.locator(".work-detail").first.wait_for(state="visible", timeout=20000)
+        page.locator(".CodeMirror").first.wait_for(state="visible", timeout=30000)
+        page.wait_for_function(
+            """({id, text}) => {
+                const ctx = window.prksGetFocusedTabContext &&
+                            window.prksGetFocusedTabContext();
+                const work = ctx && ctx.getEntity && ctx.getEntity('work');
+                const notes = ctx && ctx.getResource && ctx.getResource('workNotes');
+                return !!(work && String(work.id) === String(id) &&
+                    notes && notes.editor && notes.editor.value() === text);
+            }""",
+            arg={"id": work_id, "text": note_text},
+            timeout=30000,
+        )
         stage = "settings_focus"
         settings = page.locator("button.settings-btn")
         settings.focus()
@@ -167,7 +225,11 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
             state="visible", timeout=30000,
         )
         stage = "browser_errors"
-        collector.assert_clean()
+        try:
+            collector.assert_clean()
+        except AssertionError:
+            stage = "browser_errors_" + collector_failure_categories(collector)
+            raise
     except Exception as exc:
         failed = True
         # Playwright exceptions may include URLs, selectors and page text.

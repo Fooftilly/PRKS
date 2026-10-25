@@ -9,7 +9,8 @@ from types import ModuleType
 from unittest.mock import MagicMock, Mock, patch
 
 from scripts.ci.cross_browser_smoke import (
-    CHECKS, ENGINES, SmokeFailure, close_preserving_failure, main, run, smoke,
+    CHECKS, ENGINES, SmokeFailure, close_preserving_failure, collector_failure_categories,
+    main, run, smoke,
     verify_isolation, verify_report,
 )
 
@@ -81,15 +82,16 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
                 context = Mock()
                 collector = Mock()
 
-                def locator(selector):
+                def locator(selector, **_kwargs):
                     if selector == failed_selector:
                         raise TimeoutError("secret-url-private-document-title")
                     return Mock()
 
                 page.locator.side_effect = locator
-                with patch(
-                    "scripts.ci.cross_browser_smoke.open_app_page",
-                    return_value=(page, context, collector),
+                with (
+                    patch("scripts.ci.cross_browser_smoke.open_app_page",
+                          return_value=(page, context, collector)),
+                    patch("scripts.ci.cross_browser_smoke.wait_for_async"),
                 ):
                     with self.assertRaises(SmokeFailure) as caught:
                         smoke(object(), "http://127.0.0.1:1", "synthetic", "related", engine="webkit")
@@ -100,6 +102,66 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
                 )
                 self.assertNotIn("secret-url-private-document-title", str(error))
                 context.close.assert_called_once()
+
+    def test_error_bucket_diagnostics_omit_sensitive_browser_details(self):
+        collector = Mock()
+        collector.pageerrors = ["private-document-title", "secret-content"]
+        collector.console_errors = ["credential=private"]
+        collector.failed_requests = []
+        collector.http_5xx = []
+        collector.external = []
+        self.assertEqual(
+            collector_failure_categories(collector), "page-2_console-1"
+        )
+        self.assertNotIn("private", collector_failure_categories(collector))
+
+    def test_notes_commit_and_reload_check_is_required(self):
+        self.assertIn("notes_save_reload", CHECKS)
+        data = report()
+        data["browsers"][0]["checks"].remove("notes_save_reload")
+        with self.assertRaises(ValueError):
+            verify_report(data, ENGINES)
+
+    def test_notes_keyboard_failure_is_safely_attributed(self):
+        page, context = Mock(), Mock()
+        page.keyboard.insert_text.side_effect = TimeoutError("private-note-body")
+        with patch(
+            "scripts.ci.cross_browser_smoke.open_app_page",
+            return_value=(page, context, Mock()),
+        ):
+            with self.assertRaises(SmokeFailure) as caught:
+                smoke(object(), "http://127.0.0.1:1", "synthetic", "related",
+                      engine="webkit")
+        self.assertEqual(
+            (caught.exception.engine, caught.exception.stage, caught.exception.cause_type),
+            ("webkit", "notes_save_reload", "TimeoutError"),
+        )
+        self.assertNotIn("private-note-body", str(caught.exception))
+        context.close.assert_called_once()
+
+    def test_server_ack_never_passes_on_unresolved_or_stale_note(self):
+        page, context = Mock(), Mock()
+        with (
+            patch("scripts.ci.cross_browser_smoke.open_app_page",
+                  return_value=(page, context, Mock())),
+            patch("scripts.ci.cross_browser_smoke.wait_for_async",
+                  side_effect=AssertionError("private-uncommitted-note")) as poll,
+        ):
+            with self.assertRaises(SmokeFailure) as caught:
+                smoke(object(), "http://127.0.0.1:1", "synthetic", "related",
+                      engine="firefox")
+        self.assertEqual(
+            (caught.exception.engine, caught.exception.stage, caught.exception.cause_type),
+            ("firefox", "notes_save_reload", "AssertionError"),
+        )
+        self.assertNotIn("private-uncommitted-note", str(caught.exception))
+        self.assertEqual(poll.call_count, 1)
+        # Guard against reverting to Playwright wait_for_function on a Promise.
+        args, kwargs = poll.call_args
+        self.assertIn("async", args[1])
+        self.assertIn("text_content === text", args[1])
+        self.assertEqual(kwargs["arg"]["id"], "synthetic")
+        context.close.assert_called_once()
 
     def test_pdf_and_secondary_pane_checks_are_required(self):
         # These checks run through the same two-engine smoke and are not
@@ -118,6 +180,7 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
                   return_value=(page, context, collector)),
             patch("scripts.ci.cross_browser_smoke._wait_pdf_viewer",
                   side_effect=TimeoutError("private-pdf-content")),
+            patch("scripts.ci.cross_browser_smoke.wait_for_async"),
         ):
             with self.assertRaises(SmokeFailure) as caught:
                 smoke(object(), "http://127.0.0.1:1", "synthetic", "related", engine="webkit")
@@ -129,11 +192,16 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
     def test_split_failure_is_attributed_without_leaking_details(self):
         page, context, collector = Mock(), Mock(), Mock()
         page.evaluate.return_value = True
-        page.wait_for_function.side_effect = TimeoutError("secret-tab-title")
+        def fail_split_only(js, **_kwargs):
+            if "s.mode === 'tiled'" in js:
+                raise TimeoutError("secret-tab-title")
+            return None
+        page.wait_for_function.side_effect = fail_split_only
         with (
             patch("scripts.ci.cross_browser_smoke.open_app_page",
                   return_value=(page, context, collector)),
             patch("scripts.ci.cross_browser_smoke._wait_pdf_viewer"),
+            patch("scripts.ci.cross_browser_smoke.wait_for_async"),
         ):
             with self.assertRaises(SmokeFailure) as caught:
                 smoke(object(), "http://127.0.0.1:1", "synthetic", "related", engine="firefox")
@@ -155,6 +223,7 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
                   return_value=(page, context, Mock(unsafe=True))),
             patch("scripts.ci.cross_browser_smoke._wait_pdf_viewer"),
             patch("scripts.ci.cross_browser_smoke._wait_pdf_tab"),
+            patch("scripts.ci.cross_browser_smoke.wait_for_async"),
         ):
             with self.assertRaises(SmokeFailure) as caught:
                 smoke(object(), "http://127.0.0.1:1", "synthetic", "related", engine="webkit")
