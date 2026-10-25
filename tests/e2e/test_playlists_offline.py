@@ -79,6 +79,32 @@ class PlaylistsOfflineTests(unittest.TestCase):
         return {d: o._domain_generation(page, d) for d in
                 ('concepts', 'positions', 'arguments', 'people', 'person-groups', 'playlists')}
 
+    def assert_non_playlist_caches_present(self, page, ids):
+        """Keep cached control domains observable across successive mutations.
+
+        A Playlist ACK must not evict unrelated domains. Re-warming them
+        before every operation would conceal an unintended eviction.
+        """
+        for domain, kind, entity_id in (
+            ("concepts", "concept", ids["concept_child"]),
+            ("positions", "position", ids["position_a"]),
+            ("arguments", "argument", ids["argument_a"]),
+        ):
+            with self.subTest(cached_domain=domain):
+                self.assertIsNotNone(
+                    o._cached_entity(page, kind, entity_id),
+                    "Playlist mutation unexpectedly evicted " + domain,
+                )
+        for domain, key in (
+            ("people", "people:index"),
+            ("person-groups", "person-groups:index"),
+        ):
+            with self.subTest(cached_domain=domain):
+                self.assertIsNotNone(
+                    o._cached_list(page, key),
+                    "Playlist mutation unexpectedly evicted " + domain,
+                )
+
     def changed(self, page, before, expected):
         for domain, generation in before.items():
             with self.subTest(domain=domain):
@@ -798,9 +824,15 @@ class PlaylistsOfflineTests(unittest.TestCase):
             ("addWorkToPlaylist(ids.playlist_a, ids.work_b)", False),
             ("removeWorkFromPlaylist(ids.playlist_a, ids.work_b)", False),
         ]
-        for expression, keeps_index in actions:
+        # Warm unrelated control-domain snapshots only once. Retain the
+        # original per-operation Playlist refresh, baselines and ACK fence
+        # assertions; an unrelated cache eviction now fails explicitly.
+        self.cache(page, ids, all_domains=True)
+        for index, (expression, keeps_index) in enumerate(actions):
             with self.subTest(expression=expression):
-                self.cache(page, ids, all_domains=True)
+                if index:
+                    self.cache(page, ids)
+                self.assert_non_playlist_caches_present(page, ids)
                 self.prepare_bases(page, ids)
                 before = self.generations(page)
                 page.evaluate('async ids => { await ' + expression + '; }', ids)
@@ -812,6 +844,7 @@ class PlaylistsOfflineTests(unittest.TestCase):
                             self.assertGreater(now, generation, domain)
                         else:
                             self.assertEqual(now, generation, domain)
+                self.assert_non_playlist_caches_present(page, ids)
                 if keeps_index:
                     self.assertIsNotNone(o._cached_list(page, 'playlists:index'),
                                          'the answer carries the stored row, so the '
