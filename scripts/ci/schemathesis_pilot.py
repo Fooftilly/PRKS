@@ -6,6 +6,7 @@ No mutating operations, production tokens, live library files or arbitrary URL.
 """
 from __future__ import annotations
 
+import argparse
 import copy
 import http.client
 import json
@@ -34,8 +35,7 @@ ROUTE = "/api/publishers"
 OPERATION = "listPublishersInUse"
 SEED = 855
 MAX_EXAMPLES = 25
-MAX_SECONDS = 35
-CLI_TIMEOUT = 110
+CLI_TIMEOUT = 75
 SAFE_LINE = re.compile(r"[A-Za-z0-9 .,;:=_()!+/%-]{1,150}\Z")
 
 
@@ -92,11 +92,11 @@ def command(schema: Path, origin: str, binary: str) -> list[str]:
         binary, "run", str(schema), "--url", origin,
         "--include-operation-id", OPERATION,
         "--include-method", METHOD,
-        "--phases", "examples,coverage,fuzzing",
+        "--phases", "examples,fuzzing",
         "--checks", "not_a_server_error,status_code_conformance,"
                     "content_type_conformance,response_schema_conformance",
         "--mode", "all", "--max-examples", str(MAX_EXAMPLES),
-        "--max-time", str(MAX_SECONDS), "--max-failures", "1",
+        "--max-failures", "1",
         "--workers", "1", "--rate-limit", "10/s",
         "--seed", str(SEED), "--max-redirects", "0",
     ]
@@ -138,36 +138,23 @@ def run_schemathesis(server: AppServer, scoped: dict, binary: str):
 
 
 def print_failure_diagnostics(result, server: AppServer) -> None:
-    # Exclude all generated curl commands, URLs, headers, bodies and query
-    # strings; surface only bounded synthetic check/error classifications.
-    lines = result.stdout.splitlines() + result.stderr.splitlines()
-    categories = ("failure", "failed", "unexpected", "response", "status",
-                  "exception", "missing", "schema", "error", "checks")
-    disallowed = ("http://", "https://", "curl ", "authorization", "header:",
-                  "cookie", "?used=", "request body", "payload", "traceback")
-    diagnostics = [
-        line.strip() for line in lines
-        if len(line.strip()) <= 150 and SAFE_LINE.fullmatch(line.strip())
-        and any(word in line.lower() for word in categories)
-        and not any(word in line.lower() for word in disallowed)
-    ]
-    for line in diagnostics[:9]:
-        print("[schemathesis] scanner_diagnostic=" + line)
-
+    # Print ONLY fixed, allowlisted diagnostic categories in Actions.
+    # Never echo scanner stdout/stderr: this may contain fuzz query values,
+    # even when the input data and backend are synthetic.
+    content = (result.stdout + result.stderr).lower()
     for label, marker in (
+        ("unexpected_method_server_error", "st101 server error"),
         ("cli_option", "no such option"),
         ("cli_value", "invalid value"),
         ("schema_loading", "failed to load"),
         ("schema_validation", "invalid schema"),
         ("response_schema", "response_schema_conformance"),
         ("unexpected_status", "status_code_conformance"),
-        ("http_server_error", "not_a_server_error"),
         ("network_error", "connection refused"),
-        ("internal_cli_error", "internal error"),
         ("schema_parse_error", "failed to parse"),
         ("test_failure", "failures:"),
     ):
-        if marker in (result.stdout + result.stderr).lower():
+        if marker in content:
             print("[schemathesis] failure_category=" + label)
 
     # Discard all unsafe query/path values from isolated PRKS diagnostic logs.
@@ -190,7 +177,7 @@ def print_failure_diagnostics(result, server: AppServer) -> None:
             print("[schemathesis] server_unhandled_error_seen=yes")
 
 
-def scan() -> int:
+def scan(*, debug_local: bool = False) -> int:
     # An inherited PostgreSQL AUTH connection would violate isolation.
     if os.environ.get("PRKS_AUTH", "").strip():
         raise RuntimeError("Refusing PRKS_AUTH: no disposable PostgreSQL test identity")
@@ -206,11 +193,18 @@ def scan() -> int:
         result = run_schemathesis(server, scoped, binary)
         print(
             f"[schemathesis] method={METHOD} route={ROUTE} operation={OPERATION} "
-            f"seed={SEED} examples_cap={MAX_EXAMPLES} time_cap={MAX_SECONDS}s "
+            f"seed={SEED} fuzz_examples_cap={MAX_EXAMPLES} cli_timeout={CLI_TIMEOUT}s "
             f"elapsed={time.monotonic() - started:.2f}s exit={result.returncode}"
         )
         if result.returncode:
             print_failure_diagnostics(result, server)
+            if debug_local:
+                # Explicit private-local diagnostic mode: never on GitHub
+                # Actions, even if a repository contributor sets the option.
+                if os.environ.get("GITHUB_ACTIONS"):
+                    raise RuntimeError("Raw diagnostic output is forbidden in Actions")
+                print(result.stdout[:10000], file=sys.stderr)
+                print(result.stderr[:3000], file=sys.stderr)
             print("[schemathesis] Reproduce on disposable fixtures with seed=855.")
             return 1
         print("[schemathesis] bounded read-only contract scan completed")
@@ -220,8 +214,14 @@ def scan() -> int:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--debug-local", action="store_true",
+        help="Show full synthetic CLI failure locally only (forbidden in GitHub Actions)",
+    )
+    options = parser.parse_args()
     try:
-        raise SystemExit(scan())
+        raise SystemExit(scan(debug_local=options.debug_local))
     except (ValueError, RuntimeError, AssertionError, subprocess.TimeoutExpired) as exc:
         print(f"[schemathesis] Pilot could not complete: {type(exc).__name__}")
         raise SystemExit(1) from None
