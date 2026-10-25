@@ -219,10 +219,9 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
     context = None
     failed = False
     try:
-        page, context, collector = open_app_page(browser, origin)
-        # Current page plus any fresh document opened during the smoke.
-        context.add_init_script(_SMOKE_ERROR_PROBE)
-        page.evaluate(_SMOKE_ERROR_PROBE)
+        page, context, collector = open_app_page(
+            browser, origin, init_script=_SMOKE_ERROR_PROBE
+        )
         stage = "folders"
         page.locator("[data-prks-folder-library-view]").wait_for(
             state="visible", timeout=15000
@@ -257,6 +256,9 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
             arg={"id": work_id, "text": note_text},
             timeout=30000,
         )
+        # Catch any errors in the outgoing document *before* its in-memory
+        # diagnostics are replaced by navigation. The collector is never reset.
+        check_browser_errors(collector, engine=engine, phase="before_notes_reload", page=page)
         # A fresh document must load the committed value, not merely keep an
         # unsaved draft in the current CodeMirror instance.
         page.reload(wait_until="domcontentloaded")
