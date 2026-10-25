@@ -63,7 +63,7 @@ def compare(actual: dict, expected: dict) -> dict:
         for i in range(0, len(left), 3)
     ) / (len(left) // 3)
     return {
-        "passed": not (mean > MEAN_DELTA_LIMIT and hot > HOT_FRACTION_LIMIT),
+        "passed": not (mean > MEAN_DELTA_LIMIT or hot > HOT_FRACTION_LIMIT),
         "size_changed": False,
         "mean_delta": round(mean, 3),
         "hot_fraction": round(hot, 4),
