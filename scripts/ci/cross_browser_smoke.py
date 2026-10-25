@@ -48,6 +48,23 @@ def close_preserving_failure(resource, *, engine: str, stage: str, failed: bool)
             raise SmokeFailure(engine, stage, type(exc).__name__) from None
 
 
+def collector_failure_categories(collector) -> str:
+    """Only fixed category names/counts, never URLs, exceptions or page text."""
+    categories = (
+        ("pageerrors", "page"),
+        ("console_errors", "console"),
+        ("failed_requests", "request"),
+        ("http_5xx", "http5xx"),
+        ("external", "external"),
+    )
+    flagged = []
+    for attr, label in categories:
+        values = getattr(collector, attr, None)
+        if isinstance(values, list) and values:
+            flagged.append(f"{label}-{min(len(values), 99)}")
+    return "_".join(flagged) or "unknown"
+
+
 def verify_isolation(environ: dict[str, str]) -> None:
     """Never let a synthetic cross-browser test inherit a real database."""
     if any(environ.get(name, "").strip() for name in INHERITED_DB_SETTINGS):
@@ -208,7 +225,11 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
             state="visible", timeout=30000,
         )
         stage = "browser_errors"
-        collector.assert_clean()
+        try:
+            collector.assert_clean()
+        except AssertionError:
+            stage = "browser_errors_" + collector_failure_categories(collector)
+            raise
     except Exception as exc:
         failed = True
         # Playwright exceptions may include URLs, selectors and page text.
