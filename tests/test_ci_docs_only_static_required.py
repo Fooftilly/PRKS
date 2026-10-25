@@ -1,4 +1,4 @@
-"""Keep Pyright/ESLint required contexts while skipping only audited wiki PRs.
+"""Keep Ruff/Pyright/ESLint required contexts on audited wiki PRs.
 
 This is a structural regression guard, not a substitute for running real CI:
 it rejects removed required jobs, extra (including unnamed) work, missing real
@@ -18,6 +18,16 @@ UNIT = ROOT / ".github/workflows/test-gate.yml"
 CONDITION = "steps.docs-scope.outputs.docs_only != 'true'"
 
 HEAVY = {
+    "ruff": (
+        "Set up Python",
+        "Install Ruff",
+        "Run high-signal Python checks",
+        "Enforce PRKS engineering invariants",
+        "Resolve diff-aware check base",
+        "Fail on new E2E page.wait_for_timeout",
+        "Schema-change gate (db_schema + migration + version + PK parity)",
+        "Fail on new correlated catalogue COUNT SQL",
+    ),
     "pyright": (
         "Set up Node.js",
         "Set up Python for PostgreSQL and identity type imports",
@@ -31,6 +41,7 @@ HEAVY = {
     ),
 }
 REQUIRED = {
+    "ruff": "Ruff bug checks",
     "pyright": "Pyright data-flow + typed storage slice",
     "eslint": "ESLint bug checks",
 }
@@ -137,10 +148,11 @@ class StaticDocsOnlyTests(unittest.TestCase):
                 )
                 self.assertNotRegex(mutated, pinned)
 
-    def test_all_three_classifier_steps_enforce_trusted_base_execution(self):
+    def test_all_four_classifier_steps_enforce_trusted_base_execution(self):
         static = STATIC.read_text(encoding="utf-8")
         unit = UNIT.read_text(encoding="utf-8")
         for job_name, job in (
+            ("ruff", _job(static, "ruff")),
             ("pyright", _job(static, "pyright")),
             ("eslint", _job(static, "eslint")),
             ("unit-api-contract", _job(unit, "unit-api-contract")),
