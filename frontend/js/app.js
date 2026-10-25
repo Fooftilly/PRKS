@@ -1499,7 +1499,15 @@ async function prksOfflineResearchGraphFetch(includePeople, signal) {
     let result;
     try {
         result = await prksOfflineDetailFetch(kind, 'snapshot',
-            '/api/research-graph' + (includePeople ? '?people=1' : ''), signal, { domain: kind, validate });
+            '/api/research-graph' + (includePeople ? '?people=1' : ''), signal, {
+                domain: kind,
+                validate,
+                // A warmed Graph snapshot is safe to read locally only after
+                // the runtime confirms offline state. The shared reader
+                // retains domain/coherence/abort/reconnect fencing and uses
+                // the server first whenever connectivity is uncertain.
+                preferCacheWhenOffline: true,
+            });
     } catch (err) {
         if (err && err.status === 413) err.code = 'graph_too_large';
         throw err;

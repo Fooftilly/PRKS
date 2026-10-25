@@ -38,7 +38,7 @@ function environment() {
     vm.runInContext(runtime,ctx);
     vm.runInContext(api,ctx);
     vm.runInContext(app.slice(app.indexOf('async function prksOfflineDetailFetch'),app.indexOf('const PRKS_CONCEPTS_LIST_KEY')),ctx);
-    return {ctx,entities,setRequest:fn=>request=fn,setSweep:fn=>sweep=fn};
+    return {ctx,entities,store,setRequest:fn=>request=fn,setSweep:fn=>sweep=fn};
 }
 const tick = () => new Promise(resolve=>setImmediate(resolve));
 async function run() {
@@ -103,6 +103,49 @@ async function run() {
         finishes.forEach(f=>f());await pending;
         assert(e.entities.has('concept'));assert(e.entities.has('work'));
     }
+    // Both Graph variants use a coherent warmed snapshot only while confirmed
+    // offline. Ordinary online reads must still hit the server even if warm.
+    for (const variant of [false, true]) {
+        const kind = variant ? people : core;
+        const valid = copy(snapshot);
+        valid.meta.people_included = variant;
+        const e = environment();
+        e.entities.set(kind, {value:valid, cachedAt:1000});
+        let requests = 0;
+        e.setRequest(async () => {
+            requests++;
+            return {ok:true, status:200, json:async () => copy(valid)};
+        });
+        assert.equal((await e.ctx.prksOfflineResearchGraphFetch(variant)).source, 'server');
+        assert.equal(requests, 1, 'online Graph must be server-first');
+        e.ctx.prksOfflineNoteRequestFailure();
+        assert.equal(e.ctx.prksOfflineRuntimeState(), 'offline');
+        const cached = await e.ctx.prksOfflineResearchGraphFetch(variant);
+        assert.equal(cached.source, 'cache', 'confirmed-offline Graph uses coherent cache');
+        assert.equal(cached.snapshot.meta.people_included, variant);
+        assert.equal(requests, 1, 'confirmed offline warm Graph must not retry GET');
+    }
+    // Connectivity changing while IndexedDB is pending must invalidate the
+    // fast path: return a fresh server snapshot, never stale cached provenance.
+    {
+        const e = environment();
+        const valid = copy(snapshot);
+        e.entities.set(core, {value:valid, cachedAt:1000});
+        e.ctx.prksOfflineNoteRequestFailure();
+        let release;
+        e.store.getEntity = () => new Promise(resolve => { release = resolve; });
+        let requests = 0;
+        e.setRequest(async () => {
+            requests++;
+            return {ok:true, status:200, json:async () => copy(valid)};
+        });
+        const pending = e.ctx.prksOfflineResearchGraphFetch(false);
+        e.ctx.prksOfflineNoteRequestSuccess();
+        release({value:valid, cachedAt:1000});
+        const result = await pending;
+        assert.equal(result.source, 'server', 'a reconnect fences the stale cache read');
+        assert.equal(requests, 1, 'the changed generation must retry via the server');
+    }
     // Failed cleanup stays local. Stale GETs never republish; People-only changes allow core GET.
     for(const variant of [false,true]) {
         for(const coreChange of [false,true]) {
@@ -118,6 +161,9 @@ async function run() {
         e.entities.set(people,{value:{...snapshot,meta:{...snapshot.meta,people_included:true}},cachedAt:1});
         e.setSweep(async()=>false);
         await (variant?e.ctx.prksMarkResearchGraphPeopleChanged():e.ctx.prksMarkResearchGraphCoreChanged());
+        // The fast-cache candidate must not resurrect a blocked Graph snapshot
+        // even when the browser has already confirmed it is offline.
+        e.ctx.prksOfflineNoteRequestFailure();
         e.setRequest(async()=>{throw new Error('offline');});
         assert.equal((await e.ctx.prksOfflineResearchGraphFetch(variant)).source,'unavailable');
         if(variant)assert.equal((await e.ctx.prksOfflineResearchGraphFetch(false)).source,'cache');
