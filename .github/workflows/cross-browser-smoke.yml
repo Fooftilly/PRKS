@@ -9,6 +9,7 @@ on:
       - ".github/workflows/cross-browser-smoke.yml"
       - "scripts/ci/cross_browser_smoke.py"
       - "tests/test_cross_browser_smoke.py"
+      - "tests/e2e/pdf_readiness.py"
 
 permissions:
   contents: read
