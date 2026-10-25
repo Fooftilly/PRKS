@@ -36,7 +36,7 @@ class ProfileSafetyTests(unittest.TestCase):
         stats = FakeStats()
         self.assertEqual(snapshot(stats), [])
         self.assertIn("pg_stat_statements(false)", stats.statement)
-        self.assertNotRegex(stats.statement.split("FROM", 1)[0], r"\\bquery\\b")
+        self.assertNotRegex(stats.statement.split("FROM", 1)[0], r"\bquery\b")
 
     def test_profile_refuses_caller_supplied_postgresql_server_before_startup(self):
         root = Path(__file__).resolve().parents[1]
