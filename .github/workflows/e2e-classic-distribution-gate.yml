@@ -299,9 +299,11 @@ jobs:
           PRKS_E2E_BASE_SHA: ${{ github.sha }}
         shell: bash
         run: |
-          printf 'Manual packaged-smoke pilot only; full PR six-shard package coverage is unchanged.\n' >> "$GITHUB_STEP_SUMMARY"
-          printf 'If packaged_mode=compare, six full packaged shards also run on this exact workflow SHA; shared Docker and SW jobs execute once.\n' >> "$GITHUB_STEP_SUMMARY"
-          printf 'Commit: %s; packaged smoke: 9 curated + 5 explicit browser tests; SW upgrade/rollback and Docker checks are separate jobs.\n' "$PRKS_E2E_BASE_SHA" >> "$GITHUB_STEP_SUMMARY"
+          {
+            printf 'Manual packaged-smoke pilot only; full PR six-shard package coverage is unchanged.\n'
+            printf 'If packaged_mode=compare, six full packaged shards also run on this exact workflow SHA; shared Docker and SW jobs execute once.\n'
+            printf 'Commit: %s; packaged smoke: 9 curated + 5 explicit browser tests; SW upgrade/rollback and Docker checks are separate jobs.\n' "$PRKS_E2E_BASE_SHA"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload smoke failure diagnostics
         if: failure()
