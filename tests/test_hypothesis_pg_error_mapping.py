@@ -37,13 +37,14 @@ PRIVATE_MESSAGE = "confidential-work-title-and-secret-connection-details"
 SYMBOLS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 # Include every documented special state, not just extremely rare random hits.
+SPECIAL_STATES = (
+    SERIALIZATION_FAILURE, DEADLOCK_DETECTED, LOCK_NOT_AVAILABLE,
+    QUERY_CANCELED, UNIQUE_VIOLATION, FOREIGN_KEY_VIOLATION,
+    CHECK_VIOLATION, READ_ONLY_SQL_TRANSACTION,
+    "08000", "08006", "53300", "57P01", "57P02", "57P03", "25P03",
+)
 STATES = st.one_of(
-    st.sampled_from((
-        SERIALIZATION_FAILURE, DEADLOCK_DETECTED, LOCK_NOT_AVAILABLE,
-        QUERY_CANCELED, UNIQUE_VIOLATION, FOREIGN_KEY_VIOLATION,
-        CHECK_VIOLATION, READ_ONLY_SQL_TRANSACTION,
-        "08000", "08006", "53300", "57P01", "57P02", "57P03", "25P03",
-    )),
+    st.sampled_from(SPECIAL_STATES),
     st.text(alphabet=SYMBOLS, min_size=5, max_size=5),
 )
 
@@ -67,48 +68,44 @@ class SyntheticPgError(psycopg.Error):
 
 
 class PgErrorMappingProperties(unittest.TestCase):
-    @settings(max_examples=EXAMPLES, database=None, deadline=None)
-    @given(state=STATES)
-    def test_retry_is_an_exact_two_state_allowlist(self, state: str):
+    def assert_sqlstate_contract(self, state: str) -> None:
         err = SyntheticPgError(state)
         self.assertEqual(sqlstate_of(err), state)
-        self.assertEqual(
-            is_retryable(err),
-            state in (SERIALIZATION_FAILURE, DEADLOCK_DETECTED),
-        )
+        retryable = state in (SERIALIZATION_FAILURE, DEADLOCK_DETECTED)
+        self.assertEqual(is_retryable(err), retryable)
         mapped = map_database_error(err, ConstraintRegistry())
         self.assertIsInstance(mapped, DatabaseError)
+        self.assertEqual(mapped.sqlstate, state)
         self.assertNotIn(PRIVATE_MESSAGE, str(mapped))
         self.assertNotIn(PRIVATE_MESSAGE, mapped.message)
-        self.assertGreaterEqual(mapped.http_status, 400)
-        if state in (SERIALIZATION_FAILURE, DEADLOCK_DETECTED):
-            self.assertIsInstance(mapped, RetryTransactionError)
-            self.assertEqual((mapped.code, mapped.http_status), ("RETRY", 503))
-        else:
-            self.assertNotIsInstance(mapped, RetryTransactionError)
-
-    @settings(max_examples=EXAMPLES, database=None, deadline=None)
-    @given(state=STATES)
-    def test_only_known_transient_states_are_503(self, state: str):
-        mapped = map_database_error(SyntheticPgError(state), ConstraintRegistry())
         unavailable = (
             state.startswith("08")
             or state in {"53300", "57P01", "57P02", "57P03", "25P03"}
         )
-        transient = (
-            state in {
-                SERIALIZATION_FAILURE, DEADLOCK_DETECTED,
-                LOCK_NOT_AVAILABLE, QUERY_CANCELED,
-            }
-            or unavailable
-        )
+        transient = retryable or state in (LOCK_NOT_AVAILABLE, QUERY_CANCELED) or unavailable
         self.assertEqual(mapped.http_status, 503 if transient else (
             400 if state == CHECK_VIOLATION else 500
         ))
-        if mapped.http_status == 503:
+        if transient:
             self.assertIsNotNone(mapped.retry_after)
         else:
             self.assertIsNone(mapped.retry_after)
+        if retryable:
+            self.assertIsInstance(mapped, RetryTransactionError)
+            self.assertEqual(mapped.code, "RETRY")
+        else:
+            self.assertNotIsInstance(mapped, RetryTransactionError)
+
+    def test_every_named_sqlstate_is_always_checked(self):
+        # Hypothesis examples are not exhaustive; a fixed list MUST be.
+        for state in SPECIAL_STATES:
+            with self.subTest(sqlstate=state):
+                self.assert_sqlstate_contract(state)
+
+    @settings(max_examples=EXAMPLES, database=None, deadline=None)
+    @given(state=STATES)
+    def test_generated_sqlstates_respect_exact_retry_and_http_contracts(self, state: str):
+        self.assert_sqlstate_contract(state)
 
     @settings(max_examples=EXAMPLES, database=None, deadline=None)
     @given(
