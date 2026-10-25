@@ -166,7 +166,7 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
     def test_pdf_and_secondary_pane_checks_are_required(self):
         # These checks run through the same two-engine smoke and are not
         # implied by seeing the Work wrapper.
-        self.assertEqual(CHECKS[-2:], ("pdf_render", "split_panes"))
+        self.assertEqual(CHECKS[-3:-1], ("pdf_render", "split_panes"))
         data = report()
         data["browsers"][0]["checks"].remove("pdf_render")
         with self.assertRaises(ValueError):
@@ -208,6 +208,38 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
         self.assertEqual((caught.exception.stage, caught.exception.cause_type),
                          ("split_panes", "TimeoutError"))
         self.assertNotIn("secret-tab-title", str(caught.exception))
+        context.close.assert_called_once()
+
+    def test_split_reload_must_be_recorded_in_every_browser(self):
+        self.assertEqual(CHECKS[-1], "split_reload")
+        missing = report()
+        missing["browsers"][1]["checks"].remove("split_reload")
+        with self.assertRaises(ValueError):
+            verify_report(missing, ENGINES)
+
+    def test_split_reload_failure_reports_safe_stage_not_private_page(self):
+        page, context, collector = Mock(), Mock(), Mock(unsafe=True)
+        original = {"mainTabId": "main-tab", "secondaryTree": {"tabId": "related-tab"}}
+        page.evaluate.side_effect = lambda script, *args, **kwargs: (
+            original if script == "() => window.prksWorkspaceSnapshot()" else True
+        )
+        page.reload.side_effect = [None, TimeoutError("secret-work-title")]
+        with (
+            patch("scripts.ci.cross_browser_smoke.open_app_page",
+                  return_value=(page, context, collector)),
+            patch("scripts.ci.cross_browser_smoke.wait_for_async"),
+            patch("scripts.ci.cross_browser_smoke._wait_pdf_viewer"),
+            patch("scripts.ci.cross_browser_smoke._wait_pdf_tab"),
+        ):
+            with self.assertRaises(SmokeFailure) as caught:
+                smoke(object(), "http://127.0.0.1:1", "synthetic", "related",
+                      engine="firefox")
+        self.assertEqual(
+            (caught.exception.engine, caught.exception.stage, caught.exception.cause_type),
+            ("firefox", "split_reload", "TimeoutError"),
+        )
+        self.assertNotIn("secret-work-title", str(caught.exception))
+        self.assertEqual(page.reload.call_count, 2)
         context.close.assert_called_once()
 
     def test_context_cleanup_failure_has_its_own_safe_stage(self):
