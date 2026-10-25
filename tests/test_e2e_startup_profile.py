@@ -170,9 +170,20 @@ class OfflinePersonProfileWorkflowTargetTests(unittest.TestCase):
                 if isinstance(node, ast.FunctionDef) and node.name == method_name
             ]
             self.assertEqual(len(methods), 1, target)
+            # The create scenario invokes a shared UI helper; its nested
+            # role-link stages are deliberately outside the selected test body.
+            nodes = list(methods)
+            if mode == "create":
+                helpers = [
+                    node for node in classes[0].body
+                    if isinstance(node, ast.FunctionDef) and node.name == "link_as_author"
+                ]
+                self.assertEqual(len(helpers), 1, target)
+                nodes += helpers
             phases = {
                 call.args[0].value
-                for call in ast.walk(methods[0])
+                for node in nodes
+                for call in ast.walk(node)
                 if isinstance(call, ast.Call)
                 and isinstance(call.func, ast.Name)
                 and call.func.id == "profile_e2e_phase"
