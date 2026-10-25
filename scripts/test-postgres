@@ -175,7 +175,7 @@ fi
 }
 
 if [[ "$PROFILE" == true ]]; then
-  PRKS_PG_PROFILE_DISPOSABLE_SERVER=1 "$PY" scripts/pg_stat_profile.py "$@"
+  PRKS_PG_PROFILE_DISPOSABLE_SERVER=1 "$PY" -m scripts.pg_stat_profile "$@"
 elif [[ "${1:-}" == "--parity" ]]; then
   shift
   "$PY" scripts/run_backend_parity.py "$@"
