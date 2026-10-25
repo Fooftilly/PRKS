@@ -115,7 +115,7 @@ def compare(full: dict, smoke: dict) -> str:
         return f"{(1 - b / a) * 100:.1f}%"
 
     return "\n".join((
-        f"Same-commit packaged E2E comparison: \`{full['sha']}\`",
+        f"Same-commit packaged E2E comparison: `{full['sha']}`",
         "",
         "| Measured job spans | Full | Smoke | Reduction |",
         "| --- | ---: | ---: | ---: |",
