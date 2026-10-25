@@ -10,7 +10,6 @@ import json
 import math
 import os
 import re
-import subprocess
 from pathlib import Path
 
 OPERATIONS = frozenset(("works_list", "works_browse", "work_detail"))
@@ -36,62 +35,82 @@ def nonnegative(value: object, label: str) -> float:
     return num
 
 
-def validate(data: dict) -> list[dict]:
-    """Never summarize a missing, truncated, or untrusted metrics report."""
-    if data.get("tool") != "pg_stat_statements" or data.get("server_version_num", 0) < 180000:
-        raise ValueError("not a disposable PostgreSQL 18 query report")
-    if data.get("backend") != "postgresql_facade" or data.get("fixture") != "synthetic_works_only":
-        raise ValueError("not the known synthetic PostgreSQL facade fixture")
-    if data.get("fixture_version") != "works-v1":
-        raise ValueError("unexpected synthetic fixture revision")
-    if data.get("measurement") != "warm_facade_calls_not_http":
-        raise ValueError("wall time cannot be represented as HTTP API latency")
-    if data.get("readiness") != "disposable_pg18_identity_verified":
-        raise ValueError("disposable PostgreSQL instance not verified")
-    if data.get("query_fingerprints") != "run_local_only; no SQL text is collected":
-        raise ValueError("query privacy contract changed")
-    sizes = data.get("fixture_tiers")
+def validate_scope(data: dict) -> list[int]:
+    """Prove that the source is a disposable, known schema and fixture tier."""
+    if data.get("tool") != "pg_stat_statements":
+        raise ValueError("not a PostgreSQL statement profile")
+    if nonnegative(data.get("server_version_num"), "server_version_num") < 180000:
+        raise ValueError("PostgreSQL 18 required")
+    expected = {
+        "backend": "postgresql_facade",
+        "fixture": "synthetic_works_only",
+        "fixture_version": "works-v1",
+        "measurement": "warm_facade_calls_not_http",
+        "readiness": "disposable_pg18_identity_verified",
+        "query_fingerprints": "run_local_only; no SQL text is collected",
+    }
+    if any(data.get(key) != value for key, value in expected.items()):
+        raise ValueError("unrecognized PostgreSQL fixture/measurement scope")
+    tiers = data.get("fixture_tiers")
     if (
-        not isinstance(sizes, list) or not 2 <= len(sizes) <= 4
-        or any(type(x) is not int or x < 1 or x > 500 for x in sizes)
-        or sizes != sorted(set(sizes))
+        not isinstance(tiers, list) or not 2 <= len(tiers) <= 4
+        or any(type(n) is not int or n < 1 or n > 500 for n in tiers)
+        or tiers != sorted(set(tiers))
     ):
         raise ValueError("missing/invalid comparison fixture tiers")
+    return tiers
+
+
+def validate_statement(item: dict) -> None:
+    if not isinstance(item, dict) or set(item) != STAT_KEYS:
+        raise ValueError("unknown profile field: possible SQL text disclosure")
+    if not re.fullmatch(r"[0-9a-f]{16}", str(item["query_fingerprint"])):
+        raise ValueError("unrecognized query fingerprint format")
+    for key in STAT_KEYS - {"query_fingerprint", "shared_cache_hit_percent"}:
+        nonnegative(item[key], key)
+    if item["shared_cache_hit_percent"] is not None:
+        if nonnegative(item["shared_cache_hit_percent"], "shared_cache_hit_percent") > 100:
+            raise ValueError("invalid cache hit rate")
+
+
+def validate_row(record: dict, tiers: list[int]) -> tuple[int, str]:
+    if not isinstance(record, dict) or not REQUIRED_KEYS <= set(record):
+        raise ValueError("incomplete profiler row")
+    works, operation = record["fixture_works"], record["operation"]
+    if type(works) is not int or works not in tiers or operation not in OPERATIONS:
+        raise ValueError("unexpected profiler operation/fixture")
+    samples = record["repetitions"]
+    if type(samples) is not int or not 2 <= samples <= 30:
+        raise ValueError("invalid profiler sample count")
+    if (
+        record["completed_samples"] != samples or record["warmup_calls"] != 2
+        or record["correctness_checks"] != samples + 3
+    ):
+        raise ValueError("partial or unchecked profiler run")
+    if record["first_call_context"] != "after_fixture_seed_not_cold_start":
+        raise ValueError("first-observed call mislabeled as a cold start")
+    for metric in ("first_observed_call_ms", "call_wall_p50_ms", "call_wall_p95_ms"):
+        nonnegative(record[metric], metric)
+    statements = record["top_statements"]
+    if not isinstance(statements, list) or not 1 <= len(statements) <= 5:
+        raise ValueError("unobserved SQL is not a successful measurement")
+    for item in statements:
+        validate_statement(item)
+    return works, operation
+
+
+def validate(data: dict) -> list[dict]:
+    """Never summarize a partial, incorrect, or privacy-unsafe measurement."""
+    tiers = validate_scope(data)
     profiles = data.get("profiles")
-    if not isinstance(profiles, list) or len(profiles) != len(sizes) * len(OPERATIONS):
+    if not isinstance(profiles, list) or len(profiles) != len(tiers) * len(OPERATIONS):
         raise ValueError("incomplete or duplicated profiler workload inventory")
     seen: set[tuple[int, str]] = set()
     for record in profiles:
-        if not isinstance(record, dict) or not REQUIRED_KEYS <= set(record):
-            raise ValueError("incomplete profiler row")
-        key = (record["fixture_works"], record["operation"])
-        if type(key[0]) is not int or key[0] not in sizes or key[1] not in OPERATIONS or key in seen:
-            raise ValueError("unexpected/duplicate profiler operation")
+        key = validate_row(record, tiers)
+        if key in seen:
+            raise ValueError("duplicate profiler operation")
         seen.add(key)
-        count = record["repetitions"]
-        if type(count) is not int or not 2 <= count <= 30:
-            raise ValueError("invalid profiler sample count")
-        if (record["completed_samples"] != count or record["warmup_calls"] != 2
-            or record["correctness_checks"] != count + 3):
-            raise ValueError("partial or unchecked profiler run")
-        if record["first_call_context"] != "after_fixture_seed_not_cold_start":
-            raise ValueError("first-observed call mislabeled as a cold start")
-        for metric in ("first_observed_call_ms", "call_wall_p50_ms", "call_wall_p95_ms"):
-            nonnegative(record[metric], metric)
-        statements = record["top_statements"]
-        if not isinstance(statements, list) or not 1 <= len(statements) <= 5:
-            raise ValueError("unobserved SQL is not a successful measurement")
-        for item in statements:
-            if not isinstance(item, dict) or set(item) != STAT_KEYS:
-                raise ValueError("unknown profile field: possible SQL text disclosure")
-            if not re.fullmatch(r"[0-9a-f]{16}", str(item["query_fingerprint"])):
-                raise ValueError("unrecognized query fingerprint format")
-            for key_name in STAT_KEYS - {"query_fingerprint", "shared_cache_hit_percent"}:
-                nonnegative(item[key_name], key_name)
-            if item["shared_cache_hit_percent"] is not None:
-                hit = nonnegative(item["shared_cache_hit_percent"], "shared_cache_hit_percent")
-                if hit > 100:
-                    raise ValueError("invalid cache hit rate")
     return sorted(profiles, key=lambda row: (row["fixture_works"], row["operation"]))
 
 
