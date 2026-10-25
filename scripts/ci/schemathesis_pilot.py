@@ -178,6 +178,8 @@ def print_failure_diagnostics(result, server: AppServer) -> None:
 
 
 def scan(*, debug_local: bool = False) -> int:
+    if debug_local and os.environ.get("GITHUB_ACTIONS"):
+        raise RuntimeError("Raw diagnostic output is forbidden in Actions")
     # An inherited PostgreSQL AUTH connection would violate isolation.
     if os.environ.get("PRKS_AUTH", "").strip():
         raise RuntimeError("Refusing PRKS_AUTH: no disposable PostgreSQL test identity")
@@ -201,8 +203,6 @@ def scan(*, debug_local: bool = False) -> int:
             if debug_local:
                 # Explicit private-local diagnostic mode: never on GitHub
                 # Actions, even if a repository contributor sets the option.
-                if os.environ.get("GITHUB_ACTIONS"):
-                    raise RuntimeError("Raw diagnostic output is forbidden in Actions")
                 print(result.stdout[:10000], file=sys.stderr)
                 print(result.stderr[:3000], file=sys.stderr)
             print("[schemathesis] Reproduce on disposable fixtures with seed=855.")
