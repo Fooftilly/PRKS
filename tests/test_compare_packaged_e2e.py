@@ -193,6 +193,15 @@ class PackagedCostComparisonTests(unittest.TestCase):
             connect.assert_called_once_with("api.github.com", timeout=30)
             connect.return_value.set_tunnel.assert_not_called()
 
+    def test_schemeless_http_proxy_is_parsed_as_authority(self):
+        with patch("scripts.ci.compare_packaged_e2e.getproxies",
+                   return_value={"https": "proxy.example:3128"}), \
+             patch("scripts.ci.compare_packaged_e2e.proxy_bypass", return_value=False), \
+             patch("scripts.ci.compare_packaged_e2e.HTTPSConnection") as connect:
+            _github_connection()
+            connect.assert_called_once_with("proxy.example", 3128, timeout=30)
+            connect.return_value.set_tunnel.assert_called_once_with("api.github.com", 443)
+
     def test_reject_unsafe_proxy_url_and_bad_port(self):
         for proxy in ("https://proxy.example:443", "http://user:pass@proxy.example:3128",
                       "file:///tmp/proxy", "http://proxy.example:bad"):
