@@ -1035,10 +1035,31 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             safe_log_id(getattr(self, "_prks_request_id", "")),
         )
 
+    def _probe(self, path, *, head=False):
+        """No-I/O liveness; readiness fails closed until the PG cutover.
+
+        This never invokes API session admission or returns configuration.
+        /readyz must not signal success until the #630 paired-root, pool,
+        schema and bootstrap checks are wired into the serving process.
+        """
+        ready = path == '/healthz'
+        body = b"ok" if ready else b"not ready"
+        self.send_response(200 if ready else 503)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if not head:
+            self.wfile.write(body)
+
     def do_GET(self):
         if not self._validate_request_host():
             return
         parsed_path = urlparse(self.path)
+        probe_path = unquote(parsed_path.path).rstrip('/')
+        if probe_path in ('/healthz', '/readyz'):
+            self._probe(probe_path)
+            return
         if parsed_path.path.startswith('/api/'):
             if not self._prks_admit(parsed_path):
                 return
@@ -1063,6 +1084,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         if not self._validate_request_host():
             return
         parsed_path = urlparse(self.path)
+        probe_path = unquote(parsed_path.path).rstrip('/')
+        if probe_path in ('/healthz', '/readyz'):
+            self._probe(probe_path, head=True)
+            return
         if parsed_path.path.startswith('/api/'):
             if not self._prks_admit(parsed_path):
                 return
