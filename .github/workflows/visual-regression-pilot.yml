@@ -1,0 +1,116 @@
+name: Advisory local Playwright visual comparison
+
+# Manual or changed pilot code only: no duplicate full E2E or external
+# screenshot service. Baseline generation is a candidate until reviewed.
+on:
+  workflow_dispatch:
+    inputs:
+      propose_baseline:
+        description: "Generate new candidate screenshots without comparing approved baseline"
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - ".github/workflows/visual-regression-pilot.yml"
+      - "scripts/ci/visual_regression.py"
+      - "tests/visual/**"
+      - "tests/test_local_visual_regression.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: visual-pilot-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  visual:
+    name: Synthetic visual comparison (advisory)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Cache existing Chromium revision
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .playwright-browsers
+          key: playwright-${{ runner.os }}-${{ hashFiles('requirements-dev.txt', 'tests/e2e/install_browser.py') }}
+
+      - name: Install existing pinned E2E prerequisites
+        run: python scripts/ci/install_pinned_python.py e2e
+
+      - name: Ensure existing Playwright Chromium
+        run: python tests/e2e/install_browser.py
+
+      - name: Capture and compare five synthetic app surfaces
+        shell: bash
+        env:
+          PROPOSE: ${{ github.event_name == 'workflow_dispatch' && inputs.propose_baseline && '1' || '0' }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          mode=auto
+          if [[ "$PROPOSE" == "1" ]]; then
+            mode=propose
+          fi
+          python "$GITHUB_WORKSPACE/scripts/ci/visual_regression.py" --mode "$mode"
+
+      - name: Report visual result and baseline status
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["RUNNER_TEMP"])
+          approved = Path("tests/visual/baseline.json").is_file()
+          checks = path / "prks-visual-results.json"
+          lines = [
+              "## Local Playwright visual pilot (synthetic, advisory)",
+              "",
+              "No hosted Argos/screenshot upload; never uses real research content.",
+              "Full candidate PNGs require a maintainer's visual review before accepting baselines.",
+              "",
+          ]
+          if checks.exists():
+              results = json.loads(checks.read_text(encoding="utf-8"))
+              lines.extend(["| Scene | Result | Mean channel delta | Changed sampled pixels |",
+                            "| --- | --- | ---: | ---: |"])
+              for scene, entry in results.items():
+                  lines.append(
+                      f"| {scene} | {'PASS' if entry['passed'] else 'DIFF'} | "
+                      f"{entry['mean_delta']} | {entry['hot_fraction']} |"
+                  )
+          elif (path / "prks-visual-candidate.json").is_file():
+              lines.append(
+                  "**Candidate only:** no approved baseline comparison was run. "
+                  "Inspect all five generated PNGs and approve baseline.json separately."
+              )
+          else:
+              lines.append("**No candidate:** capture failed; inspect the failing job log.")
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as out:
+              out.write("\n".join(lines) + "\n")
+          PY
+
+      - name: Retain only fixture screenshot candidates/diffs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: synthetic-local-visual
+          path: |
+            ${{ runner.temp }}/prks-visual-*.png
+            ${{ runner.temp }}/prks-visual-candidate.json
+            ${{ runner.temp }}/prks-visual-results.json
+          retention-days: 7
+          if-no-files-found: warn
