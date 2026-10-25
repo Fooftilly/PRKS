@@ -71,12 +71,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/ci/summarize_runtime_sbom.py \
-            --sbom "$RUNNER_TEMP/prks-runtime.spdx.json" \
-            --grype "$RUNNER_TEMP/prks-runtime.grype.json" \
-            --image-id-file "$RUNNER_TEMP/prks-runtime-image-id.txt" \
-            --json-output "$RUNNER_TEMP/prks-runtime-triage.json" \
-            --markdown-output "$RUNNER_TEMP/prks-runtime-triage.md"
+          cd "$RUNNER_TEMP"
+          python3 "$GITHUB_WORKSPACE/scripts/ci/summarize_runtime_sbom.py"
           cat "$RUNNER_TEMP/prks-runtime-triage.md" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Grype advisory report
