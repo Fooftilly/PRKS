@@ -17,7 +17,7 @@ from scripts.ci.plan_packaged_e2e import (
     EXTRA_PACKAGED_SMOKE_IDS,
     MAX_SMOKE_AFFECTED_TESTS,
     SAFE_VUE_VIEWS,
-    plan_packaged_e2e,
+    plan_packaged_e2e as _actual_plan_packaged_e2e,
     _untracked_frontend_app_paths,
     main,
 )
@@ -44,8 +44,29 @@ def inventory(*affected):
     return list(dict.fromkeys((*SMOKE_TEST_IDS, *EXTRA_PACKAGED_SMOKE_IDS, *affected)))
 
 
-BROWSE_CASE = "tests.e2e.test_browse_offline.BrowseOfflineTests.test_example"
-PROCESSING_CASE = "tests.e2e.test_processing_route_surface.ProcessingRouteTests.test_example"
+BROWSE_CASE = (
+    "tests.e2e.test_browse_offline.BrowseOfflineTests."
+    "test_progress_renders_offline_from_the_cached_catalog"
+)
+PROCESSING_CASE = (
+    "tests.e2e.test_processing_route_surface.ProcessingRouteSurfaceTests."
+    "test_processing_files_page_mounts_from_the_route"
+)
+
+
+def plan_packaged_e2e(paths, *, known_test_ids=None, **options):
+    """Inject a small explicit discovered-ID fixture into the *pure* plan test.
+
+    Production code always calls the real runner unittest discovery. Fixture
+    names are checked against real test method definitions below.
+    """
+    if known_test_ids is None:
+        return _actual_plan_packaged_e2e(paths, **options)
+    with patch(
+        "scripts.ci.plan_packaged_e2e._discover_complete_e2e_ids",
+        return_value=known_test_ids,
+    ):
+        return _actual_plan_packaged_e2e(paths, **options)
 
 
 class PackagedSelectionPolicyTests(unittest.TestCase):
@@ -84,21 +105,19 @@ class PackagedSelectionPolicyTests(unittest.TestCase):
         self.assertIn(PROCESSING_CASE, candidate["test_ids"])
         self.assertEqual(candidate["test_count"], 16)
 
-    def test_source_reproducibility_and_revision_stamp_are_obligatory(self):
-        safe = plan_packaged_e2e(
-            [PROGRESS, BUNDLE, SW],
-            known_test_ids=inventory(BROWSE_CASE),
-            path_diffs={SW: STAMP_DIFF},
-        )
-        self.assertEqual(safe["proposed_mode"], "smoke_affected")
+    def test_generated_assets_require_full_until_reproducibility_proof(self):
         for paths, diffs in (
+            ([PROGRESS, BUNDLE, SW], {SW: STAMP_DIFF}),
+            ([PROGRESS, BUNDLE], {}),
             ([PROGRESS, BUNDLE, SW], {}),
             ([PROGRESS, BUNDLE, SW], {SW: STAMP_DIFF.replace("DEPENDENCY_REVISION", "CACHE_NAME")}),
             ([BUNDLE], {SW: STAMP_DIFF}),
             ([PROGRESS, SW], {SW: STAMP_DIFF}),
         ):
             with self.subTest(paths=paths, diffs=diffs):
-                result = plan_packaged_e2e(paths, known_test_ids=inventory(BROWSE_CASE), path_diffs=diffs)
+                result = plan_packaged_e2e(
+                    paths, known_test_ids=inventory(BROWSE_CASE), path_diffs=diffs
+                )
                 self.assertEqual(result["proposed_mode"], "full")
 
     def test_narrow_allowlist_rejects_shared_and_durable_paths(self):
@@ -159,12 +178,15 @@ class PackagedSelectionPolicyTests(unittest.TestCase):
             self.assertEqual(main(), 0)
         self.assertEqual(json.loads(output.getvalue())["proposed_mode"], "full")
 
-    def test_dry_run_requires_complete_discovered_inventory(self):
-        dry = plan_packaged_e2e([PROGRESS])
-        self.assertTrue(dry["candidate"])
+    def test_dry_run_requires_current_complete_discovery(self):
+        with patch(
+            "scripts.ci.plan_packaged_e2e._discover_complete_e2e_ids",
+            side_effect=ValueError("synthetic failed discovery"),
+        ):
+            dry = plan_packaged_e2e([PROGRESS])
         self.assertEqual(dry["proposed_mode"], "full")
-        self.assertEqual(dry["test_ids"], [])
-        self.assertIn("discovery", dry["reason"])
+        self.assertEqual(dry["effective_mode"], "full")
+        self.assertIn("selection failed closed", dry["reason"])
         for ids in ([], [BROWSE_CASE], inventory(BROWSE_CASE)[:-1]):
             with self.subTest(ids=ids):
                 self.assertEqual(
@@ -225,6 +247,23 @@ class PackagedSelectionPolicyTests(unittest.TestCase):
         )
         self.assertEqual(proposal["proposed_mode"], "full")
         self.assertIn("too broad", proposal["reason"])
+
+    def test_affected_fixture_ids_are_real_unittest_methods(self):
+        import ast
+        for test_id in (BROWSE_CASE, PROCESSING_CASE):
+            module, class_name, method_name = test_id.rsplit(".", 2)
+            path = ROOT / (module.replace(".", "/") + ".py")
+            source = ast.parse(path.read_text(encoding="utf-8"))
+            classes = {
+                node.name: node
+                for node in source.body if isinstance(node, ast.ClassDef)
+            }
+            self.assertIn(class_name, classes)
+            methods = {
+                node.name for node in classes[class_name].body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            }
+            self.assertIn(method_name, methods)
 
     def test_real_manual_smoke_five_ids_match_single_source_of_truth(self):
         content = WORKFLOW.read_text(encoding="utf-8")

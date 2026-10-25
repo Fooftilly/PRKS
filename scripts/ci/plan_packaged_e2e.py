@@ -114,16 +114,14 @@ def _result(
 def plan_packaged_e2e(
     changed_paths,
     *,
-    known_test_ids=None,
     path_diffs=None,
     force_full: bool = False,
 ) -> dict:
     """Propose a reduced packaged leg, but ALWAYS return effective_mode=full.
 
-    Missing changes, incomplete test discovery, unknown paths, unverified
-    generated Vue companions, or ambiguous safety rules fail closed. In the
-    eventual activation PR, the real E2E test inventory must be discovered
-    *before* using selected IDs; selection must still fail full on errors.
+    Missing changes, failed current unittest discovery, unknown paths,
+    changed generated Vue assets or ambiguous safety rules fail closed.
+    Discovery must succeed before any reduced-coverage proposal is emitted.
     """
     if force_full:
         return _result("release, master, manual override or operator requires full")
@@ -156,9 +154,10 @@ def plan_packaged_e2e(
             # source E2E planner skips them (e.g. Dockerfile/workflows).
             return _result("unrecognized nonproduction companion: " + path)
         if _is_generated_companion(path):
-            # Already checked by the source planner: a generated companion
-            # without mapped Vue source and verified SW stamp requires full.
-            continue
+            # The source planner knows whether these outputs accompany a
+            # mapped Vue change, but cannot prove byte-for-byte reproducibility.
+            # Require FULL until an explicit build-proof gate is implemented.
+            return _result("generated frontend assets require full packaged E2E")
         if path not in SAFE_VUE_VIEWS:
             return _result("outside narrow feature-owned Vue view allowlist: " + path)
         view_paths.append(path)
@@ -169,14 +168,8 @@ def plan_packaged_e2e(
     if not features or "smoke" not in features:
         return _result("missing source-affected feature selection")
 
-    if known_test_ids is None:
-        return _result(
-            "eligible view paths, but exact E2E discovery is required before reduction",
-            candidate=True,
-            features=features,
-        )
     try:
-        ids = list(known_test_ids)
+        ids = _discover_complete_e2e_ids()
         if not ids or len(set(ids)) != len(ids) or not all(
             isinstance(tid, str) and tid.startswith("tests.e2e.") for tid in ids
         ):
@@ -208,6 +201,24 @@ def plan_packaged_e2e(
     )
 
 
+def _discover_complete_e2e_ids() -> list[str]:
+    """Use the runner's authoritative live unittest modules, not stale JSON.
+
+    Imports may require pinned development dependencies. If discovery fails
+    (including unittest's synthetic _FailedTest entries), choose full.
+    """
+    from tests.e2e import run
+
+    ids = run.discover_test_ids()
+    if (
+        not ids
+        or run.invalid_e2e_discovery_ids(ids)
+        or len(set(ids)) != len(ids)
+    ):
+        raise ValueError("incomplete E2E unittest discovery")
+    return ids
+
+
 def _untracked_frontend_app_paths(repo: Path) -> list[str]:
     """Include new Vue files absent from the shared E2E git-discovery prefixes.
 
@@ -234,11 +245,6 @@ def main() -> int:
         "--base", required=True, help="Existing single Git base revision (e.g. origin/master)"
     )
     parser.add_argument(
-        "--test-ids-json",
-        type=Path,
-        help="Optional JSON array from complete current E2E discovery; absent = full",
-    )
-    parser.add_argument(
         "--force-full", action="store_true", help="Release/high-risk/manual full override"
     )
     args = parser.parse_args()
@@ -250,11 +256,8 @@ def main() -> int:
         diffs = {}
         if "frontend/sw.js" in paths:
             diffs["frontend/sw.js"] = policy.service_worker_diff_for_plan(ROOT, args.base)
-        ids = None
-        if args.test_ids_json:
-            ids = json.loads(args.test_ids_json.read_text(encoding="utf-8"))
         plan = plan_packaged_e2e(
-            paths, known_test_ids=ids, path_diffs=diffs, force_full=args.force_full
+            paths, path_diffs=diffs, force_full=args.force_full
         )
     except (OSError, ValueError, policy.ChangeDiscoveryError) as exc:
         plan = _result("change discovery failed closed: " + type(exc).__name__)
