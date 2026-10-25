@@ -2,16 +2,7 @@ name: E2E Offline Person Durability Profile
 
 # Manual-only diagnostic under #740. Normal PR/master E2E costs are unchanged.
 on:
-  workflow_dispatch:
-    inputs:
-      scenario:
-        description: Which offline Person E2E scenario to profile
-        type: choice
-        default: create
-        required: true
-        options:
-          - create
-          - edit
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -58,14 +49,15 @@ jobs:
       - name: Ensure Chromium in repo cache
         run: python tests/e2e/install_browser.py
 
-      - name: Profile isolated offline Person scenario
+      - name: Profile both isolated offline Person scenarios
         shell: bash
         env:
           PRKS_E2E_PROFILE: "1"
-          SCENARIO: ${{ inputs.scenario }}
         run: |
           set -euo pipefail
-          case "$SCENARIO" in
+          # Keep dispatch parameter-free; profile both cases on one runner.
+          for SCENARIO in create edit; do
+            case "$SCENARIO" in
             create) TARGET=tests.e2e.test_person_create_offline.OfflinePersonCreateTests.test_a_person_created_offline_can_be_linked_and_both_reach_the_server ;;
             edit) TARGET=tests.e2e.test_person_edit_offline.OfflinePersonEditTests.test_one_offline_creation_carries_two_unrelated_families_behind_it ;;
             *) echo "Unknown Person scenario: $SCENARIO" >&2; exit 2 ;;
@@ -82,6 +74,7 @@ jobs:
               python tests/e2e/run.py --jobs 1 --no-pointer-capture --profile "$TARGET"
             echo "::endgroup::"
           done
+          done
 
           python - <<'PY'
           import json
@@ -90,8 +83,7 @@ jobs:
           from pathlib import Path
           from statistics import median
 
-          mode = os.environ["SCENARIO"]
-          stages = {
+          stage_sets = {
               "create": (
                   "person_create_setup", "person_create_warm_work",
                   "person_create_offline_create", "person_create_people_index",
@@ -105,47 +97,48 @@ jobs:
                   "person_edit_dependency_check", "person_edit_reconnect_settle",
                   "person_edit_server_verify",
               ),
-          }[mode]
-          root = Path(os.environ["RUNNER_TEMP"])
-          records = [
-              json.loads((root / f"person-{mode}-profile-{i}.json").read_text())
-              for i in (1, 2, 3)
-          ]
-          for i, result in enumerate(records, 1):
-              if any(result.get(key) != expected for key, expected in (
-                      ("tests", 1), ("failures", 0), ("errors", 0), ("skipped", 0))):
-                  raise SystemExit(f"Trial {i} did not finish one passing Chromium test")
-              values = result.get("phase_seconds") or {}
-              missing = set(stages) - values.keys()
-              failed = [x for x in values if x.startswith(f"person_{mode}_")
-                        and x.endswith("_failed")]
-              bad = [x for x in stages if x in values
-                     and (not math.isfinite(float(values[x])) or float(values[x]) < 0)]
-              if missing or failed or bad:
-                  raise SystemExit(f"Trial {i}: missing={sorted(missing)}, "
-                                   f"failed={sorted(failed)}, invalid={bad}")
-
-          report = [
-              f"## Offline Person {mode} phase profile",
-              "",
-              "One excluded warm-up; three passing fresh-storage Chromium trials.",
-              "All original UI, reload, dependency and server assertions remain.",
-              "Ordered phases overlap generic E2E infrastructure timings.",
-              "",
-              "| Phase | Median (s) | Trials (s) |",
-              "| --- | ---: | --- |",
-          ]
-          for key in stages:
-              values = [float(result["phase_seconds"][key]) for result in records]
-              report.append(f"| {chr(96)}{key}{chr(96)} | {median(values):.3f} | " +
-                            ", ".join(f"{v:.3f}" for v in values) + " |")
-          walls = [float(result["wall_seconds"]) for result in records]
-          report.extend(["", f"Single-test wall median: **{median(walls):.3f}s**.",
-                         "No runtime/timeout/retry/assertion/gate policy change."])
-          output = "\n".join(report) + "\n"
-          print(output)
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as out:
-              out.write(output)
+          }
+          for mode, stages in stage_sets.items():
+              root = Path(os.environ["RUNNER_TEMP"])
+              records = [
+                  json.loads((root / f"person-{mode}-profile-{i}.json").read_text())
+                  for i in (1, 2, 3)
+              ]
+              for i, result in enumerate(records, 1):
+                  if any(result.get(key) != expected for key, expected in (
+                          ("tests", 1), ("failures", 0), ("errors", 0), ("skipped", 0))):
+                      raise SystemExit(f"Trial {i} did not finish one passing Chromium test")
+                  values = result.get("phase_seconds") or {}
+                  missing = set(stages) - values.keys()
+                  failed = [x for x in values if x.startswith(f"person_{mode}_")
+                            and x.endswith("_failed")]
+                  bad = [x for x in stages if x in values
+                         and (not math.isfinite(float(values[x])) or float(values[x]) < 0)]
+                  if missing or failed or bad:
+                      raise SystemExit(f"Trial {i}: missing={sorted(missing)}, "
+                                       f"failed={sorted(failed)}, invalid={bad}")
+    
+              report = [
+                  f"## Offline Person {mode} phase profile",
+                  "",
+                  "One excluded warm-up; three passing fresh-storage Chromium trials.",
+                  "All original UI, reload, dependency and server assertions remain.",
+                  "Ordered phases overlap generic E2E infrastructure timings.",
+                  "",
+                  "| Phase | Median (s) | Trials (s) |",
+                  "| --- | ---: | --- |",
+              ]
+              for key in stages:
+                  values = [float(result["phase_seconds"][key]) for result in records]
+                  report.append(f"| {chr(96)}{key}{chr(96)} | {median(values):.3f} | " +
+                                ", ".join(f"{v:.3f}" for v in values) + " |")
+              walls = [float(result["wall_seconds"]) for result in records]
+              report.extend(["", f"Single-test wall median: **{median(walls):.3f}s**.",
+                             "No runtime/timeout/retry/assertion/gate policy change."])
+              output = "\n".join(report) + "\n"
+              print(output)
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as out:
+                  out.write(output)
           PY
 
       - name: Upload failure diagnostics only
