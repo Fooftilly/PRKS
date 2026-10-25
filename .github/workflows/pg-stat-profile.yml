@@ -1,0 +1,80 @@
+name: PostgreSQL statement profiling (advisory)
+
+# Opt-in on demand; on PRs only if the profiler itself changes.
+# This is not a required release or general-PR check.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - scripts/test-postgres
+      - scripts/pg_stat_profile.py
+      - tests/test_pg_stat_profile.py
+      - .github/workflows/pg-stat-profile.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  # Preserve exact-head validation if an older commit is manually rerun.
+  group: pg-profile-${{ github.event.pull_request.number || github.ref }}-${{ github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  synthetic-pg-profile:
+    name: Disposable PostgreSQL 18 query profiler
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install pinned runtime packages
+        run: python scripts/ci/install_pinned_python.py runtime
+      - name: Refuse caller-selected PostgreSQL before startup
+        shell: bash
+        env:
+          PRKS_TEST_DATABASE_URL: "postgresql://postgres@127.0.0.1/postgres"
+        run: |
+          set -euo pipefail
+          if scripts/test-postgres --profile > "$RUNNER_TEMP/profile-guard.out" 2> "$RUNNER_TEMP/profile-guard.err"; then
+            echo "The profiling wrapper accepted an external PostgreSQL URL" >&2
+            exit 1
+          fi
+          grep -Fq "refuses PRKS_TEST_DATABASE_URL" "$RUNNER_TEMP/profile-guard.err"
+          if grep -Fq "starting" "$RUNNER_TEMP/profile-guard.err"; then
+            echo "The profiling wrapper started a server despite external database config" >&2
+            exit 1
+          fi
+          test ! -s "$RUNNER_TEMP/profile-guard.out"
+      - name: Profile synthetic PostgreSQL facade operations
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Refuse external PostgreSQL servers; force a disposable server.
+          unset PRKS_TEST_DATABASE_URL PRKS_DATABASE_URL PRKS_DATABASE_URL_FILE
+          scripts/test-postgres --profile --sizes 12,48 --repetitions 4 > "$RUNNER_TEMP/pg-profile.json"
+          python - "$RUNNER_TEMP/pg-profile.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          assert report["tool"] == "pg_stat_statements"
+          assert report["server_version_num"] >= 180000
+          assert len(report["profiles"]) == 6
+          assert all(profile["top_statements"] for profile in report["profiles"])
+          allowed = {
+              "query_fingerprint", "calls", "total_exec_ms", "mean_exec_ms",
+              "rows", "shared_blks_hit", "shared_blks_read",
+              "shared_cache_hit_percent", "temp_blks_read", "temp_blks_written",
+          }
+          assert all(set(statement) <= allowed
+                     for profile in report["profiles"]
+                     for statement in profile["top_statements"])
+          print(json.dumps(report, indent=2, sort_keys=True))
+          PY
