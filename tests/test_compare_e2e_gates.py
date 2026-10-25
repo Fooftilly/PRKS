@@ -6,7 +6,7 @@ import sys
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, call, patch
 
 from scripts.ci.compare_e2e_gates import (
     InvalidBenchmark, compare, summarize, verify_source_full_plan,
@@ -155,21 +155,31 @@ class CompareFullE2EGatesTests(unittest.TestCase):
     def test_plan_log_proves_full_not_affected_selection(self):
         plan_jobs = jobs("source")
         plan_jobs[0]["id"] = 122
+        signed = "https://productionresultssa.blob.core.windows.net/actions-results/log.txt"
+        api = Mock(status_code=302, headers={"Location": signed})
+        download = Mock(
+            status_code=200,
+            text=("2026-10-24T20:58:29.7819858Z "
+                  "mode=full run=true features=[] test_count=847 shards=6 pointer=true\n"),
+        )
         with patch("scripts.ci.compare_e2e_gates.requests.get") as request:
-            response = request.return_value
-            response.status_code = 200
-            response.text = (
-                "2026-10-24T20:58:29.7819858Z "
-                "mode=full run=true features=[] test_count=847 shards=6 pointer=true\n"
-            )
-            verify_source_full_plan("Fooftilly/PRKS", plan_jobs)
-            request.assert_called_once_with(
-                "https://api.github.com/repos/Fooftilly/PRKS/actions/jobs/122/logs",
-                headers={"Accept": "application/vnd.github+json",
-                         "User-Agent": "PRKS-E2E-benchmark"},
-                timeout=30, verify=True, allow_redirects=True,
-            )
-            self.assertNotIn("Authorization", request.call_args.kwargs["headers"])
+            request.side_effect = [api, download]
+            verify_source_full_plan("Fooftilly/PRKS", plan_jobs, "test-token")
+            self.assertEqual(request.call_args_list, [
+                call(
+                    "https://api.github.com/repos/Fooftilly/PRKS/actions/jobs/122/logs",
+                    headers={
+                        "Accept": "application/vnd.github+json",
+                        "User-Agent": "PRKS-E2E-benchmark",
+                        "Authorization": "Bearer test-token",
+                    },
+                    timeout=30, verify=True, allow_redirects=False,
+                ),
+                call(
+                    signed, headers={"User-Agent": "PRKS-E2E-benchmark"},
+                    timeout=30, verify=True, allow_redirects=False,
+                ),
+            ])
 
             for bad in (
                 "mode=affected run=true features=[\"tiling\"] test_count=201 shards=6 pointer=true",
@@ -178,9 +188,23 @@ class CompareFullE2EGatesTests(unittest.TestCase):
                 "unknown planner output",
             ):
                 with self.subTest(bad=bad):
-                    response.text = "2026-10-24T20:58:29.7819858Z " + bad + "\n"
+                    download.text = "2026-10-24T20:58:29.7819858Z " + bad + "\n"
+                    request.side_effect = [api, download]
                     with self.assertRaisesRegex(InvalidBenchmark, "did not prove"):
-                        verify_source_full_plan("Fooftilly/PRKS", plan_jobs)
+                        verify_source_full_plan("Fooftilly/PRKS", plan_jobs, "test-token")
+
+    def test_plan_log_requires_token_and_https_signed_redirect(self):
+        plan_jobs = jobs("source")
+        plan_jobs[0]["id"] = 122
+        with patch("scripts.ci.compare_e2e_gates.requests.get") as request:
+            with self.assertRaisesRegex(InvalidBenchmark, "TOKEN"):
+                verify_source_full_plan("Fooftilly/PRKS", plan_jobs, None)
+            request.assert_not_called()
+            request.return_value.status_code = 302
+            request.return_value.headers = {"Location": "http://example.org/log"}
+            with self.assertRaisesRegex(InvalidBenchmark, "Invalid signed"):
+                verify_source_full_plan("Fooftilly/PRKS", plan_jobs, "test-token")
+            request.assert_called_once()
 
     def test_direct_script_help_resolves_package_imports(self):
         script = Path(__file__).resolve().parents[1] / "scripts" / "ci" / "compare_e2e_gates.py"
