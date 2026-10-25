@@ -12,6 +12,8 @@ on:
       - "docker-entrypoint.sh"
       - "requirements.txt"
       - "dependency-inventory.json"
+      - "scripts/ci/summarize_runtime_sbom.py"
+      - "tests/test_runtime_sbom_summary.py"
 
 permissions:
   contents: read
@@ -30,6 +32,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Check triage summarizer invariants (no Docker needed)
+        run: python3 -m unittest -q tests.test_runtime_sbom_summary
 
       # Scan only a local built runtime image, not source dependencies.
       # The runtime Dockerfile omits test tooling and Node/npm.
@@ -62,54 +67,17 @@ jobs:
           output-format: json
           output-file: ${{ runner.temp }}/prks-runtime.grype.json
 
-      - name: Validate outputs and summarize severities
+      - name: Validate and summarize runtime vulnerability signals
         shell: bash
         run: |
-          python3 - <<'PY'
-          import collections
-          import json
-          import os
-          from pathlib import Path
-
-          root = Path(os.environ["RUNNER_TEMP"])
-          sbom = json.loads((root / "prks-runtime.spdx.json").read_text(encoding="utf-8"))
-          scan = json.loads((root / "prks-runtime.grype.json").read_text(encoding="utf-8"))
-          if not str(sbom.get("spdxVersion", "")).startswith("SPDX-"):
-              raise SystemExit("Missing SPDX format marker")
-          packages = sbom.get("packages")
-          if not isinstance(packages, list) or not packages:
-              raise SystemExit("Built runtime image SBOM must contain packages")
-          image_id = (root / "prks-runtime-image-id.txt").read_text(encoding="utf-8").strip()
-          if not image_id.startswith("sha256:"):
-              raise SystemExit("Missing built image digest")
-          matches = scan.get("matches")
-          if not isinstance(matches, list):
-              raise SystemExit("Grype report missing matches list")
-          database = scan.get("descriptor", {}).get("db") or {}
-          db_built = (database.get("status") or {}).get("built") or "unavailable (see Grype artifact)"
-          severities = collections.Counter(
-              str(match.get("vulnerability", {}).get("severity", "Unknown"))
-              for match in matches
-          )
-          summary = [
-              "## Advisory runtime-image supply-chain pilot",
-              "",
-              f"- Built runtime image ID: `{image_id}`",
-              f"- Image packages (Syft SPDX): {len(packages)}",
-              f"- Grype DB built: {db_built}",
-              f"- Grype vulnerability matches: {len(matches)}",
-              "- Severity counts: " + ", ".join(
-                  f"{severity}={severities[severity]}"
-                  for severity in ("Critical", "High", "Medium", "Low", "Negligible", "Unknown")
-              ),
-              "- No gating threshold or waiver is implied; triage findings before release.",
-              "- Base tags currently float; image ID identifies this run, not a reproducible Dockerfile pin.",
-              "- Only workflow artifacts hold full details; no repository/user data is supplied.",
-          ]
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
-              output.write("\n".join(summary) + "\n")
-          print("\n".join(summary))
-          PY
+          set -euo pipefail
+          python3 scripts/ci/summarize_runtime_sbom.py \
+            --sbom "$RUNNER_TEMP/prks-runtime.spdx.json" \
+            --grype "$RUNNER_TEMP/prks-runtime.grype.json" \
+            --image-id-file "$RUNNER_TEMP/prks-runtime-image-id.txt" \
+            --json-output "$RUNNER_TEMP/prks-runtime-triage.json" \
+            --markdown-output "$RUNNER_TEMP/prks-runtime-triage.md"
+          cat "$RUNNER_TEMP/prks-runtime-triage.md" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Grype advisory report
         # Preserve diagnosis on scan/validation failure when Grype produced JSON.
@@ -120,5 +88,6 @@ jobs:
           path: |
             ${{ runner.temp }}/prks-runtime.grype.json
             ${{ runner.temp }}/prks-runtime-image-id.txt
+            ${{ runner.temp }}/prks-runtime-triage.json
           retention-days: 7
           if-no-files-found: warn
