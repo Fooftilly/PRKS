@@ -54,7 +54,7 @@ def fixture(*rows: dict) -> tuple[dict, dict]:
                 "version": "0.121.0",
                 "timestamp": "2026-10-25T14:46:00Z",
                 "db": {"status": {"built": "2026-10-25T06:27:34Z"}},
-                "configuration": {"secret": "never publish this"},
+                "configuration": {"probe_label": "fixture content must never appear in report"},
             },
             "distro": {"name": "debian", "version": "13"},
             "matches": list(rows),
@@ -118,14 +118,14 @@ class RuntimeSbomSummaryTests(unittest.TestCase):
         self.assertTrue(all(v["fix_state"] == "fix-listed" for v in output["triage_examples"]))
 
     def test_whitelisted_labels_no_private_paths_or_descriptions(self) -> None:
-        secret = "private-document-name"
-        sample = row("CVE-2026-12345", f"bad|{secret}", installed=f"1.0\n{secret}")
+        probe_label = "fixture confidential identifier"
+        sample = row("CVE-2026-12345", f"bad|{probe_label}", installed=f"1.0\n{probe_label}")
         sbom, scan = fixture(sample)
-        scan["matches"][0]["vulnerability"]["description"] = secret
-        scan["matches"][0]["artifact"]["locations"] = [{"path": "/home/user/" + secret}]
+        scan["matches"][0]["vulnerability"]["description"] = probe_label
+        scan["matches"][0]["artifact"]["locations"] = [{"path": "/home/user/" + probe_label}]
         output = summarize(sbom, scan, IMAGE)
         text = markdown(output) + json.dumps(output)
-        self.assertNotIn(secret, text)
+        self.assertNotIn(probe_label, text)
         self.assertNotIn("locations", text)
         self.assertNotIn("description", text)
         self.assertEqual(output["match_count"], 1)
