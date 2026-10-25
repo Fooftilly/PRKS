@@ -214,7 +214,7 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
         fake_sync_api = ModuleType("playwright.sync_api")
         fake_sync_api.sync_playwright = Mock(return_value=fake_session)
         server = Mock()
-        server.ids = {"work_a": "synthetic-work"}
+        server.ids = {"work_a": "synthetic-work", "work_b": "synthetic-related"}
         with (
             patch.dict(sys.modules, {
                 "playwright": fake_playwright,
