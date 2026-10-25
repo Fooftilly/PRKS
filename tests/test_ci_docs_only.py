@@ -234,6 +234,25 @@ class DocsOnlyLinkValidationTests(unittest.TestCase):
             self.assertEqual(len(errors), 2)
             self.assertTrue(all("missing relative target" in x for x in errors))
 
+    def test_list_nested_fences_use_commonmark_containers(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _write(root, "docs/guide.md", (
+                "# Commands\n"
+                "- ```bash\n"
+                "  [not-a-link](missing.md)\n"
+                "  ```\n"
+            ))
+            self.assertEqual(check_markdown(root, "docs/guide.md"), [])
+            _write(root, "docs/guide.md", (
+                "- ```bash\n"
+                "  echo missing end\n"
+            ))
+            self.assertTrue(any(
+                "unclosed" in error
+                for error in check_markdown(root, "docs/guide.md")
+            ))
+
     def test_broken_relative_link_and_anchor_fail(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
