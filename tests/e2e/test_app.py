@@ -3464,7 +3464,7 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
         self.assertFalse(_pdf_has_pending_sync(page))
 
     def test_an_edit_the_viewer_never_commits_is_reported_and_does_not_stick(self):
-        server, page, _collector = self._start_app()
+        server, page, _collector = self._start_app(install_clock=True)
         work_id = server.ids["work_a"]
         _open_work_from_home(page, WORK_A_TITLE)
         _wait_pdf_viewer(page)
@@ -3495,6 +3495,24 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
         )
         _wait_pdf_annotation_durable(page)
         _save_annotation_comment(page, ann_id, "never committed")
+        # Saving can await materialization before arming the watchdog.
+        # The visible provisional edit is applied immediately after
+        # noteAnnotationEditAttempt arms that timer; assert it exists before
+        # advancing the virtual clock, or the test could wait 10s in real time.
+        page.wait_for_function(
+            """(id) => {
+                const viewer = %s;
+                const row = (viewer.getAnnotations() || [])
+                    .map(ann => (ann && ann.raw ? ann.raw : ann))
+                    .find(ann => ann && String(ann.id) === id);
+                return !!row && row.contents === 'never committed';
+            }""" % _FOCUSED_VIEWER,
+            arg=ann_id,
+            timeout=5000,
+        )
+        # Exercise the real 10s production watchdog, keeping the original
+        # warning, server, local-durability and recovery assertions.
+        page.clock.fast_forward(10_100)
         page.wait_for_function(
             """() => {
                 const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
