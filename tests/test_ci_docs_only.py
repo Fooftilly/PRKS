@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import re
 import subprocess  # nosec B404 - fixed local test fixture commands
 import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.ci.check_docs_only import check_markdown
+from scripts.ci.check_docs_only import _anchors, check_markdown
 from scripts.ci.docs_only import changed_documentation, is_approved_markdown
 
 
@@ -109,40 +110,99 @@ class DocsOnlyWorkflowTests(unittest.TestCase):
         self.assertIn("name: Unit / API / contract tests", unit)
         self.assertIn("Classify documentation-only PR (fail closed)", unit)
         self.assertIn("git fetch --no-tags --depth=1 origin", unit)
-        self.assertIn("Validate changed documentation links, anchors, and fences", unit)
+        self.assertIn(
+            'git show "$PRKS_PR_BASE_SHA:scripts/ci/docs_only.py"', unit
+        )
+        self.assertIn('python "$base_classifier" --base "$PRKS_PR_BASE_SHA"', unit)
+        self.assertNotIn("python -m scripts.ci.docs_only --base", unit)
         self.assertNotIn("needs:", unit)
-        # Checkout + required job are unconditional; actual heavy commands
-        # remain unchanged but guarded by the shared classifier output.
-        self.assertEqual(unit.count("if: steps.docs-scope.outputs.docs_only != 'true'"), 4)
+
+        def step(name: str) -> str:
+            match = re.search(
+                r"(?ms)^      - name: " + re.escape(name)
+                + r"\n(.*?)(?=^      - name: |\Z)",
+                unit,
+            )
+            self.assertIsNotNone(match, name)
+            return match.group(1)
+
+        for name in (
+            "Set up Python",
+            "Set up Node.js",
+            "Install pinned runtime dependencies",
+            "Run PRKS unit, API, structural, and Node tests",
+        ):
+            self.assertIn(
+                "if: steps.docs-scope.outputs.docs_only != 'true'", step(name)
+            )
+        mergify = step("Report unit test results to Mergify")
+        self.assertIn(
+            "steps.docs-scope.outputs.docs_only != 'true' &&", mergify
+        )
+        docs = step("Validate changed documentation links, anchors, and fences")
+        install = step("Install pinned Markdown validator (docs-only PR)")
+        self.assertIn("if: steps.docs-scope.outputs.docs_only == 'true'", docs)
+        self.assertIn("if: steps.docs-scope.outputs.docs_only == 'true'", install)
+        self.assertIn("run: python scripts/ci/install_pinned_python.py docs", install)
+        self.assertIn("run: python -m scripts.ci.check_docs_only", docs)
         self.assertIn("run: python run_tests.py", unit)
-        self.assertIn("run: python -m scripts.ci.check_docs_only", unit)
 
 
 class DocsOnlyLinkValidationTests(unittest.TestCase):
-    def test_valid_links_headings_duplicates_and_fences(self):
+    def test_valid_links_headings_references_and_fences(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            _write(root, "README.md", "# Top\n## Repeated\n## Repeated\n## my_func\n## Foo & Bar\n")
+            fence = chr(96) * 3
+            _write(root, "README.md", (
+                "# Top\n## Repeated\n## Repeated\n"
+                "## my_func\n## Foo & Bar\n"
+            ))
+            _write(root, "docs/guide(v2).md", "# Contents\n")
             _write(root, "docs/guide.md", (
-                "# Guide\n"
+                "# [Install](https://example.org/setup.md)\n"
+                "Getting started\n===============\n"
                 "[readme](../README.md#top)\n"
-                "[repeated](../README.md#repeated-1)\n"                "[underscore](../README.md#my_func)\n"
+                "[repeated](../README.md#repeated-1)\n"
+                "[underscore](../README.md#my_func)\n"
                 "[punctuation](../README.md#foo--bar)\n"
-
-                "[here](#guide)\n"
-                "```md\n[invalid](missing.md)\n```\n"
+                "[here](#install) [setext](#getting-started)\n"
+                "[paren](guide(v2).md)\n"
+                "[referenced][manual]\n"
+                "[manual]: guide(v2).md\n"
+                f"{fence}md\n[invalid](missing.md)\n{fence}\n"
                 "[external](https://example.org/missing.md)\n"
             ))
             self.assertEqual(check_markdown(root, "docs/guide.md"), [])
 
+    def test_fenced_headings_do_not_create_anchors(self):
+        fence = chr(96) * 3
+        content = (
+            "# Setup\n"
+            f"{fence}bash\n# Setup\n{fence}\n"
+            "## Setup\n"
+        )
+        self.assertEqual(_anchors(content), {"setup", "setup-1"})
+
+    def test_broken_references_and_parenthesized_paths_fail(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _write(root, "docs/guide.md", (
+                "[broken][manual]\n[manual]: missing(v2).md\n"
+                "[missing](not-there(v2).md)\n"
+            ))
+            errors = check_markdown(root, "docs/guide.md")
+            self.assertEqual(len(errors), 2)
+            self.assertTrue(all("missing relative target" in x for x in errors))
+
     def test_broken_relative_link_and_anchor_fail(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
+            fence = chr(96) * 3
             _write(root, "README.md", "# Present\n")
             _write(root, "docs/guide.md", (
                 "[missing](not-here.md)\n"
                 "[anchor](../README.md#absent)\n"
-                "```python\nprint('no closing fence')\n"
+                f"{fence}python\nprint('no closing fence')\n"
             ))
             errors = check_markdown(root, "docs/guide.md")
             self.assertEqual(len(errors), 3)
