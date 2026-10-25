@@ -1223,7 +1223,7 @@ class RepoGateLiveTests(unittest.TestCase):
         self.assertNotIn("requirements-dev.txt", static_install)
         expected_unit = dict(runtime, **{
             name: dev[name]
-            for name in ("openapi-core", "hypothesis", "markdown-it-py", "mdurl")
+            for name in ("openapi-core", "hypothesis", "markdown-it-py", "mdurl", "requests")
         })
         expected_pg = dict(runtime)
 
