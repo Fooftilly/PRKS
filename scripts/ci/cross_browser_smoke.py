@@ -38,6 +38,15 @@ class SmokeFailure(RuntimeError):
         super().__init__(f"{engine}/{stage} ({cause_type})")
 
 
+def close_preserving_failure(resource, *, engine: str, stage: str, failed: bool) -> None:
+    """Do not replace the primary failure with an error during cleanup."""
+    try:
+        resource.close()
+    except Exception as exc:
+        if not failed:
+            raise SmokeFailure(engine, stage, type(exc).__name__) from None
+
+
 def verify_isolation(environ: dict[str, str]) -> None:
     """Never let a synthetic cross-browser test inherit a real database."""
     if any(environ.get(name, "").strip() for name in INHERITED_DB_SETTINGS):
@@ -67,6 +76,7 @@ def smoke(browser, origin: str, work_id: str, *, engine: str) -> None:
     """One real app session; label each failure without printing page details."""
     stage = "app_open"
     context = None
+    failed = False
     try:
         page, context, collector = open_app_page(browser, origin)
         stage = "folders"
@@ -96,11 +106,14 @@ def smoke(browser, origin: str, work_id: str, *, engine: str) -> None:
         stage = "browser_errors"
         collector.assert_clean()
     except Exception as exc:
+        failed = True
         # Playwright exceptions may include URLs, selectors and page text.
         raise SmokeFailure(engine, stage, type(exc).__name__) from None
     finally:
         if context is not None:
-            context.close()
+            close_preserving_failure(
+                context, engine=engine, stage="context_close", failed=failed
+            )
 
 
 def run(engines: tuple[str, ...], output: Path | None = None) -> dict:
@@ -128,6 +141,8 @@ def run(engines: tuple[str, ...], output: Path | None = None) -> dict:
             for engine in engines:
                 stage = "browser_launch"
                 browser = getattr(playwright, engine).launch(headless=True)
+                stage = "browser_smoke"
+                failed = False
                 try:
                     smoke(browser, server.origin, server.ids["work_a"], engine=engine)
                     stage = "browser_version"
@@ -137,9 +152,13 @@ def run(engines: tuple[str, ...], output: Path | None = None) -> dict:
                         "checks": list(CHECKS),
                         "passed": True,
                     })
+                except BaseException:
+                    failed = True
+                    raise
                 finally:
-                    stage = "browser_close"
-                    browser.close()
+                    close_preserving_failure(
+                        browser, engine=engine, stage="browser_close", failed=failed
+                    )
         engine = "setup"
         stage = "report_validation"
         verify_report(report, engines)
