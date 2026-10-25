@@ -33,3 +33,5 @@
 **Materialization** — Producing/reconciling derived bytes/state from canonical structured data, such as applying the canonical annotation set to managed PDF bytes.
 
 **Rollout status** — The living document `docs/local-first-rollout-status.md` that records which local-first families are currently durable/offline-capable.
+
+For help diagnosing missing search results, offline synchronization, or annotation state, see [Troubleshooting](Troubleshooting.md).
