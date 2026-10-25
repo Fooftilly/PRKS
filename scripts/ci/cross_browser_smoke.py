@@ -125,6 +125,31 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
             timeout=30000,
         )
         snap = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        # Distinct tab IDs alone are insufficient: confirm two separately
+        # owned Work and PDF resources, not two views of the same Work.
+        page.wait_for_function(
+            """({mainTabId, secondaryTabId, mainWorkId, secondaryWorkId}) => {
+                const get = window.prksGetTabContext;
+                const main = get && get(mainTabId);
+                const secondary = get && get(secondaryTabId);
+                const workA = main && main.getEntity && main.getEntity('work');
+                const workB = secondary && secondary.getEntity && secondary.getEntity('work');
+                const pdfA = main && main.getResource && main.getResource('pdf');
+                const pdfB = secondary && secondary.getResource && secondary.getResource('pdf');
+                return !!(workA && workB && pdfA && pdfB &&
+                    String(workA.id) === String(mainWorkId) &&
+                    String(workB.id) === String(secondaryWorkId) &&
+                    String(pdfA.workId) === String(mainWorkId) &&
+                    String(pdfB.workId) === String(secondaryWorkId));
+            }""",
+            arg={
+                "mainTabId": snap["mainTabId"],
+                "secondaryTabId": snap["secondaryTree"]["tabId"],
+                "mainWorkId": work_id,
+                "secondaryWorkId": related_work_id,
+            },
+            timeout=30000,
+        )
         # Independently wait for both mounted PDFs. Merely seeing two panes
         # is not evidence that both reading contexts finished loading.
         _wait_pdf_tab(page, snap["mainTabId"])
