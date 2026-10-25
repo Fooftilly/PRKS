@@ -64,6 +64,10 @@ jobs:
           fi
           echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
 
+      - name: Install pinned Markdown validator (docs-only PR)
+        if: steps.docs-scope.outputs.docs_only == 'true'
+        run: python scripts/ci/install_pinned_python.py docs
+
       - name: Validate changed documentation links, anchors, and fences
         if: steps.docs-scope.outputs.docs_only == 'true'
         env:
