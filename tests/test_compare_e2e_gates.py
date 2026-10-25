@@ -103,6 +103,7 @@ class CompareFullE2EGatesTests(unittest.TestCase):
         for key, value in (
             ("run_attempt", 2), ("status", "in_progress"),
             ("conclusion", "failure"), ("path", ".github/workflows/other.yml"),
+            ("event", "workflow_dispatch"),
         ):
             with self.subTest(key=key):
                 payload = run("source")
