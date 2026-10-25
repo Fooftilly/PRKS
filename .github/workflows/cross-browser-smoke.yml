@@ -74,7 +74,7 @@ jobs:
               result = json.loads(path.read_text(encoding="utf-8"))
               verify_report(result, ENGINES)
               lines += [
-                  "| Browser | Playwright version | Completed interactions |",
+                  "| Browser | Browser version | Completed interactions |",
                   "| --- | --- | --- |",
               ]
               for item in result["browsers"]:
