@@ -18,14 +18,14 @@ _HEADING = re.compile(r"^ {0,3}#{1,6}\s+(.+?)\s*#*\s*$")
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 _TAG = re.compile(r"<[^>]+>")
 _PUNCT = re.compile(r"[^\w\- ]", re.UNICODE)
-_SPACES = re.compile(r"\s+")
 _HTML_ANCHOR = re.compile(r"<a\s+(?:id|name)=[\"']([^\"']+)[\"']", re.I)
 
 
 def _slug(heading: str) -> str:
     title = _TAG.sub("", heading)
-    title = re.sub(r"[\\`*_~]", "", title)
-    return _SPACES.sub("-", _PUNCT.sub("", title.lower()).strip())
+    title = re.sub(r"[\\`*~]", "", title)
+    # Match GitHub: keep underscores and replace each space individually.
+    return _PUNCT.sub("", title.lower()).strip().replace(" ", "-")
 
 
 def _visible_lines(content: str) -> tuple[list[tuple[int, str]], str]:
