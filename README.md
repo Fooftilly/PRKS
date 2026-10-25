@@ -98,11 +98,20 @@ Create a private password file outside version control and start only the databa
 ```bash
 install -d -m 700 secrets
 umask 077
+# Refuse symlinks (including dangling ones) and non-regular password paths.
+if [ -L secrets/db_password ] || { [ -e secrets/db_password ] && [ ! -f secrets/db_password ]; }; then
+  echo "secrets/db_password must be a regular, non-symlink file" >&2
+  exit 1
+fi
 if [ ! -e secrets/db_password ]; then
-  openssl rand -hex 32 > secrets/db_password
+  # noclobber also refuses to overwrite a file inserted after the check.
+  ( set -C; openssl rand -hex 32 > secrets/db_password ) || exit 1
 fi
 chmod 600 secrets/db_password
-test -s secrets/db_password || { echo "Empty database password file" >&2; exit 1; }
+test -f secrets/db_password && test -s secrets/db_password || {
+  echo "Missing or empty database password file" >&2
+  exit 1
+}
 docker compose -f docker-compose.yml -f docker-compose.postgres.yml --profile postgres up -d db
 docker compose -f docker-compose.yml -f docker-compose.postgres.yml --profile postgres ps db
 ```
