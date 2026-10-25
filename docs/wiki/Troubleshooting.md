@@ -1,6 +1,6 @@
 # Troubleshooting
 
-This page provides first-response diagnosis. For exact current commands/configuration, also check the repository [README](https://github.com/Fooftilly/PRKS/blob/master/README.md).
+This page provides first-response diagnosis. For terminology such as canonical and derived data, see the [Glossary](Glossary.md). For exact current commands/configuration, also check the repository [README](https://github.com/Fooftilly/PRKS/blob/master/README.md).
 
 ## PRKS exits before startup
 
