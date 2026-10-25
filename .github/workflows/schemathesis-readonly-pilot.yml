@@ -59,7 +59,7 @@ jobs:
           - One allowlisted operation: GET /api/publishers
           - Schema: docs/api/openapi-publishers.json, checked against the live fragment and Pydantic builder
           - Synthetic disposable --testing instance, Host admission guard, seeded Publishers
-          - Fixed seed 855; max 25 examples, 35s scanner time budget, single worker
+          - Fixed seed 855; max 25 fuzz examples (plus fixed examples phase), 75s CLI timeout, single worker
           - No POST, PATCH, DELETE, stateful sequences, production PostgreSQL sessions or user libraries
           - Unexpected 5xx, HTTP status, content-type and response-schema checks enabled
           - No raw generated HTTP requests or fuzz payloads are uploaded
