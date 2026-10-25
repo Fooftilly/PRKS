@@ -44,6 +44,76 @@ _SPLIT_PDF_OWNERS = """({mainTabId, secondaryTabId, mainWorkId, secondaryWorkId}
 }"""
 
 
+# In-memory, fixture-only WebKit diagnostics. Captures *only* known error
+# categories, static script paths and bounded line numbers; never messages,
+# URLs, stacks, request bodies or content. Installed again on each reload.
+_SMOKE_ERROR_PROBE = r"""(() => {
+    if (window.__prksSmokeErrorProbe) return;
+    const entries = [];
+    Object.defineProperty(window, '__prksSmokeErrorProbe', { value: entries });
+    const names = new Set([
+        'TypeError', 'ReferenceError', 'SyntaxError', 'RangeError', 'Error',
+        'AbortError', 'InvalidStateError', 'SecurityError', 'NotFoundError',
+        'NetworkError', 'UnknownError'
+    ]);
+    const source = (url, lineno) => {
+        try {
+            const u = new URL(url, location.href);
+            const path = u.pathname;
+            const match = /^\\/(js|vue|assets|vendor)\\/([A-Za-z0-9_./-]+\\.js)$/.exec(path);
+            if (u.origin !== location.origin || !match || path.includes('..')) return 'unknown';
+            const line = Number(lineno);
+            return match[1] + '-' + match[2].replaceAll('/', '-') +
+                (Number.isInteger(line) && line > 0 && line <= 999999 ? '-' + line : '');
+        } catch (_) { return 'unknown'; }
+    };
+    const record = (type, reason, url, line) => {
+        if (entries.length >= 5) return;
+        const name = reason && typeof reason.name === 'string' ? reason.name : '';
+        const ctor = reason && reason.constructor && reason.constructor.name;
+        entries.push({
+            kind: type, name: names.has(name) ? name : names.has(ctor) ? ctor : 'unknown',
+            source: source(url, line)
+        });
+    };
+    window.addEventListener('error', e =>
+        record('window', e.error, e.filename || '', e.lineno || 0));
+    window.addEventListener('unhandledrejection', e =>
+        record('promise', e.reason, '', 0));
+})()"""
+
+
+def probe_error_summary(page) -> str:
+    """Read only bounded metadata pre-sanitized by the synthetic page probe."""
+    try:
+        events = page.evaluate("() => window.__prksSmokeErrorProbe || []")
+        if not isinstance(events, list):
+            return "none"
+        permitted = {"window", "promise"}
+        names = {
+            "TypeError", "ReferenceError", "SyntaxError", "RangeError", "Error",
+            "AbortError", "InvalidStateError", "SecurityError", "NotFoundError",
+            "NetworkError", "UnknownError",
+        }
+        labels = []
+        for event in events[:5]:
+            if not isinstance(event, dict):
+                continue
+            kind = event.get("kind")
+            name = event.get("name")
+            src = event.get("source")
+            if kind not in permitted or name not in names | {"unknown"}:
+                continue
+            if not isinstance(src, str) or len(src) > 115 or not all(
+                ch.isascii() and (ch.isalnum() or ch in "-_.") for ch in src
+            ):
+                src = "unknown"
+            labels.append(kind + "-" + name.lower() + "-" + src)
+        return "_".join(labels) if labels else "none"
+    except Exception:
+        return "unavailable"
+
+
 class SmokeFailure(RuntimeError):
     """Only synthetic engine/stage and exception type; no browser diagnostics."""
 
@@ -107,15 +177,15 @@ def collector_failure_categories(collector) -> str:
     return "_".join(flagged) or "unknown"
 
 
-def check_browser_errors(collector, *, engine: str, phase: str) -> None:
+def check_browser_errors(collector, *, engine: str, phase: str, page=None) -> None:
     """Fail fast with only synthetic phase + allowlisted collector metadata."""
     try:
         collector.assert_clean()
     except AssertionError:
-        raise SmokeFailure(
-            engine, "browser_errors_" + phase + "_" + collector_failure_categories(collector),
-            "AssertionError",
-        ) from None
+        label = "browser_errors_" + phase + "_" + collector_failure_categories(collector)
+        if page is not None:
+            label += "_events-" + probe_error_summary(page)
+        raise SmokeFailure(engine, label, "AssertionError") from None
 
 
 def verify_isolation(environ: dict[str, str]) -> None:
@@ -150,6 +220,9 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
     failed = False
     try:
         page, context, collector = open_app_page(browser, origin)
+        # Current page plus any fresh document opened during the smoke.
+        context.add_init_script(_SMOKE_ERROR_PROBE)
+        page.evaluate(_SMOKE_ERROR_PROBE)
         stage = "folders"
         page.locator("[data-prks-folder-library-view]").wait_for(
             state="visible", timeout=15000
@@ -201,7 +274,7 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
             arg={"id": work_id, "text": note_text},
             timeout=30000,
         )
-        check_browser_errors(collector, engine=engine, phase="after_notes")
+        check_browser_errors(collector, engine=engine, phase="after_notes", page=page)
         stage = "settings_focus"
         settings = page.locator("button.settings-btn")
         settings.focus()
@@ -216,13 +289,13 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
             "document.activeElement.classList.contains('settings-btn'))"
         ):
             raise AssertionError("settings dialog did not restore keyboard focus")
-        check_browser_errors(collector, engine=engine, phase="after_settings")
+        check_browser_errors(collector, engine=engine, phase="after_settings", page=page)
         stage = "pdf_render"
         # Existing Chromium E2E readiness contract: a real page image, not
         # merely a PDF toolbar or a completed HTTP response.
         _wait_pdf_viewer(page)
 
-        check_browser_errors(collector, engine=engine, phase="after_pdf")
+        check_browser_errors(collector, engine=engine, phase="after_pdf", page=page)
         stage = "split_panes"
         page.evaluate(
             "id => window.prksNavigate('#/works/' + id, { target: 'tile' })",
@@ -267,7 +340,7 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
         page.locator(".prks-tile--secondary .prks-pdf-render-image").first.wait_for(
             state="visible", timeout=30000,
         )
-        check_browser_errors(collector, engine=engine, phase="after_split")
+        check_browser_errors(collector, engine=engine, phase="after_split", page=page)
         stage = "split_reload"
         # Match the existing Chromium E2E _flush_workspace test helper.
         # Fail closed if the persistence API was removed or renamed.
@@ -308,7 +381,7 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
         page.locator(".prks-tile--secondary .prks-pdf-render-image").first.wait_for(
             state="visible", timeout=30000,
         )
-        check_browser_errors(collector, engine=engine, phase="after_split_reload")
+        check_browser_errors(collector, engine=engine, phase="after_split_reload", page=page)
     except SmokeFailure:
         failed = True
         raise
