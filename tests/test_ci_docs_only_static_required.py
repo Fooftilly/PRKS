@@ -137,23 +137,39 @@ class StaticDocsOnlyTests(unittest.TestCase):
                 )
                 self.assertNotRegex(mutated, pinned)
 
-    def test_both_workflow_steps_must_run_trusted_base_classifier(self):
+    def test_all_three_classifier_steps_enforce_trusted_base_execution(self):
         static = STATIC.read_text(encoding="utf-8")
         unit = UNIT.read_text(encoding="utf-8")
-        for job in (
-            _job(static, "pyright"),
-            _job(static, "eslint"),
-            _job(unit, "unit-api-contract"),
+        for job_name, job in (
+            ("pyright", _job(static, "pyright")),
+            ("eslint", _job(static, "eslint")),
+            ("unit-api-contract", _job(unit, "unit-api-contract")),
         ):
-            with self.subTest(job=job[:35]):
+            with self.subTest(job=job_name):
                 script = _classifier(job)
-                self.assertIn('PRKS_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}', script)
-                self.assertIn('git fetch --no-tags --depth=1 origin "$PRKS_PR_BASE_SHA"', script)
-                self.assertIn('git show "$PRKS_PR_BASE_SHA:scripts/ci/docs_only.py"', script)
-                self.assertNotIn("python -m scripts.ci.docs_only --base", script)
-                self.assertIn('docs_only=false', script)
-                self.assertIn('decision=false', script)
-                self.assertIn('if [[ "$decision" == "true" ]]; then', script)
+                lines = script.splitlines()
+                # Exact YAML field and executable shell lines: a comment or
+                # similar-looking substring cannot satisfy these assertions.
+                for line in (
+                    "          PRKS_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}",
+                    "          PRKS_EVENT_NAME: ${{ github.event_name }}",
+                    "        run: |",
+                    "          set -euo pipefail",
+                    "          docs_only=false",
+                    '          if [[ "$PRKS_EVENT_NAME" == "pull_request" && "$PRKS_PR_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then',
+                    '            if git fetch --no-tags --depth=1 origin "$PRKS_PR_BASE_SHA"; then',
+                    '              if base_classifier="$(mktemp)"; then',
+                    '                if git show "$PRKS_PR_BASE_SHA:scripts/ci/docs_only.py" > "$base_classifier"; then',
+                    '                  decision="$(python "$base_classifier" --base "$PRKS_PR_BASE_SHA")" || decision=false',
+                    '                  if [[ "$decision" == "true" ]]; then',
+                    "                    docs_only=true",
+                    '          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"',
+                ):
+                    with self.subTest(line=line):
+                        self.assertIn(line, lines)
+                self.assertNotIn(
+                    "python -m scripts.ci.docs_only --base", script
+                )
 
     def test_unnamed_steps_and_fake_guards_cannot_escape(self):
         job = _job(STATIC.read_text(encoding="utf-8"), "eslint")
