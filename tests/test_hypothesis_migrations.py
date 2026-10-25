@@ -109,6 +109,16 @@ class MigrationReentryProperties(unittest.TestCase):
                             + " FROM works ORDER BY id")
                 snapshot_queries = {**LEGACY_ROWS, "works": work_sql}
                 legacy = rows(conn, snapshot_queries)
+                self.assertEqual(len(legacy["works"]), len(work_cases))
+                self.assertEqual(len(legacy["tags"]), 1)
+                self.assertEqual(len(legacy["folders"]), 1)
+                self.assertEqual(len(legacy["work_tags"]), len(work_cases))
+                self.assertEqual(len(legacy["folder_files"]), len(work_cases))
+                self.assertEqual(len(legacy["roles"]), len(work_cases))
+                self.assertEqual(
+                    len(legacy["annotations"]),
+                    sum(mode == "annotation" for _, mode, _, _ in work_cases),
+                )
                 self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
 
             upgraded = PRKSDatabase(storage=storage)
