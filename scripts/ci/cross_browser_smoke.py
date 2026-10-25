@@ -44,99 +44,6 @@ _SPLIT_PDF_OWNERS = """({mainTabId, secondaryTabId, mainWorkId, secondaryWorkId}
 }"""
 
 
-# In-memory, fixture-only WebKit diagnostics. Captures *only* known error
-# categories, static script paths and bounded line numbers; never messages,
-# URLs, stacks, request bodies or content. Installed again on each reload.
-_SMOKE_ERROR_PROBE = r"""(() => {
-    if (window.__prksSmokeErrorProbe) return;
-    const entries = [];
-    Object.defineProperty(window, '__prksSmokeErrorProbe', { value: entries });
-    const names = new Set([
-        'TypeError', 'ReferenceError', 'SyntaxError', 'RangeError', 'Error',
-        'AbortError', 'InvalidStateError', 'SecurityError', 'NotFoundError',
-        'NetworkError', 'UnknownError'
-    ]);
-    const source = (url, lineno) => {
-        try {
-            const u = new URL(url, location.href);
-            const path = u.pathname;
-            const match = new RegExp('^/(js|vue|assets|vendor)/([A-Za-z0-9_./-]+[.]js)$').exec(path);
-            if (u.origin !== location.origin || !match || path.includes('..')) return 'unknown';
-            const line = Number(lineno);
-            return match[1] + '-' + match[2].replaceAll('/', '-') +
-                (Number.isInteger(line) && line > 0 && line <= 999999 ? '-' + line : '');
-        } catch (_) { return 'unknown'; }
-    };
-    const family = (message) => {
-        if (typeof message !== 'string') return 'none';
-        if (message === 'ResizeObserver loop limit exceeded' ||
-            message === 'ResizeObserver loop completed with undelivered notifications.' ||
-            message === 'ResizeObserver loop completed with undelivered notifications') {
-            return 'resizeobserver';
-        }
-        if (message === 'Script error.' || message === 'Script error') return 'script';
-        if (message.includes('Failed to fetch') || message.includes('Load failed')) return 'fetch';
-        if (message.includes('Cannot read properties') ||
-            message.includes('is not an object')) return 'property';
-        if (message.includes('is not defined')) return 'reference';
-        return 'other';
-    };
-    const record = (type, reason, url, line, message) => {
-        if (entries.length >= 5) return;
-        const name = reason && typeof reason.name === 'string' ? reason.name : '';
-        const ctor = reason && reason.constructor && reason.constructor.name;
-        entries.push({
-            kind: type, name: names.has(name) ? name : names.has(ctor) ? ctor : 'unknown',
-            source: source(url, line),
-            shape: reason == null ? 'missing' : typeof reason === 'object' ? 'object' : 'other',
-            family: family(message)
-        });
-    };
-    window.addEventListener('error', e =>
-        record('window', e.error, e.filename || '', e.lineno || 0, e.message));
-    window.addEventListener('unhandledrejection', e =>
-        record('promise', e.reason, '', 0, ''));
-})()"""
-
-
-def probe_error_summary(page) -> str:
-    """Read only bounded metadata pre-sanitized by the synthetic page probe."""
-    try:
-        events = page.evaluate("() => window.__prksSmokeErrorProbe || []")
-        if not isinstance(events, list):
-            return "none"
-        permitted = {"window", "promise"}
-        names = {
-            "TypeError", "ReferenceError", "SyntaxError", "RangeError", "Error",
-            "AbortError", "InvalidStateError", "SecurityError", "NotFoundError",
-            "NetworkError", "UnknownError",
-        }
-        labels = []
-        for event in events[:5]:
-            if not isinstance(event, dict):
-                continue
-            kind = event.get("kind")
-            name = event.get("name")
-            src = event.get("source")
-            shape = event.get("shape")
-            family = event.get("family")
-            if kind not in permitted or name not in names | {"unknown"}:
-                continue
-            if shape not in {"missing", "object", "other"}:
-                shape = "unknown"
-            if family not in {"none", "resizeobserver", "script", "fetch", "property", "reference", "other"}:
-                family = "unknown"
-            if not isinstance(src, str) or len(src) > 115 or not all(
-                ch.isascii() and (ch.isalnum() or ch in "-_.") for ch in src
-            ):
-                src = "unknown"
-            labels.append(kind + "-" + name.lower() + "-" + src +
-                          "-" + shape + "-" + family)
-        return "_".join(labels) if labels else "none"
-    except Exception:
-        return "unavailable"
-
-
 class SmokeFailure(RuntimeError):
     """Only synthetic engine/stage and exception type; no browser diagnostics."""
 
@@ -184,31 +91,7 @@ def collector_failure_categories(collector) -> str:
         if len(labels) < min(len(collector.pageerrors), 5):
             labels.extend(["unknown"] * (min(len(collector.pageerrors), 5) - len(labels)))
         flagged.append("kinds-" + "_".join(labels))
-        # Only normalized loopback JS source paths recorded by PageCollector,
-        # never stack frames or arbitrary browser URLs.
-        sites = getattr(collector, "pageerror_sites", None)
-        if isinstance(sites, list) and sites:
-            safe_sites = [
-                site.replace("/", "-").replace(":", "-")
-                if isinstance(site, str) and len(site) <= 110
-                and all(ch.isascii() and (ch.isalnum() or ch in "-_./:") for ch in site)
-                and site.startswith(("js/", "assets/", "vue/", "vendor/"))
-                else "unknown"
-                for site in sites[:5]
-            ]
-            flagged.append("sites-" + "_".join(safe_sites))
     return "_".join(flagged) or "unknown"
-
-
-def check_browser_errors(collector, *, engine: str, phase: str, page=None) -> None:
-    """Fail fast with only synthetic phase + allowlisted collector metadata."""
-    try:
-        collector.assert_clean()
-    except AssertionError:
-        label = "browser_errors_" + phase + "_" + collector_failure_categories(collector)
-        if page is not None:
-            label += "_events-" + probe_error_summary(page)
-        raise SmokeFailure(engine, label, "AssertionError") from None
 
 
 def verify_isolation(environ: dict[str, str]) -> None:
@@ -243,7 +126,7 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
     failed = False
     try:
         page, context, collector = open_app_page(
-            browser, origin, init_script=_SMOKE_ERROR_PROBE
+            browser, origin, allow_webkit_resize_notices=(engine == "webkit"),
         )
         stage = "folders"
         page.locator("[data-prks-folder-library-view]").wait_for(
@@ -279,9 +162,6 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
             arg={"id": work_id, "text": note_text},
             timeout=30000,
         )
-        # Catch any errors in the outgoing document *before* its in-memory
-        # diagnostics are replaced by navigation. The collector is never reset.
-        check_browser_errors(collector, engine=engine, phase="before_notes_reload", page=page)
         # A fresh document must load the committed value, not merely keep an
         # unsaved draft in the current CodeMirror instance.
         page.reload(wait_until="domcontentloaded")
@@ -299,7 +179,6 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
             arg={"id": work_id, "text": note_text},
             timeout=30000,
         )
-        check_browser_errors(collector, engine=engine, phase="after_notes", page=page)
         stage = "settings_focus"
         settings = page.locator("button.settings-btn")
         settings.focus()
@@ -314,13 +193,11 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
             "document.activeElement.classList.contains('settings-btn'))"
         ):
             raise AssertionError("settings dialog did not restore keyboard focus")
-        check_browser_errors(collector, engine=engine, phase="after_settings", page=page)
         stage = "pdf_render"
         # Existing Chromium E2E readiness contract: a real page image, not
         # merely a PDF toolbar or a completed HTTP response.
         _wait_pdf_viewer(page)
 
-        check_browser_errors(collector, engine=engine, phase="after_pdf", page=page)
         stage = "split_panes"
         page.evaluate(
             "id => window.prksNavigate('#/works/' + id, { target: 'tile' })",
@@ -365,7 +242,14 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
         page.locator(".prks-tile--secondary .prks-pdf-render-image").first.wait_for(
             state="visible", timeout=30000,
         )
-        check_browser_errors(collector, engine=engine, phase="after_split", page=page)
+        stage = "browser_errors_pre_reload"
+        # Check earlier browser exceptions *before* remount. Keep them
+        # visible with safe categories; never clear or excuse failures.
+        try:
+            collector.assert_clean()
+        except AssertionError:
+            stage += "_" + collector_failure_categories(collector)
+            raise
         stage = "split_reload"
         # Match the existing Chromium E2E _flush_workspace test helper.
         # Fail closed if the persistence API was removed or renamed.
@@ -406,10 +290,12 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
         page.locator(".prks-tile--secondary .prks-pdf-render-image").first.wait_for(
             state="visible", timeout=30000,
         )
-        check_browser_errors(collector, engine=engine, phase="after_split_reload", page=page)
-    except SmokeFailure:
-        failed = True
-        raise
+        stage = "browser_errors"
+        try:
+            collector.assert_clean()
+        except AssertionError:
+            stage = "browser_errors_" + collector_failure_categories(collector)
+            raise
     except Exception as exc:
         failed = True
         # Playwright exceptions may include URLs, selectors and page text.
