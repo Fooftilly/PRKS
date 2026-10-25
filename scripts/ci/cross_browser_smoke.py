@@ -243,9 +243,13 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
             state="visible", timeout=30000,
         )
         stage = "split_reload"
-        # Check for earlier browser exceptions before attributing any new
-        # ones to remount. This does not clear or excuse collector failures.
-        collector.assert_clean()
+        # Check earlier browser exceptions *before* remount. Keep them
+        # visible with safe categories; never clear or excuse failures.
+        try:
+            collector.assert_clean()
+        except AssertionError:
+            stage = "before_reload_" + collector_failure_categories(collector)
+            raise
         # Match the existing Chromium E2E _flush_workspace test helper.
         # Fail closed if the persistence API was removed or renamed.
         page.evaluate("() => window.prksFlushWorkspacePersistence()")
