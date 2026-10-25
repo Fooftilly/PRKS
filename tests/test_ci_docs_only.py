@@ -142,6 +142,11 @@ class DocsOnlyWorkflowTests(unittest.TestCase):
         )
         docs = step("Validate changed documentation links, anchors, and fences")
         install = step("Install pinned Markdown validator (docs-only PR)")
+        docs_python = step("Set up Python for documentation-only PR")
+        self.assertIn("if: steps.docs-scope.outputs.docs_only == 'true'", docs_python)
+        self.assertIn('python-version: "3.12"', docs_python)
+        classifier = step("Classify documentation-only PR (fail closed)")
+        self.assertIn('if base_classifier="$(mktemp)"; then', classifier)
         self.assertIn("if: steps.docs-scope.outputs.docs_only == 'true'", docs)
         self.assertIn("if: steps.docs-scope.outputs.docs_only == 'true'", install)
         self.assertIn("run: python scripts/ci/install_pinned_python.py docs", install)
@@ -168,7 +173,7 @@ class DocsOnlyLinkValidationTests(unittest.TestCase):
                 "[punctuation](../README.md#foo--bar)\n"
                 "[here](#install) [setext](#getting-started)\n"
                 "[paren](guide(v2).md)\n"
-                "[referenced][manual]\n"
+                "[referenced][manual]\n\n"
                 "[manual]: guide(v2).md\n"
                 f"{fence}md\n[invalid](missing.md)\n{fence}\n"
                 "[external](https://example.org/missing.md)\n"
@@ -192,11 +197,37 @@ class DocsOnlyLinkValidationTests(unittest.TestCase):
         )
         self.assertTrue({"part", "another", "legacy"}.issubset(anchors))
 
+    def test_html_comments_do_not_create_anchors(self):
+        content = '<!-- <div id="ghost"></div> -->\n<div id="real"></div>\n'
+        self.assertEqual(_anchors(content), {"real"})
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _write(root, "docs/guide.md", content + "[broken](#ghost)\n")
+            self.assertTrue(any(
+                "missing anchor #ghost" in error
+                for error in check_markdown(root, "docs/guide.md")
+            ))
+
+    def test_raw_html_local_href_and_src_are_validated(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _write(root, "docs/valid.md", "# Valid\n")
+            _write(root, "docs/guide.md", (
+                '<a href="valid.md#valid">Good</a>\n'
+                '<a href="missing.md">Bad</a>\n'
+                '<img src="not-there.png" alt="missing image">\n'
+                '<!-- <a href="comment-only.md">Ignored</a> -->\n'
+            ))
+            errors = check_markdown(root, "docs/guide.md")
+            self.assertEqual(len(errors), 2)
+            self.assertTrue(any("missing.md" in error for error in errors))
+            self.assertTrue(any("not-there.png" in error for error in errors))
+
     def test_broken_references_and_parenthesized_paths_fail(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             _write(root, "docs/guide.md", (
-                "[broken][manual]\n[manual]: missing(v2).md\n"
+                "[broken][manual]\n\n[manual]: missing(v2).md\n"
                 "[missing](not-there(v2).md)\n"
             ))
             errors = check_markdown(root, "docs/guide.md")
