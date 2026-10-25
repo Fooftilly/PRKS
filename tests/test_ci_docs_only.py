@@ -159,7 +159,7 @@ class DocsOnlyLinkValidationTests(unittest.TestCase):
                 "## my_func\n## Foo & Bar\n"
             ))
             _write(root, "docs/guide(v2).md", "# Contents\n")
-            _write(root, "docs/guide.md", "docs/wiki/Home.md", "docs/wiki/User-Guide.md", (
+            _write(root, "docs/guide.md", (
                 "# [Install](https://example.org/setup.md)\n"
                 "Getting started\n===============\n"
                 "[readme](../README.md#top)\n"
@@ -195,7 +195,7 @@ class DocsOnlyLinkValidationTests(unittest.TestCase):
     def test_broken_references_and_parenthesized_paths_fail(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            _write(root, "docs/guide.md", "docs/wiki/Home.md", "docs/wiki/User-Guide.md", (
+            _write(root, "docs/guide.md", (
                 "[broken][manual]\n[manual]: missing(v2).md\n"
                 "[missing](not-there(v2).md)\n"
             ))
@@ -208,7 +208,7 @@ class DocsOnlyLinkValidationTests(unittest.TestCase):
             root = Path(folder)
             fence = chr(96) * 3
             _write(root, "README.md", "# Present\n")
-            _write(root, "docs/guide.md", "docs/wiki/Home.md", "docs/wiki/User-Guide.md", (
+            _write(root, "docs/guide.md", (
                 "[missing](not-here.md)\n"
                 "[anchor](../README.md#absent)\n"
                 f"{fence}python\nprint('no closing fence')\n"
