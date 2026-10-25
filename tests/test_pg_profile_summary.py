@@ -81,6 +81,17 @@ class PGProfileSummaryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "disclosure"):
             render(data)
 
+    def test_unknown_metadata_and_row_fields_cannot_reach_json_logs(self):
+        data = fixture()
+        data["injected_source"] = "private filename"
+        with self.assertRaisesRegex(ValueError, "disclosure"):
+            render(data)
+        data = fixture()
+        data["profiles"][0]["query"] = "SELECT secret"
+        with self.assertRaisesRegex(ValueError, "profiler row"):
+            render(data)
+
+
     def test_unusable_scope_missing_readiness_or_tiers_fail(self):
         cases = (
             ("backend", "sqlite"),
