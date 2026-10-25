@@ -12,7 +12,10 @@ import os
 import re
 from pathlib import Path
 
-OPERATIONS = frozenset(("works_list", "works_browse", "work_detail"))
+OPERATIONS = frozenset((
+    "works_list", "works_browse", "work_detail",
+    "works_recent_bounded", "works_batch_by_ids",
+))
 STAT_KEYS = frozenset((
     "query_fingerprint", "calls", "total_exec_ms", "mean_exec_ms", "rows",
     "shared_blks_hit", "shared_blks_read", "shared_cache_hit_percent",
