@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import zlib
 from pathlib import Path
 
 from PIL import Image
@@ -38,7 +39,7 @@ def fingerprint(png: bytes) -> dict:
         return {
             "width": source.width,
             "height": source.height,
-            "rgb48x30": base64.b64encode(rgb).decode("ascii"),
+            "rgb48x30_zlib": base64.b64encode(zlib.compress(rgb, 9)).decode("ascii"),
         }
 
 
@@ -49,7 +50,8 @@ def compare(actual: dict, expected: dict) -> dict:
         return {"passed": False, "size_changed": True, "mean_delta": None, "hot_fraction": None}
 
     def pixels(entry: dict) -> bytes:
-        decoded = base64.b64decode(entry["rgb48x30"], validate=True)
+        compressed = base64.b64decode(entry["rgb48x30_zlib"], validate=True)
+        decoded = zlib.decompress(compressed)
         if len(decoded) != SAMPLE_SIZE[0] * SAMPLE_SIZE[1] * 3:
             raise ValueError("invalid visual sample dimensions")
         return decoded
