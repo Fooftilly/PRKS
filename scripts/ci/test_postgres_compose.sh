@@ -30,9 +30,11 @@ if [[ -z "$container" ]]; then
   echo "No PostgreSQL container started" >&2
   exit 1
 fi
-if ! docker inspect --format '{{range .Mounts}}{{println .Destination}}{{end}}' "$container" |
-    grep -qx '/var/lib/postgresql'; then
-  echo "PostgreSQL named volume is not mounted at /var/lib/postgresql" >&2
+# Verify the exact Compose-managed named volume, not merely a directory
+# mounted at the expected path (a bind mount could survive by accident).
+mount=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql"}}{{.Type}}:{{.Name}}{{end}}{{end}}' "$container")
+if [[ "$mount" != "volume:${project}_pgdata" ]]; then
+  echo "PostgreSQL does not use the expected named volume at /var/lib/postgresql" >&2
   exit 1
 fi
 bindings=$(docker inspect --format '{{json .HostConfig.PortBindings}}' "$container")
@@ -46,8 +48,16 @@ if [[ -n "$("${compose[@]}" ps -q prks)" ]]; then
 fi
 
 query() {
-  "${compose[@]}" exec -T db psql --no-psqlrc --tuples-only --no-align \
-    --set ON_ERROR_STOP=1 --username prks --dbname prks --command "$1"
+  # Authenticate over TCP with the actual Compose secret, never a socket's
+  # implicit local-trust rule. The password is read inside the container, not
+  # passed as a host shell argument or logged.
+  "${compose[@]}" exec -T db sh -eu -c '
+    password="$(cat /run/secrets/prks_db_password)"
+    export PGPASSWORD="$password"
+    exec psql --no-psqlrc --tuples-only --no-align \
+      --set ON_ERROR_STOP=1 --username prks --dbname prks \
+      --host 127.0.0.1 --command "$1"
+  ' sh "$1"
 }
 
 major=$(query "SELECT current_setting('server_version_num')::int / 10000")
