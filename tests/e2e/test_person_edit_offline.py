@@ -15,7 +15,7 @@ from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import PERSON_DISPLAY, WORK_A_TITLE, seed_library
-from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
+from tests.e2e.harness import AppServer, open_app_page, profile_e2e_phase, require_chromium, wait_for_async
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -477,67 +477,74 @@ class OfflinePersonEditTests(unittest.TestCase):
         families it knows nothing about, and one prerequisite can carry several
         dependants that were never told about one another.
         """
-        server, page, context = self.start()
-        work = server.ids['work_a']
-        o._open_work_from_home(page, WORK_A_TITLE)
-        o._wait_entity_cached(page, 'work-people-state', work)
-        self.offline(page, context)
+        with profile_e2e_phase("person_edit_setup"):
+            server, page, context = self.start()
+            work = server.ids['work_a']
+            o._open_work_from_home(page, WORK_A_TITLE)
+            o._wait_entity_cached(page, 'work-people-state', work)
+        with profile_e2e_phase("person_edit_offline_create"):
+            self.offline(page, context)
 
-        person = self.create_person(page, 'Grace', 'Chained')
-        o._open_work_from_home(page, WORK_A_TITLE)
-        o._open_details_drawer_if_tiled(page)
-        page.wait_for_selector('.work-detail')
-        page.evaluate("() => { void prksSetWorkDetailsMode('people'); }")
-        page.wait_for_function(
-            "() => { const b = document.querySelector('.work-link-person-btn');"
-            "        return !!b && !b.disabled; }")
-        page.locator('.work-link-person-btn').click()
-        page.wait_for_selector('#role-modal:not(.hidden)')
-        page.wait_for_function(
-            "() => typeof document.getElementById('role-person-search').oninput === 'function'")
-        page.locator('#role-person-search').fill('Grace Chained')
-        result = page.locator('#role-person-results .result-item--person-pick').first
-        result.wait_for(state='visible')
-        result.click()
-        page.locator('#save-role-btn').click()
-        wait_for_async(
-            page,
-            "() => prksSync.store.listOperations().then(rows => rows.some("
-            "  o => o.operation === 'ADD_WORK_PERSON_ROLE'))")
+            person = self.create_person(page, 'Grace', 'Chained')
+        with profile_e2e_phase("person_edit_role_link"):
+            o._open_work_from_home(page, WORK_A_TITLE)
+            o._open_details_drawer_if_tiled(page)
+            page.wait_for_selector('.work-detail')
+            page.evaluate("() => { void prksSetWorkDetailsMode('people'); }")
+            page.wait_for_function(
+                "() => { const b = document.querySelector('.work-link-person-btn');"
+                "        return !!b && !b.disabled; }")
+            page.locator('.work-link-person-btn').click()
+            page.wait_for_selector('#role-modal:not(.hidden)')
+            page.wait_for_function(
+                "() => typeof document.getElementById('role-person-search').oninput === 'function'")
+            page.locator('#role-person-search').fill('Grace Chained')
+            result = page.locator('#role-person-results .result-item--person-pick').first
+            result.wait_for(state='visible')
+            result.click()
+            page.locator('#save-role-btn').click()
+            wait_for_async(
+                page,
+                "() => prksSync.store.listOperations().then(rows => rows.some("
+                "  o => o.operation === 'ADD_WORK_PERSON_ROLE'))")
 
-        o._open_person(page, person)
-        o._wait_content_contains(page, 'Grace Chained')
-        self.open_editor(page)
-        self.edit_field(page, '#pd-about', 'Third in the chain')
-        self.save_editor(page)
-        wait_for_async(
-            page,
-            "() => prksSync.store.listOperations().then(rows => rows.some("
-            "  o => o.operation === 'SET_PERSON_METADATA_FIELD'))")
+        with profile_e2e_phase("person_edit_profile_edit"):
+            o._open_person(page, person)
+            o._wait_content_contains(page, 'Grace Chained')
+            self.open_editor(page)
+            self.edit_field(page, '#pd-about', 'Third in the chain')
+            self.save_editor(page)
+            wait_for_async(
+                page,
+                "() => prksSync.store.listOperations().then(rows => rows.some("
+                "  o => o.operation === 'SET_PERSON_METADATA_FIELD'))")
 
-        rows = self.operations(page)
-        families = {op[0] for op in rows}
-        self.assertTrue({'CREATE_PERSON', 'ADD_WORK_PERSON_ROLE',
-                         'SET_PERSON_METADATA_FIELD'} <= families, families)
-        # Both dependants name the CREATION, and neither names the other.
-        created = [op for op in rows if op[0] == 'CREATE_PERSON']
-        self.assertEqual(len(created), 1)
-        create_id = [op for op in page.evaluate(
-            "() => prksSync.store.listOperations().then(rows => rows.filter("
-            "  o => o.operation === 'CREATE_PERSON').map(o => o.op_id))")][0]
-        for family in ('ADD_WORK_PERSON_ROLE', 'SET_PERSON_METADATA_FIELD'):
-            depends = [json.loads(op[4]) for op in rows if op[0] == family]
-            self.assertEqual(depends, [[create_id]], family)
+        with profile_e2e_phase("person_edit_dependency_check"):
+            rows = self.operations(page)
+            families = {op[0] for op in rows}
+            self.assertTrue({'CREATE_PERSON', 'ADD_WORK_PERSON_ROLE',
+                             'SET_PERSON_METADATA_FIELD'} <= families, families)
+            # Both dependants name the CREATION, and neither names the other.
+            created = [op for op in rows if op[0] == 'CREATE_PERSON']
+            self.assertEqual(len(created), 1)
+            create_id = [op for op in page.evaluate(
+                "() => prksSync.store.listOperations().then(rows => rows.filter("
+                "  o => o.operation === 'CREATE_PERSON').map(o => o.op_id))")][0]
+            for family in ('ADD_WORK_PERSON_ROLE', 'SET_PERSON_METADATA_FIELD'):
+                depends = [json.loads(op[4]) for op in rows if op[0] == family]
+                self.assertEqual(depends, [[create_id]], family)
 
-        self.reconnect(page, context)
-        self.settled(page)
-        db = self.db_for(server)
-        created = [p for p in db.get_all_persons() if p['id'] == person]
-        self.assertEqual(len(created), 1)
-        self.assertEqual(created[0]['about'], 'Third in the chain')
-        roles = db.execute_query(
-            'SELECT role_type FROM roles WHERE person_id = ? AND work_id = ?', (person, work))
-        self.assertEqual([r['role_type'] for r in roles], ['Author'])
+        with profile_e2e_phase("person_edit_reconnect_settle"):
+            self.reconnect(page, context)
+            self.settled(page)
+        with profile_e2e_phase("person_edit_server_verify"):
+            db = self.db_for(server)
+            created = [p for p in db.get_all_persons() if p['id'] == person]
+            self.assertEqual(len(created), 1)
+            self.assertEqual(created[0]['about'], 'Third in the chain')
+            roles = db.execute_query(
+                'SELECT role_type FROM roles WHERE person_id = ? AND work_id = ?', (person, work))
+            self.assertEqual([r['role_type'] for r in roles], ['Author'])
 
     def test_a_failed_prerequisite_blocks_the_edit_instead_of_stranding_it(self):
         """A creation the server refuses takes its dependants down VISIBLY.

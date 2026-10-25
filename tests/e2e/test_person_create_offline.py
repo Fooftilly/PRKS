@@ -11,7 +11,7 @@ from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import WORK_A_TITLE, seed_library
-from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
+from tests.e2e.harness import AppServer, open_app_page, profile_e2e_phase, require_chromium, wait_for_async
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -121,62 +121,72 @@ class OfflinePersonCreateTests(unittest.TestCase):
         may be built on it at once. The two operations must then arrive in an
         order the server can accept: the creation first.
         """
-        server, page, context = self.start()
-        work = server.ids['work_a']
-        o._open_work_from_home(page, WORK_A_TITLE)
-        o._wait_entity_cached(page, 'work-people-state', work)
-        self.offline(page, context)
+        with profile_e2e_phase("person_create_setup"):
+            server, page, context = self.start()
+        with profile_e2e_phase("person_create_warm_work"):
+            work = server.ids['work_a']
+            o._open_work_from_home(page, WORK_A_TITLE)
+            o._wait_entity_cached(page, 'work-people-state', work)
+        with profile_e2e_phase("person_create_offline_create"):
+            self.offline(page, context)
 
-        person = self.create_person(page, 'Ada', 'Offline')
-        self.assertTrue(person.startswith('P-'), person)
-        self.assertEqual(len(person), 34,
-                         'a client-chosen identity is full-width, never an 8-hex stub')
+            person = self.create_person(page, 'Ada', 'Offline')
+            self.assertTrue(person.startswith('P-'), person)
+            self.assertEqual(len(person), 34,
+                             'a client-chosen identity is full-width, never an 8-hex stub')
 
-        # It is a Person the rest of the app can see at once.
-        o._open_people_index(page)
-        o._wait_content_contains(page, 'Ada Offline')
+        with profile_e2e_phase("person_create_people_index"):
+            # It is a Person the rest of the app can see at once.
+            o._open_people_index(page)
+            o._wait_content_contains(page, 'Ada Offline')
 
-        self.link_as_author(page, WORK_A_TITLE, 'Ada Offline')
-        wait_for_async(
-            page,
-            "() => prksSync.store.listOperations().then(rows => rows.some("
-            "  o => o.operation === 'ADD_WORK_PERSON_ROLE'))",
-            message='the link was never recorded durably')
+        with profile_e2e_phase("person_create_role_link"):
+            self.link_as_author(page, WORK_A_TITLE, 'Ada Offline')
+            wait_for_async(
+                page,
+                "() => prksSync.store.listOperations().then(rows => rows.some("
+                "  o => o.operation === 'ADD_WORK_PERSON_ROLE'))",
+                message='the link was never recorded durably')
 
-        rows = {op: (entity, status, deps) for op, entity, status, deps in self.operations(page)}
-        self.assertIn('CREATE_PERSON', rows)
-        create_id = page.evaluate(
-            "() => prksSync.store.listOperations().then(rows => (rows.find("
-            "  o => o.operation === 'CREATE_PERSON') || {}).op_id)")
-        self.assertEqual(rows['ADD_WORK_PERSON_ROLE'][2], '["%s"]' % create_id,
-                         'the link waits on exactly the creation it needs')
+        with profile_e2e_phase("person_create_dependency_check"):
+            rows = {op: (entity, status, deps) for op, entity, status, deps in self.operations(page)}
+            self.assertIn('CREATE_PERSON', rows)
+            create_id = page.evaluate(
+                "() => prksSync.store.listOperations().then(rows => (rows.find("
+                "  o => o.operation === 'CREATE_PERSON') || {}).op_id)")
+            self.assertEqual(rows['ADD_WORK_PERSON_ROLE'][2], '["%s"]' % create_id,
+                             'the link waits on exactly the creation it needs')
 
-        # Durable: a reload while still offline reproduces both.
-        page.reload()
-        page.wait_for_selector('#sidebar')
-        o._open_people_index(page)
-        o._wait_content_contains(page, 'Ada Offline')
-        # The two this test is about. Opening a Work also records an open
-        # event, which is a real durable operation and not this test's concern.
-        surviving = {op for op, _entity, _status, _deps in self.operations(page)}
-        self.assertIn('CREATE_PERSON', surviving)
-        self.assertIn('ADD_WORK_PERSON_ROLE', surviving)
+        with profile_e2e_phase("person_create_offline_reload"):
+            # Durable: a reload while still offline reproduces both.
+            page.reload()
+            page.wait_for_selector('#sidebar')
+            o._open_people_index(page)
+            o._wait_content_contains(page, 'Ada Offline')
+            # The two this test is about. Opening a Work also records an open
+            # event, which is a real durable operation and not this test's concern.
+            surviving = {op for op, _entity, _status, _deps in self.operations(page)}
+            self.assertIn('CREATE_PERSON', surviving)
+            self.assertIn('ADD_WORK_PERSON_ROLE', surviving)
 
-        self.reconnect(page, context)
-        self.settled(page, 0)
+        with profile_e2e_phase("person_create_reconnect_settle"):
+            self.reconnect(page, context)
+            self.settled(page, 0)
 
-        self.assertIn(('Ada', 'Offline'), self.people(server))
-        roles = self.db_for(server).get_work_roles(work)
-        self.assertIn((person, 'Author'), {(r['id'], r['role_type']) for r in roles})
+        with profile_e2e_phase("person_create_server_verify"):
+            self.assertIn(('Ada', 'Offline'), self.people(server))
+            roles = self.db_for(server).get_work_roles(work)
+            self.assertIn((person, 'Author'), {(r['id'], r['role_type']) for r in roles})
 
-        # And no duplicate or rollback once everything is acknowledged.
-        page.reload()
-        page.wait_for_selector('#sidebar')
-        o._open_people_index(page)
-        o._wait_content_contains(page, 'Ada Offline')
-        self.assertEqual(
-            len([p for p in self.db_for(server).get_all_persons()
-                 if p['last_name'] == 'Offline']), 1)
+        with profile_e2e_phase("person_create_final_reload"):
+            # And no duplicate or rollback once everything is acknowledged.
+            page.reload()
+            page.wait_for_selector('#sidebar')
+            o._open_people_index(page)
+            o._wait_content_contains(page, 'Ada Offline')
+            self.assertEqual(
+                len([p for p in self.db_for(server).get_all_persons()
+                     if p['last_name'] == 'Offline']), 1)
 
     def test_reconnecting_immediately_after_creation_synchronizes_it(self):
         """No relationship involved: the creation stands on its own."""

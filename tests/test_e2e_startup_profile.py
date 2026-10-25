@@ -139,6 +139,62 @@ class PdfRollbackWorkflowTargetTests(unittest.TestCase):
         self.assertEqual(len(methods), 1, "manual profile method must be in that class")
 
 
+class OfflinePersonProfileWorkflowTargetTests(unittest.TestCase):
+    def test_both_manual_targets_and_stage_names_exist(self):
+        root = Path(__file__).resolve().parents[1]
+        workflow = (
+            root / ".github/workflows/e2e-offline-person-profile.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("workflow_dispatch: {}", workflow)
+        self.assertNotIn("inputs:", workflow)
+        self.assertIn("for SCENARIO in create edit; do", workflow)
+        targets = re.findall(
+            r"^\s*(create|edit)\) TARGET=(tests\.e2e\.[A-Za-z_0-9.]+) ;;$",
+            workflow,
+            flags=re.MULTILINE,
+        )
+        self.assertEqual({mode for mode, _ in targets}, {"create", "edit"})
+        self.assertEqual(len(targets), 2)
+        names = set(re.findall(r'"(person_(?:create|edit)_[a-z_]+)"', workflow))
+        for mode, target in targets:
+            module, class_name, method_name = target.rsplit(".", 2)
+            file = root.joinpath(*module.split(".")).with_suffix(".py")
+            tree = ast.parse(file.read_text(encoding="utf-8"))
+            classes = [
+                node for node in tree.body
+                if isinstance(node, ast.ClassDef) and node.name == class_name
+            ]
+            self.assertEqual(len(classes), 1, target)
+            methods = [
+                node for node in classes[0].body
+                if isinstance(node, ast.FunctionDef) and node.name == method_name
+            ]
+            self.assertEqual(len(methods), 1, target)
+            phases = {
+                call.args[0].value
+                for call in ast.walk(methods[0])
+                if isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Name)
+                and call.func.id == "profile_e2e_phase"
+                and call.args
+                and isinstance(call.args[0], ast.Constant)
+            }
+            self.assertEqual(
+                phases, {name for name in names if name.startswith(f"person_{mode}_")},
+                target,
+            )
+
+    def test_person_phase_timers_are_not_additive_infrastructure(self):
+        from tests.e2e import run as runner
+
+        self.assertEqual(runner._profile_infrastructure_total({
+            "server_start": 1.0,
+            "async_wait": 2.0,
+            "person_create_offline_reload": 8.0,
+            "person_edit_reconnect_settle": 9.0,
+        }), 3.0)
+
+
 class StartupReadinessProfileTests(unittest.TestCase):
     def test_server_subphases_keep_http_readiness_and_inclusive_total(self):
         with mock.patch.dict(os.environ, {"PRKS_E2E_PROFILE": "1"}):
