@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import ssl
 import unittest
-from unittest.mock import ANY, patch
+from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 
-from scripts.ci.compare_packaged_e2e import InvalidBenchmark, _get_json, _github_connection, compare, fetch_run, summarize
+from scripts.ci.compare_packaged_e2e import InvalidBenchmark, _get_json, compare, fetch_run, summarize
 
 SHA = "9" * 40
 START = datetime(2026, 10, 17, 21, 0, tzinfo=timezone.utc)
@@ -153,68 +152,36 @@ class PackagedCostComparisonTests(unittest.TestCase):
         self.assertIn("98.2%", report)
 
     def test_refuses_non_api_paths_without_issuing_network_requests(self):
-        with patch("scripts.ci.compare_packaged_e2e.HTTPSConnection") as connection:
+        with patch("scripts.ci.compare_packaged_e2e.requests.get") as request:
             for path in ("file:///etc/passwd", "https://example.org", "//example.org"):
                 with self.subTest(path=path):
                     with self.assertRaisesRegex(InvalidBenchmark, "Unexpected GitHub API path"):
                         _get_json(path, None)
-            connection.assert_not_called()
+            request.assert_not_called()
 
-    def test_fixed_host_connection_rejects_non_object_response(self):
-        with patch("scripts.ci.compare_packaged_e2e.getproxies", return_value={}), \
-                patch("scripts.ci.compare_packaged_e2e.HTTPSConnection") as connection:
-            response = connection.return_value.getresponse.return_value.__enter__.return_value
-            response.status = 200
-            with patch("scripts.ci.compare_packaged_e2e.json.load", return_value=[]):
-                with self.assertRaisesRegex(InvalidBenchmark, "JSON object"):
-                    _get_json("/repos/Fooftilly/PRKS/actions/runs/11", None)
-            connection.assert_called_once_with("api.github.com", timeout=30, context=ANY)
-            connection.return_value.request.assert_called_once_with(
-                "GET", "/repos/Fooftilly/PRKS/actions/runs/11",
+    def test_proxy_aware_requests_transport_pins_origin_and_tls(self):
+        with patch("scripts.ci.compare_packaged_e2e.requests.get") as request:
+            request.return_value.status_code = 200
+            request.return_value.json.return_value = {"id": 11}
+            data = _get_json("/repos/Fooftilly/PRKS/actions/runs/11", None)
+            self.assertEqual(data, {"id": 11})
+            request.assert_called_once_with(
+                "https://api.github.com/repos/Fooftilly/PRKS/actions/runs/11",
                 headers={"Accept": "application/vnd.github+json",
                          "User-Agent": "PRKS-E2E-benchmark"},
+                timeout=30, verify=True, allow_redirects=False,
             )
-            connection.return_value.close.assert_called_once()
+            self.assertNotIn("proxies", request.call_args.kwargs)
 
-    def test_fixed_host_proxy_tunnel_and_no_proxy_bypass(self):
-        with patch("scripts.ci.compare_packaged_e2e.getproxies",
-                   return_value={"https": "http://proxy.example:3128"}), \
-             patch("scripts.ci.compare_packaged_e2e.proxy_bypass", return_value=False), \
-             patch("scripts.ci.compare_packaged_e2e.HTTPSConnection") as connect:
-            connection = _github_connection()
-            self.assertIs(connection, connect.return_value)
-            connect.assert_called_once_with("proxy.example", 3128, timeout=30, context=ANY)
-            connection.set_tunnel.assert_called_once_with("api.github.com", 443)
-            context = connect.call_args.kwargs["context"]
-            self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
-            self.assertTrue(context.check_hostname)
-
-        with patch("scripts.ci.compare_packaged_e2e.getproxies",
-                   return_value={"https": "http://proxy.example:3128"}), \
-             patch("scripts.ci.compare_packaged_e2e.proxy_bypass", return_value=True), \
-             patch("scripts.ci.compare_packaged_e2e.HTTPSConnection") as connect:
-            _github_connection()
-            connect.assert_called_once_with("api.github.com", timeout=30, context=ANY)
-            connect.return_value.set_tunnel.assert_not_called()
-
-    def test_schemeless_http_proxy_is_parsed_as_authority(self):
-        with patch("scripts.ci.compare_packaged_e2e.getproxies",
-                   return_value={"https": "proxy.example:3128"}), \
-             patch("scripts.ci.compare_packaged_e2e.proxy_bypass", return_value=False), \
-             patch("scripts.ci.compare_packaged_e2e.HTTPSConnection") as connect:
-            _github_connection()
-            connect.assert_called_once_with("proxy.example", 3128, timeout=30, context=ANY)
-            connect.return_value.set_tunnel.assert_called_once_with("api.github.com", 443)
-
-    def test_reject_unsafe_proxy_url_and_bad_port(self):
-        for proxy in ("https://proxy.example:443", "http://user:pass@proxy.example:3128",
-                      "file:///tmp/proxy", "http://proxy.example:bad"):
-            with self.subTest(proxy=proxy), \
-                 patch("scripts.ci.compare_packaged_e2e.getproxies",
-                       return_value={"https": proxy}), \
-                 patch("scripts.ci.compare_packaged_e2e.proxy_bypass", return_value=False):
-                with self.assertRaises(InvalidBenchmark):
-                    _github_connection()
+    def test_refuses_github_http_errors_and_non_object_responses(self):
+        with patch("scripts.ci.compare_packaged_e2e.requests.get") as request:
+            request.return_value.status_code = 503
+            with self.assertRaisesRegex(InvalidBenchmark, "HTTP 503"):
+                _get_json("/repos/Fooftilly/PRKS/actions/runs/11", None)
+            request.return_value.status_code = 200
+            request.return_value.json.return_value = []
+            with self.assertRaisesRegex(InvalidBenchmark, "JSON object"):
+                _get_json("/repos/Fooftilly/PRKS/actions/runs/11", None)
 
     def test_distinct_same_commit_is_required(self):
         full = summarize(run(1), full_jobs(), "full")
