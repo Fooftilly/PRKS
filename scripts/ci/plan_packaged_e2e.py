@@ -180,11 +180,14 @@ def plan_packaged_e2e(
             return _result("required packaged smoke case missing from E2E inventory")
         # 'smoke' is always present in the source affected plan, so testing
         # the combined set alone cannot prove a feature-owned case exists.
-        affected = policy.select_features(
-            ids, tuple(feature for feature in features if feature != "smoke")
+        affected_features = tuple(
+            feature for feature in features if feature != "smoke"
         )
-        if not affected:
-            return _result("no discovered tests for the affected feature")
+        for feature in affected_features:
+            if not policy.select_features(ids, (feature,)):
+                return _result(
+                    "no discovered tests for the affected feature: " + feature
+                )
         selected = policy.select_features(ids, features)
         union = tuple(dict.fromkeys((*expected_smoke, *selected)))
         if len(union) > MAX_SMOKE_AFFECTED_TESTS:

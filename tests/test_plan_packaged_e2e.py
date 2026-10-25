@@ -147,6 +147,13 @@ class PackagedSelectionPolicyTests(unittest.TestCase):
                 self.assertEqual(result["proposed_mode"], "full")
                 self.assertEqual(result["effective_mode"], "full")
 
+    def test_every_affected_feature_must_have_discovered_tests(self):
+        incomplete = plan_packaged_e2e(
+            [PROGRESS, PROCESSING], known_test_ids=inventory(BROWSE_CASE)
+        )
+        self.assertEqual(incomplete["proposed_mode"], "full")
+        self.assertIn("processing", incomplete["reason"])
+
     def test_smoke_alone_cannot_masquerade_as_affected_coverage(self):
         only_smoke = inventory()
         result = plan_packaged_e2e([PROGRESS], known_test_ids=only_smoke)
