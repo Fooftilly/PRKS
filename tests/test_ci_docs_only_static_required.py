@@ -2,7 +2,8 @@
 
 This is a structural regression guard, not a substitute for running real CI:
 it rejects removed required jobs, extra (including unnamed) work, missing real
-step-level guards, or divergence from the trusted base-SHA unit classifier.
+step-level guards, or same-tree divergence from the required unit classifier.
+The runtime classifier itself is read from the immutable PR base by all jobs.
 """
 
 from __future__ import annotations
@@ -91,8 +92,11 @@ class StaticDocsOnlyTests(unittest.TestCase):
         for job_id, heavy_names in HEAVY.items():
             with self.subTest(job=job_id):
                 job = _job(workflow, job_id)
-                self.assertIn("name: " + REQUIRED[job_id], job)
-                self.assertIn("runs-on: ubuntu-latest", job)
+                self.assertRegex(
+                    job,
+                    r"(?m)^    name: " + re.escape(REQUIRED[job_id]) + r"$",
+                )
+                self.assertRegex(job, r"(?m)^    runs-on: ubuntu-latest$")
                 self.assertNotRegex(job, r"(?m)^    if:")
                 steps = _steps(job)
                 self.assertEqual(
@@ -109,7 +113,7 @@ class StaticDocsOnlyTests(unittest.TestCase):
                     with self.subTest(job=job_id, name=name):
                         self.assertEqual(_guards(body), [CONDITION])
 
-    def test_both_classifiers_identical_to_unit_trusted_baseline(self):
+    def test_both_classifiers_match_unit_step_in_this_checkout(self):
         static = STATIC.read_text(encoding="utf-8")
         unit = UNIT.read_text(encoding="utf-8")
         expected = _classifier(_job(unit, "unit-api-contract"))
@@ -118,6 +122,38 @@ class StaticDocsOnlyTests(unittest.TestCase):
         self.assertIn('echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"', expected)
         for job_id in HEAVY:
             self.assertEqual(_classifier(_job(static, job_id)), expected)
+
+    def test_required_context_names_are_exact_not_substrings(self):
+        workflow = STATIC.read_text(encoding="utf-8")
+        for job_id in HEAVY:
+            with self.subTest(job=job_id):
+                actual = _job(workflow, job_id)
+                pinned = r"(?m)^    name: " + re.escape(REQUIRED[job_id]) + r"$"
+                self.assertRegex(actual, pinned)
+                # A renamed required status check must fail the exact match.
+                mutated = actual.replace(
+                    "    name: " + REQUIRED[job_id] + "\n",
+                    "    name: " + REQUIRED[job_id] + " (v2)\n",
+                )
+                self.assertNotRegex(mutated, pinned)
+
+    def test_both_workflow_steps_must_run_trusted_base_classifier(self):
+        static = STATIC.read_text(encoding="utf-8")
+        unit = UNIT.read_text(encoding="utf-8")
+        for job in (
+            _job(static, "pyright"),
+            _job(static, "eslint"),
+            _job(unit, "unit-api-contract"),
+        ):
+            with self.subTest(job=job[:35]):
+                script = _classifier(job)
+                self.assertIn('PRKS_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}', script)
+                self.assertIn('git fetch --no-tags --depth=1 origin "$PRKS_PR_BASE_SHA"', script)
+                self.assertIn('git show "$PRKS_PR_BASE_SHA:scripts/ci/docs_only.py"', script)
+                self.assertNotIn("python -m scripts.ci.docs_only --base", script)
+                self.assertIn('docs_only=false', script)
+                self.assertIn('decision=false', script)
+                self.assertIn('if [[ "$decision" == "true" ]]; then', script)
 
     def test_unnamed_steps_and_fake_guards_cannot_escape(self):
         job = _job(STATIC.read_text(encoding="utf-8"), "eslint")
