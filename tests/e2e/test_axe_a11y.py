@@ -70,6 +70,14 @@ class AxeAccessibilityPilotTests(unittest.TestCase):
         page.keyboard.press("Enter")
         page.locator("#settings-modal:not(.hidden)").wait_for(state="visible")
         surfaces.append(scan(page, "#settings-modal:not(.hidden)", "settings-dialog"))
+        report_path = os.environ.get("PRKS_AXE_REPORT_PATH")
+        if report_path:
+            write_report(surfaces, Path(report_path))
+        else:
+            # Validation still verifies that all five required scans completed.
+            from tempfile import TemporaryDirectory
+            with TemporaryDirectory() as folder:
+                write_report(surfaces, Path(folder) / "axe-smoke.json")
         page.keyboard.press("Escape")
         page.locator("#settings-modal").wait_for(state="hidden")
         self.assertTrue(
@@ -80,14 +88,6 @@ class AxeAccessibilityPilotTests(unittest.TestCase):
             "Escape from settings must restore focus to its launching button",
         )
 
-        report_path = os.environ.get("PRKS_AXE_REPORT_PATH")
-        if report_path:
-            write_report(surfaces, Path(report_path))
-        else:
-            # Validation still verifies that all five required scans completed.
-            from tempfile import TemporaryDirectory
-            with TemporaryDirectory() as folder:
-                write_report(surfaces, Path(folder) / "axe-smoke.json")
         print("\n[axe-advisory] " + short_summary(surfaces), flush=True)
 
 
