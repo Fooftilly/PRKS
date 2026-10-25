@@ -13,3 +13,35 @@ services:
     volumes:
       - ./data:/data
     restart: unless-stopped
+
+  # Opt-in PostgreSQL 18 infrastructure preview (#630). This is NOT the
+  # canonical PRKS runtime: the existing 'prks' service still uses SQLite.
+  # Enable explicitly with: docker compose --profile postgres up -d db
+  db:
+    profiles: ["postgres"]
+    image: postgres:18
+    environment:
+      POSTGRES_DB: prks
+      POSTGRES_USER: prks
+      POSTGRES_PASSWORD_FILE: /run/secrets/prks_db_password
+      POSTGRES_INITDB_ARGS: "--locale-provider=builtin --builtin-locale=PG_UNICODE_FAST"
+    secrets:
+      - prks_db_password
+    volumes:
+      # PostgreSQL 18 uses versioned PGDATA under /var/lib/postgresql.
+      # Do not mount at /var/lib/postgresql/data (pre-18 layout).
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U prks -d prks"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+
+secrets:
+  prks_db_password:
+    file: "${PRKS_DB_PASSWORD_FILE:-./secrets/db_password}"
