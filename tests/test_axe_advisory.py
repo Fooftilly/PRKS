@@ -19,7 +19,7 @@ def raw_engine(**extras) -> dict:
                 "id": "button-name",
                 "impact": "critical",
                 "count": 3,
-                "selectors": ["#button-1", 'button[href="fixture-private"]', "<svg>"],
+                "selectors": ["#button-1", "<svg>", 'button[href="fixture-private"]'],
                 "html": "document sample must not be retained",
             }
         ],
@@ -36,6 +36,7 @@ class AxeAdvisoryReportTests(unittest.TestCase):
         self.assertEqual(report["axe"], AXE_PIN)
         self.assertEqual(report["violating_rules"], 1)
         self.assertEqual(report["violations"][0]["sample_targets"], ["#button-1"])
+        self.assertEqual(report["violations"][0]["suppressed_targets"], 1)
         for forbidden in (
             "PRIVATE RESEARCH TEXT", "fixture-private", "<svg>",
             "pageHtml", "html", "document sample must not be retained",
@@ -66,6 +67,17 @@ class AxeAdvisoryReportTests(unittest.TestCase):
         self.assertEqual(result["violations"][0]["rule"], "zz-critical")
         self.assertEqual(result["truncated_rules"], 8)
 
+    def test_invalid_impact_is_unknown_and_long_selectors_are_rejected(self):
+        too_long = "#" + "z" * 120
+        report = sanitized_report("shell", raw_engine(violations=[{
+            "id": "image-alt", "impact": "untrusted-impact", "count": 1,
+            "selectors": [too_long],
+        }]))
+        finding = report["violations"][0]
+        self.assertEqual(finding["impact"], "unknown")
+        self.assertEqual(finding["sample_targets"], [])
+        self.assertEqual(finding["suppressed_targets"], 1)
+
     def test_no_engine_or_no_rules_is_not_a_success(self):
         with self.assertRaisesRegex(AssertionError, "axe-core"):
             sanitized_report("shell", raw_engine(engine="0.0.0"))
@@ -89,6 +101,7 @@ class AxeAdvisoryReportTests(unittest.TestCase):
         report = sanitized_report("vue-folders", raw_engine(violations=violations))
         self.assertEqual(report["violating_rules"], 30)
         self.assertEqual(report["truncated_rules"], 12)
+        self.assertEqual(report["total_violation_nodes"], 30)
         self.assertEqual(len(report["violations"]), 18)
         self.assertIn("vue-folders: 30 violating rules", short_summary([report]))
 
