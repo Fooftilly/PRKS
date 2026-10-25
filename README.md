@@ -98,12 +98,16 @@ Create a private password file outside version control and start only the databa
 ```bash
 install -d -m 700 secrets
 umask 077
-install -m 600 /dev/null secrets/db_password
-openssl rand -hex 32 > secrets/db_password
+if [ ! -e secrets/db_password ]; then
+  openssl rand -hex 32 > secrets/db_password
+fi
 chmod 600 secrets/db_password
+test -s secrets/db_password || { echo "Empty database password file" >&2; exit 1; }
 docker compose -f docker-compose.yml -f docker-compose.postgres.yml --profile postgres up -d db
 docker compose -f docker-compose.yml -f docker-compose.postgres.yml --profile postgres ps db
 ```
+
+**Do not regenerate or overwrite an existing `secrets/db_password`:** PostgreSQL uses the password file only during first-time database initialization. Changing this file on an initialized volume does not change the `prks` role password; coordinate password rotation using an authenticated `ALTER ROLE` and update the secret together, without deleting the database volume.
 
 **Always supply both `-f` files for PostgreSQL lifecycle commands**, including `stop`, `down` and `down -v`. Plain `docker compose down` reads only the SQLite default file and will not manage the opt-in PostgreSQL service or its volume.
 
