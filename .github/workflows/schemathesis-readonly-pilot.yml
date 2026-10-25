@@ -1,0 +1,63 @@
+name: Advisory read-only Schemathesis API pilot
+
+# A standalone, bounded API fuzz check against isolated loopback storage.
+# Does not expand PRKS's app-wide OpenAPI or alter required E2E checks.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/schemathesis-readonly-pilot.yml"
+      - "scripts/ci/schemathesis_pilot.py"
+      - "tests/test_schemathesis_pilot.py"
+      - "backend/api_contract/openapi.py"
+      - "backend/api_contract/publishers.py"
+      - "docs/api/openapi-publishers.json"
+      - "requirements-dev.txt"
+      - "scripts/ci/install_pinned_python.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: schemathesis-readonly-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  publishers-get:
+    name: Isolated Publishers GET Schemathesis (advisory)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout PRKS
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install isolated pinned API fuzz prerequisites
+        run: python scripts/ci/install_pinned_python.py schemathesis
+
+      - name: Scan only the published Publishers GET family
+        env:
+          PRKS_TESTING: "1"
+        run: python scripts/ci/schemathesis_pilot.py
+
+      - name: Summarize narrow API pilot scope
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ## Schemathesis (advisory, isolated)
+          - One allowlisted operation: GET /api/publishers
+          - Schema: docs/api/openapi-publishers.json, checked against the live fragment and Pydantic builder
+          - Synthetic disposable --testing instance, Host admission guard, seeded Publishers
+          - Fixed seed 855; max 25 examples, 35s scanner time budget, single worker
+          - No POST, PATCH, DELETE, stateful sequences, production PostgreSQL sessions or user libraries
+          - Unexpected 5xx, HTTP status, content-type and response-schema checks enabled
+          - No raw generated HTTP requests or fuzz payloads are uploaded
+          - Manual/path-relevant pilot; no new required CI or general E2E gate
+          EOF
