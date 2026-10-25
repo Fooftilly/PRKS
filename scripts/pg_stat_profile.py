@@ -93,12 +93,13 @@ def benchmark(
 ) -> dict[str, Any]:
     """Validated facade operation with separate first-observed vs warmed samples.
 
-    The first observed call is NOT a process/DB cold start: seeding has already
-    used the same Database pool. Keep it out of warm p50/p95 and SQL stats.
+    The first call of each operation is NOT a process/DB cold start: seeding
+    and prior workload families have used the same Database pool. Keep it out of warm p50/p95 and SQL stats.
     """
     first = time.perf_counter()
-    verify_result(operation())
+    first_result = operation()
     first_ms = (time.perf_counter() - first) * 1000
+    verify_result(first_result)
     for _ in range(2):
         verify_result(operation())
     stats.execute(_RESET_SQL)
@@ -107,8 +108,10 @@ def benchmark(
     durations = []
     for _ in range(repetitions):
         start = time.perf_counter()
-        verify_result(operation())
-        durations.append((time.perf_counter() - start) * 1000)
+        value = operation()
+        elapsed = (time.perf_counter() - start) * 1000
+        verify_result(value)
+        durations.append(elapsed)
     statements = snapshot(stats)
     if not statements:
         raise RuntimeError("profile contained no observed workload SQL")
@@ -118,7 +121,7 @@ def benchmark(
         "warmup_calls": 2,
         "correctness_checks": repetitions + 3,
         "first_observed_call_ms": round(first_ms, 3),
-        "first_call_context": "after_fixture_seed_not_cold_start",
+        "first_call_context": "first_call_of_operation_not_cold_start",
         "call_wall_p50_ms": percentile(durations, 0.5),
         "call_wall_p95_ms": percentile(durations, 0.95),
         "top_statements": statements,
