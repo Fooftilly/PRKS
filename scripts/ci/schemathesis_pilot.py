@@ -7,6 +7,7 @@ No mutating operations, production tokens, live library files or arbitrary URL.
 from __future__ import annotations
 
 import copy
+import http.client
 import json
 import os
 import re
@@ -15,9 +16,8 @@ import subprocess
 import sys
 import tempfile
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -40,8 +40,13 @@ SAFE_LINE = re.compile(r"[A-Za-z0-9 .,;:=_()!+/%-]{1,150}\Z")
 
 
 def read_json(origin: str, path: str, *, host: str | None = None):
-    """Only hard-coded paths on a fresh loopback AppServer are accepted."""
-    if not origin.startswith("http://127.0.0.1:"):
+    """Only exact allowlisted paths on an unredirectable loopback socket."""
+    parsed = urlsplit(origin)
+    if (
+        parsed.scheme != "http" or parsed.hostname != "127.0.0.1"
+        or parsed.username or parsed.password or parsed.path or parsed.query
+        or parsed.fragment or parsed.port is None
+    ):
         raise ValueError("Schemathesis pilot requires isolated loopback origin")
     if path not in (
         "/api/openapi/publishers.json",
@@ -49,10 +54,15 @@ def read_json(origin: str, path: str, *, host: str | None = None):
         "/api/publishers?used=1",
     ):
         raise ValueError("unexpected API probe route")
-    headers = {"Host": host} if host is not None else {}
-    req = urllib.request.Request(origin + path, headers=headers)
-    with urllib.request.urlopen(req, timeout=8) as response:
+    connection = http.client.HTTPConnection("127.0.0.1", parsed.port, timeout=8)
+    try:
+        connection.request(
+            "GET", path, headers={"Host": host or f"127.0.0.1:{parsed.port}"}
+        )
+        response = connection.getresponse()
         return response.status, json.loads(response.read().decode("utf-8"))
+    finally:
+        connection.close()
 
 
 def scoped_contract(checked_in: dict, live: dict) -> dict:
@@ -121,13 +131,12 @@ def scan() -> int:
             raise AssertionError("seed lacks a Publisher attached to a Work")
 
         # Only check existing Host admission, not nonexistent PG session auth.
-        try:
-            read_json(server.origin, "/api/publishers?used=1", host="untrusted.invalid")
-        except urllib.error.HTTPError as exc:
-            if exc.code != 421:
-                raise AssertionError("unexpected Host refusal status") from None
-        else:
+        denied, _ = read_json(
+            server.origin, "/api/publishers?used=1", host="untrusted.invalid"
+        )
+        if denied != 421:
             raise AssertionError("foreign Host unexpectedly admitted")
+
 
         with tempfile.TemporaryDirectory(prefix="prks-schemathesis-schema-") as directory:
             schema = Path(directory) / "publishers-get-only.json"
