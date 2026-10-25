@@ -67,6 +67,18 @@ class AxeAdvisoryReportTests(unittest.TestCase):
         self.assertEqual(result["violations"][0]["rule"], "zz-critical")
         self.assertEqual(result["truncated_rules"], 8)
 
+    def test_document_coverage_is_allowlisted_and_reproducible(self):
+        raw = raw_engine(document_rules_checked=["html-has-lang", "document-title"])
+        scan = sanitized_report("shell", raw)
+        self.assertEqual(
+            scan["document_rules_checked"],
+            ["document-title", "html-has-lang"],
+        )
+        with self.assertRaisesRegex(AssertionError, "document-rule"):
+            sanitized_report("shell", raw_engine(document_rules_checked=["private-path"]))
+        with self.assertRaisesRegex(AssertionError, "document-rule"):
+            sanitized_report("shell", raw_engine(document_rules_checked="document-title"))
+
     def test_invalid_impact_is_unknown_and_long_selectors_are_rejected(self):
         too_long = "#" + "z" * 120
         report = sanitized_report("shell", raw_engine(violations=[{
