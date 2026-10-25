@@ -51,7 +51,18 @@ class CodeQLDocsOnlyCIContractTests(unittest.TestCase):
         source = CODEQL.read_text(encoding="utf-8")
         for trigger in ("push", "pull_request", "workflow_dispatch", "schedule"):
             self.assertRegex(source, r"(?m)^  " + trigger + r":\s*$")
-        self.assertNotRegex(source, r"(?m)^\s+paths(?:-ignore)?:\s*$")
+        # Restrict trigger-filter checks to the `on:` event section:
+        # CodeQL's own `init.with.config` intentionally contains a
+        # `paths-ignore:` key for vendored source, not event filtering.
+        events = source.split("\non:\n", 1)[1].split("\nconcurrency:\n", 1)[0]
+        self.assertNotRegex(events, r"(?m)^\s+paths(?:-ignore)?:\s*$")
+        self.assertIn("            paths-ignore:\n              - frontend/vendor/**", source)
+        # A workflow-level filter inside pull_request must still fail.
+        filtered_events = events.replace(
+            "  pull_request:\n    branches:\n",
+            "  pull_request:\n    paths-ignore:\n      - backend/**\n    branches:\n",
+        )
+        self.assertRegex(filtered_events, r"(?m)^\s+paths(?:-ignore)?:\s*$")
         job = _analyze(source)
         self.assertIn("name: Analyze ($"+"{{ matrix.language }})", job)
         self.assertIn("runs-on: ubuntu-latest", job)
@@ -72,6 +83,10 @@ class CodeQLDocsOnlyCIContractTests(unittest.TestCase):
         for name in HEAVY:
             with self.subTest(name=name):
                 self.assertEqual(_guards(_step(job, name)), [CONDITION])
+        # A green CodeQL check with upload disabled is not a security scan.
+        analyze = _step(job, "Perform CodeQL Analysis")
+        self.assertNotRegex(analyze, r"(?m)^\s+upload:\s*never\s*$")
+        self.assertIn('category: "/language:', analyze)
 
     def test_classifier_matches_immutable_base_unit_gate(self):
         codeql = _analyze(CODEQL.read_text(encoding="utf-8"))
