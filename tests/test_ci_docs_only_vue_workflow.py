@@ -29,7 +29,7 @@ def _step_items(job: str) -> list[tuple[str | None, str]]:
     """
     # YAML permits both "- name: ..." and a bare "-" followed by a
     # more-indented name/run/uses key. Neither may evade the step inventory.
-    starts = list(re.finditer(r"(?m)^      -(?:[ \\t]+|(?=\\r?$))", job))
+    starts = list(re.finditer(r"(?m)^      -(?:[ \t]+|(?=\r?$))", job))
     items: list[tuple[str | None, str]] = []
     for index, match in enumerate(starts):
         end = starts[index + 1].start() if index + 1 < len(starts) else len(job)
@@ -37,12 +37,12 @@ def _step_items(job: str) -> list[tuple[str | None, str]]:
         lines = block.splitlines()
         first = lines[0].strip() if lines else ""
         if first:
-            name = re.fullmatch(r"name: ([^\\r\\n]+)", first)
+            name = re.fullmatch(r"name: ([^\r\n]+)", first)
         else:
             # Bare-dash form: the name key must appear immediately next,
             # at the YAML step-field indentation, not inside run text.
             second = lines[1] if len(lines) > 1 else ""
-            name = re.fullmatch(r"        name: ([^\\r\\n]+)", second)
+            name = re.fullmatch(r"        name: ([^\r\n]+)", second)
         items.append((name.group(1) if name else None, block))
     return items
 
