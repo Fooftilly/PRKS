@@ -183,11 +183,13 @@ def tearDownModule():
 
 
 class _BrowserE2E(unittest.TestCase):
-    def _start_app(self, seed_fn=seed_library):
+    def _start_app(self, seed_fn=seed_library, *, install_clock=False):
         server = AppServer(seed_fn=seed_fn)
         self.addCleanup(server.stop)
         server.start()
-        page, context, collector = open_app_page(_BROWSER, server.origin)
+        page, context, collector = open_app_page(
+            _BROWSER, server.origin, install_clock=install_clock,
+        )
         self.addCleanup(context.close)
         self.addCleanup(collector.assert_clean)
         return server, page, collector
@@ -3538,7 +3540,7 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
 
     def test_an_uncommitted_edit_does_not_hold_another_annotations_rollback(self):
         with profile_e2e_phase("pdf_rollback_setup"):
-            server, page, _collector = self._start_app()
+            server, page, _collector = self._start_app(install_clock=True)
             work_id = server.ids["work_a"]
             _open_work_from_home(page, WORK_A_TITLE)
             _wait_pdf_viewer(page)
@@ -3619,6 +3621,10 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
                 timeout=5000,
             )
         with profile_e2e_phase("pdf_rollback_verify_late"):
+            # Exercise the real 10s uncommitted-edit watchdog without waiting
+            # ten wall-clock seconds. B's independent rollback was asserted
+            # above while A was still uncommitted, before advancing time.
+            page.clock.fast_forward(10_100)
             # A's edit is then reported as not saved and rolled back too.
             page.wait_for_function(
                 "(ids) => { const [a, b] = (%s)(ids); return a === 'stored A' && b === 'stored B'; }"
