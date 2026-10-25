@@ -4,7 +4,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from scripts.pg_stat_profile import percentile, project_statement, run, sizes_arg
@@ -15,6 +17,18 @@ class ProfileSafetyTests(unittest.TestCase):
         with patch.dict(os.environ, {"PRKS_PG_PROFILE_DISPOSABLE_SERVER": ""}):
             with self.assertRaisesRegex(RuntimeError, "scripts/test-postgres --profile"):
                 run((12,), 2)
+
+    def test_profile_refuses_caller_supplied_postgresql_server_before_startup(self):
+        root = Path(__file__).resolve().parents[1]
+        env = dict(os.environ)
+        env["PRKS_TEST_DATABASE_URL"] = "postgresql://postgres@localhost/postgres"
+        result = subprocess.run(
+            ["bash", str(root / "scripts" / "test-postgres"), "--profile"],
+            cwd=root, env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("refuses PRKS_TEST_DATABASE_URL", result.stderr)
+        self.assertNotIn("starting", result.stderr)
 
     def test_bounded_ascending_fixture_tiers(self):
         self.assertEqual(sizes_arg("12,48,128"), (12, 48, 128))
