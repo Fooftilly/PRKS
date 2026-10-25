@@ -82,10 +82,21 @@ _TEST_GATE_PG_PAIRS = (
         ("scripts/test-postgres", "--parity"),
     ),
 )
+
+_TEST_GATE_DOCS_RUNS = {
+    "Classify documentation-only PR (fail closed)": ("|", "set -euo pipefail\ndocs_only=false\nif [[ \"$PRKS_EVENT_NAME\" == \"pull_request\" && \"$PRKS_PR_BASE_SHA\" =~ ^[0-9a-fA-F]{40}$ ]]; then\nif git fetch --no-tags --depth=1 origin \"$PRKS_PR_BASE_SHA\"; then\nif base_classifier=\"$(mktemp)\"; then\nif git show \"$PRKS_PR_BASE_SHA:scripts/ci/docs_only.py\" > \"$base_classifier\"; then\ndecision=\"$(python \"$base_classifier\" --base \"$PRKS_PR_BASE_SHA\")\" || decision=false\nif [[ \"$decision\" == \"true\" ]]; then\ndocs_only=true\nfi\nelse\necho \"::warning::Docs classifier absent from base; running full tests.\"\nfi\nrm -f \"$base_classifier\"\nelse\necho \"::warning::Failed to allocate classifier file; running full tests.\"\nfi\nelse\necho \"::warning::Could not fetch immutable PR base; running full tests.\"\nfi\nfi\necho \"docs_only=$docs_only\" >> \"$GITHUB_OUTPUT\""),
+    "Install pinned Markdown validator (docs-only PR)": (
+        "", "python scripts/ci/install_pinned_python.py docs"
+    ),
+    "Validate changed documentation links, anchors, and fences": (
+        "", 'python -m scripts.ci.check_docs_only --base "$PRKS_PR_BASE_SHA"'
+    ),
+}
 _TEST_GATE_ALLOWED_RUN_STEP_NAMES = frozenset(
     {
         _TEST_GATE_APPROVED_INSTALL_STEP,
         _TEST_GATE_RUN_TESTS_STEP,
+        *_TEST_GATE_DOCS_RUNS,
         *(name for pair in _TEST_GATE_PG_PAIRS for name in pair[:2]),
     }
 )
@@ -422,15 +433,30 @@ def assert_test_gate_run_steps_allowlisted(workflow: str) -> None:
     assert_test_gate_run_tests_body(style, body)
     pairs = [unique_test_gate_pg_pair(workflow, *pair) for pair in _TEST_GATE_PG_PAIRS]
     run_steps = iter_test_gate_step_run_bodies(workflow)
-    for name, _style, _body in run_steps:
+    docs_present = {
+        name for name, _style, _body in run_steps if name in _TEST_GATE_DOCS_RUNS
+    }
+    # Initial fixtures predate the docs-only pilot. For production workflows,
+    # require all three guarded docs commands or none; partial setup fails.
+    if docs_present and docs_present != set(_TEST_GATE_DOCS_RUNS):
+        raise ValueError("incomplete required docs-only CI step set")
+    for name, style, body in run_steps:
         if name not in _TEST_GATE_ALLOWED_RUN_STEP_NAMES:
             label = name if name else "<unnamed step>"
             raise ValueError(f"disallowed run step: {label}")
-    expected = 2 + 2 * sum(pair is not None for pair in pairs)
+        if name in _TEST_GATE_DOCS_RUNS:
+            expected_style, expected_body = _TEST_GATE_DOCS_RUNS[name]
+            normalized = (
+                _test_gate_run_body_without_shell_comments(body)
+                if style == "|" else body.strip()
+            )
+            if style != expected_style or normalized != expected_body:
+                raise ValueError(f"unreviewed docs-only CI command: {name}")
+    expected = 2 + 2 * sum(pair is not None for pair in pairs) + len(docs_present)
     if len(run_steps) != expected:
         raise ValueError(
-            f"test-gate must have exactly {expected} run steps "
-            f"(Install + run-tests, plus the PostgreSQL pairs); found {len(run_steps)}"
+            f"test-gate must have exactly {expected} approved run steps; "
+            f"found {len(run_steps)}"
         )
 
 
@@ -1180,7 +1206,10 @@ class RepoGateLiveTests(unittest.TestCase):
         dev = parse_requirements_pins((_PROJECT / "requirements-dev.txt").read_text())
         self.assertIn("openapi-core", dev)
         self.assertIn("hypothesis", dev)
-        expected_unit = dict(runtime, **{name: dev[name] for name in ("openapi-core", "hypothesis")})
+        expected_unit = dict(runtime, **{
+            name: dev[name]
+            for name in ("openapi-core", "hypothesis", "markdown-it-py", "mdurl")
+        })
         expected_pg = dict(runtime)
         for name in _TEST_GATE_PG_DEV_PINS:
             expected_pg[name] = dev[name]

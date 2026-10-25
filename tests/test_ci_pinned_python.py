@@ -19,6 +19,7 @@ class CIPinsTests(unittest.TestCase):
         )
         (self.root / "requirements-dev.txt").write_text(
             "playwright==1.63.0\nopenapi-core==0.23.1\nhypothesis==6.170.9\n"
+            "markdown-it-py==4.2.0\nmdurl==0.1.2\n"
             "psycopg==3.3.6\npsycopg-binary==3.3.6\n"
             "psycopg-pool==3.3.3\nargon2-cffi==25.1.0\n",
             encoding="utf-8",
@@ -37,6 +38,12 @@ class CIPinsTests(unittest.TestCase):
 
     def test_plan_is_minimal(self) -> None:
         self.assertEqual(pins_for_profile(self.root, "plan"), ["playwright==1.63.0"])
+
+    def test_docs_profile_installs_only_parser_wheels(self) -> None:
+        self.assertEqual(
+            pins_for_profile(self.root, "docs"),
+            ["markdown-it-py==4.2.0", "mdurl==0.1.2"],
+        )
 
     def test_missing_extra_fails_closed(self) -> None:
         (self.root / "requirements-dev.txt").write_text("", encoding="utf-8")
@@ -57,6 +64,8 @@ class CIPinsTests(unittest.TestCase):
         self.assertIn("--only-binary=:all:", cmd)
         self.assertIn("openapi-core==0.23.1", cmd)
         self.assertIn("hypothesis==6.170.9", cmd)
+        self.assertIn("markdown-it-py==4.2.0", cmd)
+        self.assertIn("mdurl==0.1.2", cmd)
         self.assertEqual(run.call_args.kwargs["cwd"], self.root)
         self.assertTrue(run.call_args.kwargs["check"])
 
