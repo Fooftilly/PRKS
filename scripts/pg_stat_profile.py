@@ -9,16 +9,21 @@ database connection strings, or fixture payloads are emitted.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
 import json
 import math
 import os
 import re
+import secrets
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-# Only expose numeric aggregates and opaque (run-local) query fingerprints.
+# Only expose numeric aggregates and salted run-local query fingerprints.
+# The salt never leaves this process, so cross-run IDs are not linkable.
+_RUN_FINGERPRINT_KEY = secrets.token_bytes(32)
 # Always request showtext=false: never make PostgreSQL load representative SQL.
 _SNAPSHOT_SQL = """
 SELECT queryid, calls, total_exec_time, mean_exec_time, rows,
@@ -62,8 +67,10 @@ def project_statement(row: Mapping[str, Any]) -> dict[str, Any]:
     hits = int(row["shared_blks_hit"])
     reads = int(row["shared_blks_read"])
     return {
-        # queryid is an opaque fingerprint, not a portable stable SQL ID.
-        "query_fingerprint": f"{int(row['queryid']) & ((1 << 64) - 1):016x}",
+        # HMAC shields stable PostgreSQL query IDs against cross-run matching.
+        "query_fingerprint": hmac.new(
+            _RUN_FINGERPRINT_KEY, str(int(row["queryid"])).encode("ascii"), hashlib.sha256
+        ).hexdigest()[:16],
         "calls": int(row["calls"]),
         "total_exec_ms": round(float(row["total_exec_time"]), 3),
         "mean_exec_ms": round(float(row["mean_exec_time"]), 3),
