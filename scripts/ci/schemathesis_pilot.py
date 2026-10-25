@@ -181,7 +181,7 @@ def print_failure_diagnostics(result, server: AppServer) -> None:
             continue
         recent = log_path.read_text(encoding="utf-8", errors="replace")[-50000:]
         classes = sorted(set(re.findall(
-            r"unhandled_api_error[^\\n]{0,220}error_type=([A-Za-z][A-Za-z0-9_]{0,48})",
+            r"unhandled_api_error.*?error_type=([A-Za-z][A-Za-z0-9_]{0,48})",
             recent,
         )))
         if classes:
