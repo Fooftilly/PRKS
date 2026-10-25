@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.ci.summarize_runtime_sbom import (
     TOP_LIMIT,
@@ -102,10 +103,18 @@ class RuntimeSbomSummaryTests(unittest.TestCase):
 
     def test_top_prioritizes_fix_listed_then_severity_and_is_bounded(self) -> None:
         sample = [row(f"CVE-2026-{20000 + i}", f"package{i}", severity="Low") for i in range(20)]
-        sample += [row("CVE-2026-99001", "unfixed", severity="Critical", fix_state="not-fixed", versions=[])]
+        sample += [
+            row("CVE-2026-99001", "unfixed", severity="Critical", fix_state="not-fixed", versions=[]),
+            row("CVE-2026-99002", "fix-critical", severity="Critical"),
+            row("CVE-2026-99003", "fix-high", severity="High"),
+        ]
         sbom, scan = fixture(*sample)
         output = summarize(sbom, scan, IMAGE)
         self.assertEqual(len(output["triage_examples"]), TOP_LIMIT)
+        self.assertEqual(
+            [v["severity"] for v in output["triage_examples"][:2]],
+            ["Critical", "High"],
+        )
         self.assertTrue(all(v["fix_state"] == "fix-listed" for v in output["triage_examples"]))
 
     def test_whitelisted_labels_no_private_paths_or_descriptions(self) -> None:
@@ -188,6 +197,9 @@ class RuntimeSbomSummaryTests(unittest.TestCase):
             path.write_text("[1, 2]", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "JSON object"):
                 read_json(path)
+            with patch("scripts.ci.summarize_runtime_sbom.MAX_INPUT_BYTES", 2):
+                with self.assertRaisesRegex(ValueError, "bounded size limit"):
+                    read_json(path)
 
 
 if __name__ == "__main__":
