@@ -153,14 +153,25 @@ def _read_source_plan_log(repo: str, job_id: int, token: str) -> str:
     download = requests.get(
         location,
         headers={"User-Agent": "PRKS-E2E-benchmark"},
-        timeout=30, verify=True, allow_redirects=False,
+        timeout=30, verify=True, allow_redirects=False, stream=True,
     )
-    if download.status_code != 200:
-        raise InvalidBenchmark(f"Signed planner log returned HTTP {download.status_code}")
-    log = download.text
-    if not isinstance(log, str) or len(log) > 256_000:
-        raise InvalidBenchmark("Missing or unexpectedly large E2E planner log")
-    return log
+    try:
+        if download.status_code != 200:
+            raise InvalidBenchmark(f"Signed planner log returned HTTP {download.status_code}")
+        content = bytearray()
+        limit = 256_000
+        for chunk in download.iter_content(chunk_size=8192):
+            content.extend(chunk)
+            if len(content) > limit:
+                raise InvalidBenchmark("Unexpectedly large E2E planner log")
+        if not content:
+            raise InvalidBenchmark("Missing E2E planner log")
+        try:
+            return content.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise InvalidBenchmark("Invalid UTF-8 E2E planner log") from exc
+    finally:
+        download.close()
 
 
 def verify_source_full_plan(repo: str, jobs: list[dict], token: str | None) -> tuple[str, str, str, str]:
