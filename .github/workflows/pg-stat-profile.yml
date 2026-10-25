@@ -35,6 +35,19 @@ jobs:
           python-version: "3.12"
       - name: Install pinned runtime packages
         run: python scripts/ci/install_pinned_python.py runtime
+      - name: Refuse caller-selected PostgreSQL before startup
+        shell: bash
+        env:
+          PRKS_TEST_DATABASE_URL: "postgresql://postgres@127.0.0.1/postgres"
+        run: |
+          set -euo pipefail
+          if scripts/test-postgres --profile > "$RUNNER_TEMP/profile-guard.out" 2> "$RUNNER_TEMP/profile-guard.err"; then
+            echo "The profiling wrapper accepted an external PostgreSQL URL" >&2
+            exit 1
+          fi
+          grep -Fq "refuses PRKS_TEST_DATABASE_URL" "$RUNNER_TEMP/profile-guard.err"
+          ! grep -Fq "starting" "$RUNNER_TEMP/profile-guard.err"
+          test ! -s "$RUNNER_TEMP/profile-guard.out"
       - name: Profile synthetic PostgreSQL facade operations
         shell: bash
         run: |
