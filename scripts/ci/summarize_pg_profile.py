@@ -87,7 +87,7 @@ def validate_row(record: dict, tiers: list[int]) -> tuple[int, str]:
         or record["correctness_checks"] != samples + 3
     ):
         raise ValueError("partial or unchecked profiler run")
-    if record["first_call_context"] != "after_fixture_seed_not_cold_start":
+    if record["first_call_context"] != "first_call_of_operation_not_cold_start":
         raise ValueError("first-observed call mislabeled as a cold start")
     for metric in ("first_observed_call_ms", "call_wall_p50_ms", "call_wall_p95_ms"):
         nonnegative(record[metric], metric)
@@ -125,11 +125,11 @@ def render(data: dict) -> str:
         f"Fixture: {data['fixture_version']} · "
         f"Tiers: {', '.join(str(x) for x in data['fixture_tiers'])} Works",
         "",
-        "First observed call is **after fixture seeding**, not a process or cache cold start. "
+        "First recorded call is the **first call of each operation**; previous operations and seeding may have warmed caches, so none is a process/DB cold start. "
         "Warm p50/p95 exclude it and two warmups. "
         "Single-run runner noise is not proof of a regression.",
         "",
-        "| Works | Facade read | First observed ms | Warm p50 ms | Warm p95 ms | Samples |",
+        "| Works | Facade read | First operation call ms | Warm p50 ms | Warm p95 ms | Samples |",
         "| ---: | --- | ---: | ---: | ---: | ---: |",
     ]
     for x in rows:
@@ -149,6 +149,9 @@ def main() -> int:
     payload = json.loads((Path(temp) / "pg-profile.json").read_text(encoding="utf-8"))
     summary = render(payload)
     print(summary)
+    # Backwards-compatible, privacy-validated statement evidence remains
+    # inspectable in the Actions log without uploading a new artifact.
+    print(json.dumps(payload, indent=2, sort_keys=True))
     dest = os.environ.get("GITHUB_STEP_SUMMARY")
     if dest:
         with Path(dest).open("a", encoding="utf-8") as out:
