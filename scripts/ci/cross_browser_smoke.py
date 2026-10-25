@@ -22,7 +22,7 @@ from tests.e2e.install_browser import apply_playwright_browser_env  # noqa: E402
 from tests.e2e.pdf_readiness import _wait_pdf_tab, _wait_pdf_viewer  # noqa: E402
 
 ENGINES = ("firefox", "webkit")
-CHECKS = ("folders", "work_detail", "notes_editor", "settings_focus", "pdf_render", "split_panes")
+CHECKS = ("folders", "work_detail", "notes_editor", "notes_save_reload", "settings_focus", "pdf_render", "split_panes")
 INHERITED_DB_SETTINGS = (
     "PRKS_AUTH", "PRKS_DATABASE_URL", "PRKS_DATABASE_URL_FILE",
     "PRKS_TEST_DATABASE_URL",
@@ -90,6 +90,46 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
         stage = "notes_editor"
         # A visible wrapper alone does not mean the async editor has mounted.
         page.locator(".CodeMirror").first.wait_for(state="visible", timeout=30000)
+        stage = "notes_save_reload"
+        # Real keyboard edit, not a programmatic value assignment. Use a
+        # different synthetic value per browser so an unchanged backend body
+        # cannot pass the second run against the shared disposable server.
+        note_text = f"PRKS cross-browser synthetic notes ({engine})"
+        page.locator(".work-notes-editor-wrap .CodeMirror").first.click()
+        page.keyboard.press("Control+A")
+        page.keyboard.insert_text(note_text)
+        # A green UI label is insufficient: require independent server state.
+        page.locator(
+            '[data-prks-role="editor-status"]', has_text="All changes saved"
+        ).wait_for(state="visible", timeout=30000)
+        page.wait_for_function(
+            """async ({id, text}) => {
+                const response = await fetch('/api/works/' + encodeURIComponent(id),
+                                             { cache: 'no-store' });
+                if (!response.ok) return false;
+                const work = await response.json();
+                return !!(work && work.text_content === text);
+            }""",
+            arg={"id": work_id, "text": note_text},
+            timeout=30000,
+        )
+        # A fresh document must load the committed value, not merely keep an
+        # unsaved draft in the current CodeMirror instance.
+        page.reload(wait_until="domcontentloaded")
+        page.locator(".work-detail").first.wait_for(state="visible", timeout=20000)
+        page.locator(".CodeMirror").first.wait_for(state="visible", timeout=30000)
+        page.wait_for_function(
+            """({id, text}) => {
+                const ctx = window.prksGetFocusedTabContext &&
+                            window.prksGetFocusedTabContext();
+                const work = ctx && ctx.getEntity && ctx.getEntity('work');
+                const notes = ctx && ctx.getResource && ctx.getResource('workNotes');
+                return !!(work && String(work.id) === String(id) &&
+                    notes && notes.editor && notes.editor.value() === text);
+            }""",
+            arg={"id": work_id, "text": note_text},
+            timeout=30000,
+        )
         stage = "settings_focus"
         settings = page.locator("button.settings-btn")
         settings.focus()
