@@ -102,9 +102,96 @@ def command(schema: Path, origin: str, binary: str) -> list[str]:
     ]
 
 
+def verify_live_readonly_contract(server: AppServer, checked_in: dict) -> dict:
+    status, live = read_json(server.origin, "/api/openapi/publishers.json")
+    if status != 200:
+        raise AssertionError("live Publishers OpenAPI returned non-200")
+    scoped = scoped_contract(checked_in, live)
+    _, default_openapi = read_json(server.origin, "/api/openapi.json")
+    if default_openapi == checked_in:
+        raise AssertionError("default OpenAPI alias unexpectedly includes Publishers")
+    status, rows = read_json(server.origin, "/api/publishers?used=1")
+    if status != 200 or not isinstance(rows, list) or not rows:
+        raise AssertionError("seeded Publishers catalog is empty or malformed")
+    for row in rows:
+        PublisherInUse.model_validate(row)
+    if not any(row["work_count"] > 0 for row in rows):
+        raise AssertionError("seed lacks a Publisher attached to a Work")
+    # Check Host admission only; no PostgreSQL session auth is assumed.
+    denied, _ = read_json(
+        server.origin, "/api/publishers?used=1", host="untrusted.invalid"
+    )
+    if denied != 421:
+        raise AssertionError("foreign Host unexpectedly admitted")
+    return scoped
+
+
+def run_schemathesis(server: AppServer, scoped: dict, binary: str):
+    with tempfile.TemporaryDirectory(prefix="prks-schemathesis-schema-") as directory:
+        schema = Path(directory) / "publishers-get-only.json"
+        schema.write_text(json.dumps(scoped), encoding="utf-8")
+        args = command(schema, server.origin, binary)
+        return subprocess.run(
+            args, cwd=directory, capture_output=True, text=True,
+            timeout=CLI_TIMEOUT, check=False,
+        )
+
+
+def print_failure_diagnostics(result, server: AppServer) -> None:
+    # Exclude all generated curl commands, URLs, headers, bodies and query
+    # strings; surface only bounded synthetic check/error classifications.
+    lines = result.stdout.splitlines() + result.stderr.splitlines()
+    categories = ("failure", "failed", "unexpected", "response", "status",
+                  "exception", "missing", "schema", "error", "checks")
+    disallowed = ("http://", "https://", "curl ", "authorization", "header:",
+                  "cookie", "?used=", "request body", "payload", "traceback")
+    diagnostics = [
+        line.strip() for line in lines
+        if len(line.strip()) <= 150 and SAFE_LINE.fullmatch(line.strip())
+        and any(word in line.lower() for word in categories)
+        and not any(word in line.lower() for word in disallowed)
+    ]
+    for line in diagnostics[:9]:
+        print("[schemathesis] scanner_diagnostic=" + line)
+
+    for label, marker in (
+        ("cli_option", "no such option"),
+        ("cli_value", "invalid value"),
+        ("schema_loading", "failed to load"),
+        ("schema_validation", "invalid schema"),
+        ("response_schema", "response_schema_conformance"),
+        ("unexpected_status", "status_code_conformance"),
+        ("http_server_error", "not_a_server_error"),
+        ("network_error", "connection refused"),
+        ("internal_cli_error", "internal error"),
+        ("schema_parse_error", "failed to parse"),
+        ("test_failure", "failures:"),
+    ):
+        if marker in (result.stdout + result.stderr).lower():
+            print("[schemathesis] failure_category=" + label)
+
+    # Discard all unsafe query/path values from isolated PRKS diagnostic logs.
+    # Keep only explicit exception CLASS names and presence of server errors.
+    for log_path in (
+        Path(server.storage_root) / "prks-errors.log",
+        Path(server._stderr_path),
+        Path(server._stdout_path),
+    ):
+        if not log_path.is_file():
+            continue
+        recent = log_path.read_text(encoding="utf-8", errors="replace")[-50000:]
+        classes = sorted(set(re.findall(
+            r"unhandled_api_error[^\\n]{0,220}error_type=([A-Za-z][A-Za-z0-9_]{0,48})",
+            recent,
+        )))
+        if classes:
+            print("[schemathesis] server_exception_types=" + ",".join(classes[:5]))
+        elif "unhandled_api_error" in recent:
+            print("[schemathesis] server_unhandled_error_seen=yes")
+
+
 def scan() -> int:
-    # Do not silently inherit credentials for an unrelated PG auth instance.
-    # This first GET-only pilot does not claim session/capability coverage.
+    # An inherited PostgreSQL AUTH connection would violate isolation.
     if os.environ.get("PRKS_AUTH", "").strip():
         raise RuntimeError("Refusing PRKS_AUTH: no disposable PostgreSQL test identity")
     binary = shutil.which("st")
@@ -115,101 +202,18 @@ def scan() -> int:
     started = time.monotonic()
     try:
         server.start()
-        status, live = read_json(server.origin, "/api/openapi/publishers.json")
-        if status != 200:
-            raise AssertionError("live Publishers OpenAPI returned non-200")
-        scoped = scoped_contract(checked_in, live)
-        _, default_openapi = read_json(server.origin, "/api/openapi.json")
-        if default_openapi == checked_in:
-            raise AssertionError("default OpenAPI alias unexpectedly includes Publishers")
-        status, rows = read_json(server.origin, "/api/publishers?used=1")
-        if status != 200 or not isinstance(rows, list) or not rows:
-            raise AssertionError("seeded Publishers catalog is empty or malformed")
-        for row in rows:
-            PublisherInUse.model_validate(row)
-        if not any(row["work_count"] > 0 for row in rows):
-            raise AssertionError("seed lacks a Publisher attached to a Work")
-
-        # Only check existing Host admission, not nonexistent PG session auth.
-        denied, _ = read_json(
-            server.origin, "/api/publishers?used=1", host="untrusted.invalid"
-        )
-        if denied != 421:
-            raise AssertionError("foreign Host unexpectedly admitted")
-
-
-        with tempfile.TemporaryDirectory(prefix="prks-schemathesis-schema-") as directory:
-            schema = Path(directory) / "publishers-get-only.json"
-            schema.write_text(json.dumps(scoped), encoding="utf-8")
-            args = command(schema, server.origin, binary)
-            result = subprocess.run(
-                args, cwd=directory, capture_output=True, text=True,
-                timeout=CLI_TIMEOUT, check=False,
-            )
-        elapsed = round(time.monotonic() - started, 2)
-        # No generated curl commands, bodies, headers, or query strings in logs.
+        scoped = verify_live_readonly_contract(server, checked_in)
+        result = run_schemathesis(server, scoped, binary)
         print(
             f"[schemathesis] method={METHOD} route={ROUTE} operation={OPERATION} "
             f"seed={SEED} examples_cap={MAX_EXAMPLES} time_cap={MAX_SECONDS}s "
-            f"elapsed={elapsed}s exit={result.returncode}"
+            f"elapsed={time.monotonic() - started:.2f}s exit={result.returncode}"
         )
-        selected = [
-            line.strip() for line in result.stdout.splitlines()
-            if SAFE_LINE.fullmatch(line.strip())
-            and (line.strip().startswith("No issues") or line.strip().startswith("Test cases:"))
-        ]
-        for line in selected[:3]:
-            print("[schemathesis] " + line)
         if result.returncode:
-            # Categorize CLI argument, schema and check failures without
-            # printing generated curl commands, HTTP payloads or raw URLs.
-            output = (result.stdout + "\\n" + result.stderr).lower()
-            diagnostics = ("failure", "failed", "unexpected", "response", "status",
-                           "exception", "missing", "schema", "error", "checks")
-            selected_errors = [
-                line.strip() for line in result.stdout.splitlines() + result.stderr.splitlines()
-                if len(line.strip()) <= 150 and SAFE_LINE.fullmatch(line.strip())
-                and any(word in line.lower() for word in diagnostics)
-                and not any(word in line.lower() for word in
-                            ("http://", "https://", "curl ", "authorization", "header:",
-                             "cookie", "?used=", "request body", "payload", "traceback"))
-            ]
-            for line in selected_errors[:12]:
-                print("[schemathesis] scanner_diagnostic=" + line)
-            error_log = Path(server.storage_root) / "prks-errors.log"
-            if error_log.is_file():
-                # Read only the last bounded portion of disposable test logs;
-                # publish safe exception CLASS names, never traceback, IDs,
-                # query values, headers or response bodies.
-                recent = error_log.read_text(encoding="utf-8", errors="replace")[-50000:]
-                classes = sorted(set(re.findall(
-                    r"unhandled_api_error method=GET route=/api/publishers "
-                    r"[^\\n]{0,160}error_type=([A-Za-z][A-Za-z0-9_]{0,48})",
-                    recent,
-                )))
-                for class_name in classes[:5]:
-                    print("[schemathesis] server_exception_type=" + class_name)
-            for label, marker in (
-                ("cli_option", "no such option"),
-                ("cli_value", "invalid value"),
-                ("schema_loading", "failed to load"),
-                ("schema_validation", "invalid schema"),
-                ("response_schema", "response_schema_conformance"),
-                ("unexpected_status", "status_code_conformance"),
-                ("http_server_error", "not_a_server_error"),
-                ("network_error", "connection refused"),
-                ("internal_cli_error", "internal error"),
-                ("schema_parse_error", "failed to parse"),
-                ("test_failure", "failures:"),
-            ):
-                if marker in output:
-                    print("[schemathesis] failure_category=" + label)
-
-            print(
-                "[schemathesis] Re-run with seed=855 on a new isolated test server; "
-                "no raw HTTP payload or generated URL is published in Actions."
-            )
+            print_failure_diagnostics(result, server)
+            print("[schemathesis] Reproduce on disposable fixtures with seed=855.")
             return 1
+        print("[schemathesis] bounded read-only contract scan completed")
         return 0
     finally:
         server.stop()
