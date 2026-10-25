@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
+import io
+import json
 import re
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from scripts.ci.plan_packaged_e2e import (
     EXTRA_PACKAGED_SMOKE_IDS,
     MAX_SMOKE_AFFECTED_TESTS,
     SAFE_VUE_VIEWS,
     plan_packaged_e2e,
+    _untracked_frontend_app_paths,
+    main,
 )
 from tests.e2e.policy import SMOKE_TEST_IDS
 
@@ -109,6 +116,37 @@ class PackagedSelectionPolicyTests(unittest.TestCase):
                 result = plan_packaged_e2e([PROGRESS, changed], known_test_ids=inventory(BROWSE_CASE))
                 self.assertEqual(result["proposed_mode"], "full")
                 self.assertEqual(result["effective_mode"], "full")
+
+    def test_smoke_alone_cannot_masquerade_as_affected_coverage(self):
+        only_smoke = inventory()
+        result = plan_packaged_e2e([PROGRESS], known_test_ids=only_smoke)
+        self.assertEqual(result["proposed_mode"], "full")
+        self.assertIn("affected feature", result["reason"])
+
+    def test_local_cli_fails_full_on_new_untracked_vue_file(self):
+        missing = b"frontend-app/src/features/progress/NewComponent.vue\0"
+        with patch(
+            "scripts.ci.plan_packaged_e2e.subprocess.run",
+            return_value=SimpleNamespace(returncode=0, stdout=missing),
+        ):
+            self.assertEqual(
+                _untracked_frontend_app_paths(ROOT),
+                ["frontend-app/src/features/progress/NewComponent.vue"],
+            )
+        with (
+            patch(
+                "scripts.ci.plan_packaged_e2e.policy.list_changed_paths",
+                return_value=[PROGRESS],
+            ),
+            patch(
+                "scripts.ci.plan_packaged_e2e._untracked_frontend_app_paths",
+                return_value=["frontend-app/src/features/progress/NewComponent.vue"],
+            ),
+            patch("sys.argv", ["plan_packaged_e2e", "--base", "origin/master"]),
+            redirect_stdout(io.StringIO()) as output,
+        ):
+            self.assertEqual(main(), 0)
+        self.assertEqual(json.loads(output.getvalue())["proposed_mode"], "full")
 
     def test_dry_run_requires_complete_discovered_inventory(self):
         dry = plan_packaged_e2e([PROGRESS])

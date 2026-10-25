@@ -4,6 +4,9 @@ This module is advisory ONLY. No GitHub Actions job imports it or consumes its
 output. Existing packaged PRs continue running six full shards until a separate
 maintainer-approved workflow change. Reuse the source E2E path/feature mapping,
 and apply a much narrower allowlist before considering smoke + affected tests.
+
+Manual read-only invocation (from the repository root):
+  python -m scripts.ci.plan_packaged_e2e --base origin/master
 """
 
 from __future__ import annotations
@@ -11,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import subprocess
 
 from tests.e2e import policy
 
@@ -175,9 +179,14 @@ def plan_packaged_e2e(
         expected_smoke = (*policy.SMOKE_TEST_IDS, *EXTRA_PACKAGED_SMOKE_IDS)
         if any(tid not in known for tid in expected_smoke):
             return _result("required packaged smoke case missing from E2E inventory")
+        # 'smoke' is always present in the source affected plan, so testing
+        # the combined set alone cannot prove a feature-owned case exists.
+        affected = policy.select_features(
+            ids, tuple(feature for feature in features if feature != "smoke")
+        )
+        if not affected:
+            return _result("no discovered tests for the affected feature")
         selected = policy.select_features(ids, features)
-        if not selected:
-            return _result("source features selected no browser tests")
         union = tuple(dict.fromkeys((*expected_smoke, *selected)))
         if len(union) > MAX_SMOKE_AFFECTED_TESTS:
             return _result("affected selection too broad; keep full packaged shards")
@@ -191,6 +200,26 @@ def plan_packaged_e2e(
         features=features,
         test_ids=union,
     )
+
+
+def _untracked_frontend_app_paths(repo: Path) -> list[str]:
+    """Include new Vue files absent from the shared E2E git-discovery prefixes.
+
+    The shared source planner discovers untracked frontend/ paths, but its
+    untracked prefix set does not yet include frontend-app/. Do not change the
+    live source E2E policy for an inactive packaged experiment.
+    """
+    command = [
+        "git", "-C", str(repo), "ls-files", "--others",
+        "--exclude-standard", "-z", "--", "frontend-app/",
+    ]
+    try:
+        proc = subprocess.run(command, capture_output=True, check=False)
+    except OSError as exc:
+        raise policy.ChangeDiscoveryError("untracked Vue discovery unavailable") from exc
+    if proc.returncode:
+        raise policy.ChangeDiscoveryError("untracked Vue discovery failed")
+    return [path for path in proc.stdout.decode("utf-8").split("\0") if path]
 
 
 def main() -> int:
@@ -208,7 +237,10 @@ def main() -> int:
     )
     args = parser.parse_args()
     try:
-        paths = policy.list_changed_paths(ROOT, args.base, include_untracked=False)
+        paths = policy.list_changed_paths(ROOT, args.base, include_untracked=True)
+        for path in _untracked_frontend_app_paths(ROOT):
+            if path not in paths:
+                paths.append(path)
         diffs = {}
         if "frontend/sw.js" in paths:
             diffs["frontend/sw.js"] = policy.service_worker_diff_for_plan(ROOT, args.base)
