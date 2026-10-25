@@ -103,3 +103,33 @@ README promotional screenshots use dedicated synthetic/public-domain demo toolin
 - `scripts/capture_demo_screenshots.py`.
 
 Never use a real personal research library to generate documentation or UX-audit screenshots.
+
+
+## Optional PostgreSQL query-cost profile (#858)
+
+Run the **manual**, synthetic-only PostgreSQL 18 query profiler:
+
+```bash
+scripts/test-postgres --profile
+scripts/test-postgres --profile --sizes 12,48,128 --repetitions 8
+```
+
+The wrapper starts a new disposable Docker server (or local temporary cluster)
+with `shared_preload_libraries=pg_stat_statements` and `compute_query_id=on`,
+creates a harness-owned migrated database and extension, seeds synthetic Works,
+then deletes the database and server. The profiler **refuses**
+`PRKS_TEST_DATABASE_URL`; do not enable the extension or reset its shared
+statistics on a real PRKS cluster. A missing preload or extension fails
+clearly. Ordinary `scripts/test-postgres` and production Compose startup
+are unchanged.
+
+Results contain PostgreSQL version, fixture tier, a known facade read operation,
+warm call-wall p50/p95 and the top five *per-SQL* aggregate costs (calls,
+total/mean execution time, rows, block hits/reads and temporary blocks).
+Fingerprints are opaque and **not stable between clusters or PostgreSQL major
+versions**. The profiler does not select or print SQL text: PostgreSQL's
+representative text can contain literals even after normalization. Synthetic
+fixtures only; never upload real research content. Cache-warm facade call
+durations are **not** HTTP latency and cannot be compared directly with PRKS's
+request-level p50/p95; run repeated like-for-like benchmarks before claiming
+a performance improvement. This is advisory and never runs in mandatory PR CI.
