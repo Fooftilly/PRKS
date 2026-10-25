@@ -19,7 +19,7 @@ if str(ROOT) not in sys.path:
 from tests.e2e.fixtures import seed_library  # noqa: E402
 from tests.e2e.harness import AppServer, open_app_page  # noqa: E402
 from tests.e2e.install_browser import apply_playwright_browser_env  # noqa: E402
-from tests.e2e.test_app import _wait_pdf_tab, _wait_pdf_viewer  # noqa: E402
+from tests.e2e.pdf_readiness import _wait_pdf_tab, _wait_pdf_viewer  # noqa: E402
 
 ENGINES = ("firefox", "webkit")
 CHECKS = ("folders", "work_detail", "notes_editor", "settings_focus", "pdf_render", "split_panes")
