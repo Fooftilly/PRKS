@@ -10,7 +10,8 @@ from unittest.mock import patch
 from scripts.pg_stat_profile import (
     assert_bounded_works, assert_ordered_work_ids, assert_work_detail,
     expected_recent_work_ids,
-    assert_works_count, benchmark, percentile, project_statement, run, sizes_arg, snapshot,
+    assert_works_count, benchmark, create_verified_profile_database, percentile,
+    project_statement, run, sizes_arg, snapshot, verify_disposable_cluster,
 )
 
 
@@ -25,6 +26,80 @@ class ProfileSafetyTests(unittest.TestCase):
             with self.subTest(nonce=bad), patch.dict(os.environ, {"PRKS_PG_PROFILE_NONCE": bad}):
                 with self.assertRaisesRegex(RuntimeError, "scripts/test-postgres --profile"):
                     run((12,), 2)
+
+    def test_disposable_cluster_preflight_precedes_any_database_creation(self):
+        """Cluster mismatch/missing extension/version must refuse with zero DDL."""
+        class Stats:
+            def __init__(self, cluster, preload, version):
+                self.values = {
+                    "SHOW cluster_name": {"cluster_name": cluster},
+                    "SELECT current_setting('shared_preload_libraries') AS loaded": {
+                        "loaded": preload
+                    },
+                    "SHOW server_version_num": {"server_version_num": version},
+                }
+                self.calls = []
+                self.last = ""
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+            def execute(self, statement):
+                self.calls.append(statement)
+                self.last = statement
+                if statement not in self.values:
+                    raise AssertionError("preflight issued an unexpected SQL statement")
+                return self
+
+            def fetchone(self):
+                return self.values[self.last]
+
+        class Harness:
+            _admin_conninfo = "verified-maintenance-connection"
+
+            def __init__(self):
+                self.creates = []
+
+            def create_database(self, label):
+                self.creates.append(label)
+                return "prks_test_owned_profile"
+
+        nonce = "a" * 32
+        bad_cases = (
+            ("not-a-disposable-server", "pg_stat_statements", "180006"),
+            (f"prks-profile-{nonce}", "", "180006"),
+            (f"prks-profile-{nonce}", "other_lib", "180006"),
+            (f"prks-profile-{nonce}", "pg_stat_statements", "170999"),
+        )
+        for cluster, preload, version in bad_cases:
+            with self.subTest(cluster=cluster, preload=preload, version=version):
+                stats = Stats(cluster, preload, version)
+                harness = Harness()
+                calls = []
+
+                def connect(conninfo, **kwargs):
+                    calls.append((conninfo, kwargs))
+                    return stats
+
+                with self.assertRaises(RuntimeError):
+                    create_verified_profile_database(harness, nonce, connect, object())
+                self.assertEqual(harness.creates, [], "refusal must precede CREATE DATABASE")
+                self.assertEqual(calls[0][0], harness._admin_conninfo)
+                self.assertEqual(calls[0][1]["options"], "-c pg_stat_statements.track=none")
+                self.assertFalse(any("CREATE" in sql or "RESET" in sql for sql in stats.calls))
+
+        valid = Stats(f"prks-profile-{nonce}", "auto_explain, pg_stat_statements", "180006")
+        harness = Harness()
+        self.assertEqual(verify_disposable_cluster(valid, nonce), 180006)
+        self.assertFalse(any("CREATE" in sql or "RESET" in sql for sql in valid.calls))
+        self.assertEqual(
+            create_verified_profile_database(harness, nonce, lambda *a, **kw: valid, object()),
+            "prks_test_owned_profile",
+        )
+        self.assertEqual(harness.creates, ["profile"])
 
     def test_snapshot_never_fetches_sql_text(self):
         class FakeStats:
