@@ -10,6 +10,7 @@ import copy
 import json
 import math
 import os
+import re
 import random
 import shutil
 import socket
@@ -882,6 +883,7 @@ class PageCollector:
         self.origin = origin.rstrip("/")
         self.pageerrors = []
         self.pageerror_names = []
+        self.pageerror_sites = []
         self.console_errors = []
         self.failed_requests = []
         self.http_5xx = []
@@ -899,10 +901,24 @@ class PageCollector:
 
     def _on_page_error(self, err):
         self.pageerrors.append(str(err))
-        # Keep browser-provided exception names separate from their messages,
-        # which may contain private document text or URLs. Callers may report
-        # only strict allow-listed names; never expose raw error strings.
+        # Keep browser-provided exception metadata separate from messages,
+        # which may contain private document text or URLs. Diagnostics can
+        # report only strictly validated static source locations.
         self.pageerror_names.append(getattr(err, "name", None))
+        stack = str(getattr(err, "stack", "") or "")
+        # Static scripts only, with a loopback origin. Never retain arbitrary
+        # URLs, query strings, script content, or stack frames in CI reports.
+        site = None
+        for match in re.finditer(
+            r"https?://(?:127\\.0\\.0\\.1|localhost):[0-9]+/"
+            r"((?:js|assets)/[A-Za-z0-9_./-]+\\.js):([0-9]{1,6}):([0-9]{1,5})",
+            stack,
+        ):
+            path, line, _column = match.groups()
+            if ".." not in path.split("/") and len(path) <= 110:
+                site = f"{path}:{line}"
+                break
+        self.pageerror_sites.append(site)
 
     def _on_console(self, msg):
         if msg.type != "error":
