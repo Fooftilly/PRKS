@@ -5748,7 +5748,7 @@ function escapeHtml(s) {
  * the default accent. */
 function prksSafeTagColorCss(value) {
     const color = String(value == null ? '' : value).trim();
-    if (/^#[0-9a-fA-F]{3,8}$/.test(color)) return color;
+    if (/^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(color)) return color;
     return '#6d6cf7';
 }
 
