@@ -166,10 +166,7 @@ class PgErrorMappingProperties(unittest.TestCase):
     def test_missing_or_unknown_state_never_leaks_original_error(self, state):
         mapped = map_database_error(SyntheticPgError(state), ConstraintRegistry())
         self.assertNotIn(PRIVATE_MESSAGE, str(mapped))
-        self.assertEqual(mapped.sqlstate, state if mapped.code in (
-            "RETRY", "DATABASE_UNAVAILABLE", "DATABASE_ERROR", "INVALID_VALUE",
-            "READ_ONLY_TRANSACTION", "EXACT_CONSTRAINT",
-        ) else mapped.sqlstate)
+        self.assertEqual(mapped.sqlstate, state)
         self.assertGreaterEqual(mapped.http_status, 400)
 
 
