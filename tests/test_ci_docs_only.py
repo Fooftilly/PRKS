@@ -33,7 +33,7 @@ def _repo(root: Path) -> str:
     _git(root, "config", "user.email", "ci@example.invalid")
     _git(root, "config", "user.name", "CI test")
     _write(root, "README.md", "# Welcome\n")
-    _write(root, "docs/guide.md", "docs/wiki/Home.md", "docs/wiki/User-Guide.md", "# Guide\n")
+    _write(root, "docs/guide.md", "# Guide\n")
     _write(root, "docs/wiki/Glossary.md", "# Glossary\n")
     _write(root, "backend/app.py", "print('ok')\n")
     _write(root, "AGENTS.md", "Rules\n")
