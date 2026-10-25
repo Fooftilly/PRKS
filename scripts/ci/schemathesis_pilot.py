@@ -161,6 +161,25 @@ def scan() -> int:
         for line in selected[:3]:
             print("[schemathesis] " + line)
         if result.returncode:
+            # Categorize CLI argument, schema and check failures without
+            # printing generated curl commands, HTTP payloads or raw URLs.
+            output = (result.stdout + "\\n" + result.stderr).lower()
+            for label, marker in (
+                ("cli_option", "no such option"),
+                ("cli_value", "invalid value"),
+                ("schema_loading", "failed to load"),
+                ("schema_validation", "invalid schema"),
+                ("response_schema", "response_schema_conformance"),
+                ("unexpected_status", "status_code_conformance"),
+                ("http_server_error", "not_a_server_error"),
+                ("network_error", "connection refused"),
+                ("internal_cli_error", "internal error"),
+                ("schema_parse_error", "failed to parse"),
+                ("test_failure", "failures:"),
+            ):
+                if marker in output:
+                    print("[schemathesis] failure_category=" + label)
+
             print(
                 "[schemathesis] Re-run with seed=855 on a new isolated test server; "
                 "no raw HTTP payload or generated URL is published in Actions."
