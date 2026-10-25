@@ -37,6 +37,13 @@ def nonnegative(value: object, label: str) -> float:
 
 def validate_scope(data: dict) -> list[int]:
     """Prove that the source is a disposable, known schema and fixture tier."""
+    scope_keys = {
+        "tool", "server_version_num", "fixture", "fixture_version",
+        "fixture_tiers", "backend", "measurement", "readiness",
+        "query_fingerprints", "profiles",
+    }
+    if set(data) != scope_keys:
+        raise ValueError("unknown profile metadata: possible private field disclosure")
     if data.get("tool") != "pg_stat_statements":
         raise ValueError("not a PostgreSQL statement profile")
     if nonnegative(data.get("server_version_num"), "server_version_num") < 180000:
@@ -74,7 +81,7 @@ def validate_statement(item: dict) -> None:
 
 
 def validate_row(record: dict, tiers: list[int]) -> tuple[int, str]:
-    if not isinstance(record, dict) or not REQUIRED_KEYS <= set(record):
+    if not isinstance(record, dict) or set(record) != REQUIRED_KEYS:
         raise ValueError("incomplete profiler row")
     works, operation = record["fixture_works"], record["operation"]
     if type(works) is not int or works not in tiers or operation not in OPERATIONS:
