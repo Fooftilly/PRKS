@@ -79,7 +79,7 @@ class ProfileSafetyTests(unittest.TestCase):
         self.assertEqual(outcome["completed_samples"], 4)
         self.assertEqual(outcome["correctness_checks"], 7)
         self.assertEqual(outcome["warmup_calls"], 2)
-        self.assertEqual(outcome["first_call_context"], "after_fixture_seed_not_cold_start")
+        self.assertEqual(outcome["first_call_context"], "first_call_of_operation_not_cold_start")
         self.assertGreaterEqual(outcome["first_observed_call_ms"], 0)
         self.assertTrue(outcome["top_statements"])
         bad = []
