@@ -54,6 +54,20 @@ def _is_generated_companion(path: str) -> bool:
     )
 
 
+def _safe_nonproduction_companion(path: str) -> bool:
+    """Only allow known documentation and feature-local unit tests as extras."""
+    if path in {"README.md", "AGENTS.md"}:
+        return True
+    if path.startswith("docs/") and path.endswith(".md"):
+        return True
+    if path.endswith(".test.ts"):
+        return any(
+            path.startswith(view.rsplit("/", 1)[0] + "/")
+            for view in SAFE_VUE_VIEWS
+        )
+    return False
+
+
 def _valid_path(value: object) -> bool:
     if not isinstance(value, str) or not value or "\x00" in value:
         return False
@@ -125,7 +139,12 @@ def plan_packaged_e2e(
     for path in paths:
         classified = policy.classify_affected_path(path)
         if classified["skip"]:
-            continue
+            # The source planner legitimately skips documentation and unit
+            # tests, but may also skip unfamiliar support paths. Do not let
+            # unknown or CI-relevant changes hide behind a safe view diff.
+            if _safe_nonproduction_companion(path):
+                continue
+            return _result("unrecognized nonproduction companion: " + path)
         if _is_generated_companion(path):
             # Already checked by the source planner: a generated companion
             # without mapped Vue source and verified SW stamp requires full.

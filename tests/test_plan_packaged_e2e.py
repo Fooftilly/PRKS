@@ -147,6 +147,13 @@ class PackagedSelectionPolicyTests(unittest.TestCase):
         self.assertEqual(forced["proposed_mode"], "full")
         self.assertIn("release", forced["reason"])
 
+    def test_feature_local_unit_tests_can_accompany_an_eligible_view(self):
+        result = plan_packaged_e2e(
+            [PROGRESS, "frontend-app/src/features/progress/ProgressView.test.ts"],
+            known_test_ids=inventory(BROWSE_CASE),
+        )
+        self.assertEqual(result["proposed_mode"], "smoke_affected")
+
     def test_nonproduction_docs_changes_do_not_hide_unsafe_changes(self):
         proposal = plan_packaged_e2e(
             [PROGRESS, "docs/feature-notes.md"],
