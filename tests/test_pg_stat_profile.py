@@ -81,8 +81,18 @@ class ProfileSafetyTests(unittest.TestCase):
         public = project_statement(row)
         serialized = json.dumps(public)
         self.assertRegex(public["query_fingerprint"], r"^[0-9a-f]{16}$")
+        # Deterministic for the same query and key, distinct for different SQL
+        # fingerprints, and unlinkable between profiler runs with different keys.
         self.assertEqual(public["query_fingerprint"], project_statement(row)["query_fingerprint"])
-        self.assertNotEqual(public["query_fingerprint"], "ffffffffffffffff")
+        self.assertNotEqual(
+            public["query_fingerprint"],
+            project_statement({**row, "queryid": 0})["query_fingerprint"],
+        )
+        with patch("scripts.pg_stat_profile._RUN_FINGERPRINT_KEY", b"second-run-key"):
+            self.assertNotEqual(
+                public["query_fingerprint"],
+                project_statement(row)["query_fingerprint"],
+            )
         self.assertEqual(public["shared_cache_hit_percent"], 80.0)
         self.assertNotIn(secret, serialized)
         self.assertNotIn("query", public)
