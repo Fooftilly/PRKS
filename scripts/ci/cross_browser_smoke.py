@@ -91,7 +91,31 @@ def collector_failure_categories(collector) -> str:
         if len(labels) < min(len(collector.pageerrors), 5):
             labels.extend(["unknown"] * (min(len(collector.pageerrors), 5) - len(labels)))
         flagged.append("kinds-" + "_".join(labels))
+        # Only normalized loopback JS source paths recorded by PageCollector,
+        # never stack frames or arbitrary browser URLs.
+        sites = getattr(collector, "pageerror_sites", None)
+        if isinstance(sites, list) and sites:
+            safe_sites = [
+                site.replace("/", "-").replace(":", "-")
+                if isinstance(site, str) and len(site) <= 110
+                and all(ch.isascii() and (ch.isalnum() or ch in "-_./:") for ch in site)
+                and site.startswith(("js/", "assets/"))
+                else "unknown"
+                for site in sites[:5]
+            ]
+            flagged.append("sites-" + "_".join(safe_sites))
     return "_".join(flagged) or "unknown"
+
+
+def check_browser_errors(collector, *, engine: str, phase: str) -> None:
+    """Fail fast with only synthetic phase + allowlisted collector metadata."""
+    try:
+        collector.assert_clean()
+    except AssertionError:
+        raise SmokeFailure(
+            engine, "browser_errors_" + phase + "_" + collector_failure_categories(collector),
+            "AssertionError",
+        ) from None
 
 
 def verify_isolation(environ: dict[str, str]) -> None:
@@ -177,6 +201,7 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
             arg={"id": work_id, "text": note_text},
             timeout=30000,
         )
+        check_browser_errors(collector, engine=engine, phase="after_notes")
         stage = "settings_focus"
         settings = page.locator("button.settings-btn")
         settings.focus()
@@ -191,11 +216,13 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
             "document.activeElement.classList.contains('settings-btn'))"
         ):
             raise AssertionError("settings dialog did not restore keyboard focus")
+        check_browser_errors(collector, engine=engine, phase="after_settings")
         stage = "pdf_render"
         # Existing Chromium E2E readiness contract: a real page image, not
         # merely a PDF toolbar or a completed HTTP response.
         _wait_pdf_viewer(page)
 
+        check_browser_errors(collector, engine=engine, phase="after_pdf")
         stage = "split_panes"
         page.evaluate(
             "id => window.prksNavigate('#/works/' + id, { target: 'tile' })",
@@ -240,14 +267,7 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
         page.locator(".prks-tile--secondary .prks-pdf-render-image").first.wait_for(
             state="visible", timeout=30000,
         )
-        stage = "browser_errors_pre_reload"
-        # Check earlier browser exceptions *before* remount. Keep them
-        # visible with safe categories; never clear or excuse failures.
-        try:
-            collector.assert_clean()
-        except AssertionError:
-            stage += "_" + collector_failure_categories(collector)
-            raise
+        check_browser_errors(collector, engine=engine, phase="after_split")
         stage = "split_reload"
         # Match the existing Chromium E2E _flush_workspace test helper.
         # Fail closed if the persistence API was removed or renamed.
@@ -288,12 +308,10 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
         page.locator(".prks-tile--secondary .prks-pdf-render-image").first.wait_for(
             state="visible", timeout=30000,
         )
-        stage = "browser_errors"
-        try:
-            collector.assert_clean()
-        except AssertionError:
-            stage = "browser_errors_" + collector_failure_categories(collector)
-            raise
+        check_browser_errors(collector, engine=engine, phase="after_split_reload")
+    except SmokeFailure:
+        failed = True
+        raise
     except Exception as exc:
         failed = True
         # Playwright exceptions may include URLs, selectors and page text.
