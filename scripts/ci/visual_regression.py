@@ -18,7 +18,7 @@ if str(ROOT) not in sys.path:
 
 from tests.e2e.fixtures import seed_folders_library  # noqa: E402
 from tests.e2e.harness import AppServer, PageCollector, require_chromium  # noqa: E402
-from tests.e2e.test_app import _wait_pdf_viewer  # noqa: E402
+from tests.e2e.test_app import _wait_pdf_tab, _wait_pdf_viewer  # noqa: E402
 from tests.visual.compare import (  # noqa: E402
     SCENES,
     candidate,
@@ -92,6 +92,17 @@ def collect(output: Path) -> dict[str, dict]:
             timeout=30000,
         )
         page.locator(".prks-tile--secondary .work-detail").wait_for(state="visible")
+        # A visible Work wrapper is not a settled editor or mounted PDF.
+        # Reuse the same readiness contract as the established split E2Es.
+        ids = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        _wait_pdf_tab(page, ids["mainTabId"])
+        _wait_pdf_tab(page, ids["secondaryTree"]["tabId"])
+        page.locator(".prks-tile--secondary .CodeMirror").wait_for(
+            state="visible", timeout=30000
+        )
+        page.locator(".prks-tile--secondary .prks-pdf-render-image").wait_for(
+            state="visible", timeout=30000
+        )
         page.wait_for_function(
             "() => Array.from(document.querySelectorAll('.work-detail'))"
             ".filter(el => el.getBoundingClientRect().width > 0).length >= 2"
