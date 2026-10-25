@@ -99,7 +99,7 @@ def collector_failure_categories(collector) -> str:
                 site.replace("/", "-").replace(":", "-")
                 if isinstance(site, str) and len(site) <= 110
                 and all(ch.isascii() and (ch.isalnum() or ch in "-_./:") for ch in site)
-                and site.startswith(("js/", "assets/"))
+                and site.startswith(("js/", "assets/", "vue/", "vendor/"))
                 else "unknown"
                 for site in sites[:5]
             ]
