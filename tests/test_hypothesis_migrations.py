@@ -34,7 +34,8 @@ LEGACY_ROWS = {
     "folder_files": "SELECT folder_id, work_id FROM folder_files ORDER BY folder_id, work_id",
     # Both tables are rebuilt by v17; capture their surviving v16 columns.
     "annotations": (
-        "SELECT id, work_id, type, content, page_index FROM annotations ORDER BY id"
+        "SELECT id, work_id, type, content, page_index, color, "
+        "geometry_json, created_at, updated_at FROM annotations ORDER BY id"
     ),
     "roles": (
         "SELECT person_id, work_id, role_type, order_index, credit_name "
