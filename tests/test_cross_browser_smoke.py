@@ -105,13 +105,13 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
 
     def test_error_bucket_diagnostics_omit_sensitive_browser_details(self):
         collector = Mock()
-        collector.pageerrors = ["private-document-title", "secret-content"]
+        collector.pageerrors = ["TypeError: private-document-title", "ReferenceError: secret-content"]
         collector.console_errors = ["credential=private"]
         collector.failed_requests = []
         collector.http_5xx = []
         collector.external = []
         self.assertEqual(
-            collector_failure_categories(collector), "page-2_console-1"
+            collector_failure_categories(collector), "page-2_console-1_kinds-typeerror_referenceerror"
         )
         self.assertNotIn("private", collector_failure_categories(collector))
 
