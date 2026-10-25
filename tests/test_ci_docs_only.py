@@ -116,11 +116,13 @@ class DocsOnlyLinkValidationTests(unittest.TestCase):
     def test_valid_links_headings_duplicates_and_fences(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            _write(root, "README.md", "# Top\n## Repeated\n## Repeated\n")
+            _write(root, "README.md", "# Top\n## Repeated\n## Repeated\n## my_func\n## Foo & Bar\n")
             _write(root, "docs/guide.md", (
                 "# Guide\n"
                 "[readme](../README.md#top)\n"
-                "[repeated](../README.md#repeated-1)\n"
+                "[repeated](../README.md#repeated-1)\n"                "[underscore](../README.md#my_func)\n"
+                "[punctuation](../README.md#foo--bar)\n"
+
                 "[here](#guide)\n"
                 "```md\n[invalid](missing.md)\n```\n"
                 "[external](https://example.org/missing.md)\n"
