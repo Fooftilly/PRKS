@@ -184,6 +184,14 @@ class DocsOnlyLinkValidationTests(unittest.TestCase):
         )
         self.assertEqual(_anchors(content), {"setup", "setup-1"})
 
+    def test_html_ids_on_arbitrary_elements_and_link_attrs(self):
+        anchors = _anchors(
+            '<div id="part"></div>\n'
+            '<a class="menu" id="another">menu</a>\n'
+            '<a class="menu" name="legacy">old</a>\n'
+        )
+        self.assertTrue({"part", "another", "legacy"}.issubset(anchors))
+
     def test_broken_references_and_parenthesized_paths_fail(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
