@@ -35,21 +35,58 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Classify documentation-only PR (fail closed)
+        id: docs-scope
+        shell: bash
+        env:
+          PRKS_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PRKS_EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          docs_only=false
+          if [[ "$PRKS_EVENT_NAME" == "pull_request" && "$PRKS_PR_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            if git fetch --no-tags --depth=1 origin "$PRKS_PR_BASE_SHA"; then
+              # The PR checkout is untrusted: use the reviewed classifier from
+              # the immutable base, not the PR's possibly modified selector.
+              if base_classifier="$(mktemp)"; then
+                if git show "$PRKS_PR_BASE_SHA:scripts/ci/docs_only.py" > "$base_classifier"; then
+                  decision="$(python "$base_classifier" --base "$PRKS_PR_BASE_SHA")" || decision=false
+                  if [[ "$decision" == "true" ]]; then
+                    docs_only=true
+                  fi
+                else
+                  echo "::warning::Docs classifier absent from base; running full tests."
+                fi
+                rm -f "$base_classifier"
+              else
+                echo "::warning::Failed to allocate classifier file; running full tests."
+              fi
+            else
+              echo "::warning::Could not fetch immutable PR base; running full tests."
+            fi
+          fi
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
       - name: Set up Python
+        if: steps.docs-scope.outputs.docs_only != 'true'
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
 
       - name: Install Ruff
+        if: steps.docs-scope.outputs.docs_only != 'true'
         run: python -m pip install --disable-pip-version-check "--only-binary=:all:" "ruff==${RUFF_VERSION}"
 
       - name: Run high-signal Python checks
+        if: steps.docs-scope.outputs.docs_only != 'true'
         run: ruff check --config ruff.toml prks_app.py backend
 
       - name: Enforce PRKS engineering invariants
+        if: steps.docs-scope.outputs.docs_only != 'true'
         run: python scripts/check_invariants.py
 
       - name: Resolve diff-aware check base
+        if: steps.docs-scope.outputs.docs_only != 'true'
         id: diff-base
         # Shared by the diff-aware guards below (#189, #190, #192).
         # PR base is the immutable event SHA (not the live base-branch tip).
@@ -84,6 +121,7 @@ jobs:
           echo "base=$base" >> "$GITHUB_OUTPUT"
 
       - name: Fail on new E2E page.wait_for_timeout
+        if: steps.docs-scope.outputs.docs_only != 'true'
         # Diff-aware (#189): historical sleeps under tests/e2e/ do not fail
         # unrelated PRs. Only newly added / newly-unexempted call sites fail.
         env:
@@ -91,6 +129,7 @@ jobs:
         run: python scripts/check_e2e_wait_for_timeout.py --base "$PRKS_DIFF_BASE"
 
       - name: Schema-change gate (db_schema + migration + version + PK parity)
+        if: steps.docs-scope.outputs.docs_only != 'true'
         # #190: a db_schema.sql change needs a LATEST_SCHEMA_VERSION bump and
         # one new Migration per bumped version; ON CONFLICT tables in the
         # canonical schema must be in _CURRENT_TABLE_PKS (or the narrow
@@ -100,6 +139,7 @@ jobs:
         run: python scripts/check_schema_change.py --base "$PRKS_DIFF_BASE"
 
       - name: Fail on new correlated catalogue COUNT SQL
+        if: steps.docs-scope.outputs.docs_only != 'true'
         # #192: per-row correlated (SELECT COUNT(...) ... = outer.id) scalar
         # subqueries in backend/ + prks_app.py must match a grandfathered
         # entry in scripts/correlated_catalog_counts_allowlist.json whose
