@@ -67,19 +67,35 @@ _SMOKE_ERROR_PROBE = r"""(() => {
                 (Number.isInteger(line) && line > 0 && line <= 999999 ? '-' + line : '');
         } catch (_) { return 'unknown'; }
     };
-    const record = (type, reason, url, line) => {
+    const family = (message) => {
+        if (typeof message !== 'string') return 'none';
+        if (message === 'ResizeObserver loop limit exceeded' ||
+            message === 'ResizeObserver loop completed with undelivered notifications.' ||
+            message === 'ResizeObserver loop completed with undelivered notifications') {
+            return 'resizeobserver';
+        }
+        if (message === 'Script error.' || message === 'Script error') return 'script';
+        if (message.includes('Failed to fetch') || message.includes('Load failed')) return 'fetch';
+        if (message.includes('Cannot read properties') ||
+            message.includes('is not an object')) return 'property';
+        if (message.includes('is not defined')) return 'reference';
+        return 'other';
+    };
+    const record = (type, reason, url, line, message) => {
         if (entries.length >= 5) return;
         const name = reason && typeof reason.name === 'string' ? reason.name : '';
         const ctor = reason && reason.constructor && reason.constructor.name;
         entries.push({
             kind: type, name: names.has(name) ? name : names.has(ctor) ? ctor : 'unknown',
-            source: source(url, line)
+            source: source(url, line),
+            shape: reason == null ? 'missing' : typeof reason === 'object' ? 'object' : 'other',
+            family: family(message)
         });
     };
     window.addEventListener('error', e =>
-        record('window', e.error, e.filename || '', e.lineno || 0));
+        record('window', e.error, e.filename || '', e.lineno || 0, e.message));
     window.addEventListener('unhandledrejection', e =>
-        record('promise', e.reason, '', 0));
+        record('promise', e.reason, '', 0, ''));
 })()"""
 
 
@@ -102,13 +118,20 @@ def probe_error_summary(page) -> str:
             kind = event.get("kind")
             name = event.get("name")
             src = event.get("source")
+            shape = event.get("shape")
+            family = event.get("family")
             if kind not in permitted or name not in names | {"unknown"}:
                 continue
+            if shape not in {"missing", "object", "other"}:
+                shape = "unknown"
+            if family not in {"none", "resizeobserver", "script", "fetch", "property", "reference", "other"}:
+                family = "unknown"
             if not isinstance(src, str) or len(src) > 115 or not all(
                 ch.isascii() and (ch.isalnum() or ch in "-_.") for ch in src
             ):
                 src = "unknown"
-            labels.append(kind + "-" + name.lower() + "-" + src)
+            labels.append(kind + "-" + name.lower() + "-" + src +
+                          "-" + shape + "-" + family)
         return "_".join(labels) if labels else "none"
     except Exception:
         return "unavailable"
