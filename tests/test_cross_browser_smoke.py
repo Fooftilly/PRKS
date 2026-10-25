@@ -181,14 +181,22 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
     def test_page_probe_reports_only_allowlisted_metadata(self):
         page = Mock()
         page.evaluate.return_value = [
-            {"kind": "window", "name": "TypeError", "source": "vue-prks-vue.js-42"},
-            {"kind": "promise", "name": "AbortError", "source": "unknown"},
+            {"kind": "window", "name": "TypeError", "source": "vue-prks-vue.js-42",
+             "shape": "object", "family": "property"},
+            {"kind": "promise", "name": "AbortError", "source": "unknown",
+             "shape": "missing", "family": "none"},
             {"kind": "window", "name": "SecretBody", "source": "untrusted"},
             {"kind": "window", "name": "Error",
-             "source": "https://example.invalid/private?token=sensitive"},
+             "source": "https://example.invalid/private?token=sensitive",
+             "shape": "object", "family": "fetch"},
         ]
         label = probe_error_summary(page)
-        self.assertEqual(label, "window-typeerror-vue-prks-vue.js-42_promise-aborterror-unknown_window-error-unknown")
+        self.assertEqual(
+            label,
+            "window-typeerror-vue-prks-vue.js-42-object-property"
+            "_promise-aborterror-unknown-missing-none"
+            "_window-error-unknown-object-fetch",
+        )
         self.assertNotIn("sensitive", label)
         self.assertNotIn("SecretBody", label)
 
