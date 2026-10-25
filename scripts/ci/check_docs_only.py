@@ -19,9 +19,9 @@ from scripts.ci.docs_only import changed_documentation
 _MARKDOWN = MarkdownIt("commonmark").enable("table")
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 _PUNCT = re.compile(r"[^\w\- ]", re.UNICODE)
-_HTML_TAG = re.compile(r"<([a-z][\\w:-]*)\\b([^>]*)>", re.I)
-_HTML_ID = re.compile(r"\\bid\\s*=\\s*[\\\"']([^\\\"']+)[\\\"']", re.I)
-_HTML_NAME = re.compile(r"\\bname\\s*=\\s*[\\\"']([^\\\"']+)[\\\"']", re.I)
+_HTML_TAG = re.compile(r"<([a-z][\w:-]*)\b([^>]*)>", re.I)
+_HTML_ID = re.compile(r"""\bid\s*=\s*["']([^"']+)["']""", re.I)
+_HTML_NAME = re.compile(r"""\bname\s*=\s*["']([^"']+)["']""", re.I)
 
 
 def _slug(text: str) -> str:
