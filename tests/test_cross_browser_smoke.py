@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import io
+import shutil
+import subprocess
 import sys
 import unittest
 from contextlib import redirect_stderr
@@ -9,7 +11,7 @@ from types import ModuleType
 from unittest.mock import MagicMock, Mock, patch
 
 from scripts.ci.cross_browser_smoke import (
-    CHECKS, ENGINES, SmokeFailure, check_browser_errors, close_preserving_failure, collector_failure_categories, probe_error_summary,
+    CHECKS, ENGINES, SmokeFailure, _SMOKE_ERROR_PROBE, check_browser_errors, close_preserving_failure, collector_failure_categories, probe_error_summary,
     main, run, smoke,
     verify_isolation, verify_report,
 )
@@ -163,6 +165,18 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
         self.assertIn("webkit/browser_errors_after_pdf_", str(caught.exception))
         self.assertIn("sites-js-reader.js-42", str(caught.exception))
         self.assertNotIn("private-document-body", str(caught.exception))
+
+    def test_injected_browser_probe_is_valid_javascript(self):
+        # Catch malformed inline probes before downloading the browser engines.
+        # No browser, network, fixture document or private data is involved.
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node is unavailable; real browser CI exercises the probe")
+        result = subprocess.run(
+            [node, "--check", "-"], input=_SMOKE_ERROR_PROBE,
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_page_probe_reports_only_allowlisted_metadata(self):
         page = Mock()
