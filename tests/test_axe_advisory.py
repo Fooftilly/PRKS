@@ -101,7 +101,7 @@ class AxeAdvisoryReportTests(unittest.TestCase):
         report = sanitized_report("vue-folders", raw_engine(violations=violations))
         self.assertEqual(report["violating_rules"], 30)
         self.assertEqual(report["truncated_rules"], 12)
-        self.assertEqual(report["total_violation_nodes"], 30)
+        self.assertEqual(report["rule_node_matches"], 30)
         self.assertEqual(len(report["violations"]), 18)
         self.assertIn("vue-folders: 30 violating rules", short_summary([report]))
 
