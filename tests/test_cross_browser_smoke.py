@@ -106,14 +106,102 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
     def test_error_bucket_diagnostics_omit_sensitive_browser_details(self):
         collector = Mock()
         collector.pageerrors = ["private-document-title", "secret-content"]
+        collector.pageerror_names = ["TypeError", "ReferenceError"]
         collector.console_errors = ["credential=private"]
         collector.failed_requests = []
         collector.http_5xx = []
         collector.external = []
         self.assertEqual(
-            collector_failure_categories(collector), "page-2_console-1"
+            collector_failure_categories(collector), "page-2_console-1_kinds-typeerror_referenceerror"
         )
         self.assertNotIn("private", collector_failure_categories(collector))
+
+    def test_e2e_collector_keeps_pageerror_name_separate_from_private_message(self):
+        from tests.e2e.harness import PageCollector
+
+        collector = PageCollector.__new__(PageCollector)
+        collector.pageerrors = []
+        collector.pageerror_names = []
+
+        class SyntheticError:
+            name = "TypeError"
+
+            def __str__(self):
+                return "secret-research-note-in-exception"
+
+        collector._on_page_error(SyntheticError())
+        self.assertEqual(collector.pageerror_names, ["TypeError"])
+        self.assertEqual(collector.pageerrors, ["secret-research-note-in-exception"])
+        collector.console_errors = []
+        collector.failed_requests = []
+        collector.http_5xx = []
+        collector.external = []
+        self.assertEqual(
+            collector_failure_categories(collector), "page-1_kinds-typeerror"
+        )
+        self.assertNotIn("secret", collector_failure_categories(collector))
+
+    def test_resize_loop_notice_is_bounded_and_webkit_only(self):
+        from tests.e2e.harness import PageCollector
+
+        class BrowserError:
+            name = ""
+            stack = ""
+
+            def __init__(self, message):
+                self.message = message
+
+            def __str__(self):
+                return self.message
+
+        def collector(allow):
+            instance = PageCollector.__new__(PageCollector)
+            instance._allow_webkit_resize_notices = allow
+            instance._webkit_resize_notices = 0
+            instance.pageerrors = []
+            instance.pageerror_names = []
+            return instance
+
+        notice = "ResizeObserver loop completed with undelivered notifications."
+        webkit = collector(True)
+        for _ in range(3):
+            webkit._on_page_error(BrowserError(notice))
+        self.assertEqual(webkit.pageerrors, [])
+        self.assertEqual(webkit._webkit_resize_notices, 3)
+
+        # Repeating every paint is a genuine loop: fail, never silently clear.
+        webkit._on_page_error(BrowserError(notice))
+        self.assertEqual(webkit.pageerrors, [notice])
+        self.assertEqual(webkit._webkit_resize_notices, 4)
+
+        # Another browser cannot opt in by accident.
+        firefox = collector(False)
+        firefox._on_page_error(BrowserError(notice))
+        self.assertEqual(firefox.pageerrors, [notice])
+
+        # Only the browser-defined literal is accepted, not related errors.
+        variant = collector(True)
+        variant._on_page_error(BrowserError(notice + " private"))
+        self.assertEqual(variant.pageerrors, [notice + " private"])
+
+        # Real script exceptions (with source or JS exception type) still fail.
+        script = BrowserError(notice)
+        script.stack = "at handler (http://127.0.0.1:1234/js/app.js:1:1)"
+        sourced = collector(True)
+        sourced._on_page_error(script)
+        self.assertEqual(sourced.pageerrors, [notice])
+
+        typed = BrowserError(notice)
+        typed.name = "TypeError"
+        typed_collector = collector(True)
+        typed_collector._on_page_error(typed)
+        self.assertEqual(typed_collector.pageerrors, [notice])
+
+        # WebKit's older exact browser string uses the same bounded contract.
+        older = collector(True)
+        older._on_page_error(BrowserError("ResizeObserver loop limit exceeded"))
+        self.assertEqual(older.pageerrors, [])
+        self.assertEqual(older._webkit_resize_notices, 1)
 
     def test_notes_commit_and_reload_check_is_required(self):
         self.assertIn("notes_save_reload", CHECKS)
@@ -166,7 +254,7 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
     def test_pdf_and_secondary_pane_checks_are_required(self):
         # These checks run through the same two-engine smoke and are not
         # implied by seeing the Work wrapper.
-        self.assertEqual(CHECKS[-2:], ("pdf_render", "split_panes"))
+        self.assertEqual(CHECKS[-3:-1], ("pdf_render", "split_panes"))
         data = report()
         data["browsers"][0]["checks"].remove("pdf_render")
         with self.assertRaises(ValueError):
@@ -208,6 +296,38 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
         self.assertEqual((caught.exception.stage, caught.exception.cause_type),
                          ("split_panes", "TimeoutError"))
         self.assertNotIn("secret-tab-title", str(caught.exception))
+        context.close.assert_called_once()
+
+    def test_split_reload_must_be_recorded_in_every_browser(self):
+        self.assertEqual(CHECKS[-1], "split_reload")
+        missing = report()
+        missing["browsers"][1]["checks"].remove("split_reload")
+        with self.assertRaises(ValueError):
+            verify_report(missing, ENGINES)
+
+    def test_split_reload_failure_reports_safe_stage_not_private_page(self):
+        page, context, collector = Mock(), Mock(), Mock(unsafe=True)
+        original = {"mainTabId": "main-tab", "secondaryTree": {"tabId": "related-tab"}}
+        page.evaluate.side_effect = lambda script, *args, **kwargs: (
+            original if script == "() => window.prksWorkspaceSnapshot()" else True
+        )
+        page.reload.side_effect = [None, TimeoutError("secret-work-title")]
+        with (
+            patch("scripts.ci.cross_browser_smoke.open_app_page",
+                  return_value=(page, context, collector)),
+            patch("scripts.ci.cross_browser_smoke.wait_for_async"),
+            patch("scripts.ci.cross_browser_smoke._wait_pdf_viewer"),
+            patch("scripts.ci.cross_browser_smoke._wait_pdf_tab"),
+        ):
+            with self.assertRaises(SmokeFailure) as caught:
+                smoke(object(), "http://127.0.0.1:1", "synthetic", "related",
+                      engine="firefox")
+        self.assertEqual(
+            (caught.exception.engine, caught.exception.stage, caught.exception.cause_type),
+            ("firefox", "split_reload", "TimeoutError"),
+        )
+        self.assertNotIn("secret-work-title", str(caught.exception))
+        self.assertEqual(page.reload.call_count, 2)
         context.close.assert_called_once()
 
     def test_context_cleanup_failure_has_its_own_safe_stage(self):

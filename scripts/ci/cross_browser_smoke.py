@@ -22,11 +22,26 @@ from tests.e2e.install_browser import apply_playwright_browser_env  # noqa: E402
 from tests.e2e.pdf_readiness import _wait_pdf_tab, _wait_pdf_viewer  # noqa: E402
 
 ENGINES = ("firefox", "webkit")
-CHECKS = ("folders", "work_detail", "notes_editor", "notes_save_reload", "settings_focus", "pdf_render", "split_panes")
+CHECKS = ("folders", "work_detail", "notes_editor", "notes_save_reload", "settings_focus", "pdf_render", "split_panes", "split_reload")
 INHERITED_DB_SETTINGS = (
     "PRKS_AUTH", "PRKS_DATABASE_URL", "PRKS_DATABASE_URL_FILE",
     "PRKS_TEST_DATABASE_URL",
 )
+
+_SPLIT_PDF_OWNERS = """({mainTabId, secondaryTabId, mainWorkId, secondaryWorkId}) => {
+    const get = window.prksGetTabContext;
+    const main = get && get(mainTabId);
+    const secondary = get && get(secondaryTabId);
+    const workA = main && main.getEntity && main.getEntity('work');
+    const workB = secondary && secondary.getEntity && secondary.getEntity('work');
+    const pdfA = main && main.getResource && main.getResource('pdf');
+    const pdfB = secondary && secondary.getResource && secondary.getResource('pdf');
+    return !!(workA && workB && pdfA && pdfB &&
+        String(workA.id) === String(mainWorkId) &&
+        String(workB.id) === String(secondaryWorkId) &&
+        String(pdfA.workId) === String(mainWorkId) &&
+        String(pdfB.workId) === String(secondaryWorkId));
+}"""
 
 
 class SmokeFailure(RuntimeError):
@@ -62,6 +77,20 @@ def collector_failure_categories(collector) -> str:
         values = getattr(collector, attr, None)
         if isinstance(values, list) and values:
             flagged.append(f"{label}-{min(len(values), 99)}")
+    if collector.pageerrors:
+        # The E2E collector captures Playwright's exception class separately
+        # from its potentially sensitive message. Only fixed names escape.
+        allowed = frozenset((
+            "TypeError", "ReferenceError", "SyntaxError", "RangeError",
+            "AbortError", "InvalidStateError", "NotFoundError", "Error",
+        ))
+        labels = []
+        names = getattr(collector, "pageerror_names", None)
+        for name in (names[:5] if isinstance(names, list) else []):
+            labels.append(name.lower() if name in allowed else "unknown")
+        if len(labels) < min(len(collector.pageerrors), 5):
+            labels.extend(["unknown"] * (min(len(collector.pageerrors), 5) - len(labels)))
+        flagged.append("kinds-" + "_".join(labels))
     return "_".join(flagged) or "unknown"
 
 
@@ -96,7 +125,9 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
     context = None
     failed = False
     try:
-        page, context, collector = open_app_page(browser, origin)
+        page, context, collector = open_app_page(
+            browser, origin, allow_webkit_resize_notices=(engine == "webkit"),
+        )
         stage = "folders"
         page.locator("[data-prks-folder-library-view]").wait_for(
             state="visible", timeout=15000
@@ -186,20 +217,7 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
         # Distinct tab IDs alone are insufficient: confirm two separately
         # owned Work and PDF resources, not two views of the same Work.
         page.wait_for_function(
-            """({mainTabId, secondaryTabId, mainWorkId, secondaryWorkId}) => {
-                const get = window.prksGetTabContext;
-                const main = get && get(mainTabId);
-                const secondary = get && get(secondaryTabId);
-                const workA = main && main.getEntity && main.getEntity('work');
-                const workB = secondary && secondary.getEntity && secondary.getEntity('work');
-                const pdfA = main && main.getResource && main.getResource('pdf');
-                const pdfB = secondary && secondary.getResource && secondary.getResource('pdf');
-                return !!(workA && workB && pdfA && pdfB &&
-                    String(workA.id) === String(mainWorkId) &&
-                    String(workB.id) === String(secondaryWorkId) &&
-                    String(pdfA.workId) === String(mainWorkId) &&
-                    String(pdfB.workId) === String(secondaryWorkId));
-            }""",
+            _SPLIT_PDF_OWNERS,
             arg={
                 "mainTabId": snap["mainTabId"],
                 "secondaryTabId": snap["secondaryTree"]["tabId"],
@@ -219,6 +237,54 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
             state="visible", timeout=30000,
         )
         page.locator(".prks-tile--secondary .CodeMirror").wait_for(
+            state="visible", timeout=30000,
+        )
+        page.locator(".prks-tile--secondary .prks-pdf-render-image").first.wait_for(
+            state="visible", timeout=30000,
+        )
+        stage = "browser_errors_pre_reload"
+        # Check earlier browser exceptions *before* remount. Keep them
+        # visible with safe categories; never clear or excuse failures.
+        try:
+            collector.assert_clean()
+        except AssertionError:
+            stage += "_" + collector_failure_categories(collector)
+            raise
+        stage = "split_reload"
+        # Match the existing Chromium E2E _flush_workspace test helper.
+        # Fail closed if the persistence API was removed or renamed.
+        page.evaluate("() => window.prksFlushWorkspacePersistence()")
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_function(
+            """({mainTabId, secondaryTabId}) => {
+                if (window.__prksWorkspaceReady !== true) return false;
+                const s = window.prksWorkspaceSnapshot && window.prksWorkspaceSnapshot();
+                return !!(s && s.mode === 'tiled' &&
+                    s.mainTabId === mainTabId &&
+                    s.secondaryTree && s.secondaryTree.type === 'leaf' &&
+                    s.secondaryTree.tabId === secondaryTabId);
+            }""",
+            arg={
+                "mainTabId": snap["mainTabId"],
+                "secondaryTabId": snap["secondaryTree"]["tabId"],
+            },
+            timeout=30000,
+        )
+        page.wait_for_function(
+            _SPLIT_PDF_OWNERS,
+            arg={
+                "mainTabId": snap["mainTabId"],
+                "secondaryTabId": snap["secondaryTree"]["tabId"],
+                "mainWorkId": work_id,
+                "secondaryWorkId": related_work_id,
+            },
+            timeout=30000,
+        )
+        # Verify both rendered PDF contexts again after remount. A restored
+        # layout alone can conceal unloaded or incorrectly owned readers.
+        _wait_pdf_tab(page, snap["mainTabId"])
+        _wait_pdf_tab(page, snap["secondaryTree"]["tabId"])
+        page.locator(".prks-tile--main .prks-pdf-render-image").first.wait_for(
             state="visible", timeout=30000,
         )
         page.locator(".prks-tile--secondary .prks-pdf-render-image").first.wait_for(
