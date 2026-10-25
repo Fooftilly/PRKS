@@ -136,6 +136,62 @@ class MetadataFieldProperties(unittest.TestCase):
             )
 
     @settings(max_examples=EXAMPLES, deadline=None, database=None)
+    @given(fields=st.sampled_from(tuple(
+        (left, right) for left in FIELDS for right in FIELDS if left != right
+    )), patch_value=VALUE, sync_value=VALUE)
+    @example(fields=("doi", "isbn"), patch_value="x", sync_value="y")
+    @example(fields=("isbn", "journal"), patch_value="x", sync_value="y")
+    @example(fields=("journal", "publisher"), patch_value="x", sync_value="y")
+    @example(fields=("publisher", "location"), patch_value="x", sync_value="y")
+    @example(fields=("location", "edition"), patch_value="x", sync_value="y")
+    @example(fields=("edition", "doi"), patch_value="x", sync_value="y")
+    def test_independent_patch_and_sync_commute(self, fields, patch_value, sync_value):
+        """Independent online PATCH and durable sync converge in either order.
+
+        Sample all 30 possible ordered pairs of distinct fields, with explicit
+        examples guaranteeing that each primary field is tested at least once.
+        """
+        primary, secondary = fields
+        patch_value = "patch:" + patch_value
+        sync_value = "sync:" + sync_value
+        outcomes = []
+        for patch_first in (True, False):
+            with scratch_metadata() as (db, work):
+                initial = db.get_work_metadata_state(work)["fields"]
+                expected = {field: (initial[field]["value"], initial[field]["revision"])
+                            for field in FIELDS}
+                sync_op = operation(work, secondary, sync_value, 0, 0)
+                ack = (200, {
+                    "work_id": work,
+                    "field": secondary,
+                    "code": "ACKNOWLEDGED",
+                    "server_revision": 1,
+                    "changed": True,
+                    "value": sync_value,
+                })
+
+                # No closure over mutable loop variables: Codacy checks B023.
+                for action in (("patch", "sync") if patch_first else ("sync", "patch")):
+                    if action == "patch":
+                        db.update_work_metadata(work, {primary: patch_value})
+                    else:
+                        self.assertEqual(sync_protocol.process_operation(db, sync_op), ack)
+
+                # Replay after BOTH edits, including the sync-first case:
+                # an unrelated PATCH cannot change the stored sync outcome.
+                self.assertEqual(sync_protocol.process_operation(db, sync_op), ack)
+                expected[primary] = (patch_value, 1)
+                expected[secondary] = (sync_value, 1)
+                observed = db.get_work_metadata_state(work)["fields"]
+                actual = {field: (observed[field]["value"], observed[field]["revision"])
+                          for field in FIELDS}
+                self.assertEqual(actual, expected)
+                outcomes.append(actual)
+        # Both orderings are independently checked above; this spells out the
+        # commutativity contract explicitly for future edits to the model.
+        self.assertEqual(outcomes[0], outcomes[1])
+
+    @settings(max_examples=EXAMPLES, deadline=None, database=None)
     @given(work=VALUE, field=VALUE, other=VALUE)
     def test_metadata_scope_keys_preserve_structural_identity(self, work, field, other):
         self.assertEqual(json.loads(meta.scope_key(work, field)), [work, field])
