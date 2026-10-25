@@ -174,9 +174,8 @@ jobs:
           cache: pip
 
       - name: Install pinned runtime and PostgreSQL dependencies
-        # Runtime pins from requirements.txt plus the psycopg (#623) and
-        # argon2-cffi (#626) pins from requirements-dev.txt. Explicit
-        # package== pins plus --only-binary, as in the unit job above.
+        # PostgreSQL/Argon2 production pins are now in requirements.txt (#630).
+        # The approved installer selects the exact runtime package pins.
         run: python scripts/ci/install_pinned_python.py postgres
 
       - name: Run PostgreSQL helper and harness tests
@@ -223,8 +222,7 @@ jobs:
           cache: pip
 
       - name: Install pinned runtime and PostgreSQL dependencies for parity
-        # Same pins as the PostgreSQL helper job: requirements.txt plus the
-        # psycopg and argon2-cffi pins from requirements-dev.txt.
+        # Same pinned PostgreSQL runtime dependencies as the helper job (#630).
         run: python scripts/ci/install_pinned_python.py postgres
 
       - name: Run SQLite and PostgreSQL backend parity legs
