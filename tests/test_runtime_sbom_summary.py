@@ -78,6 +78,21 @@ class RuntimeSbomSummaryTests(unittest.TestCase):
         self.assertEqual(output["by_fix_state"]["wont-fix"], 1)
         self.assertEqual(output["grype_db_age_hours"], 8.31)
 
+    def test_same_package_advisory_with_two_versions_has_deterministic_order(self) -> None:
+        old = row("CVE-2026-12345", "libalpha", installed="1.0")
+        new = row("CVE-2026-12345", "libalpha", installed="1.1")
+        old["artifact"]["id"] = "Package-libalpha-1.0"
+        new["artifact"]["id"] = "Package-libalpha-1.1"
+        sbom, scan = fixture(new, old)
+        output = summarize(sbom, scan, IMAGE)
+        self.assertEqual(output["match_count"], 2)
+        self.assertEqual(output["unique_advisory_ids"], 1)
+        self.assertEqual(output["unique_package_advisory_pairs"], 2)
+        self.assertEqual(
+            [entry["installed"] for entry in output["triage_examples"]],
+            ["1.0", "1.1"],
+        )
+
     def test_fix_listed_requires_usable_versions(self) -> None:
         a = row("CVE-2026-12345", "library", versions=["bad\nvalue"])
         sbom, scan = fixture(a)
