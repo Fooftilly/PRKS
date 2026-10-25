@@ -1035,10 +1035,28 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             safe_log_id(getattr(self, "_prks_request_id", "")),
         )
 
+    def _healthz(self, *, head=False):
+        """Liveness only: no database, filesystem, or authentication checks.
+
+        Compose readiness is a separate /readyz endpoint in the PostgreSQL
+        deployment lane (#630). A live process is not necessarily ready.
+        """
+        body = b"ok\\n"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if not head:
+            self.wfile.write(body)
+
     def do_GET(self):
         if not self._validate_request_host():
             return
         parsed_path = urlparse(self.path)
+        if parsed_path.path == '/healthz':
+            self._healthz()
+            return
         if parsed_path.path.startswith('/api/'):
             if not self._prks_admit(parsed_path):
                 return
@@ -1063,6 +1081,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         if not self._validate_request_host():
             return
         parsed_path = urlparse(self.path)
+        if parsed_path.path == '/healthz':
+            self._healthz(head=True)
+            return
         if parsed_path.path.startswith('/api/'):
             if not self._prks_admit(parsed_path):
                 return
