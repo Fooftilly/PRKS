@@ -910,8 +910,8 @@ class PageCollector:
         # URLs, query strings, script content, or stack frames in CI reports.
         site = None
         for match in re.finditer(
-            r"https?://(?:127\\.0\\.0\\.1|localhost):[0-9]+/"
-            r"((?:js|assets)/[A-Za-z0-9_./-]+\\.js):([0-9]{1,6}):([0-9]{1,5})",
+            r"https?://(?:127\.0\.0\.1|localhost):[0-9]+/"
+            r"((?:js|assets)/[A-Za-z0-9_./-]+\.js):([0-9]{1,6}):([0-9]{1,5})",
             stack,
         ):
             path, line, _column = match.groups()
