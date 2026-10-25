@@ -51,7 +51,7 @@ if [[ -n "$("${compose[@]}" ps -q prks)" ]]; then
 fi
 
 query() {
-  # Authenticate over TCP with the actual Compose secret, never a socket's
+  # Authenticate to the bridge-network service with the Compose secret, never a socket's
   # implicit local-trust rule. The password is read inside the container, not
   # passed as a host shell argument or logged.
   "${compose[@]}" exec -T db sh -eu -c '
@@ -59,9 +59,21 @@ query() {
     export PGPASSWORD="$password"
     exec psql --no-psqlrc --tuples-only --no-align \
       --set ON_ERROR_STOP=1 --username prks --dbname prks \
-      --host 127.0.0.1 --command "$1"
+      --host db --command "$1"
   ' sh "$1"
 }
+
+# The external bridge interface must require password authentication, not
+# trust. An incorrect password may never pass, even on a fresh cluster.
+if "${compose[@]}" exec -T db sh -eu -c '
+  export PGPASSWORD="definitely-not-the-generated-password"
+  exec psql --no-psqlrc --tuples-only --no-align \
+    --set ON_ERROR_STOP=1 --username prks --dbname prks \
+    --host db --command "SELECT 1"
+' >/dev/null 2>&1; then
+  echo "PostgreSQL accepted an incorrect password on its bridge interface" >&2
+  exit 1
+fi
 
 major=$(query "SELECT current_setting('server_version_num')::int / 10000")
 if [[ "$major" != 18 ]]; then
