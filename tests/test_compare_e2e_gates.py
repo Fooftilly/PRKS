@@ -95,9 +95,10 @@ class CompareFullE2EGatesTests(unittest.TestCase):
         with self.assertRaisesRegex(InvalidBenchmark, "share SHA"):
             compare(source, summarize(p, jobs("packaged"), "packaged"))
         p["head_sha"] = SHA
-        p["event"] = "workflow_dispatch"
+        packaged = summarize(p, jobs("packaged"), "packaged")
+        packaged["event"] = "workflow_dispatch"
         with self.assertRaisesRegex(InvalidBenchmark, "share SHA"):
-            compare(source, summarize(p, jobs("packaged"), "packaged"))
+            compare(source, packaged)
 
     def test_reject_retry_incomplete_or_wrong_workflow(self):
         for key, value in (
