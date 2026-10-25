@@ -24,7 +24,7 @@ CHARS = ("a", "Z", "0", " ", "/", ":", "|", "'", "é", "λ", "中", "🔥")
 TEXT = st.text(alphabet=CHARS, max_size=12)
 MODES = ("notes", "pdf", "video", "annotation")
 CASES = st.lists(
-    st.tuples(st.sampled_from(MODES), TEXT, TEXT), min_size=1, max_size=3
+    st.tuples(st.sampled_from(MODES), TEXT, TEXT), min_size=1, max_size=4
 )
 
 LEGACY_ROWS = {
