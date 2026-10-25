@@ -2,7 +2,7 @@
 
 Only A/M changes to an explicit audited subset of Wiki Markdown qualify. Missing/invalid baselines,
 renames, deletes, workflow or test changes, and unreadable diffs fail closed to
-ordinary full validation. All workflows use this single classifier.
+ordinary full validation. The initial slice applies this to the required unit gate.
 """
 
 from __future__ import annotations
