@@ -95,6 +95,8 @@ class DockerRuntimeSmokeTests(unittest.TestCase):
             "--tmpfs /data:rw,size=128m,uid=1000,gid=1000",
             "--env PRKS_STORAGE=/data --env PRKS_PDF_LINEARIZE=1",
             "http://127.0.0.1:18080/api/works",
+            "--write-out '%{http_code}' --output \"$response\"",
+            '&& [[ "$status" == "200" ]]; then',
             'python scripts/ci/check_runtime_smoke.py < "$response"',
             "http://127.0.0.1:18080/index.html",
             "prks-classic-head.bundle.js",
