@@ -1,0 +1,103 @@
+name: Runtime image SBOM and Grype pilot (advisory)
+
+# A bounded pilot; run manually or on changes to this workflow itself.
+# No unconditional dependency-PR scan, release upload, or required policy.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/runtime-sbom-pilot.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-sbom-${{ github.event.pull_request.number || github.ref }}-${{ github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  runtime-sbom:
+    name: Built runtime image Syft/Grype
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Scan only a local built runtime image, not source dependencies.
+      # The runtime Dockerfile omits test tooling and Node/npm.
+      - name: Build a disposable local PRKS runtime image
+        run: docker build --pull --tag prks-sbom-pilot:local --file Dockerfile .
+
+      - name: Export SPDX SBOM from built image
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: prks-sbom-pilot:local
+          syft-version: v1.42.3
+          format: spdx-json
+          output-file: ${{ runner.temp }}/prks-runtime.spdx.json
+          artifact-name: prks-runtime-sbom
+          upload-artifact: true
+          upload-artifact-retention: 7
+          upload-release-assets: false
+          dependency-snapshot: false
+
+      - name: Scan the exported SBOM with Grype (advisory vulnerabilities)
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          sbom: ${{ runner.temp }}/prks-runtime.spdx.json
+          grype-version: v0.121.0
+          fail-build: false
+          output-format: json
+          output-file: ${{ runner.temp }}/prks-runtime.grype.json
+
+      - name: Validate outputs and summarize severities
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import collections
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          sbom = json.loads((root / "prks-runtime.spdx.json").read_text(encoding="utf-8"))
+          scan = json.loads((root / "prks-runtime.grype.json").read_text(encoding="utf-8"))
+          if not str(sbom.get("spdxVersion", "")).startswith("SPDX-"):
+              raise SystemExit("Missing SPDX format marker")
+          packages = sbom.get("packages")
+          if not isinstance(packages, list) or not packages:
+              raise SystemExit("Built runtime image SBOM must contain packages")
+          matches = scan.get("matches")
+          if not isinstance(matches, list):
+              raise SystemExit("Grype report missing matches list")
+          severities = collections.Counter(
+              str(match.get("vulnerability", {}).get("severity", "Unknown"))
+              for match in matches
+          )
+          summary = [
+              "## Advisory runtime-image supply-chain pilot",
+              "",
+              f"- Image packages (Syft SPDX): {len(packages)}",
+              f"- Grype vulnerability matches: {len(matches)}",
+              "- Severity counts: " + ", ".join(
+                  f"{severity}={severities[severity]}"
+                  for severity in ("Critical", "High", "Medium", "Low", "Negligible", "Unknown")
+              ),
+              "- No gating threshold or waiver is implied; triage findings before release.",
+              "- Only workflow artifacts hold full details; no repository/user data is supplied.",
+          ]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
+              output.write("\n".join(summary) + "\n")
+          print("\n".join(summary))
+          PY
+
+      - name: Upload Grype advisory report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: prks-runtime-grype-advisory
+          path: ${{ runner.temp }}/prks-runtime.grype.json
+          retention-days: 7
+          if-no-files-found: error
