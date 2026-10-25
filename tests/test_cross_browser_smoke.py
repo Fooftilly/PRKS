@@ -1,10 +1,13 @@
 """Pure safeguards for the opt-in Firefox/WebKit smoke pilot (#651 C2)."""
 from __future__ import annotations
 
+import io
 import unittest
+from contextlib import redirect_stderr
+from unittest.mock import Mock, patch
 
 from scripts.ci.cross_browser_smoke import (
-    CHECKS, ENGINES, verify_isolation, verify_report,
+    CHECKS, ENGINES, SmokeFailure, main, smoke, verify_isolation, verify_report,
 )
 
 
@@ -59,6 +62,65 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
         data["browsers"][0]["engine"] = "chromium"
         with self.assertRaises(ValueError):
             verify_report(data, ("firefox",))
+
+    def test_each_browser_interaction_reports_only_engine_and_stage(self):
+        # No real browser is required to verify that a failed check is
+        # attributed precisely, even when Playwright embeds sensitive text.
+        failures = (
+            ("[data-prks-folder-library-view]", "folders"),
+            (".work-detail", "work_detail"),
+            (".CodeMirror", "notes_editor"),
+            ("button.settings-btn", "settings_focus"),
+        )
+        for failed_selector, expected_stage in failures:
+            with self.subTest(stage=expected_stage):
+                page = Mock()
+                context = Mock()
+                collector = Mock()
+
+                def locator(selector):
+                    if selector == failed_selector:
+                        raise TimeoutError("secret-url-private-document-title")
+                    return Mock()
+
+                page.locator.side_effect = locator
+                with patch(
+                    "scripts.ci.cross_browser_smoke.open_app_page",
+                    return_value=(page, context, collector),
+                ):
+                    with self.assertRaises(SmokeFailure) as caught:
+                        smoke(object(), "http://127.0.0.1:1", "synthetic", engine="webkit")
+                error = caught.exception
+                self.assertEqual(
+                    (error.engine, error.stage, error.cause_type),
+                    ("webkit", expected_stage, "TimeoutError"),
+                )
+                self.assertNotIn("secret-url-private-document-title", str(error))
+                context.close.assert_called_once()
+
+    def test_entrypoint_prints_only_safe_engine_and_check(self):
+        output = io.StringIO()
+        with patch(
+            "scripts.ci.cross_browser_smoke.run",
+            side_effect=SmokeFailure("webkit", "notes_editor", "TimeoutError"),
+        ), redirect_stderr(output):
+            self.assertEqual(main(["--engines", "webkit"]), 1)
+        self.assertEqual(
+            output.getvalue(),
+            "Cross-browser smoke failed at webkit/notes_editor (TimeoutError)\\n",
+        )
+
+    def test_unexpected_preflight_failure_does_not_leak_details(self):
+        output = io.StringIO()
+        with patch(
+            "scripts.ci.cross_browser_smoke.run",
+            side_effect=RuntimeError("sensitive-server-connection-string"),
+        ), redirect_stderr(output):
+            self.assertEqual(main(["--engines", "firefox"]), 1)
+        self.assertEqual(
+            output.getvalue(),
+            "Cross-browser smoke failed at setup/preflight (RuntimeError)\\n",
+        )
 
 
 if __name__ == "__main__":
