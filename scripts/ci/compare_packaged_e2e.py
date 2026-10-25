@@ -114,9 +114,63 @@ def summarize(run: dict, jobs: list[dict], expected_mode: str) -> dict:
     }
 
 
-def compare(full: dict, smoke: dict) -> str:
-    if full["sha"] != smoke["sha"] or full["run_id"] == smoke["run_id"]:
-        raise InvalidBenchmark("Full and smoke runs must be distinct and use the same exact SHA")
+def _report_mode(full: dict, smoke: dict, paired: bool) -> str:
+    if full["sha"] != smoke["sha"]:
+        raise InvalidBenchmark("Full and smoke runs must use the same exact SHA")
+    if (full["run_id"] == smoke["run_id"]) != paired:
+        raise InvalidBenchmark("Incorrect distinct/paired workflow run IDs")
+    if full["mode"] != "full" or smoke["mode"] != "smoke":
+        raise InvalidBenchmark("Expected full and smoke package summaries")
+    if not paired:
+        return f"GitHub runs: full #{full['run_id']}; smoke #{smoke['run_id']}."
+    return (
+        f"GitHub run #{full['run_id']}: BOTH modes on one SHA; guards ran once. "
+        "Per-mode totals allocate the shared guards to each mode independently, "
+        "not two sets of actual billed jobs."
+    )
+
+
+def summarize_paired(run: dict, jobs: list[dict]) -> tuple[dict, dict]:
+    """Validate a manual compare dispatch containing BOTH complete browser legs.
+
+    Each counterfactual mode includes the shared Docker and SW guard cost
+    once; the actual compare dispatch executes those guard jobs only once.
+    """
+    _validate_run(run, "full")
+    active = _successful_jobs(jobs)
+    shards = [j for j in active if FULL_JOB.fullmatch(j.get("name") or "")]
+    smoke = [j for j in active if j.get("name") == SMOKE_JOB]
+    shard_ids = sorted(int(FULL_JOB.fullmatch(j["name"]).group(1)) for j in shards)
+    if shard_ids != list(range(1, 7)) or len(smoke) != 1:
+        raise InvalidBenchmark("Paired run requires all six full shards and one smoke job")
+    permitted = {*(j["name"] for j in shards), SMOKE_JOB, *SHARED_JOBS}
+    if any(j.get("name") not in permitted for j in active):
+        raise InvalidBenchmark("Unexpected successful job in paired run")
+    skipped = {j.get("name") for j in jobs if j.get("conclusion") == "skipped"}
+    if SMOKE_JOB in skipped or SKIPPED_FULL_MATRIX in skipped:
+        raise InvalidBenchmark("Paired run contains a skipped browser mode")
+    guard_jobs = [j for j in active if j.get("name") in SHARED_JOBS]
+
+    def select(mode: str, browser_jobs: list[dict]) -> dict:
+        def minutes(selected: list[dict]) -> float:
+            return sum(_seconds(j["started_at"], j["completed_at"]) for j in selected) / 60
+        return {
+            "sha": run["head_sha"],
+            "run_id": run["id"],
+            "mode": mode,
+            "browser_count": len(browser_jobs),
+            "browser_minutes": minutes(browser_jobs),
+            "shared_minutes": minutes(guard_jobs),
+            "all_job_minutes": minutes(browser_jobs + guard_jobs),
+            "longest_browser_minutes": max(
+                _seconds(j["started_at"], j["completed_at"]) for j in browser_jobs
+            ) / 60,
+        }
+    return select("full", shards), select("smoke", smoke)
+
+
+def compare(full: dict, smoke: dict, *, paired: bool = False) -> str:
+    provenance = _report_mode(full, smoke, paired)
 
     def reduction(a: float, b: float) -> str:
         if a <= 0:
@@ -134,7 +188,7 @@ def compare(full: dict, smoke: dict) -> str:
         f"| All successful job runner-min | {full['all_job_minutes']:.2f} | {smoke['all_job_minutes']:.2f} | {reduction(full['all_job_minutes'], smoke['all_job_minutes'])} |",
         f"| Longest browser job (min) | {full['longest_browser_minutes']:.2f} | {smoke['longest_browser_minutes']:.2f} | — |",
         "",
-        f"GitHub runs: full #{full['run_id']}; smoke #{smoke['run_id']}.",
+        provenance,
         "These are summed job start-to-complete spans, excluding queued time and billing adjustments.",
         "Passing jobs and matching SHA do not establish equivalent regression coverage.",
         "Keep default full packaged E2E until defect-class coverage and maintainer approval.",
@@ -194,14 +248,26 @@ def fetch_run(repo: str, run_id: int, token: str | None) -> tuple[dict, list[dic
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default="Fooftilly/PRKS")
-    parser.add_argument("--full-run", type=int, required=True)
-    parser.add_argument("--smoke-run", type=int, required=True)
+    parser.add_argument("--full-run", type=int)
+    parser.add_argument("--smoke-run", type=int)
+    parser.add_argument("--paired-run", type=int,
+                        help="Single manual compare dispatch with full and smoke jobs")
     args = parser.parse_args()
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     try:
-        full_run, full_jobs = fetch_run(args.repo, args.full_run, token)
-        smoke_run, smoke_jobs = fetch_run(args.repo, args.smoke_run, token)
-        print(compare(summarize(full_run, full_jobs, "full"), summarize(smoke_run, smoke_jobs, "smoke")))
+        if args.paired_run is not None:
+            if args.full_run is not None or args.smoke_run is not None:
+                raise InvalidBenchmark("Use either --paired-run OR --full-run and --smoke-run")
+            paired_run, paired_jobs = fetch_run(args.repo, args.paired_run, token)
+            full, smoke = summarize_paired(paired_run, paired_jobs)
+            print(compare(full, smoke, paired=True))
+        else:
+            if args.full_run is None or args.smoke_run is None:
+                raise InvalidBenchmark("Both --full-run and --smoke-run are required")
+            full_run, full_jobs = fetch_run(args.repo, args.full_run, token)
+            smoke_run, smoke_jobs = fetch_run(args.repo, args.smoke_run, token)
+            print(compare(summarize(full_run, full_jobs, "full"),
+                          summarize(smoke_run, smoke_jobs, "smoke")))
     except (requests.RequestException, OSError, ValueError, KeyError) as exc:
         print(f"Packaged E2E comparison refused: {exc}", file=sys.stderr)
         return 1
