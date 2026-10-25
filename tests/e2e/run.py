@@ -1386,14 +1386,14 @@ def _profile_infrastructure_total(phases: dict) -> float:
     if "request_routing" in phases:
         nested.add("routing_decision")
     nested.update(NAV_TIMING_COUNT_KEYS)
-    # Inclusive test-specific Graph and Argument propagation diagnostics
+    # Inclusive test-specific Graph, Argument, and PDF rollback diagnostics
     # overlap existing app, routing, and async_wait phases. Show them in
     # per-test details, not as extra additive infrastructure work.
     return sum(
         float(seconds)
         for name, seconds in phases.items()
         if name not in nested
-        and not name.startswith(("graph_nav_", "arg_overlay_"))
+        and not name.startswith(("graph_nav_", "arg_overlay_", "pdf_rollback_"))
     )
 
 
