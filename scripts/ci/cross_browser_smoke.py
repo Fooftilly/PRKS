@@ -17,7 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tests.e2e.fixtures import seed_library  # noqa: E402
-from tests.e2e.harness import AppServer, open_app_page  # noqa: E402
+from tests.e2e.harness import AppServer, open_app_page, wait_for_async  # noqa: E402
 from tests.e2e.install_browser import apply_playwright_browser_env  # noqa: E402
 from tests.e2e.pdf_readiness import _wait_pdf_tab, _wait_pdf_viewer  # noqa: E402
 
@@ -102,7 +102,8 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
         page.locator(
             '[data-prks-role="editor-status"]', has_text="All changes saved"
         ).wait_for(state="visible", timeout=30000)
-        page.wait_for_function(
+        wait_for_async(
+            page,
             """async ({id, text}) => {
                 const response = await fetch('/api/works/' + encodeURIComponent(id),
                                              { cache: 'no-store' });
