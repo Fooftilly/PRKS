@@ -22,7 +22,7 @@ class CIPinsTests(unittest.TestCase):
         )
         (self.root / "requirements-dev.txt").write_text(
             "playwright==1.63.0\nopenapi-core==0.23.1\nhypothesis==6.170.9\n"
-            "markdown-it-py==4.2.0\nmdurl==0.1.2\n",
+            "markdown-it-py==4.2.0\nmdurl==0.1.2\nrequests==2.34.2\n",
             encoding="utf-8",
         )
 
@@ -76,6 +76,7 @@ class CIPinsTests(unittest.TestCase):
         self.assertIn("hypothesis==6.170.9", cmd)
         self.assertIn("markdown-it-py==4.2.0", cmd)
         self.assertIn("mdurl==0.1.2", cmd)
+        self.assertIn("requests==2.34.2", cmd)
         self.assertEqual(run.call_args.kwargs["cwd"], self.root)
         self.assertTrue(run.call_args.kwargs["check"])
 
