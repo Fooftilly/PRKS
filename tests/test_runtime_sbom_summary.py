@@ -161,6 +161,28 @@ class RuntimeSbomSummaryTests(unittest.TestCase):
             sum(v["ecosystem"] == "OS: deb" for v in output["triage_examples"]), 6
         )
 
+    def test_low_severity_no_fix_never_hides_critical_listed_fixes(self) -> None:
+        rows = [
+            row(f"CVE-2026-{61000 + i}", f"fixed-critical{i}", severity="Critical")
+            for i in range(7)
+        ]
+        rows += [
+            row(f"CVE-2026-{62000 + i}", f"unfixed-low{i}", severity="Low",
+                fix_state="not-fixed", versions=[])
+            for i in range(6)
+        ]
+        sbom, scan = fixture(*rows)
+        report = summarize(sbom, scan, IMAGE)
+        self.assertEqual(len(report["triage_examples"]), TOP_LIMIT)
+        self.assertEqual(
+            sum(v["severity"] == "Critical" and v["fix_state"] == "fix-listed"
+                for v in report["triage_examples"]),
+            7,
+        )
+        self.assertEqual(
+            sum(v["severity"] == "Low" for v in report["triage_examples"]), 5
+        )
+
     def test_balanced_examples_fill_unused_nonfix_slots(self) -> None:
         sbom, scan = fixture(*[
             row(f"CVE-2026-{50000 + i}", f"pip{i}", "python") for i in range(16)
