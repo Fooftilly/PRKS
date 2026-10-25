@@ -1,6 +1,6 @@
 """Conservative docs-only PR scope for required CI checks (#643).
 
-Only A/M changes to audited user-facing Wiki Markdown paths qualify. Missing/invalid baselines,
+Only A/M changes to an explicit audited subset of Wiki Markdown qualify. Missing/invalid baselines,
 renames, deletes, workflow or test changes, and unreadable diffs fail closed to
 ordinary full validation. All workflows use this single classifier.
 """
@@ -16,7 +16,10 @@ from pathlib import Path
 # Only the published user-facing wiki has been audited as documentation-only.
 # README, licensing/agent guidance and implementation architecture documents
 # are read as fixtures by tests and must continue to run full validation.
-SAFE_DOC_PREFIX = "docs/wiki/"
+AUDITED_DOC_FILES = frozenset({
+    "docs/wiki/Glossary.md",
+    "docs/wiki/Troubleshooting.md",
+})
 _SHA = re.compile(r"[0-9a-fA-F]{40}\Z")
 
 
@@ -29,7 +32,7 @@ def is_approved_markdown(path: str) -> bool:
         or path.rsplit("/", 1)[-1].lower() == "agents.md"
     ):
         return False
-    return path.startswith(SAFE_DOC_PREFIX) and path.endswith(".md")
+    return path in AUDITED_DOC_FILES
 
 
 def changed_documentation(root: Path, base: str) -> tuple[str, ...] | None:
