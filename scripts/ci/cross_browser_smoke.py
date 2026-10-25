@@ -28,6 +28,16 @@ INHERITED_DB_SETTINGS = (
 )
 
 
+class SmokeFailure(RuntimeError):
+    """Only synthetic engine/stage and exception type; no browser diagnostics."""
+
+    def __init__(self, engine: str, stage: str, cause_type: str) -> None:
+        self.engine = engine
+        self.stage = stage
+        self.cause_type = cause_type
+        super().__init__(f"{engine}/{stage} ({cause_type})")
+
+
 def verify_isolation(environ: dict[str, str]) -> None:
     """Never let a synthetic cross-browser test inherit a real database."""
     if any(environ.get(name, "").strip() for name in INHERITED_DB_SETTINGS):
@@ -53,17 +63,23 @@ def verify_report(report: dict, requested: tuple[str, ...]) -> None:
             raise ValueError("cross-browser report has invalid browser version")
 
 
-def smoke(browser, origin: str, work_id: str) -> None:
-    """One real app session; every selector is an observed UI readiness signal."""
-    page, context, collector = open_app_page(browser, origin)
+def smoke(browser, origin: str, work_id: str, *, engine: str) -> None:
+    """One real app session; label each failure without printing page details."""
+    stage = "app_open"
+    context = None
     try:
+        page, context, collector = open_app_page(browser, origin)
+        stage = "folders"
         page.locator("[data-prks-folder-library-view]").wait_for(
             state="visible", timeout=15000
         )
+        stage = "work_detail"
         page.evaluate("id => window.prksNavigate('#/works/' + id)", work_id)
         page.locator(".work-detail").first.wait_for(state="visible", timeout=20000)
+        stage = "notes_editor"
         # A visible wrapper alone does not mean the async editor has mounted.
         page.locator(".CodeMirror").first.wait_for(state="visible", timeout=30000)
+        stage = "settings_focus"
         settings = page.locator("button.settings-btn")
         settings.focus()
         page.keyboard.press("Enter")
@@ -77,9 +93,14 @@ def smoke(browser, origin: str, work_id: str) -> None:
             "document.activeElement.classList.contains('settings-btn'))"
         ):
             raise AssertionError("settings dialog did not restore keyboard focus")
+        stage = "browser_errors"
         collector.assert_clean()
+    except Exception as exc:
+        # Playwright exceptions may include URLs, selectors and page text.
+        raise SmokeFailure(engine, stage, type(exc).__name__) from None
     finally:
-        context.close()
+        if context is not None:
+            context.close()
 
 
 def run(engines: tuple[str, ...], output: Path | None = None) -> dict:
@@ -98,13 +119,18 @@ def run(engines: tuple[str, ...], output: Path | None = None) -> dict:
         "fixture": "disposable_appserver_synthetic_sqlite",
         "browsers": [],
     }
+    engine = "setup"
+    stage = "server_start"
     try:
         server.start()  # only a throwaway --testing process bound to 127.0.0.1
+        stage = "playwright_start"
         with sync_playwright() as playwright:
             for engine in engines:
+                stage = "browser_launch"
                 browser = getattr(playwright, engine).launch(headless=True)
                 try:
-                    smoke(browser, server.origin, server.ids["work_a"])
+                    smoke(browser, server.origin, server.ids["work_a"], engine=engine)
+                    stage = "browser_version"
                     report["browsers"].append({
                         "engine": engine,
                         "version": browser.version,
@@ -112,11 +138,19 @@ def run(engines: tuple[str, ...], output: Path | None = None) -> dict:
                         "passed": True,
                     })
                 finally:
+                    stage = "browser_close"
                     browser.close()
+        engine = "setup"
+        stage = "report_validation"
         verify_report(report, engines)
         if output is not None:
+            stage = "report_write"
             output.write_text(json.dumps(report, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         return report
+    except SmokeFailure:
+        raise
+    except Exception as exc:
+        raise SmokeFailure(engine, stage, type(exc).__name__) from None
     finally:
         server.stop()
 
@@ -131,11 +165,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         report = run(tuple(args.engines), args.output)
+    except SmokeFailure as exc:
+        # Print only fixed synthetic engine/stage labels and exception type:
+        # Playwright diagnostics may contain URLs, paths or research content.
+        print(f"Cross-browser smoke failed at {exc.engine}/{exc.stage} "
+              f"({exc.cause_type})", file=sys.stderr)
+        return 1
     except Exception as exc:
-        # No exception strings: server/Playwright diagnostics can contain
-        # arbitrary paths, URLs, or fixture payloads. Keep Actions logs safe.
-        print(f"Cross-browser smoke failed ({type(exc).__name__}); "
-              "inspect the local isolated run.", file=sys.stderr)
+        # Includes isolation preflight; never expose exception text or paths.
+        print(f"Cross-browser smoke failed at setup/preflight "
+              f"({type(exc).__name__})", file=sys.stderr)
         return 1
     for row in report["browsers"]:
         print(f"{row['engine']} {row['version']}: " + ", ".join(row["checks"]) + " PASS")
