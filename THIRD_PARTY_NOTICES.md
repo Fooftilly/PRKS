@@ -51,7 +51,15 @@ PostgreSQL and identity runtime components added for the #630 deployment:
 These are package-level notices, not a relicensing of bundled `libpq`,
 cryptographic libraries, or transitive Python dependencies. Preserve all
 licenses and copyright notices distributed with the installed wheel/native
-libraries when redistributing the production image.
+libraries when redistributing the production image. A notice alone does **not**
+fulfill the [LGPL-3.0](https://www.gnu.org/licenses/lgpl-3.0.html) obligations:
+before conveying an image with LGPL-covered Psycopg components, ensure that
+recipients receive the applicable license and copyright notices, access to the
+Corresponding Source for the covered libraries (including modifications, if
+any), and the ability to replace or relink the LGPL-covered components where
+the license requires it. Check the licenses bundled with each installed wheel
+and native library and the applicable LGPL/GPL conveyance conditions when
+preparing redistributable images.
 
 The shipped Vue browser bundle `frontend/vue/prks-vue.js` has accompanying [upstream license notices](frontend/vue/THIRD_PARTY_LICENSES.md), including copyright texts for Vue, TanStack Query, VueUse and Floating UI and full Apache-2.0 terms for the Atlassian drag-and-drop packages. Its [version-controlled source notices](frontend-app/THIRD_PARTY_LICENSES.md) are copied into `frontend/vue/` after each Vite build.
 
