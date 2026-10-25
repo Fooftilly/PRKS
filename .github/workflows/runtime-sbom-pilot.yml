@@ -1,12 +1,17 @@
 name: Runtime image SBOM and Grype pilot (advisory)
 
-# A bounded pilot; run manually or on changes to this workflow itself.
-# No unconditional dependency-PR scan, release upload, or required policy.
+# Bounded pilot: run manually or on actual runtime packaging inputs.
+# Source-only/backend/frontend edits do not trigger expensive container builds.
+# Advisory only; no release upload or required policy.
 on:
   workflow_dispatch:
   pull_request:
     paths:
       - ".github/workflows/runtime-sbom-pilot.yml"
+      - "Dockerfile"
+      - "docker-entrypoint.sh"
+      - "requirements.txt"
+      - "dependency-inventory.json"
 
 permissions:
   contents: read
