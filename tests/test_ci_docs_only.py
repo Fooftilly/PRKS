@@ -92,6 +92,26 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
                 self.assertIsNone(changed_documentation(root, base))
 
 
+class DocsOnlyWorkflowTests(unittest.TestCase):
+    def test_required_unit_context_kept_with_step_level_skip(self):
+        workflow = (
+            Path(__file__).resolve().parents[1] / ".github/workflows/test-gate.yml"
+        ).read_text(encoding="utf-8")
+        unit = workflow.split("  unit-api-contract:\n", 1)[1].split(
+            "  postgres-helpers:\n", 1
+        )[0]
+        self.assertIn("name: Unit / API / contract tests", unit)
+        self.assertIn("Classify documentation-only PR (fail closed)", unit)
+        self.assertIn("git fetch --no-tags --depth=1 origin", unit)
+        self.assertIn("Validate changed documentation links, anchors, and fences", unit)
+        self.assertNotIn("needs:", unit)
+        # Checkout + required job are unconditional; actual heavy commands
+        # remain unchanged but guarded by the shared classifier output.
+        self.assertEqual(unit.count("if: steps.docs-scope.outputs.docs_only != 'true'"), 4)
+        self.assertIn("run: python run_tests.py", unit)
+        self.assertIn("run: python -m scripts.ci.check_docs_only", unit)
+
+
 class DocsOnlyLinkValidationTests(unittest.TestCase):
     def test_valid_links_headings_duplicates_and_fences(self):
         with tempfile.TemporaryDirectory() as folder:
