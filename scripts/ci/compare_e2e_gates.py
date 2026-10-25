@@ -8,16 +8,26 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from datetime import datetime
+from pathlib import Path
 
 import requests
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from scripts.ci.compare_packaged_e2e import InvalidBenchmark, _seconds, fetch_run
 
 SOURCE_WORKFLOW = ".github/workflows/e2e-gate.yml"
 PACKAGED_WORKFLOW = ".github/workflows/e2e-classic-distribution-gate.yml"
 SHARDS = 6
+PLAN_SUMMARY = re.compile(
+    r"(?m)^\S+ mode=(full|affected|skip) run=(true|false) "
+    r"features=\S+ test_count=\S+ shards=(\d+) pointer=(true|false)\s*$"
+)
 KINDS = {
     "source": (
         SOURCE_WORKFLOW,
@@ -72,9 +82,13 @@ def _check_jobs(jobs: list[dict], mode: str) -> tuple[list[dict], str]:
     return [by_name[name] for name in required_names], step_name
 
 
-def summarize(run: dict, jobs: list[dict], mode: str) -> dict:
-    """Require successful guards, six complete shards and their actual test steps."""
+def summarize(
+    run: dict, jobs: list[dict], mode: str, *, source_full_verified: bool = False
+) -> dict:
+    """Require verified source full mode, six complete shards and test steps."""
     _check_run(run, mode)
+    if mode == "source" and source_full_verified is not True:
+        raise InvalidBenchmark("Source planner full mode was not verified")
     shards, step_name = _check_jobs(jobs, mode)
     job_seconds = 0.0
     test_seconds = 0.0
@@ -114,6 +128,40 @@ def summarize(run: dict, jobs: list[dict], mode: str) -> dict:
     }
 
 
+def verify_source_full_plan(repo: str, jobs: list[dict]) -> None:
+    """Require the successful E2E plan job's actual emitted full-mode record.
+
+    GitHub job names and matrix width cannot distinguish full from a 6-shard
+    affected subset. Only the plan step's emitted record proves selection.
+    The public logs API redirects to a temporary GitHub-hosted download;
+    do NOT forward a bearer token to that redirect.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+        raise InvalidBenchmark("Invalid GitHub repository")
+    if not isinstance(jobs, list) or any(not isinstance(j, dict) for j in jobs):
+        raise InvalidBenchmark("Malformed E2E planner job metadata")
+    plans = [j for j in jobs if j.get("name") == "E2E plan"]
+    if len(plans) != 1 or plans[0].get("conclusion") != "success":
+        raise InvalidBenchmark("Missing or unsuccessful E2E planner")
+    job_id = plans[0].get("id")
+    if not isinstance(job_id, int) or job_id <= 0:
+        raise InvalidBenchmark("Missing E2E planner job ID")
+    response = requests.get(
+        f"https://api.github.com/repos/{repo}/actions/jobs/{job_id}/logs",
+        headers={"Accept": "application/vnd.github+json",
+                 "User-Agent": "PRKS-E2E-benchmark"},
+        timeout=30, verify=True, allow_redirects=True,
+    )
+    if response.status_code != 200:
+        raise InvalidBenchmark(f"GitHub planner log returned HTTP {response.status_code}")
+    log = response.text
+    if not isinstance(log, str) or len(log) > 256_000:
+        raise InvalidBenchmark("Missing or unexpectedly large E2E planner log")
+    found = PLAN_SUMMARY.findall(log)
+    if len(found) != 1 or found[0] != ("full", "true", "6", "true"):
+        raise InvalidBenchmark("E2E planner did not prove a complete six-shard full suite")
+
+
 def compare(source: dict, packaged: dict) -> str:
     if (source["mode"], packaged["mode"]) != ("source", "packaged"):
         raise InvalidBenchmark("Expected source and packaged full suites")
@@ -149,10 +197,14 @@ def main() -> int:
     args = parser.parse_args()
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     try:
-        source = summarize(*fetch_run(args.repo, args.source_run, token), "source")
-        packaged = summarize(*fetch_run(args.repo, args.packaged_run, token), "packaged")
+        source_run, source_jobs = fetch_run(args.repo, args.source_run, token)
+        packaged_run, packaged_jobs = fetch_run(args.repo, args.packaged_run, token)
+        _check_run(source_run, "source")
+        verify_source_full_plan(args.repo, source_jobs)
+        source = summarize(source_run, source_jobs, "source", source_full_verified=True)
+        packaged = summarize(packaged_run, packaged_jobs, "packaged")
         print(compare(source, packaged))
-    except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
+    except (requests.RequestException, ValueError, KeyError, TypeError, AttributeError) as exc:
         print(f"E2E cost comparison refused: {exc}", file=sys.stderr)
         return 1
     return 0
