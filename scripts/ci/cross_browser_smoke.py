@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -77,6 +78,21 @@ def collector_failure_categories(collector) -> str:
         values = getattr(collector, attr, None)
         if isinstance(values, list) and values:
             flagged.append(f"{label}-{min(len(values), 99)}")
+    if collector.pageerrors:
+        # Only well-known JavaScript exception *classes* may leave CI. Never
+        # print raw page error text, stack frames, paths or URLs.
+        allowed = (
+            "TypeError", "ReferenceError", "SyntaxError", "RangeError",
+            "AbortError", "InvalidStateError", "NotFoundError", "Error",
+        )
+        labels = []
+        for error in collector.pageerrors[:5]:
+            match = re.search(
+                r"\\b(" + "|".join(allowed) + r")\\s*:",
+                str(error).split("\\n", 1)[0],
+            )
+            labels.append(match.group(1).lower() if match else "unknown")
+        flagged.append("kinds-" + "_".join(labels))
     return "_".join(flagged) or "unknown"
 
 
