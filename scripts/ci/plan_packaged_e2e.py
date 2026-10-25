@@ -189,7 +189,7 @@ def plan_packaged_e2e(
         union = tuple(dict.fromkeys((*expected_smoke, *selected)))
         if len(union) > MAX_SMOKE_AFFECTED_TESTS:
             return _result("affected selection too broad; keep full packaged shards")
-    except (TypeError, ValueError, KeyError) as exc:
+    except (TypeError, ValueError, KeyError, ImportError, OSError, RuntimeError) as exc:
         return _result("test selection failed closed: " + type(exc).__name__)
 
     return _result(
