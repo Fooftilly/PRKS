@@ -7,7 +7,8 @@ services:
   # Enable with both Compose files (see command above); never enable by default.
   db:
     profiles: ["postgres"]
-    image: postgres:18
+    # Match scripts/test-postgres and CI parity tests; update together after validation.
+    image: postgres:18.6@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
     environment:
       POSTGRES_DB: prks
       POSTGRES_USER: prks
