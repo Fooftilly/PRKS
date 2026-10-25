@@ -82,14 +82,15 @@ jobs:
                   "No existing axe violation is automatically accepted or promoted to a required gate.",
                   "Keyboard focus restoration is separately asserted by Playwright.",
                   "",
-                  "| Surface | Violating rules | Rule IDs (up to 8) | Incomplete |",
-                  "| --- | ---: | --- | ---: |",
+                  "| Surface | Violating rules | Rule IDs (up to 8) | Incomplete | Document rules checked |",
+                  "| --- | ---: | --- | ---: | --- |",
               ]
               for scan in data["surfaces"]:
                   names = ", ".join(rule["rule"] for rule in scan["violations"][:8])
                   lines.append(
                       f"| {scan['surface']} | {scan['violating_rules']} | {names} | "
-                      f"{scan['rules_incomplete']} |"
+                      f"{scan['rules_incomplete']} | "
+                      f"{', '.join(scan['document_rules_checked'])} |"
                   )
               with summary.open("a", encoding="utf-8") as out:
                   out.write("\n".join(lines) + "\n")
