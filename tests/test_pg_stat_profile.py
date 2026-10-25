@@ -9,14 +9,34 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.pg_stat_profile import percentile, project_statement, run, sizes_arg
+from scripts.pg_stat_profile import percentile, project_statement, run, sizes_arg, snapshot
 
 
 class ProfileSafetyTests(unittest.TestCase):
     def test_never_runs_outside_disposable_wrapper(self):
-        with patch.dict(os.environ, {"PRKS_PG_PROFILE_DISPOSABLE_SERVER": ""}):
+        with patch.dict(os.environ, {"PRKS_PG_PROFILE_NONCE": ""}):
             with self.assertRaisesRegex(RuntimeError, "scripts/test-postgres --profile"):
                 run((12,), 2)
+
+    def test_profile_refuses_invalid_handoff_before_db_import(self):
+        for bad in ("", "123", "f" * 31, "0" * 33):
+            with self.subTest(nonce=bad), patch.dict(os.environ, {"PRKS_PG_PROFILE_NONCE": bad}):
+                with self.assertRaisesRegex(RuntimeError, "scripts/test-postgres --profile"):
+                    run((12,), 2)
+
+    def test_snapshot_never_fetches_sql_text(self):
+        class FakeStats:
+            def execute(self, statement):
+                self.statement = statement
+                return self
+
+            def fetchall(self):
+                return []
+
+        stats = FakeStats()
+        self.assertEqual(snapshot(stats), [])
+        self.assertIn("pg_stat_statements(false)", stats.statement)
+        self.assertNotRegex(stats.statement.split("FROM", 1)[0], r"\\bquery\\b")
 
     def test_profile_refuses_caller_supplied_postgresql_server_before_startup(self):
         root = Path(__file__).resolve().parents[1]
