@@ -9,7 +9,7 @@ from types import ModuleType
 from unittest.mock import MagicMock, Mock, patch
 
 from scripts.ci.cross_browser_smoke import (
-    CHECKS, ENGINES, SmokeFailure, close_preserving_failure, collector_failure_categories,
+    CHECKS, ENGINES, SmokeFailure, check_browser_errors, close_preserving_failure, collector_failure_categories,
     main, run, smoke,
     verify_isolation, verify_report,
 )
@@ -125,21 +125,43 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
 
         class SyntheticError:
             name = "TypeError"
+            stack = (
+                "TypeError: secret-research-note-in-exception\\n"
+                "    at handler (http://127.0.0.1:51243/js/components/works.js:331:18)"
+            )
 
             def __str__(self):
                 return "secret-research-note-in-exception"
 
         collector._on_page_error(SyntheticError())
         self.assertEqual(collector.pageerror_names, ["TypeError"])
+        self.assertEqual(collector.pageerror_sites, ["js/components/works.js:331"])
         self.assertEqual(collector.pageerrors, ["secret-research-note-in-exception"])
         collector.console_errors = []
         collector.failed_requests = []
         collector.http_5xx = []
         collector.external = []
         self.assertEqual(
-            collector_failure_categories(collector), "page-1_kinds-typeerror"
+            collector_failure_categories(collector),
+            "page-1_kinds-typeerror_sites-js-components-works.js-331",
         )
         self.assertNotIn("secret", collector_failure_categories(collector))
+
+    def test_early_errors_fail_closed_with_stage_and_safe_source(self):
+        collector = Mock()
+        collector.pageerrors = ["private-document-body"]
+        collector.pageerror_names = ["ReferenceError"]
+        collector.pageerror_sites = ["js/reader.js:42"]
+        collector.console_errors = []
+        collector.failed_requests = []
+        collector.http_5xx = []
+        collector.external = []
+        collector.assert_clean.side_effect = AssertionError("private-document-body")
+        with self.assertRaises(SmokeFailure) as caught:
+            check_browser_errors(collector, engine="webkit", phase="after_pdf")
+        self.assertIn("webkit/browser_errors_after_pdf_", str(caught.exception))
+        self.assertIn("sites-js-reader.js-42", str(caught.exception))
+        self.assertNotIn("private-document-body", str(caught.exception))
 
     def test_notes_commit_and_reload_check_is_required(self):
         self.assertIn("notes_save_reload", CHECKS)
