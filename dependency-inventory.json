@@ -74,13 +74,13 @@
     },
     {
       "name": "schemathesis",
-      "scope": "build",
-      "authoritative_source": "requirements-dev.txt -> schemathesis",
+      "scope": "test",
+      "authoritative_source": "requirements-dev.txt",
       "manifest": "requirements-dev.txt",
       "lockfile": null,
       "generated_assets": [],
       "version_metadata": null,
-      "exact_installed_version_check": false,
+      "exact_installed_version_check": true,
       "dependabot_monitored": true,
       "notes": "Manual/path-scoped read-only Schemathesis CLI for published Publishers OpenAPI (#855); no production runtime."
     },
