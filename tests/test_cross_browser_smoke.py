@@ -116,6 +116,31 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
         )
         self.assertNotIn("private", collector_failure_categories(collector))
 
+    def test_e2e_collector_keeps_pageerror_name_separate_from_private_message(self):
+        from tests.e2e.harness import PageCollector
+
+        collector = PageCollector.__new__(PageCollector)
+        collector.pageerrors = []
+        collector.pageerror_names = []
+
+        class SyntheticError:
+            name = "TypeError"
+
+            def __str__(self):
+                return "secret-research-note-in-exception"
+
+        collector._on_page_error(SyntheticError())
+        self.assertEqual(collector.pageerror_names, ["TypeError"])
+        self.assertEqual(collector.pageerrors, ["secret-research-note-in-exception"])
+        collector.console_errors = []
+        collector.failed_requests = []
+        collector.http_5xx = []
+        collector.external = []
+        self.assertEqual(
+            collector_failure_categories(collector), "page-1_kinds-typeerror"
+        )
+        self.assertNotIn("secret", collector_failure_categories(collector))
+
     def test_notes_commit_and_reload_check_is_required(self):
         self.assertIn("notes_save_reload", CHECKS)
         data = report()
