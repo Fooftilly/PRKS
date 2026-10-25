@@ -129,7 +129,7 @@ jobs:
 
       # The typed slice includes PostgreSQL and identity login (#69).
       # Resolve psycopg and argon2 imports rather than suppressing diagnostics.
-      # Install only pinned type imports from requirements-dev.txt.
+      # Install only pinned PostgreSQL/identity type imports from requirements.txt.
       - name: Set up Python for PostgreSQL and identity type imports
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
