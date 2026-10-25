@@ -34,9 +34,24 @@ Generated JavaScript and WebAssembly are not relicensed by the PRKS root license
 ## Packages installed separately
 
 Runtime Python dependencies are pinned in [requirements.txt](requirements.txt):
-PyMuPDF, Pillow and pydantic. They remain subject to their upstream licenses.
+PyMuPDF, Pillow, pydantic, psycopg, psycopg-binary, psycopg-pool and argon2-cffi.
+They remain subject to their upstream licenses.
 **PyMuPDF** is distributed under an AGPL option or commercial license; the
 PRKS root license is not a commercial PyMuPDF license.
+
+PostgreSQL and identity runtime components added for the #630 deployment:
+
+| Installed package | Upstream package license and notice |
+| --- | --- |
+| `psycopg` | LGPL-3.0-only ([upstream license](https://github.com/psycopg/psycopg/blob/master/LICENSE.txt)) |
+| `psycopg-binary` | LGPL-3.0-only for Psycopg's code ([package metadata](https://pypi.org/project/psycopg-binary/3.3.6/)); its self-contained binary wheels also bundle native libraries such as `libpq`, which retain their own license and notice requirements |
+| `psycopg-pool` | LGPL-3.0-only ([package metadata](https://pypi.org/project/psycopg-pool/3.3.3/)) |
+| `argon2-cffi` | MIT ([package metadata](https://pypi.org/project/argon2-cffi/25.1.0/)) |
+
+These are package-level notices, not a relicensing of bundled `libpq`,
+cryptographic libraries, or transitive Python dependencies. Preserve all
+licenses and copyright notices distributed with the installed wheel/native
+libraries when redistributing the production image.
 
 The shipped Vue browser bundle `frontend/vue/prks-vue.js` has accompanying [upstream license notices](frontend/vue/THIRD_PARTY_LICENSES.md), including copyright texts for Vue, TanStack Query, VueUse and Floating UI and full Apache-2.0 terms for the Atlassian drag-and-drop packages. Its [version-controlled source notices](frontend-app/THIRD_PARTY_LICENSES.md) are copied into `frontend/vue/` after each Vite build.
 
