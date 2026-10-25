@@ -21,7 +21,8 @@ from backend.dependency_gate import read_requirements_pins  # noqa: E402
 # Workflows select explicit, purpose-limited dev requirements.
 DEV_PROFILES: dict[str, tuple[str, ...]] = {
     "runtime": (),
-    "unit": ("openapi-core", "hypothesis"),
+    "unit": ("openapi-core", "hypothesis", "markdown-it-py", "mdurl"),
+    "docs": ("markdown-it-py", "mdurl"),
     "plan": ("playwright",),
     "e2e": ("playwright",),
     "postgres": ("psycopg", "psycopg-binary", "psycopg-pool", "argon2-cffi"),
@@ -34,7 +35,7 @@ def pins_for_profile(root: Path, profile: str) -> list[str]:
         raise ValueError(f"unknown install profile: {profile}")
     runtime = read_requirements_pins(root / "requirements.txt")
     dev = read_requirements_pins(root / "requirements-dev.txt")
-    selected = dict(runtime) if profile != "plan" else {}
+    selected = dict(runtime) if profile not in ("plan", "docs") else {}
     for name in DEV_PROFILES[profile]:
         if name not in dev:
             raise ValueError(f"missing required development pin: {name}")
