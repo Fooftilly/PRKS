@@ -9,7 +9,8 @@ from types import ModuleType
 from unittest.mock import MagicMock, Mock, patch
 
 from scripts.ci.cross_browser_smoke import (
-    CHECKS, ENGINES, SmokeFailure, close_preserving_failure, main, run, smoke,
+    CHECKS, ENGINES, SmokeFailure, close_preserving_failure, collector_failure_categories,
+    main, run, smoke,
     verify_isolation, verify_report,
 )
 
@@ -101,6 +102,18 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
                 )
                 self.assertNotIn("secret-url-private-document-title", str(error))
                 context.close.assert_called_once()
+
+    def test_error_bucket_diagnostics_omit_sensitive_browser_details(self):
+        collector = Mock()
+        collector.pageerrors = ["private-document-title", "secret-content"]
+        collector.console_errors = ["credential=private"]
+        collector.failed_requests = []
+        collector.http_5xx = []
+        collector.external = []
+        self.assertEqual(
+            collector_failure_categories(collector), "page-2_console-1"
+        )
+        self.assertNotIn("private", collector_failure_categories(collector))
 
     def test_notes_commit_and_reload_check_is_required(self):
         self.assertIn("notes_save_reload", CHECKS)
