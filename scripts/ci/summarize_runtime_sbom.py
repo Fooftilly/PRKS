@@ -69,6 +69,98 @@ def age_hours(scan_time: str, db_time: str) -> float | None:
     return round(delta, 2) if delta >= 0 else None
 
 
+def project_match(row: Any) -> dict[str, Any]:
+    """Validate one Grype match and project only bounded, public labels."""
+    if not isinstance(row, dict):
+        raise ValueError("malformed Grype match row")
+    vuln, art = row.get("vulnerability"), row.get("artifact")
+    if not isinstance(vuln, dict) or not isinstance(art, dict):
+        raise ValueError("malformed Grype vulnerability or artifact")
+    advisory, package_id = vuln.get("id"), art.get("id")
+    if not isinstance(advisory, str) or not advisory:
+        raise ValueError("match has no advisory identifier")
+    if not isinstance(package_id, str) or not package_id:
+        raise ValueError("match has no package identity")
+    severity = vuln.get("severity", "Unknown")
+    if severity not in SEVERITIES:
+        severity = "Unknown"
+    fix = vuln.get("fix") or {}
+    if not isinstance(fix, dict):
+        fix = {}
+    versions = fix.get("versions")
+    valid_versions = [v for v in versions if safe(v, VERSION) != "redacted"] if isinstance(versions, list) else []
+    state = fix.get("state")
+    state_bucket = "fix-listed" if state == "fixed" and valid_versions else (
+        state if state in ("wont-fix", "not-fixed") else "unknown"
+    )
+    group = ecosystem(art.get("type"))
+    name = safe(art.get("name"), PACKAGE)
+    example = None
+    if ADVISORY_ID.fullmatch(advisory) and name != "redacted":
+        example = {
+            "advisory": advisory,
+            "package": name,
+            "installed": safe(art.get("version"), VERSION),
+            "ecosystem": group,
+            "severity": severity,
+            "fix_state": state_bucket,
+            "fixed_versions": ", ".join(valid_versions[:2]) if valid_versions else "none listed",
+        }
+    return {
+        "id": advisory, "package_id": package_id, "severity": severity,
+        "fix_state": state_bucket, "ecosystem": group, "example": example,
+    }
+
+
+def tally_matches(matches: list[Any]) -> dict[str, Any]:
+    """Count rows, distinct identities, ecosystems and prioritized examples."""
+    severity_counts: collections.Counter[str] = collections.Counter()
+    fix_counts: collections.Counter[str] = collections.Counter()
+    ecosystems: dict[str, dict[str, Any]] = {}
+    advisory_ids: set[str] = set()
+    pairs: set[tuple[str, str]] = set()
+    candidates: list[tuple[int, int, str, str, str, dict[str, Any]]] = []
+    for row in matches:
+        info = project_match(row)
+        advisory = info["id"]
+        package_id = info["package_id"]
+        group = info["ecosystem"]
+        state = info["fix_state"]
+        severity = info["severity"]
+        severity_counts[severity] += 1
+        fix_counts[state] += 1
+        advisory_ids.add(advisory)
+        pairs.add((package_id, advisory))
+        bucket = ecosystems.setdefault(group, {"matches": 0, "advisories": set(), "packages": set(), "fix_listed": 0})
+        bucket["matches"] += 1
+        bucket["advisories"].add(advisory)
+        bucket["packages"].add(package_id)
+        bucket["fix_listed"] += state == "fix-listed"
+        example = info["example"]
+        if example is not None:
+            candidates.append((
+                0 if state == "fix-listed" else 1, SEVERITIES.index(severity),
+                group, example["package"], advisory, example,
+            ))
+    return {
+        "match_count": len(matches),
+        "unique_advisory_ids": len(advisory_ids),
+        "unique_package_advisory_pairs": len(pairs),
+        "by_severity": {key: severity_counts[key] for key in SEVERITIES},
+        "by_fix_state": {key: fix_counts[key] for key in FIX_STATES},
+        "by_ecosystem": {
+            group: {
+                "matches": bucket["matches"],
+                "unique_advisory_ids": len(bucket["advisories"]),
+                "affected_packages": len(bucket["packages"]),
+                "fix_listed": bucket["fix_listed"],
+            }
+            for group, bucket in sorted(ecosystems.items())
+        },
+        "triage_examples": [entry[-1] for entry in sorted(candidates)[:TOP_LIMIT]],
+    }
+
+
 def summarize(sbom: dict[str, Any], scan: dict[str, Any], image_id: str) -> dict[str, Any]:
     if not str(sbom.get("spdxVersion", "")).startswith("SPDX-"):
         raise ValueError("expected a Syft SPDX JSON SBOM")
@@ -84,82 +176,18 @@ def summarize(sbom: dict[str, Any], scan: dict[str, Any], image_id: str) -> dict
     if not isinstance(descriptor, dict) or descriptor.get("name") != "grype":
         raise ValueError("expected Grype JSON descriptor")
 
-    summary_severity: collections.Counter[str] = collections.Counter()
-    summary_fix: collections.Counter[str] = collections.Counter()
-    per_kind: dict[str, dict[str, Any]] = {}
-    all_advisories: set[str] = set()
-    all_pairs: set[tuple[str, str]] = set()
-    candidates: list[tuple[int, int, str, str, str, dict[str, Any]]] = []
-
-    for row in matches:
-        if not isinstance(row, dict):
-            raise ValueError("malformed Grype match row")
-        vuln = row.get("vulnerability")
-        art = row.get("artifact")
-        if not isinstance(vuln, dict) or not isinstance(art, dict):
-            raise ValueError("malformed Grype vulnerability or artifact")
-        advisory = vuln.get("id")
-        package_id = art.get("id")
-        if not isinstance(advisory, str) or not advisory:
-            raise ValueError("match has no advisory identifier")
-        if not isinstance(package_id, str) or not package_id:
-            raise ValueError("match has no package identity")
-        # Internal counters may include nonstandard IDs; none of those are
-        # exposed unless they match the public advisory identifier allowlist.
-        severity = vuln.get("severity", "Unknown")
-        if severity not in SEVERITIES:
-            severity = "Unknown"
-        fix = vuln.get("fix") or {}
-        if not isinstance(fix, dict):
-            fix = {}
-        versions = fix.get("versions")
-        valid_versions = [v for v in versions if safe(v, VERSION) != "redacted"] if isinstance(versions, list) else []
-        state = fix.get("state")
-        state_bucket = "fix-listed" if state == "fixed" and valid_versions else (
-            state if state in ("wont-fix", "not-fixed") else "unknown"
-        )
-        group = ecosystem(art.get("type"))
-        summary_severity[severity] += 1
-        summary_fix[state_bucket] += 1
-        all_advisories.add(advisory)
-        all_pairs.add((package_id, advisory))
-        bucket = per_kind.setdefault(group, {"matches": 0, "advisories": set(), "packages": set(), "fix_listed": 0})
-        bucket["matches"] += 1
-        bucket["advisories"].add(advisory)
-        bucket["packages"].add(package_id)
-        bucket["fix_listed"] += state_bucket == "fix-listed"
-
-        name = safe(art.get("name"), PACKAGE)
-        fixed = ", ".join(valid_versions[:2]) if valid_versions else "none listed"
-        if ADVISORY_ID.fullmatch(advisory) and name != "redacted":
-            item = {
-                "advisory": advisory,
-                "package": name,
-                "installed": safe(art.get("version"), VERSION),
-                "ecosystem": group,
-                "severity": severity,
-                "fix_state": state_bucket,
-                "fixed_versions": fixed,
-            }
-            # Prioritize provided fix versions, then severity; don't pretend
-            # the scanner has confirmed exploitability or upgrade safety.
-            candidates.append((
-                0 if state_bucket == "fix-listed" else 1,
-                SEVERITIES.index(severity), group, name, advisory, item
-            ))
     db = descriptor.get("db") or {}
     if not isinstance(db, dict):
         db = {}
     status = db.get("status") or {}
     if not isinstance(status, dict):
         status = {}
-    scan_time = iso(descriptor.get("timestamp"))
-    db_time = iso(status.get("built"))
     distro = scan.get("distro") or {}
     if not isinstance(distro, dict):
         distro = {}
     distro_part = re.compile(r"[A-Za-z0-9._+-]{1,24}\Z")
-    report: dict[str, Any] = {
+    scan_time, db_time = iso(descriptor.get("timestamp")), iso(status.get("built"))
+    return {
         "format": "prks-runtime-image-triage-v1",
         "image_id": image_id,
         "spdx_packages": len(packages),
@@ -169,23 +197,8 @@ def summarize(sbom: dict[str, Any], scan: dict[str, Any], image_id: str) -> dict
         "grype_db_age_hours": age_hours(scan_time, db_time),
         "distro": safe(distro.get("name"), distro_part, "unknown"),
         "distro_version": safe(distro.get("version"), distro_part, "unknown"),
-        "match_count": len(matches),
-        "unique_advisory_ids": len(all_advisories),
-        "unique_package_advisory_pairs": len(all_pairs),
-        "by_severity": {key: summary_severity[key] for key in SEVERITIES},
-        "by_fix_state": {key: summary_fix[key] for key in FIX_STATES},
-        "by_ecosystem": {
-            key: {
-                "matches": bucket["matches"],
-                "unique_advisory_ids": len(bucket["advisories"]),
-                "affected_packages": len(bucket["packages"]),
-                "fix_listed": bucket["fix_listed"],
-            }
-            for key, bucket in sorted(per_kind.items())
-        },
-        "triage_examples": [entry[-1] for entry in sorted(candidates)[:TOP_LIMIT]],
+        **tally_matches(matches),
     }
-    return report
 
 
 def markdown(report: dict[str, Any]) -> str:
