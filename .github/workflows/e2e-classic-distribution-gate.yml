@@ -21,11 +21,12 @@ on:
   workflow_dispatch:
     inputs:
       packaged_mode:
-        description: "Packaged E2E validation (full is the default; smoke is a manual cost/coverage pilot only)"
+        description: "Packaged E2E validation (full default; smoke pilot or paired compare require manual dispatch)"
         type: choice
         options:
           - full
           - smoke
+          - compare
         default: full
 
 permissions:
@@ -128,7 +129,8 @@ jobs:
   packaged-frontend:
     name: Packaged classic bundles (${{ matrix.shard }}/6)
     # Pull requests always keep the six-shard packaged regression matrix.
-    # Only an explicit manual dispatch can opt into the cheaper smoke pilot.
+    # Explicit manual smoke omits full shards; manual compare runs BOTH modes
+    # against one SHA. PR/release coverage remains the full six-shard matrix.
     if: github.event_name != 'workflow_dispatch' || inputs.packaged_mode != 'smoke'
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -198,7 +200,7 @@ jobs:
       - name: Export packaged test timings (manual full benchmark only)
         if: >-
           github.event_name == 'workflow_dispatch' &&
-          inputs.packaged_mode == 'full' && success()
+          (inputs.packaged_mode == 'full' || inputs.packaged_mode == 'compare') && success()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: packaged-e2e-timings-${{ matrix.shard }}-of-6
@@ -221,8 +223,12 @@ jobs:
 
   packaged-smoke:
     name: Packaged classic smoke (manual pilot)
+    # Compare runs the full six shards and smoke in this SAME workflow run;
+    # only an explicit workflow_dispatch can activate the smoke job.
     # A cost/coverage measurement, NOT a substitute for the PR or release gate.
-    if: github.event_name == 'workflow_dispatch' && inputs.packaged_mode == 'smoke'
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      (inputs.packaged_mode == 'smoke' || inputs.packaged_mode == 'compare')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -293,8 +299,11 @@ jobs:
           PRKS_E2E_BASE_SHA: ${{ github.sha }}
         shell: bash
         run: |
-          printf 'Manual packaged-smoke pilot only; full PR six-shard package coverage is unchanged.\n' >> "$GITHUB_STEP_SUMMARY"
-          printf 'Commit: %s; packaged smoke: 9 curated + 5 explicit browser tests; SW upgrade/rollback and Docker checks are separate jobs.\n' "$PRKS_E2E_BASE_SHA" >> "$GITHUB_STEP_SUMMARY"
+          {
+            printf 'Manual packaged-smoke pilot only; full PR six-shard package coverage is unchanged.\n'
+            printf 'If packaged_mode=compare, six full packaged shards also run on this exact workflow SHA; shared Docker and SW jobs execute once.\n'
+            printf 'Commit: %s; packaged smoke: 9 curated + 5 explicit browser tests; SW upgrade/rollback and Docker checks are separate jobs.\n' "$PRKS_E2E_BASE_SHA"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload smoke failure diagnostics
         if: failure()

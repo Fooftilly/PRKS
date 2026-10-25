@@ -60,7 +60,7 @@ class E2ETimingArtifactWorkflowTests(unittest.TestCase):
         self.assertEqual(shard.count("path: .tests/e2e-timings.json"), 1)
         self.assertNotIn("path: .tests/\n", step)
 
-    def test_manual_packaged_full_not_smoke_or_pr(self):
+    def test_manual_packaged_full_and_compare_not_smoke_or_pr(self):
         workflow = PACKAGED.read_text(encoding="utf-8")
         shard = job_source(workflow, "packaged-frontend")
         step = named_upload_step(
@@ -69,7 +69,7 @@ class E2ETimingArtifactWorkflowTests(unittest.TestCase):
         self.assertIn(
             "        if: >-\n"
             "          github.event_name == 'workflow_dispatch' &&\n"
-            "          inputs.packaged_mode == 'full' && success()\n",
+            "          (inputs.packaged_mode == 'full' || inputs.packaged_mode == 'compare') && success()\n",
             step,
         )
         self.assertIn("name: packaged-e2e-timings-${{ matrix.shard }}-of-6", step)

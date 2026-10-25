@@ -8,11 +8,14 @@ from datetime import datetime, timedelta, timezone
 
 from scripts.ci.compare_packaged_e2e import (
     SKIPPED_FULL_MATRIX,
+    SMOKE_JOB,
     InvalidBenchmark,
     _get_json,
     compare,
     fetch_run,
     summarize,
+    summarize_paired,
+    main,
 )
 
 SHA = "9" * 40
@@ -71,6 +74,67 @@ class PackagedCostComparisonTests(unittest.TestCase):
         report = compare(full, smoke)
         self.assertIn("98.2%", report)
         self.assertIn("do not establish equivalent regression coverage", report)
+
+
+    def test_single_dispatch_paired_full_and_smoke_includes_shared_guards_once(self):
+        combined = [
+            *full_jobs()[:-1],
+            job(SMOKE_JOB, 75),
+        ]
+        full, smoke = summarize_paired(run(99), combined)
+        self.assertEqual(full["browser_count"], 6)
+        self.assertEqual(smoke["browser_count"], 1)
+        self.assertAlmostEqual(full["browser_minutes"], 49.55)
+        self.assertAlmostEqual(smoke["browser_minutes"], 75 / 60)
+        self.assertEqual(full["run_id"], smoke["run_id"])
+        self.assertAlmostEqual(full["shared_minutes"], 43 / 60)
+        self.assertAlmostEqual(smoke["shared_minutes"], 43 / 60)
+        self.assertAlmostEqual(full["all_job_minutes"], full["browser_minutes"] + 43 / 60)
+        self.assertAlmostEqual(smoke["all_job_minutes"], smoke["browser_minutes"] + 43 / 60)
+        report = compare(full, smoke, paired=True)
+        self.assertIn("BOTH modes on one SHA", report)
+        self.assertIn("guards ran once", report)
+        self.assertIn("not two sets of actual billed jobs", report)
+        with self.assertRaises(InvalidBenchmark):
+            compare(full, smoke)
+
+    def test_compare_mode_refuses_partial_paired_runs(self):
+        valid = [*full_jobs()[:-1], job(SMOKE_JOB, 75)]
+        failures = [
+            valid[:-1],
+            valid[:-2] + [valid[-1]],
+            valid + [valid[-1]],
+            valid + [job("Unaccounted job", 30)],
+            valid + [job(SKIPPED_FULL_MATRIX, 0, "skipped")],
+            valid + [job(SMOKE_JOB, 0, "skipped")],
+        ]
+        for altered in failures:
+            with self.subTest(names=[j["name"] for j in altered]):
+                with self.assertRaises(InvalidBenchmark):
+                    summarize_paired(run(88), altered)
+        bad = list(valid)
+        bad[0] = dict(bad[0], conclusion="failure")
+        with self.assertRaises(InvalidBenchmark):
+            summarize_paired(run(88), bad)
+        invalid_run = run(88)
+        invalid_run["event"] = "pull_request"
+        with self.assertRaises(InvalidBenchmark):
+            summarize_paired(invalid_run, valid)
+
+    def test_paired_cli_fetches_one_run_and_renders_comparison(self):
+        valid = [*full_jobs()[:-1], job(SMOKE_JOB, 75)]
+        with (
+            patch("scripts.ci.compare_packaged_e2e.fetch_run",
+                  return_value=(run(777), valid)) as fetch,
+            patch("scripts.ci.compare_packaged_e2e.os.environ.get",
+                  return_value=None),
+            patch("scripts.ci.compare_packaged_e2e.sys.argv",
+                  ["compare_packaged_e2e.py", "--paired-run", "777"]),
+            patch("builtins.print") as output,
+        ):
+            self.assertEqual(main(), 0)
+        fetch.assert_called_once_with("Fooftilly/PRKS", 777, None)
+        self.assertIn("GitHub run #777", output.call_args.args[0])
 
     def test_missing_or_duplicate_shard_fails_closed(self):
         for altered in (full_jobs()[:-2] + [full_jobs()[-1]],
