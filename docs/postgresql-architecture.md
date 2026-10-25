@@ -2630,7 +2630,7 @@ services:
       POSTGRES_INITDB_ARGS: "--locale-provider=builtin --builtin-locale=PG_UNICODE_FAST"
     volumes: [pgdata:/var/lib/postgresql]   # postgres:18 keeps PGDATA in /var/lib/postgresql/18/docker
     secrets: [prks_db_password]
-    healthcheck: {test: ["CMD-SHELL", "pg_isready -U prks -d prks"], interval: 5s, retries: 20}
+    healthcheck: {test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U prks -d prks"], interval: 5s, retries: 20}
   migrate:
     image: prks:latest
     command: ["python", "/app/prks_app.py", "migrate"]
