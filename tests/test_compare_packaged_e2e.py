@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import ssl
 import unittest
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 from datetime import datetime, timedelta, timezone
 
 from scripts.ci.compare_packaged_e2e import InvalidBenchmark, _get_json, _github_connection, compare, fetch_run, summarize
@@ -167,7 +168,7 @@ class PackagedCostComparisonTests(unittest.TestCase):
             with patch("scripts.ci.compare_packaged_e2e.json.load", return_value=[]):
                 with self.assertRaisesRegex(InvalidBenchmark, "JSON object"):
                     _get_json("/repos/Fooftilly/PRKS/actions/runs/11", None)
-            connection.assert_called_once_with("api.github.com", timeout=30)
+            connection.assert_called_once_with("api.github.com", timeout=30, context=ANY)
             connection.return_value.request.assert_called_once_with(
                 "GET", "/repos/Fooftilly/PRKS/actions/runs/11",
                 headers={"Accept": "application/vnd.github+json",
@@ -182,15 +183,18 @@ class PackagedCostComparisonTests(unittest.TestCase):
              patch("scripts.ci.compare_packaged_e2e.HTTPSConnection") as connect:
             connection = _github_connection()
             self.assertIs(connection, connect.return_value)
-            connect.assert_called_once_with("proxy.example", 3128, timeout=30)
+            connect.assert_called_once_with("proxy.example", 3128, timeout=30, context=ANY)
             connection.set_tunnel.assert_called_once_with("api.github.com", 443)
+            context = connect.call_args.kwargs["context"]
+            self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+            self.assertTrue(context.check_hostname)
 
         with patch("scripts.ci.compare_packaged_e2e.getproxies",
                    return_value={"https": "http://proxy.example:3128"}), \
              patch("scripts.ci.compare_packaged_e2e.proxy_bypass", return_value=True), \
              patch("scripts.ci.compare_packaged_e2e.HTTPSConnection") as connect:
             _github_connection()
-            connect.assert_called_once_with("api.github.com", timeout=30)
+            connect.assert_called_once_with("api.github.com", timeout=30, context=ANY)
             connect.return_value.set_tunnel.assert_not_called()
 
     def test_schemeless_http_proxy_is_parsed_as_authority(self):
@@ -199,7 +203,7 @@ class PackagedCostComparisonTests(unittest.TestCase):
              patch("scripts.ci.compare_packaged_e2e.proxy_bypass", return_value=False), \
              patch("scripts.ci.compare_packaged_e2e.HTTPSConnection") as connect:
             _github_connection()
-            connect.assert_called_once_with("proxy.example", 3128, timeout=30)
+            connect.assert_called_once_with("proxy.example", 3128, timeout=30, context=ANY)
             connect.return_value.set_tunnel.assert_called_once_with("api.github.com", 443)
 
     def test_reject_unsafe_proxy_url_and_bad_port(self):
