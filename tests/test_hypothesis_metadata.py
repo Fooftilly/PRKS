@@ -135,6 +135,61 @@ class MetadataFieldProperties(unittest.TestCase):
                 ("unrelated:" + right, 1),
             )
 
+
+    @settings(max_examples=EXAMPLES, deadline=None, database=None)
+    @given(primary=st.sampled_from(FIELDS), patch_value=VALUE, sync_value=VALUE)
+    @example(primary="doi", patch_value="x", sync_value="y")
+    @example(primary="isbn", patch_value="x", sync_value="y")
+    @example(primary="journal", patch_value="x", sync_value="y")
+    @example(primary="publisher", patch_value="x", sync_value="y")
+    @example(primary="location", patch_value="x", sync_value="y")
+    @example(primary="edition", patch_value="x", sync_value="y")
+    def test_independent_patch_and_sync_commute(self, primary, patch_value, sync_value):
+        """Two independent fields converge in either delivery order.
+
+        Contrast ordinary online PATCH of one field with a durable sync
+        operation of another. Neither order may manufacture a revision on an
+        unrelated field, lose an edit, or change the sync ledger replay.
+        """
+        secondary = FIELDS[(FIELDS.index(primary) + 1) % len(FIELDS)]
+        patch_value = "patch:" + patch_value
+        sync_value = "sync:" + sync_value
+        outcomes = []
+        for patch_first in (True, False):
+            with scratch_metadata() as (db, work):
+                initial = db.get_work_metadata_state(work)["fields"]
+                expected = {field: (initial[field]["value"], initial[field]["revision"])
+                            for field in FIELDS}
+                sync_op = operation(work, secondary, sync_value, 0, 0)
+
+                def apply_patch():
+                    db.update_work_metadata(work, {primary: patch_value})
+
+                def apply_sync():
+                    result = sync_protocol.process_operation(db, sync_op)
+                    self.assertEqual(
+                        (result[0], result[1]["code"], result[1]["changed"],
+                         result[1]["server_revision"]),
+                        (200, "ACKNOWLEDGED", True, 1),
+                    )
+                    self.assertEqual(sync_protocol.process_operation(db, sync_op), result)
+
+                if patch_first:
+                    apply_patch()
+                    apply_sync()
+                else:
+                    apply_sync()
+                    apply_patch()
+
+                expected[primary] = (patch_value, 1)
+                expected[secondary] = (sync_value, 1)
+                observed = db.get_work_metadata_state(work)["fields"]
+                actual = {field: (observed[field]["value"], observed[field]["revision"])
+                          for field in FIELDS}
+                self.assertEqual(actual, expected)
+                outcomes.append(actual)
+        self.assertEqual(outcomes[0], outcomes[1])
+
     @settings(max_examples=EXAMPLES, deadline=None, database=None)
     @given(work=VALUE, field=VALUE, other=VALUE)
     def test_metadata_scope_keys_preserve_structural_identity(self, work, field, other):
