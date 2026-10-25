@@ -133,7 +133,7 @@ class PackagedCostComparisonTests(unittest.TestCase):
                     summarize(payload, full_jobs(), "full")
 
     def test_fetch_run_jobs_then_summarize_and_compare(self):
-        base = "https://api.github.com/repos/Fooftilly/PRKS/actions/runs/"
+        base = "/repos/Fooftilly/PRKS/actions/runs/"
         payloads = {
             base + "11": run(11),
             base + "11/jobs?per_page=100&page=1": {"jobs": full_jobs()},
