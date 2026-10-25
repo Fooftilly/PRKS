@@ -151,7 +151,10 @@ def _get_json(path: str, token: str | None) -> dict:
         with connection.getresponse() as response:
             if response.status != 200:
                 raise InvalidBenchmark(f"GitHub API returned HTTP {response.status}")
-            return json.load(response)
+            payload = json.load(response)
+            if not isinstance(payload, dict):
+                raise InvalidBenchmark("GitHub API response must be a JSON object")
+            return payload
     finally:
         connection.close()
 
@@ -190,7 +193,7 @@ def main() -> int:
         full_run, full_jobs = fetch_run(args.repo, args.full_run, token)
         smoke_run, smoke_jobs = fetch_run(args.repo, args.smoke_run, token)
         print(compare(summarize(full_run, full_jobs, "full"), summarize(smoke_run, smoke_jobs, "smoke")))
-    except (HTTPException, OSError, ValueError) as exc:
+    except (HTTPException, OSError, ValueError, KeyError) as exc:
         print(f"Packaged E2E comparison refused: {exc}", file=sys.stderr)
         return 1
     return 0
