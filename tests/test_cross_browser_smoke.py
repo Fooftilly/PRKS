@@ -101,6 +101,30 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
                 self.assertNotIn("secret-url-private-document-title", str(error))
                 context.close.assert_called_once()
 
+    def test_notes_commit_and_reload_check_is_required(self):
+        self.assertIn("notes_save_reload", CHECKS)
+        data = report()
+        data["browsers"][0]["checks"].remove("notes_save_reload")
+        with self.assertRaises(ValueError):
+            verify_report(data, ENGINES)
+
+    def test_notes_keyboard_failure_is_safely_attributed(self):
+        page, context = Mock(), Mock()
+        page.keyboard.insert_text.side_effect = TimeoutError("private-note-body")
+        with patch(
+            "scripts.ci.cross_browser_smoke.open_app_page",
+            return_value=(page, context, Mock()),
+        ):
+            with self.assertRaises(SmokeFailure) as caught:
+                smoke(object(), "http://127.0.0.1:1", "synthetic", "related",
+                      engine="webkit")
+        self.assertEqual(
+            (caught.exception.engine, caught.exception.stage, caught.exception.cause_type),
+            ("webkit", "notes_save_reload", "TimeoutError"),
+        )
+        self.assertNotIn("private-note-body", str(caught.exception))
+        context.close.assert_called_once()
+
     def test_pdf_and_secondary_pane_checks_are_required(self):
         # These checks run through the same two-engine smoke and are not
         # implied by seeing the Work wrapper.
