@@ -90,9 +90,10 @@ def summarize(run: dict, jobs: list[dict], expected_mode: str) -> dict:
     _validate_run(run, expected_mode)
     active = _successful_jobs(jobs)
     browser_jobs = _browser_jobs(active, jobs, expected_mode)
-    minutes = lambda selected: sum(
-        _seconds(job["started_at"], job["completed_at"]) for job in selected
-    ) / 60
+    def minutes(selected: list[dict]) -> float:
+        return sum(
+            _seconds(job["started_at"], job["completed_at"]) for job in selected
+        ) / 60
     return {
         "sha": run["head_sha"],
         "run_id": run["id"],
@@ -189,7 +190,7 @@ def main() -> int:
         full_run, full_jobs = fetch_run(args.repo, args.full_run, token)
         smoke_run, smoke_jobs = fetch_run(args.repo, args.smoke_run, token)
         print(compare(summarize(full_run, full_jobs, "full"), summarize(smoke_run, smoke_jobs, "smoke")))
-    except (InvalidBenchmark, HTTPException, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
+    except (HTTPException, OSError, ValueError) as exc:
         print(f"Packaged E2E comparison refused: {exc}", file=sys.stderr)
         return 1
     return 0
