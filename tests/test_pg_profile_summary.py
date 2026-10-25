@@ -24,7 +24,10 @@ _STAT = {
 def fixture() -> dict:
     rows = []
     for n in (12, 48):
-        for name in ("works_list", "works_browse", "work_detail"):
+        for name in (
+            "works_list", "works_browse", "work_detail",
+            "works_recent_bounded", "works_batch_by_ids",
+        ):
             rows.append({
                 "fixture_works": n, "operation": name,
                 "repetitions": 4, "completed_samples": 4,
@@ -49,11 +52,13 @@ def fixture() -> dict:
 
 
 class PGProfileSummaryTests(unittest.TestCase):
-    def test_valid_fixture_reports_all_six_reads_without_raw_sql(self):
+    def test_valid_fixture_reports_all_ten_reads_without_raw_sql(self):
         data = fixture()
-        self.assertEqual(len(validate(data)), 6)
+        self.assertEqual(len(validate(data)), 10)
         report = render(data)
         self.assertIn("| 48 | works_browse |", report)
+        self.assertIn("| 48 | works_recent_bounded |", report)
+        self.assertIn("| 48 | works_batch_by_ids |", report)
         self.assertIn("not authenticated HTTP/API", report)
         self.assertIn("none is a process/DB cold start", report)
         self.assertNotIn("abcdef0123456789", report)
