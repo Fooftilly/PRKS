@@ -10,7 +10,7 @@ import unittest
 from types import SimpleNamespace
 
 import psycopg
-from hypothesis import given, settings, strategies as st
+from hypothesis import example, given, settings, strategies as st
 
 from backend.db.errors import (
     CHECK_VIOLATION,
@@ -137,6 +137,7 @@ class PgErrorMappingProperties(unittest.TestCase):
                 self.assertEqual((mapped.code, mapped.http_status), ("DATABASE_ERROR", 500))
 
     @settings(max_examples=EXAMPLES, database=None, deadline=None)
+    @example(table="other", field="other_x")
     @given(
         table=st.text(alphabet="abcdefghijklmnopqrstuvwxyz0123456789",
                       min_size=1, max_size=12),
@@ -148,7 +149,8 @@ class PgErrorMappingProperties(unittest.TestCase):
     ):
         constraint = f"{table}_{field}_check"
         self.assertEqual(check_constraint_field(constraint, table), field)
-        self.assertIsNone(check_constraint_field(constraint, "other_" + table))
+        # A different prefix that cannot match even when field has underscores.
+        self.assertIsNone(check_constraint_field(constraint, table + "x"))
         self.assertIsNone(check_constraint_field(constraint + "_extra", table))
         mapped = map_database_error(
             SyntheticPgError(CHECK_VIOLATION, constraint, table),
