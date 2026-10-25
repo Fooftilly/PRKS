@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 
-from scripts.ci.compare_packaged_e2e import InvalidBenchmark, _get_json, compare, fetch_run, summarize
+from scripts.ci.compare_packaged_e2e import InvalidBenchmark, _get_json, _github_connection, compare, fetch_run, summarize
 
 SHA = "9" * 40
 START = datetime(2026, 10, 17, 21, 0, tzinfo=timezone.utc)
@@ -160,7 +160,8 @@ class PackagedCostComparisonTests(unittest.TestCase):
             connection.assert_not_called()
 
     def test_fixed_host_connection_rejects_non_object_response(self):
-        with patch("scripts.ci.compare_packaged_e2e.HTTPSConnection") as connection:
+        with patch("scripts.ci.compare_packaged_e2e.getproxies", return_value={}), \
+                patch("scripts.ci.compare_packaged_e2e.HTTPSConnection") as connection:
             response = connection.return_value.getresponse.return_value.__enter__.return_value
             response.status = 200
             with patch("scripts.ci.compare_packaged_e2e.json.load", return_value=[]):
@@ -173,6 +174,34 @@ class PackagedCostComparisonTests(unittest.TestCase):
                          "User-Agent": "PRKS-E2E-benchmark"},
             )
             connection.return_value.close.assert_called_once()
+
+    def test_fixed_host_proxy_tunnel_and_no_proxy_bypass(self):
+        with patch("scripts.ci.compare_packaged_e2e.getproxies",
+                   return_value={"https": "http://proxy.example:3128"}), \
+             patch("scripts.ci.compare_packaged_e2e.proxy_bypass", return_value=False), \
+             patch("scripts.ci.compare_packaged_e2e.HTTPSConnection") as connect:
+            connection = _github_connection()
+            self.assertIs(connection, connect.return_value)
+            connect.assert_called_once_with("proxy.example", 3128, timeout=30)
+            connection.set_tunnel.assert_called_once_with("api.github.com", 443)
+
+        with patch("scripts.ci.compare_packaged_e2e.getproxies",
+                   return_value={"https": "http://proxy.example:3128"}), \
+             patch("scripts.ci.compare_packaged_e2e.proxy_bypass", return_value=True), \
+             patch("scripts.ci.compare_packaged_e2e.HTTPSConnection") as connect:
+            _github_connection()
+            connect.assert_called_once_with("api.github.com", timeout=30)
+            connect.return_value.set_tunnel.assert_not_called()
+
+    def test_reject_unsafe_proxy_url_and_bad_port(self):
+        for proxy in ("https://proxy.example:443", "http://user:pass@proxy.example:3128",
+                      "file:///tmp/proxy", "http://proxy.example:bad"):
+            with self.subTest(proxy=proxy), \
+                 patch("scripts.ci.compare_packaged_e2e.getproxies",
+                       return_value={"https": proxy}), \
+                 patch("scripts.ci.compare_packaged_e2e.proxy_bypass", return_value=False):
+                with self.assertRaises(InvalidBenchmark):
+                    _github_connection()
 
     def test_distinct_same_commit_is_required(self):
         full = summarize(run(1), full_jobs(), "full")
