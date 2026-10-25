@@ -115,7 +115,9 @@ class RuntimeSbomSummaryTests(unittest.TestCase):
             [v["severity"] for v in output["triage_examples"][:2]],
             ["Critical", "High"],
         )
-        self.assertTrue(all(v["fix_state"] == "fix-listed" for v in output["triage_examples"]))
+        self.assertTrue(all(v["fix_state"] == "fix-listed" for v in output["triage_examples"][:-1]))
+        self.assertEqual(output["triage_examples"][-1]["fix_state"], "not-fixed")
+        self.assertEqual(output["triage_examples"][-1]["severity"], "Critical")
 
     def test_whitelisted_labels_no_private_paths_or_descriptions(self) -> None:
         probe_label = "fixture confidential identifier"
@@ -137,6 +139,34 @@ class RuntimeSbomSummaryTests(unittest.TestCase):
         self.assertEqual(output["grype_db_built_at"], "2026-10-25T06:27:34Z")
         self.assertEqual(output["grype_scan_at"], "2026-10-25T14:46:00Z")
         self.assertEqual(output["by_severity"]["Critical"], 0)
+
+    def test_balanced_examples_keep_os_high_without_listed_fix(self) -> None:
+        rows = [
+            row(f"GHSA-abcd-{2000 + i}-wxyz", "pip", "python", "Medium")
+            for i in range(13)
+        ]
+        rows += [
+            row(f"CVE-2026-{30000 + i}", f"debian{i}", "deb",
+                "High", fix_state="wont-fix", versions=[])
+            for i in range(20)
+        ]
+        sbom, scan = fixture(*rows)
+        output = summarize(sbom, scan, IMAGE)
+        self.assertEqual(len(output["triage_examples"]), TOP_LIMIT)
+        self.assertEqual(
+            sum(v["fix_state"] == "fix-listed" for v in output["triage_examples"]), 6
+        )
+        self.assertEqual(
+            sum(v["ecosystem"] == "OS: deb" for v in output["triage_examples"]), 6
+        )
+
+    def test_balanced_examples_fill_unused_nonfix_slots(self) -> None:
+        sbom, scan = fixture(*[
+            row(f"CVE-2026-{50000 + i}", f"pip{i}", "python") for i in range(16)
+        ])
+        output = summarize(sbom, scan, IMAGE)
+        self.assertEqual(len(output["triage_examples"]), TOP_LIMIT)
+        self.assertTrue(all(v["fix_state"] == "fix-listed" for v in output["triage_examples"]))
 
     def test_literal_redacted_is_a_valid_public_package_and_version(self) -> None:
         item = row("CVE-2026-12345", "redacted", installed="redacted", versions=["redacted"])
