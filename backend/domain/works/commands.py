@@ -163,10 +163,11 @@ def create_work(scope: LibraryScope, new: NewWork, *, if_absent: bool = False) -
         # As every Research Note writer does (``notes``): a Concept or
         # Argument delete overlapping this create then sees the note's
         # references.
-        from backend.domain.research import arguments, concepts
+        from backend.domain.research import arguments, concepts, reindex
 
         concepts.share_referenced(scope, new.research_note)
         arguments.share_referenced(scope, new.research_note)
+        reindex.enqueue(scope, new.work_id)
     for kind, body in (("research", new.research_note), ("private", new.private_note)):
         if body:
             scope.execute(_INSERT_NOTE, {"work_id": new.work_id, "kind": kind, "body": body})
@@ -301,6 +302,8 @@ def delete_work(scope: LibraryScope, work_id: str) -> Optional[DeletedWork]:
     revision scope of the Work is tombstoned (§5.2): each one this Work ever
     advanced, and every fixed scope (``work_scopes``) even if never edited, so
     a base taken before the delete is stale on a Work recreated under the id.
+    A ``research.reindex_work`` enqueued here drops the Work's derived
+    mentions once the delete commits (§8.4).
     The managed file stays where it is: claiming and removing bytes is the
     objects lane's (L-A-1, §11.2), so this only reports the Work's
     ``/api/pdfs/`` path and whether another Asset of the Library still
@@ -321,11 +324,14 @@ def delete_work(scope: LibraryScope, work_id: str) -> Optional[DeletedWork]:
     roles.drop_work_roles(scope, work_id)
     # Citations too (a pinned one holds its Manifestation), advancing each
     # citing Argument's list.
-    from backend.domain.research import arguments
+    from backend.domain.research import arguments, reindex
 
     arguments.release_work(scope, work_id)
     for statement in _DELETE_WORK_LEVELS:
         scope.execute(statement, {"work_id": work_id})
+    # Its reindex runs after this COMMIT and removes whatever an earlier one
+    # wrote (§8.4).
+    reindex.enqueue(scope, work_id)
     # A scope no edit ever touched has no row and reads as revision 0, the
     # same base a recreated Work starts from; ensuring the rows first makes
     # the tombstone advance it too, exactly once with the rest (#790).

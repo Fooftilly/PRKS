@@ -48,6 +48,7 @@ from backend import concept_sync as rules
 from backend import research_network as network
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.works import revisions
+from backend.entity_ids import generate as generate_id
 from backend.research_markup import parse_research_markup
 from backend.research_network import ResearchError
 
@@ -629,6 +630,36 @@ def share_referenced(scope: LibraryScope, text: str) -> None:
     names = _reference_names(text)
     if names:
         scope.execute(_SHARE_REFERENCED_SQL, {"names": names}).fetchall()
+
+
+def ensure_referenced(scope: LibraryScope, text: str) -> None:
+    """``ensure_concepts_for_names``: create the Concepts a Research Note names that do not exist yet.
+
+    A note command calls it before the note is stored, in its own
+    transaction, so a Concept auto-created for a note that then fails to
+    save is rolled back with it. Each missing identity key gets one Concept
+    named by the reference that first spells it, as SQLite does, created in
+    key order so two notes creating the same names never wait on each other
+    in opposite orders; a key a concurrent writer committed first is that
+    writer's Concept. Then every named Concept is held as
+    :func:`share_referenced` holds it. No revision is advanced
+    (``insert_concept_on_conn``).
+    """
+    first: dict[str, str] = {}
+    names = [network.canonical_concept_name(ref.name) for ref in parse_research_markup(text).concept_refs]
+    for name in names:
+        if not name or len(name) > network.CONCEPT_NAME_MAX:
+            raise ResearchError("invalid_concept", "Concept reference is invalid.")
+    for name, key in zip(names, _keys(scope, names) if names else []):
+        first.setdefault(key, name)
+    owners = _owners(scope, list(first)) if first else {}
+    for key in sorted(key for key in first if key not in owners):
+        try:
+            insert(scope, generate_id("C"), first[key])
+        except ResearchError as exc:
+            if exc.code != _EXISTS[0]:
+                raise
+    share_referenced(scope, text)
 
 
 def _referenced_by_notes(scope: LibraryScope, concept_id: str) -> bool:

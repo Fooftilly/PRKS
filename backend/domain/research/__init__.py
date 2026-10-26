@@ -5,10 +5,12 @@ Concepts, their aliases and hierarchy (``concepts``), Positions
 sources (``arguments``) on PostgreSQL. The schema is
 ``backend/db/schema/130_research.sql``; the sync handlers are
 ``backend/sync/handlers/concept.py``, ``position.py`` and ``argument.py``.
-Note markup and derived mentions are later slices of this lane.
+A Research Note's derived mentions are rebuilt by the
+``research.reindex_work`` job (``reindex``, §8.4).
 
-Nothing in the running application imports this package yet: SQLite stays
-the only backend until the cutover slices (§15.3).
+The running application imports only ``reindex`` (the jobs worker, to
+register its handler): SQLite stays the only backend until the cutover
+slices (§15.3).
 
 **Lock order.** Every Research command takes its locks in one order, so two
 commands that share rows queue instead of deadlocking:
@@ -34,14 +36,20 @@ A Concept create writes one key and holds no other, so it takes no key
 lock, and an Argument create needs no target lock: nothing can answer an
 Argument before it exists.
 
-No Research command locks a Tag or a Folder. A Research Note write holds the
-Concepts and Arguments its markup names ``FOR KEY SHARE`` after its Work
-row and note scope (``concepts.share_referenced``,
-``arguments.share_referenced``), which composes with this order because no
-Research command waits on a note scope, and the only Work it waits on is a
-cited one, before any Research row; a delete's ``FOR UPDATE`` therefore
-never misses a note committed alongside it (``CONCEPT_IN_USE``,
-``ARGUMENT_IN_USE``).
+No Research command locks a Tag or a Folder. A Research Note write, after
+its Work row and note scope, creates the Concepts its markup names that do
+not exist yet (in key order, holding no key lock, as a Concept create does)
+and holds them and the Arguments it names ``FOR KEY SHARE``
+(``concepts.ensure_referenced``, ``arguments.share_referenced``), which
+composes with this order because no Research command waits on a note scope,
+and the only Work it waits on is a cited one, before any Research row; a
+delete's ``FOR UPDATE`` therefore never misses a note committed alongside
+it (``CONCEPT_IN_USE``, ``ARGUMENT_IN_USE``).
+
+``research.reindex_work`` takes the Work's reindex lock, the Work row ``FOR
+KEY SHARE``, then its note ``FOR SHARE``, and writes only ``derived`` rows,
+which no command locks: a note write or a Work delete waits for it at most
+once and never holds anything it waits on.
 """
 
 from backend.db import register_constraint

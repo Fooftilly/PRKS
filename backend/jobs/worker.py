@@ -61,6 +61,7 @@ from backend.db.errors import DatabaseConfigError, DatabaseError
 from backend.db.migrate import SCHEMA_DIR, MigrationError, verify_schema
 from backend.domain.identity import root_pairing
 from backend.domain.identity.errors import RootPairingRefused
+from backend.domain.research import reindex as _research_reindex  # noqa: F401  registers research.reindex_work
 from backend.jobs import queue
 from backend.jobs.diagnostics import WorkerStats
 from backend.jobs.handlers import REGISTRY, HandlerRegistry
